@@ -2,6 +2,7 @@ use sift_core::buffer::Buffer;
 use sift_core::config::SiftConfig;
 use sift_core::search::SearchState;
 use sift_core::search::matcher;
+use sift_core::buffer::cursor::Cursor;
 use sift_core::selection::{Selection, SelectionMode};
 use sift_core::export;
 
@@ -40,6 +41,11 @@ pub struct App {
     pub should_quit: bool,
     /// Flag: the event loop should suspend TUI and open the editor.
     pub pending_editor: bool,
+    /// Pending Vim-style prefix state (currently only `g`).
+    pub pending_g: bool,
+    pub mouse_anchor: Option<Cursor>,
+    pub mouse_mode: SelectionMode,
+    pub mouse_dragged: bool,
 }
 
 impl App {
@@ -53,12 +59,20 @@ impl App {
             status: None,
             should_quit: false,
             pending_editor: false,
+            pending_g: false,
+            mouse_anchor: None,
+            mouse_mode: SelectionMode::Visual,
+            mouse_dragged: false,
         }
     }
 
     /// Enter visual selection mode.
     pub fn enter_visual(&mut self, mode: SelectionMode) {
         let anchor = self.buffer.cursor;
+        self.enter_visual_from(mode, anchor);
+    }
+
+    pub fn enter_visual_from(&mut self, mode: SelectionMode, anchor: Cursor) {
         self.buffer.selection = Some(Selection::new(mode, anchor));
         self.mode = match mode {
             SelectionMode::Visual => AppMode::Visual,
@@ -71,6 +85,7 @@ impl App {
     pub fn exit_visual(&mut self) {
         self.buffer.selection = None;
         self.mode = AppMode::Normal;
+        self.cancel_mouse_selection();
     }
 
     /// Yank (copy) the current selection to the system clipboard.
@@ -161,6 +176,49 @@ impl App {
     /// Request opening the editor (actual launch is handled by the event loop).
     pub fn request_editor(&mut self) {
         self.pending_editor = true;
+    }
+
+    pub fn swap_selection_anchor(&mut self) {
+        if let Some(ref mut selection) = self.buffer.selection {
+            std::mem::swap(&mut selection.anchor, &mut self.buffer.cursor);
+            self.buffer.ensure_cursor_visible_pub();
+        }
+    }
+
+    pub fn clear_pending_prefixes(&mut self) {
+        self.pending_g = false;
+    }
+
+    pub fn begin_mouse_selection(&mut self, anchor: Cursor, mode: SelectionMode) {
+        self.mouse_anchor = Some(anchor);
+        self.mouse_mode = mode;
+        self.mouse_dragged = false;
+        self.clear_pending_prefixes();
+    }
+
+    pub fn update_mouse_selection(&mut self, cursor: Cursor) {
+        self.buffer.set_cursor(cursor.row, cursor.col);
+        if let Some(anchor) = self.mouse_anchor {
+            if !self.mouse_dragged {
+                self.enter_visual_from(self.mouse_mode, anchor);
+                self.mouse_dragged = true;
+            } else {
+                self.buffer.ensure_cursor_visible_pub();
+            }
+        }
+    }
+
+    pub fn cancel_mouse_selection(&mut self) {
+        self.mouse_anchor = None;
+        self.mouse_dragged = false;
+    }
+
+    pub fn finish_mouse_selection(&mut self) {
+        if !self.mouse_dragged && matches!(self.mode, AppMode::Visual | AppMode::VisualLine | AppMode::VisualBlock) {
+            self.exit_visual();
+        } else {
+            self.cancel_mouse_selection();
+        }
     }
 
     /// Get the text to send to the editor: selection if active, otherwise full buffer.

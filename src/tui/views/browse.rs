@@ -1,7 +1,7 @@
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 use crate::app::App;
-use sift_core::buffer::line::{AnsiColor, StyledSpan as CoreStyledSpan};
+use sift_core::buffer::line::{AnsiColor, Line as CoreLine, StyledSpan as CoreStyledSpan};
 use sift_core::selection::SelectionMode;
 
 /// Convert an AnsiColor to a ratatui Color.
@@ -80,6 +80,16 @@ fn render_styled_content<'a>(
     }
 }
 
+fn split_by_display_cols(line: &CoreLine, start_col: usize, end_col_inclusive: usize) -> (String, String, String) {
+    let max_width = line.display_width();
+    let start = start_col.min(max_width);
+    let end_exclusive = (end_col_inclusive + 1).min(max_width);
+    let before = line.extract_by_display_cols(0, start);
+    let selected = line.extract_by_display_cols(start, end_exclusive);
+    let after = line.extract_by_display_cols(end_exclusive, max_width);
+    (before, selected, after)
+}
+
 /// Render the main output browse view.
 pub fn render(app: &App, area: Rect, buf: &mut Buffer) {
     let buffer = &app.buffer;
@@ -114,19 +124,13 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) {
                         }
                         SelectionMode::VisualBlock => {
                             let (left, right) = sel.col_range(cursor);
-                            let content = &content_line.content;
-                            let chars: Vec<char> = content.chars().collect();
-
-                            let before: String = chars.iter().take(left).collect();
+                            let (before, selected, after) =
+                                split_by_display_cols(content_line, left, right);
                             spans.push(Span::raw(before));
-
-                            let selected: String = chars.iter().skip(left).take(right - left + 1).collect();
                             spans.push(Span::styled(
                                 selected,
                                 Style::default().bg(Color::Blue).fg(Color::White),
                             ));
-
-                            let after: String = chars.iter().skip(right + 1).collect();
                             spans.push(Span::raw(after));
                         }
                         SelectionMode::Visual => {
@@ -139,14 +143,9 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) {
                                 (*cursor, *anchor)
                             };
 
-                            let content = &content_line.content;
-
                             if line_idx == top && line_idx == bot {
-                                let chars: Vec<char> = content.chars().collect();
-                                let before: String = chars.iter().take(start.col).collect();
-                                let selected: String = chars.iter().skip(start.col).take(end.col - start.col + 1).collect();
-                                let after: String = chars.iter().skip(end.col + 1).collect();
-
+                                let (before, selected, after) =
+                                    split_by_display_cols(content_line, start.col, end.col);
                                 spans.push(Span::raw(before));
                                 spans.push(Span::styled(
                                     selected,
@@ -154,18 +153,17 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) {
                                 ));
                                 spans.push(Span::raw(after));
                             } else if line_idx == top {
-                                let chars: Vec<char> = content.chars().collect();
-                                let before: String = chars.iter().take(start.col).collect();
-                                let selected: String = chars.iter().skip(start.col).collect();
+                                let max_width = content_line.display_width().saturating_sub(1);
+                                let (before, selected, _) =
+                                    split_by_display_cols(content_line, start.col, max_width);
                                 spans.push(Span::raw(before));
                                 spans.push(Span::styled(
                                     selected,
                                     Style::default().bg(Color::Blue).fg(Color::White),
                                 ));
                             } else if line_idx == bot {
-                                let chars: Vec<char> = content.chars().collect();
-                                let selected: String = chars.iter().take(end.col + 1).collect();
-                                let after: String = chars.iter().skip(end.col + 1).collect();
+                                let (_, selected, after) =
+                                    split_by_display_cols(content_line, 0, end.col);
                                 spans.push(Span::styled(
                                     selected,
                                     Style::default().bg(Color::Blue).fg(Color::White),
@@ -173,7 +171,7 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) {
                                 spans.push(Span::raw(after));
                             } else {
                                 spans.push(Span::styled(
-                                    content.clone(),
+                                    content_line.content.clone(),
                                     Style::default().bg(Color::Blue).fg(Color::White),
                                 ));
                             }

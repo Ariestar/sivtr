@@ -46,6 +46,28 @@ impl Line {
         self.content.chars().count()
     }
 
+    /// Convert a display column to the corresponding character index.
+    pub fn char_index_for_display_col(&self, target_col: usize) -> usize {
+        let mut display_col = 0usize;
+        for (idx, width) in self.display_widths.iter().enumerate() {
+            let width = *width as usize;
+            if display_col + width > target_col {
+                return idx;
+            }
+            display_col += width;
+        }
+        self.display_widths.len()
+    }
+
+    /// Convert a character index to its starting display column.
+    pub fn display_col_for_char_index(&self, char_idx: usize) -> usize {
+        self.display_widths
+            .iter()
+            .take(char_idx.min(self.display_widths.len()))
+            .map(|&w| w as usize)
+            .sum()
+    }
+
     /// Extract a substring by display column range [col_start, col_end).
     /// Returns the extracted string. Short lines return what's available.
     pub fn extract_by_display_cols(&self, col_start: usize, col_end: usize) -> String {
@@ -98,5 +120,24 @@ mod tests {
         let line = make_line("hi");
         // Requesting cols 0..10 on a 2-char line should return "hi"
         assert_eq!(line.extract_by_display_cols(0, 10), "hi");
+    }
+
+    #[test]
+    fn test_char_index_for_display_col() {
+        let line = make_line("a好b");
+        assert_eq!(line.char_index_for_display_col(0), 0);
+        assert_eq!(line.char_index_for_display_col(1), 1);
+        assert_eq!(line.char_index_for_display_col(2), 1);
+        assert_eq!(line.char_index_for_display_col(3), 2);
+        assert_eq!(line.char_index_for_display_col(4), 3);
+    }
+
+    #[test]
+    fn test_display_col_for_char_index() {
+        let line = make_line("a好b");
+        assert_eq!(line.display_col_for_char_index(0), 0);
+        assert_eq!(line.display_col_for_char_index(1), 1);
+        assert_eq!(line.display_col_for_char_index(2), 3);
+        assert_eq!(line.display_col_for_char_index(3), 4);
     }
 }

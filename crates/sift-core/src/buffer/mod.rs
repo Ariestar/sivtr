@@ -36,6 +36,10 @@ impl Buffer {
         self.lines.get(index)
     }
 
+    pub fn current_line(&self) -> Option<&Line> {
+        self.get_line(self.cursor.row)
+    }
+
     /// Get the lines currently visible in the viewport.
     pub fn visible_lines(&self) -> &[Line] {
         let start = self.viewport.offset;
@@ -58,12 +62,14 @@ impl Buffer {
     pub fn cursor_down(&mut self, n: usize) {
         let max_row = self.lines.len().saturating_sub(1);
         self.cursor.row = (self.cursor.row + n).min(max_row);
+        self.clamp_cursor_col();
         self.ensure_cursor_visible();
     }
 
     /// Move cursor up, scrolling viewport if needed.
     pub fn cursor_up(&mut self, n: usize) {
         self.cursor.row = self.cursor.row.saturating_sub(n);
+        self.clamp_cursor_col();
         self.ensure_cursor_visible();
     }
 
@@ -90,6 +96,7 @@ impl Buffer {
     /// Jump cursor to the last line.
     pub fn cursor_bottom(&mut self) {
         self.cursor.row = self.lines.len().saturating_sub(1);
+        self.clamp_cursor_col();
         self.ensure_cursor_visible();
     }
 
@@ -103,6 +110,53 @@ impl Buffer {
     pub fn half_page_up(&mut self) {
         let half = self.viewport.height / 2;
         self.cursor_up(half);
+    }
+
+    pub fn page_down(&mut self) {
+        let height = self.viewport.height.saturating_sub(1).max(1);
+        self.cursor_down(height);
+    }
+
+    pub fn page_up(&mut self) {
+        let height = self.viewport.height.saturating_sub(1).max(1);
+        self.cursor_up(height);
+    }
+
+    pub fn cursor_line_start(&mut self) {
+        self.cursor.col = 0;
+    }
+
+    pub fn cursor_line_end(&mut self) {
+        self.cursor.col = self.max_col_for_row(self.cursor.row);
+    }
+
+    pub fn cursor_first_nonblank(&mut self) {
+        self.cursor.col = self.first_nonblank_col(self.cursor.row);
+    }
+
+    pub fn cursor_view_top(&mut self) {
+        self.cursor.row = self.viewport.offset.min(self.lines.len().saturating_sub(1));
+        self.clamp_cursor_col();
+    }
+
+    pub fn cursor_view_middle(&mut self) {
+        let visible_height = self.viewport.height.max(1);
+        let row = self.viewport.offset + visible_height / 2;
+        self.cursor.row = row.min(self.lines.len().saturating_sub(1));
+        self.clamp_cursor_col();
+    }
+
+    pub fn cursor_view_bottom(&mut self) {
+        let visible_height = self.viewport.height.max(1);
+        let row = self.viewport.offset + visible_height.saturating_sub(1);
+        self.cursor.row = row.min(self.lines.len().saturating_sub(1));
+        self.clamp_cursor_col();
+    }
+
+    pub fn set_cursor(&mut self, row: usize, col: usize) {
+        self.cursor.row = row.min(self.lines.len().saturating_sub(1));
+        self.cursor.col = self.clamp_col_for_row(self.cursor.row, col);
+        self.ensure_cursor_visible();
     }
 
     /// Ensure the cursor row is within the visible viewport, adjusting offset if needed.
@@ -123,5 +177,34 @@ impl Buffer {
     /// Public version of ensure_cursor_visible for external callers.
     pub fn ensure_cursor_visible_pub(&mut self) {
         self.ensure_cursor_visible();
+    }
+
+    fn clamp_cursor_col(&mut self) {
+        self.cursor.col = self.clamp_col_for_row(self.cursor.row, self.cursor.col);
+    }
+
+    fn clamp_col_for_row(&self, row: usize, col: usize) -> usize {
+        col.min(self.max_col_for_row(row))
+    }
+
+    fn max_col_for_row(&self, row: usize) -> usize {
+        self.lines
+            .get(row)
+            .map(|line| line.display_width().saturating_sub(1))
+            .unwrap_or(0)
+    }
+
+    fn first_nonblank_col(&self, row: usize) -> usize {
+        self.lines
+            .get(row)
+            .map(|line| {
+                let char_idx = line
+                    .content
+                    .chars()
+                    .position(|ch| !ch.is_whitespace())
+                    .unwrap_or_else(|| line.char_count());
+                line.display_col_for_char_index(char_idx)
+            })
+            .unwrap_or(0)
     }
 }
