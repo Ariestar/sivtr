@@ -7,6 +7,7 @@ use sift_core::capture::scrollback;
 pub fn execute() -> Result<()> {
     let log = scrollback::session_log_path();
     let state = scrollback::flush_state_path();
+    let boundaries = log.with_extension("boundaries");
 
     let mut cleared = false;
 
@@ -14,8 +15,10 @@ pub fn execute() -> Result<()> {
         fs::remove_file(&log)?;
         cleared = true;
     }
-    if state.exists() {
-        fs::remove_file(&state)?;
+    for f in [&state, &boundaries] {
+        if f.exists() {
+            let _ = fs::remove_file(f);
+        }
     }
 
     if cleared {

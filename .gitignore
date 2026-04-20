@@ -1,6 +1,7 @@
 # Build
 /target
 /crates/*/target
+/target*
 
 # Editor
 *.swp

@@ -39,7 +39,7 @@ pub fn execute() -> Result<()> {
         }
         None => {
             eprintln!("sift: no session log found");
-            eprintln!("  hint: run `sift init powershell | Invoke-Expression` to start recording");
+            eprintln!("  hint: run `sift init powershell` then restart your terminal");
             Ok(())
         }
     }

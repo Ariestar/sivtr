@@ -38,6 +38,13 @@ pub enum Commands {
         shell: String,
     },
 
+    /// Copy the output of the Nth-last command to clipboard
+    Copy {
+        /// How many commands back (default: 1 = last command)
+        #[arg(default_value = "1")]
+        n: usize,
+    },
+
     /// Clear the current session log
     Clear,
 

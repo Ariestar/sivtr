@@ -43,6 +43,19 @@ fn do_flush() -> Result<()> {
             let log_path = scrollback::session_log_path();
             fs::create_dir_all(log_path.parent().unwrap())?;
 
+            // Record command boundary (byte offset) before writing
+            let log_size = if log_path.exists() {
+                fs::metadata(&log_path)?.len()
+            } else {
+                0
+            };
+            let boundaries_path = log_path.with_extension("boundaries");
+            let mut bf = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&boundaries_path)?;
+            writeln!(bf, "{}", log_size)?;
+
             let mut file = fs::OpenOptions::new()
                 .create(true)
                 .append(true)

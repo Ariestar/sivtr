@@ -41,6 +41,10 @@ pub fn capture_console_buffer() -> Result<String> {
 /// including color attributes converted to ANSI escape codes.
 #[cfg(windows)]
 fn capture_windows_console() -> Result<String> {
+    use std::ptr;
+
+    use winapi::um::fileapi::{CreateFileW, OPEN_EXISTING};
+    use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
     use winapi::um::processenv::GetStdHandle;
     use winapi::um::winbase::STD_OUTPUT_HANDLE;
     use winapi::um::wincon::{
@@ -48,15 +52,37 @@ fn capture_windows_console() -> Result<String> {
         ReadConsoleOutputAttribute,
         CONSOLE_SCREEN_BUFFER_INFO, COORD,
     };
+    use winapi::um::winnt::{FILE_SHARE_READ, FILE_SHARE_WRITE, GENERIC_READ, GENERIC_WRITE};
 
     unsafe {
-        let handle = GetStdHandle(STD_OUTPUT_HANDLE);
-        if handle.is_null() || handle == winapi::um::handleapi::INVALID_HANDLE_VALUE {
+        // In PowerShell and ConPTY-based terminals, a child process's STDOUT is often a pipe.
+        // Opening CONOUT$ gives us the active console screen buffer instead of the redirected handle.
+        let conout: Vec<u16> = "CONOUT$\0".encode_utf16().collect();
+        let conout_handle = CreateFileW(
+            conout.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            ptr::null_mut(),
+            OPEN_EXISTING,
+            0,
+            ptr::null_mut(),
+        );
+        let (handle, should_close) = if !conout_handle.is_null() && conout_handle != INVALID_HANDLE_VALUE {
+            (conout_handle, true)
+        } else {
+            let std_handle = GetStdHandle(STD_OUTPUT_HANDLE);
+            (std_handle, false)
+        };
+
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
             anyhow::bail!("Failed to get console handle");
         }
 
         let mut info: CONSOLE_SCREEN_BUFFER_INFO = std::mem::zeroed();
         if GetConsoleScreenBufferInfo(handle, &mut info) == 0 {
+            if should_close {
+                CloseHandle(handle);
+            }
             anyhow::bail!("Failed to get console buffer info");
         }
 
@@ -146,6 +172,10 @@ fn capture_windows_console() -> Result<String> {
             }
 
             result.push('\n');
+        }
+
+        if should_close {
+            CloseHandle(handle);
         }
 
         let trimmed = result.trim_end_matches('\n');

@@ -30,6 +30,9 @@ fn main() -> Result<()> {
         Some(Commands::Init { shell }) => {
             commands::init::execute(&shell)?;
         }
+        Some(Commands::Copy { n }) => {
+            commands::copy::execute(n)?;
+        }
         Some(Commands::Clear) => {
             commands::clear::execute()?;
         }

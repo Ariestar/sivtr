@@ -1,6 +1,7 @@
 pub mod browse;
 pub mod clear;
 pub mod config;
+pub mod copy;
 pub mod flush;
 pub mod init;
 pub mod run;
