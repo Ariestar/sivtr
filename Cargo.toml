@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/sift-core", "."]
+members = ["crates/sivtr-core", "."]
 resolver = "2"
 
 [workspace.package]
@@ -9,20 +9,20 @@ license = "MIT"
 rust-version = "1.75"
 
 [package]
-name = "sift"
+name = "sivtr"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Terminal output workspace — capture, browse, search, select, and export terminal output"
-default-run = "sift"
+description = "Terminal output workspace 鈥?capture, browse, search, select, and export terminal output"
+default-run = "sivtr"
 
 [[bin]]
-name = "sift"
+name = "sivtr"
 path = "src/main.rs"
 
 [dependencies]
-sift-core = { path = "crates/sift-core" }
+sivtr-core = { path = "crates/sivtr-core" }
 clap = { version = "4", features = ["derive"] }
 ratatui = "0.29"
 crossterm = "0.28"

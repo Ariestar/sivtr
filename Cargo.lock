@@ -1215,43 +1215,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
-name = "sift"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arboard",
- "atty",
- "clap",
- "crossterm",
- "dirs",
- "ratatui",
- "regex",
- "sift-core",
- "tokio",
-]
-
-[[package]]
-name = "sift-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arboard",
- "chrono",
- "dirs",
- "hostname",
- "regex",
- "rusqlite",
- "serde",
- "strip-ansi-escapes",
- "tempfile",
- "thiserror 2.0.18",
- "toml",
- "unicode-width 0.2.0",
- "uuid",
- "winapi",
-]
-
-[[package]]
 name = "signal-hook"
 version = "0.3.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1287,6 +1250,43 @@ name = "simd-adler32"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "703d5c7ef118737c72f1af64ad2f6f8c5e1921f818cdcb97b8fe6fc69bf66214"
+
+[[package]]
+name = "sivtr"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "atty",
+ "clap",
+ "crossterm",
+ "dirs",
+ "ratatui",
+ "regex",
+ "sivtr-core",
+ "tokio",
+]
+
+[[package]]
+name = "sivtr-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "chrono",
+ "dirs",
+ "hostname",
+ "regex",
+ "rusqlite",
+ "serde",
+ "strip-ansi-escapes",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml",
+ "unicode-width 0.2.0",
+ "uuid",
+ "winapi",
+]
 
 [[package]]
 name = "smallvec"

@@ -74,7 +74,7 @@ pub fn parse_styles(raw_line: &str) -> Vec<StyledSpan> {
 
     while i < len {
         if bytes[i] == 0x1b && i + 1 < len && bytes[i + 1] == b'[' {
-            // Found ESC[ — parse CSI sequence
+            // Found ESC[ 鈥?parse CSI sequence
             let _seq_start = i;
             i += 2; // skip ESC[
 
@@ -90,7 +90,7 @@ pub fn parse_styles(raw_line: &str) -> Vec<StyledSpan> {
                 i += 1; // consume final byte
 
                 if final_byte == b'm' {
-                    // SGR sequence — flush current span and apply new style
+                    // SGR sequence 鈥?flush current span and apply new style
                     if clean_offset > span_start {
                         spans.push(state.to_span(span_start, clean_offset));
                         span_start = clean_offset;
@@ -103,7 +103,7 @@ pub fn parse_styles(raw_line: &str) -> Vec<StyledSpan> {
                 // Ignore non-SGR CSI sequences
             }
         } else {
-            // Regular character — count its byte length in the clean output
+            // Regular character 鈥?count its byte length in the clean output
             let _ch_start = i;
             // Decode one UTF-8 character
             if let Some(ch) = raw_line[i..].chars().next() {
@@ -223,8 +223,8 @@ mod tests {
 
     #[test]
     fn test_strip_complex_escapes() {
-        let input = "\x1b[1;32m✓\x1b[0m \x1b[90mtest passed\x1b[0m";
-        assert_eq!(strip_ansi(input), "✓ test passed");
+        let input = "\x1b[1;32m鉁揬x1b[0m \x1b[90mtest passed\x1b[0m";
+        assert_eq!(strip_ansi(input), "鉁?test passed");
     }
 
     #[test]
@@ -259,10 +259,10 @@ mod tests {
 
     #[test]
     fn test_parse_bold_green() {
-        // \x1b[1;32m✓\x1b[0m world
-        let spans = parse_styles("\x1b[1;32m✓\x1b[0m world");
+        // \x1b[1;32m鉁揬x1b[0m world
+        let spans = parse_styles("\x1b[1;32m鉁揬x1b[0m world");
         assert_eq!(spans.len(), 2);
-        // First span: bold green "✓"
+        // First span: bold green "鉁?
         assert_eq!(spans[0].fg, Some(AnsiColor::Indexed(2)));
         assert!(spans[0].bold);
         // Second span: reset " world"

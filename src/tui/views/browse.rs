@@ -1,8 +1,8 @@
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 use crate::app::App;
-use sift_core::buffer::line::{AnsiColor, Line as CoreLine, StyledSpan as CoreStyledSpan};
-use sift_core::selection::SelectionMode;
+use sivtr_core::buffer::line::{AnsiColor, Line as CoreLine, StyledSpan as CoreStyledSpan};
+use sivtr_core::selection::SelectionMode;
 
 /// Convert an AnsiColor to a ratatui Color.
 fn ansi_to_ratatui(c: &AnsiColor) -> Color {
@@ -200,7 +200,7 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) {
 fn render_content_with_search<'a>(
     app: &App,
     line_idx: usize,
-    content_line: &sift_core::buffer::line::Line,
+    content_line: &sivtr_core::buffer::line::Line,
     preserve_colors: bool,
     spans: &mut Vec<Span<'a>>,
 ) {

@@ -1,13 +1,13 @@
 use anyhow::Result;
-use sift_core::config::SiftConfig;
-use sift_core::export::editor;
+use sivtr_core::config::SivtrConfig;
+use sivtr_core::export::editor;
 use crate::cli::{ConfigCommand, ConfigAction};
 
 /// Execute config subcommands.
 pub fn execute(cmd: ConfigCommand) -> Result<()> {
     match cmd.action {
         Some(ConfigAction::Show) | None => {
-            let path = SiftConfig::config_path()?;
+            let path = SivtrConfig::config_path()?;
             println!("Config file: {}", path.display());
             println!();
 
@@ -15,21 +15,21 @@ pub fn execute(cmd: ConfigCommand) -> Result<()> {
                 let content = std::fs::read_to_string(&path)?;
                 println!("{}", content);
             } else {
-                println!("(file does not exist — using defaults)");
+                println!("(file does not exist 鈥?using defaults)");
                 println!();
-                let config = SiftConfig::default();
-                let content = sift_core::config::to_toml_string(&config)?;
+                let config = SivtrConfig::default();
+                let content = sivtr_core::config::to_toml_string(&config)?;
                 println!("{}", content);
                 println!();
-                println!("Run `sift config init` to create the config file.");
+                println!("Run `sivtr config init` to create the config file.");
             }
         }
         Some(ConfigAction::Init) => {
-            let path = SiftConfig::init_default()?;
+            let path = SivtrConfig::init_default()?;
             println!("Config file created: {}", path.display());
         }
         Some(ConfigAction::Edit) => {
-            let path = SiftConfig::init_default()?;
+            let path = SivtrConfig::init_default()?;
             let ed = editor::resolve_editor()?;
             println!("Opening {} in {}...", path.display(), ed);
 

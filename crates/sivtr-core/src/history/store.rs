@@ -89,6 +89,16 @@ impl HistoryStore {
     fn default_db_path() -> Result<PathBuf> {
         let data_dir = dirs::data_dir()
             .ok_or_else(|| anyhow::anyhow!("Cannot determine data directory"))?;
-        Ok(data_dir.join("sift").join("history.db"))
+        let current = data_dir.join("sivtr").join("history.db");
+        if current.exists() {
+            return Ok(current);
+        }
+
+        let legacy = data_dir.join("sift").join("history.db");
+        if legacy.exists() {
+            return Ok(legacy);
+        }
+
+        Ok(current)
     }
 }

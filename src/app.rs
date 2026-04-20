@@ -1,14 +1,14 @@
-use sift_core::buffer::Buffer;
-use sift_core::config::SiftConfig;
-use sift_core::search::SearchState;
-use sift_core::search::matcher;
-use sift_core::buffer::cursor::Cursor;
-use sift_core::selection::{Selection, SelectionMode};
-use sift_core::export;
+use sivtr_core::buffer::Buffer;
+use sivtr_core::config::SivtrConfig;
+use sivtr_core::search::SearchState;
+use sivtr_core::search::matcher;
+use sivtr_core::buffer::cursor::Cursor;
+use sivtr_core::selection::{Selection, SelectionMode};
+use sivtr_core::export;
 
 use anyhow::Result;
 
-/// Application mode — maps to the TUI state machine.
+/// Application mode 鈥?maps to the TUI state machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppMode {
     /// Normal browsing mode (hjkl navigation).
@@ -34,7 +34,7 @@ pub struct StatusMessage {
 pub struct App {
     pub buffer: Buffer,
     pub mode: AppMode,
-    pub config: SiftConfig,
+    pub config: SivtrConfig,
     pub search_state: Option<SearchState>,
     pub search_input: String,
     pub status: Option<StatusMessage>,
@@ -53,7 +53,7 @@ impl App {
         Self {
             buffer,
             mode: AppMode::Normal,
-            config: SiftConfig::default(),
+            config: SivtrConfig::default(),
             search_state: None,
             search_input: String::new(),
             status: None,
@@ -91,7 +91,7 @@ impl App {
     /// Yank (copy) the current selection to the system clipboard.
     pub fn yank_selection(&mut self) -> Result<()> {
         if let Some(ref sel) = self.buffer.selection {
-            let text = sift_core::selection::extract::extract_selection(
+            let text = sivtr_core::selection::extract::extract_selection(
                 &self.buffer,
                 sel,
                 &self.buffer.cursor,
@@ -224,7 +224,7 @@ impl App {
     /// Get the text to send to the editor: selection if active, otherwise full buffer.
     pub fn get_content_for_editor(&self) -> String {
         if let Some(ref sel) = self.buffer.selection {
-            sift_core::selection::extract::extract_selection(
+            sivtr_core::selection::extract::extract_selection(
                 &self.buffer,
                 sel,
                 &self.buffer.cursor,

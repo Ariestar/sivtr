@@ -1,13 +1,13 @@
-# sift
+# sivtr
 
-**Terminal Output Workspace** — Capture, browse, search, select, and export terminal output.
+**Terminal Output Workspace** 鈥?Capture, browse, search, select, and export terminal output.
 
-sift turns terminal output into searchable, selectable, reusable text assets. It is not a terminal emulator or multiplexer — it is an independent tool that works alongside your existing terminal workflow.
+sivtr turns terminal output into searchable, selectable, reusable text assets. It is not a terminal emulator or multiplexer 鈥?it is an independent tool that works alongside your existing terminal workflow.
 
 ## Features (V1)
 
-- **Pipe mode**: `command | sift` — pipe any command output into a TUI browser
-- **Run mode**: `sift run <command>` — wrap command execution, capture output, then browse
+- **Pipe mode**: `command | sivtr` 鈥?pipe any command output into a TUI browser
+- **Run mode**: `sivtr run <command>` 鈥?wrap command execution, capture output, then browse
 - **Vim-style navigation**: `hjkl`, `Ctrl-D/U`, `gg`, `G`
 - **Visual selection**: `v` (character), `V` (line), `Ctrl-V` (block/column)
 - **Search**: `/pattern` forward search, `n`/`N` for next/previous match
@@ -25,30 +25,30 @@ cargo install --path .
 
 ```bash
 # Pipe mode
-cargo build 2>&1 | sift
-ls -la | sift
+cargo build 2>&1 | sivtr
+ls -la | sivtr
 
 # Run mode
-sift run cargo test
-sift run python script.py
+sivtr run cargo test
+sivtr run python script.py
 
 # History
-sift history list
-sift history search "error"
-sift history show 42
+sivtr history list
+sivtr history search "error"
+sivtr history show 42
 
 # Import scrollback (tmux/zellij, coming soon)
-sift import
+sivtr import
 ```
 
 ## Key Bindings
 
 | Key | Mode | Action |
 |-----|------|--------|
-| `j` / `↓` | Normal | Move down |
-| `k` / `↑` | Normal | Move up |
-| `h` / `←` | Normal | Move left |
-| `l` / `→` | Normal | Move right |
+| `j` / `鈫揱 | Normal | Move down |
+| `k` / `鈫慲 | Normal | Move up |
+| `h` / `鈫恅 | Normal | Move left |
+| `l` / `鈫抈 | Normal | Move right |
 | `Ctrl-D` | Normal | Half page down |
 | `Ctrl-U` | Normal | Half page up |
 | `g` | Normal | Go to top |
@@ -74,14 +74,14 @@ sift import
 ## Project Structure
 
 ```
-sift/
-├── crates/sift-core/    # Core library (capture, parse, buffer, selection, search, history, export)
-├── src/                 # CLI + TUI binary
-│   ├── cli.rs           # Command definitions (clap)
-│   ├── app.rs           # Application state machine
-│   ├── tui/             # TUI rendering and events
-│   └── commands/        # Subcommand handlers
-└── docs/                # PRD and architecture docs
+sivtr/
+鈹溾攢鈹€ crates/sivtr-core/    # Core library (capture, parse, buffer, selection, search, history, export)
+鈹溾攢鈹€ src/                 # CLI + TUI binary
+鈹?  鈹溾攢鈹€ cli.rs           # Command definitions (clap)
+鈹?  鈹溾攢鈹€ app.rs           # Application state machine
+鈹?  鈹溾攢鈹€ tui/             # TUI rendering and events
+鈹?  鈹斺攢鈹€ commands/        # Subcommand handlers
+鈹斺攢鈹€ docs/                # PRD and architecture docs
 ```
 
 ## License

@@ -1,9 +1,9 @@
 use clap::{Args, Parser, Subcommand};
 
-/// sift — Terminal output workspace.
+/// sivtr 鈥?Terminal output workspace.
 /// Capture, browse, search, select, and export terminal output.
 #[derive(Parser, Debug)]
-#[command(name = "sift", version, about, long_about = None)]
+#[command(name = "sivtr", version, about, long_about = None)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -20,7 +20,7 @@ pub enum Commands {
         args: Vec<String>,
     },
 
-    /// Read from stdin pipe (e.g., `cmd | sift`)
+    /// Read from stdin pipe (e.g., `cmd | sivtr`)
     Pipe,
 
     /// Import scrollback from the current terminal multiplexer
@@ -74,7 +74,7 @@ pub struct CopyArgs {
     /// Copy only the bare command text, without prompt/context
     #[arg(long, conflicts_with_all = ["all", "input", "output", "prompt"])]
     pub cmd: bool,
-    /// Preserve prompt/context explicitly (already default for `sift copy`)
+    /// Preserve prompt/context explicitly (already default for `sivtr copy`)
     #[arg(long, conflicts_with_all = ["output", "cmd"])]
     pub prompt: bool,
     /// Print the full copied text to the terminal

@@ -27,7 +27,7 @@ pub fn display_width(s: &str) -> usize {
 /// Given a string and a display column range [col_start, col_end),
 /// return the byte range and char range that covers those display columns.
 ///
-/// Returns (char_start_idx, char_end_idx) — indices into the char iterator.
+/// Returns (char_start_idx, char_end_idx) 鈥?indices into the char iterator.
 pub fn display_col_to_char_range(s: &str, col_start: usize, col_end: usize) -> (usize, usize) {
     let mut current_col = 0usize;
     let mut char_start = None;
@@ -70,21 +70,21 @@ mod tests {
 
     #[test]
     fn test_cjk_widths() {
-        let widths = compute_display_widths("你好");
+        let widths = compute_display_widths("浣犲ソ");
         assert_eq!(widths, vec![2, 2]);
     }
 
     #[test]
     fn test_mixed_widths() {
-        let widths = compute_display_widths("hi你好");
+        let widths = compute_display_widths("hi浣犲ソ");
         assert_eq!(widths, vec![1, 1, 2, 2]);
     }
 
     #[test]
     fn test_display_width() {
         assert_eq!(display_width("hello"), 5);
-        assert_eq!(display_width("你好"), 4);
-        assert_eq!(display_width("hi你好"), 6);
+        assert_eq!(display_width("浣犲ソ"), 4);
+        assert_eq!(display_width("hi浣犲ソ"), 6);
     }
 
     #[test]
@@ -95,7 +95,7 @@ mod tests {
 
     #[test]
     fn test_display_col_to_char_range_ascii() {
-        // "hello" — select columns 1..4 → chars 1..4 = "ell"
+        // "hello" 鈥?select columns 1..4 鈫?chars 1..4 = "ell"
         let (start, end) = display_col_to_char_range("hello", 1, 4);
         assert_eq!(start, 1);
         assert_eq!(end, 4);
@@ -103,19 +103,19 @@ mod tests {
 
     #[test]
     fn test_display_col_to_char_range_cjk() {
-        // "你好世界" — each char is 2 cols wide
-        // cols 0..4 → chars 0..2 = "你好"
-        let (start, end) = display_col_to_char_range("你好世界", 0, 4);
+        // "浣犲ソ涓栫晫" 鈥?each char is 2 cols wide
+        // cols 0..4 鈫?chars 0..2 = "浣犲ソ"
+        let (start, end) = display_col_to_char_range("浣犲ソ涓栫晫", 0, 4);
         assert_eq!(start, 0);
         assert_eq!(end, 2);
     }
 
     #[test]
     fn test_display_col_to_char_range_mixed() {
-        // "hi你好" — h(1) i(1) 你(2) 好(2) = cols 0,1,2-3,4-5
-        // cols 1..5 → chars 1..4 = "i你好"... wait, col 5 is end of 好
-        let (start, end) = display_col_to_char_range("hi你好", 1, 5);
+        // "hi浣犲ソ" 鈥?h(1) i(1) 浣?2) 濂?2) = cols 0,1,2-3,4-5
+        // cols 1..5 鈫?chars 1..4 = "i浣犲ソ"... wait, col 5 is end of 濂?
+        let (start, end) = display_col_to_char_range("hi浣犲ソ", 1, 5);
         assert_eq!(start, 1);
-        assert_eq!(end, 4); // 'i', '你', '好'
+        assert_eq!(end, 4); // 'i', '浣?, '濂?
     }
 }

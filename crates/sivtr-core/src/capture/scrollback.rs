@@ -3,13 +3,26 @@ use std::env;
 
 /// Get the session log path used by the shell hook.
 pub fn session_log_path() -> std::path::PathBuf {
+    if let Ok(path) = env::var("SIVTR_SESSION_LOG") {
+        return std::path::PathBuf::from(path);
+    }
+
     if let Ok(path) = env::var("SIFT_SESSION_LOG") {
         return std::path::PathBuf::from(path);
     }
-    dirs::config_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("sift")
-        .join("session.log")
+
+    let base_dir = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    let current = base_dir.join("sivtr").join("session.log");
+    if current.exists() {
+        return current;
+    }
+
+    let legacy = base_dir.join("sift").join("session.log");
+    if legacy.exists() {
+        return legacy;
+    }
+
+    current
 }
 
 /// Get the flush state file path (derived from session log path).
@@ -17,7 +30,7 @@ pub fn flush_state_path() -> std::path::PathBuf {
     session_log_path().with_extension("state")
 }
 
-/// Read the current session log (populated by `sift flush` shell hook).
+/// Read the current session log (populated by `sivtr flush` shell hook).
 pub fn capture_scrollback() -> Result<Option<String>> {
     let log = session_log_path();
     if log.exists() {
@@ -31,7 +44,7 @@ pub fn capture_scrollback() -> Result<Option<String>> {
 }
 
 /// Read the current console buffer with ANSI color codes.
-/// Used by `sift flush` to incrementally capture output.
+/// Used by `sivtr flush` to incrementally capture output.
 #[cfg(windows)]
 pub fn capture_console_buffer() -> Result<String> {
     capture_windows_console()

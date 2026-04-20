@@ -5,8 +5,8 @@ use crossterm::event::{
 };
 
 use crate::app::{App, AppMode};
-use sift_core::buffer::cursor::Cursor;
-use sift_core::selection::SelectionMode;
+use sivtr_core::buffer::cursor::Cursor;
+use sivtr_core::selection::SelectionMode;
 
 const LINE_NUMBER_WIDTH: usize = 6;
 

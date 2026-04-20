@@ -1,9 +1,9 @@
 use anyhow::Result;
-use sift_core::capture::scrollback;
-use sift_core::config::{SiftConfig, OpenMode};
-use sift_core::parse;
-use sift_core::buffer::Buffer;
-use sift_core::export::editor;
+use sivtr_core::capture::scrollback;
+use sivtr_core::config::{SivtrConfig, OpenMode};
+use sivtr_core::parse;
+use sivtr_core::buffer::Buffer;
+use sivtr_core::export::editor;
 
 use crate::app::App;
 use super::browse;
@@ -13,16 +13,16 @@ pub fn execute() -> Result<()> {
     match scrollback::capture_scrollback()? {
         Some(raw) => {
             if raw.trim().is_empty() {
-                eprintln!("sift: captured scrollback is empty");
+                eprintln!("sivtr: captured scrollback is empty");
                 return Ok(());
             }
 
-            let config = SiftConfig::load().unwrap_or_default();
+            let config = SivtrConfig::load().unwrap_or_default();
 
             match config.general.open_mode {
                 OpenMode::Editor => {
                     let ed = editor::resolve_editor_with_config(&config)?;
-                    eprintln!("sift: opening scrollback in {}", ed);
+                    eprintln!("sivtr: opening scrollback in {}", ed);
                     editor::open_in_editor(&raw)?;
                     Ok(())
                 }
@@ -38,8 +38,8 @@ pub fn execute() -> Result<()> {
             }
         }
         None => {
-            eprintln!("sift: no session log found");
-            eprintln!("  hint: run `sift init <shell>` then restart your terminal");
+            eprintln!("sivtr: no session log found");
+            eprintln!("  hint: run `sivtr init <shell>` then restart your terminal");
             Ok(())
         }
     }

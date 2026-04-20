@@ -1,5 +1,5 @@
 use anyhow::Result;
-use sift_core::history::HistoryStore;
+use sivtr_core::history::HistoryStore;
 use crate::cli::{HistoryCommand, HistoryAction};
 
 /// Execute history subcommands.

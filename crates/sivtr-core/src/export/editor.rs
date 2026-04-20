@@ -2,7 +2,7 @@ use anyhow::{Result, Context};
 use std::io::Write;
 use std::process::Command;
 
-use crate::config::SiftConfig;
+use crate::config::SivtrConfig;
 
 /// Known editors to try, in order of preference.
 const FALLBACK_EDITORS: &[&str] = &["hx", "nvim", "vim", "vi", "nano", "notepad"];
@@ -10,11 +10,11 @@ const FALLBACK_EDITORS: &[&str] = &["hx", "nvim", "vim", "vi", "nano", "notepad"
 /// Resolve which editor to use.
 /// Priority: config file `editor.command` > auto-detect from PATH.
 pub fn resolve_editor() -> Result<String> {
-    resolve_editor_with_config(&SiftConfig::load().unwrap_or_default())
+    resolve_editor_with_config(&SivtrConfig::load().unwrap_or_default())
 }
 
 /// Resolve editor using a pre-loaded config.
-pub fn resolve_editor_with_config(config: &SiftConfig) -> Result<String> {
+pub fn resolve_editor_with_config(config: &SivtrConfig) -> Result<String> {
     // 1. Check config file setting
     if !config.editor.command.is_empty() {
         return Ok(config.editor.command.clone());
@@ -29,7 +29,7 @@ pub fn resolve_editor_with_config(config: &SiftConfig) -> Result<String> {
 
     anyhow::bail!(
         "No editor found. Set editor.command in config file \
-         (run `sift config init` to create one)"
+         (run `sivtr config init` to create one)"
     )
 }
 
@@ -44,7 +44,7 @@ pub fn open_in_editor(content: &str) -> Result<String> {
 
     // Create temp file
     let mut tmp = tempfile::Builder::new()
-        .prefix("sift-")
+        .prefix("sivtr-")
         .suffix(".txt")
         .tempfile()
         .context("Failed to create temp file")?;

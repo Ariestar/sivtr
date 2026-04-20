@@ -1,10 +1,10 @@
 [package]
-name = "sift-core"
+name = "sivtr-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Core library for sift — terminal output processing engine"
+description = "Core library for sivtr 鈥?terminal output processing engine"
 
 [dependencies]
 strip-ansi-escapes = "0.2"

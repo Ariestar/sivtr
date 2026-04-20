@@ -1,5 +1,5 @@
 use anyhow::Result;
-use sift_core::export::editor;
+use sivtr_core::export::editor;
 
 use crate::app::{App, StatusMessage};
 use crate::tui;
@@ -26,7 +26,7 @@ pub fn run_tui(app: &mut App) -> Result<()> {
             break;
         }
 
-        // Handle pending editor request: suspend TUI → launch editor → resume TUI
+        // Handle pending editor request: suspend TUI 鈫?launch editor 鈫?resume TUI
         if app.pending_editor {
             app.pending_editor = false;
 
@@ -44,7 +44,7 @@ pub fn run_tui(app: &mut App) -> Result<()> {
                     });
                 }
                 Err(e) => {
-                    eprintln!("sift: editor error: {}", e);
+                    eprintln!("sivtr: editor error: {}", e);
                     app.status = Some(StatusMessage {
                         text: format!("Editor error: {}", e),
                         is_error: true,

@@ -8,94 +8,100 @@ struct HookSpec {
     hook: &'static str,
     marker_start: &'static str,
     marker_end: &'static str,
+    legacy_marker_start: &'static str,
+    legacy_marker_end: &'static str,
     legacy_hook: Option<&'static str>,
 }
 
-const POWERSHELL_MARKER_START: &str = "# >>> sift shell integration >>>";
-const POWERSHELL_MARKER_END: &str = "# <<< sift shell integration <<<";
+const LEGACY_MARKER_START: &str = "# >>> sift shell integration >>>";
+const LEGACY_MARKER_END: &str = "# <<< sift shell integration <<<";
+const POWERSHELL_MARKER_START: &str = "# >>> sivtr shell integration >>>";
+const POWERSHELL_MARKER_END: &str = "# <<< sivtr shell integration <<<";
 const LEGACY_POWERSHELL_HOOK: &str = r#"# sift shell integration
 $env:SIFT_SESSION_LOG = Join-Path $env:APPDATA "sift\session_$PID.log"
 $Global:_sift_orig_prompt = $function:prompt
 function Global:prompt { try { sift flush *>$null } catch {}; & $Global:_sift_orig_prompt }
 "#;
-const POWERSHELL_HOOK: &str = r#"# >>> sift shell integration >>>
-$env:SIFT_SESSION_LOG = Join-Path $env:APPDATA "sift\session_$PID.log"
-if (-not $Global:_sift_prompt_wrapped) {
-    $Global:_sift_orig_prompt = $function:prompt
+const POWERSHELL_HOOK: &str = r#"# >>> sivtr shell integration >>>
+$env:SIVTR_SESSION_LOG = Join-Path $env:APPDATA "sivtr\session_$PID.log"
+if (-not $Global:_sivtr_prompt_wrapped) {
+    $Global:_sivtr_orig_prompt = $function:prompt
     function Global:prompt {
-        try { sift flush } catch {}
-        if ($Global:_sift_orig_prompt) {
-            & $Global:_sift_orig_prompt
+        try { sivtr flush } catch {}
+        if ($Global:_sivtr_orig_prompt) {
+            & $Global:_sivtr_orig_prompt
         } else {
             "PS $($executionContext.SessionState.Path.CurrentLocation)> "
         }
     }
-    $Global:_sift_prompt_wrapped = $true
+    $Global:_sivtr_prompt_wrapped = $true
 }
-# <<< sift shell integration <<<
+# <<< sivtr shell integration <<<
 "#;
 
-const BASH_MARKER_START: &str = "# >>> sift shell integration >>>";
-const BASH_MARKER_END: &str = "# <<< sift shell integration <<<";
-const BASH_HOOK: &str = r#"# >>> sift shell integration >>>
+const BASH_MARKER_START: &str = "# >>> sivtr shell integration >>>";
+const BASH_MARKER_END: &str = "# <<< sivtr shell integration <<<";
+const BASH_HOOK: &str = r#"# >>> sivtr shell integration >>>
 if [[ -n "${APPDATA:-}" ]]; then
-  export SIFT_SESSION_LOG="${APPDATA}\\sift\\session_$$.log"
+  export SIVTR_SESSION_LOG="${APPDATA}\\sivtr\\session_$$.log"
 else
-  export SIFT_SESSION_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/sift/session_$$.log"
+  export SIVTR_SESSION_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/sivtr/session_$$.log"
 fi
-__sift_precmd() {
-  sift flush >/dev/null 2>&1 || true
+__sivtr_precmd() {
+  sivtr flush >/dev/null 2>&1 || true
 }
 if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then
-  if [[ " ${PROMPT_COMMAND[*]} " != *" __sift_precmd "* ]]; then
-    PROMPT_COMMAND=(__sift_precmd "${PROMPT_COMMAND[@]}")
+  if [[ " ${PROMPT_COMMAND[*]} " != *" __sivtr_precmd "* ]]; then
+    PROMPT_COMMAND=(__sivtr_precmd "${PROMPT_COMMAND[@]}")
   fi
 elif [[ -n "${PROMPT_COMMAND:-}" ]]; then
   case ";$PROMPT_COMMAND;" in
-    *";__sift_precmd;"*) ;;
-    *) PROMPT_COMMAND="__sift_precmd;$PROMPT_COMMAND" ;;
+    *";__sivtr_precmd;"*) ;;
+    *) PROMPT_COMMAND="__sivtr_precmd;$PROMPT_COMMAND" ;;
   esac
 else
-  PROMPT_COMMAND="__sift_precmd"
+  PROMPT_COMMAND="__sivtr_precmd"
 fi
-# <<< sift shell integration <<<
+# <<< sivtr shell integration <<<
 "#;
 
-const ZSH_MARKER_START: &str = "# >>> sift shell integration >>>";
-const ZSH_MARKER_END: &str = "# <<< sift shell integration <<<";
-const ZSH_HOOK: &str = r#"# >>> sift shell integration >>>
+const ZSH_MARKER_START: &str = "# >>> sivtr shell integration >>>";
+const ZSH_MARKER_END: &str = "# <<< sivtr shell integration <<<";
+const ZSH_HOOK: &str = r#"# >>> sivtr shell integration >>>
 if [[ -n "${APPDATA:-}" ]]; then
-  export SIFT_SESSION_LOG="${APPDATA}\\sift\\session_$$.log"
+  export SIVTR_SESSION_LOG="${APPDATA}\\sivtr\\session_$$.log"
 else
-  export SIFT_SESSION_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/sift/session_$$.log"
+  export SIVTR_SESSION_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/sivtr/session_$$.log"
 fi
-_sift_precmd() {
-  sift flush >/dev/null 2>&1 || true
+_sivtr_precmd() {
+  sivtr flush >/dev/null 2>&1 || true
 }
-if (( ${precmd_functions[(I)_sift_precmd]} == 0 )); then
-  precmd_functions=(_sift_precmd $precmd_functions)
+if (( ${precmd_functions[(I)_sivtr_precmd]} == 0 )); then
+  precmd_functions=(_sivtr_precmd $precmd_functions)
 fi
-# <<< sift shell integration <<<
+# <<< sivtr shell integration <<<
 "#;
 
-const NUSHELL_MARKER_START: &str = "# >>> sift shell integration >>>";
-const NUSHELL_MARKER_END: &str = "# <<< sift shell integration <<<";
-const NUSHELL_HOOK: &str = r#"# >>> sift shell integration >>>
-$env.SIFT_SESSION_LOG = (($env.APPDATA? | default $nu.default-config-dir) | path join 'sift' $"session_($nu.pid).log")
-if (($env.SIFT_PROMPT_WRAPPED? | default false) != true) {
-    def _sift_precmd [] {
-        try { ^sift flush } catch {}
+const NUSHELL_MARKER_START: &str = "# >>> sivtr shell integration >>>";
+const NUSHELL_MARKER_END: &str = "# <<< sivtr shell integration <<<";
+const NUSHELL_HOOK: &str = r#"# >>> sivtr shell integration >>>
+$env.SIVTR_SESSION_LOG = (($env.APPDATA? | default $nu.default-config-dir) | path join 'sivtr' $"session_($nu.pid).log")
+if (($env.SIVTR_PROMPT_WRAPPED? | default false) != true) {
+    def _sivtr_precmd [] {
+        try { ^sivtr flush } catch {}
     }
-    $env.config.hooks.pre_prompt = ($env.config.hooks.pre_prompt? | default [] | append {|| _sift_precmd })
-    $env.SIFT_PROMPT_WRAPPED = true
+    $env.config.hooks.pre_prompt = ($env.config.hooks.pre_prompt? | default [] | append {|| _sivtr_precmd })
+    $env.SIVTR_PROMPT_WRAPPED = true
 }
-# <<< sift shell integration <<<
+# <<< sivtr shell integration <<<
 "#;
 
 const POWERSHELL_SPEC: HookSpec = HookSpec {
     hook: POWERSHELL_HOOK,
     marker_start: POWERSHELL_MARKER_START,
     marker_end: POWERSHELL_MARKER_END,
+    legacy_marker_start: LEGACY_MARKER_START,
+    legacy_marker_end: LEGACY_MARKER_END,
     legacy_hook: Some(LEGACY_POWERSHELL_HOOK),
 };
 
@@ -103,6 +109,8 @@ const BASH_SPEC: HookSpec = HookSpec {
     hook: BASH_HOOK,
     marker_start: BASH_MARKER_START,
     marker_end: BASH_MARKER_END,
+    legacy_marker_start: LEGACY_MARKER_START,
+    legacy_marker_end: LEGACY_MARKER_END,
     legacy_hook: None,
 };
 
@@ -110,6 +118,8 @@ const ZSH_SPEC: HookSpec = HookSpec {
     hook: ZSH_HOOK,
     marker_start: ZSH_MARKER_START,
     marker_end: ZSH_MARKER_END,
+    legacy_marker_start: LEGACY_MARKER_START,
+    legacy_marker_end: LEGACY_MARKER_END,
     legacy_hook: None,
 };
 
@@ -117,6 +127,8 @@ const NUSHELL_SPEC: HookSpec = HookSpec {
     hook: NUSHELL_HOOK,
     marker_start: NUSHELL_MARKER_START,
     marker_end: NUSHELL_MARKER_END,
+    legacy_marker_start: LEGACY_MARKER_START,
+    legacy_marker_end: LEGACY_MARKER_END,
     legacy_hook: None,
 };
 
@@ -134,8 +146,8 @@ pub fn execute(shell: &str) -> Result<()> {
         "zsh" => install_single_shell_hook(&zsh_profile_path()?, &ZSH_SPEC),
         "nu" | "nushell" => install_single_shell_hook(&nushell_config_path()?, &NUSHELL_SPEC),
         _ => {
-            eprintln!("sift: supported shells are powershell, bash, zsh, nushell");
-            eprintln!("  usage: sift init <powershell|bash|zsh|nushell>");
+            eprintln!("sivtr: supported shells are powershell, bash, zsh, nushell");
+            eprintln!("  usage: sivtr init <powershell|bash|zsh|nushell>");
             std::process::exit(1);
         }
     }
@@ -150,7 +162,7 @@ fn install_powershell_hook() -> Result<()> {
             match install_into_profile(Path::new(&path), &POWERSHELL_SPEC) {
                 Ok(InstallStatus::Installed) => installed.push(path),
                 Ok(InstallStatus::Updated) => updated.push(path),
-                Ok(InstallStatus::Unchanged) => eprintln!("sift: already installed in {}", path),
+                Ok(InstallStatus::Unchanged) => eprintln!("sivtr: already installed in {}", path),
                 Err(_) => {}
             }
         }
@@ -163,16 +175,16 @@ fn install_powershell_hook() -> Result<()> {
 fn install_single_shell_hook(profile_path: &Path, spec: &HookSpec) -> Result<()> {
     match install_into_profile(profile_path, spec)? {
         InstallStatus::Installed => {
-            eprintln!("sift: installed into {}", profile_path.display());
+            eprintln!("sivtr: installed into {}", profile_path.display());
             eprintln!("  restart your terminal to activate");
         }
         InstallStatus::Updated => {
-            eprintln!("sift: updated {}", profile_path.display());
+            eprintln!("sivtr: updated {}", profile_path.display());
             eprintln!("  restart your terminal to activate");
         }
         InstallStatus::Unchanged => {
-            eprintln!("sift: already installed in {}", profile_path.display());
-            eprintln!("sift: no new installation needed (already set up)");
+            eprintln!("sivtr: already installed in {}", profile_path.display());
+            eprintln!("sivtr: no new installation needed (already set up)");
         }
     }
     Ok(())
@@ -180,15 +192,15 @@ fn install_single_shell_hook(profile_path: &Path, spec: &HookSpec) -> Result<()>
 
 fn print_install_summary(installed: &[String], updated: &[String]) {
     if installed.is_empty() && updated.is_empty() {
-        eprintln!("sift: no new installation needed (already set up)");
+        eprintln!("sivtr: no new installation needed (already set up)");
         return;
     }
 
     for path in installed {
-        eprintln!("sift: installed into {}", path);
+        eprintln!("sivtr: installed into {}", path);
     }
     for path in updated {
-        eprintln!("sift: updated {}", path);
+        eprintln!("sivtr: updated {}", path);
     }
     eprintln!("  restart your terminal to activate");
 }
@@ -273,6 +285,16 @@ fn update_existing_hook(content: &str, spec: &HookSpec) -> Option<String> {
         return Some(updated);
     }
 
+    if let Some((start, end)) =
+        find_marked_block(content, spec.legacy_marker_start, spec.legacy_marker_end)
+    {
+        let mut updated = String::with_capacity(content.len() - (end - start) + spec.hook.len());
+        updated.push_str(&content[..start]);
+        updated.push_str(spec.hook);
+        updated.push_str(&content[end..]);
+        return Some(updated);
+    }
+
     if let Some(legacy_hook) = spec.legacy_hook {
         if content.contains(legacy_hook) {
             return Some(content.replacen(legacy_hook, spec.hook, 1));
@@ -319,7 +341,7 @@ mod tests {
 
     #[test]
     fn current_powershell_hook_does_not_redirect_flush_output_handle() {
-        assert!(POWERSHELL_HOOK.contains("sift flush"));
+        assert!(POWERSHELL_HOOK.contains("sivtr flush"));
         assert!(!POWERSHELL_HOOK.contains("*>$null"));
     }
 

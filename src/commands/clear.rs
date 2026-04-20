@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::fs;
 
-use sift_core::capture::scrollback;
+use sivtr_core::capture::scrollback;
 
 /// Clear the current session's log and state files.
 pub fn execute() -> Result<()> {
@@ -22,9 +22,9 @@ pub fn execute() -> Result<()> {
     }
 
     if cleared {
-        eprintln!("sift: session cleared ({})", log.display());
+        eprintln!("sivtr: session cleared ({})", log.display());
     } else {
-        eprintln!("sift: no session to clear");
+        eprintln!("sivtr: no session to clear");
     }
 
     Ok(())

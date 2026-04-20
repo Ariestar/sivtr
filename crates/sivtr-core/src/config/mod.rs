@@ -7,7 +7,7 @@ use std::path::PathBuf;
 /// Top-level configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct SiftConfig {
+pub struct SivtrConfig {
     /// General settings.
     pub general: GeneralConfig,
     /// Editor settings.
@@ -28,7 +28,7 @@ pub struct GeneralConfig {
     pub preserve_colors: bool,
 }
 
-/// How sift opens captured output.
+/// How sivtr opens captured output.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OpenMode {
@@ -59,7 +59,7 @@ pub struct HistoryConfig {
 
 // --- Defaults ---
 
-impl Default for SiftConfig {
+impl Default for SivtrConfig {
     fn default() -> Self {
         Self {
             general: GeneralConfig::default(),
@@ -103,7 +103,7 @@ impl Default for OpenMode {
 
 // --- Loading / Saving ---
 
-impl SiftConfig {
+impl SivtrConfig {
     /// Load config from the default config file.
     /// If the file doesn't exist, return defaults.
     pub fn load() -> Result<Self> {
@@ -113,7 +113,7 @@ impl SiftConfig {
         }
         let content = std::fs::read_to_string(&path)
             .with_context(|| format!("Failed to read config file: {}", path.display()))?;
-        let config: SiftConfig = toml::from_str(&content)
+        let config: SivtrConfig = toml::from_str(&content)
             .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
         Ok(config)
     }
@@ -143,17 +143,27 @@ impl SiftConfig {
     }
 
     /// Get the config file path.
-    /// Windows: %APPDATA%/sift/config.toml
-    /// macOS:   ~/Library/Application Support/sift/config.toml
-    /// Linux:   ~/.config/sift/config.toml
+    /// Windows: %APPDATA%/sivtr/config.toml
+    /// macOS:   ~/Library/Application Support/sivtr/config.toml
+    /// Linux:   ~/.config/sivtr/config.toml
     pub fn config_path() -> Result<PathBuf> {
         let config_dir = dirs::config_dir()
             .ok_or_else(|| anyhow::anyhow!("Cannot determine config directory"))?;
-        Ok(config_dir.join("sift").join("config.toml"))
+        let current = config_dir.join("sivtr").join("config.toml");
+        if current.exists() {
+            return Ok(current);
+        }
+
+        let legacy = config_dir.join("sift").join("config.toml");
+        if legacy.exists() {
+            return Ok(legacy);
+        }
+
+        Ok(current)
     }
 }
 
-/// Serialize a SiftConfig to a pretty TOML string.
-pub fn to_toml_string(config: &SiftConfig) -> Result<String> {
+/// Serialize a SivtrConfig to a pretty TOML string.
+pub fn to_toml_string(config: &SivtrConfig) -> Result<String> {
     toml::to_string_pretty(config).context("Failed to serialize config to TOML")
 }

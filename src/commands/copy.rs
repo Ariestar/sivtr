@@ -6,8 +6,8 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use std::fs;
 
-use sift_core::capture::scrollback;
-use sift_core::parse::ansi::strip_ansi;
+use sivtr_core::capture::scrollback;
+use sivtr_core::parse::ansi::strip_ansi;
 
 use crate::tui::terminal::{init as init_tui, restore as restore_tui};
 
@@ -16,11 +16,11 @@ const PROMPT_SYMBOLS: &[char] = &[
     '$',
     '#',
     '%',
-    '\u{03BB}', // λ
-    '\u{276F}', // ❯
-    '\u{279C}', // ➜
-    '\u{203A}', // ›
-    '\u{00BB}', // »
+    '\u{03BB}', // lambda
+    '\u{276F}', // heavy right angle quote ornament
+    '\u{279C}', // heavy round-tipped rightwards arrow
+    '\u{203A}', // single right-pointing angle quote
+    '\u{00BB}', // right-pointing double angle quote
 ];
 const PICK_LIMIT: usize = 50;
 const PICK_PREVIEW_LINES: usize = 8;
@@ -62,8 +62,8 @@ pub fn execute(
     let boundaries_path = log_path.with_extension("boundaries");
 
     if !log_path.exists() || !boundaries_path.exists() {
-        eprintln!("sift: no session log found");
-        eprintln!("  hint: run `sift init <shell>` to start recording");
+        eprintln!("sivtr: no session log found");
+        eprintln!("  hint: run `sivtr init <shell>` to start recording");
         return Ok(());
     }
 
@@ -74,7 +74,7 @@ pub fn execute(
         .collect();
 
     if boundaries.is_empty() {
-        eprintln!("sift: no commands recorded yet");
+        eprintln!("sivtr: no commands recorded yet");
         return Ok(());
     }
 
@@ -87,7 +87,7 @@ pub fn execute(
 
     let indices = resolve_selection(selection, total)?;
     if indices.is_empty() {
-        eprintln!("sift: nothing selected");
+        eprintln!("sivtr: nothing selected");
         return Ok(());
     }
 
@@ -100,7 +100,7 @@ pub fn execute(
         .collect();
 
     if blocks.is_empty() {
-        eprintln!("sift: selected commands are empty");
+        eprintln!("sivtr: selected commands are empty");
         return Ok(());
     }
 
@@ -116,7 +116,7 @@ pub fn execute(
 
     let text = text.trim().to_string();
     if text.is_empty() {
-        eprintln!("sift: nothing matched the requested selection");
+        eprintln!("sivtr: nothing matched the requested selection");
         return Ok(());
     }
 
@@ -141,7 +141,7 @@ pub fn execute(
     }
 
     eprintln!(
-        "sift: copied {} command(s) to clipboard{}",
+        "sivtr: copied {} command(s) to clipboard{}",
         indices.len(),
         if print_full { " (full text shown)" } else { "" }
     );
@@ -448,11 +448,11 @@ mod tests {
 
     #[test]
     fn parses_prompt_symbol_input_and_output() {
-        let block = "sift on main +7\n❯ git commit -m \"feat: basic vim\"\n[main 123] feat: basic vim\n";
+        let block = "sivtr on main +7\n\u{276F} git commit -m \"feat: basic vim\"\n[main 123] feat: basic vim\n";
         let parsed = parse_command_block(block);
         assert_eq!(
             parsed.input_with_prompt,
-            "sift on main +7\n❯ git commit -m \"feat: basic vim\""
+            "sivtr on main +7\n\u{276F} git commit -m \"feat: basic vim\""
         );
         assert_eq!(parsed.input_without_prompt, "git commit -m \"feat: basic vim\"");
         assert_eq!(parsed.output, "[main 123] feat: basic vim");
@@ -471,8 +471,8 @@ mod tests {
 
     #[test]
     fn detects_prompt_line_shapes() {
-        assert!(looks_like_command_line("PS C:\\repo> sift copy 3"));
-        assert!(looks_like_command_line("❯ git add ."));
+        assert!(looks_like_command_line("PS C:\\repo> sivtr copy 3"));
+        assert!(looks_like_command_line("\u{276F} git add ."));
         assert!(!looks_like_command_line("warning: file"));
     }
 
@@ -482,7 +482,10 @@ mod tests {
             extract_command_text("PS C:\\repo> git status --all -a").unwrap(),
             "git status --all -a"
         );
-        assert_eq!(extract_command_text("❯  cargo test").unwrap(), "cargo test");
+        assert_eq!(
+            extract_command_text("\u{276F} cargo test").unwrap(),
+            "cargo test"
+        );
     }
 
     #[test]
@@ -729,7 +732,7 @@ fn render_picker(
         entries.len(),
         total
     ))
-    .block(Block::default().borders(Borders::ALL).title("sift copy --pick"));
+    .block(Block::default().borders(Borders::ALL).title("sivtr copy --pick"));
     frame.render_widget(title, chunks[0]);
 
     let body_chunks = if show_preview {

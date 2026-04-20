@@ -2,15 +2,15 @@ use anyhow::Result;
 use std::fs;
 use std::io::Write;
 
-use sift_core::capture::scrollback;
-use sift_core::parse::ansi::strip_ansi;
+use sivtr_core::capture::scrollback;
+use sivtr_core::parse::ansi::strip_ansi;
 
 /// Flush: read console buffer, append new content to session.log.
 /// Called by the shell prompt hook after each command.
-/// Must NEVER fail or print anything — the prompt depends on it.
+/// Must NEVER fail or print anything 鈥?the prompt depends on it.
 pub fn execute() -> Result<()> {
     if let Err(_) = do_flush() {
-        // Silently ignore all errors — never break the user's prompt
+        // Silently ignore all errors 鈥?never break the user's prompt
     }
     Ok(())
 }
@@ -118,6 +118,6 @@ fn find_new_start(current: &[&str], prev_tail: &[String]) -> usize {
         }
     }
 
-    // No overlap found — everything is new
+    // No overlap found 鈥?everything is new
     0
 }
