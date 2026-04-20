@@ -29,7 +29,7 @@ pub fn find_all(lines: &[Line], pattern: &str, use_regex: bool) -> Vec<SearchMat
     } else {
         // Escape the pattern and make it case-insensitive
         let escaped = regex::escape(pattern);
-        match Regex::new(&format!("(?i){}", escaped)) {
+        match Regex::new(&format!("(?i){escaped}")) {
             Ok(r) => r,
             Err(_) => return Vec::new(),
         }

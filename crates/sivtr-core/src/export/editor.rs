@@ -64,10 +64,10 @@ pub fn open_in_editor(content: &str) -> Result<String> {
         .args(extra_args)
         .arg(&path)
         .status()
-        .with_context(|| format!("Failed to launch editor '{}'", editor))?;
+        .with_context(|| format!("Failed to launch editor '{editor}'"))?;
 
     if !status.success() {
-        anyhow::bail!("Editor '{}' exited with {}", editor, status);
+        anyhow::bail!("Editor '{editor}' exited with {status}");
     }
 
     // Read back content
