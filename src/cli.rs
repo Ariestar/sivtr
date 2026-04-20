@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 /// sift — Terminal output workspace.
 /// Capture, browse, search, select, and export terminal output.
@@ -38,12 +38,14 @@ pub enum Commands {
         shell: String,
     },
 
-    /// Copy the output of the Nth-last command to clipboard
-    Copy {
-        /// How many commands back (default: 1 = last command)
-        #[arg(default_value = "1")]
-        n: usize,
-    },
+    /// Copy recent command blocks to clipboard
+    Copy(CopyArgs),
+
+    /// Copy recent command input blocks to clipboard
+    In(CopyFilterArgs),
+
+    /// Copy recent command output blocks to clipboard
+    Out(CopyFilterArgs),
 
     /// Clear the current session log
     Clear,
@@ -51,6 +53,57 @@ pub enum Commands {
     /// Internal: flush console buffer to session log (called by shell hook)
     #[command(hide = true)]
     Flush,
+}
+
+#[derive(Args, Debug)]
+pub struct CopyArgs {
+    /// Command selector: N for recent N commands, or A..B for the Nth-last range
+    pub selector: Option<String>,
+    /// Interactively select command blocks to copy
+    #[arg(long)]
+    pub pick: bool,
+    /// Copy input + output explicitly (default behavior)
+    #[arg(long, conflicts_with_all = ["input", "output", "cmd"])]
+    pub all: bool,
+    /// Copy only command input/prompt lines
+    #[arg(long = "in", conflicts_with_all = ["all", "output", "cmd"])]
+    pub input: bool,
+    /// Copy only command output lines
+    #[arg(long = "out", conflicts_with_all = ["all", "input", "cmd"])]
+    pub output: bool,
+    /// Copy only the bare command text, without prompt/context
+    #[arg(long, conflicts_with_all = ["all", "input", "output", "prompt"])]
+    pub cmd: bool,
+    /// Preserve prompt/context explicitly (already default for `sift copy`)
+    #[arg(long, conflicts_with_all = ["output", "cmd"])]
+    pub prompt: bool,
+    /// Print the full copied text to the terminal
+    #[arg(long)]
+    pub print: bool,
+    /// Filter copied text by regex, keeping matching lines
+    #[arg(long)]
+    pub regex: Option<String>,
+    /// Select specific 1-based line numbers/ranges, e.g. 1,3-5,8
+    #[arg(long)]
+    pub lines: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct CopyFilterArgs {
+    /// Command selector: N for recent N commands, or A..B for the Nth-last range
+    pub selector: Option<String>,
+    /// Interactively select command blocks to copy
+    #[arg(long)]
+    pub pick: bool,
+    /// Print the full copied text to the terminal
+    #[arg(long)]
+    pub print: bool,
+    /// Filter copied text by regex, keeping matching lines
+    #[arg(long)]
+    pub regex: Option<String>,
+    /// Select specific 1-based line numbers/ranges, e.g. 1,3-5,8
+    #[arg(long)]
+    pub lines: Option<String>,
 }
 
 #[derive(Parser, Debug)]

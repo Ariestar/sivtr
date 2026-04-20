@@ -7,6 +7,7 @@ use anyhow::Result;
 use clap::Parser;
 
 use cli::{Cli, Commands};
+use commands::copy::CopyMode;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -30,8 +31,47 @@ fn main() -> Result<()> {
         Some(Commands::Init { shell }) => {
             commands::init::execute(&shell)?;
         }
-        Some(Commands::Copy { n }) => {
-            commands::copy::execute(n)?;
+        Some(Commands::Copy(args)) => {
+            let mode = if args.cmd {
+                CopyMode::CommandOnly
+            } else if args.input {
+                CopyMode::InputOnly
+            } else if args.output {
+                CopyMode::OutputOnly
+            } else {
+                CopyMode::Both
+            };
+            commands::copy::execute(
+                args.selector.as_deref(),
+                args.pick,
+                mode,
+                args.prompt || !args.cmd,
+                args.print,
+                args.regex.as_deref(),
+                args.lines.as_deref(),
+            )?;
+        }
+        Some(Commands::In(args)) => {
+            commands::copy::execute(
+                args.selector.as_deref(),
+                args.pick,
+                CopyMode::InputOnly,
+                false,
+                args.print,
+                args.regex.as_deref(),
+                args.lines.as_deref(),
+            )?;
+        }
+        Some(Commands::Out(args)) => {
+            commands::copy::execute(
+                args.selector.as_deref(),
+                args.pick,
+                CopyMode::OutputOnly,
+                false,
+                args.print,
+                args.regex.as_deref(),
+                args.lines.as_deref(),
+            )?;
         }
         Some(Commands::Clear) => {
             commands::clear::execute()?;

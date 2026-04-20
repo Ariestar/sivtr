@@ -1225,6 +1225,7 @@ dependencies = [
  "crossterm",
  "dirs",
  "ratatui",
+ "regex",
  "sift-core",
  "tokio",
 ]
