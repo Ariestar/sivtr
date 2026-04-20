@@ -30,3 +30,4 @@ tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 atty = "0.2"
 arboard = "3"
+dirs = "5"

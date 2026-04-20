@@ -1223,6 +1223,7 @@ dependencies = [
  "atty",
  "clap",
  "crossterm",
+ "dirs",
  "ratatui",
  "sift-core",
  "tokio",

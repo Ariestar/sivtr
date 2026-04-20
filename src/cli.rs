@@ -34,7 +34,7 @@ pub enum Commands {
 
     /// Generate shell integration hook
     Init {
-        /// Shell type: powershell, bash, zsh, fish
+        /// Shell type: powershell, bash, zsh, nushell
         shell: String,
     },
 

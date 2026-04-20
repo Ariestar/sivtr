@@ -11,7 +11,7 @@ pub fn execute(n: usize) -> Result<()> {
 
     if !log_path.exists() || !boundaries_path.exists() {
         eprintln!("sift: no session log found");
-        eprintln!("  hint: run `sift init powershell` to start recording");
+        eprintln!("  hint: run `sift init <shell>` to start recording");
         return Ok(());
     }
 
