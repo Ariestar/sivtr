@@ -1,0 +1,26 @@
+[package]
+name = "sift-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Core library for sift — terminal output processing engine"
+
+[dependencies]
+strip-ansi-escapes = "0.2"
+unicode-width = "0.2"
+regex = "1"
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+rusqlite = { version = "0.32", features = ["bundled", "vtab"] }
+arboard = "3"
+dirs = "5"
+uuid = { version = "1", features = ["v4"] }
+hostname = "0.4"
+anyhow = "1"
+thiserror = "2"
+tempfile = "3"
+toml = "0.8"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["processenv", "winbase", "wincon", "handleapi"] }

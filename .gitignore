@@ -1,0 +1,22 @@
+# Build
+/target
+/crates/*/target
+
+# Editor
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Sift runtime
+session_*.log
+*.state
+
+# Docs (local only)
+/docs/

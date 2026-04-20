@@ -1,0 +1,31 @@
+[workspace]
+members = ["crates/sift-core", "."]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+rust-version = "1.75"
+
+[package]
+name = "sift"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Terminal output workspace — capture, browse, search, select, and export terminal output"
+default-run = "sift"
+
+[[bin]]
+name = "sift"
+path = "src/main.rs"
+
+[dependencies]
+sift-core = { path = "crates/sift-core" }
+clap = { version = "4", features = ["derive"] }
+ratatui = "0.29"
+crossterm = "0.28"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+atty = "0.2"
