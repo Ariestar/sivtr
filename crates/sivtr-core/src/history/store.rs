@@ -79,7 +79,14 @@ impl HistoryStore {
         self.conn.execute(
             "INSERT INTO history (content, command, timestamp, hostname, session_id, source)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![content, command, timestamp, hostname, session_id, source.to_string()],
+            rusqlite::params![
+                content,
+                command,
+                timestamp,
+                hostname,
+                session_id,
+                source.to_string()
+            ],
         )?;
 
         Ok(self.conn.last_insert_rowid())
@@ -87,8 +94,8 @@ impl HistoryStore {
 
     /// Get default database path.
     fn default_db_path() -> Result<PathBuf> {
-        let data_dir = dirs::data_dir()
-            .ok_or_else(|| anyhow::anyhow!("Cannot determine data directory"))?;
+        let data_dir =
+            dirs::data_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine data directory"))?;
         let current = data_dir.join("sivtr").join("history.db");
         if current.exists() {
             return Ok(current);

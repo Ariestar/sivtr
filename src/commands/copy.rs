@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use regex::Regex;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+use regex::Regex;
 use std::fs;
 
 use sivtr_core::capture::scrollback;
@@ -12,11 +12,7 @@ use sivtr_core::parse::ansi::strip_ansi;
 use crate::tui::terminal::{init as init_tui, restore as restore_tui};
 
 const PROMPT_SYMBOLS: &[char] = &[
-    '>',
-    '$',
-    '#',
-    '%',
-    '\u{03BB}', // lambda
+    '>', '$', '#', '%', '\u{03BB}', // lambda
     '\u{276F}', // heavy right angle quote ornament
     '\u{279C}', // heavy round-tipped rightwards arrow
     '\u{203A}', // single right-pointing angle quote
@@ -41,6 +37,7 @@ struct CommandBlock {
     command: String,
 }
 
+#[allow(clippy::enum_variant_names)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum CommandSelection {
     RecentCount(usize),
@@ -378,7 +375,11 @@ fn filter_lines_by_spec(text: &str, spec: &str) -> Result<String> {
     let lines: Vec<&str> = text.lines().collect();
     let mut selected = Vec::new();
 
-    for part in spec.split(',').map(str::trim).filter(|part| !part.is_empty()) {
+    for part in spec
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
         let range = part.split_once(':');
 
         if let Some((start, end)) = range {
@@ -430,10 +431,10 @@ fn parse_line_number(value: &str) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_range_toggle, build_output_preview,
-        extract_command_text, filter_lines_by_regex, filter_lines_by_spec, format_block,
-        looks_like_command_line, parse_command_block, parse_selection, resolve_selection,
-        selection_from_entries, CommandBlock, CommandSelection, CopyMode, PickEntry,
+        apply_range_toggle, build_output_preview, extract_command_text, filter_lines_by_regex,
+        filter_lines_by_spec, format_block, looks_like_command_line, parse_command_block,
+        parse_selection, resolve_selection, selection_from_entries, CommandBlock, CommandSelection,
+        CopyMode, PickEntry,
     };
 
     #[test]
@@ -454,7 +455,10 @@ mod tests {
             parsed.input_with_prompt,
             "sivtr on main +7\n\u{276F} git commit -m \"feat: basic vim\""
         );
-        assert_eq!(parsed.input_without_prompt, "git commit -m \"feat: basic vim\"");
+        assert_eq!(
+            parsed.input_without_prompt,
+            "git commit -m \"feat: basic vim\""
+        );
         assert_eq!(parsed.output, "[main 123] feat: basic vim");
         assert_eq!(parsed.command, "git commit -m \"feat: basic vim\"");
     }
@@ -521,7 +525,10 @@ mod tests {
 
     #[test]
     fn parses_selection_count() {
-        assert_eq!(parse_selection("3").unwrap(), CommandSelection::RecentCount(3));
+        assert_eq!(
+            parse_selection("3").unwrap(),
+            CommandSelection::RecentCount(3)
+        );
     }
 
     #[test]
@@ -534,7 +541,10 @@ mod tests {
 
     #[test]
     fn resolves_selection_range() {
-        assert_eq!(resolve_selection(CommandSelection::RecentRange { newer: 2, older: 5 }, 10).unwrap(), vec![5, 6, 7, 8]);
+        assert_eq!(
+            resolve_selection(CommandSelection::RecentRange { newer: 2, older: 5 }, 10).unwrap(),
+            vec![5, 6, 7, 8]
+        );
     }
 
     #[test]
@@ -720,7 +730,11 @@ fn render_picker(
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(1), Constraint::Length(2)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(1),
+            Constraint::Length(2),
+        ])
         .split(area);
 
     let anchor_hint = range_anchor
@@ -760,7 +774,9 @@ fn render_picker(
             if is_in_pending_range {
                 ListItem::new(Line::styled(
                     line,
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
                 ))
             } else {
                 ListItem::new(line)
@@ -843,7 +859,11 @@ fn apply_range_toggle(entries: &mut [PickEntry], a: usize, b: usize) {
 }
 
 fn range_bounds(a: usize, b: usize) -> (usize, usize) {
-    if a <= b { (a, b) } else { (b, a) }
+    if a <= b {
+        (a, b)
+    } else {
+        (b, a)
+    }
 }
 
 fn build_output_preview(block: &CommandBlock) -> String {

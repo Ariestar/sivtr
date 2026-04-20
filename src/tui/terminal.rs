@@ -22,7 +22,11 @@ pub fn init() -> Result<Tui> {
 /// Restore the terminal to its original state.
 pub fn restore(terminal: &mut Tui) -> Result<()> {
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), DisableMouseCapture, LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )?;
     terminal.show_cursor()?;
     Ok(())
 }

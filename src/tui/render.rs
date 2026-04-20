@@ -33,9 +33,12 @@ pub fn render(app: &App, frame: &mut Frame) {
             chunks[2].y,
         ));
     } else {
-        let cursor_y = chunks[0]
-            .y
-            .saturating_add(app.buffer.cursor.row.saturating_sub(app.buffer.viewport.offset) as u16);
+        let cursor_y = chunks[0].y.saturating_add(
+            app.buffer
+                .cursor
+                .row
+                .saturating_sub(app.buffer.viewport.offset) as u16,
+        );
         let cursor_x = chunks[0]
             .x
             .saturating_add(LINE_NUMBER_WIDTH)

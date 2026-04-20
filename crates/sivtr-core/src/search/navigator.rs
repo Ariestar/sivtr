@@ -52,11 +52,7 @@ impl SearchState {
             return;
         }
         // Find first match at or after this row
-        let idx = self
-            .matches
-            .iter()
-            .position(|m| m.row >= row)
-            .unwrap_or(0);
+        let idx = self.matches.iter().position(|m| m.row >= row).unwrap_or(0);
         self.current = Some(idx);
     }
 }
@@ -67,9 +63,21 @@ mod tests {
 
     fn make_matches() -> Vec<SearchMatch> {
         vec![
-            SearchMatch { row: 0, byte_start: 0, byte_end: 3 },
-            SearchMatch { row: 2, byte_start: 5, byte_end: 8 },
-            SearchMatch { row: 5, byte_start: 0, byte_end: 3 },
+            SearchMatch {
+                row: 0,
+                byte_start: 0,
+                byte_end: 3,
+            },
+            SearchMatch {
+                row: 2,
+                byte_start: 5,
+                byte_end: 8,
+            },
+            SearchMatch {
+                row: 5,
+                byte_start: 0,
+                byte_end: 3,
+            },
         ]
     }
 

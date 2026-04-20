@@ -1,5 +1,5 @@
-use regex::Regex;
 use crate::buffer::line::Line;
+use regex::Regex;
 
 /// A single search match within a line.
 #[derive(Debug, Clone, PartialEq, Eq)]

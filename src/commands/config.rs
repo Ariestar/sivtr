@@ -1,7 +1,7 @@
+use crate::cli::{ConfigAction, ConfigCommand};
 use anyhow::Result;
 use sivtr_core::config::SivtrConfig;
 use sivtr_core::export::editor;
-use crate::cli::{ConfigCommand, ConfigAction};
 
 /// Execute config subcommands.
 pub fn execute(cmd: ConfigCommand) -> Result<()> {

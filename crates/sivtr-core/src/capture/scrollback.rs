@@ -1,4 +1,4 @@
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use std::env;
 
 /// Get the session log path used by the shell hook.
@@ -34,8 +34,7 @@ pub fn flush_state_path() -> std::path::PathBuf {
 pub fn capture_scrollback() -> Result<Option<String>> {
     let log = session_log_path();
     if log.exists() {
-        let content = std::fs::read_to_string(&log)
-            .context("Failed to read session log")?;
+        let content = std::fs::read_to_string(&log).context("Failed to read session log")?;
         if !content.trim().is_empty() {
             return Ok(Some(content));
         }
@@ -61,8 +60,7 @@ fn capture_windows_console() -> Result<String> {
     use winapi::um::processenv::GetStdHandle;
     use winapi::um::winbase::STD_OUTPUT_HANDLE;
     use winapi::um::wincon::{
-        GetConsoleScreenBufferInfo, ReadConsoleOutputCharacterW,
-        ReadConsoleOutputAttribute,
+        GetConsoleScreenBufferInfo, ReadConsoleOutputAttribute, ReadConsoleOutputCharacterW,
         CONSOLE_SCREEN_BUFFER_INFO, COORD,
     };
     use winapi::um::winnt::{FILE_SHARE_READ, FILE_SHARE_WRITE, GENERIC_READ, GENERIC_WRITE};
@@ -80,12 +78,13 @@ fn capture_windows_console() -> Result<String> {
             0,
             ptr::null_mut(),
         );
-        let (handle, should_close) = if !conout_handle.is_null() && conout_handle != INVALID_HANDLE_VALUE {
-            (conout_handle, true)
-        } else {
-            let std_handle = GetStdHandle(STD_OUTPUT_HANDLE);
-            (std_handle, false)
-        };
+        let (handle, should_close) =
+            if !conout_handle.is_null() && conout_handle != INVALID_HANDLE_VALUE {
+                (conout_handle, true)
+            } else {
+                let std_handle = GetStdHandle(STD_OUTPUT_HANDLE);
+                (std_handle, false)
+            };
 
         if handle.is_null() || handle == INVALID_HANDLE_VALUE {
             anyhow::bail!("Failed to get console handle");

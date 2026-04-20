@@ -1,6 +1,6 @@
+use crate::app::App;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
-use crate::app::App;
 use sivtr_core::buffer::line::{AnsiColor, Line as CoreLine, StyledSpan as CoreStyledSpan};
 use sivtr_core::selection::SelectionMode;
 
@@ -55,11 +55,7 @@ fn span_to_style(span: &CoreStyledSpan) -> Style {
 }
 
 /// Render styled spans for a content line, respecting colors.
-fn render_styled_content<'a>(
-    content: &str,
-    styles: &[CoreStyledSpan],
-    spans: &mut Vec<Span<'a>>,
-) {
+fn render_styled_content<'a>(content: &str, styles: &[CoreStyledSpan], spans: &mut Vec<Span<'a>>) {
     if styles.is_empty() {
         spans.push(Span::raw(content.to_string()));
         return;
@@ -80,7 +76,11 @@ fn render_styled_content<'a>(
     }
 }
 
-fn split_by_display_cols(line: &CoreLine, start_col: usize, end_col_inclusive: usize) -> (String, String, String) {
+fn split_by_display_cols(
+    line: &CoreLine,
+    start_col: usize,
+    end_col_inclusive: usize,
+) -> (String, String, String) {
     let max_width = line.display_width();
     let start = start_col.min(max_width);
     let end_exclusive = (end_col_inclusive + 1).min(max_width);
@@ -104,10 +104,7 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) {
         if let Some(content_line) = buffer.get_line(line_idx) {
             // Build the line number prefix
             let line_num = format!("{:>5} ", line_idx + 1);
-            let mut spans = vec![Span::styled(
-                line_num,
-                Style::default().fg(Color::DarkGray),
-            )];
+            let mut spans = vec![Span::styled(line_num, Style::default().fg(Color::DarkGray))];
 
             // Check if this line is within a selection
             if let Some(ref sel) = buffer.selection {
@@ -178,17 +175,30 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) {
                         }
                     }
                 } else {
-                    render_content_with_search(app, line_idx, content_line, preserve_colors, &mut spans);
+                    render_content_with_search(
+                        app,
+                        line_idx,
+                        content_line,
+                        preserve_colors,
+                        &mut spans,
+                    );
                 }
             } else {
-                render_content_with_search(app, line_idx, content_line, preserve_colors, &mut spans);
+                render_content_with_search(
+                    app,
+                    line_idx,
+                    content_line,
+                    preserve_colors,
+                    &mut spans,
+                );
             }
 
             lines.push(Line::from(spans));
         } else {
-            lines.push(Line::from(vec![
-                Span::styled("    ~ ", Style::default().fg(Color::DarkGray)),
-            ]));
+            lines.push(Line::from(vec![Span::styled(
+                "    ~ ",
+                Style::default().fg(Color::DarkGray),
+            )]));
         }
     }
 
@@ -226,7 +236,13 @@ fn render_content_with_search<'a>(
             for (match_idx, m) in &line_matches {
                 if m.byte_start > last_end {
                     if preserve_colors {
-                        render_styled_slice(content, &content_line.styles, last_end, m.byte_start, spans);
+                        render_styled_slice(
+                            content,
+                            &content_line.styles,
+                            last_end,
+                            m.byte_start,
+                            spans,
+                        );
                     } else {
                         spans.push(Span::raw(content[last_end..m.byte_start].to_string()));
                     }
@@ -246,7 +262,13 @@ fn render_content_with_search<'a>(
             }
             if last_end < content.len() {
                 if preserve_colors {
-                    render_styled_slice(content, &content_line.styles, last_end, content.len(), spans);
+                    render_styled_slice(
+                        content,
+                        &content_line.styles,
+                        last_end,
+                        content.len(),
+                        spans,
+                    );
                 } else {
                     spans.push(Span::raw(content[last_end..].to_string()));
                 }

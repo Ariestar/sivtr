@@ -1,12 +1,12 @@
 use anyhow::Result;
-use sivtr_core::capture::scrollback;
-use sivtr_core::config::{SivtrConfig, OpenMode};
-use sivtr_core::parse;
 use sivtr_core::buffer::Buffer;
+use sivtr_core::capture::scrollback;
+use sivtr_core::config::{OpenMode, SivtrConfig};
 use sivtr_core::export::editor;
+use sivtr_core::parse;
 
-use crate::app::App;
 use super::browse;
+use crate::app::App;
 
 /// Capture current terminal scrollback and open it.
 pub fn execute() -> Result<()> {

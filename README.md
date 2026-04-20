@@ -1,13 +1,13 @@
 # sivtr
 
-**Terminal Output Workspace** 鈥?Capture, browse, search, select, and export terminal output.
+**Terminal Output Workspace** - Capture, browse, search, select, and export terminal output.
 
-sivtr turns terminal output into searchable, selectable, reusable text assets. It is not a terminal emulator or multiplexer 鈥?it is an independent tool that works alongside your existing terminal workflow.
+`sivtr` turns terminal output into searchable, selectable, reusable text assets. It is not a terminal emulator or multiplexer - it is an independent tool that works alongside your existing terminal workflow.
 
 ## Features (V1)
 
-- **Pipe mode**: `command | sivtr` 鈥?pipe any command output into a TUI browser
-- **Run mode**: `sivtr run <command>` 鈥?wrap command execution, capture output, then browse
+- **Pipe mode**: `command | sivtr` - pipe any command output into a TUI browser
+- **Run mode**: `sivtr run <command>` - wrap command execution, capture output, then browse
 - **Vim-style navigation**: `hjkl`, `Ctrl-D/U`, `gg`, `G`
 - **Visual selection**: `v` (character), `V` (line), `Ctrl-V` (block/column)
 - **Search**: `/pattern` forward search, `n`/`N` for next/previous match
@@ -45,10 +45,10 @@ sivtr import
 
 | Key | Mode | Action |
 |-----|------|--------|
-| `j` / `鈫揱 | Normal | Move down |
-| `k` / `鈫慲 | Normal | Move up |
-| `h` / `鈫恅 | Normal | Move left |
-| `l` / `鈫抈 | Normal | Move right |
+| `j` / `Down` | Normal | Move down |
+| `k` / `Up` | Normal | Move up |
+| `h` / `Left` | Normal | Move left |
+| `l` / `Right` | Normal | Move right |
 | `Ctrl-D` | Normal | Half page down |
 | `Ctrl-U` | Normal | Half page up |
 | `g` | Normal | Go to top |
@@ -73,15 +73,15 @@ sivtr import
 
 ## Project Structure
 
-```
+```text
 sivtr/
-鈹溾攢鈹€ crates/sivtr-core/    # Core library (capture, parse, buffer, selection, search, history, export)
-鈹溾攢鈹€ src/                 # CLI + TUI binary
-鈹?  鈹溾攢鈹€ cli.rs           # Command definitions (clap)
-鈹?  鈹溾攢鈹€ app.rs           # Application state machine
-鈹?  鈹溾攢鈹€ tui/             # TUI rendering and events
-鈹?  鈹斺攢鈹€ commands/        # Subcommand handlers
-鈹斺攢鈹€ docs/                # PRD and architecture docs
+|- crates/sivtr-core/    # Core library (capture, parse, buffer, selection, search, history, export)
+|- src/                  # CLI + TUI binary
+|  |- cli.rs             # Command definitions (clap)
+|  |- app.rs             # Application state machine
+|  |- tui/               # TUI rendering and events
+|  `- commands/          # Subcommand handlers
+`- docs/                 # PRD and architecture docs
 ```
 
 ## License

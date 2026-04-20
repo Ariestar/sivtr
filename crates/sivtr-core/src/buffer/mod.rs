@@ -1,11 +1,11 @@
+pub mod cursor;
 pub mod line;
 pub mod viewport;
-pub mod cursor;
 
+use crate::selection::Selection;
+use cursor::Cursor;
 use line::Line;
 use viewport::Viewport;
-use cursor::Cursor;
-use crate::selection::Selection;
 
 /// The main buffer holding all parsed lines and view state.
 pub struct Buffer {

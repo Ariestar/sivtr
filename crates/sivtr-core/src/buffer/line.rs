@@ -73,7 +73,11 @@ impl Line {
     pub fn extract_by_display_cols(&self, col_start: usize, col_end: usize) -> String {
         let (char_start, char_end) =
             crate::parse::unicode::display_col_to_char_range(&self.content, col_start, col_end);
-        self.content.chars().skip(char_start).take(char_end - char_start).collect()
+        self.content
+            .chars()
+            .skip(char_start)
+            .take(char_end - char_start)
+            .collect()
     }
 }
 
@@ -99,7 +103,7 @@ mod tests {
 
     #[test]
     fn test_display_width_cjk() {
-        let line = make_line("浣犲ソ");
+        let line = make_line("你好");
         assert_eq!(line.display_width(), 4);
     }
 
@@ -111,33 +115,32 @@ mod tests {
 
     #[test]
     fn test_extract_cjk() {
-        let line = make_line("浣犲ソ涓栫晫");
-        assert_eq!(line.extract_by_display_cols(0, 4), "浣犲ソ");
+        let line = make_line("你好世界");
+        assert_eq!(line.extract_by_display_cols(0, 4), "你好");
     }
 
     #[test]
     fn test_extract_beyond_line() {
         let line = make_line("hi");
-        // Requesting cols 0..10 on a 2-char line should return "hi"
         assert_eq!(line.extract_by_display_cols(0, 10), "hi");
     }
 
     #[test]
     fn test_char_index_for_display_col() {
-        let line = make_line("a濂絙");
+        let line = make_line("a你好");
         assert_eq!(line.char_index_for_display_col(0), 0);
         assert_eq!(line.char_index_for_display_col(1), 1);
         assert_eq!(line.char_index_for_display_col(2), 1);
         assert_eq!(line.char_index_for_display_col(3), 2);
-        assert_eq!(line.char_index_for_display_col(4), 3);
+        assert_eq!(line.char_index_for_display_col(4), 2);
     }
 
     #[test]
     fn test_display_col_for_char_index() {
-        let line = make_line("a濂絙");
+        let line = make_line("a你好");
         assert_eq!(line.display_col_for_char_index(0), 0);
         assert_eq!(line.display_col_for_char_index(1), 1);
         assert_eq!(line.display_col_for_char_index(2), 3);
-        assert_eq!(line.display_col_for_char_index(3), 4);
+        assert_eq!(line.display_col_for_char_index(3), 5);
     }
 }

@@ -1,6 +1,6 @@
+use crate::app::{App, AppMode};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
-use crate::app::{App, AppMode};
 
 /// Render the status bar at the bottom of the screen.
 pub fn render(app: &App, area: Rect, buf: &mut Buffer) {
@@ -51,7 +51,10 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) {
         Span::styled(format!(" {}", status_text), status_style),
         Span::raw(middle_pad),
         Span::styled(total_lines, Style::default().fg(Color::DarkGray)),
-        Span::styled(position, Style::default().bg(Color::DarkGray).fg(Color::White)),
+        Span::styled(
+            position,
+            Style::default().bg(Color::DarkGray).fg(Color::White),
+        ),
     ]);
 
     let paragraph = Paragraph::new(line);

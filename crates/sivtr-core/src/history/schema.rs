@@ -1,5 +1,5 @@
-use rusqlite::Connection;
 use anyhow::Result;
+use rusqlite::Connection;
 
 /// Initialize the database schema, creating tables if they don't exist.
 pub fn init_schema(conn: &Connection) -> Result<()> {
@@ -38,7 +38,7 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             INSERT INTO history_fts(rowid, content, command)
             VALUES (new.id, new.content, new.command);
         END;
-        "
+        ",
     )?;
     Ok(())
 }

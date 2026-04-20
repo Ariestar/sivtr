@@ -1,10 +1,10 @@
+use sivtr_core::buffer::cursor::Cursor;
 use sivtr_core::buffer::Buffer;
 use sivtr_core::config::SivtrConfig;
-use sivtr_core::search::SearchState;
-use sivtr_core::search::matcher;
-use sivtr_core::buffer::cursor::Cursor;
-use sivtr_core::selection::{Selection, SelectionMode};
 use sivtr_core::export;
+use sivtr_core::search::matcher;
+use sivtr_core::search::SearchState;
+use sivtr_core::selection::{Selection, SelectionMode};
 
 use anyhow::Result;
 
@@ -135,7 +135,11 @@ impl App {
         }
 
         self.status = Some(StatusMessage {
-            text: format!("[{}/{}] matches", state.current.map(|i| i + 1).unwrap_or(0), count),
+            text: format!(
+                "[{}/{}] matches",
+                state.current.map(|i| i + 1).unwrap_or(0),
+                count
+            ),
             is_error: count == 0,
         });
 
@@ -214,7 +218,12 @@ impl App {
     }
 
     pub fn finish_mouse_selection(&mut self) {
-        if !self.mouse_dragged && matches!(self.mode, AppMode::Visual | AppMode::VisualLine | AppMode::VisualBlock) {
+        if !self.mouse_dragged
+            && matches!(
+                self.mode,
+                AppMode::Visual | AppMode::VisualLine | AppMode::VisualBlock
+            )
+        {
             self.exit_visual();
         } else {
             self.cancel_mouse_selection();

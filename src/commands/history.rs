@@ -1,6 +1,6 @@
+use crate::cli::{HistoryAction, HistoryCommand};
 use anyhow::Result;
 use sivtr_core::history::HistoryStore;
-use crate::cli::{HistoryCommand, HistoryAction};
 
 /// Execute history subcommands.
 pub fn execute(cmd: HistoryCommand) -> Result<()> {
@@ -15,10 +15,20 @@ pub fn execute(cmd: HistoryCommand) -> Result<()> {
             }
             for entry in &entries {
                 let cmd_str = entry.command.as_deref().unwrap_or("-");
-                let preview: String = entry.content.lines().next().unwrap_or("").chars().take(60).collect();
+                let preview: String = entry
+                    .content
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(60)
+                    .collect();
                 println!(
                     "{:>5}  {}  [{}]  {}",
-                    entry.id, &entry.timestamp[..19], cmd_str, preview
+                    entry.id,
+                    &entry.timestamp[..19],
+                    cmd_str,
+                    preview
                 );
             }
         }
@@ -30,29 +40,37 @@ pub fn execute(cmd: HistoryCommand) -> Result<()> {
             }
             for entry in &entries {
                 let cmd_str = entry.command.as_deref().unwrap_or("-");
-                let preview: String = entry.content.lines().next().unwrap_or("").chars().take(60).collect();
+                let preview: String = entry
+                    .content
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(60)
+                    .collect();
                 println!(
                     "{:>5}  {}  [{}]  {}",
-                    entry.id, &entry.timestamp[..19], cmd_str, preview
+                    entry.id,
+                    &entry.timestamp[..19],
+                    cmd_str,
+                    preview
                 );
             }
         }
-        Some(HistoryAction::Show { id }) => {
-            match store.get_by_id(id)? {
-                Some(entry) => {
-                    println!("--- History #{} ---", entry.id);
-                    println!("Timestamp: {}", entry.timestamp);
-                    println!("Command:   {}", entry.command.as_deref().unwrap_or("-"));
-                    println!("Source:    {}", entry.source);
-                    println!("Host:      {}", entry.hostname);
-                    println!("---");
-                    println!("{}", entry.content);
-                }
-                None => {
-                    println!("History entry #{} not found.", id);
-                }
+        Some(HistoryAction::Show { id }) => match store.get_by_id(id)? {
+            Some(entry) => {
+                println!("--- History #{} ---", entry.id);
+                println!("Timestamp: {}", entry.timestamp);
+                println!("Command:   {}", entry.command.as_deref().unwrap_or("-"));
+                println!("Source:    {}", entry.source);
+                println!("Host:      {}", entry.hostname);
+                println!("---");
+                println!("{}", entry.content);
             }
-        }
+            None => {
+                println!("History entry #{} not found.", id);
+            }
+        },
         None => {
             // Default: list recent
             let entries = store.list_recent(20)?;
@@ -62,10 +80,20 @@ pub fn execute(cmd: HistoryCommand) -> Result<()> {
             }
             for entry in &entries {
                 let cmd_str = entry.command.as_deref().unwrap_or("-");
-                let preview: String = entry.content.lines().next().unwrap_or("").chars().take(60).collect();
+                let preview: String = entry
+                    .content
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(60)
+                    .collect();
                 println!(
                     "{:>5}  {}  [{}]  {}",
-                    entry.id, &entry.timestamp[..19], cmd_str, preview
+                    entry.id,
+                    &entry.timestamp[..19],
+                    cmd_str,
+                    preview
                 );
             }
         }

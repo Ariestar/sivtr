@@ -22,15 +22,6 @@ impl StyleState {
         *self = Self::default();
     }
 
-    fn is_default(&self) -> bool {
-        self.fg.is_none()
-            && self.bg.is_none()
-            && !self.bold
-            && !self.dim
-            && !self.italic
-            && !self.underline
-    }
-
     fn to_span(&self, start: usize, end: usize) -> StyledSpan {
         StyledSpan {
             start,
@@ -59,13 +50,11 @@ fn sgr_to_indexed_color(code: u16) -> Option<u8> {
 
 /// Parse ANSI escape sequences and produce styled spans.
 ///
-/// Each span maps a byte range in the *cleaned* text to a style.
-/// Walks through the raw input, tracks style state via SGR codes,
-/// and emits spans whenever the style changes.
+/// Each span maps a byte range in the cleaned text to a style.
 pub fn parse_styles(raw_line: &str) -> Vec<StyledSpan> {
     let mut spans: Vec<StyledSpan> = Vec::new();
     let mut state = StyleState::default();
-    let mut clean_offset: usize = 0; // byte offset in cleaned text
+    let mut clean_offset: usize = 0;
     let mut span_start: usize = 0;
 
     let bytes = raw_line.as_bytes();
@@ -74,50 +63,37 @@ pub fn parse_styles(raw_line: &str) -> Vec<StyledSpan> {
 
     while i < len {
         if bytes[i] == 0x1b && i + 1 < len && bytes[i + 1] == b'[' {
-            // Found ESC[ 鈥?parse CSI sequence
-            let _seq_start = i;
-            i += 2; // skip ESC[
+            i += 2;
 
-            // Collect parameter bytes (digits and semicolons)
             let param_start = i;
             while i < len && (bytes[i].is_ascii_digit() || bytes[i] == b';') {
                 i += 1;
             }
 
-            // Final byte determines the command
             if i < len {
                 let final_byte = bytes[i];
-                i += 1; // consume final byte
+                i += 1;
 
                 if final_byte == b'm' {
-                    // SGR sequence 鈥?flush current span and apply new style
                     if clean_offset > span_start {
                         spans.push(state.to_span(span_start, clean_offset));
                         span_start = clean_offset;
                     }
 
-                    let params_str =
-                        std::str::from_utf8(&bytes[param_start..i - 1]).unwrap_or("");
+                    let params_str = std::str::from_utf8(&bytes[param_start..i - 1]).unwrap_or("");
                     apply_sgr(&mut state, params_str);
                 }
-                // Ignore non-SGR CSI sequences
             }
+        } else if let Some(ch) = raw_line[i..].chars().next() {
+            let ch_len = ch.len_utf8();
+            clean_offset += ch_len;
+            i += ch_len;
         } else {
-            // Regular character 鈥?count its byte length in the clean output
-            let _ch_start = i;
-            // Decode one UTF-8 character
-            if let Some(ch) = raw_line[i..].chars().next() {
-                let ch_len = ch.len_utf8();
-                clean_offset += ch_len;
-                i += ch_len;
-            } else {
-                i += 1;
-                clean_offset += 1;
-            }
+            i += 1;
+            clean_offset += 1;
         }
     }
 
-    // Flush final span
     if clean_offset > span_start {
         spans.push(state.to_span(span_start, clean_offset));
     }
@@ -151,57 +127,45 @@ fn apply_sgr(state: &mut StyleState, params: &str) {
             }
             23 => state.italic = false,
             24 => state.underline = false,
-            // Standard foreground colors
             30..=37 | 90..=97 => {
                 state.fg = sgr_to_indexed_color(codes[ci]).map(AnsiColor::Indexed);
             }
-            39 => state.fg = None, // default fg
-            // Standard background colors
+            39 => state.fg = None,
             40..=47 | 100..=107 => {
                 state.bg = sgr_to_indexed_color(codes[ci]).map(AnsiColor::Indexed);
             }
-            49 => state.bg = None, // default bg
-            // Extended color: 38;5;N (256-color) or 38;2;R;G;B (truecolor)
-            38 => {
-                if ci + 1 < codes.len() {
-                    match codes[ci + 1] {
-                        5 if ci + 2 < codes.len() => {
-                            state.fg = Some(AnsiColor::Indexed(codes[ci + 2] as u8));
-                            ci += 2;
-                        }
-                        2 if ci + 4 < codes.len() => {
-                            state.fg = Some(AnsiColor::Rgb(
-                                codes[ci + 2] as u8,
-                                codes[ci + 3] as u8,
-                                codes[ci + 4] as u8,
-                            ));
-                            ci += 4;
-                        }
-                        _ => {}
-                    }
+            49 => state.bg = None,
+            38 => match codes.get(ci + 1).copied() {
+                Some(5) if ci + 2 < codes.len() => {
+                    state.fg = Some(AnsiColor::Indexed(codes[ci + 2] as u8));
+                    ci += 2;
                 }
-            }
-            // Extended background: 48;5;N or 48;2;R;G;B
-            48 => {
-                if ci + 1 < codes.len() {
-                    match codes[ci + 1] {
-                        5 if ci + 2 < codes.len() => {
-                            state.bg = Some(AnsiColor::Indexed(codes[ci + 2] as u8));
-                            ci += 2;
-                        }
-                        2 if ci + 4 < codes.len() => {
-                            state.bg = Some(AnsiColor::Rgb(
-                                codes[ci + 2] as u8,
-                                codes[ci + 3] as u8,
-                                codes[ci + 4] as u8,
-                            ));
-                            ci += 4;
-                        }
-                        _ => {}
-                    }
+                Some(2) if ci + 4 < codes.len() => {
+                    state.fg = Some(AnsiColor::Rgb(
+                        codes[ci + 2] as u8,
+                        codes[ci + 3] as u8,
+                        codes[ci + 4] as u8,
+                    ));
+                    ci += 4;
                 }
-            }
-            _ => {} // ignore unknown codes
+                _ => {}
+            },
+            48 => match codes.get(ci + 1).copied() {
+                Some(5) if ci + 2 < codes.len() => {
+                    state.bg = Some(AnsiColor::Indexed(codes[ci + 2] as u8));
+                    ci += 2;
+                }
+                Some(2) if ci + 4 < codes.len() => {
+                    state.bg = Some(AnsiColor::Rgb(
+                        codes[ci + 2] as u8,
+                        codes[ci + 3] as u8,
+                        codes[ci + 4] as u8,
+                    ));
+                    ci += 4;
+                }
+                _ => {}
+            },
+            _ => {}
         }
         ci += 1;
     }
@@ -223,8 +187,8 @@ mod tests {
 
     #[test]
     fn test_strip_complex_escapes() {
-        let input = "\x1b[1;32m鉁揬x1b[0m \x1b[90mtest passed\x1b[0m";
-        assert_eq!(strip_ansi(input), "鉁?test passed");
+        let input = "\x1b[1;32mok\x1b[0m \x1b[90mtest passed\x1b[0m";
+        assert_eq!(strip_ansi(input), "ok test passed");
     }
 
     #[test]
@@ -249,37 +213,31 @@ mod tests {
 
     #[test]
     fn test_parse_red_text() {
-        // \x1b[31mhello\x1b[0m
         let spans = parse_styles("\x1b[31mhello\x1b[0m");
         assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].fg, Some(AnsiColor::Indexed(1))); // red
+        assert_eq!(spans[0].fg, Some(AnsiColor::Indexed(1)));
         assert_eq!(spans[0].start, 0);
         assert_eq!(spans[0].end, 5);
     }
 
     #[test]
     fn test_parse_bold_green() {
-        // \x1b[1;32m鉁揬x1b[0m world
-        let spans = parse_styles("\x1b[1;32m鉁揬x1b[0m world");
+        let spans = parse_styles("\x1b[1;32mok\x1b[0m world");
         assert_eq!(spans.len(), 2);
-        // First span: bold green "鉁?
         assert_eq!(spans[0].fg, Some(AnsiColor::Indexed(2)));
         assert!(spans[0].bold);
-        // Second span: reset " world"
         assert_eq!(spans[1].fg, None);
         assert!(!spans[1].bold);
     }
 
     #[test]
     fn test_parse_256_color() {
-        // \x1b[38;5;208mtext\x1b[0m
         let spans = parse_styles("\x1b[38;5;208mtext\x1b[0m");
         assert_eq!(spans[0].fg, Some(AnsiColor::Indexed(208)));
     }
 
     #[test]
     fn test_parse_rgb_color() {
-        // \x1b[38;2;255;128;0mtext\x1b[0m
         let spans = parse_styles("\x1b[38;2;255;128;0mtext\x1b[0m");
         assert_eq!(spans[0].fg, Some(AnsiColor::Rgb(255, 128, 0)));
     }

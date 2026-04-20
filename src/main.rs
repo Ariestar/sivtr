@@ -1,7 +1,7 @@
-mod cli;
 mod app;
-mod tui;
+mod cli;
 mod commands;
+mod tui;
 
 use anyhow::Result;
 use clap::Parser;

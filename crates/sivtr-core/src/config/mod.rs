@@ -1,11 +1,11 @@
 pub mod keys;
 
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Top-level configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SivtrConfig {
     /// General settings.
@@ -29,17 +29,18 @@ pub struct GeneralConfig {
 }
 
 /// How sivtr opens captured output.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OpenMode {
     /// Built-in TUI browser (default).
+    #[default]
     Tui,
     /// Open directly in external editor.
     Editor,
 }
 
 /// Editor configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EditorConfig {
     /// Editor command. If empty, auto-detect from PATH.
@@ -59,29 +60,11 @@ pub struct HistoryConfig {
 
 // --- Defaults ---
 
-impl Default for SivtrConfig {
-    fn default() -> Self {
-        Self {
-            general: GeneralConfig::default(),
-            editor: EditorConfig::default(),
-            history: HistoryConfig::default(),
-        }
-    }
-}
-
 impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
             open_mode: OpenMode::Tui,
             preserve_colors: true,
-        }
-    }
-}
-
-impl Default for EditorConfig {
-    fn default() -> Self {
-        Self {
-            command: String::new(), // empty = auto-detect
         }
     }
 }
@@ -92,12 +75,6 @@ impl Default for HistoryConfig {
             auto_save: true,
             max_entries: 0, // unlimited
         }
-    }
-}
-
-impl Default for OpenMode {
-    fn default() -> Self {
-        OpenMode::Tui
     }
 }
 
@@ -124,8 +101,7 @@ impl SivtrConfig {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let content = toml::to_string_pretty(self)
-            .context("Failed to serialize config")?;
+        let content = toml::to_string_pretty(self).context("Failed to serialize config")?;
         std::fs::write(&path, content)
             .with_context(|| format!("Failed to write config file: {}", path.display()))?;
         Ok(())

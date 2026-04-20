@@ -1,5 +1,5 @@
-pub mod mode;
 pub mod extract;
+pub mod mode;
 
 use crate::buffer::cursor::Cursor;
 

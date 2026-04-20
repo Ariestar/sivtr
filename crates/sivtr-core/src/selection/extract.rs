@@ -1,6 +1,6 @@
-use crate::buffer::Buffer;
-use crate::buffer::cursor::Cursor;
 use super::{Selection, SelectionMode};
+use crate::buffer::cursor::Cursor;
+use crate::buffer::Buffer;
 
 /// Extract the selected text from the buffer based on the selection and current cursor.
 pub fn extract_selection(buffer: &Buffer, selection: &Selection, cursor: &Cursor) -> String {

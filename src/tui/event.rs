@@ -108,10 +108,18 @@ fn handle_motion_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('0') | KeyCode::Home => app.buffer.cursor_line_start(),
         KeyCode::Char('^') => app.buffer.cursor_first_nonblank(),
         KeyCode::Char('$') | KeyCode::End => app.buffer.cursor_line_end(),
-        KeyCode::Char('H') if key.modifiers.contains(KeyModifiers::SHIFT) => app.buffer.cursor_view_top(),
-        KeyCode::Char('M') if key.modifiers.contains(KeyModifiers::SHIFT) => app.buffer.cursor_view_middle(),
-        KeyCode::Char('L') if key.modifiers.contains(KeyModifiers::SHIFT) => app.buffer.cursor_view_bottom(),
-        KeyCode::Char('G') if key.modifiers.contains(KeyModifiers::SHIFT) => app.buffer.cursor_bottom(),
+        KeyCode::Char('H') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+            app.buffer.cursor_view_top()
+        }
+        KeyCode::Char('M') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+            app.buffer.cursor_view_middle()
+        }
+        KeyCode::Char('L') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+            app.buffer.cursor_view_bottom()
+        }
+        KeyCode::Char('G') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+            app.buffer.cursor_bottom()
+        }
         KeyCode::PageDown => app.buffer.page_down(),
         KeyCode::PageUp => app.buffer.page_up(),
         KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -120,7 +128,9 @@ fn handle_motion_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.buffer.half_page_up()
         }
-        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => app.buffer.page_down(),
+        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.buffer.page_down()
+        }
         KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => app.buffer.page_up(),
         _ => {}
     }
@@ -181,7 +191,8 @@ fn mouse_to_cursor(app: &App, column: u16, row: u16) -> Option<Cursor> {
         return None;
     }
 
-    let absolute_row = (app.buffer.viewport.offset + row).min(app.buffer.line_count().saturating_sub(1));
+    let absolute_row =
+        (app.buffer.viewport.offset + row).min(app.buffer.line_count().saturating_sub(1));
     let content_col = (column as usize).saturating_sub(LINE_NUMBER_WIDTH);
     Some(Cursor::new(absolute_row, content_col))
 }

@@ -9,7 +9,7 @@ use sivtr_core::parse::ansi::strip_ansi;
 /// Called by the shell prompt hook after each command.
 /// Must NEVER fail or print anything 鈥?the prompt depends on it.
 pub fn execute() -> Result<()> {
-    if let Err(_) = do_flush() {
+    if do_flush().is_err() {
         // Silently ignore all errors 鈥?never break the user's prompt
     }
     Ok(())

@@ -1,4 +1,4 @@
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use std::io::Write;
 use std::process::Command;
 
@@ -57,9 +57,7 @@ pub fn open_in_editor(content: &str) -> Result<String> {
 
     // Parse editor command (handles cases like "code --wait")
     let parts: Vec<&str> = editor.split_whitespace().collect();
-    let (program, extra_args) = parts
-        .split_first()
-        .context("Empty editor command")?;
+    let (program, extra_args) = parts.split_first().context("Empty editor command")?;
 
     // Spawn editor
     let status = Command::new(program)
@@ -73,8 +71,7 @@ pub fn open_in_editor(content: &str) -> Result<String> {
     }
 
     // Read back content
-    let result = std::fs::read_to_string(&path)
-        .context("Failed to read back from temp file")?;
+    let result = std::fs::read_to_string(&path).context("Failed to read back from temp file")?;
 
     Ok(result)
 }

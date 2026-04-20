@@ -1,12 +1,12 @@
 use anyhow::Result;
-use sivtr_core::capture::subprocess;
-use sivtr_core::config::{SivtrConfig, OpenMode};
-use sivtr_core::parse;
 use sivtr_core::buffer::Buffer;
+use sivtr_core::capture::subprocess;
+use sivtr_core::config::{OpenMode, SivtrConfig};
 use sivtr_core::export::editor;
+use sivtr_core::parse;
 
-use crate::app::App;
 use super::browse;
+use crate::app::App;
 
 /// Execute a command, capture its output, then open based on config.
 pub fn execute(command: &str, args: &[String]) -> Result<()> {

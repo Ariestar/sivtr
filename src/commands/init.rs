@@ -304,7 +304,11 @@ fn update_existing_hook(content: &str, spec: &HookSpec) -> Option<String> {
     None
 }
 
-fn find_marked_block(content: &str, start_marker: &str, end_marker: &str) -> Option<(usize, usize)> {
+fn find_marked_block(
+    content: &str,
+    start_marker: &str,
+    end_marker: &str,
+) -> Option<(usize, usize)> {
     let start = content.find(start_marker)?;
     let end_marker_offset = content[start..].find(end_marker)?;
     let end = start + end_marker_offset + end_marker.len();
@@ -348,8 +352,8 @@ mod tests {
     #[test]
     fn replaces_existing_bash_block() {
         let profile = format!("before\n{}\nafter\n", BASH_HOOK);
-        let updated = update_existing_hook(&profile, &BASH_SPEC)
-            .expect("bash hook should be detected");
+        let updated =
+            update_existing_hook(&profile, &BASH_SPEC).expect("bash hook should be detected");
 
         assert_eq!(updated, profile);
     }
@@ -357,8 +361,8 @@ mod tests {
     #[test]
     fn replaces_existing_zsh_block() {
         let profile = format!("before\n{}\nafter\n", ZSH_HOOK);
-        let updated = update_existing_hook(&profile, &ZSH_SPEC)
-            .expect("zsh hook should be detected");
+        let updated =
+            update_existing_hook(&profile, &ZSH_SPEC).expect("zsh hook should be detected");
 
         assert_eq!(updated, profile);
     }
@@ -366,8 +370,8 @@ mod tests {
     #[test]
     fn replaces_existing_nushell_block() {
         let profile = format!("before\n{}\nafter\n", NUSHELL_HOOK);
-        let updated = update_existing_hook(&profile, &NUSHELL_SPEC)
-            .expect("nushell hook should be detected");
+        let updated =
+            update_existing_hook(&profile, &NUSHELL_SPEC).expect("nushell hook should be detected");
 
         assert_eq!(updated, profile);
     }
