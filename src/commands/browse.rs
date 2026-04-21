@@ -44,9 +44,9 @@ pub fn run_tui(app: &mut App) -> Result<()> {
                     });
                 }
                 Err(e) => {
-                    eprintln!("sivtr: editor error: {}", e);
+                    eprintln!("sivtr: editor error: {e}");
                     app.status = Some(StatusMessage {
-                        text: format!("Editor error: {}", e),
+                        text: format!("Editor error: {e}"),
                         is_error: true,
                     });
                 }

@@ -94,12 +94,12 @@ impl App {
             let text = sivtr_core::selection::extract::extract_selection(
                 &self.buffer,
                 sel,
-                &self.buffer.cursor,
+                &self.selection_cursor(),
             );
             export::clipboard::copy_to_clipboard(&text)?;
             let line_count = text.lines().count();
             self.status = Some(StatusMessage {
-                text: format!("{} lines yanked to clipboard", line_count),
+                text: format!("{line_count} lines yanked to clipboard"),
                 is_error: false,
             });
         }
@@ -236,7 +236,7 @@ impl App {
             sivtr_core::selection::extract::extract_selection(
                 &self.buffer,
                 sel,
-                &self.buffer.cursor,
+                &self.selection_cursor(),
             )
         } else {
             self.buffer
@@ -260,5 +260,13 @@ impl App {
                 is_error: false,
             });
         }
+    }
+
+    pub fn selection_cursor(&self) -> Cursor {
+        let mut cursor = self.buffer.cursor;
+        if matches!(self.mode, AppMode::VisualBlock) {
+            cursor.col = self.buffer.preferred_col();
+        }
+        cursor
     }
 }

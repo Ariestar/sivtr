@@ -60,7 +60,7 @@ pub fn execute(
 
     if !log_path.exists() || !boundaries_path.exists() {
         eprintln!("sivtr: no session log found");
-        eprintln!("  hint: run `sivtr init <shell>` to start recording");
+        eprintln!("  hint: run `sivtr init <shell>`, restart the shell, then run some commands");
         return Ok(());
     }
 
@@ -72,6 +72,7 @@ pub fn execute(
 
     if boundaries.is_empty() {
         eprintln!("sivtr: no commands recorded yet");
+        eprintln!("  hint: run a few commands first, then try `sivtr copy` again");
         return Ok(());
     }
 
@@ -85,6 +86,7 @@ pub fn execute(
     let indices = resolve_selection(selection, total)?;
     if indices.is_empty() {
         eprintln!("sivtr: nothing selected");
+        eprintln!("  hint: choose at least one command block");
         return Ok(());
     }
 
@@ -98,6 +100,7 @@ pub fn execute(
 
     if blocks.is_empty() {
         eprintln!("sivtr: selected commands are empty");
+        eprintln!("  hint: try `sivtr copy --out` or choose a different block");
         return Ok(());
     }
 
@@ -113,7 +116,8 @@ pub fn execute(
 
     let text = text.trim().to_string();
     if text.is_empty() {
-        eprintln!("sivtr: nothing matched the requested selection");
+        eprintln!("sivtr: filters removed everything");
+        eprintln!("  hint: loosen `--regex` or `--lines`, or copy without filters");
         return Ok(());
     }
 
@@ -124,16 +128,16 @@ pub fn execute(
 
     if print_full {
         for line in text.lines() {
-            eprintln!("  {}", line);
+            eprintln!("  {line}");
         }
     } else {
         let preview: Vec<&str> = text.lines().take(4).collect();
         let line_count = text.lines().count();
         for line in &preview {
-            eprintln!("  {}", line);
+            eprintln!("  {line}");
         }
         if line_count > 4 {
-            eprintln!("  ... ({} lines total)", line_count);
+            eprintln!("  ... ({line_count} lines total)");
         }
     }
 
@@ -270,7 +274,7 @@ fn format_block(block: &CommandBlock, mode: CopyMode, include_prompt: bool) -> S
 fn parse_selection(value: &str) -> Result<CommandSelection> {
     let value = value.trim();
     if value.is_empty() {
-        anyhow::bail!("Empty selector");
+        anyhow::bail!("Empty selector. Use `N`, `A..B`, or `--pick`.");
     }
 
     if let Some((a, b)) = value.split_once("..") {
@@ -287,19 +291,23 @@ fn resolve_selection(selection: CommandSelection, total: usize) -> Result<Vec<us
     match selection {
         CommandSelection::RecentCount(n) => {
             if n == 0 {
-                anyhow::bail!("Selector must be at least 1");
+                anyhow::bail!("Selector values are 1-based. Use `1` for the last command.");
             }
             if n > total {
-                anyhow::bail!("Only {} commands recorded", total);
+                anyhow::bail!(
+                    "Only {total} command(s) recorded. Try a smaller selector or `--pick`."
+                );
             }
             Ok(((total - n)..total).collect())
         }
         CommandSelection::RecentRange { newer, older } => {
             if newer == 0 || older == 0 {
-                anyhow::bail!("Range selectors are 1-based");
+                anyhow::bail!("Range selectors are 1-based. Example: `2..5`.");
             }
             if older > total {
-                anyhow::bail!("Only {} commands recorded", total);
+                anyhow::bail!(
+                    "Only {total} command(s) recorded. Try a smaller range or `--pick`."
+                );
             }
             let start = total - older;
             let end = total - newer;
@@ -307,16 +315,18 @@ fn resolve_selection(selection: CommandSelection, total: usize) -> Result<Vec<us
         }
         CommandSelection::RecentExplicit(selected) => {
             if selected.is_empty() {
-                anyhow::bail!("No commands selected");
+                anyhow::bail!("No command blocks selected.");
             }
 
             let mut indices = Vec::with_capacity(selected.len());
             for recent in selected {
                 if recent == 0 {
-                    anyhow::bail!("Selector values are 1-based");
+                    anyhow::bail!("Selector values are 1-based. Use `1` for the last command.");
                 }
                 if recent > total {
-                    anyhow::bail!("Only {} commands recorded", total);
+                    anyhow::bail!(
+                        "Only {total} command(s) recorded. Try a smaller selector or `--pick`."
+                    );
                 }
                 indices.push(total - recent);
             }
@@ -363,7 +373,8 @@ fn pick_selection(content: &str, boundaries: &[usize]) -> Result<CommandSelectio
 }
 
 fn filter_lines_by_regex(text: &str, pattern: &str) -> Result<String> {
-    let regex = Regex::new(pattern).context("Invalid regex")?;
+    let regex = Regex::new(pattern)
+        .with_context(|| format!("Invalid regex `{pattern}`. Check the pattern syntax."))?;
     Ok(text
         .lines()
         .filter(|line| regex.is_match(line))
@@ -386,7 +397,7 @@ fn filter_lines_by_spec(text: &str, spec: &str) -> Result<String> {
             let start = parse_line_number(start)?;
             let end = parse_line_number(end)?;
             if start == 0 || end == 0 {
-                anyhow::bail!("Line ranges are 1-based");
+                anyhow::bail!("Line ranges are 1-based. Example: `10:20`.");
             }
             let (start, end) = if start <= end {
                 (start, end)
@@ -401,7 +412,7 @@ fn filter_lines_by_spec(text: &str, spec: &str) -> Result<String> {
         } else {
             let idx = parse_line_number(part)?;
             if idx == 0 {
-                anyhow::bail!("Line numbers are 1-based");
+                anyhow::bail!("Line numbers are 1-based. Example: `1,3,8:12`.");
             }
             if let Some(line) = lines.get(idx - 1) {
                 selected.push((*line).to_string());
@@ -415,9 +426,9 @@ fn filter_lines_by_spec(text: &str, spec: &str) -> Result<String> {
 fn parse_positive(value: &str) -> Result<usize> {
     let n = value
         .parse::<usize>()
-        .with_context(|| format!("Invalid selector '{}'", value))?;
+        .with_context(|| format!("Invalid selector `{value}`. Use `N`, `A..B`, or `--pick`."))?;
     if n == 0 {
-        anyhow::bail!("Selector values are 1-based");
+        anyhow::bail!("Selector values are 1-based. Use `1` for the last command.");
     }
     Ok(n)
 }
@@ -425,7 +436,9 @@ fn parse_positive(value: &str) -> Result<usize> {
 fn parse_line_number(value: &str) -> Result<usize> {
     value
         .parse::<usize>()
-        .with_context(|| format!("Invalid line number '{}'", value))
+        .with_context(|| {
+            format!("Invalid line number `{value}`. Use `N`, `A:B`, or comma-separated lists.")
+        })
 }
 
 #[cfg(test)]
@@ -841,7 +854,7 @@ fn selection_from_entries(entries: &[PickEntry]) -> Result<CommandSelection> {
         .collect();
 
     if selected.is_empty() {
-        anyhow::bail!("No command blocks selected");
+        anyhow::bail!("No command blocks selected. Toggle one or more entries, then press Enter.");
     }
 
     selected.sort_unstable();

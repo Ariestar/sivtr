@@ -33,6 +33,11 @@ pub fn render(app: &App, frame: &mut Frame) {
             chunks[2].y,
         ));
     } else {
+        let cursor_col = if app.mode == AppMode::VisualBlock {
+            app.buffer.preferred_col()
+        } else {
+            app.buffer.cursor.col
+        };
         let cursor_y = chunks[0].y.saturating_add(
             app.buffer
                 .cursor
@@ -42,7 +47,7 @@ pub fn render(app: &App, frame: &mut Frame) {
         let cursor_x = chunks[0]
             .x
             .saturating_add(LINE_NUMBER_WIDTH)
-            .saturating_add(app.buffer.cursor.col as u16);
+            .saturating_add(cursor_col as u16);
         frame.set_cursor_position(Position::new(
             cursor_x.min(chunks[0].right().saturating_sub(1)),
             cursor_y.min(chunks[0].bottom().saturating_sub(1)),

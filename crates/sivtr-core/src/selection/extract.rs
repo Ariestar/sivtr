@@ -125,4 +125,13 @@ mod tests {
         // Should extract columns 1-3 from each row: "bcd", "hij", "nop"
         assert_eq!(text, "bcd\nhij\nnop");
     }
+
+    #[test]
+    fn test_visual_block_keeps_empty_rows_empty() {
+        let buf = make_buffer("abcdef\n\nmnopqr");
+        let sel = Selection::new(SelectionMode::VisualBlock, Cursor::new(0, 1));
+        let cursor = Cursor::new(2, 3);
+        let text = extract_selection(&buf, &sel, &cursor);
+        assert_eq!(text, "bcd\n\nnop");
+    }
 }

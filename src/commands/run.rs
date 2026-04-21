@@ -16,7 +16,7 @@ pub fn execute(command: &str, args: &[String]) -> Result<()> {
 
     match result.exit_code {
         Some(0) => eprintln!("sivtr: command exited successfully"),
-        Some(code) => eprintln!("sivtr: command exited with code {}", code),
+        Some(code) => eprintln!("sivtr: command exited with code {code}"),
         None => eprintln!("sivtr: command was terminated by signal"),
     }
 
@@ -30,7 +30,7 @@ pub fn execute(command: &str, args: &[String]) -> Result<()> {
     match config.general.open_mode {
         OpenMode::Editor => {
             let ed = editor::resolve_editor_with_config(&config)?;
-            eprintln!("sivtr: opening in {}", ed);
+            eprintln!("sivtr: opening in {ed}");
             editor::open_in_editor(&result.combined)?;
             Ok(())
         }

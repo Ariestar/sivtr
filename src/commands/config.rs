@@ -13,13 +13,13 @@ pub fn execute(cmd: ConfigCommand) -> Result<()> {
 
             if path.exists() {
                 let content = std::fs::read_to_string(&path)?;
-                println!("{}", content);
+                println!("{content}");
             } else {
                 println!("(file does not exist 鈥?using defaults)");
                 println!();
                 let config = SivtrConfig::default();
                 let content = sivtr_core::config::to_toml_string(&config)?;
-                println!("{}", content);
+                println!("{content}");
                 println!();
                 println!("Run `sivtr config init` to create the config file.");
             }

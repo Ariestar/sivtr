@@ -35,7 +35,7 @@ pub fn execute(cmd: HistoryCommand) -> Result<()> {
         Some(HistoryAction::Search { keyword, limit }) => {
             let entries = store.search(&keyword, limit)?;
             if entries.is_empty() {
-                println!("No matches found for '{}'.", keyword);
+                println!("No matches found for '{keyword}'.");
                 return Ok(());
             }
             for entry in &entries {
@@ -68,7 +68,7 @@ pub fn execute(cmd: HistoryCommand) -> Result<()> {
                 println!("{}", entry.content);
             }
             None => {
-                println!("History entry #{} not found.", id);
+                println!("History entry #{id} not found.");
             }
         },
         None => {

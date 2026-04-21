@@ -27,6 +27,21 @@ pub fn display_width(s: &str) -> usize {
 /// Given a string and a display column range [col_start, col_end),
 /// return the char range that covers those display columns.
 pub fn display_col_to_char_range(s: &str, col_start: usize, col_end: usize) -> (usize, usize) {
+    if col_start >= col_end {
+        let char_idx = s.chars().count().min(
+            compute_display_widths(s)
+                .iter()
+                .scan(0usize, |col, width| {
+                    let start = *col;
+                    *col += *width as usize;
+                    Some(start)
+                })
+                .position(|start| start >= col_start)
+                .unwrap_or_else(|| s.chars().count()),
+        );
+        return (char_idx, char_idx);
+    }
+
     let mut current_col = 0usize;
     let mut char_start = None;
     let mut char_end = 0;
@@ -110,5 +125,11 @@ mod tests {
         let (start, end) = display_col_to_char_range("hi你好", 1, 5);
         assert_eq!(start, 1);
         assert_eq!(end, 4);
+    }
+
+    #[test]
+    fn test_display_col_to_char_range_empty() {
+        assert_eq!(display_col_to_char_range("hello", 0, 0), (0, 0));
+        assert_eq!(display_col_to_char_range("hello", 2, 2), (2, 2));
     }
 }

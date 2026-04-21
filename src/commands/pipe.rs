@@ -22,7 +22,7 @@ pub fn execute() -> Result<()> {
     match config.general.open_mode {
         OpenMode::Editor => {
             let ed = editor::resolve_editor_with_config(&config)?;
-            eprintln!("sivtr: opening in {}", ed);
+            eprintln!("sivtr: opening in {ed}");
             editor::open_in_editor(&raw)?;
             Ok(())
         }

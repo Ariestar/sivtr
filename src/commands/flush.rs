@@ -54,7 +54,7 @@ fn do_flush() -> Result<()> {
                 .create(true)
                 .append(true)
                 .open(&boundaries_path)?;
-            writeln!(bf, "{}", log_size)?;
+            writeln!(bf, "{log_size}")?;
 
             let mut file = fs::OpenOptions::new()
                 .create(true)
@@ -62,7 +62,7 @@ fn do_flush() -> Result<()> {
                 .open(&log_path)?;
 
             for line in &current_lines[new_start..] {
-                writeln!(file, "{}", line)?;
+                writeln!(file, "{line}")?;
             }
         }
 

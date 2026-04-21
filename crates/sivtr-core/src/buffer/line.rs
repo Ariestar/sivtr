@@ -71,6 +71,9 @@ impl Line {
     /// Extract a substring by display column range [col_start, col_end).
     /// Returns the extracted string. Short lines return what's available.
     pub fn extract_by_display_cols(&self, col_start: usize, col_end: usize) -> String {
+        if col_start >= col_end {
+            return String::new();
+        }
         let (char_start, char_end) =
             crate::parse::unicode::display_col_to_char_range(&self.content, col_start, col_end);
         self.content
@@ -123,6 +126,13 @@ mod tests {
     fn test_extract_beyond_line() {
         let line = make_line("hi");
         assert_eq!(line.extract_by_display_cols(0, 10), "hi");
+    }
+
+    #[test]
+    fn test_extract_empty_range() {
+        let line = make_line("hello");
+        assert_eq!(line.extract_by_display_cols(0, 0), "");
+        assert_eq!(line.extract_by_display_cols(2, 2), "");
     }
 
     #[test]

@@ -90,6 +90,10 @@ fn split_by_display_cols(
     (before, selected, after)
 }
 
+fn selection_cursor(app: &App) -> sivtr_core::buffer::cursor::Cursor {
+    app.selection_cursor()
+}
+
 /// Render the main output browse view.
 pub fn render(app: &App, area: Rect, buf: &mut Buffer) {
     let buffer = &app.buffer;
@@ -108,7 +112,8 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) {
 
             // Check if this line is within a selection
             if let Some(ref sel) = buffer.selection {
-                let cursor = &buffer.cursor;
+                let cursor = selection_cursor(app);
+                let cursor = &cursor;
                 let (top, bot) = sel.row_range(cursor);
 
                 if line_idx >= top && line_idx <= bot {
@@ -124,10 +129,18 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) {
                             let (before, selected, after) =
                                 split_by_display_cols(content_line, left, right);
                             spans.push(Span::raw(before));
-                            spans.push(Span::styled(
-                                selected,
-                                Style::default().bg(Color::Blue).fg(Color::White),
-                            ));
+                            if !selected.is_empty() || left <= right {
+                                let fill_width = right.saturating_add(1).saturating_sub(left);
+                                let selected = if selected.is_empty() {
+                                    " ".repeat(fill_width)
+                                } else {
+                                    selected
+                                };
+                                spans.push(Span::styled(
+                                    selected,
+                                    Style::default().bg(Color::Blue).fg(Color::White),
+                                ));
+                            }
                             spans.push(Span::raw(after));
                         }
                         SelectionMode::Visual => {
@@ -274,12 +287,10 @@ fn render_content_with_search<'a>(
                 }
             }
         }
+    } else if preserve_colors {
+        render_styled_content(content, &content_line.styles, spans);
     } else {
-        if preserve_colors {
-            render_styled_content(content, &content_line.styles, spans);
-        } else {
-            spans.push(Span::raw(content.to_string()));
-        }
+        spans.push(Span::raw(content.to_string()));
     }
 }
 

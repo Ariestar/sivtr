@@ -22,7 +22,7 @@ pub fn execute() -> Result<()> {
             match config.general.open_mode {
                 OpenMode::Editor => {
                     let ed = editor::resolve_editor_with_config(&config)?;
-                    eprintln!("sivtr: opening scrollback in {}", ed);
+                    eprintln!("sivtr: opening scrollback in {ed}");
                     editor::open_in_editor(&raw)?;
                     Ok(())
                 }

@@ -13,6 +13,7 @@ pub struct Buffer {
     pub viewport: Viewport,
     pub cursor: Cursor,
     pub selection: Option<Selection>,
+    preferred_col: usize,
 }
 
 impl Buffer {
@@ -23,6 +24,7 @@ impl Buffer {
             viewport: Viewport::default(),
             cursor: Cursor::default(),
             selection: None,
+            preferred_col: 0,
         }
     }
 
@@ -78,18 +80,21 @@ impl Buffer {
         if let Some(line) = self.lines.get(self.cursor.row) {
             let max_col = line.display_width().saturating_sub(1);
             self.cursor.col = (self.cursor.col + n).min(max_col);
+            self.preferred_col = self.cursor.col;
         }
     }
 
     /// Move cursor left within the current line.
     pub fn cursor_left(&mut self, n: usize) {
         self.cursor.col = self.cursor.col.saturating_sub(n);
+        self.preferred_col = self.cursor.col;
     }
 
     /// Jump cursor to the first line.
     pub fn cursor_top(&mut self) {
         self.cursor.row = 0;
         self.cursor.col = 0;
+        self.preferred_col = 0;
         self.ensure_cursor_visible();
     }
 
@@ -124,14 +129,17 @@ impl Buffer {
 
     pub fn cursor_line_start(&mut self) {
         self.cursor.col = 0;
+        self.preferred_col = 0;
     }
 
     pub fn cursor_line_end(&mut self) {
         self.cursor.col = self.max_col_for_row(self.cursor.row);
+        self.preferred_col = self.cursor.col;
     }
 
     pub fn cursor_first_nonblank(&mut self) {
         self.cursor.col = self.first_nonblank_col(self.cursor.row);
+        self.preferred_col = self.cursor.col;
     }
 
     pub fn cursor_view_top(&mut self) {
@@ -156,6 +164,7 @@ impl Buffer {
     pub fn set_cursor(&mut self, row: usize, col: usize) {
         self.cursor.row = row.min(self.lines.len().saturating_sub(1));
         self.cursor.col = self.clamp_col_for_row(self.cursor.row, col);
+        self.preferred_col = col;
         self.ensure_cursor_visible();
     }
 
@@ -179,8 +188,12 @@ impl Buffer {
         self.ensure_cursor_visible();
     }
 
+    pub fn preferred_col(&self) -> usize {
+        self.preferred_col
+    }
+
     fn clamp_cursor_col(&mut self) {
-        self.cursor.col = self.clamp_col_for_row(self.cursor.row, self.cursor.col);
+        self.cursor.col = self.clamp_col_for_row(self.cursor.row, self.preferred_col);
     }
 
     fn clamp_col_for_row(&self, row: usize, col: usize) -> usize {
@@ -206,5 +219,40 @@ impl Buffer {
                 line.display_col_for_char_index(char_idx)
             })
             .unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_buffer(lines: &[&str]) -> Buffer {
+        let lines = lines
+            .iter()
+            .map(|content| Line {
+                content: (*content).to_string(),
+                display_widths: crate::parse::unicode::compute_display_widths(content),
+                styles: Vec::new(),
+            })
+            .collect();
+        Buffer::new(lines)
+    }
+
+    #[test]
+    fn vertical_motion_preserves_preferred_col() {
+        let mut buffer = make_buffer(&["abcd", "", "wxyz"]);
+        buffer.set_cursor(0, 3);
+        assert_eq!(buffer.cursor.col, 3);
+        assert_eq!(buffer.preferred_col(), 3);
+
+        buffer.cursor_down(1);
+        assert_eq!(buffer.cursor.row, 1);
+        assert_eq!(buffer.cursor.col, 0);
+        assert_eq!(buffer.preferred_col(), 3);
+
+        buffer.cursor_down(1);
+        assert_eq!(buffer.cursor.row, 2);
+        assert_eq!(buffer.cursor.col, 3);
+        assert_eq!(buffer.preferred_col(), 3);
     }
 }

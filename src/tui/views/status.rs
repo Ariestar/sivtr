@@ -48,7 +48,7 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) {
 
     let line = Line::from(vec![
         Span::styled(mode_str, mode_style),
-        Span::styled(format!(" {}", status_text), status_style),
+        Span::styled(format!(" {status_text}"), status_style),
         Span::raw(middle_pad),
         Span::styled(total_lines, Style::default().fg(Color::DarkGray)),
         Span::styled(

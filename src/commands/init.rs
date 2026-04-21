@@ -162,7 +162,7 @@ fn install_powershell_hook() -> Result<()> {
             match install_into_profile(Path::new(&path), &POWERSHELL_SPEC) {
                 Ok(InstallStatus::Installed) => installed.push(path),
                 Ok(InstallStatus::Updated) => updated.push(path),
-                Ok(InstallStatus::Unchanged) => eprintln!("sivtr: already installed in {}", path),
+                Ok(InstallStatus::Unchanged) => eprintln!("sivtr: already installed in {path}"),
                 Err(_) => {}
             }
         }
@@ -197,10 +197,10 @@ fn print_install_summary(installed: &[String], updated: &[String]) {
     }
 
     for path in installed {
-        eprintln!("sivtr: installed into {}", path);
+        eprintln!("sivtr: installed into {path}");
     }
     for path in updated {
-        eprintln!("sivtr: updated {}", path);
+        eprintln!("sivtr: updated {path}");
     }
     eprintln!("  restart your terminal to activate");
 }
@@ -324,7 +324,7 @@ mod tests {
 
     #[test]
     fn upgrades_legacy_powershell_hook_in_place() {
-        let profile = format!("before\n{}\nafter\n", LEGACY_POWERSHELL_HOOK);
+        let profile = format!("before\n{LEGACY_POWERSHELL_HOOK}\nafter\n");
         let updated = update_existing_hook(&profile, &POWERSHELL_SPEC)
             .expect("legacy hook should be detected");
 
@@ -336,7 +336,7 @@ mod tests {
 
     #[test]
     fn keeps_current_powershell_hook_unchanged() {
-        let profile = format!("before\n{}\nafter\n", POWERSHELL_HOOK);
+        let profile = format!("before\n{POWERSHELL_HOOK}\nafter\n");
         let updated = update_existing_hook(&profile, &POWERSHELL_SPEC)
             .expect("current hook should be detected");
 
@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn replaces_existing_bash_block() {
-        let profile = format!("before\n{}\nafter\n", BASH_HOOK);
+        let profile = format!("before\n{BASH_HOOK}\nafter\n");
         let updated =
             update_existing_hook(&profile, &BASH_SPEC).expect("bash hook should be detected");
 
@@ -360,7 +360,7 @@ mod tests {
 
     #[test]
     fn replaces_existing_zsh_block() {
-        let profile = format!("before\n{}\nafter\n", ZSH_HOOK);
+        let profile = format!("before\n{ZSH_HOOK}\nafter\n");
         let updated =
             update_existing_hook(&profile, &ZSH_SPEC).expect("zsh hook should be detected");
 
@@ -369,7 +369,7 @@ mod tests {
 
     #[test]
     fn replaces_existing_nushell_block() {
-        let profile = format!("before\n{}\nafter\n", NUSHELL_HOOK);
+        let profile = format!("before\n{NUSHELL_HOOK}\nafter\n");
         let updated =
             update_existing_hook(&profile, &NUSHELL_SPEC).expect("nushell hook should be detected");
 
