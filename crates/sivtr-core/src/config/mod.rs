@@ -14,6 +14,8 @@ pub struct SivtrConfig {
     pub editor: EditorConfig,
     /// History settings.
     pub history: HistoryConfig,
+    /// Copy command settings.
+    pub copy: CopyConfig,
 }
 
 /// General behavior settings.
@@ -56,6 +58,23 @@ pub struct HistoryConfig {
     pub auto_save: bool,
     /// Maximum number of history entries to keep (0 = unlimited).
     pub max_entries: usize,
+}
+
+/// Copy command configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CopyConfig {
+    /// Prompt profiles or literal prefixes used when detecting command lines.
+    pub prompts: Vec<String>,
+
+    #[serde(rename = "prompt_presets", skip_serializing)]
+    pub legacy_prompt_presets: Vec<String>,
+}
+
+impl CopyConfig {
+    pub fn prompt_values(&self) -> impl Iterator<Item = &String> {
+        self.legacy_prompt_presets.iter().chain(self.prompts.iter())
+    }
 }
 
 // --- Defaults ---
@@ -142,4 +161,29 @@ impl SivtrConfig {
 /// Serialize a SivtrConfig to a pretty TOML string.
 pub fn to_toml_string(config: &SivtrConfig) -> Result<String> {
     toml::to_string_pretty(config).context("Failed to serialize config to TOML")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serializes_copy_prompt_config() {
+        let config = SivtrConfig {
+            copy: CopyConfig {
+                prompts: vec!["arrow".to_string(), "mysh>".to_string(), "dev>".to_string()],
+                legacy_prompt_presets: vec!["cmd".to_string()],
+            },
+            ..SivtrConfig::default()
+        };
+
+        let toml = to_toml_string(&config).unwrap();
+
+        assert!(toml.contains("[copy]"));
+        assert!(toml.contains("prompts = ["));
+        assert!(toml.contains("\"arrow\""));
+        assert!(toml.contains("\"mysh>\""));
+        assert!(toml.contains("\"dev>\""));
+        assert!(!toml.contains("prompt_presets"));
+    }
 }

@@ -4,20 +4,13 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use regex::Regex;
-use std::fs;
 
+use crate::command_blocks::ParsedCommandBlock as CommandBlock;
 use sivtr_core::capture::scrollback;
-use sivtr_core::parse::ansi::strip_ansi;
+use sivtr_core::session;
 
 use crate::tui::terminal::{init as init_tui, restore as restore_tui};
 
-const PROMPT_SYMBOLS: &[char] = &[
-    '>', '$', '#', '%', '\u{03BB}', // lambda
-    '\u{276F}', // heavy right angle quote ornament
-    '\u{279C}', // heavy round-tipped rightwards arrow
-    '\u{203A}', // single right-pointing angle quote
-    '\u{00BB}', // right-pointing double angle quote
-];
 const PICK_LIMIT: usize = 50;
 const PICK_PREVIEW_LINES: usize = 8;
 
@@ -29,56 +22,79 @@ pub enum CopyMode {
     CommandOnly,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CommandBlock {
-    input_with_prompt: String,
-    input_without_prompt: String,
-    output: String,
-    command: String,
+#[derive(Clone, Copy, Debug)]
+pub struct CopyRequest<'a> {
+    pub selector: Option<&'a str>,
+    pub pick: bool,
+    pub mode: CopyMode,
+    pub include_prompt: bool,
+    pub prompt_override: Option<&'a str>,
+    pub print_full: bool,
+    pub regex: Option<&'a str>,
+    pub lines: Option<&'a str>,
 }
 
 #[allow(clippy::enum_variant_names)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum CommandSelection {
-    RecentCount(usize),
+    RecentSingle(usize),
     RecentRange { newer: usize, older: usize },
     RecentExplicit(Vec<usize>),
 }
 
-/// Copy recent command blocks to clipboard.
-pub fn execute(
-    selector: Option<&str>,
-    pick: bool,
-    mode: CopyMode,
-    include_prompt: bool,
-    print_full: bool,
-    regex: Option<&str>,
-    lines: Option<&str>,
-) -> Result<()> {
-    let log_path = scrollback::session_log_path();
-    let boundaries_path = log_path.with_extension("boundaries");
+#[derive(Clone, Debug)]
+struct IndexedCommandBlock {
+    parsed: CommandBlock,
+}
 
-    if !log_path.exists() || !boundaries_path.exists() {
+/// Copy recent command blocks to clipboard.
+pub fn execute(request: CopyRequest<'_>) -> Result<()> {
+    let CopyRequest {
+        selector,
+        pick,
+        mode,
+        include_prompt,
+        prompt_override,
+        print_full,
+        regex,
+        lines,
+    } = request;
+
+    let log_path = scrollback::session_log_path();
+    if !log_path.exists() {
         eprintln!("sivtr: no session log found");
         eprintln!("  hint: run `sivtr init <shell>`, restart the shell, then run some commands");
         return Ok(());
     }
 
-    let content = fs::read_to_string(&log_path).context("Failed to read session log")?;
-    let boundaries: Vec<usize> = fs::read_to_string(&boundaries_path)?
-        .lines()
-        .filter_map(|line| line.parse().ok())
-        .collect();
-
-    if boundaries.is_empty() {
+    let entries = session::load_entries(&log_path).context("Failed to read session log")?;
+    if entries.is_empty() {
         eprintln!("sivtr: no commands recorded yet");
         eprintln!("  hint: run a few commands first, then try `sivtr copy` again");
         return Ok(());
     }
 
-    let total = boundaries.len();
+    let blocks: Vec<IndexedCommandBlock> = entries
+        .iter()
+        .map(|entry| IndexedCommandBlock {
+            parsed: CommandBlock {
+                input_with_prompt: session::render_input(&entry.prompt, &entry.command),
+                input_without_prompt: entry.command.replace("\r\n", "\n").trim_end().to_string(),
+                output: entry.output.replace("\r\n", "\n").trim_end_matches('\n').to_string(),
+                command: entry.command.replace("\r\n", "\n").trim_end().to_string(),
+            },
+        })
+        .collect();
+
+    let total = blocks.len();
+    if total == 0 {
+        eprintln!("sivtr: no commands recorded yet");
+        eprintln!("  hint: run a command first, then try `sivtr copy` again");
+        return Ok(());
+    }
+
     let selection = if pick {
-        pick_selection(&content, &boundaries)?
+        pick_selection(&blocks)?
     } else {
         parse_selection(selector.unwrap_or("1"))?
     };
@@ -90,21 +106,20 @@ pub fn execute(
         return Ok(());
     }
 
-    let blocks: Vec<String> = indices
+    let copied_blocks: Vec<String> = indices
         .iter()
-        .filter_map(|idx| extract_block(&content, &boundaries, *idx))
-        .map(parse_command_block)
-        .map(|block| format_block(&block, mode, include_prompt))
+        .filter_map(|idx| blocks.get(*idx))
+        .map(|block| format_block(&block.parsed, mode, include_prompt, prompt_override))
         .filter(|block| !block.trim().is_empty())
         .collect();
 
-    if blocks.is_empty() {
+    if copied_blocks.is_empty() {
         eprintln!("sivtr: selected commands are empty");
         eprintln!("  hint: try `sivtr copy --out` or choose a different block");
         return Ok(());
     }
 
-    let mut text = blocks.join("\n\n");
+    let mut text = copied_blocks.join("\n\n");
 
     if let Some(pattern) = regex {
         text = filter_lines_by_regex(&text, pattern)?;
@@ -150,124 +165,56 @@ pub fn execute(
     Ok(())
 }
 
-fn extract_block<'a>(content: &'a str, boundaries: &[usize], idx: usize) -> Option<&'a str> {
-    let start = *boundaries.get(idx)?;
-    let end = boundaries.get(idx + 1).copied().unwrap_or(content.len());
-    content.get(start..end)
-}
-
-fn parse_command_block(block: &str) -> CommandBlock {
-    let clean = strip_ansi(block).replace("\r\n", "\n");
-    let lines: Vec<&str> = clean.lines().collect();
-
-    let first = lines.iter().position(|line| !line.trim().is_empty());
-    let last = lines.iter().rposition(|line| !line.trim().is_empty());
-
-    let Some(first) = first else {
-        return CommandBlock {
-            input_with_prompt: String::new(),
-            input_without_prompt: String::new(),
-            output: String::new(),
-            command: String::new(),
-        };
-    };
-    let last = last.unwrap_or(first);
-    let lines = &lines[first..=last];
-
-    let command_idx = lines.iter().position(|line| looks_like_command_line(line));
-
-    match command_idx {
-        Some(idx) => {
-            let command_line = lines[idx].trim_start();
-            let command = extract_command_text(command_line).unwrap_or_default();
-            CommandBlock {
-                input_with_prompt: join_lines(&lines[..=idx]),
-                input_without_prompt: command.clone(),
-                output: join_lines(&lines[idx + 1..]),
-                command,
-            }
-        }
-        None => CommandBlock {
-            input_with_prompt: String::new(),
-            input_without_prompt: String::new(),
-            output: join_lines(lines),
-            command: String::new(),
-        },
-    }
-}
-
-fn looks_like_command_line(line: &str) -> bool {
-    let trimmed = line.trim_start();
-    if trimmed.is_empty() {
-        return false;
-    }
-
-    if trimmed.starts_with("PS ") && trimmed.contains('>') {
-        return true;
-    }
-
-    if trimmed.starts_with("In>") || trimmed.starts_with("Out>") {
-        return true;
-    }
-
-    PROMPT_SYMBOLS
-        .iter()
-        .any(|symbol| trimmed.starts_with(*symbol) && trimmed.chars().nth(1).is_some())
-}
-
-fn extract_command_text(line: &str) -> Option<String> {
-    let trimmed = line.trim_start();
-
-    if trimmed.starts_with("PS ") {
-        let (_, rest) = trimmed.split_once('>')?;
-        return Some(rest.trim().to_string());
-    }
-
-    if let Some(rest) = trimmed.strip_prefix("In>") {
-        return Some(rest.trim().to_string());
-    }
-
-    if let Some(rest) = trimmed.strip_prefix("Out>") {
-        return Some(rest.trim().to_string());
-    }
-
-    for symbol in PROMPT_SYMBOLS {
-        if let Some(rest) = trimmed.strip_prefix(*symbol) {
-            return Some(rest.trim().to_string());
-        }
-    }
-
-    None
-}
-
-fn join_lines(lines: &[&str]) -> String {
-    lines.join("\n").trim().to_string()
-}
-
-fn format_block(block: &CommandBlock, mode: CopyMode, include_prompt: bool) -> String {
+fn format_block(
+    block: &CommandBlock,
+    mode: CopyMode,
+    include_prompt: bool,
+    prompt_override: Option<&str>,
+) -> String {
     match mode {
         CopyMode::Both => {
             let input = if include_prompt {
-                &block.input_with_prompt
+                format_input(block, prompt_override)
             } else {
-                &block.input_without_prompt
+                block.input_without_prompt.clone()
             };
             match (input.is_empty(), block.output.is_empty()) {
                 (false, false) => format!("{}\n{}", input, block.output),
-                (false, true) => input.clone(),
+                (false, true) => input,
                 (true, false) => block.output.clone(),
                 (true, true) => String::new(),
             }
         }
         CopyMode::InputOnly => {
             if include_prompt {
-                block.input_with_prompt.clone()
+                format_input(block, prompt_override)
             } else {
                 block.input_without_prompt.clone()
             }
         }
         CopyMode::OutputOnly => block.output.clone(),
         CopyMode::CommandOnly => block.command.clone(),
+    }
+}
+
+fn format_input(block: &CommandBlock, prompt_override: Option<&str>) -> String {
+    match prompt_override {
+        Some(prompt) if !block.command.is_empty() => render_prompt_override(prompt, &block.command),
+        Some(_) => block.input_with_prompt.clone(),
+        None => block.input_with_prompt.clone(),
+    }
+}
+
+fn render_prompt_override(prompt: &str, command: &str) -> String {
+    let prompt = prompt.trim_end_matches(['\r', '\n']);
+    if prompt.is_empty() {
+        return command.to_string();
+    }
+
+    if prompt.ends_with(' ') || prompt.ends_with('\t') {
+        format!("{prompt}{command}")
+    } else {
+        format!("{prompt} {command}")
     }
 }
 
@@ -284,30 +231,28 @@ fn parse_selection(value: &str) -> Result<CommandSelection> {
         return Ok(CommandSelection::RecentRange { newer, older });
     }
 
-    Ok(CommandSelection::RecentCount(parse_positive(value)?))
+    Ok(CommandSelection::RecentSingle(parse_positive(value)?))
 }
 
 fn resolve_selection(selection: CommandSelection, total: usize) -> Result<Vec<usize>> {
     match selection {
-        CommandSelection::RecentCount(n) => {
-            if n == 0 {
+        CommandSelection::RecentSingle(recent) => {
+            if recent == 0 {
                 anyhow::bail!("Selector values are 1-based. Use `1` for the last command.");
             }
-            if n > total {
+            if recent > total {
                 anyhow::bail!(
                     "Only {total} command(s) recorded. Try a smaller selector or `--pick`."
                 );
             }
-            Ok(((total - n)..total).collect())
+            Ok(vec![total - recent])
         }
         CommandSelection::RecentRange { newer, older } => {
             if newer == 0 || older == 0 {
                 anyhow::bail!("Range selectors are 1-based. Example: `2..5`.");
             }
             if older > total {
-                anyhow::bail!(
-                    "Only {total} command(s) recorded. Try a smaller range or `--pick`."
-                );
+                anyhow::bail!("Only {total} command(s) recorded. Try a smaller range or `--pick`.");
             }
             let start = total - older;
             let end = total - newer;
@@ -338,25 +283,21 @@ fn resolve_selection(selection: CommandSelection, total: usize) -> Result<Vec<us
     }
 }
 
-fn pick_selection(content: &str, boundaries: &[usize]) -> Result<CommandSelection> {
-    let total = boundaries.len();
+fn pick_selection(blocks: &[IndexedCommandBlock]) -> Result<CommandSelection> {
+    let total = blocks.len();
     let shown = total.min(PICK_LIMIT);
-    let entries: Vec<PickEntry> = (1..=shown)
-        .map(|recent| {
-            let idx = total - recent;
-            let block = extract_block(content, boundaries, idx)
-                .map(parse_command_block)
-                .unwrap_or_else(|| CommandBlock {
-                    input_with_prompt: String::new(),
-                    input_without_prompt: String::new(),
-                    output: String::new(),
-                    command: String::new(),
-                });
-            let output_preview = build_output_preview(&block);
-            let preview = if !block.command.is_empty() {
-                block.command.clone()
-            } else if !block.output.is_empty() {
-                block.output.lines().next().unwrap_or("").to_string()
+    let entries: Vec<PickEntry> = blocks
+        .iter()
+        .rev()
+        .take(shown)
+        .enumerate()
+        .map(|(offset, block)| {
+            let recent = offset + 1;
+            let output_preview = build_output_preview(&block.parsed);
+            let preview = if !block.parsed.command.is_empty() {
+                block.parsed.command.clone()
+            } else if !block.parsed.output.is_empty() {
+                block.parsed.output.lines().next().unwrap_or("").to_string()
             } else {
                 "<empty>".to_string()
             };
@@ -434,76 +375,18 @@ fn parse_positive(value: &str) -> Result<usize> {
 }
 
 fn parse_line_number(value: &str) -> Result<usize> {
-    value
-        .parse::<usize>()
-        .with_context(|| {
-            format!("Invalid line number `{value}`. Use `N`, `A:B`, or comma-separated lists.")
-        })
+    value.parse::<usize>().with_context(|| {
+        format!("Invalid line number `{value}`. Use `N`, `A:B`, or comma-separated lists.")
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_range_toggle, build_output_preview, extract_command_text, filter_lines_by_regex,
-        filter_lines_by_spec, format_block, looks_like_command_line, parse_command_block,
-        parse_selection, resolve_selection, selection_from_entries, CommandBlock, CommandSelection,
-        CopyMode, PickEntry,
+        apply_range_toggle, build_output_preview, filter_lines_by_regex, filter_lines_by_spec,
+        format_block, parse_selection, resolve_selection, selection_from_entries, CommandBlock,
+        CommandSelection, CopyMode, PickEntry,
     };
-
-    #[test]
-    fn parses_powershell_input_and_output() {
-        let block = "PS C:\\repo> git add --all -a\nwarning: file\nwarning: file2\n";
-        let parsed = parse_command_block(block);
-        assert_eq!(parsed.input_with_prompt, "PS C:\\repo> git add --all -a");
-        assert_eq!(parsed.input_without_prompt, "git add --all -a");
-        assert_eq!(parsed.output, "warning: file\nwarning: file2");
-        assert_eq!(parsed.command, "git add --all -a");
-    }
-
-    #[test]
-    fn parses_prompt_symbol_input_and_output() {
-        let block = "sivtr on main +7\n\u{276F} git commit -m \"feat: basic vim\"\n[main 123] feat: basic vim\n";
-        let parsed = parse_command_block(block);
-        assert_eq!(
-            parsed.input_with_prompt,
-            "sivtr on main +7\n\u{276F} git commit -m \"feat: basic vim\""
-        );
-        assert_eq!(
-            parsed.input_without_prompt,
-            "git commit -m \"feat: basic vim\""
-        );
-        assert_eq!(parsed.output, "[main 123] feat: basic vim");
-        assert_eq!(parsed.command, "git commit -m \"feat: basic vim\"");
-    }
-
-    #[test]
-    fn keeps_output_only_when_no_prompt_detected() {
-        let block = "warning: file\nwarning: file2\n";
-        let parsed = parse_command_block(block);
-        assert!(parsed.input_with_prompt.is_empty());
-        assert!(parsed.input_without_prompt.is_empty());
-        assert_eq!(parsed.output, "warning: file\nwarning: file2");
-        assert!(parsed.command.is_empty());
-    }
-
-    #[test]
-    fn detects_prompt_line_shapes() {
-        assert!(looks_like_command_line("PS C:\\repo> sivtr copy 3"));
-        assert!(looks_like_command_line("\u{276F} git add ."));
-        assert!(!looks_like_command_line("warning: file"));
-    }
-
-    #[test]
-    fn extracts_bare_command_text() {
-        assert_eq!(
-            extract_command_text("PS C:\\repo> git status --all -a").unwrap(),
-            "git status --all -a"
-        );
-        assert_eq!(
-            extract_command_text("\u{276F} cargo test").unwrap(),
-            "cargo test"
-        );
-    }
 
     #[test]
     fn formats_modes() {
@@ -514,25 +397,47 @@ mod tests {
             command: "git status --all -a".to_string(),
         };
         assert_eq!(
-            format_block(&block, CopyMode::Both, false),
+            format_block(&block, CopyMode::Both, false, None),
             "git status --all -a\nclean"
         );
         assert_eq!(
-            format_block(&block, CopyMode::Both, true),
+            format_block(&block, CopyMode::Both, true, None),
             "PS C:\\repo> git status --all -a\nclean"
         );
         assert_eq!(
-            format_block(&block, CopyMode::InputOnly, false),
+            format_block(&block, CopyMode::InputOnly, false, None),
             "git status --all -a"
         );
         assert_eq!(
-            format_block(&block, CopyMode::InputOnly, true),
+            format_block(&block, CopyMode::InputOnly, true, None),
             "PS C:\\repo> git status --all -a"
         );
-        assert_eq!(format_block(&block, CopyMode::OutputOnly, false), "clean");
         assert_eq!(
-            format_block(&block, CopyMode::CommandOnly, false),
+            format_block(&block, CopyMode::OutputOnly, false, None),
+            "clean"
+        );
+        assert_eq!(
+            format_block(&block, CopyMode::CommandOnly, false, None),
             "git status --all -a"
+        );
+    }
+
+    #[test]
+    fn rewrites_prompt_in_copied_input() {
+        let block = CommandBlock {
+            input_with_prompt: "PS C:\\repo> cargo test".to_string(),
+            input_without_prompt: "cargo test".to_string(),
+            output: "ok".to_string(),
+            command: "cargo test".to_string(),
+        };
+
+        assert_eq!(
+            format_block(&block, CopyMode::InputOnly, true, Some(":")),
+            ": cargo test"
+        );
+        assert_eq!(
+            format_block(&block, CopyMode::Both, true, Some(">>>")),
+            ">>> cargo test\nok"
         );
     }
 
@@ -540,7 +445,15 @@ mod tests {
     fn parses_selection_count() {
         assert_eq!(
             parse_selection("3").unwrap(),
-            CommandSelection::RecentCount(3)
+            CommandSelection::RecentSingle(3)
+        );
+    }
+
+    #[test]
+    fn resolves_single_selection_as_exact_recent_command() {
+        assert_eq!(
+            resolve_selection(CommandSelection::RecentSingle(3), 10).unwrap(),
+            vec![7]
         );
     }
 
@@ -891,3 +804,4 @@ fn build_output_preview(block: &CommandBlock) -> String {
     }
     lines.join("\n")
 }
+

@@ -9,89 +9,86 @@ Selector Semantics:
   Selection is relative to the newest command block.
   `1` means the last block, `2` means the 2nd-last block.
 
-Selectors:
-  sivtr copy           Last command block
-  sivtr copy 3         Last 3 command blocks
-  sivtr copy 2..5      From the 2nd-last to the 5th-last block
-  sivtr copy --pick    Interactive multi-select picker
+Prompt Output:
+  `--prompt TEXT` rewrites the copied input prompt.
+  Example: `sivtr copy --prompt ':'` produces `: cargo test`.
 
-Content:
-  --all                Input + output (default for `sivtr copy`)
-  --in                 Input only
-  --out                Output only
-  --cmd                Bare command only, without prompt
-  --prompt             Keep prompt in copied input
+Modes:
+  sivtr copy           Copy input + output
+  sivtr copy in        Copy input only
+  sivtr copy out       Copy output only
+  sivtr copy cmd       Copy the bare command only
+
+Aliases:
+  sivtr c              Same as `sivtr copy`
+  sivtr ci             Same as `sivtr copy in`
+  sivtr co             Same as `sivtr copy out`
+  sivtr cc             Same as `sivtr copy cmd`
 
 Filters:
   Filters run after the selected blocks are merged.
+  If both are set, `--regex` runs before `--lines`.
   --regex error
   --lines 10:20
   --lines 1,3,8:12
 
 Examples:
+  sivtr copy
   sivtr copy 3 --print
-  sivtr copy --pick --regex panic
-  sivtr copy 2..5 --out
-  sivtr copy --cmd --print
+  sivtr copy --prompt \":\"
+  sivtr copy in 2..4
+  sivtr copy out --pick --regex panic
+  sivtr copy cmd --pick
 ";
 
 const COPY_INPUT_AFTER_HELP: &str = "\
 Defaults:
-  `sivtr in` copies input from the last command block.
+  `sivtr copy in` copies input from the last command block.
+  Prompt is preserved by default.
 
 Selector Semantics:
   Selection is relative to the newest command block.
   `1` means the last block, `2` means the 2nd-last block.
 
-Selectors:
-  sivtr in             Input from the last command block
-  sivtr in 3           Input from the last 3 command blocks
-  sivtr in 2..5        Input from the 2nd-last to the 5th-last block
-  sivtr in --pick      Interactive multi-select picker
-
-Filters:
-  Filters run after the selected blocks are merged.
-  If both are set, `--regex` runs before `--lines`.
-  --regex error
-  --lines 10:20
-  --lines 1,3,8:12
-
 Examples:
-  sivtr in 2..4 --lines 1:5
-  sivtr in --pick --regex cargo
-  sivtr in 3 --print
-  sivtr in --regex '^cargo '
+  sivtr copy in
+  sivtr copy in 3 --print
+  sivtr copy in --prompt \":\"
+  sivtr copy in 2..5 --lines 1:5
+  sivtr copy in --pick --regex cargo
 ";
 
 const COPY_OUTPUT_AFTER_HELP: &str = "\
 Defaults:
-  `sivtr out` copies output from the last command block.
+  `sivtr copy out` copies output from the last command block.
 
 Selector Semantics:
   Selection is relative to the newest command block.
   `1` means the last block, `2` means the 2nd-last block.
 
-Selectors:
-  sivtr out            Output from the last command block
-  sivtr out 3          Output from the last 3 command blocks
-  sivtr out 2..5       Output from the 2nd-last to the 5th-last block
-  sivtr out --pick     Interactive multi-select picker
-
-Filters:
-  Filters run after the selected blocks are merged.
-  If both are set, `--regex` runs before `--lines`.
-  --regex error
-  --lines 10:20
-  --lines 1,3,8:12
-
 Examples:
-  sivtr out 3 --print
-  sivtr out --pick --regex error
-  sivtr out 2..5 --lines 1:20
-  sivtr out --regex panic
+  sivtr copy out
+  sivtr copy out 3 --print
+  sivtr copy out 2..5 --lines 1:20
+  sivtr copy out --pick --regex error
 ";
 
-/// sivtr 鈥?Terminal output workspace.
+const COPY_COMMAND_AFTER_HELP: &str = "\
+Defaults:
+  `sivtr copy cmd` copies the bare command from the last command block.
+
+Selector Semantics:
+  Selection is relative to the newest command block.
+  `1` means the last block, `2` means the 2nd-last block.
+
+Examples:
+  sivtr copy cmd
+  sivtr copy cmd 3 --print
+  sivtr copy cmd --pick
+  sivtr copy cmd 2..5
+";
+
+/// sivtr - Terminal output workspace.
 /// Capture, browse, search, select, and export terminal output.
 #[derive(Parser, Debug)]
 #[command(name = "sivtr", version, about, long_about = None)]
@@ -114,7 +111,7 @@ pub enum Commands {
     /// Read from stdin pipe (e.g., `cmd | sivtr`)
     Pipe,
 
-    /// Import scrollback from the current terminal multiplexer
+    /// Open the current session log
     Import,
 
     /// Manage output history
@@ -130,16 +127,20 @@ pub enum Commands {
     },
 
     /// Copy recent command blocks to clipboard
-    #[command(after_help = COPY_AFTER_HELP)]
-    Copy(CopyArgs),
+    #[command(visible_alias = "c", after_help = COPY_AFTER_HELP)]
+    Copy(CopyCommand),
 
-    /// Copy recent command input blocks to clipboard
-    #[command(after_help = COPY_INPUT_AFTER_HELP)]
-    In(CopyFilterArgs),
+    /// Alias for `copy in`
+    #[command(name = "ci", hide = true)]
+    Ci(CopyArgs),
 
-    /// Copy recent command output blocks to clipboard
-    #[command(after_help = COPY_OUTPUT_AFTER_HELP)]
-    Out(CopyFilterArgs),
+    /// Alias for `copy out`
+    #[command(name = "co", hide = true)]
+    Co(CopySimpleArgs),
+
+    /// Alias for `copy cmd`
+    #[command(name = "cc", hide = true)]
+    Cc(CopySimpleArgs),
 
     /// Clear the current session log
     Clear,
@@ -150,56 +151,95 @@ pub enum Commands {
 }
 
 #[derive(Args, Debug)]
-pub struct CopyArgs {
+pub struct CopyCommand {
+    #[command(subcommand)]
+    pub mode: Option<CopySubcommand>,
+
+    #[command(flatten)]
+    pub args: CopyArgs,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CopySubcommand {
+    /// Copy recent command input blocks to clipboard
+    #[command(after_help = COPY_INPUT_AFTER_HELP)]
+    In(CopyArgs),
+
+    /// Copy recent command output blocks to clipboard
+    #[command(after_help = COPY_OUTPUT_AFTER_HELP)]
+    Out(CopySimpleArgs),
+
+    /// Copy only the bare command text
+    #[command(after_help = COPY_COMMAND_AFTER_HELP)]
+    Cmd(CopySimpleArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct CopyCommonArgs {
     /// Which blocks to copy; `1` means the last block
     #[arg(value_name = "N|A..B")]
     pub selector: Option<String>,
+
     /// Open the interactive picker
     #[arg(long)]
     pub pick: bool,
-    /// Copy input + output
-    #[arg(long, conflicts_with_all = ["input", "output", "cmd"])]
-    pub all: bool,
-    /// Copy only input
-    #[arg(long = "in", conflicts_with_all = ["all", "output", "cmd"])]
-    pub input: bool,
-    /// Copy only output
-    #[arg(long = "out", conflicts_with_all = ["all", "input", "cmd"])]
-    pub output: bool,
-    /// Copy only the bare command, without prompt
-    #[arg(long, conflicts_with_all = ["all", "input", "output", "prompt"])]
-    pub cmd: bool,
-    /// Keep the prompt in copied input
-    #[arg(long, conflicts_with_all = ["output", "cmd"])]
-    pub prompt: bool,
+
     /// Print the copied text after copying
     #[arg(long)]
     pub print: bool,
+
     /// Keep only lines matching this regex
     #[arg(long, value_name = "PATTERN")]
     pub regex: Option<String>,
+
     /// Keep only selected 1-based lines, for example `10:20` or `1,3,8:12`
     #[arg(long, value_name = "SPEC")]
     pub lines: Option<String>,
 }
 
-#[derive(Args, Debug)]
-pub struct CopyFilterArgs {
-    /// Which blocks to copy; `1` means the last block
-    #[arg(value_name = "N|A..B")]
-    pub selector: Option<String>,
-    /// Open the interactive picker
-    #[arg(long)]
-    pub pick: bool,
-    /// Print the copied text after copying
-    #[arg(long)]
-    pub print: bool,
-    /// Keep only lines matching this regex
-    #[arg(long, value_name = "PATTERN")]
-    pub regex: Option<String>,
-    /// Keep only selected 1-based lines, for example `10:20` or `1,3,8:12`
-    #[arg(long, value_name = "SPEC")]
-    pub lines: Option<String>,
+#[derive(Args, Debug, Clone)]
+pub struct CopyArgs {
+    #[command(flatten)]
+    pub common: CopyCommonArgs,
+
+    /// Prompt text used in copied input instead of the original shell prompt
+    #[arg(long = "prompt", value_name = "TEXT")]
+    pub prompt: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct CopySimpleArgs {
+    #[command(flatten)]
+    pub common: CopyCommonArgs,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copy_input_accepts_prompt_override() {
+        let cli = Cli::try_parse_from(["sivtr", "ci", "--prompt", ":"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Ci(args)) => assert_eq!(args.prompt.as_deref(), Some(":")),
+            _ => panic!("expected ci command"),
+        }
+    }
+
+    #[test]
+    fn copy_out_does_not_accept_prompt_override() {
+        let result = Cli::try_parse_from(["sivtr", "co", "--prompt", ":"]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn copy_cmd_does_not_accept_prompt_argument() {
+        let result = Cli::try_parse_from(["sivtr", "cc", "--prompt", ":"]);
+
+        assert!(result.is_err());
+    }
 }
 
 #[derive(Parser, Debug)]

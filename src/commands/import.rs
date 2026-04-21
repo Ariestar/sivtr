@@ -7,13 +7,14 @@ use sivtr_core::parse;
 
 use super::browse;
 use crate::app::App;
+use crate::command_blocks;
 
-/// Capture current terminal scrollback and open it.
+/// Open the current session log.
 pub fn execute() -> Result<()> {
-    match scrollback::capture_scrollback()? {
+    match scrollback::read_session_log()? {
         Some(raw) => {
             if raw.trim().is_empty() {
-                eprintln!("sivtr: captured scrollback is empty");
+                eprintln!("sivtr: session log is empty");
                 return Ok(());
             }
 
@@ -22,7 +23,7 @@ pub fn execute() -> Result<()> {
             match config.general.open_mode {
                 OpenMode::Editor => {
                     let ed = editor::resolve_editor_with_config(&config)?;
-                    eprintln!("sivtr: opening scrollback in {ed}");
+                    eprintln!("sivtr: opening session log in {ed}");
                     editor::open_in_editor(&raw)?;
                     Ok(())
                 }
@@ -33,6 +34,8 @@ pub fn execute() -> Result<()> {
                     buffer.cursor_bottom();
                     let mut app = App::new(buffer);
                     app.config = config;
+                    app.command_blocks =
+                        command_blocks::load_from_session_log()?.unwrap_or_default();
                     browse::run_tui(&mut app)
                 }
             }

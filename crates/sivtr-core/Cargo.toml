@@ -12,6 +12,7 @@ unicode-width = "0.2"
 regex = "1"
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled", "vtab"] }
 arboard = "3"
 dirs = "5"

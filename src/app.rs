@@ -1,3 +1,4 @@
+use crate::command_blocks::{CommandBlockSpan, CopyTarget, SelectTarget};
 use sivtr_core::buffer::cursor::Cursor;
 use sivtr_core::buffer::Buffer;
 use sivtr_core::config::SivtrConfig;
@@ -30,6 +31,16 @@ pub struct StatusMessage {
     pub is_error: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingPrefix {
+    G,
+    LeftBracket,
+    RightBracket,
+    M,
+    My,
+    Mv,
+}
+
 /// Main application state.
 pub struct App {
     pub buffer: Buffer,
@@ -41,11 +52,11 @@ pub struct App {
     pub should_quit: bool,
     /// Flag: the event loop should suspend TUI and open the editor.
     pub pending_editor: bool,
-    /// Pending Vim-style prefix state (currently only `g`).
-    pub pending_g: bool,
+    pub pending_prefix: Option<PendingPrefix>,
     pub mouse_anchor: Option<Cursor>,
     pub mouse_mode: SelectionMode,
     pub mouse_dragged: bool,
+    pub command_blocks: Vec<CommandBlockSpan>,
 }
 
 impl App {
@@ -59,10 +70,11 @@ impl App {
             status: None,
             should_quit: false,
             pending_editor: false,
-            pending_g: false,
+            pending_prefix: None,
             mouse_anchor: None,
             mouse_mode: SelectionMode::Visual,
             mouse_dragged: false,
+            command_blocks: Vec::new(),
         }
     }
 
@@ -190,7 +202,7 @@ impl App {
     }
 
     pub fn clear_pending_prefixes(&mut self) {
-        self.pending_g = false;
+        self.pending_prefix = None;
     }
 
     pub fn begin_mouse_selection(&mut self, anchor: Cursor, mode: SelectionMode) {
@@ -268,5 +280,201 @@ impl App {
             cursor.col = self.buffer.preferred_col();
         }
         cursor
+    }
+
+    pub fn jump_prev_command_block(&mut self) {
+        let Some(current) = self.current_command_block_index() else {
+            self.set_status("No command blocks found", true);
+            return;
+        };
+        let target = current.saturating_sub(1);
+        if target == current {
+            self.set_status("Already at the first command block", false);
+            return;
+        }
+        self.buffer
+            .set_cursor(self.command_blocks[target].line_start, 0);
+        self.set_status("Jumped to previous command block", false);
+    }
+
+    pub fn jump_next_command_block(&mut self) {
+        let Some(current) = self.current_command_block_index() else {
+            self.set_status("No command blocks found", true);
+            return;
+        };
+        let target = (current + 1).min(self.command_blocks.len().saturating_sub(1));
+        if target == current {
+            self.set_status("Already at the last command block", false);
+            return;
+        }
+        self.buffer
+            .set_cursor(self.command_blocks[target].line_start, 0);
+        self.set_status("Jumped to next command block", false);
+    }
+
+    pub fn copy_current_command_target(&mut self, target: CopyTarget) -> Result<()> {
+        let Some(block) = self.current_command_block().cloned() else {
+            self.set_status("No command block at cursor", true);
+            return Ok(());
+        };
+
+        let Some(text) = block.text_for(target) else {
+            self.set_status("Current command block has no matching content", true);
+            return Ok(());
+        };
+
+        export::clipboard::copy_to_clipboard(&text)?;
+        let label = match target {
+            CopyTarget::Block => "command block",
+            CopyTarget::Input => "command input",
+            CopyTarget::Output => "command output",
+            CopyTarget::Command => "bare command",
+        };
+        self.set_status(format!("Copied current {label}"), false);
+        Ok(())
+    }
+
+    pub fn select_current_command_target(&mut self, target: SelectTarget) {
+        let Some(block) = self.current_command_block().cloned() else {
+            self.set_status("No command block at cursor", true);
+            return;
+        };
+
+        let Some((start, end)) = block.line_range_for(target) else {
+            self.set_status("Current command block has no matching section", true);
+            return;
+        };
+
+        self.buffer.set_cursor(end, 0);
+        self.enter_visual_from(SelectionMode::VisualLine, Cursor::new(start, 0));
+
+        let label = match target {
+            SelectTarget::Block => "command block",
+            SelectTarget::Input => "command input",
+            SelectTarget::Output => "command output",
+        };
+        self.set_status(format!("Selected current {label}"), false);
+    }
+
+    fn current_command_block(&self) -> Option<&CommandBlockSpan> {
+        let idx = self.current_command_block_index()?;
+        self.command_blocks.get(idx)
+    }
+
+    fn current_command_block_index(&self) -> Option<usize> {
+        if self.command_blocks.is_empty() {
+            return None;
+        }
+
+        let row = self.buffer.cursor.row;
+        if let Some((idx, _)) = self
+            .command_blocks
+            .iter()
+            .enumerate()
+            .find(|(_, block)| row >= block.line_start && row <= block.line_end)
+        {
+            return Some(idx);
+        }
+
+        self.command_blocks
+            .iter()
+            .enumerate()
+            .rfind(|(_, block)| block.line_start <= row)
+            .map(|(idx, _)| idx)
+            .or(Some(0))
+    }
+
+    fn set_status(&mut self, text: impl Into<String>, is_error: bool) {
+        self.status = Some(StatusMessage {
+            text: text.into(),
+            is_error,
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::command_blocks::{CommandBlockSpan, ParsedCommandBlock};
+    use sivtr_core::buffer::line::Line;
+
+    fn make_line(content: &str) -> Line {
+        Line {
+            content: content.to_string(),
+            display_widths: sivtr_core::parse::unicode::compute_display_widths(content),
+            styles: Vec::new(),
+        }
+    }
+
+    fn make_app() -> App {
+        let buffer = Buffer::new(vec![
+            make_line("PS C:\\repo> git status"),
+            make_line("clean"),
+            make_line("PS C:\\repo> cargo test"),
+            make_line("ok"),
+        ]);
+        let mut app = App::new(buffer);
+        app.command_blocks = vec![
+            CommandBlockSpan {
+                line_start: 0,
+                line_end: 1,
+                input_line_range: Some((0, 0)),
+                output_line_range: Some((1, 1)),
+                parsed: ParsedCommandBlock {
+                    input_with_prompt: "PS C:\\repo> git status".to_string(),
+                    input_without_prompt: "git status".to_string(),
+                    output: "clean".to_string(),
+                    command: "git status".to_string(),
+                },
+            },
+            CommandBlockSpan {
+                line_start: 2,
+                line_end: 3,
+                input_line_range: Some((2, 2)),
+                output_line_range: Some((3, 3)),
+                parsed: ParsedCommandBlock {
+                    input_with_prompt: "PS C:\\repo> cargo test".to_string(),
+                    input_without_prompt: "cargo test".to_string(),
+                    output: "ok".to_string(),
+                    command: "cargo test".to_string(),
+                },
+            },
+        ];
+        app
+    }
+
+    #[test]
+    fn jumps_between_command_blocks() {
+        let mut app = make_app();
+        app.buffer.set_cursor(0, 0);
+        app.jump_next_command_block();
+        assert_eq!(app.buffer.cursor.row, 2);
+
+        app.jump_prev_command_block();
+        assert_eq!(app.buffer.cursor.row, 0);
+    }
+
+    #[test]
+    fn selects_current_command_input_range() {
+        let mut app = make_app();
+        app.buffer.set_cursor(3, 0);
+        app.select_current_command_target(SelectTarget::Input);
+
+        assert_eq!(app.mode, AppMode::VisualLine);
+        let selection = app.buffer.selection.expect("selection should exist");
+        assert_eq!(selection.anchor.row, 2);
+        assert_eq!(app.buffer.cursor.row, 2);
+    }
+
+    #[test]
+    fn selects_current_command_block_range() {
+        let mut app = make_app();
+        app.buffer.set_cursor(3, 0);
+        app.select_current_command_target(SelectTarget::Block);
+
+        assert_eq!(app.mode, AppMode::VisualLine);
+        let selection = app.buffer.selection.expect("selection should exist");
+        assert_eq!(selection.anchor.row, 2);
+        assert_eq!(app.buffer.cursor.row, 3);
     }
 }

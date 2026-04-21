@@ -4,7 +4,8 @@ use crossterm::event::{
     MouseEventKind,
 };
 
-use crate::app::{App, AppMode};
+use crate::app::{App, AppMode, PendingPrefix};
+use crate::command_blocks::{CopyTarget, SelectTarget};
 use sivtr_core::buffer::cursor::Cursor;
 use sivtr_core::selection::SelectionMode;
 
@@ -33,7 +34,7 @@ pub fn handle_event(app: &mut App) -> Result<()> {
 }
 
 fn handle_normal_mode(app: &mut App, key: KeyEvent) -> Result<()> {
-    if handle_gg_prefix(app, key) {
+    if handle_pending_prefix(app, key)? {
         return Ok(());
     }
 
@@ -60,7 +61,7 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) -> Result<()> {
 }
 
 fn handle_visual_mode(app: &mut App, key: KeyEvent) -> Result<()> {
-    if handle_gg_prefix(app, key) {
+    if handle_pending_prefix(app, key)? {
         return Ok(());
     }
 
@@ -136,17 +137,85 @@ fn handle_motion_key(app: &mut App, key: KeyEvent) {
     }
 }
 
-fn handle_gg_prefix(app: &mut App, key: KeyEvent) -> bool {
-    if key.modifiers == KeyModifiers::NONE && key.code == KeyCode::Char('g') {
-        if app.pending_g {
-            app.buffer.cursor_top();
-            app.pending_g = false;
-        } else {
-            app.pending_g = true;
-        }
-        return true;
+fn handle_pending_prefix(app: &mut App, key: KeyEvent) -> Result<bool> {
+    if key.modifiers != KeyModifiers::NONE {
+        app.clear_pending_prefixes();
+        return Ok(false);
     }
-    false
+
+    if let Some(prefix) = app.pending_prefix.take() {
+        match (prefix, key.code) {
+            (PendingPrefix::G, KeyCode::Char('g')) => {
+                app.buffer.cursor_top();
+                return Ok(true);
+            }
+            (PendingPrefix::LeftBracket, KeyCode::Char('[')) => {
+                app.jump_prev_command_block();
+                return Ok(true);
+            }
+            (PendingPrefix::RightBracket, KeyCode::Char(']')) => {
+                app.jump_next_command_block();
+                return Ok(true);
+            }
+            (PendingPrefix::M, KeyCode::Char('y')) => {
+                app.pending_prefix = Some(PendingPrefix::My);
+                return Ok(true);
+            }
+            (PendingPrefix::M, KeyCode::Char('v')) => {
+                app.pending_prefix = Some(PendingPrefix::Mv);
+                return Ok(true);
+            }
+            (PendingPrefix::My, KeyCode::Char('y')) => {
+                app.copy_current_command_target(CopyTarget::Block)?;
+                return Ok(true);
+            }
+            (PendingPrefix::My, KeyCode::Char('i')) => {
+                app.copy_current_command_target(CopyTarget::Input)?;
+                return Ok(true);
+            }
+            (PendingPrefix::My, KeyCode::Char('o')) => {
+                app.copy_current_command_target(CopyTarget::Output)?;
+                return Ok(true);
+            }
+            (PendingPrefix::My, KeyCode::Char('c')) => {
+                app.copy_current_command_target(CopyTarget::Command)?;
+                return Ok(true);
+            }
+            (PendingPrefix::Mv, KeyCode::Char('v')) => {
+                app.select_current_command_target(SelectTarget::Block);
+                return Ok(true);
+            }
+            (PendingPrefix::Mv, KeyCode::Char('i')) => {
+                app.select_current_command_target(SelectTarget::Input);
+                return Ok(true);
+            }
+            (PendingPrefix::Mv, KeyCode::Char('o')) => {
+                app.select_current_command_target(SelectTarget::Output);
+                return Ok(true);
+            }
+            _ => {}
+        }
+    }
+
+    match key.code {
+        KeyCode::Char('g') => {
+            app.pending_prefix = Some(PendingPrefix::G);
+            Ok(true)
+        }
+        KeyCode::Char('[') => {
+            app.pending_prefix = Some(PendingPrefix::LeftBracket);
+            Ok(true)
+        }
+        KeyCode::Char(']') => {
+            app.pending_prefix = Some(PendingPrefix::RightBracket);
+            Ok(true)
+        }
+        KeyCode::Char('m') => {
+            app.pending_prefix = Some(PendingPrefix::M);
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
 }
 
 fn handle_mouse_event(app: &mut App, mouse: MouseEvent) {

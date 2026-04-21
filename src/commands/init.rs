@@ -27,12 +27,21 @@ $env:SIVTR_SESSION_LOG = Join-Path $env:APPDATA "sivtr\session_$PID.log"
 if (-not $Global:_sivtr_prompt_wrapped) {
     $Global:_sivtr_orig_prompt = $function:prompt
     function Global:prompt {
-        try { sivtr flush } catch {}
-        if ($Global:_sivtr_orig_prompt) {
+        $rendered = if ($Global:_sivtr_orig_prompt) {
             & $Global:_sivtr_orig_prompt
         } else {
             "PS $($executionContext.SessionState.Path.CurrentLocation)> "
         }
+        try {
+            $last = Get-History -Count 1 -ErrorAction SilentlyContinue
+            if ($last) {
+                $env:SIVTR_LAST_COMMAND = [string]$last.CommandLine
+                $env:SIVTR_LAST_COMMAND_ID = [string]$last.Id
+            }
+            $env:SIVTR_LAST_PROMPT = [string]$rendered
+            sivtr flush
+        } catch {}
+        $rendered
     }
     $Global:_sivtr_prompt_wrapped = $true
 }
@@ -48,6 +57,13 @@ else
   export SIVTR_SESSION_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/sivtr/session_$$.log"
 fi
 __sivtr_precmd() {
+  local hist_entry
+  hist_entry="$(HISTTIMEFORMAT= history 1)"
+  if [[ $hist_entry =~ ^[[:space:]]*([0-9]+)[[:space:]]+(.*)$ ]]; then
+    export SIVTR_LAST_COMMAND_ID="${BASH_REMATCH[1]}"
+    export SIVTR_LAST_COMMAND="${BASH_REMATCH[2]}"
+  fi
+  export SIVTR_LAST_PROMPT="${PS1@P}"
   sivtr flush >/dev/null 2>&1 || true
 }
 if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then
@@ -74,6 +90,9 @@ else
   export SIVTR_SESSION_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/sivtr/session_$$.log"
 fi
 _sivtr_precmd() {
+  export SIVTR_LAST_COMMAND="$(fc -ln -1)"
+  export SIVTR_LAST_COMMAND_ID="$HISTCMD"
+  export SIVTR_LAST_PROMPT="$(print -P "$PROMPT")"
   sivtr flush >/dev/null 2>&1 || true
 }
 if (( ${precmd_functions[(I)_sivtr_precmd]} == 0 )); then
@@ -88,6 +107,12 @@ const NUSHELL_HOOK: &str = r#"# >>> sivtr shell integration >>>
 $env.SIVTR_SESSION_LOG = (($env.APPDATA? | default $nu.default-config-dir) | path join 'sivtr' $"session_($nu.pid).log")
 if (($env.SIVTR_PROMPT_WRAPPED? | default false) != true) {
     def _sivtr_precmd [] {
+        let last = (history | last 1 | get 0?)
+        if $last != null {
+            $env.SIVTR_LAST_COMMAND = ($last.command? | default "")
+            $env.SIVTR_LAST_COMMAND_ID = (($last.start_timestamp? | default (date now)) | into string)
+        }
+        $env.SIVTR_LAST_PROMPT = (do $env.PROMPT_COMMAND)
         try { ^sivtr flush } catch {}
     }
     $env.config.hooks.pre_prompt = ($env.config.hooks.pre_prompt? | default [] | append {|| _sivtr_precmd })

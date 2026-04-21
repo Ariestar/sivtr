@@ -1,5 +1,7 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::env;
+
+use crate::session;
 
 /// Get the session log path used by the shell hook.
 pub fn session_log_path() -> std::path::PathBuf {
@@ -30,13 +32,13 @@ pub fn flush_state_path() -> std::path::PathBuf {
     session_log_path().with_extension("state")
 }
 
-/// Read the current session log (populated by `sivtr flush` shell hook).
-pub fn capture_scrollback() -> Result<Option<String>> {
+/// Read the current session log populated by the shell hook.
+pub fn read_session_log() -> Result<Option<String>> {
     let log = session_log_path();
     if log.exists() {
-        let content = std::fs::read_to_string(&log).context("Failed to read session log")?;
-        if !content.trim().is_empty() {
-            return Ok(Some(content));
+        let entries = session::load_entries(&log)?;
+        if !entries.is_empty() {
+            return Ok(Some(session::render_entries(&entries)));
         }
     }
     Ok(None)
@@ -45,14 +47,22 @@ pub fn capture_scrollback() -> Result<Option<String>> {
 /// Read the current console buffer with ANSI color codes.
 /// Used by `sivtr flush` to incrementally capture output.
 #[cfg(windows)]
-pub fn capture_console_buffer() -> Result<String> {
+pub struct ConsoleSnapshot {
+    pub content: String,
+    pub width: usize,
+}
+
+/// Read the current console buffer with ANSI color codes.
+/// Used by `sivtr flush` to incrementally capture output.
+#[cfg(windows)]
+pub fn capture_console_buffer() -> Result<ConsoleSnapshot> {
     capture_windows_console()
 }
 
 /// Read the Windows console screen buffer via Win32 API,
 /// including color attributes converted to ANSI escape codes.
 #[cfg(windows)]
-fn capture_windows_console() -> Result<String> {
+fn capture_windows_console() -> Result<ConsoleSnapshot> {
     use std::ptr;
 
     use winapi::um::fileapi::{CreateFileW, OPEN_EXISTING};
@@ -100,7 +110,10 @@ fn capture_windows_console() -> Result<String> {
 
         let width = info.dwSize.X as usize;
         if width == 0 {
-            return Ok(String::new());
+            return Ok(ConsoleSnapshot {
+                content: String::new(),
+                width: 0,
+            });
         }
         let cursor_row = info.dwCursorPosition.Y as usize;
         let content_rows = (cursor_row + 1).min(info.dwSize.Y as usize);
@@ -190,8 +203,11 @@ fn capture_windows_console() -> Result<String> {
             CloseHandle(handle);
         }
 
-        let trimmed = result.trim_end_matches('\n');
-        Ok(trimmed.to_string())
+        let trimmed = result.trim_end_matches('\n').to_string();
+        Ok(ConsoleSnapshot {
+            content: trimmed,
+            width,
+        })
     }
 }
 
