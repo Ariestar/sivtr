@@ -25,6 +25,21 @@ pub struct ParsedCommandBlock {
     pub command: String,
 }
 
+impl ParsedCommandBlock {
+    pub fn from_session_entry(entry: &SessionEntry) -> Self {
+        let input_with_prompt = entry.render_input();
+        let input_without_prompt = entry.command.replace("\r\n", "\n").trim_end().to_string();
+        let output = entry.output.replace("\r\n", "\n").trim_end_matches('\n').to_string();
+
+        Self {
+            input_with_prompt,
+            input_without_prompt: input_without_prompt.clone(),
+            output,
+            command: input_without_prompt,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandBlockSpan {
     pub line_start: usize,
@@ -88,12 +103,10 @@ pub fn build_from_entries(entries: &[SessionEntry]) -> Vec<CommandBlockSpan> {
     let mut line_start = 0usize;
 
     for entry in entries {
-        let input_with_prompt = session::render_input(&entry.prompt, &entry.command);
-        let input_without_prompt = entry.command.replace("\r\n", "\n").trim_end().to_string();
-        let output = entry.output.replace("\r\n", "\n").trim_end_matches('\n').to_string();
+        let parsed = ParsedCommandBlock::from_session_entry(entry);
 
-        let input_line_count = line_count(&input_with_prompt);
-        let output_line_count = line_count(&output);
+        let input_line_count = line_count(&parsed.input_with_prompt);
+        let output_line_count = line_count(&parsed.output);
         let block_line_count = input_line_count + output_line_count;
         if block_line_count == 0 {
             continue;
@@ -115,12 +128,7 @@ pub fn build_from_entries(entries: &[SessionEntry]) -> Vec<CommandBlockSpan> {
             line_end: line_start + block_line_count - 1,
             input_line_range,
             output_line_range,
-            parsed: ParsedCommandBlock {
-                input_with_prompt,
-                input_without_prompt: input_without_prompt.clone(),
-                output,
-                command: input_without_prompt,
-            },
+            parsed,
         });
 
         line_start += block_line_count;

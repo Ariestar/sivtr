@@ -181,6 +181,7 @@ pub fn execute(shell: &str) -> Result<()> {
 fn install_powershell_hook() -> Result<()> {
     let mut installed = Vec::new();
     let mut updated = Vec::new();
+    let mut failed = Vec::new();
 
     for cmd in &["pwsh", "powershell"] {
         if let Ok(path) = get_ps_profile(cmd) {
@@ -188,12 +189,16 @@ fn install_powershell_hook() -> Result<()> {
                 Ok(InstallStatus::Installed) => installed.push(path),
                 Ok(InstallStatus::Updated) => updated.push(path),
                 Ok(InstallStatus::Unchanged) => eprintln!("sivtr: already installed in {path}"),
-                Err(_) => {}
+                Err(err) => failed.push((path, err)),
             }
         }
     }
 
     print_install_summary(&installed, &updated);
+    for (path, err) in failed {
+        eprintln!("sivtr: failed to update {path}");
+        eprintln!("  {err}");
+    }
     Ok(())
 }
 

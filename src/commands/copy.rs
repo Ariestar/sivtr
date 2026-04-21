@@ -42,11 +42,6 @@ enum CommandSelection {
     RecentExplicit(Vec<usize>),
 }
 
-#[derive(Clone, Debug)]
-struct IndexedCommandBlock {
-    parsed: CommandBlock,
-}
-
 /// Copy recent command blocks to clipboard.
 pub fn execute(request: CopyRequest<'_>) -> Result<()> {
     let CopyRequest {
@@ -74,17 +69,7 @@ pub fn execute(request: CopyRequest<'_>) -> Result<()> {
         return Ok(());
     }
 
-    let blocks: Vec<IndexedCommandBlock> = entries
-        .iter()
-        .map(|entry| IndexedCommandBlock {
-            parsed: CommandBlock {
-                input_with_prompt: session::render_input(&entry.prompt, &entry.command),
-                input_without_prompt: entry.command.replace("\r\n", "\n").trim_end().to_string(),
-                output: entry.output.replace("\r\n", "\n").trim_end_matches('\n').to_string(),
-                command: entry.command.replace("\r\n", "\n").trim_end().to_string(),
-            },
-        })
-        .collect();
+    let blocks: Vec<CommandBlock> = entries.iter().map(CommandBlock::from_session_entry).collect();
 
     let total = blocks.len();
     if total == 0 {
@@ -109,7 +94,7 @@ pub fn execute(request: CopyRequest<'_>) -> Result<()> {
     let copied_blocks: Vec<String> = indices
         .iter()
         .filter_map(|idx| blocks.get(*idx))
-        .map(|block| format_block(&block.parsed, mode, include_prompt, prompt_override))
+        .map(|block| format_block(block, mode, include_prompt, prompt_override))
         .filter(|block| !block.trim().is_empty())
         .collect();
 
@@ -283,7 +268,7 @@ fn resolve_selection(selection: CommandSelection, total: usize) -> Result<Vec<us
     }
 }
 
-fn pick_selection(blocks: &[IndexedCommandBlock]) -> Result<CommandSelection> {
+fn pick_selection(blocks: &[CommandBlock]) -> Result<CommandSelection> {
     let total = blocks.len();
     let shown = total.min(PICK_LIMIT);
     let entries: Vec<PickEntry> = blocks
@@ -293,11 +278,11 @@ fn pick_selection(blocks: &[IndexedCommandBlock]) -> Result<CommandSelection> {
         .enumerate()
         .map(|(offset, block)| {
             let recent = offset + 1;
-            let output_preview = build_output_preview(&block.parsed);
-            let preview = if !block.parsed.command.is_empty() {
-                block.parsed.command.clone()
-            } else if !block.parsed.output.is_empty() {
-                block.parsed.output.lines().next().unwrap_or("").to_string()
+            let output_preview = build_output_preview(block);
+            let preview = if !block.command.is_empty() {
+                block.command.clone()
+            } else if !block.output.is_empty() {
+                block.output.lines().next().unwrap_or("").to_string()
             } else {
                 "<empty>".to_string()
             };
@@ -804,4 +789,3 @@ fn build_output_preview(block: &CommandBlock) -> String {
     }
     lines.join("\n")
 }
-

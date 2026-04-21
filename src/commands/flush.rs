@@ -34,11 +34,7 @@ fn do_flush() -> Result<()> {
             session::extract_output_from_snapshot(&prompt, &command, &current_lines, snapshot.width);
 
         if should_append_entry(&state, command_id.as_deref(), &command) {
-            let entry = SessionEntry {
-                prompt,
-                command: command.clone(),
-                output,
-            };
+            let entry = SessionEntry::new(prompt, command.clone(), output);
             session::append_entry(&scrollback::session_log_path(), &entry)?;
             state.last_command_id = command_id;
             state.last_command = Some(command);
