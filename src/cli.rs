@@ -142,8 +142,8 @@ pub enum Commands {
     #[command(name = "cc", hide = true)]
     Cc(CopySimpleArgs),
 
-    /// Clear the current session log
-    Clear,
+    /// Clear session logs
+    Clear(ClearArgs),
 
     /// Internal: flush console buffer to session log (called by shell hook)
     #[command(hide = true)]
@@ -180,6 +180,10 @@ pub struct CopyCommonArgs {
     #[arg(value_name = "N|A..B")]
     pub selector: Option<String>,
 
+    /// Copy the ANSI-decorated version when available
+    #[arg(long)]
+    pub ansi: bool,
+
     /// Open the interactive picker
     #[arg(long)]
     pub pick: bool,
@@ -213,6 +217,13 @@ pub struct CopySimpleArgs {
     pub common: CopyCommonArgs,
 }
 
+#[derive(Args, Debug, Clone, Default)]
+pub struct ClearArgs {
+    /// Clear all recorded session logs and state files
+    #[arg(short = 'a', long = "all")]
+    pub all: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,6 +250,26 @@ mod tests {
         let result = Cli::try_parse_from(["sivtr", "cc", "--prompt", ":"]);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn copy_aliases_accept_ansi_flag() {
+        let cli = Cli::try_parse_from(["sivtr", "co", "--ansi"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Co(args)) => assert!(args.common.ansi),
+            _ => panic!("expected co command"),
+        }
+    }
+
+    #[test]
+    fn clear_accepts_all_flag() {
+        let cli = Cli::try_parse_from(["sivtr", "clear", "--all"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Clear(args)) => assert!(args.all),
+            _ => panic!("expected clear command"),
+        }
     }
 }
 

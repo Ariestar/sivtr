@@ -24,4 +24,7 @@ tempfile = "3"
 toml = "0.8"
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["processenv", "winbase", "wincon", "handleapi"] }
+winapi = { version = "0.3", features = ["processenv", "winbase", "wincon", "handleapi", "processthreadsapi"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

@@ -156,11 +156,15 @@ mod tests {
                 prompt: "PS C:\\repo> ".to_string(),
                 command: "git status".to_string(),
                 output: "clean".to_string(),
+                prompt_ansi: None,
+                output_ansi: None,
             },
             SessionEntry {
                 prompt: "repo on main\n❯  ".to_string(),
                 command: "cargo test".to_string(),
                 output: "ok".to_string(),
+                prompt_ansi: None,
+                output_ansi: None,
             },
         ];
 
@@ -181,6 +185,8 @@ mod tests {
             prompt: String::new(),
             command: String::new(),
             output: "warning: something happened\nwarning: still bad".to_string(),
+            prompt_ansi: None,
+            output_ansi: None,
         }];
 
         let blocks = build_from_entries(&entries);

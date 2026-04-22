@@ -47,8 +47,8 @@ fn main() -> Result<()> {
         Some(Commands::Ci(args)) => run_copy(&args, CopyMode::InputOnly, true)?,
         Some(Commands::Co(args)) => run_copy_simple(&args, CopyMode::OutputOnly, false)?,
         Some(Commands::Cc(args)) => run_copy_simple(&args, CopyMode::CommandOnly, false)?,
-        Some(Commands::Clear) => {
-            commands::clear::execute()?;
+        Some(Commands::Clear(args)) => {
+            commands::clear::execute(args.all)?;
         }
         Some(Commands::Flush) => {
             commands::flush::execute()?;
@@ -75,6 +75,7 @@ fn run_copy(args: &CopyArgs, mode: CopyMode, include_prompt: bool) -> Result<()>
         include_prompt,
         prompt_override: args.prompt.as_deref(),
         print_full: args.common.print,
+        ansi: args.common.ansi,
         regex: args.common.regex.as_deref(),
         lines: args.common.lines.as_deref(),
     })
@@ -88,6 +89,7 @@ fn run_copy_simple(args: &CopySimpleArgs, mode: CopyMode, include_prompt: bool) 
         include_prompt,
         prompt_override: None,
         print_full: args.common.print,
+        ansi: args.common.ansi,
         regex: args.common.regex.as_deref(),
         lines: args.common.lines.as_deref(),
     })

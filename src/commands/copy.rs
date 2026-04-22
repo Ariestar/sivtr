@@ -7,7 +7,7 @@ use regex::Regex;
 
 use crate::command_blocks::ParsedCommandBlock as CommandBlock;
 use sivtr_core::capture::scrollback;
-use sivtr_core::session;
+use sivtr_core::session::{self, SessionEntry};
 
 use crate::tui::terminal::{init as init_tui, restore as restore_tui};
 
@@ -30,6 +30,7 @@ pub struct CopyRequest<'a> {
     pub include_prompt: bool,
     pub prompt_override: Option<&'a str>,
     pub print_full: bool,
+    pub ansi: bool,
     pub regex: Option<&'a str>,
     pub lines: Option<&'a str>,
 }
@@ -42,6 +43,32 @@ enum CommandSelection {
     RecentExplicit(Vec<usize>),
 }
 
+#[derive(Clone, Debug)]
+struct IndexedCommandBlock {
+    plain: CommandBlock,
+    ansi: Option<CommandBlock>,
+}
+
+impl IndexedCommandBlock {
+    fn from_session_entry(entry: &SessionEntry) -> Self {
+        let plain = CommandBlock::from_session_entry(entry);
+        let ansi = entry.has_ansi().then(|| CommandBlock {
+            input_with_prompt: entry.render_input_ansi(),
+            input_without_prompt: plain.input_without_prompt.clone(),
+            output: entry.output_ansi.clone().unwrap_or_else(|| plain.output.clone()),
+            command: plain.command.clone(),
+        });
+
+        Self { plain, ansi }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct TextPair {
+    plain: String,
+    ansi: String,
+}
+
 /// Copy recent command blocks to clipboard.
 pub fn execute(request: CopyRequest<'_>) -> Result<()> {
     let CopyRequest {
@@ -51,6 +78,7 @@ pub fn execute(request: CopyRequest<'_>) -> Result<()> {
         include_prompt,
         prompt_override,
         print_full,
+        ansi,
         regex,
         lines,
     } = request;
@@ -69,7 +97,10 @@ pub fn execute(request: CopyRequest<'_>) -> Result<()> {
         return Ok(());
     }
 
-    let blocks: Vec<CommandBlock> = entries.iter().map(CommandBlock::from_session_entry).collect();
+    let blocks: Vec<IndexedCommandBlock> = entries
+        .iter()
+        .map(IndexedCommandBlock::from_session_entry)
+        .collect();
 
     let total = blocks.len();
     if total == 0 {
@@ -91,11 +122,11 @@ pub fn execute(request: CopyRequest<'_>) -> Result<()> {
         return Ok(());
     }
 
-    let copied_blocks: Vec<String> = indices
+    let copied_blocks: Vec<TextPair> = indices
         .iter()
         .filter_map(|idx| blocks.get(*idx))
-        .map(|block| format_block(block, mode, include_prompt, prompt_override))
-        .filter(|block| !block.trim().is_empty())
+        .map(|block| format_block_pair(block, mode, include_prompt, prompt_override))
+        .filter(|block| !block.plain.trim().is_empty())
         .collect();
 
     if copied_blocks.is_empty() {
@@ -104,7 +135,7 @@ pub fn execute(request: CopyRequest<'_>) -> Result<()> {
         return Ok(());
     }
 
-    let mut text = copied_blocks.join("\n\n");
+    let mut text = join_text_pairs(&copied_blocks, "\n\n");
 
     if let Some(pattern) = regex {
         text = filter_lines_by_regex(&text, pattern)?;
@@ -114,7 +145,11 @@ pub fn execute(request: CopyRequest<'_>) -> Result<()> {
         text = filter_lines_by_spec(&text, spec)?;
     }
 
-    let text = text.trim().to_string();
+    let text = if ansi {
+        text.ansi.trim().to_string()
+    } else {
+        text.plain.trim().to_string()
+    };
     if text.is_empty() {
         eprintln!("sivtr: filters removed everything");
         eprintln!("  hint: loosen `--regex` or `--lines`, or copy without filters");
@@ -130,24 +165,43 @@ pub fn execute(request: CopyRequest<'_>) -> Result<()> {
         for line in text.lines() {
             eprintln!("  {line}");
         }
-    } else {
-        let preview: Vec<&str> = text.lines().take(4).collect();
-        let line_count = text.lines().count();
-        for line in &preview {
-            eprintln!("  {line}");
-        }
-        if line_count > 4 {
-            eprintln!("  ... ({line_count} lines total)");
-        }
     }
 
-    eprintln!(
-        "sivtr: copied {} command(s) to clipboard{}",
-        indices.len(),
-        if print_full { " (full text shown)" } else { "" }
-    );
+    eprintln!("sivtr: copied {} command(s) to clipboard", indices.len());
 
     Ok(())
+}
+
+fn format_block_pair(
+    block: &IndexedCommandBlock,
+    mode: CopyMode,
+    include_prompt: bool,
+    prompt_override: Option<&str>,
+) -> TextPair {
+    let plain = format_block(&block.plain, mode, include_prompt, prompt_override);
+    let ansi = format_block(
+        block.ansi.as_ref().unwrap_or(&block.plain),
+        mode,
+        include_prompt,
+        prompt_override,
+    );
+
+    TextPair { plain, ansi }
+}
+
+fn join_text_pairs(pairs: &[TextPair], separator: &str) -> TextPair {
+    TextPair {
+        plain: pairs
+            .iter()
+            .map(|pair| pair.plain.as_str())
+            .collect::<Vec<_>>()
+            .join(separator),
+        ansi: pairs
+            .iter()
+            .map(|pair| pair.ansi.as_str())
+            .collect::<Vec<_>>()
+            .join(separator),
+    }
 }
 
 fn format_block(
@@ -268,7 +322,7 @@ fn resolve_selection(selection: CommandSelection, total: usize) -> Result<Vec<us
     }
 }
 
-fn pick_selection(blocks: &[CommandBlock]) -> Result<CommandSelection> {
+fn pick_selection(blocks: &[IndexedCommandBlock]) -> Result<CommandSelection> {
     let total = blocks.len();
     let shown = total.min(PICK_LIMIT);
     let entries: Vec<PickEntry> = blocks
@@ -278,11 +332,11 @@ fn pick_selection(blocks: &[CommandBlock]) -> Result<CommandSelection> {
         .enumerate()
         .map(|(offset, block)| {
             let recent = offset + 1;
-            let output_preview = build_output_preview(block);
-            let preview = if !block.command.is_empty() {
-                block.command.clone()
-            } else if !block.output.is_empty() {
-                block.output.lines().next().unwrap_or("").to_string()
+            let output_preview = build_output_preview(&block.plain);
+            let preview = if !block.plain.command.is_empty() {
+                block.plain.command.clone()
+            } else if !block.plain.output.is_empty() {
+                block.plain.output.lines().next().unwrap_or("").to_string()
             } else {
                 "<empty>".to_string()
             };
@@ -298,18 +352,20 @@ fn pick_selection(blocks: &[CommandBlock]) -> Result<CommandSelection> {
     run_picker(entries, total)
 }
 
-fn filter_lines_by_regex(text: &str, pattern: &str) -> Result<String> {
+fn filter_lines_by_regex(text: &TextPair, pattern: &str) -> Result<TextPair> {
     let regex = Regex::new(pattern)
         .with_context(|| format!("Invalid regex `{pattern}`. Check the pattern syntax."))?;
-    Ok(text
+    let indices = text
+        .plain
         .lines()
-        .filter(|line| regex.is_match(line))
-        .collect::<Vec<_>>()
-        .join("\n"))
+        .enumerate()
+        .filter_map(|(idx, line)| regex.is_match(line).then_some(idx))
+        .collect::<Vec<_>>();
+    Ok(select_lines(text, &indices))
 }
 
-fn filter_lines_by_spec(text: &str, spec: &str) -> Result<String> {
-    let lines: Vec<&str> = text.lines().collect();
+fn filter_lines_by_spec(text: &TextPair, spec: &str) -> Result<TextPair> {
+    let lines: Vec<&str> = text.plain.lines().collect();
     let mut selected = Vec::new();
 
     for part in spec
@@ -331,8 +387,8 @@ fn filter_lines_by_spec(text: &str, spec: &str) -> Result<String> {
                 (end, start)
             };
             for idx in start..=end {
-                if let Some(line) = lines.get(idx - 1) {
-                    selected.push((*line).to_string());
+                if lines.get(idx - 1).is_some() {
+                    selected.push(idx - 1);
                 }
             }
         } else {
@@ -340,13 +396,38 @@ fn filter_lines_by_spec(text: &str, spec: &str) -> Result<String> {
             if idx == 0 {
                 anyhow::bail!("Line numbers are 1-based. Example: `1,3,8:12`.");
             }
-            if let Some(line) = lines.get(idx - 1) {
-                selected.push((*line).to_string());
+            if lines.get(idx - 1).is_some() {
+                selected.push(idx - 1);
             }
         }
     }
 
-    Ok(selected.join("\n"))
+    Ok(select_lines(text, &selected))
+}
+
+fn select_lines(text: &TextPair, indices: &[usize]) -> TextPair {
+    let plain_lines: Vec<&str> = text.plain.lines().collect();
+    let ansi_lines: Vec<&str> = text.ansi.lines().collect();
+    let mut plain_selected = Vec::new();
+    let mut ansi_selected = Vec::new();
+
+    for &idx in indices {
+        if let Some(line) = plain_lines.get(idx) {
+            plain_selected.push((*line).to_string());
+            ansi_selected.push(
+                ansi_lines
+                    .get(idx)
+                    .copied()
+                    .unwrap_or(line)
+                    .to_string(),
+            );
+        }
+    }
+
+    TextPair {
+        plain: plain_selected.join("\n"),
+        ansi: ansi_selected.join("\n"),
+    }
 }
 
 fn parse_positive(value: &str) -> Result<usize> {
@@ -370,7 +451,7 @@ mod tests {
     use super::{
         apply_range_toggle, build_output_preview, filter_lines_by_regex, filter_lines_by_spec,
         format_block, parse_selection, resolve_selection, selection_from_entries, CommandBlock,
-        CommandSelection, CopyMode, PickEntry,
+        CommandSelection, CopyMode, PickEntry, TextPair,
     };
 
     #[test]
@@ -495,19 +576,55 @@ mod tests {
 
     #[test]
     fn filters_by_regex() {
-        let filtered = filter_lines_by_regex("a\nwarn: b\nc", "warn").unwrap();
-        assert_eq!(filtered, "warn: b");
+        let filtered = filter_lines_by_regex(
+            &TextPair {
+                plain: "a\nwarn: b\nc".to_string(),
+                ansi: "a\nwarn: b\nc".to_string(),
+            },
+            "warn",
+        )
+        .unwrap();
+        assert_eq!(filtered.plain, "warn: b");
+    }
+
+    #[test]
+    fn filters_ansi_by_plain_regex_matches() {
+        let filtered = filter_lines_by_regex(
+            &TextPair {
+                plain: "a\nwarn: b\nc".to_string(),
+                ansi: "a\n\x1b[31mwarn: b\x1b[0m\nc".to_string(),
+            },
+            "warn",
+        )
+        .unwrap();
+        assert_eq!(filtered.ansi, "\x1b[31mwarn: b\x1b[0m");
     }
 
     #[test]
     fn filters_by_line_spec_with_colon_ranges() {
-        let filtered = filter_lines_by_spec("a\nb\nc\nd", "2,4:3").unwrap();
-        assert_eq!(filtered, "b\nc\nd");
+        let filtered = filter_lines_by_spec(
+            &TextPair {
+                plain: "a\nb\nc\nd".to_string(),
+                ansi: "a\nb\nc\nd".to_string(),
+            },
+            "2,4:3",
+        )
+        .unwrap();
+        assert_eq!(filtered.plain, "b\nc\nd");
     }
 
     #[test]
     fn rejects_dash_ranges_for_lines() {
-        assert!(filter_lines_by_spec("a\nb\nc", "1-2").is_err());
+        assert!(
+            filter_lines_by_spec(
+                &TextPair {
+                    plain: "a\nb\nc".to_string(),
+                    ansi: "a\nb\nc".to_string(),
+                },
+                "1-2"
+            )
+            .is_err()
+        );
     }
 
     #[test]

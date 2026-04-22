@@ -9,23 +9,75 @@ pub struct SessionEntry {
     pub prompt: String,
     pub command: String,
     pub output: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_ansi: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_ansi: Option<String>,
 }
 
 impl SessionEntry {
     pub fn new(prompt: impl Into<String>, command: impl Into<String>, output: impl Into<String>) -> Self {
-        Self {
-            prompt: sanitize_prompt(&prompt.into()),
-            command: sanitize_command(&command.into()),
-            output: sanitize_output(&output.into()),
-        }
+        Self::from_raw(prompt.into(), command.into(), output.into())
     }
 
     pub fn render_input(&self) -> String {
         render_input(&self.prompt, &self.command)
     }
 
+    pub fn render_input_ansi(&self) -> String {
+        render_input(
+            self.prompt_ansi.as_deref().unwrap_or(&self.prompt),
+            &self.command,
+        )
+    }
+
     pub fn render(&self) -> String {
         render_entry(self)
+    }
+
+    pub fn render_ansi(&self) -> String {
+        render_entry_ansi(self)
+    }
+
+    pub fn has_ansi(&self) -> bool {
+        self.prompt_ansi.is_some() || self.output_ansi.is_some()
+    }
+
+    fn from_raw(prompt: String, command: String, output: String) -> Self {
+        let prompt = normalize_newlines(&prompt);
+        let command = normalize_newlines(&command);
+        let output = normalize_newlines(&output);
+        let prompt_plain = sanitize_prompt(&prompt);
+        let output_plain = sanitize_output(&output);
+
+        Self {
+            prompt: prompt_plain.clone(),
+            command: sanitize_command(&command),
+            output: output_plain.clone(),
+            prompt_ansi: preserve_ansi(prompt, &prompt_plain),
+            output_ansi: preserve_ansi(output, &output_plain),
+        }
+    }
+
+    fn normalized(self) -> Self {
+        let raw_prompt = normalize_newlines(&self.prompt);
+        let raw_output = normalize_newlines(&self.output);
+        let prompt_plain = sanitize_prompt(&raw_prompt);
+        let output_plain = sanitize_output(&raw_output);
+
+        Self {
+            prompt: prompt_plain.clone(),
+            command: sanitize_command(&self.command),
+            output: output_plain.clone(),
+            prompt_ansi: self
+                .prompt_ansi
+                .and_then(|prompt| preserve_ansi(prompt, &prompt_plain))
+                .or_else(|| preserve_ansi(raw_prompt, &prompt_plain)),
+            output_ansi: self
+                .output_ansi
+                .and_then(|output| preserve_ansi(output, &output_plain))
+                .or_else(|| preserve_ansi(raw_output, &output_plain)),
+        }
     }
 }
 
@@ -60,7 +112,7 @@ pub fn load_entries(path: &Path) -> Result<Vec<SessionEntry>> {
                 path.display()
             )
         })?;
-        entries.push(SessionEntry::new(entry.prompt, entry.command, entry.output));
+        entries.push(entry.normalized());
     }
 
     Ok(entries)
@@ -68,13 +120,16 @@ pub fn load_entries(path: &Path) -> Result<Vec<SessionEntry>> {
 
 pub fn append_entry(path: &Path, entry: &SessionEntry) -> Result<()> {
     reset_invalid_log_if_needed(path)?;
-    rewrite_sanitized_log_if_needed(path)?;
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
 
-    let entry = SessionEntry::new(&entry.prompt, &entry.command, &entry.output);
+    let entry = SessionEntry::from_raw(
+        entry.prompt_ansi.clone().unwrap_or_else(|| entry.prompt.clone()),
+        entry.command.clone(),
+        entry.output_ansi.clone().unwrap_or_else(|| entry.output.clone()),
+    );
     let mut file = fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -132,14 +187,14 @@ pub fn render_input(prompt: &str, command: &str) -> String {
 }
 
 pub fn render_entry(entry: &SessionEntry) -> String {
-    let input = entry.render_input();
+    render_entry_parts(&entry.render_input(), &entry.output)
+}
 
-    match (input.is_empty(), entry.output.is_empty()) {
-        (false, false) => format!("{input}\n{}", entry.output),
-        (false, true) => input,
-        (true, false) => entry.output.clone(),
-        (true, true) => String::new(),
-    }
+pub fn render_entry_ansi(entry: &SessionEntry) -> String {
+    render_entry_parts(
+        &entry.render_input_ansi(),
+        entry.output_ansi.as_deref().unwrap_or(&entry.output),
+    )
 }
 
 pub fn render_entries(entries: &[SessionEntry]) -> String {
@@ -149,6 +204,24 @@ pub fn render_entries(entries: &[SessionEntry]) -> String {
         .filter(|entry| !entry.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+pub fn render_entries_ansi(entries: &[SessionEntry]) -> String {
+    entries
+        .iter()
+        .map(SessionEntry::render_ansi)
+        .filter(|entry| !entry.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn render_entry_parts(input: &str, output: &str) -> String {
+    match (input.is_empty(), output.is_empty()) {
+        (false, false) => format!("{input}\n{output}"),
+        (false, true) => input.to_string(),
+        (true, false) => output.to_string(),
+        (true, true) => String::new(),
+    }
 }
 
 pub(super) fn normalize_newlines(text: &str) -> String {
@@ -165,6 +238,15 @@ pub(super) fn sanitize_command(command: &str) -> String {
 
 pub(super) fn sanitize_output(output: &str) -> String {
     normalize_newlines(&strip_ansi_escapes::strip_str(output))
+}
+
+fn preserve_ansi(raw: String, plain: &str) -> Option<String> {
+    let normalized = normalize_newlines(&raw);
+    if normalized.is_empty() || normalized == plain {
+        None
+    } else {
+        Some(normalized)
+    }
 }
 
 fn reset_invalid_log_if_needed(path: &Path) -> Result<()> {
@@ -185,42 +267,9 @@ fn reset_invalid_log_if_needed(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn rewrite_sanitized_log_if_needed(path: &Path) -> Result<()> {
-    if !path.exists() {
-        return Ok(());
-    }
-
-    let raw = fs::read_to_string(path).with_context(|| {
-        format!(
-            "Failed to read session log for normalization: {}",
-            path.display()
-        )
-    })?;
-    if !raw.contains("\\u001b") && !raw.contains("\u{1b}") {
-        return Ok(());
-    }
-
-    let entries = load_entries(path)?;
-    let normalized = entries
-        .into_iter()
-        .map(|entry| {
-            serde_json::to_string(&entry).context("Failed to encode normalized session entry")
-        })
-        .collect::<Result<Vec<_>>>()?
-        .join("\n");
-
-    let rewritten = if normalized.is_empty() {
-        String::new()
-    } else {
-        format!("{normalized}\n")
-    };
-    fs::write(path, rewritten)
-        .with_context(|| format!("Failed to rewrite sanitized session log: {}", path.display()))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{render_entry, render_input, SessionEntry};
+    use super::{render_entry, render_entry_ansi, render_input, render_entries_ansi, SessionEntry};
 
     #[test]
     fn renders_multiline_prompt_input() {
@@ -244,6 +293,28 @@ mod tests {
 
         assert_eq!(entry.prompt, "sift\n❯  ");
         assert_eq!(entry.output, "ok");
+        assert_eq!(
+            entry.prompt_ansi.as_deref(),
+            Some("\x1b[1;32msift\x1b[0m\n\x1b[1;36m❯ \x1b[0m ")
+        );
+        assert_eq!(entry.output_ansi.as_deref(), Some("\x1b[92mok\x1b[0m"));
         assert_eq!(render_entry(&entry), "sift\n❯  sivtr c 1\nok");
+        assert_eq!(
+            render_entry_ansi(&entry),
+            "\x1b[1;32msift\x1b[0m\n\x1b[1;36m❯ \x1b[0m sivtr c 1\n\x1b[92mok\x1b[0m"
+        );
+    }
+
+    #[test]
+    fn renders_ansi_entries_with_fallback() {
+        let entries = vec![
+            SessionEntry::new("\x1b[36mPS C:\\repo>\x1b[0m ", "cargo test", "\x1b[31mfailed\x1b[0m"),
+            SessionEntry::new("PS C:\\repo> ", "cargo check", "ok"),
+        ];
+
+        assert_eq!(
+            render_entries_ansi(&entries),
+            "\x1b[36mPS C:\\repo>\x1b[0m cargo test\n\x1b[31mfailed\x1b[0m\nPS C:\\repo> cargo check\nok"
+        );
     }
 }

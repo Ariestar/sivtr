@@ -1,16 +1,24 @@
 use anyhow::Result;
 use std::env;
+use std::path::{Path, PathBuf};
+use std::sync::Once;
 
 use crate::session;
+
+static CLEANUP_ONCE: Once = Once::new();
 
 /// Get the session log path used by the shell hook.
 pub fn session_log_path() -> std::path::PathBuf {
     if let Ok(path) = env::var("SIVTR_SESSION_LOG") {
-        return std::path::PathBuf::from(path);
+        let path = PathBuf::from(path);
+        cleanup_stale_sessions_once(&path);
+        return path;
     }
 
     if let Ok(path) = env::var("SIFT_SESSION_LOG") {
-        return std::path::PathBuf::from(path);
+        let path = PathBuf::from(path);
+        cleanup_stale_sessions_once(&path);
+        return path;
     }
 
     let base_dir = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
@@ -27,6 +35,103 @@ pub fn session_log_path() -> std::path::PathBuf {
     current
 }
 
+fn cleanup_stale_sessions_once(current_session_path: &Path) {
+    let current_session_path = current_session_path.to_path_buf();
+    CLEANUP_ONCE.call_once(|| {
+        let _ = cleanup_stale_sessions(&current_session_path);
+    });
+}
+
+fn cleanup_stale_sessions(current_session_path: &Path) -> Result<()> {
+    let Some(parent) = current_session_path.parent() else {
+        return Ok(());
+    };
+    if !parent.exists() {
+        return Ok(());
+    }
+
+    let current_pid = session_pid_from_path(current_session_path);
+
+    for entry in std::fs::read_dir(parent)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        let Some(pid) = session_pid_from_path(&path) else {
+            continue;
+        };
+
+        if Some(pid) == current_pid || process_is_alive(pid) {
+            continue;
+        }
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    Ok(())
+}
+
+fn session_pid_from_path(path: &Path) -> Option<u32> {
+    let name = path.file_name()?.to_str()?;
+    let suffix = if let Some(pid) = name
+        .strip_prefix("session_")
+        .and_then(|rest| rest.strip_suffix(".log"))
+    {
+        pid
+    } else if let Some(pid) = name
+        .strip_prefix("session_")
+        .and_then(|rest| rest.strip_suffix(".state"))
+    {
+        pid
+    } else {
+        return None;
+    };
+
+    suffix.parse::<u32>().ok()
+}
+
+#[cfg(windows)]
+fn process_is_alive(pid: u32) -> bool {
+    use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
+    use winapi::um::processthreadsapi::OpenProcess;
+    use winapi::um::winnt::PROCESS_QUERY_LIMITED_INFORMATION;
+
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+            return false;
+        }
+        let _ = CloseHandle(handle);
+        true
+    }
+}
+
+#[cfg(unix)]
+fn process_is_alive(pid: u32) -> bool {
+    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if result == 0 {
+        return true;
+    }
+
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::session_pid_from_path;
+    use std::path::Path;
+
+    #[test]
+    fn extracts_pid_from_session_artifacts() {
+        assert_eq!(session_pid_from_path(Path::new("session_42.log")), Some(42));
+        assert_eq!(session_pid_from_path(Path::new("session_42.state")), Some(42));
+        assert_eq!(session_pid_from_path(Path::new("session.log")), None);
+        assert_eq!(session_pid_from_path(Path::new("history.db")), None);
+    }
+}
+
 /// Get the flush state file path (derived from session log path).
 pub fn flush_state_path() -> std::path::PathBuf {
     session_log_path().with_extension("state")
@@ -38,7 +143,7 @@ pub fn read_session_log() -> Result<Option<String>> {
     if log.exists() {
         let entries = session::load_entries(&log)?;
         if !entries.is_empty() {
-            return Ok(Some(session::render_entries(&entries)));
+            return Ok(Some(session::render_entries_ansi(&entries)));
         }
     }
     Ok(None)
