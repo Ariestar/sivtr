@@ -1,4 +1,4 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{ArgGroup, Args, Parser, Subcommand};
 
 const COPY_AFTER_HELP: &str = "\
 Defaults:
@@ -88,6 +88,32 @@ Examples:
   sivtr copy cmd 2..5
 ";
 
+const DIFF_AFTER_HELP: &str = "\
+Defaults:
+  `sivtr diff <left> <right>` compares two command blocks from the current session.
+  The default content mode is `--output`.
+
+Selector Semantics:
+  Selection is relative to the newest command block.
+  `1` means the last block, `2` means the 2nd-last block.
+  Each selector must resolve to exactly one block.
+
+Modes:
+  --output         Compare command output (default)
+  --block          Compare input + output
+  --input          Compare input with prompt
+  --cmd            Compare bare command text
+
+View:
+  Unified diff is the default output.
+  --side-by-side   Show a two-column text view
+
+Examples:
+  sivtr diff 1 2
+  sivtr diff 3 1 --block
+  sivtr diff 2 1 --side-by-side
+";
+
 /// sivtr - Terminal output workspace.
 /// Capture, browse, search, select, and export terminal output.
 #[derive(Parser, Debug)]
@@ -141,6 +167,10 @@ pub enum Commands {
     /// Alias for `copy cmd`
     #[command(name = "cc", hide = true)]
     Cc(CopySimpleArgs),
+
+    /// Compare two recent command blocks in the current session
+    #[command(after_help = DIFF_AFTER_HELP)]
+    Diff(DiffArgs),
 
     /// Clear session logs
     Clear(ClearArgs),
@@ -217,6 +247,42 @@ pub struct CopySimpleArgs {
     pub common: CopyCommonArgs,
 }
 
+#[derive(Args, Debug, Clone)]
+#[command(group(
+    ArgGroup::new("diff_content_mode")
+        .args(["output", "block", "input", "cmd"])
+        .multiple(false)
+))]
+pub struct DiffArgs {
+    /// Left selector, for example `1`
+    #[arg(value_name = "LEFT")]
+    pub left: String,
+
+    /// Right selector, for example `2`
+    #[arg(value_name = "RIGHT")]
+    pub right: String,
+
+    /// Compare output text (default)
+    #[arg(long)]
+    pub output: bool,
+
+    /// Compare input + output
+    #[arg(long)]
+    pub block: bool,
+
+    /// Compare input with prompt
+    #[arg(long)]
+    pub input: bool,
+
+    /// Compare bare command text
+    #[arg(long)]
+    pub cmd: bool,
+
+    /// Show side-by-side text output instead of unified diff
+    #[arg(long = "side-by-side")]
+    pub side_by_side: bool,
+}
+
 #[derive(Args, Debug, Clone, Default)]
 pub struct ClearArgs {
     /// Clear all recorded session logs and state files
@@ -270,6 +336,46 @@ mod tests {
             Some(Commands::Clear(args)) => assert!(args.all),
             _ => panic!("expected clear command"),
         }
+    }
+
+    #[test]
+    fn diff_parses_two_selectors() {
+        let cli = Cli::try_parse_from(["sivtr", "diff", "1", "2"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Diff(args)) => {
+                assert_eq!(args.left, "1");
+                assert_eq!(args.right, "2");
+                assert!(!args.side_by_side);
+                assert!(!args.output);
+                assert!(!args.block);
+                assert!(!args.input);
+                assert!(!args.cmd);
+            }
+            _ => panic!("expected diff command"),
+        }
+    }
+
+    #[test]
+    fn diff_parses_block_mode_and_side_by_side() {
+        let cli =
+            Cli::try_parse_from(["sivtr", "diff", "3", "1", "--block", "--side-by-side"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Diff(args)) => {
+                assert_eq!(args.left, "3");
+                assert_eq!(args.right, "1");
+                assert!(args.block);
+                assert!(args.side_by_side);
+            }
+            _ => panic!("expected diff command"),
+        }
+    }
+
+    #[test]
+    fn diff_rejects_multiple_content_modes() {
+        let result = Cli::try_parse_from(["sivtr", "diff", "1", "2", "--output", "--cmd"]);
+        assert!(result.is_err());
     }
 }
 

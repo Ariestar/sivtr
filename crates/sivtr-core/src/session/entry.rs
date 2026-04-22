@@ -16,7 +16,11 @@ pub struct SessionEntry {
 }
 
 impl SessionEntry {
-    pub fn new(prompt: impl Into<String>, command: impl Into<String>, output: impl Into<String>) -> Self {
+    pub fn new(
+        prompt: impl Into<String>,
+        command: impl Into<String>,
+        output: impl Into<String>,
+    ) -> Self {
         Self::from_raw(prompt.into(), command.into(), output.into())
     }
 
@@ -100,7 +104,11 @@ pub fn load_entries(path: &Path) -> Result<Vec<SessionEntry>> {
 
     for (idx, line) in reader.lines().enumerate() {
         let line = line.with_context(|| {
-            format!("Failed to read session log line {}: {}", idx + 1, path.display())
+            format!(
+                "Failed to read session log line {}: {}",
+                idx + 1,
+                path.display()
+            )
         })?;
         if line.trim().is_empty() {
             continue;
@@ -126,9 +134,15 @@ pub fn append_entry(path: &Path, entry: &SessionEntry) -> Result<()> {
     }
 
     let entry = SessionEntry::from_raw(
-        entry.prompt_ansi.clone().unwrap_or_else(|| entry.prompt.clone()),
+        entry
+            .prompt_ansi
+            .clone()
+            .unwrap_or_else(|| entry.prompt.clone()),
         entry.command.clone(),
-        entry.output_ansi.clone().unwrap_or_else(|| entry.output.clone()),
+        entry
+            .output_ansi
+            .clone()
+            .unwrap_or_else(|| entry.output.clone()),
     );
     let mut file = fs::OpenOptions::new()
         .create(true)
@@ -225,7 +239,9 @@ fn render_entry_parts(input: &str, output: &str) -> String {
 }
 
 pub(super) fn normalize_newlines(text: &str) -> String {
-    text.replace("\r\n", "\n").trim_end_matches('\n').to_string()
+    text.replace("\r\n", "\n")
+        .trim_end_matches('\n')
+        .to_string()
 }
 
 pub(super) fn sanitize_prompt(prompt: &str) -> String {
@@ -269,12 +285,15 @@ fn reset_invalid_log_if_needed(path: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_entry, render_entry_ansi, render_input, render_entries_ansi, SessionEntry};
+    use super::{render_entries_ansi, render_entry, render_entry_ansi, render_input, SessionEntry};
 
     #[test]
     fn renders_multiline_prompt_input() {
         let prompt = "repo on main\n❯  ";
-        assert_eq!(render_input(prompt, "cargo test"), "repo on main\n❯  cargo test");
+        assert_eq!(
+            render_input(prompt, "cargo test"),
+            "repo on main\n❯  cargo test"
+        );
     }
 
     #[test]
@@ -308,7 +327,11 @@ mod tests {
     #[test]
     fn renders_ansi_entries_with_fallback() {
         let entries = vec![
-            SessionEntry::new("\x1b[36mPS C:\\repo>\x1b[0m ", "cargo test", "\x1b[31mfailed\x1b[0m"),
+            SessionEntry::new(
+                "\x1b[36mPS C:\\repo>\x1b[0m ",
+                "cargo test",
+                "\x1b[31mfailed\x1b[0m",
+            ),
             SessionEntry::new("PS C:\\repo> ", "cargo check", "ok"),
         ];
 

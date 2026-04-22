@@ -17,6 +17,14 @@ pub enum SelectTarget {
     Output,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandBlockTextMode {
+    Output,
+    Block,
+    Input,
+    Command,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedCommandBlock {
     pub input_with_prompt: String,
@@ -29,13 +37,33 @@ impl ParsedCommandBlock {
     pub fn from_session_entry(entry: &SessionEntry) -> Self {
         let input_with_prompt = entry.render_input();
         let input_without_prompt = entry.command.replace("\r\n", "\n").trim_end().to_string();
-        let output = entry.output.replace("\r\n", "\n").trim_end_matches('\n').to_string();
+        let output = entry
+            .output
+            .replace("\r\n", "\n")
+            .trim_end_matches('\n')
+            .to_string();
 
         Self {
             input_with_prompt,
             input_without_prompt: input_without_prompt.clone(),
             output,
             command: input_without_prompt,
+        }
+    }
+
+    pub fn text_for_mode(&self, mode: CommandBlockTextMode) -> String {
+        match mode {
+            CommandBlockTextMode::Output => self.output.clone(),
+            CommandBlockTextMode::Block => {
+                match (self.input_with_prompt.is_empty(), self.output.is_empty()) {
+                    (false, false) => format!("{}\n{}", self.input_with_prompt, self.output),
+                    (false, true) => self.input_with_prompt.clone(),
+                    (true, false) => self.output.clone(),
+                    (true, true) => String::new(),
+                }
+            }
+            CommandBlockTextMode::Input => self.input_with_prompt.clone(),
+            CommandBlockTextMode::Command => self.command.clone(),
         }
     }
 }
@@ -51,22 +79,13 @@ pub struct CommandBlockSpan {
 
 impl CommandBlockSpan {
     pub fn text_for(&self, target: CopyTarget) -> Option<String> {
-        let text = match target {
-            CopyTarget::Block => match (
-                self.parsed.input_with_prompt.is_empty(),
-                self.parsed.output.is_empty(),
-            ) {
-                (false, false) => {
-                    format!("{}\n{}", self.parsed.input_with_prompt, self.parsed.output)
-                }
-                (false, true) => self.parsed.input_with_prompt.clone(),
-                (true, false) => self.parsed.output.clone(),
-                (true, true) => String::new(),
-            },
-            CopyTarget::Input => self.parsed.input_with_prompt.clone(),
-            CopyTarget::Output => self.parsed.output.clone(),
-            CopyTarget::Command => self.parsed.command.clone(),
+        let mode = match target {
+            CopyTarget::Block => CommandBlockTextMode::Block,
+            CopyTarget::Input => CommandBlockTextMode::Input,
+            CopyTarget::Output => CommandBlockTextMode::Output,
+            CopyTarget::Command => CommandBlockTextMode::Command,
         };
+        let text = self.parsed.text_for_mode(mode);
 
         if text.trim().is_empty() {
             None
@@ -118,7 +137,10 @@ pub fn build_from_entries(entries: &[SessionEntry]) -> Vec<CommandBlockSpan> {
             None
         };
         let output_line_range = if output_line_count > 0 {
-            Some((line_start + input_line_count, line_start + block_line_count - 1))
+            Some((
+                line_start + input_line_count,
+                line_start + block_line_count - 1,
+            ))
         } else {
             None
         };
@@ -197,6 +219,30 @@ mod tests {
         assert_eq!(
             blocks[0].parsed.output,
             "warning: something happened\nwarning: still bad"
+        );
+    }
+
+    #[test]
+    fn parsed_block_text_modes_return_expected_text() {
+        let parsed = ParsedCommandBlock {
+            input_with_prompt: "PS C:\\repo> cargo test".to_string(),
+            input_without_prompt: "cargo test".to_string(),
+            output: "ok".to_string(),
+            command: "cargo test".to_string(),
+        };
+
+        assert_eq!(parsed.text_for_mode(CommandBlockTextMode::Output), "ok");
+        assert_eq!(
+            parsed.text_for_mode(CommandBlockTextMode::Block),
+            "PS C:\\repo> cargo test\nok"
+        );
+        assert_eq!(
+            parsed.text_for_mode(CommandBlockTextMode::Input),
+            "PS C:\\repo> cargo test"
+        );
+        assert_eq!(
+            parsed.text_for_mode(CommandBlockTextMode::Command),
+            "cargo test"
         );
     }
 }

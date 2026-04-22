@@ -7,8 +7,10 @@ mod tui;
 use anyhow::Result;
 use clap::Parser;
 
-use cli::{Cli, Commands, CopyArgs, CopySimpleArgs, CopySubcommand};
+use cli::{Cli, Commands, CopyArgs, CopySimpleArgs, CopySubcommand, DiffArgs};
+use command_blocks::CommandBlockTextMode;
 use commands::copy::{CopyMode, CopyRequest};
+use commands::diff::DiffRequest;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -33,9 +35,7 @@ fn main() -> Result<()> {
             commands::init::execute(&shell)?;
         }
         Some(Commands::Copy(args)) => match args.mode {
-            Some(CopySubcommand::In(sub_args)) => {
-                run_copy(&sub_args, CopyMode::InputOnly, true)?
-            }
+            Some(CopySubcommand::In(sub_args)) => run_copy(&sub_args, CopyMode::InputOnly, true)?,
             Some(CopySubcommand::Out(sub_args)) => {
                 run_copy_simple(&sub_args, CopyMode::OutputOnly, false)?
             }
@@ -47,6 +47,9 @@ fn main() -> Result<()> {
         Some(Commands::Ci(args)) => run_copy(&args, CopyMode::InputOnly, true)?,
         Some(Commands::Co(args)) => run_copy_simple(&args, CopyMode::OutputOnly, false)?,
         Some(Commands::Cc(args)) => run_copy_simple(&args, CopyMode::CommandOnly, false)?,
+        Some(Commands::Diff(args)) => {
+            run_diff(&args)?;
+        }
         Some(Commands::Clear(args)) => {
             commands::clear::execute(args.all)?;
         }
@@ -92,5 +95,24 @@ fn run_copy_simple(args: &CopySimpleArgs, mode: CopyMode, include_prompt: bool) 
         ansi: args.common.ansi,
         regex: args.common.regex.as_deref(),
         lines: args.common.lines.as_deref(),
+    })
+}
+
+fn run_diff(args: &DiffArgs) -> Result<()> {
+    let mode = if args.block {
+        CommandBlockTextMode::Block
+    } else if args.input {
+        CommandBlockTextMode::Input
+    } else if args.cmd {
+        CommandBlockTextMode::Command
+    } else {
+        CommandBlockTextMode::Output
+    };
+
+    commands::diff::execute(DiffRequest {
+        left_selector: &args.left,
+        right_selector: &args.right,
+        mode,
+        side_by_side: args.side_by_side,
     })
 }

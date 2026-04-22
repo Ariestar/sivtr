@@ -30,8 +30,12 @@ fn do_flush() -> Result<()> {
         let prompt = env::var("SIVTR_LAST_PROMPT").unwrap_or_default();
         let command = env::var("SIVTR_LAST_COMMAND").unwrap_or_default();
         let command_id = env::var("SIVTR_LAST_COMMAND_ID").ok();
-        let output =
-            session::extract_output_from_snapshot(&prompt, &command, &current_lines, snapshot.width);
+        let output = session::extract_output_from_snapshot(
+            &prompt,
+            &command,
+            &current_lines,
+            snapshot.width,
+        );
 
         if should_append_entry(&state, command_id.as_deref(), &command) {
             let entry = SessionEntry::new(prompt, command.clone(), output);

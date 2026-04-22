@@ -126,7 +126,10 @@ mod tests {
     #[test]
     fn extracts_pid_from_session_artifacts() {
         assert_eq!(session_pid_from_path(Path::new("session_42.log")), Some(42));
-        assert_eq!(session_pid_from_path(Path::new("session_42.state")), Some(42));
+        assert_eq!(
+            session_pid_from_path(Path::new("session_42.state")),
+            Some(42)
+        );
         assert_eq!(session_pid_from_path(Path::new("session.log")), None);
         assert_eq!(session_pid_from_path(Path::new("history.db")), None);
     }

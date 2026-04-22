@@ -1,7 +1,9 @@
 pub mod browse;
 pub mod clear;
+pub mod command_block_selector;
 pub mod config;
 pub mod copy;
+pub mod diff;
 pub mod flush;
 pub mod history;
 pub mod import;

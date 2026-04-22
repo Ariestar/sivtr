@@ -197,7 +197,12 @@ mod tests {
             "❯",
         ];
         assert_eq!(
-            extract_output_from_snapshot("sift on 󰊢 main !14 ?2 ⇡1\n❯  ", "cargo test", &lines, 120),
+            extract_output_from_snapshot(
+                "sift on 󰊢 main !14 ?2 ⇡1\n❯  ",
+                "cargo test",
+                &lines,
+                120
+            ),
             "ok"
         );
     }

@@ -6,6 +6,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 use regex::Regex;
 
 use crate::command_blocks::ParsedCommandBlock as CommandBlock;
+use crate::commands::command_block_selector::{parse_selector, resolve_selector, CommandSelection};
 use sivtr_core::capture::scrollback;
 use sivtr_core::session::{self, SessionEntry};
 
@@ -35,14 +36,6 @@ pub struct CopyRequest<'a> {
     pub lines: Option<&'a str>,
 }
 
-#[allow(clippy::enum_variant_names)]
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum CommandSelection {
-    RecentSingle(usize),
-    RecentRange { newer: usize, older: usize },
-    RecentExplicit(Vec<usize>),
-}
-
 #[derive(Clone, Debug)]
 struct IndexedCommandBlock {
     plain: CommandBlock,
@@ -55,7 +48,10 @@ impl IndexedCommandBlock {
         let ansi = entry.has_ansi().then(|| CommandBlock {
             input_with_prompt: entry.render_input_ansi(),
             input_without_prompt: plain.input_without_prompt.clone(),
-            output: entry.output_ansi.clone().unwrap_or_else(|| plain.output.clone()),
+            output: entry
+                .output_ansi
+                .clone()
+                .unwrap_or_else(|| plain.output.clone()),
             command: plain.command.clone(),
         });
 
@@ -112,10 +108,10 @@ pub fn execute(request: CopyRequest<'_>) -> Result<()> {
     let selection = if pick {
         pick_selection(&blocks)?
     } else {
-        parse_selection(selector.unwrap_or("1"))?
+        parse_selector(selector.unwrap_or("1"))?
     };
 
-    let indices = resolve_selection(selection, total)?;
+    let indices = resolve_selector(selection, total)?;
     if indices.is_empty() {
         eprintln!("sivtr: nothing selected");
         eprintln!("  hint: choose at least one command block");
@@ -257,71 +253,6 @@ fn render_prompt_override(prompt: &str, command: &str) -> String {
     }
 }
 
-fn parse_selection(value: &str) -> Result<CommandSelection> {
-    let value = value.trim();
-    if value.is_empty() {
-        anyhow::bail!("Empty selector. Use `N`, `A..B`, or `--pick`.");
-    }
-
-    if let Some((a, b)) = value.split_once("..") {
-        let a = parse_positive(a)?;
-        let b = parse_positive(b)?;
-        let (newer, older) = if a <= b { (a, b) } else { (b, a) };
-        return Ok(CommandSelection::RecentRange { newer, older });
-    }
-
-    Ok(CommandSelection::RecentSingle(parse_positive(value)?))
-}
-
-fn resolve_selection(selection: CommandSelection, total: usize) -> Result<Vec<usize>> {
-    match selection {
-        CommandSelection::RecentSingle(recent) => {
-            if recent == 0 {
-                anyhow::bail!("Selector values are 1-based. Use `1` for the last command.");
-            }
-            if recent > total {
-                anyhow::bail!(
-                    "Only {total} command(s) recorded. Try a smaller selector or `--pick`."
-                );
-            }
-            Ok(vec![total - recent])
-        }
-        CommandSelection::RecentRange { newer, older } => {
-            if newer == 0 || older == 0 {
-                anyhow::bail!("Range selectors are 1-based. Example: `2..5`.");
-            }
-            if older > total {
-                anyhow::bail!("Only {total} command(s) recorded. Try a smaller range or `--pick`.");
-            }
-            let start = total - older;
-            let end = total - newer;
-            Ok((start..=end).collect())
-        }
-        CommandSelection::RecentExplicit(selected) => {
-            if selected.is_empty() {
-                anyhow::bail!("No command blocks selected.");
-            }
-
-            let mut indices = Vec::with_capacity(selected.len());
-            for recent in selected {
-                if recent == 0 {
-                    anyhow::bail!("Selector values are 1-based. Use `1` for the last command.");
-                }
-                if recent > total {
-                    anyhow::bail!(
-                        "Only {total} command(s) recorded. Try a smaller selector or `--pick`."
-                    );
-                }
-                indices.push(total - recent);
-            }
-
-            indices.sort_unstable();
-            indices.dedup();
-            Ok(indices)
-        }
-    }
-}
-
 fn pick_selection(blocks: &[IndexedCommandBlock]) -> Result<CommandSelection> {
     let total = blocks.len();
     let shown = total.min(PICK_LIMIT);
@@ -414,13 +345,7 @@ fn select_lines(text: &TextPair, indices: &[usize]) -> TextPair {
     for &idx in indices {
         if let Some(line) = plain_lines.get(idx) {
             plain_selected.push((*line).to_string());
-            ansi_selected.push(
-                ansi_lines
-                    .get(idx)
-                    .copied()
-                    .unwrap_or(line)
-                    .to_string(),
-            );
+            ansi_selected.push(ansi_lines.get(idx).copied().unwrap_or(line).to_string());
         }
     }
 
@@ -428,16 +353,6 @@ fn select_lines(text: &TextPair, indices: &[usize]) -> TextPair {
         plain: plain_selected.join("\n"),
         ansi: ansi_selected.join("\n"),
     }
-}
-
-fn parse_positive(value: &str) -> Result<usize> {
-    let n = value
-        .parse::<usize>()
-        .with_context(|| format!("Invalid selector `{value}`. Use `N`, `A..B`, or `--pick`."))?;
-    if n == 0 {
-        anyhow::bail!("Selector values are 1-based. Use `1` for the last command.");
-    }
-    Ok(n)
 }
 
 fn parse_line_number(value: &str) -> Result<usize> {
@@ -450,8 +365,8 @@ fn parse_line_number(value: &str) -> Result<usize> {
 mod tests {
     use super::{
         apply_range_toggle, build_output_preview, filter_lines_by_regex, filter_lines_by_spec,
-        format_block, parse_selection, resolve_selection, selection_from_entries, CommandBlock,
-        CommandSelection, CopyMode, PickEntry, TextPair,
+        format_block, selection_from_entries, CommandBlock, CommandSelection, CopyMode, PickEntry,
+        TextPair,
     };
 
     #[test]
@@ -504,46 +419,6 @@ mod tests {
         assert_eq!(
             format_block(&block, CopyMode::Both, true, Some(">>>")),
             ">>> cargo test\nok"
-        );
-    }
-
-    #[test]
-    fn parses_selection_count() {
-        assert_eq!(
-            parse_selection("3").unwrap(),
-            CommandSelection::RecentSingle(3)
-        );
-    }
-
-    #[test]
-    fn resolves_single_selection_as_exact_recent_command() {
-        assert_eq!(
-            resolve_selection(CommandSelection::RecentSingle(3), 10).unwrap(),
-            vec![7]
-        );
-    }
-
-    #[test]
-    fn parses_selection_range() {
-        assert_eq!(
-            parse_selection("5..2").unwrap(),
-            CommandSelection::RecentRange { newer: 2, older: 5 }
-        );
-    }
-
-    #[test]
-    fn resolves_selection_range() {
-        assert_eq!(
-            resolve_selection(CommandSelection::RecentRange { newer: 2, older: 5 }, 10).unwrap(),
-            vec![5, 6, 7, 8]
-        );
-    }
-
-    #[test]
-    fn resolves_explicit_selection_as_disjoint_commands() {
-        assert_eq!(
-            resolve_selection(CommandSelection::RecentExplicit(vec![1, 4, 7]), 10).unwrap(),
-            vec![3, 6, 9]
         );
     }
 
@@ -615,16 +490,14 @@ mod tests {
 
     #[test]
     fn rejects_dash_ranges_for_lines() {
-        assert!(
-            filter_lines_by_spec(
-                &TextPair {
-                    plain: "a\nb\nc".to_string(),
-                    ansi: "a\nb\nc".to_string(),
-                },
-                "1-2"
-            )
-            .is_err()
-        );
+        assert!(filter_lines_by_spec(
+            &TextPair {
+                plain: "a\nb\nc".to_string(),
+                ansi: "a\nb\nc".to_string(),
+            },
+            "1-2"
+        )
+        .is_err());
     }
 
     #[test]
