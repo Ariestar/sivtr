@@ -1,8 +1,4 @@
 use anyhow::{Context, Result};
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
-use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use regex::Regex;
 use serde::Serialize;
 use std::io::Write;
@@ -19,7 +15,9 @@ use sivtr_core::codex::{
 };
 use sivtr_core::session::{self, SessionEntry};
 
-use crate::tui::terminal::{init as init_tui, restore as restore_tui};
+mod picker;
+
+use picker::{run_picker, PickEntry};
 
 const PICK_LIMIT: usize = 50;
 const PICK_PREVIEW_LINES: usize = 8;
@@ -374,6 +372,7 @@ fn pick_selection(blocks: &[IndexedCommandBlock]) -> Result<CommandSelection> {
                 recent,
                 preview,
                 output_preview,
+                full_preview: block.plain.output.clone(),
                 selected: false,
             }
         })
@@ -763,6 +762,7 @@ fn pick_text_selection(
             recent: offset + 1,
             preview: build_text_preview(&unit.plain),
             output_preview: build_text_preview_lines(&unit.plain),
+            full_preview: unit.plain.clone(),
             selected: false,
         })
         .collect();
@@ -772,11 +772,11 @@ fn pick_text_selection(
 
 #[cfg(test)]
 mod tests {
+    use super::picker::{apply_range_toggle, selection_from_entries, PickEntry};
     use super::{
-        apply_range_toggle, build_codex_vim_view, build_output_preview, filter_lines_by_regex,
-        filter_lines_by_spec, format_block, is_vim_command, selection_from_entries,
-        vim_single_quote, CodexBlock, CodexBlockKind, CommandBlock, CommandSelection, CopyMode,
-        PickEntry, TextPair,
+        build_codex_vim_view, build_output_preview, filter_lines_by_regex, filter_lines_by_spec,
+        format_block, is_vim_command, vim_single_quote, CodexBlock, CodexBlockKind, CommandBlock,
+        CommandSelection, CopyMode, TextPair,
     };
 
     #[test]
@@ -839,18 +839,21 @@ mod tests {
                 recent: 1,
                 preview: "latest".to_string(),
                 output_preview: "out1".to_string(),
+                full_preview: "out1".to_string(),
                 selected: true,
             },
             PickEntry {
                 recent: 2,
                 preview: "second".to_string(),
                 output_preview: "out2".to_string(),
+                full_preview: "out2".to_string(),
                 selected: false,
             },
             PickEntry {
                 recent: 4,
                 preview: "fourth".to_string(),
                 output_preview: "out4".to_string(),
+                full_preview: "out4".to_string(),
                 selected: true,
             },
         ])
@@ -917,18 +920,21 @@ mod tests {
                 recent: 1,
                 preview: "one".to_string(),
                 output_preview: "out1".to_string(),
+                full_preview: "out1".to_string(),
                 selected: false,
             },
             PickEntry {
                 recent: 2,
                 preview: "two".to_string(),
                 output_preview: "out2".to_string(),
+                full_preview: "out2".to_string(),
                 selected: false,
             },
             PickEntry {
                 recent: 3,
                 preview: "three".to_string(),
                 output_preview: "out3".to_string(),
+                full_preview: "out3".to_string(),
                 selected: true,
             },
         ];
@@ -1024,99 +1030,6 @@ mod tests {
         assert_eq!(full.blocks.len(), 2);
         assert!(full.blocks[0].output_text.contains("tool output"));
         assert!(full.blocks[0].output_text.contains("first answer"));
-    }
-}
-
-#[derive(Debug, Clone)]
-struct PickEntry {
-    recent: usize,
-    preview: String,
-    output_preview: String,
-    selected: bool,
-}
-
-fn run_picker(
-    mut entries: Vec<PickEntry>,
-    total: usize,
-    title: &str,
-    tui_target: PickerTuiTarget,
-) -> Result<CommandSelection> {
-    let mut terminal = init_tui()?;
-    let mut state = ListState::default();
-    state.select(Some(0));
-    let mut range_anchor = None;
-    let mut show_preview = false;
-
-    loop {
-        terminal.draw(|frame| {
-            render_picker(
-                frame,
-                &entries,
-                &state,
-                total,
-                range_anchor,
-                show_preview,
-                title,
-            )
-        })?;
-
-        if let Event::Key(key) = event::read()? {
-            if key.kind != KeyEventKind::Press {
-                continue;
-            }
-
-            match key.code {
-                KeyCode::Esc | KeyCode::Char('q') => {
-                    restore_tui(&mut terminal)?;
-                    anyhow::bail!("Pick cancelled");
-                }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    let current = state.selected().unwrap_or(0);
-                    state.select(Some(current.saturating_sub(1)));
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    let current = state.selected().unwrap_or(0);
-                    let next = (current + 1).min(entries.len().saturating_sub(1));
-                    state.select(Some(next));
-                }
-                KeyCode::Char('v') => {
-                    let current = state.selected().unwrap_or(0);
-                    range_anchor = match range_anchor {
-                        Some(anchor) if anchor == current => None,
-                        _ => Some(current),
-                    };
-                }
-                KeyCode::Char(' ') => {
-                    if let Some(idx) = state.selected() {
-                        if let Some(anchor) = range_anchor.take() {
-                            apply_range_toggle(&mut entries, anchor, idx);
-                        } else if let Some(entry) = entries.get_mut(idx) {
-                            entry.selected = !entry.selected;
-                        }
-                    }
-                }
-                KeyCode::Char('a') => {
-                    let select_all = entries.iter().any(|entry| !entry.selected);
-                    for entry in &mut entries {
-                        entry.selected = select_all;
-                    }
-                    range_anchor = None;
-                }
-                KeyCode::Char('p') => {
-                    show_preview = !show_preview;
-                }
-                KeyCode::Char('t') => {
-                    restore_tui(&mut terminal)?;
-                    open_picker_vim(&tui_target)?;
-                    terminal = init_tui()?;
-                }
-                KeyCode::Enter => {
-                    restore_tui(&mut terminal)?;
-                    return selection_from_entries(&entries);
-                }
-                _ => {}
-            }
-        }
     }
 }
 
@@ -1408,127 +1321,6 @@ autocmd VimEnter * echo "sivtr: [[/]] jump turns, T toggles tools, myy/myi/myo/m
     file.write_all(script.as_bytes())
         .context("Failed to write temporary Vim config")?;
     Ok(())
-}
-
-fn render_picker(
-    frame: &mut Frame,
-    entries: &[PickEntry],
-    state: &ListState,
-    total: usize,
-    range_anchor: Option<usize>,
-    show_preview: bool,
-    title: &str,
-) {
-    let area = frame.area();
-    frame.render_widget(Clear, area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(1)])
-        .split(area);
-
-    let anchor_hint = range_anchor
-        .map(|anchor| format!("  v range@{}", anchor + 1))
-        .unwrap_or_default();
-    let title = Paragraph::new(format!(
-        "Pick command blocks  Space toggle  v mark-range  p preview  t tui  a toggle-all  Enter confirm  Esc cancel{}\nshowing last {} of {} commands",
-        anchor_hint,
-        entries.len(),
-        total
-    ))
-    .block(Block::default().borders(Borders::TOP | Borders::LEFT | Borders::RIGHT).title(title));
-    frame.render_widget(title, chunks[0]);
-
-    let body_chunks = if show_preview {
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(56), Constraint::Percentage(44)])
-            .split(chunks[1])
-    } else {
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(100), Constraint::Percentage(0)])
-            .split(chunks[1])
-    };
-
-    let items: Vec<ListItem> = entries
-        .iter()
-        .enumerate()
-        .map(|(idx, entry)| {
-            let marker = if entry.selected { "[x]" } else { "[ ]" };
-            let is_in_pending_range = range_anchor
-                .map(|anchor| range_bounds(anchor, state.selected().unwrap_or(0)))
-                .map(|(start, end)| (start..=end).contains(&idx))
-                .unwrap_or(false);
-            let line = format!("{marker} {:>2}. {}", entry.recent, entry.preview);
-            if is_in_pending_range {
-                ListItem::new(Line::styled(
-                    line,
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                ))
-            } else {
-                ListItem::new(line)
-            }
-        })
-        .collect();
-
-    let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title("Commands"))
-        .highlight_style(Style::default().bg(Color::Blue).fg(Color::White))
-        .highlight_symbol(">> ");
-    let mut local_state = state.clone();
-    frame.render_stateful_widget(list, body_chunks[0], &mut local_state);
-
-    if show_preview {
-        let preview_text = state
-            .selected()
-            .and_then(|idx| entries.get(idx))
-            .map(|entry| entry.output_preview.as_str())
-            .unwrap_or("<no output>");
-        let preview = Paragraph::new(preview_text)
-            .wrap(ratatui::widgets::Wrap { trim: false })
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("Output Preview"),
-            );
-        frame.render_widget(preview, body_chunks[1]);
-    }
-}
-
-fn selection_from_entries(entries: &[PickEntry]) -> Result<CommandSelection> {
-    let mut selected: Vec<usize> = entries
-        .iter()
-        .filter(|entry| entry.selected)
-        .map(|entry| entry.recent)
-        .collect();
-
-    if selected.is_empty() {
-        anyhow::bail!("No command blocks selected. Toggle one or more entries, then press Enter.");
-    }
-
-    selected.sort_unstable();
-    selected.dedup();
-
-    Ok(CommandSelection::RecentExplicit(selected))
-}
-
-fn apply_range_toggle(entries: &mut [PickEntry], a: usize, b: usize) {
-    let (start, end) = range_bounds(a, b);
-    let select_range = entries[start..=end].iter().any(|entry| !entry.selected);
-    for entry in &mut entries[start..=end] {
-        entry.selected = select_range;
-    }
-}
-
-fn range_bounds(a: usize, b: usize) -> (usize, usize) {
-    if a <= b {
-        (a, b)
-    } else {
-        (b, a)
-    }
 }
 
 fn build_output_preview(block: &CommandBlock) -> String {
