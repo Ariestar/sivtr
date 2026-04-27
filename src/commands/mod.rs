@@ -6,6 +6,7 @@ pub mod copy;
 pub mod diff;
 pub mod flush;
 pub mod history;
+pub mod hotkey;
 pub mod import;
 pub mod init;
 pub mod pipe;

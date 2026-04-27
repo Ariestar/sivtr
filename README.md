@@ -48,6 +48,11 @@ sivtr copy codex out
 sivtr copy codex in
 sivtr copy codex tool
 sivtr copy codex all --print
+
+# Global hotkey (Windows)
+sivtr hotkey start
+sivtr hotkey status
+sivtr hotkey stop
 ```
 
 `sivtr copy codex` reads Codex rollout JSONL files from `~/.codex/sessions` and defaults to the
@@ -64,6 +69,9 @@ Selector semantics match `sivtr copy`: `1` means the latest matching item, `2` m
 
 Progress commentary emitted while Codex is working is filtered out by default, so `copy out`
 returns the final assistant reply instead of intermediate status updates.
+
+On Windows, `sivtr hotkey start` registers a single global shortcut. By default it uses
+`alt+y` and opens a new terminal window that runs `sivtr copy codex --pick`.
 
 ## Key Bindings
 

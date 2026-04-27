@@ -1,4 +1,5 @@
 use clap::{ArgGroup, Args, Parser, Subcommand};
+use std::path::PathBuf;
 
 const COPY_AFTER_HELP: &str = "\
 Defaults:
@@ -148,6 +149,18 @@ Examples:
   sivtr diff 2 1 --side-by-side
 ";
 
+const HOTKEY_AFTER_HELP: &str = "\
+Examples:
+  sivtr hotkey start
+  sivtr hotkey start --chord alt+y
+  sivtr hotkey status
+  sivtr hotkey stop
+
+Behavior:
+  The hotkey daemon registers one global shortcut and opens a new
+  terminal window that runs `sivtr copy codex --pick`.
+";
+
 /// sivtr - Terminal output workspace.
 /// Capture, browse, search, select, and export terminal output.
 #[derive(Parser, Debug)]
@@ -206,12 +219,24 @@ pub enum Commands {
     #[command(after_help = DIFF_AFTER_HELP)]
     Diff(DiffArgs),
 
+    /// Manage the global Codex picker hotkey
+    #[command(after_help = HOTKEY_AFTER_HELP)]
+    Hotkey(HotkeyCommand),
+
     /// Clear session logs
     Clear(ClearArgs),
 
     /// Internal: flush console buffer to session log (called by shell hook)
     #[command(hide = true)]
     Flush,
+
+    /// Internal: run the Windows hotkey daemon loop
+    #[command(hide = true)]
+    HotkeyServe(HotkeyServeArgs),
+
+    /// Internal: open the Codex picker from the Windows hotkey daemon
+    #[command(hide = true)]
+    HotkeyPickCodex(HotkeyPickCodexArgs),
 }
 
 #[derive(Args, Debug)]
@@ -326,6 +351,49 @@ pub struct ClearArgs {
     /// Clear all recorded session logs and state files
     #[arg(short = 'a', long = "all")]
     pub all: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct HotkeyCommand {
+    #[command(subcommand)]
+    pub action: Option<HotkeyAction>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum HotkeyAction {
+    /// Start the global hotkey daemon
+    Start(HotkeyStartArgs),
+
+    /// Stop the global hotkey daemon
+    Stop,
+
+    /// Show daemon status
+    Status,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct HotkeyStartArgs {
+    /// Override the configured hotkey chord, for example `alt+y`
+    #[arg(long, value_name = "CHORD")]
+    pub chord: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct HotkeyServeArgs {
+    /// Absolute working directory used when the picker terminal opens
+    #[arg(long, value_name = "PATH")]
+    pub cwd: String,
+
+    /// Registered global hotkey chord, for example `alt+y`
+    #[arg(long, value_name = "CHORD")]
+    pub chord: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct HotkeyPickCodexArgs {
+    /// Working directory used to resolve the current Codex session
+    #[arg(long, value_name = "PATH")]
+    pub cwd: PathBuf,
 }
 
 #[derive(Args, Debug)]
@@ -484,6 +552,29 @@ mod tests {
                 _ => panic!("expected copy codex mode"),
             },
             _ => panic!("expected copy command"),
+        }
+    }
+
+    #[test]
+    fn hotkey_start_accepts_chord_override() {
+        let cli = Cli::try_parse_from(["sivtr", "hotkey", "start", "--chord", "alt+y"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Hotkey(cmd)) => match cmd.action {
+                Some(HotkeyAction::Start(args)) => assert_eq!(args.chord.as_deref(), Some("alt+y")),
+                _ => panic!("expected hotkey start"),
+            },
+            _ => panic!("expected hotkey command"),
+        }
+    }
+
+    #[test]
+    fn hotkey_pick_codex_accepts_cwd() {
+        let cli = Cli::try_parse_from(["sivtr", "hotkey-pick-codex", "--cwd", "."]).unwrap();
+
+        match cli.command {
+            Some(Commands::HotkeyPickCodex(args)) => assert_eq!(args.cwd, PathBuf::from(".")),
+            _ => panic!("expected hotkey-pick-codex command"),
         }
     }
 }

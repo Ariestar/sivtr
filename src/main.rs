@@ -9,7 +9,7 @@ use clap::Parser;
 
 use cli::{
     Cli, CodexCopyCommand, CodexCopyMode, Commands, CopyArgs, CopySimpleArgs, CopySubcommand,
-    DiffArgs,
+    DiffArgs, HotkeyPickCodexArgs, HotkeyServeArgs,
 };
 use command_blocks::CommandBlockTextMode;
 use commands::copy::{CodexCopyRequest, CodexSelectionMode, CopyMode, CopyRequest};
@@ -30,6 +30,9 @@ fn main() -> Result<()> {
         }
         Some(Commands::History(hist_cmd)) => {
             commands::history::execute(hist_cmd)?;
+        }
+        Some(Commands::Hotkey(cmd)) => {
+            commands::hotkey::execute(cmd)?;
         }
         Some(Commands::Config(cfg_cmd)) => {
             commands::config::execute(cfg_cmd)?;
@@ -59,6 +62,12 @@ fn main() -> Result<()> {
         }
         Some(Commands::Flush) => {
             commands::flush::execute()?;
+        }
+        Some(Commands::HotkeyServe(args)) => {
+            run_hotkey_serve(&args)?;
+        }
+        Some(Commands::HotkeyPickCodex(args)) => {
+            run_hotkey_pick_codex(&args)?;
         }
         None => {
             if atty::isnt(atty::Stream::Stdin) {
@@ -142,4 +151,12 @@ fn run_diff(args: &DiffArgs) -> Result<()> {
         mode,
         side_by_side: args.side_by_side,
     })
+}
+
+fn run_hotkey_serve(args: &HotkeyServeArgs) -> Result<()> {
+    commands::hotkey::serve(args)
+}
+
+fn run_hotkey_pick_codex(args: &HotkeyPickCodexArgs) -> Result<()> {
+    commands::hotkey::pick_codex(args)
 }

@@ -795,16 +795,12 @@ fn render_picker(
     show_preview: bool,
     title: &str,
 ) {
-    let area = centered_rect(80, 70, frame.area());
+    let area = frame.area();
     frame.render_widget(Clear, area);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(1),
-            Constraint::Length(2),
-        ])
+        .constraints([Constraint::Length(3), Constraint::Min(1)])
         .split(area);
 
     let anchor_hint = range_anchor
@@ -816,7 +812,7 @@ fn render_picker(
         entries.len(),
         total
     ))
-    .block(Block::default().borders(Borders::ALL).title(title));
+    .block(Block::default().borders(Borders::TOP | Borders::LEFT | Borders::RIGHT).title(title));
     frame.render_widget(title, chunks[0]);
 
     let body_chunks = if show_preview {
@@ -876,31 +872,6 @@ fn render_picker(
             );
         frame.render_widget(preview, body_chunks[1]);
     }
-
-    let footer = Paragraph::new(
-        "Space toggles one row. v marks a range anchor; move and press Space to toggle the whole range. Multiple selections are copied oldest to newest.",
-    )
-    .block(Block::default().borders(Borders::ALL));
-    frame.render_widget(footer, chunks[2]);
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let vertical = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(area);
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(vertical[1])[1]
 }
 
 fn selection_from_entries(entries: &[PickEntry]) -> Result<CommandSelection> {

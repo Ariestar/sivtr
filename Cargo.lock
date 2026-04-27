@@ -1282,9 +1282,12 @@ dependencies = [
  "dirs",
  "ratatui",
  "regex",
+ "serde",
+ "serde_json",
  "similar",
  "sivtr-core",
  "tokio",
+ "winapi",
 ]
 
 [[package]]

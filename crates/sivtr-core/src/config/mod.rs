@@ -16,6 +16,8 @@ pub struct SivtrConfig {
     pub history: HistoryConfig,
     /// Copy command settings.
     pub copy: CopyConfig,
+    /// Global hotkey settings.
+    pub hotkey: HotkeyConfig,
 }
 
 /// General behavior settings.
@@ -77,6 +79,14 @@ impl CopyConfig {
     }
 }
 
+/// Global hotkey configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HotkeyConfig {
+    /// Hotkey chord used by `sivtr hotkey start`.
+    pub chord: String,
+}
+
 // --- Defaults ---
 
 impl Default for GeneralConfig {
@@ -93,6 +103,14 @@ impl Default for HistoryConfig {
         Self {
             auto_save: true,
             max_entries: 0, // unlimited
+        }
+    }
+}
+
+impl Default for HotkeyConfig {
+    fn default() -> Self {
+        Self {
+            chord: "alt+y".to_string(),
         }
     }
 }
@@ -185,5 +203,20 @@ mod tests {
         assert!(toml.contains("\"mysh>\""));
         assert!(toml.contains("\"dev>\""));
         assert!(!toml.contains("prompt_presets"));
+    }
+
+    #[test]
+    fn serializes_hotkey_config() {
+        let config = SivtrConfig {
+            hotkey: HotkeyConfig {
+                chord: "alt+y".to_string(),
+            },
+            ..SivtrConfig::default()
+        };
+
+        let toml = to_toml_string(&config).unwrap();
+
+        assert!(toml.contains("[hotkey]"));
+        assert!(toml.contains("chord = \"alt+y\""));
     }
 }
