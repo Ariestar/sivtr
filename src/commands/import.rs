@@ -29,14 +29,12 @@ pub fn execute() -> Result<()> {
                 }
                 OpenMode::Tui => {
                     let lines = parse::parse_lines(&raw);
-                    let mut buffer = Buffer::new(lines);
-                    // Start at the bottom (most recent output)
-                    buffer.cursor_bottom();
+                    let buffer = Buffer::new(lines);
                     let mut app = App::new(buffer);
                     app.config = config;
                     app.command_blocks =
                         command_blocks::load_from_session_log()?.unwrap_or_default();
-                    browse::run_tui(&mut app)
+                    browse::run_tui(&mut app, true)
                 }
             }
         }

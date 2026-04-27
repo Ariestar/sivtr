@@ -14,6 +14,8 @@ use anyhow::Result;
 pub enum AppMode {
     /// Normal browsing mode (hjkl navigation).
     Normal,
+    /// Insert mode (read-only typing state).
+    Insert,
     /// Character-wise visual selection.
     Visual,
     /// Line-wise visual selection.
@@ -123,6 +125,18 @@ impl App {
     pub fn enter_search(&mut self) {
         self.mode = AppMode::Search;
         self.search_input.clear();
+    }
+
+    /// Enter insert mode.
+    pub fn enter_insert(&mut self) {
+        self.mode = AppMode::Insert;
+        self.clear_pending_prefixes();
+    }
+
+    /// Exit insert mode back to normal.
+    pub fn exit_insert(&mut self) {
+        self.mode = AppMode::Normal;
+        self.clear_pending_prefixes();
     }
 
     /// Execute the current search.
@@ -476,5 +490,17 @@ mod tests {
         let selection = app.buffer.selection.expect("selection should exist");
         assert_eq!(selection.anchor.row, 2);
         assert_eq!(app.buffer.cursor.row, 3);
+    }
+
+    #[test]
+    fn enters_and_exits_insert_mode() {
+        let mut app = make_app();
+        assert_eq!(app.mode, AppMode::Normal);
+
+        app.enter_insert();
+        assert_eq!(app.mode, AppMode::Insert);
+
+        app.exit_insert();
+        assert_eq!(app.mode, AppMode::Normal);
     }
 }

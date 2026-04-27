@@ -31,7 +31,7 @@ pub fn execute() -> Result<()> {
             let buffer = Buffer::new(lines);
             let mut app = App::new(buffer);
             app.config = config;
-            browse::run_tui(&mut app)
+            browse::run_tui(&mut app, false)
         }
     }
 }

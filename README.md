@@ -9,6 +9,7 @@
 - **Pipe mode**: `command | sivtr` - pipe any command output into a TUI browser
 - **Run mode**: `sivtr run <command>` - wrap command execution, capture output, then browse
 - **Vim-style navigation**: `hjkl`, `Ctrl-D/U`, `gg`, `G`
+- **Modal workflow**: normal / insert / visual / search
 - **Visual selection**: `v` (character), `V` (line), `Ctrl-V` (block/column)
 - **Search**: `/pattern` forward search, `n`/`N` for next/previous match
 - **Copy to clipboard**: `y` in visual mode copies selection to system clipboard
@@ -53,6 +54,7 @@ sivtr import
 | `Ctrl-U` | Normal | Half page up |
 | `g` | Normal | Go to top |
 | `G` | Normal | Go to bottom |
+| `i` | Normal | Enter insert mode |
 | `v` | Normal | Enter visual mode |
 | `V` | Normal | Enter visual line mode |
 | `Ctrl-V` | Normal | Enter visual block mode |
@@ -60,7 +62,7 @@ sivtr import
 | `n` | Normal | Next search match |
 | `N` | Normal | Previous search match |
 | `y` | Visual | Yank (copy) to clipboard |
-| `Esc` | Visual/Search | Cancel |
+| `Esc` | Visual/Search/Insert | Cancel |
 | `q` | Normal | Quit |
 
 ## Tech Stack

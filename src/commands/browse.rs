@@ -6,11 +6,14 @@ use crate::tui;
 
 /// Shared TUI event loop with external editor support.
 /// Used by both `pipe` and `run` commands.
-pub fn run_tui(app: &mut App) -> Result<()> {
+pub fn run_tui(app: &mut App, start_at_bottom: bool) -> Result<()> {
     let mut terminal = tui::terminal::init()?;
     let size = terminal.size()?;
     app.buffer
         .resize(size.width as usize, size.height.saturating_sub(2) as usize);
+    if start_at_bottom {
+        app.buffer.cursor_bottom();
+    }
 
     loop {
         terminal.draw(|frame| {

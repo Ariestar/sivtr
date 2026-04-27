@@ -20,6 +20,7 @@ pub fn handle_event(app: &mut App) -> Result<()> {
             }
             match app.mode {
                 AppMode::Normal => handle_normal_mode(app, key)?,
+                AppMode::Insert => handle_insert_mode(app, key),
                 AppMode::Visual | AppMode::VisualLine | AppMode::VisualBlock => {
                     handle_visual_mode(app, key)?;
                 }
@@ -43,6 +44,7 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) -> Result<()> {
     match key.code {
         KeyCode::Char('q') => app.should_quit = true,
         KeyCode::Char('e') => app.request_editor(),
+        KeyCode::Char('i') => app.enter_insert(),
         KeyCode::Char('/') => app.enter_search(),
         KeyCode::Char('n') => app.search_next(),
         KeyCode::Char('N') if key.modifiers.contains(KeyModifiers::SHIFT) => app.search_prev(),
@@ -58,6 +60,35 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn handle_insert_mode(app: &mut App, key: KeyEvent) {
+    app.clear_pending_prefixes();
+    match key.code {
+        KeyCode::Esc => app.exit_insert(),
+        KeyCode::Char('/') => app.enter_search(),
+        KeyCode::Up
+        | KeyCode::Down
+        | KeyCode::Left
+        | KeyCode::Right
+        | KeyCode::Home
+        | KeyCode::End
+        | KeyCode::PageUp
+        | KeyCode::PageDown => handle_motion_key(app, key),
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            handle_motion_key(app, key)
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            handle_motion_key(app, key)
+        }
+        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            handle_motion_key(app, key)
+        }
+        KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            handle_motion_key(app, key)
+        }
+        _ => {}
+    }
 }
 
 fn handle_visual_mode(app: &mut App, key: KeyEvent) -> Result<()> {

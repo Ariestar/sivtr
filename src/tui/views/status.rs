@@ -6,6 +6,7 @@ use ratatui::widgets::Paragraph;
 pub fn render(app: &App, area: Rect, buf: &mut Buffer) {
     let mode_str = match app.mode {
         AppMode::Normal => " NORMAL ",
+        AppMode::Insert => " INSERT ",
         AppMode::Visual => " VISUAL ",
         AppMode::VisualLine => " V-LINE ",
         AppMode::VisualBlock => " V-BLOCK ",
@@ -14,6 +15,7 @@ pub fn render(app: &App, area: Rect, buf: &mut Buffer) {
 
     let mode_style = match app.mode {
         AppMode::Normal => Style::default().bg(Color::Blue).fg(Color::White).bold(),
+        AppMode::Insert => Style::default().bg(Color::Green).fg(Color::Black).bold(),
         AppMode::Visual | AppMode::VisualLine | AppMode::VisualBlock => {
             Style::default().bg(Color::Magenta).fg(Color::White).bold()
         }
