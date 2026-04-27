@@ -1,0 +1,28 @@
+:root {
+  --sl-color-accent-low: #d7f0e5;
+  --sl-color-accent: #147d64;
+  --sl-color-accent-high: #083f34;
+  --sl-color-bg-sidebar: #f8faf9;
+  --sl-content-width: 52rem;
+  --sl-text-5xl: 3rem;
+}
+
+:root[data-theme='dark'] {
+  --sl-color-accent-low: #0f332c;
+  --sl-color-accent: #54d3ad;
+  --sl-color-accent-high: #c7f6e5;
+  --sl-color-bg-sidebar: #111715;
+}
+
+.hero img {
+  filter: none;
+}
+
+.sl-markdown-content code:not(:where(pre code)) {
+  border-radius: 0.25rem;
+  padding: 0.1rem 0.25rem;
+}
+
+.sl-markdown-content table {
+  font-size: 0.95rem;
+}

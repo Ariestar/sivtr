@@ -21,3 +21,10 @@ session_*.log
 
 # Docs (local only)
 /docs/
+
+# Documentation site
+/docs-site/node_modules/
+/docs-site/dist/
+/docs-site/.astro/
+/docs-site/.astro-dev*.log
+/.playwright-mcp/
