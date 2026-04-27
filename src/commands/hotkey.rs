@@ -41,19 +41,15 @@ pub fn serve(args: &HotkeyServeArgs) -> Result<()> {
 
 pub fn pick_codex(args: &HotkeyPickCodexArgs) -> Result<()> {
     #[cfg(windows)]
-    if let Err(error) = bind_stdio_to_console() {
-        append_log(format!("failed to bind stdio to console: {error:#}"));
-    }
+    let _ = bind_stdio_to_console();
 
     if let Err(error) = std::env::set_current_dir(&args.cwd) {
         let error =
             anyhow::Error::new(error).context(format!("Failed to enter {}", args.cwd.display()));
-        append_log(format!("picker failed before launch: {error:#}"));
         show_pick_error_and_wait(&error);
         return Ok(());
     }
 
-    append_log(format!("picker started cwd={}", args.cwd.display()));
     let result = std::panic::catch_unwind(|| {
         copy::execute_codex(CodexCopyRequest {
             selector: None,
@@ -66,16 +62,12 @@ pub fn pick_codex(args: &HotkeyPickCodexArgs) -> Result<()> {
     });
 
     match result {
-        Ok(Ok(())) => {
-            append_log("picker completed");
-        }
+        Ok(Ok(())) => {}
         Ok(Err(error)) => {
-            append_log(format!("picker failed: {error:#}"));
             show_pick_error_and_wait(&error);
         }
         Err(panic) => {
             let message = panic_message(&panic);
-            append_log(format!("picker panicked: {message}"));
             eprintln!("sivtr: Codex picker panicked");
             eprintln!("{message}");
             wait_for_enter();
@@ -96,7 +88,6 @@ fn start(args: HotkeyStartArgs) -> Result<()> {
             if let Some(exe) = state.exe {
                 eprintln!("  exe:   {}", exe);
             }
-            eprintln!("  log:   {}", log_path()?.display());
             return Ok(());
         }
         clear_state_file()?;
@@ -117,7 +108,6 @@ fn start(args: HotkeyStartArgs) -> Result<()> {
         if let Some(exe) = state.exe {
             eprintln!("  exe:   {}", exe);
         }
-        eprintln!("  log:   {}", log_path()?.display());
     } else {
         eprintln!("sivtr: hotkey daemon started");
     }
@@ -166,7 +156,6 @@ fn status() -> Result<()> {
     if let Some(exe) = state.exe {
         eprintln!("  exe:   {}", exe);
     }
-    eprintln!("  log:   {}", log_path()?.display());
     Ok(())
 }
 
@@ -176,42 +165,6 @@ fn state_path() -> Result<PathBuf> {
         .parent()
         .ok_or_else(|| anyhow::anyhow!("Config path has no parent directory"))?;
     Ok(dir.join("hotkey-state.json"))
-}
-
-fn log_path() -> Result<PathBuf> {
-    let config_path = SivtrConfig::config_path()?;
-    let dir = config_path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("Config path has no parent directory"))?;
-    Ok(dir.join("hotkey.log"))
-}
-
-fn append_log(message: impl AsRef<str>) {
-    let Ok(path) = log_path() else {
-        return;
-    };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let line = format!("{} {}\n", chrono_like_timestamp(), message.as_ref());
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .and_then(|mut file| {
-            use std::io::Write;
-            file.write_all(line.as_bytes())
-        });
-}
-
-fn chrono_like_timestamp() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default();
-    format!("[{seconds}]")
 }
 
 fn show_pick_error_and_wait(error: &anyhow::Error) {
@@ -384,11 +337,6 @@ fn serve_windows(args: &HotkeyServeArgs) -> Result<()> {
             .map(|path| path.to_string_lossy().to_string()),
     };
     write_state(&state)?;
-    append_log(format!(
-        "daemon started pid={} chord={} cwd={}",
-        state.pid, state.chord, state.cwd
-    ));
-
     let mut msg: MSG = unsafe { std::mem::zeroed() };
     loop {
         let result = unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) };
@@ -397,10 +345,7 @@ fn serve_windows(args: &HotkeyServeArgs) -> Result<()> {
         }
 
         if msg.message == WM_HOTKEY && msg.wParam == hotkey_id as usize {
-            append_log("hotkey fired");
-            if let Err(error) = spawn_picker_terminal(&args.cwd) {
-                append_log(format!("failed to open picker terminal: {error:#}"));
-            }
+            let _ = spawn_picker_terminal(&args.cwd);
         }
 
         unsafe {
@@ -499,7 +444,6 @@ fn spawn_picker_terminal(cwd: &str) -> Result<()> {
     let cwd = normalize_windows_path_text(cwd);
     let exe = std::env::current_exe().context("Failed to resolve current executable")?;
     let exe = normalize_windows_path_text(&exe.to_string_lossy());
-    append_log(format!("spawning {} hotkey-pick-codex --cwd {}", exe, cwd));
 
     Command::new(exe)
         .current_dir(&cwd)

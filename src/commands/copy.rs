@@ -4,7 +4,12 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use regex::Regex;
+use serde::Serialize;
+use std::io::Write;
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::command_blocks::CommandBlockSpan;
 use crate::command_blocks::ParsedCommandBlock as CommandBlock;
 use crate::commands::command_block_selector::{parse_selector, resolve_selector, CommandSelection};
 use sivtr_core::capture::scrollback;
@@ -86,6 +91,40 @@ impl IndexedCommandBlock {
 struct TextPair {
     plain: String,
     ansi: String,
+}
+
+#[derive(Clone, Debug)]
+enum PickerTuiTarget {
+    SessionLog,
+    Text(VimView),
+}
+
+#[derive(Clone, Debug)]
+struct VimView {
+    raw: String,
+    blocks: Vec<VimBlock>,
+    alternate: Option<VimAlternateView>,
+}
+
+#[derive(Clone, Debug)]
+struct VimAlternateView {
+    label: String,
+    raw: String,
+    blocks: Vec<VimBlock>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct VimBlock {
+    start: usize,
+    end: usize,
+    input_start: usize,
+    input_end: usize,
+    output_start: usize,
+    output_end: usize,
+    block_text: String,
+    input_text: String,
+    output_text: String,
+    command_text: String,
 }
 
 /// Copy recent command blocks to clipboard.
@@ -192,7 +231,11 @@ pub fn execute_codex(request: CodexCopyRequest<'_>) -> Result<()> {
     }
 
     let selection = if request.pick {
-        pick_text_selection(&units, "sivtr copy codex --pick")?
+        pick_text_selection(
+            &units,
+            "sivtr copy codex --pick",
+            build_codex_vim_view(&session.blocks),
+        )?
     } else {
         parse_selector(request.selector.unwrap_or("1"))?
     };
@@ -336,7 +379,12 @@ fn pick_selection(blocks: &[IndexedCommandBlock]) -> Result<CommandSelection> {
         })
         .collect();
 
-    run_picker(entries, total, "sivtr copy --pick")
+    run_picker(
+        entries,
+        total,
+        "sivtr copy --pick",
+        PickerTuiTarget::SessionLog,
+    )
 }
 
 fn filter_lines_by_regex(text: &TextPair, pattern: &str) -> Result<TextPair> {
@@ -502,7 +550,208 @@ fn build_codex_kind_units(session: &CodexSession, kind: CodexBlockKind) -> Vec<T
         .collect()
 }
 
-fn pick_text_selection(units: &[TextPair], title: &str) -> Result<CommandSelection> {
+fn build_codex_vim_view(blocks: &[CodexBlock]) -> VimView {
+    let mut main_turns = Vec::new();
+    let mut full_turns = Vec::new();
+
+    for (idx, block) in blocks.iter().enumerate() {
+        if block.kind != CodexBlockKind::Assistant {
+            continue;
+        }
+
+        let start = blocks[..idx]
+            .iter()
+            .rposition(|block| block.kind == CodexBlockKind::User)
+            .unwrap_or(idx);
+        let full_blocks = &blocks[start..=idx];
+        let main_blocks: Vec<CodexBlock> = full_blocks
+            .iter()
+            .filter(|block| matches!(block.kind, CodexBlockKind::User | CodexBlockKind::Assistant))
+            .cloned()
+            .collect();
+
+        if !main_blocks.is_empty() {
+            main_turns.push(main_blocks);
+            full_turns.push(full_blocks.to_vec());
+        }
+    }
+
+    if main_turns.is_empty() {
+        main_turns = blocks
+            .iter()
+            .filter(|block| matches!(block.kind, CodexBlockKind::User | CodexBlockKind::Assistant))
+            .cloned()
+            .map(|block| vec![block])
+            .collect();
+        full_turns = main_turns.clone();
+    }
+
+    let main = build_codex_turn_view(&main_turns);
+    let full = build_codex_turn_view(&full_turns);
+
+    VimView {
+        raw: main.raw,
+        blocks: main.blocks,
+        alternate: Some(VimAlternateView {
+            label: "tools".to_string(),
+            raw: full.raw,
+            blocks: full.blocks,
+        }),
+    }
+}
+
+fn build_codex_turn_view(turns: &[Vec<CodexBlock>]) -> VimAlternateView {
+    let mut rendered_turns = Vec::new();
+    let mut raw_parts = Vec::new();
+    let mut next_line = 1usize;
+
+    for turn in turns {
+        let rendered_blocks: Vec<String> = turn.iter().map(format_codex_block_for_vim).collect();
+        let rendered = rendered_blocks.join("\n\n");
+        if rendered.trim().is_empty() {
+            continue;
+        }
+
+        let line_count = line_count(&rendered);
+        let start = next_line;
+        let end = start + line_count.saturating_sub(1);
+        let input_text = join_codex_kind_text(turn, CodexBlockKind::User);
+        let output_text = turn
+            .iter()
+            .filter(|block| {
+                matches!(
+                    block.kind,
+                    CodexBlockKind::Assistant | CodexBlockKind::ToolOutput
+                )
+            })
+            .map(|block| block.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let command_text = turn
+            .iter()
+            .filter(|block| block.kind == CodexBlockKind::ToolCall)
+            .filter_map(|block| block.label.as_deref())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        rendered_turns.push(VimBlock {
+            start,
+            end,
+            input_start: range_for_first_kind(turn, CodexBlockKind::User, start).0,
+            input_end: range_for_first_kind(turn, CodexBlockKind::User, start).1,
+            output_start: range_for_first_kind(turn, CodexBlockKind::Assistant, start).0,
+            output_end: range_for_first_kind(turn, CodexBlockKind::Assistant, start).1,
+            block_text: rendered.clone(),
+            input_text,
+            output_text,
+            command_text,
+        });
+        raw_parts.push(rendered);
+        next_line = end + 2;
+    }
+
+    VimAlternateView {
+        label: "main".to_string(),
+        raw: raw_parts.join("\n\n"),
+        blocks: rendered_turns,
+    }
+}
+
+fn join_codex_kind_text(turn: &[CodexBlock], kind: CodexBlockKind) -> String {
+    turn.iter()
+        .filter(|block| block.kind == kind)
+        .map(|block| block.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn range_for_first_kind(
+    turn: &[CodexBlock],
+    kind: CodexBlockKind,
+    turn_start_line: usize,
+) -> (usize, usize) {
+    let mut cursor = turn_start_line;
+    for block in turn {
+        let rendered = format_codex_block_for_vim(block);
+        let count = line_count(&rendered);
+        if block.kind == kind {
+            let body_start = (cursor + 1).min(cursor + count.saturating_sub(1));
+            return (body_start, cursor + count.saturating_sub(1));
+        }
+        cursor += count + 2;
+    }
+    (0, 0)
+}
+
+fn format_codex_block_for_vim(block: &CodexBlock) -> String {
+    let heading = match block.kind {
+        CodexBlockKind::User => "User".to_string(),
+        CodexBlockKind::Assistant => "Assistant".to_string(),
+        CodexBlockKind::ToolCall => block
+            .label
+            .as_deref()
+            .map(|label| format!("Tool Call: {label}"))
+            .unwrap_or_else(|| "Tool Call".to_string()),
+        CodexBlockKind::ToolOutput => "Tool Output".to_string(),
+    };
+    format!("## {heading}\n{}", block.text.trim())
+}
+
+fn build_session_vim_view(raw: String) -> Result<VimView> {
+    let spans = crate::command_blocks::load_from_session_log()?.unwrap_or_default();
+    Ok(VimView {
+        raw,
+        blocks: spans.iter().map(VimBlock::from_command_span).collect(),
+        alternate: None,
+    })
+}
+
+impl VimBlock {
+    fn from_command_span(span: &CommandBlockSpan) -> Self {
+        let (input_start, input_end) = one_based_range(span.input_line_range);
+        let (output_start, output_end) = one_based_range(span.output_line_range);
+        Self {
+            start: span.line_start + 1,
+            end: span.line_end + 1,
+            input_start,
+            input_end,
+            output_start,
+            output_end,
+            block_text: span
+                .text_for(crate::command_blocks::CopyTarget::Block)
+                .unwrap_or_default(),
+            input_text: span
+                .text_for(crate::command_blocks::CopyTarget::Input)
+                .unwrap_or_default(),
+            output_text: span
+                .text_for(crate::command_blocks::CopyTarget::Output)
+                .unwrap_or_default(),
+            command_text: span
+                .text_for(crate::command_blocks::CopyTarget::Command)
+                .unwrap_or_default(),
+        }
+    }
+}
+
+fn one_based_range(range: Option<(usize, usize)>) -> (usize, usize) {
+    range
+        .map(|(start, end)| (start + 1, end + 1))
+        .unwrap_or((0, 0))
+}
+
+fn line_count(text: &str) -> usize {
+    if text.is_empty() {
+        0
+    } else {
+        text.lines().count()
+    }
+}
+
+fn pick_text_selection(
+    units: &[TextPair],
+    title: &str,
+    vim_view: VimView,
+) -> Result<CommandSelection> {
     let total = units.len();
     let shown = total.min(PICK_LIMIT);
     let entries: Vec<PickEntry> = units
@@ -518,15 +767,16 @@ fn pick_text_selection(units: &[TextPair], title: &str) -> Result<CommandSelecti
         })
         .collect();
 
-    run_picker(entries, total, title)
+    run_picker(entries, total, title, PickerTuiTarget::Text(vim_view))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_range_toggle, build_output_preview, filter_lines_by_regex, filter_lines_by_spec,
-        format_block, selection_from_entries, CommandBlock, CommandSelection, CopyMode, PickEntry,
-        TextPair,
+        apply_range_toggle, build_codex_vim_view, build_output_preview, filter_lines_by_regex,
+        filter_lines_by_spec, format_block, is_vim_command, selection_from_entries,
+        vim_single_quote, CodexBlock, CodexBlockKind, CommandBlock, CommandSelection, CopyMode,
+        PickEntry, TextPair,
     };
 
     #[test]
@@ -701,6 +951,80 @@ mod tests {
 
         assert_eq!(build_output_preview(&block), "line1\nline2\nline3");
     }
+
+    #[test]
+    fn detects_vim_compatible_editor_commands() {
+        assert!(is_vim_command("nvim"));
+        assert!(is_vim_command("vim -Nu NONE"));
+        assert!(is_vim_command("C:\\Tools\\gVim\\gvim.exe"));
+        assert!(!is_vim_command("code --wait"));
+        assert!(!is_vim_command("hx"));
+    }
+
+    #[test]
+    fn escapes_vim_single_quoted_strings() {
+        assert_eq!(
+            vim_single_quote("C:\\tmp\\it's.json"),
+            "C:\\tmp\\it''s.json"
+        );
+    }
+
+    #[test]
+    fn codex_vim_view_hides_tools_by_default_and_moves_by_turn() {
+        let blocks = vec![
+            CodexBlock {
+                kind: CodexBlockKind::User,
+                timestamp: None,
+                label: None,
+                text: "first question".to_string(),
+            },
+            CodexBlock {
+                kind: CodexBlockKind::ToolCall,
+                timestamp: None,
+                label: Some("shell".to_string()),
+                text: "tool call".to_string(),
+            },
+            CodexBlock {
+                kind: CodexBlockKind::ToolOutput,
+                timestamp: None,
+                label: None,
+                text: "tool output".to_string(),
+            },
+            CodexBlock {
+                kind: CodexBlockKind::Assistant,
+                timestamp: None,
+                label: None,
+                text: "first answer".to_string(),
+            },
+            CodexBlock {
+                kind: CodexBlockKind::User,
+                timestamp: None,
+                label: None,
+                text: "second question".to_string(),
+            },
+            CodexBlock {
+                kind: CodexBlockKind::Assistant,
+                timestamp: None,
+                label: None,
+                text: "second answer".to_string(),
+            },
+        ];
+
+        let view = build_codex_vim_view(&blocks);
+
+        assert!(!view.raw.contains("tool output"));
+        assert_eq!(view.blocks.len(), 2);
+        assert_eq!(view.blocks[0].start, 1);
+        assert_eq!(view.blocks[1].start, view.blocks[0].end + 2);
+        assert_eq!(view.blocks[0].input_text, "first question");
+        assert_eq!(view.blocks[0].output_text, "first answer");
+
+        let full = view.alternate.expect("tools view should exist");
+        assert!(full.raw.contains("tool output"));
+        assert_eq!(full.blocks.len(), 2);
+        assert!(full.blocks[0].output_text.contains("tool output"));
+        assert!(full.blocks[0].output_text.contains("first answer"));
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -711,7 +1035,12 @@ struct PickEntry {
     selected: bool,
 }
 
-fn run_picker(mut entries: Vec<PickEntry>, total: usize, title: &str) -> Result<CommandSelection> {
+fn run_picker(
+    mut entries: Vec<PickEntry>,
+    total: usize,
+    title: &str,
+    tui_target: PickerTuiTarget,
+) -> Result<CommandSelection> {
     let mut terminal = init_tui()?;
     let mut state = ListState::default();
     state.select(Some(0));
@@ -776,6 +1105,11 @@ fn run_picker(mut entries: Vec<PickEntry>, total: usize, title: &str) -> Result<
                 KeyCode::Char('p') => {
                     show_preview = !show_preview;
                 }
+                KeyCode::Char('t') => {
+                    restore_tui(&mut terminal)?;
+                    open_picker_vim(&tui_target)?;
+                    terminal = init_tui()?;
+                }
                 KeyCode::Enter => {
                     restore_tui(&mut terminal)?;
                     return selection_from_entries(&entries);
@@ -784,6 +1118,296 @@ fn run_picker(mut entries: Vec<PickEntry>, total: usize, title: &str) -> Result<
             }
         }
     }
+}
+
+fn open_picker_vim(target: &PickerTuiTarget) -> Result<()> {
+    let view = match target {
+        PickerTuiTarget::SessionLog => match scrollback::read_session_log()? {
+            Some(raw) if !raw.trim().is_empty() => build_session_vim_view(raw)?,
+            _ => {
+                eprintln!("sivtr: session log is empty");
+                return Ok(());
+            }
+        },
+        PickerTuiTarget::Text(view) => view.clone(),
+    };
+    open_vim_view(&view)
+}
+
+fn open_vim_view(view: &VimView) -> Result<()> {
+    let editor = resolve_vim_editor()?;
+    let dir = std::env::temp_dir();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    let content_path = dir.join(format!("sivtr-view-{}-{nonce}.txt", std::process::id()));
+    let vimrc_path = dir.join(format!("sivtr-view-{}-{nonce}.vim", std::process::id()));
+    let blocks_path = dir.join(format!(
+        "sivtr-view-{}-{nonce}.blocks.json",
+        std::process::id()
+    ));
+    let alternate_content_path = dir.join(format!(
+        "sivtr-view-{}-{nonce}.tools.txt",
+        std::process::id()
+    ));
+    let alternate_blocks_path = dir.join(format!(
+        "sivtr-view-{}-{nonce}.tools.blocks.json",
+        std::process::id()
+    ));
+
+    std::fs::write(&content_path, &view.raw).context("Failed to write Vim view file")?;
+    let blocks_json =
+        serde_json::to_string(&view.blocks).context("Failed to encode Vim block data")?;
+    std::fs::write(&blocks_path, blocks_json).context("Failed to write Vim block data")?;
+    let alternate = if let Some(alternate) = &view.alternate {
+        std::fs::write(&alternate_content_path, &alternate.raw)
+            .context("Failed to write alternate Vim view file")?;
+        let blocks_json = serde_json::to_string(&alternate.blocks)
+            .context("Failed to encode alternate Vim block data")?;
+        std::fs::write(&alternate_blocks_path, blocks_json)
+            .context("Failed to write alternate Vim block data")?;
+        Some((
+            alternate.label.as_str(),
+            alternate_content_path.as_path(),
+            alternate_blocks_path.as_path(),
+        ))
+    } else {
+        None
+    };
+    write_vimrc(&vimrc_path, &blocks_path, alternate)?;
+
+    let parts: Vec<&str> = editor.split_whitespace().collect();
+    let (program, extra_args) = parts
+        .split_first()
+        .ok_or_else(|| anyhow::anyhow!("Empty Vim editor command"))?;
+
+    let status = Command::new(program)
+        .args(extra_args)
+        .arg("-u")
+        .arg(&vimrc_path)
+        .arg("-n")
+        .arg("-R")
+        .arg(&content_path)
+        .status()
+        .with_context(|| format!("Failed to launch Vim editor `{editor}`"))?;
+
+    let _ = std::fs::remove_file(&content_path);
+    let _ = std::fs::remove_file(&vimrc_path);
+    let _ = std::fs::remove_file(&blocks_path);
+    let _ = std::fs::remove_file(&alternate_content_path);
+    let _ = std::fs::remove_file(&alternate_blocks_path);
+
+    if !status.success() {
+        anyhow::bail!("Vim editor `{editor}` exited with {status}");
+    }
+    Ok(())
+}
+
+fn resolve_vim_editor() -> Result<String> {
+    let config = sivtr_core::config::SivtrConfig::load().unwrap_or_default();
+    if is_vim_command(&config.editor.command) {
+        return Ok(config.editor.command);
+    }
+
+    for candidate in ["nvim", "vim", "vi"] {
+        if command_exists(candidate) {
+            return Ok(candidate.to_string());
+        }
+    }
+
+    anyhow::bail!("No Vim-compatible editor found. Set `editor.command` to nvim/vim/vi.")
+}
+
+fn is_vim_command(command: &str) -> bool {
+    let Some(program) = command.split_whitespace().next() else {
+        return false;
+    };
+    let name = std::path::Path::new(program)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or(program)
+        .to_lowercase();
+    name == "vi" || name.contains("vim")
+}
+
+fn vim_single_quote(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+fn command_exists(name: &str) -> bool {
+    #[cfg(windows)]
+    {
+        Command::new("where")
+            .arg(name)
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+    #[cfg(not(windows))]
+    {
+        Command::new("which")
+            .arg(name)
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+}
+
+fn write_vimrc(
+    path: &std::path::Path,
+    blocks_path: &std::path::Path,
+    alternate: Option<(&str, &std::path::Path, &std::path::Path)>,
+) -> Result<()> {
+    let mut file = std::fs::File::create(path).context("Failed to create temporary Vim config")?;
+    let blocks_path = vim_single_quote(&blocks_path.to_string_lossy());
+    let (alternate_label, alternate_content_path, alternate_blocks_path) =
+        if let Some((label, content, blocks)) = alternate {
+            (
+                vim_single_quote(label),
+                vim_single_quote(&content.to_string_lossy()),
+                vim_single_quote(&blocks.to_string_lossy()),
+            )
+        } else {
+            (String::new(), String::new(), String::new())
+        };
+    let script = format!(
+        r#"
+set nocompatible
+set nomodeline
+set readonly
+set nomodifiable
+set nomodified
+set number
+set nowrap
+set nofoldenable
+let s:sivtr_blocks = json_decode(join(readfile('{blocks_path}'), "\n"))
+let s:sivtr_main_blocks_path = '{blocks_path}'
+let s:sivtr_alt_label = '{alternate_label}'
+let s:sivtr_alt_content_path = '{alternate_content_path}'
+let s:sivtr_alt_blocks_path = '{alternate_blocks_path}'
+let s:sivtr_tools_visible = 0
+
+function! s:SivtrLoadBlocks(path) abort
+  let s:sivtr_blocks = json_decode(join(readfile(a:path), "\n"))
+endfunction
+
+function! s:SivtrToggleTools() abort
+  if empty(s:sivtr_alt_content_path)
+    echo 'sivtr: no alternate view'
+    return
+  endif
+  let l:top = winsaveview()
+  setlocal modifiable
+  silent %delete _
+  if s:sivtr_tools_visible
+    silent execute '0read ' . fnameescape(expand('%:p'))
+    silent 1delete _
+    call s:SivtrLoadBlocks(s:sivtr_main_blocks_path)
+    let s:sivtr_tools_visible = 0
+    echo 'sivtr: tools hidden'
+  else
+    silent execute '0read ' . fnameescape(s:sivtr_alt_content_path)
+    silent 1delete _
+    call s:SivtrLoadBlocks(s:sivtr_alt_blocks_path)
+    let s:sivtr_tools_visible = 1
+    echo 'sivtr: ' . s:sivtr_alt_label . ' visible'
+  endif
+  setlocal nomodifiable nomodified readonly
+  call winrestview(l:top)
+endfunction
+
+function! s:SivtrCurrentBlockIndex() abort
+  let l:line = line('.')
+  let l:fallback = -1
+  for l:i in range(0, len(s:sivtr_blocks) - 1)
+    let l:block = s:sivtr_blocks[l:i]
+    if l:line >= l:block.start && l:line <= l:block.end
+      return l:i
+    endif
+    if l:block.start <= l:line
+      let l:fallback = l:i
+    endif
+  endfor
+  return l:fallback >= 0 ? l:fallback : 0
+endfunction
+
+function! s:SivtrCurrentBlock() abort
+  if empty(s:sivtr_blocks)
+    echohl ErrorMsg | echo 'sivtr: no blocks' | echohl None
+    return {{}}
+  endif
+  return s:sivtr_blocks[s:SivtrCurrentBlockIndex()]
+endfunction
+
+function! s:SivtrJump(delta) abort
+  if empty(s:sivtr_blocks)
+    echohl ErrorMsg | echo 'sivtr: no blocks' | echohl None
+    return
+  endif
+  let l:idx = s:SivtrCurrentBlockIndex() + a:delta
+  let l:idx = max([0, min([l:idx, len(s:sivtr_blocks) - 1])])
+  call cursor(s:sivtr_blocks[l:idx].start, 1)
+  normal! zz
+endfunction
+
+function! s:SivtrCopy(kind) abort
+  let l:block = s:SivtrCurrentBlock()
+  if empty(l:block)
+    return
+  endif
+  let l:key = a:kind . '_text'
+  let l:text = get(l:block, l:key, '')
+  if empty(l:text)
+    echohl ErrorMsg | echo 'sivtr: current block has no ' . a:kind . ' content' | echohl None
+    return
+  endif
+  call setreg('"', l:text)
+  try | call setreg('+', l:text) | catch | endtry
+  try | call setreg('*', l:text) | catch | endtry
+  echo 'sivtr: copied current ' . a:kind
+endfunction
+
+function! s:SivtrSelect(kind) abort
+  let l:block = s:SivtrCurrentBlock()
+  if empty(l:block)
+    return
+  endif
+  if a:kind ==# 'block'
+    let [l:start, l:end] = [l:block.start, l:block.end]
+  elseif a:kind ==# 'input'
+    let [l:start, l:end] = [l:block.input_start, l:block.input_end]
+  else
+    let [l:start, l:end] = [l:block.output_start, l:block.output_end]
+  endif
+  if l:start <= 0 || l:end <= 0
+    echohl ErrorMsg | echo 'sivtr: current block has no ' . a:kind . ' range' | echohl None
+    return
+  endif
+  call cursor(l:start, 1)
+  normal! V
+  call cursor(l:end, 1)
+endfunction
+
+nnoremap <silent> p :qa!<CR>
+nnoremap <silent> q :qa!<CR>
+nnoremap <silent> <Esc> :qa!<CR>
+nnoremap <silent> [[ :call <SID>SivtrJump(-1)<CR>
+nnoremap <silent> ]] :call <SID>SivtrJump(1)<CR>
+nnoremap <silent> myy :call <SID>SivtrCopy('block')<CR>
+nnoremap <silent> myi :call <SID>SivtrCopy('input')<CR>
+nnoremap <silent> myo :call <SID>SivtrCopy('output')<CR>
+nnoremap <silent> myc :call <SID>SivtrCopy('command')<CR>
+nnoremap <silent> mvv :call <SID>SivtrSelect('block')<CR>
+nnoremap <silent> mvi :call <SID>SivtrSelect('input')<CR>
+nnoremap <silent> mvo :call <SID>SivtrSelect('output')<CR>
+nnoremap <silent> T :call <SID>SivtrToggleTools()<CR>
+autocmd VimEnter * echo "sivtr: [[/]] jump turns, T toggles tools, myy/myi/myo/myc copy, mvv/mvi/mvo select, p returns to picker"
+"#
+    );
+    file.write_all(script.as_bytes())
+        .context("Failed to write temporary Vim config")?;
+    Ok(())
 }
 
 fn render_picker(
@@ -807,7 +1431,7 @@ fn render_picker(
         .map(|anchor| format!("  v range@{}", anchor + 1))
         .unwrap_or_default();
     let title = Paragraph::new(format!(
-        "Pick command blocks  Space toggle  v mark-range  p preview  a toggle-all  Enter confirm  Esc cancel{}\nshowing last {} of {} commands",
+        "Pick command blocks  Space toggle  v mark-range  p preview  t tui  a toggle-all  Enter confirm  Esc cancel{}\nshowing last {} of {} commands",
         anchor_hint,
         entries.len(),
         total
