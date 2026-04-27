@@ -88,6 +88,40 @@ Examples:
   sivtr copy cmd 2..5
 ";
 
+const COPY_CODEX_AFTER_HELP: &str = "\
+Defaults:
+  `sivtr copy codex` copies the last completed user + assistant turn
+  from the current Codex session.
+
+Session Resolution:
+  By default, sivtr reads the newest Codex rollout whose `cwd`
+  matches the current working directory.
+
+Selector Semantics:
+  Selection is relative to the newest matching Codex item.
+  `1` means the latest turn/message/tool output, `2` means the 2nd-latest.
+
+Modes:
+  sivtr copy codex       Copy the last user + assistant turn
+  sivtr copy codex out   Copy the last assistant reply
+  sivtr copy codex in    Copy the last user message
+  sivtr copy codex tool  Copy the last tool output
+  sivtr copy codex all   Copy the whole parsed session
+
+Filters:
+  Filters run after the selected text is assembled.
+  If both are set, `--regex` runs before `--lines`.
+
+Examples:
+  sivtr copy codex
+  sivtr copy codex 2
+  sivtr copy codex 2..4
+  sivtr copy codex out --print
+  sivtr copy codex out --pick
+  sivtr copy codex tool --regex error
+  sivtr copy codex all --lines 1:20
+";
+
 const DIFF_AFTER_HELP: &str = "\
 Defaults:
   `sivtr diff <left> <right>` compares two command blocks from the current session.
@@ -202,6 +236,10 @@ pub enum CopySubcommand {
     /// Copy only the bare command text
     #[command(after_help = COPY_COMMAND_AFTER_HELP)]
     Cmd(CopySimpleArgs),
+
+    /// Copy content from the current Codex conversation session
+    #[command(after_help = COPY_CODEX_AFTER_HELP)]
+    Codex(CodexCopyCommand),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -290,6 +328,30 @@ pub struct ClearArgs {
     pub all: bool,
 }
 
+#[derive(Args, Debug)]
+pub struct CodexCopyCommand {
+    #[command(subcommand)]
+    pub mode: Option<CodexCopyMode>,
+
+    #[command(flatten)]
+    pub args: CopySimpleArgs,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CodexCopyMode {
+    /// Copy the last user message
+    In(CopySimpleArgs),
+
+    /// Copy the last assistant reply
+    Out(CopySimpleArgs),
+
+    /// Copy the last tool output
+    Tool(CopySimpleArgs),
+
+    /// Copy the whole parsed session
+    All(CopySimpleArgs),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,6 +438,53 @@ mod tests {
     fn diff_rejects_multiple_content_modes() {
         let result = Cli::try_parse_from(["sivtr", "diff", "1", "2", "--output", "--cmd"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn codex_copy_defaults_to_last_turn() {
+        let cli = Cli::try_parse_from(["sivtr", "copy", "codex"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Copy(cmd)) => match cmd.mode {
+                Some(CopySubcommand::Codex(codex)) => {
+                    assert!(codex.mode.is_none());
+                    assert_eq!(codex.args.common.selector, None);
+                }
+                _ => panic!("expected copy codex mode"),
+            },
+            _ => panic!("expected copy command"),
+        }
+    }
+
+    #[test]
+    fn codex_copy_accepts_nested_mode() {
+        let cli = Cli::try_parse_from(["sivtr", "copy", "codex", "out", "--print"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Copy(cmd)) => match cmd.mode {
+                Some(CopySubcommand::Codex(codex)) => match codex.mode {
+                    Some(CodexCopyMode::Out(args)) => assert!(args.common.print),
+                    _ => panic!("expected copy codex out mode"),
+                },
+                _ => panic!("expected copy codex mode"),
+            },
+            _ => panic!("expected copy command"),
+        }
+    }
+
+    #[test]
+    fn codex_copy_accepts_selector() {
+        let cli = Cli::try_parse_from(["sivtr", "copy", "codex", "2..4"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Copy(cmd)) => match cmd.mode {
+                Some(CopySubcommand::Codex(codex)) => {
+                    assert_eq!(codex.args.common.selector.as_deref(), Some("2..4"));
+                }
+                _ => panic!("expected copy codex mode"),
+            },
+            _ => panic!("expected copy command"),
+        }
     }
 }
 

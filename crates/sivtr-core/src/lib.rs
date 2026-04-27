@@ -1,5 +1,6 @@
 pub mod buffer;
 pub mod capture;
+pub mod codex;
 pub mod config;
 pub mod export;
 pub mod history;

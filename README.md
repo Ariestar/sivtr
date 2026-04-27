@@ -14,6 +14,7 @@
 - **Search**: `/pattern` forward search, `n`/`N` for next/previous match
 - **Copy to clipboard**: `y` in visual mode copies selection to system clipboard
 - **History**: local SQLite storage with full-text search via FTS5
+- **Codex capture**: read structured Codex rollout logs and copy conversation blocks without opening a TUI
 - **Cross-platform**: Windows, macOS, Linux
 
 ## Installation
@@ -40,7 +41,29 @@ sivtr history show 42
 
 # Import scrollback (tmux/zellij, coming soon)
 sivtr import
+
+# Codex conversation capture
+sivtr copy codex
+sivtr copy codex out
+sivtr copy codex in
+sivtr copy codex tool
+sivtr copy codex all --print
 ```
+
+`sivtr copy codex` reads Codex rollout JSONL files from `~/.codex/sessions` and defaults to the
+latest session whose `cwd` matches your current working directory. The common zero-confirmation
+paths are:
+
+- `sivtr copy codex` copies the last completed user + assistant turn
+- `sivtr copy codex out` copies the last assistant reply
+- `sivtr copy codex in` copies the last user message
+- `sivtr copy codex tool` copies the last tool output
+
+Selector semantics match `sivtr copy`: `1` means the latest matching item, `2` means the
+2nd-latest, and ranges like `2..4` select multiple recent items.
+
+Progress commentary emitted while Codex is working is filtered out by default, so `copy out`
+returns the final assistant reply instead of intermediate status updates.
 
 ## Key Bindings
 

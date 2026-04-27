@@ -8,6 +8,10 @@ use regex::Regex;
 use crate::command_blocks::ParsedCommandBlock as CommandBlock;
 use crate::commands::command_block_selector::{parse_selector, resolve_selector, CommandSelection};
 use sivtr_core::capture::scrollback;
+use sivtr_core::codex::{
+    find_current_session, format_blocks, parse_session_file, CodexBlock, CodexBlockKind,
+    CodexSession,
+};
 use sivtr_core::session::{self, SessionEntry};
 
 use crate::tui::terminal::{init as init_tui, restore as restore_tui};
@@ -32,6 +36,25 @@ pub struct CopyRequest<'a> {
     pub prompt_override: Option<&'a str>,
     pub print_full: bool,
     pub ansi: bool,
+    pub regex: Option<&'a str>,
+    pub lines: Option<&'a str>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CodexSelectionMode {
+    LastTurn,
+    LastAssistant,
+    LastUser,
+    LastTool,
+    All,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct CodexCopyRequest<'a> {
+    pub selector: Option<&'a str>,
+    pub pick: bool,
+    pub selection_mode: CodexSelectionMode,
+    pub print_full: bool,
     pub regex: Option<&'a str>,
     pub lines: Option<&'a str>,
 }
@@ -146,26 +169,59 @@ pub fn execute(request: CopyRequest<'_>) -> Result<()> {
     } else {
         text.plain.trim().to_string()
     };
-    if text.is_empty() {
-        eprintln!("sivtr: filters removed everything");
-        eprintln!("  hint: loosen `--regex` or `--lines`, or copy without filters");
+    finish_copy(
+        text,
+        print_full,
+        format!("sivtr: copied {} command(s) to clipboard", indices.len()),
+    )
+}
+
+pub fn execute_codex(request: CodexCopyRequest<'_>) -> Result<()> {
+    let path = resolve_codex_session_path()?;
+    let session = parse_session_file(&path)?;
+
+    if session.blocks.is_empty() {
+        eprintln!("sivtr: Codex session has no parsed conversation blocks");
         return Ok(());
     }
 
-    arboard::Clipboard::new()
-        .context("Failed to open clipboard")?
-        .set_text(&text)
-        .context("Failed to set clipboard")?;
-
-    if print_full {
-        for line in text.lines() {
-            eprintln!("  {line}");
-        }
+    let units = build_codex_units(&session, request.selection_mode);
+    if units.is_empty() {
+        eprintln!("sivtr: selected Codex content is empty");
+        return Ok(());
     }
 
-    eprintln!("sivtr: copied {} command(s) to clipboard", indices.len());
+    let selection = if request.pick {
+        pick_text_selection(&units, "sivtr copy codex --pick")?
+    } else {
+        parse_selector(request.selector.unwrap_or("1"))?
+    };
+    let indices = resolve_selector(selection, units.len())?;
+    let selected_units: Vec<TextPair> = indices
+        .iter()
+        .filter_map(|idx| units.get(*idx).cloned())
+        .filter(|unit| !unit.plain.trim().is_empty())
+        .collect();
+    if selected_units.is_empty() {
+        eprintln!("sivtr: selected Codex content is empty");
+        return Ok(());
+    }
 
-    Ok(())
+    let mut text = join_text_pairs(&selected_units, "\n\n");
+
+    if let Some(pattern) = request.regex {
+        text = filter_lines_by_regex(&text, pattern)?;
+    }
+
+    if let Some(spec) = request.lines {
+        text = filter_lines_by_spec(&text, spec)?;
+    }
+
+    finish_copy(
+        text.plain.trim().to_string(),
+        request.print_full,
+        "sivtr: copied Codex content to clipboard".to_string(),
+    )
 }
 
 fn format_block_pair(
@@ -280,7 +336,7 @@ fn pick_selection(blocks: &[IndexedCommandBlock]) -> Result<CommandSelection> {
         })
         .collect();
 
-    run_picker(entries, total)
+    run_picker(entries, total, "sivtr copy --pick")
 }
 
 fn filter_lines_by_regex(text: &TextPair, pattern: &str) -> Result<TextPair> {
@@ -359,6 +415,110 @@ fn parse_line_number(value: &str) -> Result<usize> {
     value.parse::<usize>().with_context(|| {
         format!("Invalid line number `{value}`. Use `N`, `A:B`, or comma-separated lists.")
     })
+}
+
+fn finish_copy(text: String, print_full: bool, success_message: String) -> Result<()> {
+    if text.is_empty() {
+        eprintln!("sivtr: filters removed everything");
+        eprintln!("  hint: loosen `--regex` or `--lines`, or copy without filters");
+        return Ok(());
+    }
+
+    arboard::Clipboard::new()
+        .context("Failed to open clipboard")?
+        .set_text(&text)
+        .context("Failed to set clipboard")?;
+
+    if print_full {
+        for line in text.lines() {
+            eprintln!("  {line}");
+        }
+    }
+
+    eprintln!("{success_message}");
+    Ok(())
+}
+
+fn resolve_codex_session_path() -> Result<std::path::PathBuf> {
+    let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
+    find_current_session(&cwd)?.context("No Codex sessions found")
+}
+
+fn build_codex_units(session: &CodexSession, selection_mode: CodexSelectionMode) -> Vec<TextPair> {
+    match selection_mode {
+        CodexSelectionMode::LastTurn => build_codex_turn_units(session),
+        CodexSelectionMode::LastAssistant => {
+            build_codex_kind_units(session, CodexBlockKind::Assistant)
+        }
+        CodexSelectionMode::LastUser => build_codex_kind_units(session, CodexBlockKind::User),
+        CodexSelectionMode::LastTool => build_codex_kind_units(session, CodexBlockKind::ToolOutput),
+        CodexSelectionMode::All => vec![TextPair {
+            plain: format_blocks(&session.blocks),
+            ansi: String::new(),
+        }],
+    }
+}
+
+fn build_codex_turn_units(session: &CodexSession) -> Vec<TextPair> {
+    let mut turns = Vec::new();
+
+    for (idx, block) in session.blocks.iter().enumerate() {
+        if block.kind != CodexBlockKind::Assistant {
+            continue;
+        }
+
+        let start = session.blocks[..idx]
+            .iter()
+            .rposition(|block| block.kind == CodexBlockKind::User)
+            .unwrap_or(idx);
+
+        let turn_blocks: Vec<CodexBlock> = session.blocks[start..=idx]
+            .iter()
+            .filter(|block| matches!(block.kind, CodexBlockKind::User | CodexBlockKind::Assistant))
+            .cloned()
+            .collect();
+
+        let text = format_blocks(&turn_blocks);
+        if !text.trim().is_empty() {
+            turns.push(TextPair {
+                plain: text,
+                ansi: String::new(),
+            });
+        }
+    }
+
+    turns
+}
+
+fn build_codex_kind_units(session: &CodexSession, kind: CodexBlockKind) -> Vec<TextPair> {
+    session
+        .blocks
+        .iter()
+        .filter(|block| block.kind == kind)
+        .map(|block| TextPair {
+            plain: block.text.clone(),
+            ansi: String::new(),
+        })
+        .collect()
+}
+
+fn pick_text_selection(units: &[TextPair], title: &str) -> Result<CommandSelection> {
+    let total = units.len();
+    let shown = total.min(PICK_LIMIT);
+    let entries: Vec<PickEntry> = units
+        .iter()
+        .rev()
+        .take(shown)
+        .enumerate()
+        .map(|(offset, unit)| PickEntry {
+            recent: offset + 1,
+            preview: build_text_preview(&unit.plain),
+            output_preview: build_text_preview_lines(&unit.plain),
+            selected: false,
+        })
+        .collect();
+
+    run_picker(entries, total, title)
 }
 
 #[cfg(test)]
@@ -551,7 +711,7 @@ struct PickEntry {
     selected: bool,
 }
 
-fn run_picker(mut entries: Vec<PickEntry>, total: usize) -> Result<CommandSelection> {
+fn run_picker(mut entries: Vec<PickEntry>, total: usize, title: &str) -> Result<CommandSelection> {
     let mut terminal = init_tui()?;
     let mut state = ListState::default();
     state.select(Some(0));
@@ -560,7 +720,15 @@ fn run_picker(mut entries: Vec<PickEntry>, total: usize) -> Result<CommandSelect
 
     loop {
         terminal.draw(|frame| {
-            render_picker(frame, &entries, &state, total, range_anchor, show_preview)
+            render_picker(
+                frame,
+                &entries,
+                &state,
+                total,
+                range_anchor,
+                show_preview,
+                title,
+            )
         })?;
 
         if let Event::Key(key) = event::read()? {
@@ -625,6 +793,7 @@ fn render_picker(
     total: usize,
     range_anchor: Option<usize>,
     show_preview: bool,
+    title: &str,
 ) {
     let area = centered_rect(80, 70, frame.area());
     frame.render_widget(Clear, area);
@@ -647,7 +816,7 @@ fn render_picker(
         entries.len(),
         total
     ))
-    .block(Block::default().borders(Borders::ALL).title("sivtr copy --pick"));
+    .block(Block::default().borders(Borders::ALL).title(title));
     frame.render_widget(title, chunks[0]);
 
     let body_chunks = if show_preview {
@@ -775,6 +944,29 @@ fn build_output_preview(block: &CommandBlock) -> String {
     let mut lines: Vec<&str> = block.output.lines().take(PICK_PREVIEW_LINES).collect();
     let total_lines = block.output.lines().count();
     if total_lines > PICK_PREVIEW_LINES {
+        lines.push("...");
+    }
+    lines.join("\n")
+}
+
+fn build_text_preview(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with("## "))
+        .unwrap_or("<empty>")
+        .chars()
+        .take(80)
+        .collect()
+}
+
+fn build_text_preview_lines(text: &str) -> String {
+    let mut lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(PICK_PREVIEW_LINES)
+        .collect();
+    if text.lines().count() > PICK_PREVIEW_LINES {
         lines.push("...");
     }
     lines.join("\n")

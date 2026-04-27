@@ -7,9 +7,12 @@ mod tui;
 use anyhow::Result;
 use clap::Parser;
 
-use cli::{Cli, Commands, CopyArgs, CopySimpleArgs, CopySubcommand, DiffArgs};
+use cli::{
+    Cli, CodexCopyCommand, CodexCopyMode, Commands, CopyArgs, CopySimpleArgs, CopySubcommand,
+    DiffArgs,
+};
 use command_blocks::CommandBlockTextMode;
-use commands::copy::{CopyMode, CopyRequest};
+use commands::copy::{CodexCopyRequest, CodexSelectionMode, CopyMode, CopyRequest};
 use commands::diff::DiffRequest;
 
 fn main() -> Result<()> {
@@ -42,6 +45,7 @@ fn main() -> Result<()> {
             Some(CopySubcommand::Cmd(sub_args)) => {
                 run_copy_simple(&sub_args, CopyMode::CommandOnly, false)?
             }
+            Some(CopySubcommand::Codex(sub_args)) => run_codex_copy(sub_args)?,
             None => run_copy(&args.args, CopyMode::Both, true)?,
         },
         Some(Commands::Ci(args)) => run_copy(&args, CopyMode::InputOnly, true)?,
@@ -93,6 +97,29 @@ fn run_copy_simple(args: &CopySimpleArgs, mode: CopyMode, include_prompt: bool) 
         prompt_override: None,
         print_full: args.common.print,
         ansi: args.common.ansi,
+        regex: args.common.regex.as_deref(),
+        lines: args.common.lines.as_deref(),
+    })
+}
+
+fn run_codex_copy(cmd: CodexCopyCommand) -> Result<()> {
+    match cmd.mode {
+        Some(CodexCopyMode::In(args)) => run_codex_copy_args(&args, CodexSelectionMode::LastUser),
+        Some(CodexCopyMode::Out(args)) => {
+            run_codex_copy_args(&args, CodexSelectionMode::LastAssistant)
+        }
+        Some(CodexCopyMode::Tool(args)) => run_codex_copy_args(&args, CodexSelectionMode::LastTool),
+        Some(CodexCopyMode::All(args)) => run_codex_copy_args(&args, CodexSelectionMode::All),
+        None => run_codex_copy_args(&cmd.args, CodexSelectionMode::LastTurn),
+    }
+}
+
+fn run_codex_copy_args(args: &CopySimpleArgs, selection_mode: CodexSelectionMode) -> Result<()> {
+    commands::copy::execute_codex(CodexCopyRequest {
+        selector: args.common.selector.as_deref(),
+        pick: args.common.pick,
+        selection_mode,
+        print_full: args.common.print,
         regex: args.common.regex.as_deref(),
         lines: args.common.lines.as_deref(),
     })
