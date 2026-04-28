@@ -7,6 +7,11 @@ export default defineConfig({
       title: 'sivtr',
       description:
         'Documentation for sivtr, a terminal output workspace for capturing, browsing, searching, selecting, and reusing command output.',
+      locales: {
+        root: { label: 'English', lang: 'en' },
+        'zh-cn': { label: '简体中文', lang: 'zh-CN' },
+      },
+      defaultLocale: 'root',
       favicon: '/favicon.svg',
       customCss: ['./src/styles/custom.css'],
       tableOfContents: {
@@ -15,9 +20,14 @@ export default defineConfig({
       },
       lastUpdated: true,
       sidebar: [
-        { label: 'Overview', link: '/' },
+        {
+          label: 'Overview',
+          translations: { 'zh-CN': '概览' },
+          link: '/',
+        },
         {
           label: 'Start',
+          translations: { 'zh-CN': '开始' },
           items: [
             'start/installation',
             'start/quickstart',
@@ -26,6 +36,7 @@ export default defineConfig({
         },
         {
           label: 'Use sivtr',
+          translations: { 'zh-CN': '使用 sivtr' },
           items: [
             'usage/capture-output',
             'usage/browse-and-select',
@@ -38,6 +49,7 @@ export default defineConfig({
         },
         {
           label: 'Reference',
+          translations: { 'zh-CN': '参考' },
           items: [
             'reference/cli',
             'reference/keybindings',
@@ -46,6 +58,7 @@ export default defineConfig({
         },
         {
           label: 'Explanation',
+          translations: { 'zh-CN': '解释' },
           items: [
             'explanation/architecture',
             'explanation/session-model',
@@ -53,6 +66,7 @@ export default defineConfig({
         },
         {
           label: 'Project',
+          translations: { 'zh-CN': '项目' },
           items: ['project/release-notes', 'project/documentation-maintenance'],
         },
       ],
