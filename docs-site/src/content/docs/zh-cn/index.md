@@ -7,8 +7,6 @@ description: 面向 AI 时代的终端输出工作区。
 
 它不是终端模拟器、复用器，也不是替代 shell。它是一个放在现有终端旁边使用的工作台。
 
-源代码和发布版本在 [github.com/Ariestar/sivtr](https://github.com/Ariestar/sivtr)。
-
 ## 为什么需要它
 
 终端输出通常是一次性的。命令滚出屏幕后，有用的内容就困在 scrollback、复制模式或巨大的日志里。`sivtr` 给这些输出一个小型工作区：

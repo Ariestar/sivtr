@@ -7,6 +7,13 @@ export default defineConfig({
       title: 'sivtr',
       description:
         'Documentation for sivtr, a terminal output workspace for capturing, browsing, searching, selecting, and reusing command output.',
+      social: [
+        {
+          icon: 'github',
+          label: 'GitHub',
+          href: 'https://github.com/Ariestar/sivtr',
+        },
+      ],
       locales: {
         root: { label: 'English', lang: 'en' },
         'zh-cn': { label: '简体中文', lang: 'zh-CN' },

@@ -7,8 +7,6 @@ description: Terminal output workspace for the AI era.
 
 It is not a terminal emulator, multiplexer, or replacement shell. It works beside the terminal you already use.
 
-Source code and releases live at [github.com/Ariestar/sivtr](https://github.com/Ariestar/sivtr).
-
 ## Why it exists
 
 Terminal output is usually treated as disposable. Once a command scrolls away, the useful part is trapped in scrollback, copy mode, or a giant log. `sivtr` gives that output a small workspace:
