@@ -67,7 +67,7 @@ export default defineConfig({
         {
           label: 'Project',
           translations: { 'zh-CN': '项目' },
-          items: ['project/release-notes', 'project/documentation-maintenance'],
+          items: ['project/release-notes'],
         },
       ],
     }),
