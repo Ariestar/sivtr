@@ -1,14 +1,13 @@
 ---
 title: Installation
-description: Install sivtr from source and set up shell integration.
+description: Install sivtr with Cargo and set up shell integration.
 ---
 
-`sivtr` is a Rust workspace with a CLI/TUI binary and a core library crate. The current installation path is from source.
+`sivtr` is published as a Cargo package and developed at [github.com/Ariestar/sivtr](https://github.com/Ariestar/sivtr).
 
 ## Requirements
 
-- Rust toolchain compatible with the repository `rust-toolchain.toml`
-- Cargo
+- Rust and Cargo
 - A supported terminal
 - Clipboard support for your platform
 
@@ -17,12 +16,12 @@ Optional:
 - `nvim`, `vim`, or `vi` for the Vim picker view used by some copy workflows
 - PowerShell, Bash, Zsh, or Nushell shell profile access for session logging
 
-## Install from the repository
+## Install with Cargo
 
-From the repository root:
+Install the latest published release from crates.io:
 
 ```bash
-cargo install --path .
+cargo install sivtr
 ```
 
 Verify the binary:
@@ -32,12 +31,34 @@ sivtr --version
 sivtr --help
 ```
 
-## Update after pulling changes
+## Install from source
 
-Reinstall from the repository root:
+Clone the repository:
+
+```bash
+git clone https://github.com/Ariestar/sivtr.git
+cd sivtr
+```
+
+From the repository root:
 
 ```bash
 cargo install --path .
+```
+
+## Update
+
+Update the published package:
+
+```bash
+cargo install sivtr --force
+```
+
+Or reinstall from a local checkout after pulling changes:
+
+```bash
+git pull
+cargo install --path . --force
 ```
 
 Cargo will replace the previously installed binary.

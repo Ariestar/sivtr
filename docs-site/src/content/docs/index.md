@@ -1,11 +1,13 @@
 ---
 title: sivtr
-description: Terminal output workspace for capture, search, selection, and reuse.
+description: Terminal output workspace for the AI era.
 ---
 
 `sivtr` turns terminal output into reusable text. Pipe output into a browser, wrap command execution, search across past captures, copy structured command blocks, or pull the last useful turn out of a Codex session without opening the transcript by hand.
 
 It is not a terminal emulator, multiplexer, or replacement shell. It works beside the terminal you already use.
+
+Source code and releases live at [github.com/Ariestar/sivtr](https://github.com/Ariestar/sivtr).
 
 ## Why it exists
 
@@ -20,10 +22,10 @@ Terminal output is usually treated as disposable. Once a command scrolls away, t
 
 ## First command
 
-Install from the repository, then pipe output into `sivtr`:
+Install from crates.io, then pipe output into `sivtr`:
 
 ```bash
-cargo install --path .
+cargo install sivtr
 cargo test 2>&1 | sivtr
 ```
 
