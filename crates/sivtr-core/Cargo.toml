@@ -4,7 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Core library for sivtr 鈥?terminal output processing engine"
+repository.workspace = true
+description = "Core library for sivtr terminal output and AI coding session processing"
+keywords = ["terminal", "tui", "codex", "ai"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 strip-ansi-escapes = "0.2"

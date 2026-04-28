@@ -1,82 +1,188 @@
 # sivtr
 
-**Terminal Output Workspace** - Capture, browse, search, select, and export terminal output.
+[![Crates.io](https://img.shields.io/crates/v/sivtr.svg)](https://crates.io/crates/sivtr)
+[![CI](https://github.com/Ariestar/sivtr/actions/workflows/rust.yml/badge.svg)](https://github.com/Ariestar/sivtr/actions/workflows/rust.yml)
+[![License](https://img.shields.io/crates/l/sivtr.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](rust-toolchain.toml)
 
-`sivtr` turns terminal output into searchable, selectable, reusable text assets. It is not a terminal emulator or multiplexer - it is an independent tool that works alongside your existing terminal workflow.
+**Terminal output workspace for the AI era** - Capture, sift, browse, search, select, and reuse your terminal output and AI coding sessions.
 
-## Features (V1)
+`sivtr` turns command output, Codex sessions, command blocks, and tool results into searchable, selectable, reusable text assets. It is not a terminal emulator or multiplexer. It is a companion tool for the terminal workflows you already use.
 
-- **Pipe mode**: `command | sivtr` - pipe any command output into a TUI browser
-- **Run mode**: `sivtr run <command>` - wrap command execution, capture output, then browse
-- **Vim-style navigation**: `hjkl`, `Ctrl-D/U`, `gg`, `G`
-- **Modal workflow**: normal / insert / visual / search
-- **Visual selection**: `v` (character), `V` (line), `Ctrl-V` (block/column)
-- **Search**: `/pattern` forward search, `n`/`N` for next/previous match
-- **Copy to clipboard**: `y` in visual mode copies selection to system clipboard
-- **History**: local SQLite storage with full-text search via FTS5
-- **Codex capture**: read structured Codex rollout logs and copy conversation blocks without opening a TUI
-- **Cross-platform**: Windows, macOS, Linux
+## Why sivtr
+
+Modern coding work happens in streams: shell output, test failures, build logs, AI-agent replies, tool calls, and long terminal histories. `sivtr` gives those streams a workspace.
+
+- Pipe any output into a fast TUI browser.
+- Wrap commands and keep their output for later.
+- Search, select, and copy exactly the text you need.
+- Reuse recent command blocks without digging through scrollback.
+- Pull the useful parts of the current Codex session without opening raw transcript files.
+- Compare recent command outputs when iterations get noisy.
 
 ## Installation
 
 ```bash
+cargo install sivtr
+```
+
+From source:
+
+```bash
+git clone https://github.com/Ariestar/sivtr.git
+cd sivtr
 cargo install --path .
 ```
 
-## Usage
+## Quick Start
+
+Browse command output:
 
 ```bash
-# Pipe mode
-cargo build 2>&1 | sivtr
-ls -la | sivtr
+cargo test 2>&1 | sivtr
+```
 
-# Run mode
-sivtr run cargo test
-sivtr run python script.py
+Run a command through `sivtr` and inspect the captured output:
 
-# History
-sivtr history list
-sivtr history search "error"
-sivtr history show 42
+```bash
+sivtr run cargo build
+```
 
-# Import scrollback (tmux/zellij, coming soon)
-sivtr import
+Copy the last command block from the current shell session:
 
-# Codex conversation capture
-sivtr copy codex
+```bash
+sivtr copy
+```
+
+Copy the latest assistant reply from the current Codex project session:
+
+```bash
 sivtr copy codex out
-sivtr copy codex in
-sivtr copy codex tool
-sivtr copy codex all --print
+```
 
-# Global hotkey (Windows)
+Open an interactive picker for Codex conversation blocks:
+
+```bash
+sivtr copy codex --pick
+```
+
+Compare two recent command outputs:
+
+```bash
+sivtr diff 1 2
+```
+
+## Core Workflows
+
+### Browse Output
+
+Use pipe mode when you already have a command:
+
+```bash
+some-command --verbose 2>&1 | sivtr
+```
+
+Use run mode when you want `sivtr` to execute, capture, and then open the output:
+
+```bash
+sivtr run cargo test
+```
+
+Inside the TUI you can move with Vim-style keys, search with `/`, enter visual selection with `v`, and copy with `y`.
+
+### Copy Command Blocks
+
+With shell integration enabled, `sivtr` records command blocks so you can copy recent inputs and outputs later:
+
+```bash
+sivtr copy              # latest input + output
+sivtr copy out          # latest output only
+sivtr copy in 2..4      # user input from recent blocks
+sivtr copy cmd --pick   # pick and copy bare commands
+```
+
+Selectors are relative to newest first: `1` is the latest block, `2` is the one before it, and ranges like `2..4` select multiple blocks.
+
+Filters run after text is assembled:
+
+```bash
+sivtr copy out --regex panic
+sivtr copy out --lines 10:40
+```
+
+### Reuse Codex Sessions
+
+`sivtr copy codex` reads Codex rollout JSONL files from `~/.codex/sessions` and chooses the newest session whose `cwd` matches your current directory.
+
+```bash
+sivtr copy codex        # latest completed user + assistant turn
+sivtr copy codex out    # latest assistant reply
+sivtr copy codex in     # latest user message
+sivtr copy codex tool   # latest tool output
+sivtr copy codex all    # parsed session
+```
+
+Progress commentary is filtered by default, so `sivtr copy codex out` returns the final assistant reply instead of intermediate status updates.
+
+On Windows, the hotkey daemon opens the Codex picker from anywhere:
+
+```bash
 sivtr hotkey start
 sivtr hotkey status
 sivtr hotkey stop
 ```
 
-`sivtr copy codex` reads Codex rollout JSONL files from `~/.codex/sessions` and defaults to the
-latest session whose `cwd` matches your current working directory. The common zero-confirmation
-paths are:
+The default shortcut is `alt+y`.
 
-- `sivtr copy codex` copies the last completed user + assistant turn
-- `sivtr copy codex out` copies the last assistant reply
-- `sivtr copy codex in` copies the last user message
-- `sivtr copy codex tool` copies the last tool output
+### Search History
 
-Selector semantics match `sivtr copy`: `1` means the latest matching item, `2` means the
-2nd-latest, and ranges like `2..4` select multiple recent items.
+Captured output is stored locally and can be searched later:
 
-Progress commentary emitted while Codex is working is filtered out by default, so `copy out`
-returns the final assistant reply instead of intermediate status updates.
+```bash
+sivtr history list
+sivtr history search "error"
+sivtr history show 42
+```
 
-On Windows, `sivtr hotkey start` registers a single global shortcut. By default it uses
-`alt+y` and opens a new terminal window that runs `sivtr copy codex --pick`.
+### Configure
 
-## Key Bindings
+Create, inspect, or edit the config file:
+
+```bash
+sivtr config init
+sivtr config show
+sivtr config edit
+```
+
+Generate shell integration hooks:
+
+```bash
+sivtr init powershell
+sivtr init bash
+sivtr init zsh
+sivtr init nushell
+```
+
+## Commands
+
+| Command | Purpose |
+| --- | --- |
+| `sivtr` / `sivtr pipe` | Read output from stdin and open the TUI browser. |
+| `sivtr run <command>` | Execute a command, capture output, then browse it. |
+| `sivtr copy` | Copy recent command blocks. |
+| `sivtr copy codex` | Copy useful content from the current Codex session. |
+| `sivtr diff <left> <right>` | Compare recent command blocks. |
+| `sivtr history` | List, search, and show captured output history. |
+| `sivtr config` | Manage the TOML config file. |
+| `sivtr init <shell>` | Generate shell integration for command-block capture. |
+| `sivtr import` | Open the current session log. |
+| `sivtr hotkey` | Manage the Windows Codex picker hotkey. |
+| `sivtr clear` | Clear session logs. |
+
+## TUI Keys
 
 | Key | Mode | Action |
-|-----|------|--------|
+| --- | --- | --- |
 | `j` / `Down` | Normal | Move down |
 | `k` / `Up` | Normal | Move up |
 | `h` / `Left` | Normal | Move left |
@@ -92,29 +198,26 @@ On Windows, `sivtr hotkey start` registers a single global shortcut. By default 
 | `/` | Normal | Start search |
 | `n` | Normal | Next search match |
 | `N` | Normal | Previous search match |
-| `y` | Visual | Yank (copy) to clipboard |
+| `y` | Visual | Copy selection to clipboard |
 | `Esc` | Visual/Search/Insert | Cancel |
 | `q` | Normal | Quit |
 
-## Tech Stack
+## Development
 
-- **Language**: Rust
-- **CLI**: clap
-- **TUI**: ratatui + crossterm
-- **Storage**: SQLite (rusqlite) + FTS5
-- **Clipboard**: arboard (cross-platform)
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
 
-## Project Structure
+The workspace contains:
 
 ```text
 sivtr/
-|- crates/sivtr-core/    # Core library (capture, parse, buffer, selection, search, history, export)
-|- src/                  # CLI + TUI binary
-|  |- cli.rs             # Command definitions (clap)
-|  |- app.rs             # Application state machine
-|  |- tui/               # TUI rendering and events
-|  `- commands/          # Subcommand handlers
-`- docs/                 # PRD and architecture docs
+|- crates/sivtr-core/    # Capture, parsing, buffers, selection, search, history, export
+|- src/                  # CLI, TUI, commands, hotkey integration
+|- docs-site/            # Astro/Starlight documentation site
+`- .github/workflows/    # CI and release automation
 ```
 
 ## License

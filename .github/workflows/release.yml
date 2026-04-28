@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            archive: zip
+            binary: sivtr.exe
+          - name: linux-x64
+            os: ubuntu-latest
+            archive: tar.gz
+            binary: sivtr
+          - name: macos
+            os: macos-latest
+            archive: tar.gz
+            binary: sivtr
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package Windows
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $name = "sivtr-${{ github.ref_name }}-${{ matrix.name }}"
+          New-Item -ItemType Directory -Path $name | Out-Null
+          Copy-Item "target/release/${{ matrix.binary }}" $name
+          Copy-Item README.md $name
+          Copy-Item LICENSE $name
+          Compress-Archive -Path $name -DestinationPath "$name.zip"
+
+      - name: Package Unix
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          name="sivtr-${GITHUB_REF_NAME}-${{ matrix.name }}"
+          mkdir "$name"
+          cp "target/release/${{ matrix.binary }}" "$name/"
+          cp README.md LICENSE "$name/"
+          tar -czf "$name.tar.gz" "$name"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sivtr-${{ github.ref_name }}-${{ matrix.name }}
+          path: |
+            *.zip
+            *.tar.gz
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: CHANGELOG.md
+          files: artifacts/**/*

@@ -7,6 +7,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 rust-version = "1.88"
+repository = "https://github.com/Ariestar/sivtr"
 
 [package]
 name = "sivtr"
@@ -14,7 +15,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Terminal output workspace 鈥?capture, browse, search, select, and export terminal output"
+repository.workspace = true
+description = "Terminal output workspace for the AI era - capture, sift, browse, search, select, and reuse terminal output and AI coding sessions"
+keywords = ["terminal", "cli", "tui", "codex", "ai"]
+categories = ["command-line-utilities", "development-tools"]
 default-run = "sivtr"
 
 [[bin]]
@@ -22,7 +26,7 @@ name = "sivtr"
 path = "src/main.rs"
 
 [dependencies]
-sivtr-core = { path = "crates/sivtr-core" }
+sivtr-core = { version = "0.1.0", path = "crates/sivtr-core" }
 clap = { version = "4", features = ["derive"] }
 ratatui = "0.29"
 crossterm = "0.28"
