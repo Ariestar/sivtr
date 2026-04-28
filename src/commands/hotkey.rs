@@ -64,7 +64,9 @@ pub fn pick_codex(args: &HotkeyPickCodexArgs) -> Result<()> {
     match result {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
-            show_pick_error_and_wait(&error);
+            if !copy::is_pick_cancelled(&error) {
+                show_pick_error_and_wait(&error);
+            }
         }
         Err(panic) => {
             let message = panic_message(&panic);

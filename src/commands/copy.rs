@@ -19,8 +19,13 @@ mod picker;
 
 use picker::{run_picker, PickEntry};
 
+pub(crate) const PICK_CANCELLED_MESSAGE: &str = "Pick cancelled";
 const PICK_LIMIT: usize = 50;
 const PICK_PREVIEW_LINES: usize = 8;
+
+pub(crate) fn is_pick_cancelled(error: &anyhow::Error) -> bool {
+    error.to_string() == PICK_CANCELLED_MESSAGE
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CopyMode {

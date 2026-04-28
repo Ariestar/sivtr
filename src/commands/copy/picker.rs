@@ -7,7 +7,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 use crate::commands::command_block_selector::CommandSelection;
 use crate::tui::terminal::{init as init_tui, restore as restore_tui};
 
-use super::{open_picker_vim, PickerTuiTarget};
+use super::{open_picker_vim, PickerTuiTarget, PICK_CANCELLED_MESSAGE};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PickerFocus {
@@ -101,7 +101,7 @@ pub(super) fn run_picker(
             match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => {
                     restore_tui(&mut terminal)?;
-                    anyhow::bail!("Pick cancelled");
+                    anyhow::bail!(PICK_CANCELLED_MESSAGE);
                 }
                 KeyCode::Tab => {
                     if show_preview {
