@@ -1,0 +1,43 @@
+# sivtr VS Code extension
+
+Launch the sivtr Codex picker from VS Code.
+
+## Usage
+
+Install `sivtr` first:
+
+```bash
+cargo install sivtr
+```
+
+If `sivtr` is missing, the extension will offer to open a terminal and run that
+install command.
+
+Run `Sivtr: Pick Codex Turn` from the command palette, or press `Alt+Y`.
+
+The extension opens a VS Code terminal in the current workspace and runs:
+
+```bash
+sivtr copy codex --pick
+```
+
+## Settings
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `sivtr.command` | `sivtr` | Command used to launch sivtr |
+| `sivtr.args` | `["copy", "codex", "--pick"]` | Arguments passed to sivtr |
+| `sivtr.reuseTerminal` | `true` | Reuse the existing sivtr terminal |
+| `sivtr.terminalName` | `sivtr` | Terminal name |
+
+To use `Ctrl+Y`, override the keybinding in VS Code Keyboard Shortcuts.
+
+## Development
+
+```bash
+pnpm install
+pnpm run compile
+pnpm run package
+```
+
+Open this folder in VS Code and press `F5` to launch an Extension Development Host.

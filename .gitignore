@@ -27,4 +27,9 @@ session_*.log
 /docs-site/dist/
 /docs-site/.astro/
 /docs-site/.astro-dev*.log
+
+# VS Code extension
+/editors/vscode/node_modules/
+/editors/vscode/out/
+/editors/vscode/*.vsix
 /.playwright-mcp/

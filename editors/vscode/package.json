@@ -1,0 +1,84 @@
+{
+  "name": "sivtr-vscode",
+  "displayName": "sivtr",
+  "description": "Launch the sivtr Codex picker from VS Code.",
+  "version": "0.1.1",
+  "publisher": "ariestar",
+  "icon": "icon.png",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@10.28.1",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Ariestar/sivtr.git",
+    "directory": "editors/vscode"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "extensionKind": [
+    "workspace"
+  ],
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "sivtr.pickCodex",
+        "title": "Sivtr: Pick Codex Turn"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "sivtr.pickCodex",
+        "key": "alt+y",
+        "mac": "cmd+alt+y",
+        "when": "!terminalFocus"
+      }
+    ],
+    "configuration": {
+      "title": "sivtr",
+      "properties": {
+        "sivtr.command": {
+          "type": "string",
+          "default": "sivtr",
+          "description": "Command used to launch sivtr."
+        },
+        "sivtr.args": {
+          "type": "array",
+          "default": [
+            "copy",
+            "codex",
+            "--pick"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Arguments passed to the sivtr command."
+        },
+        "sivtr.reuseTerminal": {
+          "type": "boolean",
+          "default": true,
+          "description": "Reuse the existing sivtr terminal when launching the picker."
+        },
+        "sivtr.terminalName": {
+          "type": "string",
+          "default": "sivtr",
+          "description": "Name of the VS Code terminal used by sivtr."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "pnpm run compile && node node_modules/@vscode/vsce/vsce package --no-dependencies --no-yarn --allow-missing-repository"
+  },
+  "devDependencies": {
+    "@types/node": "20.14.9",
+    "@types/vscode": "1.90.0",
+    "@vscode/vsce": "3.9.1",
+    "typescript": "5.4.5"
+  }
+}

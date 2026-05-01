@@ -217,6 +217,7 @@ sivtr/
 |- crates/sivtr-core/    # Capture, parsing, buffers, selection, search, history, export
 |- src/                  # CLI, TUI, commands, hotkey integration
 |- docs-site/            # Astro/Starlight documentation site
+|- editors/vscode/       # VS Code extension bridge for the Codex picker
 `- .github/workflows/    # CI and release automation
 ```
 

@@ -1,0 +1,8 @@
+node_modules
+src
+tsconfig.json
+*.map
+**/*.map
+*.vsix
+pnpm-lock.yaml
+logo.png
