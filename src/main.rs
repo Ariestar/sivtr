@@ -127,6 +127,7 @@ fn run_codex_copy_args(args: &CopySimpleArgs, selection_mode: CodexSelectionMode
     commands::copy::execute_codex(CodexCopyRequest {
         selector: args.common.selector.as_deref(),
         pick: args.common.pick,
+        pick_current_session: false,
         selection_mode,
         print_full: args.common.print,
         regex: args.common.regex.as_deref(),

@@ -54,6 +54,7 @@ pub fn pick_codex(args: &HotkeyPickCodexArgs) -> Result<()> {
         copy::execute_codex(CodexCopyRequest {
             selector: None,
             pick: true,
+            pick_current_session: true,
             selection_mode: CodexSelectionMode::LastTurn,
             print_full: false,
             regex: None,

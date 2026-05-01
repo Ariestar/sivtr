@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use chrono::{DateTime, Local};
 use serde_json::Value;
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -29,6 +30,14 @@ pub struct CodexSession {
     pub blocks: Vec<CodexBlock>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexSessionInfo {
+    pub path: PathBuf,
+    pub id: Option<String>,
+    pub cwd: Option<String>,
+    pub modified: SystemTime,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexSelection {
     LastTurn,
@@ -50,9 +59,10 @@ pub fn codex_home() -> PathBuf {
 }
 
 pub fn find_latest_session() -> Result<Option<PathBuf>> {
-    let mut files = session_files()?;
-    files.sort_by_key(|path| modified_time(path).unwrap_or(SystemTime::UNIX_EPOCH));
-    Ok(files.pop())
+    Ok(list_recent_sessions(None)?
+        .into_iter()
+        .next()
+        .map(|session| session.path))
 }
 
 pub fn find_session_by_id(id: &str) -> Result<Option<PathBuf>> {
@@ -74,24 +84,49 @@ pub fn find_session_by_id(id: &str) -> Result<Option<PathBuf>> {
 }
 
 pub fn find_current_session(cwd: &Path) -> Result<Option<PathBuf>> {
-    let wanted = normalize_path_for_match(cwd);
-    let mut files = session_files()?;
-    files.sort_by_key(|path| modified_time(path).unwrap_or(SystemTime::UNIX_EPOCH));
-    files.reverse();
-
-    for path in &files {
-        let meta = parse_session_meta(path)?;
-        if meta
-            .cwd
-            .as_deref()
-            .map(|cwd| normalize_path_for_match(Path::new(cwd)) == wanted)
-            .unwrap_or(false)
-        {
-            return Ok(Some(path.clone()));
-        }
+    if let Some(session) = list_recent_sessions(Some(cwd))?.into_iter().next() {
+        return Ok(Some(session.path));
     }
 
-    Ok(files.into_iter().next())
+    Ok(list_recent_sessions(None)?
+        .into_iter()
+        .next()
+        .map(|session| session.path))
+}
+
+pub fn list_recent_sessions(cwd: Option<&Path>) -> Result<Vec<CodexSessionInfo>> {
+    let wanted = cwd.map(normalize_path_for_match);
+    let mut sessions = Vec::new();
+
+    for path in session_files()? {
+        let meta = parse_session_meta(&path)?;
+        if let Some(wanted) = wanted.as_deref() {
+            let matches_cwd = meta
+                .cwd
+                .as_deref()
+                .map(|cwd| normalize_path_for_match(Path::new(cwd)) == wanted)
+                .unwrap_or(false);
+            if !matches_cwd {
+                continue;
+            }
+        }
+
+        sessions.push(CodexSessionInfo {
+            modified: modified_time(&path).unwrap_or(SystemTime::UNIX_EPOCH),
+            path,
+            id: meta.id,
+            cwd: meta.cwd,
+        });
+    }
+
+    sessions.sort_by_key(|session| session.modified);
+    sessions.reverse();
+    Ok(sessions)
+}
+
+pub fn is_session_modified_today(path: &Path) -> Result<bool> {
+    let modified: DateTime<Local> = modified_time(path)?.into();
+    Ok(modified.date_naive() == Local::now().date_naive())
 }
 
 pub fn parse_session_file(path: &Path) -> Result<CodexSession> {

@@ -158,7 +158,7 @@ Examples:
 
 Behavior:
   The hotkey daemon registers one global shortcut and opens a new
-  terminal window that runs `sivtr copy codex --pick`.
+  terminal window for picking from the current Codex session.
 ";
 
 /// sivtr - Terminal output workspace.

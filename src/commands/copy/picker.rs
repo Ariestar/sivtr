@@ -5,9 +5,21 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
 use crate::commands::command_block_selector::CommandSelection;
-use crate::tui::terminal::{init as init_tui, restore as restore_tui};
+use crate::tui::terminal::{init as init_tui, restore as restore_tui, Tui};
 
 use super::{open_picker_vim, PickerTuiTarget, PICK_CANCELLED_MESSAGE};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PickerSubmitMode {
+    Selected,
+    Highlighted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum PickerOutcome {
+    Submitted(CommandSelection),
+    Back,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PickerFocus {
@@ -25,12 +37,97 @@ pub(super) struct PickEntry {
 }
 
 pub(super) fn run_picker(
-    mut entries: Vec<PickEntry>,
+    entries: Vec<PickEntry>,
     total: usize,
     title: &str,
     tui_target: PickerTuiTarget,
 ) -> Result<CommandSelection> {
     let mut terminal = init_tui()?;
+    let outcome = run_picker_on_terminal(
+        &mut terminal,
+        entries,
+        total,
+        title,
+        tui_target,
+        PickerSubmitMode::Selected,
+        false,
+    );
+    restore_tui(&mut terminal)?;
+    match outcome? {
+        PickerOutcome::Submitted(selection) => Ok(selection),
+        PickerOutcome::Back => anyhow::bail!(PICK_CANCELLED_MESSAGE),
+    }
+}
+
+pub(super) fn run_single_picker(
+    entries: Vec<PickEntry>,
+    total: usize,
+    title: &str,
+    tui_target: PickerTuiTarget,
+) -> Result<usize> {
+    let mut terminal = init_tui()?;
+    let outcome = run_single_picker_on_terminal(&mut terminal, entries, total, title, tui_target);
+    restore_tui(&mut terminal)?;
+    match outcome? {
+        Some(selected) => Ok(selected),
+        None => anyhow::bail!(PICK_CANCELLED_MESSAGE),
+    }
+}
+
+pub(super) fn run_picker_with_back_on_terminal(
+    terminal: &mut Tui,
+    entries: Vec<PickEntry>,
+    total: usize,
+    title: &str,
+    tui_target: PickerTuiTarget,
+) -> Result<PickerOutcome> {
+    run_picker_on_terminal(
+        terminal,
+        entries,
+        total,
+        title,
+        tui_target,
+        PickerSubmitMode::Selected,
+        true,
+    )
+}
+
+pub(super) fn run_single_picker_on_terminal(
+    terminal: &mut Tui,
+    entries: Vec<PickEntry>,
+    total: usize,
+    title: &str,
+    tui_target: PickerTuiTarget,
+) -> Result<Option<usize>> {
+    let outcome = run_picker_on_terminal(
+        terminal,
+        entries,
+        total,
+        title,
+        tui_target,
+        PickerSubmitMode::Highlighted,
+        false,
+    )?;
+    match outcome {
+        PickerOutcome::Back => Ok(None),
+        PickerOutcome::Submitted(selection) => match selection {
+            CommandSelection::RecentExplicit(mut selected) if selected.len() == 1 => {
+                Ok(Some(selected.remove(0)))
+            }
+            _ => anyhow::bail!("No item selected"),
+        },
+    }
+}
+
+fn run_picker_on_terminal(
+    terminal: &mut Tui,
+    mut entries: Vec<PickEntry>,
+    total: usize,
+    title: &str,
+    tui_target: PickerTuiTarget,
+    submit_mode: PickerSubmitMode,
+    allow_back: bool,
+) -> Result<PickerOutcome> {
     let mut state = ListState::default();
     state.select(Some(0));
     let mut range_anchor = None;
@@ -59,6 +156,9 @@ pub(super) fn run_picker(
                 preview_search_input.as_deref(),
                 preview_search_match,
                 title,
+                submit_mode,
+                tui_target.is_available(),
+                allow_back,
             )
         })?;
 
@@ -100,7 +200,9 @@ pub(super) fn run_picker(
 
             match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => {
-                    restore_tui(&mut terminal)?;
+                    if allow_back {
+                        return Ok(PickerOutcome::Back);
+                    }
                     anyhow::bail!(PICK_CANCELLED_MESSAGE);
                 }
                 KeyCode::Tab => {
@@ -192,14 +294,18 @@ pub(super) fn run_picker(
                     preview_scroll = 0;
                     preview_search_match = 0;
                 }
-                KeyCode::Char('v') if focus == PickerFocus::List => {
+                KeyCode::Char('v')
+                    if focus == PickerFocus::List && submit_mode == PickerSubmitMode::Selected =>
+                {
                     let current = state.selected().unwrap_or(0);
                     range_anchor = match range_anchor {
                         Some(anchor) if anchor == current => None,
                         _ => Some(current),
                     };
                 }
-                KeyCode::Char(' ') if focus == PickerFocus::List => {
+                KeyCode::Char(' ')
+                    if focus == PickerFocus::List && submit_mode == PickerSubmitMode::Selected =>
+                {
                     if let Some(idx) = state.selected() {
                         if let Some(anchor) = range_anchor.take() {
                             apply_range_toggle(&mut entries, anchor, idx);
@@ -208,7 +314,9 @@ pub(super) fn run_picker(
                         }
                     }
                 }
-                KeyCode::Char('a') if focus == PickerFocus::List => {
+                KeyCode::Char('a')
+                    if focus == PickerFocus::List && submit_mode == PickerSubmitMode::Selected =>
+                {
                     let select_all = entries.iter().any(|entry| !entry.selected);
                     for entry in &mut entries {
                         entry.selected = select_all;
@@ -222,14 +330,17 @@ pub(super) fn run_picker(
                         focus = PickerFocus::List;
                     }
                 }
-                KeyCode::Char('t') => {
-                    restore_tui(&mut terminal)?;
+                KeyCode::Char('t') if tui_target.is_available() => {
+                    restore_tui(terminal)?;
                     open_picker_vim(&tui_target)?;
-                    terminal = init_tui()?;
+                    *terminal = init_tui()?;
                 }
                 KeyCode::Enter => {
-                    restore_tui(&mut terminal)?;
-                    return selection_from_entries(&entries);
+                    return Ok(PickerOutcome::Submitted(submit_selection(
+                        &entries,
+                        &state,
+                        submit_mode,
+                    )?));
                 }
                 _ => {}
             }
@@ -250,6 +361,9 @@ fn render_picker(
     preview_search_input: Option<&str>,
     preview_search_match: usize,
     title: &str,
+    submit_mode: PickerSubmitMode,
+    tui_available: bool,
+    allow_back: bool,
 ) {
     let area = frame.area();
     frame.render_widget(Clear, area);
@@ -270,14 +384,35 @@ fn render_picker(
     } else {
         ""
     };
+    let exit_hint = if allow_back {
+        "q/Esc back"
+    } else {
+        "q/Esc cancel"
+    };
+    let controls = match submit_mode {
+        PickerSubmitMode::Selected => {
+            if tui_available {
+                format!("Space toggle  v mark-range  p preview  Tab focus  / search  t tui  a toggle-all  Enter confirm  {exit_hint}")
+            } else {
+                format!("Space toggle  v mark-range  p preview  Tab focus  / search  a toggle-all  Enter confirm  {exit_hint}")
+            }
+        }
+        PickerSubmitMode::Highlighted => {
+            format!("p preview  Tab focus  / search  Enter choose  {exit_hint}")
+        }
+    };
     let title_widget = Paragraph::new(format!(
-        "Space toggle  v mark-range  p preview  Tab focus  / search  t tui  a toggle-all  Enter confirm  Esc cancel{}{}\nshowing last {} of {} commands",
+        "{controls}{}{}\nshowing last {} of {}",
         anchor_hint,
         focus_hint,
         entries.len(),
         total
     ))
-    .block(Block::default().borders(Borders::TOP | Borders::LEFT | Borders::RIGHT).title(title));
+    .block(
+        Block::default()
+            .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
+            .title(title),
+    );
     frame.render_widget(title_widget, chunks[0]);
 
     let body_chunks = if show_preview {
@@ -296,12 +431,20 @@ fn render_picker(
         .iter()
         .enumerate()
         .map(|(idx, entry)| {
-            let marker = if entry.selected { "[x]" } else { "[ ]" };
+            let marker = if submit_mode == PickerSubmitMode::Selected {
+                if entry.selected {
+                    "[x] "
+                } else {
+                    "[ ] "
+                }
+            } else {
+                ""
+            };
             let is_in_pending_range = range_anchor
                 .map(|anchor| range_bounds(anchor, state.selected().unwrap_or(0)))
                 .map(|(start, end)| (start..=end).contains(&idx))
                 .unwrap_or(false);
-            let line = format!("{marker} {:>2}. {}", entry.recent, entry.preview);
+            let line = format!("{marker}{:>2}. {}", entry.recent, entry.preview);
             if is_in_pending_range {
                 ListItem::new(Line::styled(
                     line,
@@ -406,6 +549,21 @@ pub(super) fn selection_from_entries(entries: &[PickEntry]) -> Result<CommandSel
     selected.dedup();
 
     Ok(CommandSelection::RecentExplicit(selected))
+}
+
+fn submit_selection(
+    entries: &[PickEntry],
+    state: &ListState,
+    submit_mode: PickerSubmitMode,
+) -> Result<CommandSelection> {
+    match submit_mode {
+        PickerSubmitMode::Selected => selection_from_entries(entries),
+        PickerSubmitMode::Highlighted => state
+            .selected()
+            .and_then(|idx| entries.get(idx))
+            .map(|entry| CommandSelection::RecentExplicit(vec![entry.recent]))
+            .ok_or_else(|| anyhow::anyhow!("No item selected")),
+    }
 }
 
 pub(super) fn apply_range_toggle(entries: &mut [PickEntry], a: usize, b: usize) {

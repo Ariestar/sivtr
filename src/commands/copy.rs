@@ -10,14 +10,18 @@ use crate::command_blocks::ParsedCommandBlock as CommandBlock;
 use crate::commands::command_block_selector::{parse_selector, resolve_selector, CommandSelection};
 use sivtr_core::capture::scrollback;
 use sivtr_core::codex::{
-    find_current_session, format_blocks, parse_session_file, CodexBlock, CodexBlockKind,
-    CodexSession,
+    find_current_session, format_blocks, is_session_modified_today, list_recent_sessions,
+    parse_session_file, CodexBlock, CodexBlockKind, CodexSession, CodexSessionInfo,
 };
 use sivtr_core::session::{self, SessionEntry};
 
 mod picker;
 
-use picker::{run_picker, PickEntry};
+use crate::tui::terminal::{init as init_tui, restore as restore_tui};
+use picker::{
+    run_picker, run_picker_with_back_on_terminal, run_single_picker, run_single_picker_on_terminal,
+    PickEntry, PickerOutcome,
+};
 
 pub(crate) const PICK_CANCELLED_MESSAGE: &str = "Pick cancelled";
 const PICK_LIMIT: usize = 50;
@@ -61,6 +65,7 @@ pub enum CodexSelectionMode {
 pub struct CodexCopyRequest<'a> {
     pub selector: Option<&'a str>,
     pub pick: bool,
+    pub pick_current_session: bool,
     pub selection_mode: CodexSelectionMode,
     pub print_full: bool,
     pub regex: Option<&'a str>,
@@ -98,8 +103,15 @@ struct TextPair {
 
 #[derive(Clone, Debug)]
 enum PickerTuiTarget {
+    Unavailable,
     SessionLog,
     Text(VimView),
+}
+
+impl PickerTuiTarget {
+    fn is_available(&self) -> bool {
+        !matches!(self, Self::Unavailable)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -219,7 +231,11 @@ pub fn execute(request: CopyRequest<'_>) -> Result<()> {
 }
 
 pub fn execute_codex(request: CodexCopyRequest<'_>) -> Result<()> {
-    let path = resolve_codex_session_path()?;
+    if request.pick && !request.pick_current_session {
+        return execute_codex_session_pick(request);
+    }
+
+    let path = resolve_codex_session_path(request.pick_current_session)?;
     let session = parse_session_file(&path)?;
 
     if session.blocks.is_empty() {
@@ -242,6 +258,60 @@ pub fn execute_codex(request: CodexCopyRequest<'_>) -> Result<()> {
     } else {
         parse_selector(request.selector.unwrap_or("1"))?
     };
+    finish_codex_copy(&units, selection, &request)
+}
+
+fn execute_codex_session_pick(request: CodexCopyRequest<'_>) -> Result<()> {
+    let mut terminal = init_tui()?;
+    let result = pick_codex_session_content_on_terminal(&mut terminal, request.selection_mode);
+    restore_tui(&mut terminal)?;
+    let (units, selection) = result?;
+    finish_codex_copy(&units, selection, &request)
+}
+
+fn pick_codex_session_content_on_terminal(
+    terminal: &mut crate::tui::terminal::Tui,
+    selection_mode: CodexSelectionMode,
+) -> Result<(Vec<TextPair>, CommandSelection)> {
+    let sessions = list_recent_sessions(None)?;
+    loop {
+        let path = match pick_codex_session_path_on_terminal(terminal, &sessions)? {
+            Some(path) => path,
+            None => anyhow::bail!(PICK_CANCELLED_MESSAGE),
+        };
+        let session = parse_session_file(&path)?;
+
+        if session.blocks.is_empty() {
+            eprintln!("sivtr: Codex session has no parsed conversation blocks");
+            continue;
+        }
+
+        let units = build_codex_units(&session, selection_mode);
+        if units.is_empty() {
+            eprintln!("sivtr: selected Codex content is empty");
+            continue;
+        }
+
+        match run_picker_with_back_on_terminal(
+            terminal,
+            build_text_pick_entries(&units),
+            units.len(),
+            "sivtr copy codex --pick",
+            PickerTuiTarget::Text(build_codex_vim_view(&session.blocks)),
+        )? {
+            PickerOutcome::Back => continue,
+            PickerOutcome::Submitted(selection) => {
+                return Ok((units, selection));
+            }
+        }
+    }
+}
+
+fn finish_codex_copy(
+    units: &[TextPair],
+    selection: CommandSelection,
+    request: &CodexCopyRequest<'_>,
+) -> Result<()> {
     let indices = resolve_selector(selection, units.len())?;
     let selected_units: Vec<TextPair> = indices
         .iter()
@@ -491,9 +561,129 @@ fn finish_copy(text: String, print_full: bool, success_message: String) -> Resul
     Ok(())
 }
 
-fn resolve_codex_session_path() -> Result<std::path::PathBuf> {
+fn resolve_codex_session_path(pick_current_session: bool) -> Result<std::path::PathBuf> {
     let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
+    if pick_current_session {
+        return resolve_current_codex_pick_session_path(&cwd);
+    }
+
     find_current_session(&cwd)?.context("No Codex sessions found")
+}
+
+fn resolve_current_codex_pick_session_path(cwd: &std::path::Path) -> Result<std::path::PathBuf> {
+    let cwd_sessions = list_recent_sessions(Some(cwd))?;
+    if let Some(session) = cwd_sessions.first() {
+        if is_session_modified_today(&session.path)? && codex_session_has_blocks(&session.path)? {
+            return Ok(session.path.clone());
+        }
+    }
+
+    pick_codex_session_path(&list_recent_sessions(None)?)?.context("No Codex sessions found")
+}
+
+fn codex_session_has_blocks(path: &std::path::Path) -> Result<bool> {
+    Ok(!parse_session_file(path)?.blocks.is_empty())
+}
+
+fn pick_codex_session_path(sessions: &[CodexSessionInfo]) -> Result<Option<std::path::PathBuf>> {
+    if sessions.is_empty() {
+        return Ok(None);
+    }
+
+    let entries = build_codex_session_pick_entries(sessions)?;
+
+    let selected = run_single_picker(
+        entries,
+        sessions.len(),
+        "sivtr copy codex --session",
+        PickerTuiTarget::Unavailable,
+    )?;
+    Ok(sessions
+        .get(selected.saturating_sub(1))
+        .map(|session| session.path.clone()))
+}
+
+fn pick_codex_session_path_on_terminal(
+    terminal: &mut crate::tui::terminal::Tui,
+    sessions: &[CodexSessionInfo],
+) -> Result<Option<std::path::PathBuf>> {
+    if sessions.is_empty() {
+        return Ok(None);
+    }
+
+    let entries = build_codex_session_pick_entries(sessions)?;
+
+    Ok(run_single_picker_on_terminal(
+        terminal,
+        entries,
+        sessions.len(),
+        "sivtr copy codex --session",
+        PickerTuiTarget::Unavailable,
+    )?
+    .and_then(|selected| {
+        sessions
+            .get(selected.saturating_sub(1))
+            .map(|session| session.path.clone())
+    }))
+}
+
+fn build_codex_session_pick_entries(sessions: &[CodexSessionInfo]) -> Result<Vec<PickEntry>> {
+    sessions
+        .iter()
+        .take(PICK_LIMIT)
+        .enumerate()
+        .map(|(idx, session)| build_codex_session_pick_entry(idx, session))
+        .collect()
+}
+
+fn build_codex_session_pick_entry(idx: usize, session: &CodexSessionInfo) -> Result<PickEntry> {
+    let parsed = parse_session_file(&session.path)?;
+    let preview = codex_session_preview(&parsed)
+        .or_else(|| session.id.clone())
+        .unwrap_or_else(|| "<empty Codex session>".to_string());
+    let meta = format_codex_session_meta(session, &parsed);
+    let full_preview = if parsed.blocks.is_empty() {
+        meta
+    } else {
+        format!("{meta}\n\n{}", format_blocks(&parsed.blocks))
+    };
+
+    Ok(PickEntry {
+        recent: idx + 1,
+        preview,
+        output_preview: full_preview
+            .lines()
+            .take(PICK_PREVIEW_LINES)
+            .collect::<Vec<_>>()
+            .join("\n"),
+        full_preview,
+        selected: false,
+    })
+}
+
+fn codex_session_preview(session: &CodexSession) -> Option<String> {
+    session
+        .blocks
+        .iter()
+        .find(|block| matches!(block.kind, CodexBlockKind::User | CodexBlockKind::Assistant))
+        .and_then(|block| {
+            let text = block.text.lines().find(|line| !line.trim().is_empty())?;
+            Some(text.trim().chars().take(80).collect())
+        })
+}
+
+fn format_codex_session_meta(info: &CodexSessionInfo, session: &CodexSession) -> String {
+    let id = session
+        .id
+        .as_deref()
+        .or(info.id.as_deref())
+        .unwrap_or("<no id>");
+    let cwd = session
+        .cwd
+        .as_deref()
+        .or(info.cwd.as_deref())
+        .unwrap_or("<no cwd>");
+    format!("id: {id}\ncwd: {cwd}\npath: {}", info.path.display())
 }
 
 fn build_codex_units(session: &CodexSession, selection_mode: CodexSelectionMode) -> Vec<TextPair> {
@@ -757,11 +947,19 @@ fn pick_text_selection(
     vim_view: VimView,
 ) -> Result<CommandSelection> {
     let total = units.len();
-    let shown = total.min(PICK_LIMIT);
-    let entries: Vec<PickEntry> = units
+    run_picker(
+        build_text_pick_entries(units),
+        total,
+        title,
+        PickerTuiTarget::Text(vim_view),
+    )
+}
+
+fn build_text_pick_entries(units: &[TextPair]) -> Vec<PickEntry> {
+    units
         .iter()
         .rev()
-        .take(shown)
+        .take(PICK_LIMIT)
         .enumerate()
         .map(|(offset, unit)| PickEntry {
             recent: offset + 1,
@@ -770,9 +968,7 @@ fn pick_text_selection(
             full_preview: unit.plain.clone(),
             selected: false,
         })
-        .collect();
-
-    run_picker(entries, total, title, PickerTuiTarget::Text(vim_view))
+        .collect()
 }
 
 #[cfg(test)]
@@ -1040,6 +1236,9 @@ mod tests {
 
 fn open_picker_vim(target: &PickerTuiTarget) -> Result<()> {
     let view = match target {
+        PickerTuiTarget::Unavailable => {
+            return Ok(());
+        }
         PickerTuiTarget::SessionLog => match scrollback::read_session_log()? {
             Some(raw) if !raw.trim().is_empty() => build_session_vim_view(raw)?,
             _ => {
