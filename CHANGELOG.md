@@ -2,6 +2,12 @@
 
 All notable user-facing changes to this project are documented here.
 
+## [0.1.2] - 2026-05-02
+
+### Fixed
+
+- Treat cancelling interactive pickers as a normal exit.
+
 ## [0.1.1] - 2026-05-01
 
 ### Fixed

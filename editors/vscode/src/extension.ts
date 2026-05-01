@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import * as path from "node:path";
 import * as vscode from "vscode";
 
 let sivtrTerminal: vscode.Terminal | undefined;
@@ -38,6 +39,7 @@ async function pickCodex(): Promise<void> {
   const args = config.get<string[]>("args", ["copy", "codex", "--pick"]);
   const terminalName = config.get<string>("terminalName", "sivtr");
   const reuseTerminal = config.get<boolean>("reuseTerminal", true);
+  const closeTerminalOnSuccess = config.get<boolean>("closeTerminalOnSuccess", true);
 
   if (!command) {
     void vscode.window.showErrorMessage("sivtr: setting `sivtr.command` is empty.");
@@ -51,7 +53,10 @@ async function pickCodex(): Promise<void> {
 
   const terminal = getTerminal(terminalName, workspaceFolder.uri.fsPath, reuseTerminal);
   terminal.show();
-  terminal.sendText(buildCommandLine(command, args), true);
+  terminal.sendText(
+    buildTerminalCommandLine(buildCommandLine(command, args), closeTerminalOnSuccess),
+    true,
+  );
 }
 
 function isSivtrAvailable(command: string, cwd: string): Promise<boolean> {
@@ -120,6 +125,25 @@ function getTerminal(name: string, cwd: string, reuse: boolean): vscode.Terminal
 
 function buildCommandLine(command: string, args: string[]): string {
   return [command, ...args].map(quoteShellToken).join(" ");
+}
+
+function buildTerminalCommandLine(commandLine: string, closeOnSuccess: boolean): string {
+  if (!closeOnSuccess) {
+    return commandLine;
+  }
+
+  const shellName = path.basename(vscode.env.shell).toLowerCase();
+  if (shellName.includes("powershell") || shellName.includes("pwsh")) {
+    return `${commandLine}; if ($LASTEXITCODE -eq 0) { exit }`;
+  }
+  if (shellName === "cmd.exe" || shellName === "cmd") {
+    return `${commandLine} & if not errorlevel 1 exit`;
+  }
+  if (shellName.includes("fish")) {
+    return `${commandLine}; test $status -eq 0; and exit`;
+  }
+
+  return `${commandLine}; code=$?; if [ "$code" -eq 0 ]; then exit 0; fi`;
 }
 
 function quoteShellToken(value: string): string {

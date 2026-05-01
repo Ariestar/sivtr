@@ -28,6 +28,7 @@ sivtr copy codex --pick
 | `sivtr.command` | `sivtr` | Command used to launch sivtr |
 | `sivtr.args` | `["copy", "codex", "--pick"]` | Arguments passed to sivtr |
 | `sivtr.reuseTerminal` | `true` | Reuse the existing sivtr terminal |
+| `sivtr.closeTerminalOnSuccess` | `true` | Close the sivtr terminal when the picker exits successfully |
 | `sivtr.terminalName` | `sivtr` | Terminal name |
 
 To use `Ctrl+Y`, override the keybinding in VS Code Keyboard Shortcuts.

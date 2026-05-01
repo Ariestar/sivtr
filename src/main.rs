@@ -16,6 +16,14 @@ use commands::copy::{CodexCopyRequest, CodexSelectionMode, CopyMode, CopyRequest
 use commands::diff::DiffRequest;
 
 fn main() -> Result<()> {
+    match run() {
+        Ok(()) => Ok(()),
+        Err(error) if commands::copy::is_pick_cancelled(&error) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {

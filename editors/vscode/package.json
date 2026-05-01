@@ -2,7 +2,7 @@
   "name": "sivtr-vscode",
   "displayName": "sivtr",
   "description": "Launch the sivtr Codex picker from VS Code.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "ariestar",
   "icon": "icon.png",
   "license": "Apache-2.0",
@@ -61,6 +61,11 @@
           "type": "boolean",
           "default": true,
           "description": "Reuse the existing sivtr terminal when launching the picker."
+        },
+        "sivtr.closeTerminalOnSuccess": {
+          "type": "boolean",
+          "default": true,
+          "description": "Close the sivtr terminal when the picker exits successfully."
         },
         "sivtr.terminalName": {
           "type": "string",
