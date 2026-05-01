@@ -1272,7 +1272,7 @@ dependencies = [
 
 [[package]]
 name = "sivtr"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -1292,7 +1292,7 @@ dependencies = [
 
 [[package]]
 name = "sivtr-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "arboard",

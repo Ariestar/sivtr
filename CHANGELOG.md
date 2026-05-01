@@ -2,6 +2,13 @@
 
 All notable user-facing changes to this project are documented here.
 
+## [0.1.1] - 2026-05-01
+
+### Fixed
+
+- Fixed Codex copy picker TUI selection logic.
+- Fixed terminal exit handling that could leave the terminal stuck.
+
 ## [0.1.0] - 2026-04-28
 
 ### Added
