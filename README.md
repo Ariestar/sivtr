@@ -1,38 +1,75 @@
-# sivtr
+<p align="center">
+  <img src="editors/vscode/icon.png" alt="sivtr logo" width="96" height="96">
+</p>
 
-[![Crates.io](https://img.shields.io/crates/v/sivtr.svg)](https://crates.io/crates/sivtr)
-[![CI](https://github.com/Ariestar/sivtr/actions/workflows/rust.yml/badge.svg)](https://github.com/Ariestar/sivtr/actions/workflows/rust.yml)
-[![License](https://img.shields.io/crates/l/sivtr.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](rust-toolchain.toml)
+<h1 align="center">sivtr</h1>
 
-**Terminal output workspace for the AI era** - Capture, sift, browse, search, select, and reuse your terminal output and AI coding sessions.
+<p align="center">
+  Terminal output workspace for the AI era.
+  <br>
+  Capture, sift, browse, search, select, and reuse terminal output and Codex sessions.
+</p>
 
-`sivtr` turns command output, Codex sessions, command blocks, and tool results into searchable, selectable, reusable text assets. It is not a terminal emulator or multiplexer. It is a companion tool for the terminal workflows you already use.
+<p align="center">
+  <a href="https://crates.io/crates/sivtr"><img alt="Crates.io" src="https://img.shields.io/crates/v/sivtr?style=flat-square"></a>
+  <a href="https://marketplace.visualstudio.com/items?itemName=ariestar.sivtr-vscode"><img alt="VS Code Marketplace" src="https://img.shields.io/visual-studio-marketplace/v/ariestar.sivtr-vscode?style=flat-square&label=VS%20Code"></a>
+  <a href="https://github.com/Ariestar/sivtr/actions/workflows/rust.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Ariestar/sivtr/rust.yml?branch=main&style=flat-square"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square"></a>
+  <a href="rust-toolchain.toml"><img alt="Rust" src="https://img.shields.io/badge/rust-1.88%2B-orange?style=flat-square"></a>
+</p>
 
-## Why sivtr
+<p align="center">
+  <strong>English</strong>
+  ·
+  <a href="README.zh-CN.md">简体中文</a>
+  ·
+  <a href="https://sivtr.pages.dev/">Docs</a>
+  ·
+  <a href="https://sivtr.pages.dev/zh-cn/">中文文档</a>
+</p>
 
-Modern coding work happens in streams: shell output, test failures, build logs, AI-agent replies, tool calls, and long terminal histories. `sivtr` gives those streams a workspace.
+---
 
-- Pipe any output into a fast TUI browser.
-- Wrap commands and keep their output for later.
-- Search, select, and copy exactly the text you need.
-- Reuse recent command blocks without digging through scrollback.
-- Pull the useful parts of the current Codex session without opening raw transcript files.
-- Compare recent command outputs when iterations get noisy.
+## What is sivtr?
 
-## Installation
+`sivtr` turns noisy terminal streams into reusable text assets. It is built for developers who move between shells, build logs, test failures, AI-agent replies, tool output, and long Codex sessions.
+
+It is not a terminal emulator and not a multiplexer. It is a companion tool for the terminal workflows you already use.
+
+## Highlights
+
+- Browse command output in a fast keyboard-first TUI.
+- Pipe any command into a searchable, selectable output viewer.
+- Record shell command blocks and copy recent inputs, outputs, or bare commands.
+- Read Codex session JSONL files and copy useful user, assistant, or tool blocks.
+- Open a Codex picker from VS Code with one shortcut.
+- Filter copied text with regex and line ranges.
+- Keep a local SQLite history for later search.
+- Compare recent command outputs while iterating on tests and builds.
+
+## Install
+
+Install the CLI from crates.io:
 
 ```bash
 cargo install sivtr
 ```
 
-From source:
+Install from source:
 
 ```bash
 git clone https://github.com/Ariestar/sivtr.git
 cd sivtr
 cargo install --path .
 ```
+
+Install the VS Code bridge from the Marketplace:
+
+```text
+ariestar.sivtr-vscode
+```
+
+The extension launches the Codex picker from the current workspace. If the `sivtr` CLI is missing, it offers to run `cargo install sivtr` in a visible terminal.
 
 ## Quick Start
 
@@ -48,7 +85,7 @@ Run a command through `sivtr` and inspect the captured output:
 sivtr run cargo build
 ```
 
-Copy the last command block from the current shell session:
+Copy the latest command block from the current shell session:
 
 ```bash
 sivtr copy
@@ -82,13 +119,13 @@ Use pipe mode when you already have a command:
 some-command --verbose 2>&1 | sivtr
 ```
 
-Use run mode when you want `sivtr` to execute, capture, and then open the output:
+Use run mode when you want `sivtr` to execute, capture, and then open output:
 
 ```bash
 sivtr run cargo test
 ```
 
-Inside the TUI you can move with Vim-style keys, search with `/`, enter visual selection with `v`, and copy with `y`.
+Inside the TUI, move with Vim-style keys, search with `/`, enter visual selection with `v`, and copy with `y`.
 
 ### Copy Command Blocks
 
@@ -101,7 +138,7 @@ sivtr copy in 2..4      # user input from recent blocks
 sivtr copy cmd --pick   # pick and copy bare commands
 ```
 
-Selectors are relative to newest first: `1` is the latest block, `2` is the one before it, and ranges like `2..4` select multiple blocks.
+Selectors are newest-first: `1` is the latest block, `2` is the one before it, and `2..4` selects multiple blocks.
 
 Filters run after text is assembled:
 
@@ -124,7 +161,25 @@ sivtr copy codex all    # parsed session
 
 Progress commentary is filtered by default, so `sivtr copy codex out` returns the final assistant reply instead of intermediate status updates.
 
-On Windows, the hotkey daemon opens the Codex picker from anywhere:
+### VS Code Shortcut
+
+The VS Code extension contributes:
+
+```text
+Sivtr: Pick Codex Turn
+```
+
+Default keybinding:
+
+```text
+Alt+Y
+```
+
+You can rebind it to `Ctrl+Y`, but that usually overrides the editor Redo shortcut.
+
+### Windows Global Hotkey
+
+On Windows, the hotkey daemon can open the Codex picker from anywhere:
 
 ```bash
 sivtr hotkey start
@@ -134,36 +189,7 @@ sivtr hotkey stop
 
 The default shortcut is `alt+y`.
 
-### Search History
-
-Captured output is stored locally and can be searched later:
-
-```bash
-sivtr history list
-sivtr history search "error"
-sivtr history show 42
-```
-
-### Configure
-
-Create, inspect, or edit the config file:
-
-```bash
-sivtr config init
-sivtr config show
-sivtr config edit
-```
-
-Generate shell integration hooks:
-
-```bash
-sivtr init powershell
-sivtr init bash
-sivtr init zsh
-sivtr init nushell
-```
-
-## Commands
+## Command Reference
 
 | Command | Purpose |
 | --- | --- |
@@ -191,16 +217,18 @@ sivtr init nushell
 | `Ctrl-U` | Normal | Half page up |
 | `g` | Normal | Go to top |
 | `G` | Normal | Go to bottom |
-| `i` | Normal | Enter insert mode |
-| `v` | Normal | Enter visual mode |
-| `V` | Normal | Enter visual line mode |
-| `Ctrl-V` | Normal | Enter visual block mode |
 | `/` | Normal | Start search |
-| `n` | Normal | Next search match |
-| `N` | Normal | Previous search match |
+| `n` / `N` | Normal | Next / previous match |
+| `v` / `V` / `Ctrl-V` | Normal | Visual, visual line, visual block |
 | `y` | Visual | Copy selection to clipboard |
 | `Esc` | Visual/Search/Insert | Cancel |
 | `q` | Normal | Quit |
+
+## Documentation
+
+- English docs: [https://sivtr.pages.dev/](https://sivtr.pages.dev/)
+- Chinese docs: [https://sivtr.pages.dev/zh-cn/](https://sivtr.pages.dev/zh-cn/)
+- VS Code extension: [editors/vscode/README.md](editors/vscode/README.md)
 
 ## Development
 
@@ -210,7 +238,16 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-The workspace contains:
+VS Code extension:
+
+```bash
+cd editors/vscode
+pnpm install
+pnpm run compile
+pnpm run package
+```
+
+Workspace layout:
 
 ```text
 sivtr/
@@ -223,4 +260,4 @@ sivtr/
 
 ## License
 
-MIT
+sivtr is licensed under the [Apache License 2.0](LICENSE).

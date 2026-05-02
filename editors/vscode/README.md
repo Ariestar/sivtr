@@ -42,3 +42,7 @@ pnpm run package
 ```
 
 Open this folder in VS Code and press `F5` to launch an Extension Development Host.
+
+## License
+
+Apache License 2.0. See the repository [LICENSE](../../LICENSE).
