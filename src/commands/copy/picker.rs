@@ -145,23 +145,24 @@ fn run_picker_on_terminal(
         terminal.draw(|frame| {
             render_picker(
                 frame,
-                &entries,
-                &state,
-                total,
-                range_anchor,
-                show_preview,
-                focus,
-                preview_scroll,
-                preview_search.as_deref(),
-                preview_search_input.as_deref(),
-                preview_search_match,
-                title,
-                submit_mode,
-                tui_target.is_available(),
-                allow_back,
+                PickerRenderContext {
+                    entries: &entries,
+                    state: &state,
+                    total,
+                    range_anchor,
+                    show_preview,
+                    focus,
+                    preview_scroll,
+                    preview_search: preview_search.as_deref(),
+                    preview_search_input: preview_search_input.as_deref(),
+                    preview_search_match,
+                    title,
+                    submit_mode,
+                    tui_available: tui_target.is_available(),
+                    allow_back,
+                },
             )
         })?;
-
         if let Event::Key(key) = event::read()? {
             if key.kind != KeyEventKind::Press {
                 continue;
@@ -348,23 +349,41 @@ fn run_picker_on_terminal(
     }
 }
 
-fn render_picker(
-    frame: &mut Frame,
-    entries: &[PickEntry],
-    state: &ListState,
+struct PickerRenderContext<'a> {
+    entries: &'a [PickEntry],
+    state: &'a ListState,
     total: usize,
     range_anchor: Option<usize>,
     show_preview: bool,
     focus: PickerFocus,
     preview_scroll: usize,
-    preview_search: Option<&str>,
-    preview_search_input: Option<&str>,
+    preview_search: Option<&'a str>,
+    preview_search_input: Option<&'a str>,
     preview_search_match: usize,
-    title: &str,
+    title: &'a str,
     submit_mode: PickerSubmitMode,
     tui_available: bool,
     allow_back: bool,
-) {
+}
+
+fn render_picker(frame: &mut Frame, context: PickerRenderContext<'_>) {
+    let PickerRenderContext {
+        entries,
+        state,
+        total,
+        range_anchor,
+        show_preview,
+        focus,
+        preview_scroll,
+        preview_search,
+        preview_search_input,
+        preview_search_match,
+        title,
+        submit_mode,
+        tui_available,
+        allow_back,
+    } = context;
+
     let area = frame.area();
     frame.render_widget(Clear, area);
 

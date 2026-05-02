@@ -971,269 +971,6 @@ fn build_text_pick_entries(units: &[TextPair]) -> Vec<PickEntry> {
         .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::picker::{apply_range_toggle, selection_from_entries, PickEntry};
-    use super::{
-        build_codex_vim_view, build_output_preview, filter_lines_by_regex, filter_lines_by_spec,
-        format_block, is_vim_command, vim_single_quote, CodexBlock, CodexBlockKind, CommandBlock,
-        CommandSelection, CopyMode, TextPair,
-    };
-
-    #[test]
-    fn formats_modes() {
-        let block = CommandBlock {
-            input_with_prompt: "PS C:\\repo> git status --all -a".to_string(),
-            input_without_prompt: "git status --all -a".to_string(),
-            output: "clean".to_string(),
-            command: "git status --all -a".to_string(),
-        };
-        assert_eq!(
-            format_block(&block, CopyMode::Both, false, None),
-            "git status --all -a\nclean"
-        );
-        assert_eq!(
-            format_block(&block, CopyMode::Both, true, None),
-            "PS C:\\repo> git status --all -a\nclean"
-        );
-        assert_eq!(
-            format_block(&block, CopyMode::InputOnly, false, None),
-            "git status --all -a"
-        );
-        assert_eq!(
-            format_block(&block, CopyMode::InputOnly, true, None),
-            "PS C:\\repo> git status --all -a"
-        );
-        assert_eq!(
-            format_block(&block, CopyMode::OutputOnly, false, None),
-            "clean"
-        );
-        assert_eq!(
-            format_block(&block, CopyMode::CommandOnly, false, None),
-            "git status --all -a"
-        );
-    }
-
-    #[test]
-    fn rewrites_prompt_in_copied_input() {
-        let block = CommandBlock {
-            input_with_prompt: "PS C:\\repo> cargo test".to_string(),
-            input_without_prompt: "cargo test".to_string(),
-            output: "ok".to_string(),
-            command: "cargo test".to_string(),
-        };
-
-        assert_eq!(
-            format_block(&block, CopyMode::InputOnly, true, Some(":")),
-            ": cargo test"
-        );
-        assert_eq!(
-            format_block(&block, CopyMode::Both, true, Some(">>>")),
-            ">>> cargo test\nok"
-        );
-    }
-
-    #[test]
-    fn picker_selection_keeps_disjoint_blocks() {
-        let selection = selection_from_entries(&[
-            PickEntry {
-                recent: 1,
-                preview: "latest".to_string(),
-                output_preview: "out1".to_string(),
-                full_preview: "out1".to_string(),
-                selected: true,
-            },
-            PickEntry {
-                recent: 2,
-                preview: "second".to_string(),
-                output_preview: "out2".to_string(),
-                full_preview: "out2".to_string(),
-                selected: false,
-            },
-            PickEntry {
-                recent: 4,
-                preview: "fourth".to_string(),
-                output_preview: "out4".to_string(),
-                full_preview: "out4".to_string(),
-                selected: true,
-            },
-        ])
-        .unwrap();
-
-        assert_eq!(selection, CommandSelection::RecentExplicit(vec![1, 4]));
-    }
-
-    #[test]
-    fn filters_by_regex() {
-        let filtered = filter_lines_by_regex(
-            &TextPair {
-                plain: "a\nwarn: b\nc".to_string(),
-                ansi: "a\nwarn: b\nc".to_string(),
-            },
-            "warn",
-        )
-        .unwrap();
-        assert_eq!(filtered.plain, "warn: b");
-    }
-
-    #[test]
-    fn filters_ansi_by_plain_regex_matches() {
-        let filtered = filter_lines_by_regex(
-            &TextPair {
-                plain: "a\nwarn: b\nc".to_string(),
-                ansi: "a\n\x1b[31mwarn: b\x1b[0m\nc".to_string(),
-            },
-            "warn",
-        )
-        .unwrap();
-        assert_eq!(filtered.ansi, "\x1b[31mwarn: b\x1b[0m");
-    }
-
-    #[test]
-    fn filters_by_line_spec_with_colon_ranges() {
-        let filtered = filter_lines_by_spec(
-            &TextPair {
-                plain: "a\nb\nc\nd".to_string(),
-                ansi: "a\nb\nc\nd".to_string(),
-            },
-            "2,4:3",
-        )
-        .unwrap();
-        assert_eq!(filtered.plain, "b\nc\nd");
-    }
-
-    #[test]
-    fn rejects_dash_ranges_for_lines() {
-        assert!(filter_lines_by_spec(
-            &TextPair {
-                plain: "a\nb\nc".to_string(),
-                ansi: "a\nb\nc".to_string(),
-            },
-            "1-2"
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn toggles_selected_range_in_picker() {
-        let mut entries = vec![
-            PickEntry {
-                recent: 1,
-                preview: "one".to_string(),
-                output_preview: "out1".to_string(),
-                full_preview: "out1".to_string(),
-                selected: false,
-            },
-            PickEntry {
-                recent: 2,
-                preview: "two".to_string(),
-                output_preview: "out2".to_string(),
-                full_preview: "out2".to_string(),
-                selected: false,
-            },
-            PickEntry {
-                recent: 3,
-                preview: "three".to_string(),
-                output_preview: "out3".to_string(),
-                full_preview: "out3".to_string(),
-                selected: true,
-            },
-        ];
-
-        apply_range_toggle(&mut entries, 0, 2);
-        assert!(entries.iter().all(|entry| entry.selected));
-
-        apply_range_toggle(&mut entries, 0, 2);
-        assert!(entries.iter().all(|entry| !entry.selected));
-    }
-
-    #[test]
-    fn builds_output_preview_from_first_lines() {
-        let block = CommandBlock {
-            input_with_prompt: "PS C:\\repo> cargo test".to_string(),
-            input_without_prompt: "cargo test".to_string(),
-            output: "line1\nline2\nline3".to_string(),
-            command: "cargo test".to_string(),
-        };
-
-        assert_eq!(build_output_preview(&block), "line1\nline2\nline3");
-    }
-
-    #[test]
-    fn detects_vim_compatible_editor_commands() {
-        assert!(is_vim_command("nvim"));
-        assert!(is_vim_command("vim -Nu NONE"));
-        assert!(is_vim_command("C:\\Tools\\gVim\\gvim.exe"));
-        assert!(!is_vim_command("code --wait"));
-        assert!(!is_vim_command("hx"));
-    }
-
-    #[test]
-    fn escapes_vim_single_quoted_strings() {
-        assert_eq!(
-            vim_single_quote("C:\\tmp\\it's.json"),
-            "C:\\tmp\\it''s.json"
-        );
-    }
-
-    #[test]
-    fn codex_vim_view_hides_tools_by_default_and_moves_by_turn() {
-        let blocks = vec![
-            CodexBlock {
-                kind: CodexBlockKind::User,
-                timestamp: None,
-                label: None,
-                text: "first question".to_string(),
-            },
-            CodexBlock {
-                kind: CodexBlockKind::ToolCall,
-                timestamp: None,
-                label: Some("shell".to_string()),
-                text: "tool call".to_string(),
-            },
-            CodexBlock {
-                kind: CodexBlockKind::ToolOutput,
-                timestamp: None,
-                label: None,
-                text: "tool output".to_string(),
-            },
-            CodexBlock {
-                kind: CodexBlockKind::Assistant,
-                timestamp: None,
-                label: None,
-                text: "first answer".to_string(),
-            },
-            CodexBlock {
-                kind: CodexBlockKind::User,
-                timestamp: None,
-                label: None,
-                text: "second question".to_string(),
-            },
-            CodexBlock {
-                kind: CodexBlockKind::Assistant,
-                timestamp: None,
-                label: None,
-                text: "second answer".to_string(),
-            },
-        ];
-
-        let view = build_codex_vim_view(&blocks);
-
-        assert!(!view.raw.contains("tool output"));
-        assert_eq!(view.blocks.len(), 2);
-        assert_eq!(view.blocks[0].start, 1);
-        assert_eq!(view.blocks[1].start, view.blocks[0].end + 2);
-        assert_eq!(view.blocks[0].input_text, "first question");
-        assert_eq!(view.blocks[0].output_text, "first answer");
-
-        let full = view.alternate.expect("tools view should exist");
-        assert!(full.raw.contains("tool output"));
-        assert_eq!(full.blocks.len(), 2);
-        assert!(full.blocks[0].output_text.contains("tool output"));
-        assert!(full.blocks[0].output_text.contains("first answer"));
-    }
-}
-
 fn open_picker_vim(target: &PickerTuiTarget) -> Result<()> {
     let view = match target {
         PickerTuiTarget::Unavailable => {
@@ -1561,4 +1298,267 @@ fn build_text_preview_lines(text: &str) -> String {
         lines.push("...");
     }
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::picker::{apply_range_toggle, selection_from_entries, PickEntry};
+    use super::{
+        build_codex_vim_view, build_output_preview, filter_lines_by_regex, filter_lines_by_spec,
+        format_block, is_vim_command, vim_single_quote, CodexBlock, CodexBlockKind, CommandBlock,
+        CommandSelection, CopyMode, TextPair,
+    };
+
+    #[test]
+    fn formats_modes() {
+        let block = CommandBlock {
+            input_with_prompt: "PS C:\\repo> git status --all -a".to_string(),
+            input_without_prompt: "git status --all -a".to_string(),
+            output: "clean".to_string(),
+            command: "git status --all -a".to_string(),
+        };
+        assert_eq!(
+            format_block(&block, CopyMode::Both, false, None),
+            "git status --all -a\nclean"
+        );
+        assert_eq!(
+            format_block(&block, CopyMode::Both, true, None),
+            "PS C:\\repo> git status --all -a\nclean"
+        );
+        assert_eq!(
+            format_block(&block, CopyMode::InputOnly, false, None),
+            "git status --all -a"
+        );
+        assert_eq!(
+            format_block(&block, CopyMode::InputOnly, true, None),
+            "PS C:\\repo> git status --all -a"
+        );
+        assert_eq!(
+            format_block(&block, CopyMode::OutputOnly, false, None),
+            "clean"
+        );
+        assert_eq!(
+            format_block(&block, CopyMode::CommandOnly, false, None),
+            "git status --all -a"
+        );
+    }
+
+    #[test]
+    fn rewrites_prompt_in_copied_input() {
+        let block = CommandBlock {
+            input_with_prompt: "PS C:\\repo> cargo test".to_string(),
+            input_without_prompt: "cargo test".to_string(),
+            output: "ok".to_string(),
+            command: "cargo test".to_string(),
+        };
+
+        assert_eq!(
+            format_block(&block, CopyMode::InputOnly, true, Some(":")),
+            ": cargo test"
+        );
+        assert_eq!(
+            format_block(&block, CopyMode::Both, true, Some(">>>")),
+            ">>> cargo test\nok"
+        );
+    }
+
+    #[test]
+    fn picker_selection_keeps_disjoint_blocks() {
+        let selection = selection_from_entries(&[
+            PickEntry {
+                recent: 1,
+                preview: "latest".to_string(),
+                output_preview: "out1".to_string(),
+                full_preview: "out1".to_string(),
+                selected: true,
+            },
+            PickEntry {
+                recent: 2,
+                preview: "second".to_string(),
+                output_preview: "out2".to_string(),
+                full_preview: "out2".to_string(),
+                selected: false,
+            },
+            PickEntry {
+                recent: 4,
+                preview: "fourth".to_string(),
+                output_preview: "out4".to_string(),
+                full_preview: "out4".to_string(),
+                selected: true,
+            },
+        ])
+        .unwrap();
+
+        assert_eq!(selection, CommandSelection::RecentExplicit(vec![1, 4]));
+    }
+
+    #[test]
+    fn filters_by_regex() {
+        let filtered = filter_lines_by_regex(
+            &TextPair {
+                plain: "a\nwarn: b\nc".to_string(),
+                ansi: "a\nwarn: b\nc".to_string(),
+            },
+            "warn",
+        )
+        .unwrap();
+        assert_eq!(filtered.plain, "warn: b");
+    }
+
+    #[test]
+    fn filters_ansi_by_plain_regex_matches() {
+        let filtered = filter_lines_by_regex(
+            &TextPair {
+                plain: "a\nwarn: b\nc".to_string(),
+                ansi: "a\n\x1b[31mwarn: b\x1b[0m\nc".to_string(),
+            },
+            "warn",
+        )
+        .unwrap();
+        assert_eq!(filtered.ansi, "\x1b[31mwarn: b\x1b[0m");
+    }
+
+    #[test]
+    fn filters_by_line_spec_with_colon_ranges() {
+        let filtered = filter_lines_by_spec(
+            &TextPair {
+                plain: "a\nb\nc\nd".to_string(),
+                ansi: "a\nb\nc\nd".to_string(),
+            },
+            "2,4:3",
+        )
+        .unwrap();
+        assert_eq!(filtered.plain, "b\nc\nd");
+    }
+
+    #[test]
+    fn rejects_dash_ranges_for_lines() {
+        assert!(filter_lines_by_spec(
+            &TextPair {
+                plain: "a\nb\nc".to_string(),
+                ansi: "a\nb\nc".to_string(),
+            },
+            "1-2"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn toggles_selected_range_in_picker() {
+        let mut entries = vec![
+            PickEntry {
+                recent: 1,
+                preview: "one".to_string(),
+                output_preview: "out1".to_string(),
+                full_preview: "out1".to_string(),
+                selected: false,
+            },
+            PickEntry {
+                recent: 2,
+                preview: "two".to_string(),
+                output_preview: "out2".to_string(),
+                full_preview: "out2".to_string(),
+                selected: false,
+            },
+            PickEntry {
+                recent: 3,
+                preview: "three".to_string(),
+                output_preview: "out3".to_string(),
+                full_preview: "out3".to_string(),
+                selected: true,
+            },
+        ];
+
+        apply_range_toggle(&mut entries, 0, 2);
+        assert!(entries.iter().all(|entry| entry.selected));
+
+        apply_range_toggle(&mut entries, 0, 2);
+        assert!(entries.iter().all(|entry| !entry.selected));
+    }
+
+    #[test]
+    fn builds_output_preview_from_first_lines() {
+        let block = CommandBlock {
+            input_with_prompt: "PS C:\\repo> cargo test".to_string(),
+            input_without_prompt: "cargo test".to_string(),
+            output: "line1\nline2\nline3".to_string(),
+            command: "cargo test".to_string(),
+        };
+
+        assert_eq!(build_output_preview(&block), "line1\nline2\nline3");
+    }
+
+    #[test]
+    fn detects_vim_compatible_editor_commands() {
+        assert!(is_vim_command("nvim"));
+        assert!(is_vim_command("vim -Nu NONE"));
+        assert!(is_vim_command("C:\\Tools\\gVim\\gvim.exe"));
+        assert!(!is_vim_command("code --wait"));
+        assert!(!is_vim_command("hx"));
+    }
+
+    #[test]
+    fn escapes_vim_single_quoted_strings() {
+        assert_eq!(
+            vim_single_quote("C:\\tmp\\it's.json"),
+            "C:\\tmp\\it''s.json"
+        );
+    }
+
+    #[test]
+    fn codex_vim_view_hides_tools_by_default_and_moves_by_turn() {
+        let blocks = vec![
+            CodexBlock {
+                kind: CodexBlockKind::User,
+                timestamp: None,
+                label: None,
+                text: "first question".to_string(),
+            },
+            CodexBlock {
+                kind: CodexBlockKind::ToolCall,
+                timestamp: None,
+                label: Some("shell".to_string()),
+                text: "tool call".to_string(),
+            },
+            CodexBlock {
+                kind: CodexBlockKind::ToolOutput,
+                timestamp: None,
+                label: None,
+                text: "tool output".to_string(),
+            },
+            CodexBlock {
+                kind: CodexBlockKind::Assistant,
+                timestamp: None,
+                label: None,
+                text: "first answer".to_string(),
+            },
+            CodexBlock {
+                kind: CodexBlockKind::User,
+                timestamp: None,
+                label: None,
+                text: "second question".to_string(),
+            },
+            CodexBlock {
+                kind: CodexBlockKind::Assistant,
+                timestamp: None,
+                label: None,
+                text: "second answer".to_string(),
+            },
+        ];
+
+        let view = build_codex_vim_view(&blocks);
+
+        assert!(!view.raw.contains("tool output"));
+        assert_eq!(view.blocks.len(), 2);
+        assert_eq!(view.blocks[0].start, 1);
+        assert_eq!(view.blocks[1].start, view.blocks[0].end + 2);
+        assert_eq!(view.blocks[0].input_text, "first question");
+        assert_eq!(view.blocks[0].output_text, "first answer");
+
+        let full = view.alternate.expect("tools view should exist");
+        assert!(full.raw.contains("tool output"));
+        assert_eq!(full.blocks.len(), 2);
+        assert!(full.blocks[0].output_text.contains("tool output"));
+        assert!(full.blocks[0].output_text.contains("first answer"));
+    }
 }

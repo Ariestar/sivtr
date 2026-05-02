@@ -118,23 +118,6 @@ fn process_is_alive(pid: u32) -> bool {
     std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::session_pid_from_path;
-    use std::path::Path;
-
-    #[test]
-    fn extracts_pid_from_session_artifacts() {
-        assert_eq!(session_pid_from_path(Path::new("session_42.log")), Some(42));
-        assert_eq!(
-            session_pid_from_path(Path::new("session_42.state")),
-            Some(42)
-        );
-        assert_eq!(session_pid_from_path(Path::new("session.log")), None);
-        assert_eq!(session_pid_from_path(Path::new("history.db")), None);
-    }
-}
-
 /// Get the flush state file path (derived from session log path).
 pub fn flush_state_path() -> std::path::PathBuf {
     session_log_path().with_extension("state")
@@ -359,4 +342,21 @@ fn win_attr_to_ansi(attr: u16) -> String {
     }
 
     format!("\x1b[{}m", codes.join(";"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::session_pid_from_path;
+    use std::path::Path;
+
+    #[test]
+    fn extracts_pid_from_session_artifacts() {
+        assert_eq!(session_pid_from_path(Path::new("session_42.log")), Some(42));
+        assert_eq!(
+            session_pid_from_path(Path::new("session_42.state")),
+            Some(42)
+        );
+        assert_eq!(session_pid_from_path(Path::new("session.log")), None);
+        assert_eq!(session_pid_from_path(Path::new("history.db")), None);
+    }
 }

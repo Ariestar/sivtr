@@ -29,7 +29,7 @@ pub fn execute(command: HotkeyCommand) -> Result<()> {
 pub fn serve(args: &HotkeyServeArgs) -> Result<()> {
     #[cfg(windows)]
     {
-        return serve_windows(args);
+        serve_windows(args)
     }
 
     #[cfg(not(windows))]
@@ -89,7 +89,7 @@ fn start(args: HotkeyStartArgs) -> Result<()> {
             eprintln!("  chord: {}", state.chord);
             eprintln!("  cwd:   {}", state.cwd);
             if let Some(exe) = state.exe {
-                eprintln!("  exe:   {}", exe);
+                eprintln!("  exe:   {exe}");
             }
             return Ok(());
         }
@@ -97,7 +97,7 @@ fn start(args: HotkeyStartArgs) -> Result<()> {
     }
 
     let config = SivtrConfig::load().unwrap_or_default();
-    let chord = args.chord.unwrap_or_else(|| config.hotkey.chord);
+    let chord = args.chord.unwrap_or(config.hotkey.chord);
     let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
     let exe = std::env::current_exe().context("Failed to resolve current executable")?;
 
@@ -109,7 +109,7 @@ fn start(args: HotkeyStartArgs) -> Result<()> {
         eprintln!("  chord: {}", state.chord);
         eprintln!("  cwd:   {}", state.cwd);
         if let Some(exe) = state.exe {
-            eprintln!("  exe:   {}", exe);
+            eprintln!("  exe:   {exe}");
         }
     } else {
         eprintln!("sivtr: hotkey daemon started");
@@ -157,7 +157,7 @@ fn status() -> Result<()> {
     eprintln!("  chord: {}", state.chord);
     eprintln!("  cwd:   {}", state.cwd);
     if let Some(exe) = state.exe {
-        eprintln!("  exe:   {}", exe);
+        eprintln!("  exe:   {exe}");
     }
     Ok(())
 }
@@ -288,7 +288,7 @@ fn wait_for_state_file() -> Result<()> {
 fn ensure_windows() -> Result<()> {
     #[cfg(windows)]
     {
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(windows))]
