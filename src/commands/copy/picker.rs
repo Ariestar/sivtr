@@ -92,6 +92,27 @@ pub(super) fn run_picker_with_back_on_terminal(
     )
 }
 
+pub(super) fn run_picker_selection_on_terminal(
+    terminal: &mut Tui,
+    entries: Vec<PickEntry>,
+    total: usize,
+    title: &str,
+    tui_target: PickerTuiTarget,
+) -> Result<CommandSelection> {
+    match run_picker_on_terminal(
+        terminal,
+        entries,
+        total,
+        title,
+        tui_target,
+        PickerSubmitMode::Selected,
+        false,
+    )? {
+        PickerOutcome::Submitted(selection) => Ok(selection),
+        PickerOutcome::Back => anyhow::bail!(PICK_CANCELLED_MESSAGE),
+    }
+}
+
 pub(super) fn run_single_picker_on_terminal(
     terminal: &mut Tui,
     entries: Vec<PickEntry>,

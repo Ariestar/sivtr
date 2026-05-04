@@ -10,8 +10,8 @@ use crate::command_blocks::ParsedCommandBlock as CommandBlock;
 use crate::commands::command_block_selector::{parse_selector, resolve_selector, CommandSelection};
 use sivtr_core::capture::scrollback;
 use sivtr_core::codex::{
-    find_current_session, format_blocks, is_session_modified_today, list_recent_sessions,
-    parse_session_file, CodexBlock, CodexBlockKind, CodexSession, CodexSessionInfo,
+    find_current_session, format_blocks, list_recent_sessions, parse_session_file, CodexBlock,
+    CodexBlockKind, CodexSession, CodexSessionInfo,
 };
 use sivtr_core::session::{self, SessionEntry};
 
@@ -19,8 +19,8 @@ mod picker;
 
 use crate::tui::terminal::{init as init_tui, restore as restore_tui};
 use picker::{
-    run_picker, run_picker_with_back_on_terminal, run_single_picker, run_single_picker_on_terminal,
-    PickEntry, PickerOutcome,
+    run_picker, run_picker_selection_on_terminal, run_picker_with_back_on_terminal,
+    run_single_picker, run_single_picker_on_terminal, PickEntry, PickerOutcome,
 };
 
 pub(crate) const PICK_CANCELLED_MESSAGE: &str = "Pick cancelled";
@@ -232,7 +232,7 @@ pub fn execute(request: CopyRequest<'_>) -> Result<()> {
 
 pub fn execute_codex(request: CodexCopyRequest<'_>) -> Result<()> {
     if request.pick && !request.pick_current_session {
-        return execute_codex_session_pick(request);
+        return execute_codex_pick(request);
     }
 
     let path = resolve_codex_session_path(request.pick_current_session)?;
@@ -261,12 +261,41 @@ pub fn execute_codex(request: CodexCopyRequest<'_>) -> Result<()> {
     finish_codex_copy(&units, selection, &request)
 }
 
-fn execute_codex_session_pick(request: CodexCopyRequest<'_>) -> Result<()> {
+fn execute_codex_pick(request: CodexCopyRequest<'_>) -> Result<()> {
     let mut terminal = init_tui()?;
-    let result = pick_codex_session_content_on_terminal(&mut terminal, request.selection_mode);
+    let result = pick_current_codex_session_content_or_fallback_on_terminal(
+        &mut terminal,
+        request.selection_mode,
+    );
     restore_tui(&mut terminal)?;
     let (units, selection) = result?;
     finish_codex_copy(&units, selection, &request)
+}
+
+fn pick_current_codex_session_content_or_fallback_on_terminal(
+    terminal: &mut crate::tui::terminal::Tui,
+    selection_mode: CodexSelectionMode,
+) -> Result<(Vec<TextPair>, CommandSelection)> {
+    let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
+    if let Some(path) = resolve_current_codex_session_with_blocks(&cwd)? {
+        let session = parse_session_file(&path)?;
+        let units = build_codex_units(&session, selection_mode);
+        if units.is_empty() {
+            eprintln!("sivtr: selected Codex content is empty");
+            anyhow::bail!(PICK_CANCELLED_MESSAGE);
+        }
+
+        let selection = run_picker_selection_on_terminal(
+            terminal,
+            build_text_pick_entries(&units),
+            units.len(),
+            "sivtr copy codex --pick",
+            PickerTuiTarget::Text(build_codex_vim_view(&session.blocks)),
+        )?;
+        return Ok((units, selection));
+    }
+
+    pick_codex_session_content_on_terminal(terminal, selection_mode)
 }
 
 fn pick_codex_session_content_on_terminal(
@@ -571,14 +600,23 @@ fn resolve_codex_session_path(pick_current_session: bool) -> Result<std::path::P
 }
 
 fn resolve_current_codex_pick_session_path(cwd: &std::path::Path) -> Result<std::path::PathBuf> {
-    let cwd_sessions = list_recent_sessions(Some(cwd))?;
-    if let Some(session) = cwd_sessions.first() {
-        if is_session_modified_today(&session.path)? && codex_session_has_blocks(&session.path)? {
-            return Ok(session.path.clone());
-        }
+    if let Some(path) = resolve_current_codex_session_with_blocks(cwd)? {
+        return Ok(path);
     }
 
     pick_codex_session_path(&list_recent_sessions(None)?)?.context("No Codex sessions found")
+}
+
+fn resolve_current_codex_session_with_blocks(
+    cwd: &std::path::Path,
+) -> Result<Option<std::path::PathBuf>> {
+    for session in list_recent_sessions(Some(cwd))? {
+        if codex_session_has_blocks(&session.path)? {
+            return Ok(Some(session.path));
+        }
+    }
+
+    Ok(None)
 }
 
 fn codex_session_has_blocks(path: &std::path::Path) -> Result<bool> {
