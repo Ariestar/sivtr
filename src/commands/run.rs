@@ -11,7 +11,8 @@ use crate::app::App;
 
 /// Execute a command, capture its output, then open based on config.
 pub fn execute(command: &str, args: &[String]) -> Result<()> {
-    eprintln!("sivtr: running `{} {}`", command, args.join(" "));
+    let command_line = render_command_line(command, args);
+    eprintln!("sivtr: running `{command_line}`");
 
     let result = subprocess::run_and_capture(command, args)?;
 
@@ -27,7 +28,6 @@ pub fn execute(command: &str, args: &[String]) -> Result<()> {
     }
 
     let config = SivtrConfig::load().unwrap_or_default();
-    let command_line = render_command_line(command, args);
     if let Err(error) = capture_history::maybe_save_default(
         &config,
         &result.combined,
@@ -55,9 +55,56 @@ pub fn execute(command: &str, args: &[String]) -> Result<()> {
 }
 
 fn render_command_line(command: &str, args: &[String]) -> String {
-    if args.is_empty() {
-        command.to_string()
-    } else {
-        format!("{command} {}", args.join(" "))
+    std::iter::once(command)
+        .chain(args.iter().map(String::as_str))
+        .map(quote_shell_token)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn quote_shell_token(value: &str) -> String {
+    if !value.is_empty() && value.chars().all(is_shell_safe_char) {
+        return value.to_string();
+    }
+
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn is_shell_safe_char(ch: char) -> bool {
+    matches!(
+        ch,
+        'A'..='Z'
+            | 'a'..='z'
+            | '0'..='9'
+            | '_'
+            | '.'
+            | '/'
+            | ':'
+            | '@'
+            | '%'
+            | '+'
+            | '='
+            | ','
+            | '-'
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_command_line;
+
+    #[test]
+    fn quotes_arguments_with_spaces() {
+        let rendered =
+            render_command_line("echo", &["hello world".to_string(), "plain".to_string()]);
+
+        assert_eq!(rendered, "echo 'hello world' plain");
+    }
+
+    #[test]
+    fn escapes_single_quotes_inside_arguments() {
+        let rendered = render_command_line("printf", &["it's fine".to_string()]);
+
+        assert_eq!(rendered, "printf 'it'\\''s fine'");
     }
 }
