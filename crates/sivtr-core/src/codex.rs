@@ -1,51 +1,29 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, Local};
 use serde_json::Value;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CodexBlockKind {
-    User,
-    Assistant,
-    ToolCall,
-    ToolOutput,
-}
+use crate::ai::{
+    AgentBlock, AgentBlockKind, AgentProvider, AgentSession, AgentSessionInfo, AgentSessionProvider,
+};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CodexBlock {
-    pub kind: CodexBlockKind,
-    pub timestamp: Option<String>,
-    pub label: Option<String>,
-    pub text: String,
-}
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CodexProvider;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CodexSession {
-    pub path: PathBuf,
-    pub id: Option<String>,
-    pub cwd: Option<String>,
-    pub blocks: Vec<CodexBlock>,
-}
+impl AgentSessionProvider for CodexProvider {
+    fn provider(&self) -> AgentProvider {
+        AgentProvider::Codex
+    }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CodexSessionInfo {
-    pub path: PathBuf,
-    pub id: Option<String>,
-    pub cwd: Option<String>,
-    pub modified: SystemTime,
-}
+    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
+        list_recent_sessions(cwd)
+    }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CodexSelection {
-    LastTurn,
-    LastAssistant,
-    LastUser,
-    LastTool,
-    LastBlocks(usize),
-    All,
+    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
+        parse_session_file(path)
+    }
 }
 
 pub fn codex_home() -> PathBuf {
@@ -58,43 +36,7 @@ pub fn codex_home() -> PathBuf {
         .join(".codex")
 }
 
-pub fn find_latest_session() -> Result<Option<PathBuf>> {
-    Ok(list_recent_sessions(None)?
-        .into_iter()
-        .next()
-        .map(|session| session.path))
-}
-
-pub fn find_session_by_id(id: &str) -> Result<Option<PathBuf>> {
-    for path in session_files()? {
-        if path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.contains(id))
-        {
-            return Ok(Some(path));
-        }
-
-        if parse_session_meta(&path)?.id.as_deref() == Some(id) {
-            return Ok(Some(path));
-        }
-    }
-
-    Ok(None)
-}
-
-pub fn find_current_session(cwd: &Path) -> Result<Option<PathBuf>> {
-    if let Some(session) = list_recent_sessions(Some(cwd))?.into_iter().next() {
-        return Ok(Some(session.path));
-    }
-
-    Ok(list_recent_sessions(None)?
-        .into_iter()
-        .next()
-        .map(|session| session.path))
-}
-
-pub fn list_recent_sessions(cwd: Option<&Path>) -> Result<Vec<CodexSessionInfo>> {
+fn list_recent_sessions(cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
     let wanted = cwd.map(normalize_path_for_match);
     let mut sessions = Vec::new();
 
@@ -111,7 +53,7 @@ pub fn list_recent_sessions(cwd: Option<&Path>) -> Result<Vec<CodexSessionInfo>>
             }
         }
 
-        sessions.push(CodexSessionInfo {
+        sessions.push(AgentSessionInfo {
             modified: modified_time(&path).unwrap_or(SystemTime::UNIX_EPOCH),
             path,
             id: meta.id,
@@ -124,16 +66,11 @@ pub fn list_recent_sessions(cwd: Option<&Path>) -> Result<Vec<CodexSessionInfo>>
     Ok(sessions)
 }
 
-pub fn is_session_modified_today(path: &Path) -> Result<bool> {
-    let modified: DateTime<Local> = modified_time(path)?.into();
-    Ok(modified.date_naive() == Local::now().date_naive())
-}
-
-pub fn parse_session_file(path: &Path) -> Result<CodexSession> {
+fn parse_session_file(path: &Path) -> Result<AgentSession> {
     let file = fs::File::open(path)
         .with_context(|| format!("Failed to read Codex session: {}", path.display()))?;
     let reader = BufReader::new(file);
-    let mut session = CodexSession {
+    let mut session = AgentSession {
         path: path.to_path_buf(),
         id: None,
         cwd: None,
@@ -163,37 +100,6 @@ pub fn parse_session_file(path: &Path) -> Result<CodexSession> {
     }
 
     Ok(session)
-}
-
-pub fn select_blocks(session: &CodexSession, selection: CodexSelection) -> Vec<CodexBlock> {
-    match selection {
-        CodexSelection::LastTurn => select_last_turn(&session.blocks),
-        CodexSelection::LastAssistant => {
-            select_last_kind(&session.blocks, CodexBlockKind::Assistant)
-        }
-        CodexSelection::LastUser => select_last_kind(&session.blocks, CodexBlockKind::User),
-        CodexSelection::LastTool => select_last_kind(&session.blocks, CodexBlockKind::ToolOutput),
-        CodexSelection::LastBlocks(count) => {
-            let start = session.blocks.len().saturating_sub(count);
-            session.blocks[start..].to_vec()
-        }
-        CodexSelection::All => session.blocks.clone(),
-    }
-}
-
-pub fn format_blocks(blocks: &[CodexBlock]) -> String {
-    if blocks.len() == 1 {
-        return blocks[0].text.trim().to_string();
-    }
-
-    blocks
-        .iter()
-        .filter(|block| !block.text.trim().is_empty())
-        .map(format_block_with_heading)
-        .collect::<Vec<_>>()
-        .join("\n\n")
-        .trim()
-        .to_string()
 }
 
 fn session_files() -> Result<Vec<PathBuf>> {
@@ -267,7 +173,7 @@ fn normalize_path_for_match(path: &Path) -> String {
         .to_lowercase()
 }
 
-fn apply_event(session: &mut CodexSession, value: &Value) {
+fn apply_event(session: &mut AgentSession, value: &Value) {
     let timestamp = value
         .get("timestamp")
         .and_then(Value::as_str)
@@ -290,16 +196,16 @@ fn apply_event(session: &mut CodexSession, value: &Value) {
     }
 }
 
-fn apply_response_item(session: &mut CodexSession, payload: &Value, timestamp: Option<String>) {
+fn apply_response_item(session: &mut AgentSession, payload: &Value, timestamp: Option<String>) {
     match payload.get("type").and_then(Value::as_str) {
         Some("message") => {
             let kind = match payload.get("role").and_then(Value::as_str) {
-                Some("user") => CodexBlockKind::User,
+                Some("user") => AgentBlockKind::User,
                 Some("assistant") => {
                     if payload.get("phase").and_then(Value::as_str) == Some("commentary") {
                         return;
                     }
-                    CodexBlockKind::Assistant
+                    AgentBlockKind::Assistant
                 }
                 _ => return,
             };
@@ -312,7 +218,7 @@ fn apply_response_item(session: &mut CodexSession, payload: &Value, timestamp: O
                 .and_then(Value::as_str)
                 .map(str::to_string);
             let text = extract_tool_call_text(payload);
-            push_block(session, CodexBlockKind::ToolCall, timestamp, label, text);
+            push_block(session, AgentBlockKind::ToolCall, timestamp, label, text);
         }
         Some("function_call_output") => {
             let text = payload
@@ -320,22 +226,22 @@ fn apply_response_item(session: &mut CodexSession, payload: &Value, timestamp: O
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
-            push_block(session, CodexBlockKind::ToolOutput, timestamp, None, text);
+            push_block(session, AgentBlockKind::ToolOutput, timestamp, None, text);
         }
         _ => {}
     }
 }
 
 fn push_block(
-    session: &mut CodexSession,
-    kind: CodexBlockKind,
+    session: &mut AgentSession,
+    kind: AgentBlockKind,
     timestamp: Option<String>,
     label: Option<String>,
     text: String,
 ) {
     let text = text.trim().to_string();
     if !text.is_empty() {
-        session.blocks.push(CodexBlock {
+        session.blocks.push(AgentBlock {
             kind,
             timestamp,
             label,
@@ -379,53 +285,10 @@ fn pretty_json_string(text: &str) -> String {
         .unwrap_or_else(|| text.to_string())
 }
 
-fn select_last_kind(blocks: &[CodexBlock], kind: CodexBlockKind) -> Vec<CodexBlock> {
-    blocks
-        .iter()
-        .rev()
-        .find(|block| block.kind == kind)
-        .cloned()
-        .into_iter()
-        .collect()
-}
-
-fn select_last_turn(blocks: &[CodexBlock]) -> Vec<CodexBlock> {
-    let Some(assistant_idx) = blocks
-        .iter()
-        .rposition(|block| block.kind == CodexBlockKind::Assistant)
-    else {
-        return Vec::new();
-    };
-    let user_idx = blocks[..assistant_idx]
-        .iter()
-        .rposition(|block| block.kind == CodexBlockKind::User)
-        .unwrap_or(assistant_idx);
-
-    blocks[user_idx..=assistant_idx]
-        .iter()
-        .filter(|block| matches!(block.kind, CodexBlockKind::User | CodexBlockKind::Assistant))
-        .cloned()
-        .collect()
-}
-
-fn format_block_with_heading(block: &CodexBlock) -> String {
-    let heading = match block.kind {
-        CodexBlockKind::User => "User".to_string(),
-        CodexBlockKind::Assistant => "Assistant".to_string(),
-        CodexBlockKind::ToolCall => block
-            .label
-            .as_deref()
-            .map(|label| format!("Tool Call: {label}"))
-            .unwrap_or_else(|| "Tool Call".to_string()),
-        CodexBlockKind::ToolOutput => "Tool Output".to_string(),
-    };
-
-    format!("## {heading}\n{}", block.text.trim())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{format_blocks, parse_session_file, select_blocks, CodexBlockKind, CodexSelection};
+    use super::parse_session_file;
+    use crate::ai::{format_blocks, select_blocks, AgentBlockKind, AgentSelection};
 
     #[test]
     fn parses_codex_rollout_messages_and_tools() {
@@ -447,10 +310,10 @@ mod tests {
         assert_eq!(session.id.as_deref(), Some("abc"));
         assert_eq!(session.cwd.as_deref(), Some("C:\\repo"));
         assert_eq!(session.blocks.len(), 4);
-        assert_eq!(session.blocks[0].kind, CodexBlockKind::User);
-        assert_eq!(session.blocks[1].kind, CodexBlockKind::ToolCall);
-        assert_eq!(session.blocks[2].kind, CodexBlockKind::ToolOutput);
-        assert_eq!(session.blocks[3].kind, CodexBlockKind::Assistant);
+        assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
+        assert_eq!(session.blocks[1].kind, AgentBlockKind::ToolCall);
+        assert_eq!(session.blocks[2].kind, AgentBlockKind::ToolOutput);
+        assert_eq!(session.blocks[3].kind, AgentBlockKind::Assistant);
     }
 
     #[test]
@@ -470,7 +333,7 @@ mod tests {
         .unwrap();
         let session = parse_session_file(&path).unwrap();
 
-        let blocks = select_blocks(&session, CodexSelection::LastTurn);
+        let blocks = select_blocks(&session, AgentSelection::LastTurn);
 
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].text, "second");
@@ -496,7 +359,7 @@ mod tests {
         .unwrap();
         let session = parse_session_file(&path).unwrap();
 
-        let blocks = select_blocks(&session, CodexSelection::LastAssistant);
+        let blocks = select_blocks(&session, AgentSelection::LastAssistant);
 
         assert_eq!(session.blocks.len(), 2);
         assert_eq!(blocks[0].text, "real answer");

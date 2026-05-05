@@ -12,11 +12,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::command_blocks::CommandBlockSpan;
 use crate::command_blocks::ParsedCommandBlock as CommandBlock;
 use crate::commands::command_block_selector::{parse_selector, resolve_selector, CommandSelection};
-use sivtr_core::capture::scrollback;
-use sivtr_core::codex::{
-    find_current_session, find_session_by_id, format_blocks, list_recent_sessions,
-    parse_session_file, CodexBlock, CodexBlockKind, CodexSession, CodexSessionInfo,
+use sivtr_core::ai::{
+    format_blocks, select_blocks, AgentBlock, AgentBlockKind, AgentProvider, AgentSelection,
+    AgentSession, AgentSessionInfo, AgentSessionProvider,
 };
+use sivtr_core::capture::scrollback;
+use sivtr_core::codex::CodexProvider;
 use sivtr_core::session::{self, SessionEntry};
 
 mod picker;
@@ -53,24 +54,26 @@ pub struct CopyRequest<'a> {
     pub lines: Option<&'a str>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CodexSelectionMode {
-    LastTurn,
-    LastAssistant,
-    LastUser,
-    LastTool,
-    All,
-}
-
 #[derive(Clone, Copy, Debug)]
-pub struct CodexCopyRequest<'a> {
+pub struct AgentCopyRequest<'a> {
+    pub provider: AgentProvider,
     pub selector: Option<&'a str>,
     pub pick: bool,
     pub pick_current_session: bool,
-    pub selection_mode: CodexSelectionMode,
+    pub selection_mode: AgentSelection,
     pub print_full: bool,
     pub regex: Option<&'a str>,
     pub lines: Option<&'a str>,
+}
+
+fn agent_session_provider(provider: AgentProvider) -> Box<dyn AgentSessionProvider> {
+    match provider {
+        AgentProvider::Codex => Box::new(CodexProvider),
+    }
+}
+
+fn agent_copy_command(provider: AgentProvider) -> String {
+    format!("sivtr copy {}", provider.command_name())
 }
 
 #[derive(Clone, Debug)]
@@ -231,117 +234,151 @@ pub fn execute(request: CopyRequest<'_>) -> Result<()> {
     )
 }
 
-pub fn execute_codex(request: CodexCopyRequest<'_>) -> Result<()> {
+pub fn execute_agent(request: AgentCopyRequest<'_>) -> Result<()> {
+    let source = agent_session_provider(request.provider);
     if request.pick && !request.pick_current_session {
-        return execute_codex_session_pick(request);
+        return execute_agent_session_pick(source.as_ref(), request);
     }
 
     let path = if request.pick && request.pick_current_session {
         let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
-        match resolve_current_codex_session_with_blocks(&cwd)? {
-            Some(path) => return execute_current_codex_session_pick(request, &path),
-            None => return execute_codex_session_pick(request),
+        match resolve_current_agent_session_with_blocks(source.as_ref(), &cwd)? {
+            Some(path) => {
+                return execute_current_agent_session_pick(source.as_ref(), request, &path)
+            }
+            None => return execute_agent_session_pick(source.as_ref(), request),
         }
     } else {
-        resolve_codex_session_path(request.pick_current_session)?
+        resolve_agent_session_path(source.as_ref(), request.pick_current_session)?
     };
-    let session = parse_session_file(&path)?;
+    let session = source.parse_session_file(&path)?;
+    let provider_name = source.provider().name();
+    let command = agent_copy_command(source.provider());
 
     if session.blocks.is_empty() {
-        eprintln!("sivtr: Codex session has no parsed conversation blocks");
+        eprintln!("sivtr: {provider_name} session has no parsed conversation blocks");
         return Ok(());
     }
 
-    let units = build_codex_units(&session, request.selection_mode);
+    let units = build_agent_units(&session, request.selection_mode);
     if units.is_empty() {
-        eprintln!("sivtr: selected Codex content is empty");
+        eprintln!("sivtr: selected {provider_name} content is empty");
         return Ok(());
     }
 
     let selection = if request.pick {
         pick_text_selection(
             &units,
-            "sivtr copy codex --pick",
-            build_codex_vim_view(&session.blocks),
+            &format!("{command} --pick"),
+            build_agent_vim_view(&session.blocks),
         )?
     } else {
         parse_selector(request.selector.unwrap_or("1"))?
     };
-    finish_codex_copy(&units, selection, &request)
+    finish_agent_copy(&units, selection, &request)
 }
 
-fn execute_codex_session_pick(request: CodexCopyRequest<'_>) -> Result<()> {
-    let mut terminal = init_tui()?;
-    let result = pick_codex_session_content_on_terminal(&mut terminal, request.selection_mode);
-    restore_tui(&mut terminal)?;
-    let (units, selection) = result?;
-    finish_codex_copy(&units, selection, &request)
-}
-
-fn execute_current_codex_session_pick(
-    request: CodexCopyRequest<'_>,
-    path: &std::path::Path,
+fn execute_agent_session_pick(
+    source: &dyn AgentSessionProvider,
+    request: AgentCopyRequest<'_>,
 ) -> Result<()> {
     let mut terminal = init_tui()?;
     let result =
-        pick_current_codex_session_content_on_terminal(&mut terminal, path, request.selection_mode);
+        pick_agent_session_content_on_terminal(source, &mut terminal, request.selection_mode);
     restore_tui(&mut terminal)?;
     let (units, selection) = result?;
-    finish_codex_copy(&units, selection, &request)
+    finish_agent_copy(&units, selection, &request)
 }
 
-fn pick_codex_session_content_on_terminal(
+fn execute_current_agent_session_pick(
+    source: &dyn AgentSessionProvider,
+    request: AgentCopyRequest<'_>,
+    path: &std::path::Path,
+) -> Result<()> {
+    let mut terminal = init_tui()?;
+    let result = pick_current_agent_session_content_on_terminal(
+        source,
+        &mut terminal,
+        path,
+        request.selection_mode,
+    );
+    restore_tui(&mut terminal)?;
+    let (units, selection) = result?;
+    finish_agent_copy(&units, selection, &request)
+}
+
+fn pick_agent_session_content_on_terminal(
+    source: &dyn AgentSessionProvider,
     terminal: &mut crate::tui::terminal::Tui,
-    selection_mode: CodexSelectionMode,
+    selection_mode: AgentSelection,
 ) -> Result<(Vec<TextPair>, CommandSelection)> {
-    let sessions = list_recent_sessions(None)?;
-    let choices = build_codex_session_choices(&sessions, selection_mode)?;
+    let sessions = source.list_recent_sessions(None)?;
+    let choices = build_agent_session_choices(source, &sessions, selection_mode)?;
     if choices.is_empty() {
-        anyhow::bail!("No Codex sessions with selectable content found");
+        anyhow::bail!(
+            "No {} sessions with selectable content found",
+            source.provider().name()
+        );
     }
-    run_codex_hierarchy_picker_on_terminal(terminal, choices, CodexHierarchyFocus::Sessions)
+    run_agent_hierarchy_picker_on_terminal(
+        source.provider(),
+        terminal,
+        choices,
+        AgentHierarchyFocus::Sessions,
+    )
 }
 
-fn pick_current_codex_session_content_on_terminal(
+fn pick_current_agent_session_content_on_terminal(
+    source: &dyn AgentSessionProvider,
     terminal: &mut crate::tui::terminal::Tui,
     path: &std::path::Path,
-    selection_mode: CodexSelectionMode,
+    selection_mode: AgentSelection,
 ) -> Result<(Vec<TextPair>, CommandSelection)> {
-    let session = parse_session_file(path)?;
-    let info = CodexSessionInfo {
+    let session = source.parse_session_file(path)?;
+    let info = AgentSessionInfo {
         path: path.to_path_buf(),
         id: session.id.clone(),
         cwd: session.cwd.clone(),
         modified: SystemTime::UNIX_EPOCH,
     };
-    let choice = build_codex_session_choice(&info, session, selection_mode)
-        .context("Current Codex session has no selectable content")?;
-    run_codex_hierarchy_picker_on_terminal(terminal, vec![choice], CodexHierarchyFocus::Dialogues)
+    let choice = build_agent_session_choice(&info, session, selection_mode).with_context(|| {
+        format!(
+            "Current {} session has no selectable content",
+            source.provider().name()
+        )
+    })?;
+    run_agent_hierarchy_picker_on_terminal(
+        source.provider(),
+        terminal,
+        vec![choice],
+        AgentHierarchyFocus::Dialogues,
+    )
 }
 
 #[derive(Clone, Debug)]
-struct CodexSessionChoice {
+struct AgentSessionChoice {
     title: String,
     units: Vec<TextPair>,
     dialogue_titles: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CodexHierarchyFocus {
+enum AgentHierarchyFocus {
     Sessions,
     Dialogues,
     Content,
 }
 
-fn build_codex_session_choices(
-    sessions: &[CodexSessionInfo],
-    selection_mode: CodexSelectionMode,
-) -> Result<Vec<CodexSessionChoice>> {
+fn build_agent_session_choices(
+    source: &dyn AgentSessionProvider,
+    sessions: &[AgentSessionInfo],
+    selection_mode: AgentSelection,
+) -> Result<Vec<AgentSessionChoice>> {
     let mut choices = Vec::new();
 
     for info in sessions.iter().take(PICK_LIMIT) {
-        let session = parse_session_file(&info.path)?;
-        if let Some(choice) = build_codex_session_choice(info, session, selection_mode) {
+        let session = source.parse_session_file(&info.path)?;
+        if let Some(choice) = build_agent_session_choice(info, session, selection_mode) {
             choices.push(choice);
         }
     }
@@ -349,17 +386,17 @@ fn build_codex_session_choices(
     Ok(choices)
 }
 
-fn build_codex_session_choice(
-    info: &CodexSessionInfo,
-    session: CodexSession,
-    selection_mode: CodexSelectionMode,
-) -> Option<CodexSessionChoice> {
-    let units = build_codex_units(&session, selection_mode);
+fn build_agent_session_choice(
+    info: &AgentSessionInfo,
+    session: AgentSession,
+    selection_mode: AgentSelection,
+) -> Option<AgentSessionChoice> {
+    let units = build_agent_units(&session, selection_mode);
     if session.blocks.is_empty() || units.is_empty() {
         return None;
     }
 
-    let title = codex_session_display_title(info, &session);
+    let title = agent_session_display_title(info, &session);
     let dialogue_titles = units
         .iter()
         .rev()
@@ -367,17 +404,18 @@ fn build_codex_session_choice(
         .map(|unit| build_text_preview(&unit.plain))
         .collect();
 
-    Some(CodexSessionChoice {
+    Some(AgentSessionChoice {
         title,
         units,
         dialogue_titles,
     })
 }
 
-fn run_codex_hierarchy_picker_on_terminal(
+fn run_agent_hierarchy_picker_on_terminal(
+    provider: AgentProvider,
     terminal: &mut crate::tui::terminal::Tui,
-    choices: Vec<CodexSessionChoice>,
-    initial_focus: CodexHierarchyFocus,
+    choices: Vec<AgentSessionChoice>,
+    initial_focus: AgentHierarchyFocus,
 ) -> Result<(Vec<TextPair>, CommandSelection)> {
     let mut session_state = ListState::default();
     session_state.select(Some(0));
@@ -393,14 +431,15 @@ fn run_codex_hierarchy_picker_on_terminal(
         let dialogue_idx = selected_index(&dialogue_state).min(dialogue_count.saturating_sub(1));
         dialogue_state.select((dialogue_count > 0).then_some(dialogue_idx));
         content_scroll = content_scroll.min(
-            current_dialogue_text(&choices[session_idx], dialogue_idx)
+            current_agent_dialogue_text(&choices[session_idx], dialogue_idx)
                 .lines()
                 .count()
                 .saturating_sub(1),
         );
 
         terminal.draw(|frame| {
-            render_codex_hierarchy_picker(
+            render_agent_hierarchy_picker(
+                provider,
                 frame,
                 &choices,
                 &session_state,
@@ -419,30 +458,30 @@ fn run_codex_hierarchy_picker_on_terminal(
             match key.code {
                 KeyCode::Char('q') => anyhow::bail!(PICK_CANCELLED_MESSAGE),
                 KeyCode::Esc => match focus {
-                    CodexHierarchyFocus::Sessions => anyhow::bail!(PICK_CANCELLED_MESSAGE),
-                    CodexHierarchyFocus::Dialogues => focus = CodexHierarchyFocus::Sessions,
-                    CodexHierarchyFocus::Content => focus = CodexHierarchyFocus::Dialogues,
+                    AgentHierarchyFocus::Sessions => anyhow::bail!(PICK_CANCELLED_MESSAGE),
+                    AgentHierarchyFocus::Dialogues => focus = AgentHierarchyFocus::Sessions,
+                    AgentHierarchyFocus::Content => focus = AgentHierarchyFocus::Dialogues,
                 },
                 KeyCode::Left | KeyCode::Char('h') => match focus {
-                    CodexHierarchyFocus::Sessions => {}
-                    CodexHierarchyFocus::Dialogues => focus = CodexHierarchyFocus::Sessions,
-                    CodexHierarchyFocus::Content => focus = CodexHierarchyFocus::Dialogues,
+                    AgentHierarchyFocus::Sessions => {}
+                    AgentHierarchyFocus::Dialogues => focus = AgentHierarchyFocus::Sessions,
+                    AgentHierarchyFocus::Content => focus = AgentHierarchyFocus::Dialogues,
                 },
                 KeyCode::Right | KeyCode::Char('l') => match focus {
-                    CodexHierarchyFocus::Sessions if dialogue_count > 0 => {
-                        focus = CodexHierarchyFocus::Dialogues;
+                    AgentHierarchyFocus::Sessions if dialogue_count > 0 => {
+                        focus = AgentHierarchyFocus::Dialogues;
                     }
-                    CodexHierarchyFocus::Dialogues => {
-                        focus = CodexHierarchyFocus::Content;
+                    AgentHierarchyFocus::Dialogues => {
+                        focus = AgentHierarchyFocus::Content;
                     }
                     _ => {}
                 },
                 KeyCode::Up | KeyCode::Char('k') => match focus {
-                    CodexHierarchyFocus::Sessions => {
+                    AgentHierarchyFocus::Sessions => {
                         let next = selected_index(&session_state).saturating_sub(1);
                         if next != selected_index(&session_state) {
                             session_state.select(Some(next));
-                            reset_codex_dialogue_state(
+                            reset_agent_dialogue_state(
                                 &choices,
                                 next,
                                 &mut dialogue_state,
@@ -451,22 +490,22 @@ fn run_codex_hierarchy_picker_on_terminal(
                             content_scroll = 0;
                         }
                     }
-                    CodexHierarchyFocus::Dialogues => {
+                    AgentHierarchyFocus::Dialogues => {
                         let next = selected_index(&dialogue_state).saturating_sub(1);
                         dialogue_state.select(Some(next));
                         content_scroll = 0;
                     }
-                    CodexHierarchyFocus::Content => {
+                    AgentHierarchyFocus::Content => {
                         content_scroll = content_scroll.saturating_sub(1);
                     }
                 },
                 KeyCode::Down | KeyCode::Char('j') => match focus {
-                    CodexHierarchyFocus::Sessions => {
+                    AgentHierarchyFocus::Sessions => {
                         let current = selected_index(&session_state);
                         let next = (current + 1).min(choices.len().saturating_sub(1));
                         if next != current {
                             session_state.select(Some(next));
-                            reset_codex_dialogue_state(
+                            reset_agent_dialogue_state(
                                 &choices,
                                 next,
                                 &mut dialogue_state,
@@ -475,51 +514,51 @@ fn run_codex_hierarchy_picker_on_terminal(
                             content_scroll = 0;
                         }
                     }
-                    CodexHierarchyFocus::Dialogues => {
+                    AgentHierarchyFocus::Dialogues => {
                         let current = selected_index(&dialogue_state);
                         let next = (current + 1).min(dialogue_count.saturating_sub(1));
                         dialogue_state.select(Some(next));
                         content_scroll = 0;
                     }
-                    CodexHierarchyFocus::Content => {
+                    AgentHierarchyFocus::Content => {
                         content_scroll = content_scroll.saturating_add(1);
                     }
                 },
                 KeyCode::PageDown | KeyCode::Char('d')
-                    if focus == CodexHierarchyFocus::Content
+                    if focus == AgentHierarchyFocus::Content
                         && (key.code == KeyCode::PageDown
                             || key.modifiers.contains(KeyModifiers::CONTROL)) =>
                 {
                     content_scroll = content_scroll.saturating_add(10);
                 }
                 KeyCode::PageUp | KeyCode::Char('u')
-                    if focus == CodexHierarchyFocus::Content
+                    if focus == AgentHierarchyFocus::Content
                         && (key.code == KeyCode::PageUp
                             || key.modifiers.contains(KeyModifiers::CONTROL)) =>
                 {
                     content_scroll = content_scroll.saturating_sub(10);
                 }
-                KeyCode::Char(' ') if focus == CodexHierarchyFocus::Dialogues => {
+                KeyCode::Char(' ') if focus == AgentHierarchyFocus::Dialogues => {
                     if let Some(selected) = selected_dialogues.get_mut(dialogue_idx) {
                         *selected = !*selected;
                     }
                 }
-                KeyCode::Char('a') if focus == CodexHierarchyFocus::Dialogues => {
+                KeyCode::Char('a') if focus == AgentHierarchyFocus::Dialogues => {
                     let select_all = selected_dialogues.iter().any(|selected| !selected);
                     selected_dialogues.fill(select_all);
                 }
                 KeyCode::Enter => match focus {
-                    CodexHierarchyFocus::Sessions => {
+                    AgentHierarchyFocus::Sessions => {
                         if dialogue_count > 0 {
-                            focus = CodexHierarchyFocus::Dialogues;
+                            focus = AgentHierarchyFocus::Dialogues;
                         }
                     }
-                    CodexHierarchyFocus::Dialogues => {
-                        let selection = codex_dialogue_selection(&selected_dialogues, dialogue_idx);
+                    AgentHierarchyFocus::Dialogues => {
+                        let selection = agent_dialogue_selection(&selected_dialogues, dialogue_idx);
                         return Ok((choices[session_idx].units.clone(), selection));
                     }
-                    CodexHierarchyFocus::Content => {
-                        let selection = codex_dialogue_selection(&selected_dialogues, dialogue_idx);
+                    AgentHierarchyFocus::Content => {
+                        let selection = agent_dialogue_selection(&selected_dialogues, dialogue_idx);
                         return Ok((choices[session_idx].units.clone(), selection));
                     }
                 },
@@ -529,8 +568,8 @@ fn run_codex_hierarchy_picker_on_terminal(
     }
 }
 
-fn reset_codex_dialogue_state(
-    choices: &[CodexSessionChoice],
+fn reset_agent_dialogue_state(
+    choices: &[AgentSessionChoice],
     session_idx: usize,
     dialogue_state: &mut ListState,
     selected_dialogues: &mut Vec<bool>,
@@ -540,7 +579,7 @@ fn reset_codex_dialogue_state(
     selected_dialogues.resize(choices[session_idx].dialogue_titles.len(), false);
 }
 
-fn codex_dialogue_selection(
+fn agent_dialogue_selection(
     selected_dialogues: &[bool],
     highlighted_idx: usize,
 ) -> CommandSelection {
@@ -561,7 +600,7 @@ fn selected_index(state: &ListState) -> usize {
     state.selected().unwrap_or(0)
 }
 
-fn current_dialogue_text(choice: &CodexSessionChoice, dialogue_idx: usize) -> &str {
+fn current_agent_dialogue_text(choice: &AgentSessionChoice, dialogue_idx: usize) -> &str {
     let total = choice.units.len();
     if total == 0 {
         return "<empty>";
@@ -574,13 +613,14 @@ fn current_dialogue_text(choice: &CodexSessionChoice, dialogue_idx: usize) -> &s
         .unwrap_or("<empty>")
 }
 
-fn render_codex_hierarchy_picker(
+fn render_agent_hierarchy_picker(
+    provider: AgentProvider,
     frame: &mut Frame,
-    choices: &[CodexSessionChoice],
+    choices: &[AgentSessionChoice],
     session_state: &ListState,
     dialogue_state: &ListState,
     selected_dialogues: &[bool],
-    focus: CodexHierarchyFocus,
+    focus: AgentHierarchyFocus,
     content_scroll: usize,
 ) {
     let area = frame.area();
@@ -592,11 +632,11 @@ fn render_codex_hierarchy_picker(
         .split(area);
 
     let controls = match focus {
-        CodexHierarchyFocus::Sessions => "j/k move  l/Right/Enter open dialogues  q/Esc cancel",
-        CodexHierarchyFocus::Dialogues => {
+        AgentHierarchyFocus::Sessions => "j/k move  l/Right/Enter open dialogues  q/Esc cancel",
+        AgentHierarchyFocus::Dialogues => {
             "j/k move  Space toggle  a toggle-all  h/Left/Esc back  Enter copy  q cancel"
         }
-        CodexHierarchyFocus::Content => {
+        AgentHierarchyFocus::Content => {
             "j/k scroll  Ctrl-d/PageDown down  Ctrl-u/PageUp up  h/Left/Esc back  Enter copy  q cancel"
         }
     };
@@ -618,7 +658,7 @@ fn render_codex_hierarchy_picker(
     .block(
         Block::default()
             .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
-            .title("sivtr copy codex --pick"),
+            .title(format!("{} --pick", agent_copy_command(provider))),
     );
     frame.render_widget(title, chunks[0]);
 
@@ -628,9 +668,9 @@ fn render_codex_hierarchy_picker(
         .split(chunks[1]);
 
     match focus {
-        CodexHierarchyFocus::Sessions => {
-            render_codex_session_list(frame, body_chunks[0], choices, session_state, true);
-            render_codex_dialogue_list(
+        AgentHierarchyFocus::Sessions => {
+            render_agent_session_list(frame, body_chunks[0], choices, session_state, true);
+            render_agent_dialogue_list(
                 frame,
                 body_chunks[1],
                 &choices[session_idx],
@@ -639,8 +679,8 @@ fn render_codex_hierarchy_picker(
                 false,
             );
         }
-        CodexHierarchyFocus::Dialogues => {
-            render_codex_dialogue_list(
+        AgentHierarchyFocus::Dialogues => {
+            render_agent_dialogue_list(
                 frame,
                 body_chunks[0],
                 &choices[session_idx],
@@ -650,15 +690,17 @@ fn render_codex_hierarchy_picker(
             );
             let dialogue_idx = selected_index(dialogue_state)
                 .min(choices[session_idx].dialogue_titles.len().saturating_sub(1));
-            let content =
-                Paragraph::new(current_dialogue_text(&choices[session_idx], dialogue_idx))
-                    .scroll((content_scroll as u16, 0))
-                    .wrap(ratatui::widgets::Wrap { trim: false })
-                    .block(Block::default().borders(Borders::ALL).title("Content"));
+            let content = Paragraph::new(current_agent_dialogue_text(
+                &choices[session_idx],
+                dialogue_idx,
+            ))
+            .scroll((content_scroll as u16, 0))
+            .wrap(ratatui::widgets::Wrap { trim: false })
+            .block(Block::default().borders(Borders::ALL).title("Content"));
             frame.render_widget(content, body_chunks[1]);
         }
-        CodexHierarchyFocus::Content => {
-            render_codex_dialogue_list(
+        AgentHierarchyFocus::Content => {
+            render_agent_dialogue_list(
                 frame,
                 body_chunks[0],
                 &choices[session_idx],
@@ -668,20 +710,22 @@ fn render_codex_hierarchy_picker(
             );
             let dialogue_idx = selected_index(dialogue_state)
                 .min(choices[session_idx].dialogue_titles.len().saturating_sub(1));
-            let content =
-                Paragraph::new(current_dialogue_text(&choices[session_idx], dialogue_idx))
-                    .scroll((content_scroll as u16, 0))
-                    .wrap(ratatui::widgets::Wrap { trim: false })
-                    .block(Block::default().borders(Borders::ALL).title("Content *"));
+            let content = Paragraph::new(current_agent_dialogue_text(
+                &choices[session_idx],
+                dialogue_idx,
+            ))
+            .scroll((content_scroll as u16, 0))
+            .wrap(ratatui::widgets::Wrap { trim: false })
+            .block(Block::default().borders(Borders::ALL).title("Content *"));
             frame.render_widget(content, body_chunks[1]);
         }
     }
 }
 
-fn render_codex_session_list(
+fn render_agent_session_list(
     frame: &mut Frame,
     area: Rect,
-    choices: &[CodexSessionChoice],
+    choices: &[AgentSessionChoice],
     state: &ListState,
     active: bool,
 ) {
@@ -702,10 +746,10 @@ fn render_codex_session_list(
     frame.render_stateful_widget(list, area, &mut local_state);
 }
 
-fn render_codex_dialogue_list(
+fn render_agent_dialogue_list(
     frame: &mut Frame,
     area: Rect,
-    choice: &CodexSessionChoice,
+    choice: &AgentSessionChoice,
     state: &ListState,
     selected_dialogues: &[bool],
     active: bool,
@@ -745,10 +789,10 @@ fn render_codex_dialogue_list(
     frame.render_stateful_widget(list, area, &mut local_state);
 }
 
-fn finish_codex_copy(
+fn finish_agent_copy(
     units: &[TextPair],
     selection: CommandSelection,
-    request: &CodexCopyRequest<'_>,
+    request: &AgentCopyRequest<'_>,
 ) -> Result<()> {
     let indices = resolve_selector(selection, units.len())?;
     let selected_units: Vec<TextPair> = indices
@@ -757,7 +801,10 @@ fn finish_codex_copy(
         .filter(|unit| !unit.plain.trim().is_empty())
         .collect();
     if selected_units.is_empty() {
-        eprintln!("sivtr: selected Codex content is empty");
+        eprintln!(
+            "sivtr: selected {} content is empty",
+            request.provider.name()
+        );
         return Ok(());
     }
 
@@ -774,7 +821,10 @@ fn finish_codex_copy(
     finish_copy(
         text.plain.trim().to_string(),
         request.print_full,
-        "sivtr: copied Codex content to clipboard".to_string(),
+        format!(
+            "sivtr: copied {} content to clipboard",
+            request.provider.name()
+        ),
     )
 }
 
@@ -999,56 +1049,78 @@ fn finish_copy(text: String, print_full: bool, success_message: String) -> Resul
     Ok(())
 }
 
-fn resolve_codex_session_path(pick_current_session: bool) -> Result<std::path::PathBuf> {
+fn resolve_agent_session_path(
+    source: &dyn AgentSessionProvider,
+    pick_current_session: bool,
+) -> Result<std::path::PathBuf> {
     let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
     if pick_current_session {
-        return resolve_current_codex_pick_session_path(&cwd);
+        return resolve_current_agent_pick_session_path(source, &cwd);
     }
 
-    find_current_session(&cwd)?.context("No Codex sessions found")
+    source
+        .find_current_session(&cwd)?
+        .with_context(|| format!("No {} sessions found", source.provider().name()))
 }
 
-fn resolve_current_codex_pick_session_path(cwd: &std::path::Path) -> Result<std::path::PathBuf> {
-    if let Some(path) = resolve_current_codex_session_with_blocks(cwd)? {
+fn resolve_current_agent_pick_session_path(
+    source: &dyn AgentSessionProvider,
+    cwd: &std::path::Path,
+) -> Result<std::path::PathBuf> {
+    if let Some(path) = resolve_current_agent_session_with_blocks(source, cwd)? {
         return Ok(path);
     }
 
-    pick_codex_session_path(&list_recent_sessions(None)?)?.context("No Codex sessions found")
+    pick_agent_session_path(source, &source.list_recent_sessions(None)?)?
+        .with_context(|| format!("No {} sessions found", source.provider().name()))
 }
 
-fn resolve_current_codex_session_with_blocks(
+fn resolve_current_agent_session_with_blocks(
+    source: &dyn AgentSessionProvider,
     cwd: &std::path::Path,
 ) -> Result<Option<std::path::PathBuf>> {
-    if let Ok(thread_id) = std::env::var("CODEX_THREAD_ID") {
-        if !thread_id.trim().is_empty() {
-            if let Some(path) = find_session_by_id(thread_id.trim())? {
-                if codex_session_has_blocks(&path)? {
-                    return Ok(Some(path));
+    if source.provider() == AgentProvider::Codex {
+        if let Ok(thread_id) = std::env::var("CODEX_THREAD_ID") {
+            if !thread_id.trim().is_empty() {
+                if let Some(path) = source.find_session_by_id(thread_id.trim())? {
+                    if agent_session_has_blocks(source, &path)? {
+                        return Ok(Some(path));
+                    }
                 }
             }
         }
     }
 
-    let _ = cwd;
+    for session in source.list_recent_sessions(Some(cwd))? {
+        if agent_session_has_blocks(source, &session.path)? {
+            return Ok(Some(session.path));
+        }
+    }
 
     Ok(None)
 }
 
-fn codex_session_has_blocks(path: &std::path::Path) -> Result<bool> {
-    Ok(!parse_session_file(path)?.blocks.is_empty())
+fn agent_session_has_blocks(
+    source: &dyn AgentSessionProvider,
+    path: &std::path::Path,
+) -> Result<bool> {
+    Ok(!source.parse_session_file(path)?.blocks.is_empty())
 }
 
-fn pick_codex_session_path(sessions: &[CodexSessionInfo]) -> Result<Option<std::path::PathBuf>> {
+fn pick_agent_session_path(
+    source: &dyn AgentSessionProvider,
+    sessions: &[AgentSessionInfo],
+) -> Result<Option<std::path::PathBuf>> {
     if sessions.is_empty() {
         return Ok(None);
     }
 
-    let entries = build_codex_session_pick_entries(sessions)?;
+    let entries = build_agent_session_pick_entries(source, sessions)?;
 
     let selected = run_single_picker(
         entries,
         sessions.len(),
-        "sivtr copy codex --session",
+        &format!("{} --session", agent_copy_command(source.provider())),
         PickerTuiTarget::Unavailable,
     )?;
     Ok(sessions
@@ -1056,21 +1128,28 @@ fn pick_codex_session_path(sessions: &[CodexSessionInfo]) -> Result<Option<std::
         .map(|session| session.path.clone()))
 }
 
-fn build_codex_session_pick_entries(sessions: &[CodexSessionInfo]) -> Result<Vec<PickEntry>> {
+fn build_agent_session_pick_entries(
+    source: &dyn AgentSessionProvider,
+    sessions: &[AgentSessionInfo],
+) -> Result<Vec<PickEntry>> {
     sessions
         .iter()
         .take(PICK_LIMIT)
         .enumerate()
-        .map(|(idx, session)| build_codex_session_pick_entry(idx, session))
+        .map(|(idx, session)| build_agent_session_pick_entry(source, idx, session))
         .collect()
 }
 
-fn build_codex_session_pick_entry(idx: usize, session: &CodexSessionInfo) -> Result<PickEntry> {
-    let parsed = parse_session_file(&session.path)?;
-    let preview = codex_session_preview(&parsed)
+fn build_agent_session_pick_entry(
+    source: &dyn AgentSessionProvider,
+    idx: usize,
+    session: &AgentSessionInfo,
+) -> Result<PickEntry> {
+    let parsed = source.parse_session_file(&session.path)?;
+    let preview = agent_session_preview(&parsed)
         .or_else(|| session.id.clone())
-        .unwrap_or_else(|| "<empty Codex session>".to_string());
-    let meta = format_codex_session_meta(session, &parsed);
+        .unwrap_or_else(|| format!("<empty {} session>", source.provider().name()));
+    let meta = format_agent_session_meta(session, &parsed);
 
     Ok(PickEntry {
         recent: idx + 1,
@@ -1085,7 +1164,7 @@ fn build_codex_session_pick_entry(idx: usize, session: &CodexSessionInfo) -> Res
     })
 }
 
-fn codex_session_preview(session: &CodexSession) -> Option<String> {
+fn agent_session_preview(session: &AgentSession) -> Option<String> {
     session
         .blocks
         .iter()
@@ -1095,21 +1174,21 @@ fn codex_session_preview(session: &CodexSession) -> Option<String> {
             session
                 .blocks
                 .iter()
-                .find(|block| block.kind == CodexBlockKind::Assistant)
+                .find(|block| block.kind == AgentBlockKind::Assistant)
                 .and_then(|block| preview_line(&block.text, 80))
         })
 }
 
-fn codex_session_display_title(info: &CodexSessionInfo, session: &CodexSession) -> String {
-    let title = codex_session_preview(session)
+fn agent_session_display_title(info: &AgentSessionInfo, session: &AgentSession) -> String {
+    let title = agent_session_preview(session)
         .or_else(|| session.id.clone())
         .or_else(|| info.id.clone())
-        .unwrap_or_else(|| "<empty Codex session>".to_string());
+        .unwrap_or_else(|| "<empty AI session>".to_string());
     let id = session
         .id
         .as_deref()
         .or(info.id.as_deref())
-        .map(short_codex_id);
+        .map(short_agent_id);
 
     match id {
         Some(id) if !id.is_empty() => format!("{title}  [{id}]"),
@@ -1117,20 +1196,20 @@ fn codex_session_display_title(info: &CodexSessionInfo, session: &CodexSession) 
     }
 }
 
-fn short_codex_id(id: &str) -> String {
+fn short_agent_id(id: &str) -> String {
     id.chars().take(8).collect()
 }
 
-fn is_real_user_block(block: &CodexBlock) -> bool {
-    if block.kind != CodexBlockKind::User {
+fn is_real_user_block(block: &AgentBlock) -> bool {
+    if block.kind != AgentBlockKind::User {
         return false;
     }
 
     let text = block.text.trim_start();
-    !is_codex_startup_user_text(text)
+    !is_agent_startup_user_text(text)
 }
 
-fn is_codex_startup_user_text(text: &str) -> bool {
+fn is_agent_startup_user_text(text: &str) -> bool {
     text.starts_with("# AGENTS.md instructions for")
         || text.starts_with("<environment_context>")
         || text.starts_with("<turn_aborted>")
@@ -1141,7 +1220,7 @@ fn preview_line(text: &str, limit: usize) -> Option<String> {
     Some(line.chars().take(limit).collect())
 }
 
-fn format_codex_session_meta(info: &CodexSessionInfo, session: &CodexSession) -> String {
+fn format_agent_session_meta(info: &AgentSessionInfo, session: &AgentSession) -> String {
     let id = session
         .id
         .as_deref()
@@ -1155,37 +1234,39 @@ fn format_codex_session_meta(info: &CodexSessionInfo, session: &CodexSession) ->
     format!("id: {id}\ncwd: {cwd}\npath: {}", info.path.display())
 }
 
-fn build_codex_units(session: &CodexSession, selection_mode: CodexSelectionMode) -> Vec<TextPair> {
+fn build_agent_units(session: &AgentSession, selection_mode: AgentSelection) -> Vec<TextPair> {
     match selection_mode {
-        CodexSelectionMode::LastTurn => build_codex_turn_units(session),
-        CodexSelectionMode::LastAssistant => {
-            build_codex_kind_units(session, CodexBlockKind::Assistant)
-        }
-        CodexSelectionMode::LastUser => build_codex_kind_units(session, CodexBlockKind::User),
-        CodexSelectionMode::LastTool => build_codex_kind_units(session, CodexBlockKind::ToolOutput),
-        CodexSelectionMode::All => vec![TextPair {
+        AgentSelection::LastTurn => build_agent_turn_units(session),
+        AgentSelection::LastAssistant => build_agent_kind_units(session, AgentBlockKind::Assistant),
+        AgentSelection::LastUser => build_agent_kind_units(session, AgentBlockKind::User),
+        AgentSelection::LastTool => build_agent_kind_units(session, AgentBlockKind::ToolOutput),
+        AgentSelection::LastBlocks(count) => vec![TextPair {
+            plain: format_blocks(&select_blocks(session, AgentSelection::LastBlocks(count))),
+            ansi: String::new(),
+        }],
+        AgentSelection::All => vec![TextPair {
             plain: format_blocks(&session.blocks),
             ansi: String::new(),
         }],
     }
 }
 
-fn build_codex_turn_units(session: &CodexSession) -> Vec<TextPair> {
+fn build_agent_turn_units(session: &AgentSession) -> Vec<TextPair> {
     let mut turns = Vec::new();
 
     for (idx, block) in session.blocks.iter().enumerate() {
-        if block.kind != CodexBlockKind::Assistant {
+        if block.kind != AgentBlockKind::Assistant {
             continue;
         }
 
         let start = session.blocks[..idx]
             .iter()
-            .rposition(|block| block.kind == CodexBlockKind::User)
+            .rposition(|block| block.kind == AgentBlockKind::User)
             .unwrap_or(idx);
 
-        let turn_blocks: Vec<CodexBlock> = session.blocks[start..=idx]
+        let turn_blocks: Vec<AgentBlock> = session.blocks[start..=idx]
             .iter()
-            .filter(|block| matches!(block.kind, CodexBlockKind::User | CodexBlockKind::Assistant))
+            .filter(|block| matches!(block.kind, AgentBlockKind::User | AgentBlockKind::Assistant))
             .cloned()
             .collect();
 
@@ -1201,7 +1282,7 @@ fn build_codex_turn_units(session: &CodexSession) -> Vec<TextPair> {
     turns
 }
 
-fn build_codex_kind_units(session: &CodexSession, kind: CodexBlockKind) -> Vec<TextPair> {
+fn build_agent_kind_units(session: &AgentSession, kind: AgentBlockKind) -> Vec<TextPair> {
     session
         .blocks
         .iter()
@@ -1213,23 +1294,23 @@ fn build_codex_kind_units(session: &CodexSession, kind: CodexBlockKind) -> Vec<T
         .collect()
 }
 
-fn build_codex_vim_view(blocks: &[CodexBlock]) -> VimView {
+fn build_agent_vim_view(blocks: &[AgentBlock]) -> VimView {
     let mut main_turns = Vec::new();
     let mut full_turns = Vec::new();
 
     for (idx, block) in blocks.iter().enumerate() {
-        if block.kind != CodexBlockKind::Assistant {
+        if block.kind != AgentBlockKind::Assistant {
             continue;
         }
 
         let start = blocks[..idx]
             .iter()
-            .rposition(|block| block.kind == CodexBlockKind::User)
+            .rposition(|block| block.kind == AgentBlockKind::User)
             .unwrap_or(idx);
         let full_blocks = &blocks[start..=idx];
-        let main_blocks: Vec<CodexBlock> = full_blocks
+        let main_blocks: Vec<AgentBlock> = full_blocks
             .iter()
-            .filter(|block| matches!(block.kind, CodexBlockKind::User | CodexBlockKind::Assistant))
+            .filter(|block| matches!(block.kind, AgentBlockKind::User | AgentBlockKind::Assistant))
             .cloned()
             .collect();
 
@@ -1242,15 +1323,15 @@ fn build_codex_vim_view(blocks: &[CodexBlock]) -> VimView {
     if main_turns.is_empty() {
         main_turns = blocks
             .iter()
-            .filter(|block| matches!(block.kind, CodexBlockKind::User | CodexBlockKind::Assistant))
+            .filter(|block| matches!(block.kind, AgentBlockKind::User | AgentBlockKind::Assistant))
             .cloned()
             .map(|block| vec![block])
             .collect();
         full_turns = main_turns.clone();
     }
 
-    let main = build_codex_turn_view(&main_turns);
-    let full = build_codex_turn_view(&full_turns);
+    let main = build_agent_turn_view(&main_turns);
+    let full = build_agent_turn_view(&full_turns);
 
     VimView {
         raw: main.raw,
@@ -1263,13 +1344,13 @@ fn build_codex_vim_view(blocks: &[CodexBlock]) -> VimView {
     }
 }
 
-fn build_codex_turn_view(turns: &[Vec<CodexBlock>]) -> VimAlternateView {
+fn build_agent_turn_view(turns: &[Vec<AgentBlock>]) -> VimAlternateView {
     let mut rendered_turns = Vec::new();
     let mut raw_parts = Vec::new();
     let mut next_line = 1usize;
 
     for turn in turns {
-        let rendered_blocks: Vec<String> = turn.iter().map(format_codex_block_for_vim).collect();
+        let rendered_blocks: Vec<String> = turn.iter().map(format_agent_block_for_vim).collect();
         let rendered = rendered_blocks.join("\n\n");
         if rendered.trim().is_empty() {
             continue;
@@ -1278,13 +1359,13 @@ fn build_codex_turn_view(turns: &[Vec<CodexBlock>]) -> VimAlternateView {
         let line_count = line_count(&rendered);
         let start = next_line;
         let end = start + line_count.saturating_sub(1);
-        let input_text = join_codex_kind_text(turn, CodexBlockKind::User);
+        let input_text = join_agent_kind_text(turn, AgentBlockKind::User);
         let output_text = turn
             .iter()
             .filter(|block| {
                 matches!(
                     block.kind,
-                    CodexBlockKind::Assistant | CodexBlockKind::ToolOutput
+                    AgentBlockKind::Assistant | AgentBlockKind::ToolOutput
                 )
             })
             .map(|block| block.text.as_str())
@@ -1292,7 +1373,7 @@ fn build_codex_turn_view(turns: &[Vec<CodexBlock>]) -> VimAlternateView {
             .join("\n\n");
         let command_text = turn
             .iter()
-            .filter(|block| block.kind == CodexBlockKind::ToolCall)
+            .filter(|block| block.kind == AgentBlockKind::ToolCall)
             .filter_map(|block| block.label.as_deref())
             .collect::<Vec<_>>()
             .join("\n");
@@ -1300,10 +1381,10 @@ fn build_codex_turn_view(turns: &[Vec<CodexBlock>]) -> VimAlternateView {
         rendered_turns.push(VimBlock {
             start,
             end,
-            input_start: range_for_first_kind(turn, CodexBlockKind::User, start).0,
-            input_end: range_for_first_kind(turn, CodexBlockKind::User, start).1,
-            output_start: range_for_first_kind(turn, CodexBlockKind::Assistant, start).0,
-            output_end: range_for_first_kind(turn, CodexBlockKind::Assistant, start).1,
+            input_start: range_for_first_kind(turn, AgentBlockKind::User, start).0,
+            input_end: range_for_first_kind(turn, AgentBlockKind::User, start).1,
+            output_start: range_for_first_kind(turn, AgentBlockKind::Assistant, start).0,
+            output_end: range_for_first_kind(turn, AgentBlockKind::Assistant, start).1,
             block_text: rendered.clone(),
             input_text,
             output_text,
@@ -1320,7 +1401,7 @@ fn build_codex_turn_view(turns: &[Vec<CodexBlock>]) -> VimAlternateView {
     }
 }
 
-fn join_codex_kind_text(turn: &[CodexBlock], kind: CodexBlockKind) -> String {
+fn join_agent_kind_text(turn: &[AgentBlock], kind: AgentBlockKind) -> String {
     turn.iter()
         .filter(|block| block.kind == kind)
         .map(|block| block.text.as_str())
@@ -1329,13 +1410,13 @@ fn join_codex_kind_text(turn: &[CodexBlock], kind: CodexBlockKind) -> String {
 }
 
 fn range_for_first_kind(
-    turn: &[CodexBlock],
-    kind: CodexBlockKind,
+    turn: &[AgentBlock],
+    kind: AgentBlockKind,
     turn_start_line: usize,
 ) -> (usize, usize) {
     let mut cursor = turn_start_line;
     for block in turn {
-        let rendered = format_codex_block_for_vim(block);
+        let rendered = format_agent_block_for_vim(block);
         let count = line_count(&rendered);
         if block.kind == kind {
             let body_start = (cursor + 1).min(cursor + count.saturating_sub(1));
@@ -1346,16 +1427,16 @@ fn range_for_first_kind(
     (0, 0)
 }
 
-fn format_codex_block_for_vim(block: &CodexBlock) -> String {
+fn format_agent_block_for_vim(block: &AgentBlock) -> String {
     let heading = match block.kind {
-        CodexBlockKind::User => "User".to_string(),
-        CodexBlockKind::Assistant => "Assistant".to_string(),
-        CodexBlockKind::ToolCall => block
+        AgentBlockKind::User => "User".to_string(),
+        AgentBlockKind::Assistant => "Assistant".to_string(),
+        AgentBlockKind::ToolCall => block
             .label
             .as_deref()
             .map(|label| format!("Tool Call: {label}"))
             .unwrap_or_else(|| "Tool Call".to_string()),
-        CodexBlockKind::ToolOutput => "Tool Output".to_string(),
+        AgentBlockKind::ToolOutput => "Tool Output".to_string(),
     };
     format!("## {heading}\n{}", block.text.trim())
 }
@@ -1773,9 +1854,9 @@ fn build_text_preview_lines(text: &str) -> String {
 mod tests {
     use super::picker::{apply_range_toggle, selection_from_entries, PickEntry};
     use super::{
-        build_codex_vim_view, build_output_preview, codex_session_preview, filter_lines_by_regex,
-        filter_lines_by_spec, format_block, is_vim_command, vim_single_quote, CodexBlock,
-        CodexBlockKind, CodexSession, CommandBlock, CommandSelection, CopyMode, TextPair,
+        agent_session_preview, build_agent_vim_view, build_output_preview, filter_lines_by_regex,
+        filter_lines_by_spec, format_block, is_vim_command, vim_single_quote, AgentBlock,
+        AgentBlockKind, AgentSession, CommandBlock, CommandSelection, CopyMode, TextPair,
     };
 
     #[test]
@@ -1977,45 +2058,45 @@ mod tests {
     #[test]
     fn codex_vim_view_hides_tools_by_default_and_moves_by_turn() {
         let blocks = vec![
-            CodexBlock {
-                kind: CodexBlockKind::User,
+            AgentBlock {
+                kind: AgentBlockKind::User,
                 timestamp: None,
                 label: None,
                 text: "first question".to_string(),
             },
-            CodexBlock {
-                kind: CodexBlockKind::ToolCall,
+            AgentBlock {
+                kind: AgentBlockKind::ToolCall,
                 timestamp: None,
                 label: Some("shell".to_string()),
                 text: "tool call".to_string(),
             },
-            CodexBlock {
-                kind: CodexBlockKind::ToolOutput,
+            AgentBlock {
+                kind: AgentBlockKind::ToolOutput,
                 timestamp: None,
                 label: None,
                 text: "tool output".to_string(),
             },
-            CodexBlock {
-                kind: CodexBlockKind::Assistant,
+            AgentBlock {
+                kind: AgentBlockKind::Assistant,
                 timestamp: None,
                 label: None,
                 text: "first answer".to_string(),
             },
-            CodexBlock {
-                kind: CodexBlockKind::User,
+            AgentBlock {
+                kind: AgentBlockKind::User,
                 timestamp: None,
                 label: None,
                 text: "second question".to_string(),
             },
-            CodexBlock {
-                kind: CodexBlockKind::Assistant,
+            AgentBlock {
+                kind: AgentBlockKind::Assistant,
                 timestamp: None,
                 label: None,
                 text: "second answer".to_string(),
             },
         ];
 
-        let view = build_codex_vim_view(&blocks);
+        let view = build_agent_vim_view(&blocks);
 
         assert!(!view.raw.contains("tool output"));
         assert_eq!(view.blocks.len(), 2);
@@ -2033,31 +2114,31 @@ mod tests {
 
     #[test]
     fn codex_session_picker_uses_first_real_user_message() {
-        let session = CodexSession {
+        let session = AgentSession {
             path: "rollout.jsonl".into(),
             id: Some("abc".to_string()),
             cwd: Some("d:\\repo".to_string()),
             blocks: vec![
-                CodexBlock {
-                    kind: CodexBlockKind::User,
+                AgentBlock {
+                    kind: AgentBlockKind::User,
                     timestamp: None,
                     label: None,
                     text: "# AGENTS.md instructions for d:\\repo\n\n<INSTRUCTIONS>".to_string(),
                 },
-                CodexBlock {
-                    kind: CodexBlockKind::User,
+                AgentBlock {
+                    kind: AgentBlockKind::User,
                     timestamp: None,
                     label: None,
                     text: "first actual task\nmore details".to_string(),
                 },
-                CodexBlock {
-                    kind: CodexBlockKind::Assistant,
+                AgentBlock {
+                    kind: AgentBlockKind::Assistant,
                     timestamp: None,
                     label: None,
                     text: "first answer".to_string(),
                 },
-                CodexBlock {
-                    kind: CodexBlockKind::User,
+                AgentBlock {
+                    kind: AgentBlockKind::User,
                     timestamp: None,
                     label: None,
                     text: "second actual task".to_string(),
@@ -2066,7 +2147,7 @@ mod tests {
         };
 
         assert_eq!(
-            codex_session_preview(&session).as_deref(),
+            agent_session_preview(&session).as_deref(),
             Some("first actual task")
         );
     }

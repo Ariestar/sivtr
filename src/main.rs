@@ -8,12 +8,13 @@ use anyhow::Result;
 use clap::Parser;
 
 use cli::{
-    Cli, CodexCopyCommand, CodexCopyMode, Commands, CopyArgs, CopySimpleArgs, CopySubcommand,
+    AgentCopyCommand, AgentCopyMode, Cli, Commands, CopyArgs, CopySimpleArgs, CopySubcommand,
     DiffArgs, HotkeyPickCodexArgs, HotkeyServeArgs,
 };
 use command_blocks::CommandBlockTextMode;
-use commands::copy::{CodexCopyRequest, CodexSelectionMode, CopyMode, CopyRequest};
+use commands::copy::{AgentCopyRequest, CopyMode, CopyRequest};
 use commands::diff::DiffRequest;
+use sivtr_core::ai::{AgentProvider, AgentSelection};
 
 fn main() -> Result<()> {
     match run() {
@@ -56,7 +57,9 @@ fn run() -> Result<()> {
             Some(CopySubcommand::Cmd(sub_args)) => {
                 run_copy_simple(&sub_args, CopyMode::CommandOnly, false)?
             }
-            Some(CopySubcommand::Codex(sub_args)) => run_codex_copy(sub_args)?,
+            Some(CopySubcommand::Codex(sub_args)) => {
+                run_agent_copy(AgentProvider::Codex, sub_args)?
+            }
             None => run_copy(&args.args, CopyMode::Both, true)?,
         },
         Some(Commands::Ci(args)) => run_copy(&args, CopyMode::InputOnly, true)?,
@@ -119,20 +122,29 @@ fn run_copy_simple(args: &CopySimpleArgs, mode: CopyMode, include_prompt: bool) 
     })
 }
 
-fn run_codex_copy(cmd: CodexCopyCommand) -> Result<()> {
+fn run_agent_copy(provider: AgentProvider, cmd: AgentCopyCommand) -> Result<()> {
     match cmd.mode {
-        Some(CodexCopyMode::In(args)) => run_codex_copy_args(&args, CodexSelectionMode::LastUser),
-        Some(CodexCopyMode::Out(args)) => {
-            run_codex_copy_args(&args, CodexSelectionMode::LastAssistant)
+        Some(AgentCopyMode::In(args)) => {
+            run_agent_copy_args(provider, &args, AgentSelection::LastUser)
         }
-        Some(CodexCopyMode::Tool(args)) => run_codex_copy_args(&args, CodexSelectionMode::LastTool),
-        Some(CodexCopyMode::All(args)) => run_codex_copy_args(&args, CodexSelectionMode::All),
-        None => run_codex_copy_args(&cmd.args, CodexSelectionMode::LastTurn),
+        Some(AgentCopyMode::Out(args)) => {
+            run_agent_copy_args(provider, &args, AgentSelection::LastAssistant)
+        }
+        Some(AgentCopyMode::Tool(args)) => {
+            run_agent_copy_args(provider, &args, AgentSelection::LastTool)
+        }
+        Some(AgentCopyMode::All(args)) => run_agent_copy_args(provider, &args, AgentSelection::All),
+        None => run_agent_copy_args(provider, &cmd.args, AgentSelection::LastTurn),
     }
 }
 
-fn run_codex_copy_args(args: &CopySimpleArgs, selection_mode: CodexSelectionMode) -> Result<()> {
-    commands::copy::execute_codex(CodexCopyRequest {
+fn run_agent_copy_args(
+    provider: AgentProvider,
+    args: &CopySimpleArgs,
+    selection_mode: AgentSelection,
+) -> Result<()> {
+    commands::copy::execute_agent(AgentCopyRequest {
+        provider,
         selector: args.common.selector.as_deref(),
         pick: args.common.pick,
         pick_current_session: false,

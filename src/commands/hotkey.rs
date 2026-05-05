@@ -7,7 +7,8 @@ use std::process::Command;
 use crate::cli::{
     HotkeyAction, HotkeyCommand, HotkeyPickCodexArgs, HotkeyServeArgs, HotkeyStartArgs,
 };
-use crate::commands::copy::{self, CodexCopyRequest, CodexSelectionMode};
+use crate::commands::copy::{self, AgentCopyRequest};
+use sivtr_core::ai::{AgentProvider, AgentSelection};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct HotkeyState {
@@ -51,11 +52,12 @@ pub fn pick_codex(args: &HotkeyPickCodexArgs) -> Result<()> {
     }
 
     let result = std::panic::catch_unwind(|| {
-        copy::execute_codex(CodexCopyRequest {
+        copy::execute_agent(AgentCopyRequest {
+            provider: AgentProvider::Codex,
             selector: None,
             pick: true,
             pick_current_session: true,
-            selection_mode: CodexSelectionMode::LastTurn,
+            selection_mode: AgentSelection::LastTurn,
             print_full: false,
             regex: None,
             lines: None,

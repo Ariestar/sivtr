@@ -264,7 +264,7 @@ pub enum CopySubcommand {
 
     /// Copy content from the current Codex conversation session
     #[command(after_help = COPY_CODEX_AFTER_HELP)]
-    Codex(CodexCopyCommand),
+    Codex(AgentCopyCommand),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -397,16 +397,16 @@ pub struct HotkeyPickCodexArgs {
 }
 
 #[derive(Args, Debug)]
-pub struct CodexCopyCommand {
+pub struct AgentCopyCommand {
     #[command(subcommand)]
-    pub mode: Option<CodexCopyMode>,
+    pub mode: Option<AgentCopyMode>,
 
     #[command(flatten)]
     pub args: CopySimpleArgs,
 }
 
 #[derive(Subcommand, Debug)]
-pub enum CodexCopyMode {
+pub enum AgentCopyMode {
     /// Copy the last user message
     In(CopySimpleArgs),
 
@@ -531,7 +531,7 @@ mod tests {
         match cli.command {
             Some(Commands::Copy(cmd)) => match cmd.mode {
                 Some(CopySubcommand::Codex(codex)) => match codex.mode {
-                    Some(CodexCopyMode::Out(args)) => assert!(args.common.print),
+                    Some(AgentCopyMode::Out(args)) => assert!(args.common.print),
                     _ => panic!("expected copy codex out mode"),
                 },
                 _ => panic!("expected copy codex mode"),
