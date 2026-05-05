@@ -1,6 +1,8 @@
-use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
-use serde::{Deserialize, Serialize};
+use clap::{ArgGroup, Args, Parser, Subcommand};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use sivtr_core::ai::AgentProvider;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 const COPY_AFTER_HELP: &str = "\
 Defaults:
@@ -411,7 +413,7 @@ pub struct HotkeyStartArgs {
     pub chord: Option<String>,
 
     /// AI provider opened by the hotkey
-    #[arg(long, value_enum, default_value_t = HotkeyProviderSelection::All)]
+    #[arg(long, default_value_t = HotkeyProviderSelection::default(), value_name = "PROVIDER")]
     pub provider: HotkeyProviderSelection,
 }
 
@@ -426,7 +428,7 @@ pub struct HotkeyServeArgs {
     pub chord: String,
 
     /// AI provider opened by the hotkey
-    #[arg(long, value_enum, default_value_t = HotkeyProviderSelection::All)]
+    #[arg(long, default_value_t = HotkeyProviderSelection::default(), value_name = "PROVIDER")]
     pub provider: HotkeyProviderSelection,
 }
 
@@ -437,34 +439,75 @@ pub struct HotkeyPickAgentArgs {
     pub cwd: PathBuf,
 
     /// AI provider sessions to show
-    #[arg(long, value_enum, default_value_t = HotkeyProviderSelection::All)]
+    #[arg(long, default_value_t = HotkeyProviderSelection::default(), value_name = "PROVIDER")]
     pub provider: HotkeyProviderSelection,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
-#[serde(rename_all = "kebab-case")]
-pub enum HotkeyProviderSelection {
-    #[default]
-    All,
-    Codex,
-    Claude,
-}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HotkeyProviderSelection(Option<AgentProvider>);
 
 impl HotkeyProviderSelection {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::All => "all",
-            Self::Codex => "codex",
-            Self::Claude => "claude",
+    pub fn provider(provider: AgentProvider) -> Self {
+        Self(Some(provider))
+    }
+
+    pub fn providers(self) -> Vec<AgentProvider> {
+        match self.0 {
+            Some(provider) => vec![provider],
+            None => AgentProvider::all()
+                .iter()
+                .map(|spec| spec.provider)
+                .collect(),
         }
     }
 
+    pub fn as_str(self) -> &'static str {
+        self.0.map(AgentProvider::command_name).unwrap_or("all")
+    }
+
     pub fn label(self) -> &'static str {
-        match self {
-            Self::All => "all AI providers",
-            Self::Codex => "Codex",
-            Self::Claude => "Claude",
+        self.0
+            .map(AgentProvider::name)
+            .unwrap_or("all AI providers")
+    }
+}
+
+impl FromStr for HotkeyProviderSelection {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.eq_ignore_ascii_case("all") {
+            return Ok(Self::default());
         }
+
+        AgentProvider::from_command_name(value)
+            .map(Self::provider)
+            .ok_or_else(|| format!("unknown AI provider `{value}`"))
+    }
+}
+
+impl std::fmt::Display for HotkeyProviderSelection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl Serialize for HotkeyProviderSelection {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for HotkeyProviderSelection {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::from_str(&value).map_err(serde::de::Error::custom)
     }
 }
 
@@ -651,7 +694,7 @@ mod tests {
             Some(Commands::Hotkey(cmd)) => match cmd.action {
                 Some(HotkeyAction::Start(args)) => {
                     assert_eq!(args.chord.as_deref(), Some("alt+y"));
-                    assert_eq!(args.provider, HotkeyProviderSelection::All);
+                    assert_eq!(args.provider, HotkeyProviderSelection::default());
                 }
                 _ => panic!("expected hotkey start"),
             },
@@ -667,7 +710,10 @@ mod tests {
         match cli.command {
             Some(Commands::Hotkey(cmd)) => match cmd.action {
                 Some(HotkeyAction::Start(args)) => {
-                    assert_eq!(args.provider, HotkeyProviderSelection::Claude);
+                    assert_eq!(
+                        args.provider,
+                        HotkeyProviderSelection::provider(AgentProvider::Claude)
+                    );
                 }
                 _ => panic!("expected hotkey start"),
             },
@@ -682,10 +728,17 @@ mod tests {
         match cli.command {
             Some(Commands::HotkeyPickAgent(args)) => {
                 assert_eq!(args.cwd, PathBuf::from("."));
-                assert_eq!(args.provider, HotkeyProviderSelection::All);
+                assert_eq!(args.provider, HotkeyProviderSelection::default());
             }
             _ => panic!("expected hotkey-pick-agent command"),
         }
+    }
+
+    #[test]
+    fn hotkey_provider_rejects_unknown_provider() {
+        let result = Cli::try_parse_from(["sivtr", "hotkey", "start", "--provider", "unknown"]);
+
+        assert!(result.is_err());
     }
 }
 

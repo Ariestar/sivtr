@@ -9,7 +9,7 @@ use crate::cli::{
     HotkeyStartArgs,
 };
 use crate::commands::copy::{self, AgentPickerRequest};
-use sivtr_core::ai::{AgentProvider, AgentSelection};
+use sivtr_core::ai::AgentSelection;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct HotkeyState {
@@ -55,7 +55,7 @@ pub fn pick_agent(args: &HotkeyPickAgentArgs) -> Result<()> {
     }
 
     let result = std::panic::catch_unwind(|| {
-        let providers = selected_providers(args.provider);
+        let providers = args.provider.providers();
         copy::execute_agent_picker(AgentPickerRequest {
             providers: &providers,
             pick_current_session: true,
@@ -301,14 +301,6 @@ fn ensure_windows() -> Result<()> {
     #[cfg(not(windows))]
     {
         anyhow::bail!("sivtr hotkey is currently supported on Windows only");
-    }
-}
-
-fn selected_providers(selection: HotkeyProviderSelection) -> Vec<AgentProvider> {
-    match selection {
-        HotkeyProviderSelection::All => vec![AgentProvider::Codex, AgentProvider::Claude],
-        HotkeyProviderSelection::Codex => vec![AgentProvider::Codex],
-        HotkeyProviderSelection::Claude => vec![AgentProvider::Claude],
     }
 }
 

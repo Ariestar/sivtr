@@ -11,19 +11,80 @@ pub enum AgentProvider {
     Codex,
 }
 
+#[derive(Clone, Copy)]
+pub struct AgentProviderSpec {
+    pub provider: AgentProvider,
+    pub name: &'static str,
+    pub command_name: &'static str,
+    pub current_transcript_env: Option<&'static str>,
+    pub current_session_id_env: Option<&'static str>,
+    factory: fn() -> Box<dyn AgentSessionProvider>,
+}
+
+const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
+    AgentProviderSpec {
+        provider: AgentProvider::Codex,
+        name: "Codex",
+        command_name: "codex",
+        current_transcript_env: None,
+        current_session_id_env: Some("CODEX_THREAD_ID"),
+        factory: codex_provider,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::Claude,
+        name: "Claude",
+        command_name: "claude",
+        current_transcript_env: Some("CLAUDE_TRANSCRIPT_PATH"),
+        current_session_id_env: Some("CLAUDE_SESSION_ID"),
+        factory: claude_provider,
+    },
+];
+
+fn codex_provider() -> Box<dyn AgentSessionProvider> {
+    Box::new(crate::codex::CodexProvider)
+}
+
+fn claude_provider() -> Box<dyn AgentSessionProvider> {
+    Box::new(crate::claude::ClaudeProvider)
+}
+
 impl AgentProvider {
+    pub fn all() -> &'static [AgentProviderSpec] {
+        AGENT_PROVIDER_SPECS
+    }
+
+    pub fn from_command_name(value: &str) -> Option<Self> {
+        Self::all()
+            .iter()
+            .find(|spec| spec.command_name.eq_ignore_ascii_case(value))
+            .map(|spec| spec.provider)
+    }
+
+    pub fn spec(self) -> &'static AgentProviderSpec {
+        Self::all()
+            .iter()
+            .find(|spec| spec.provider == self)
+            .expect("agent provider registry must contain every AgentProvider variant")
+    }
+
     pub fn name(self) -> &'static str {
-        match self {
-            AgentProvider::Claude => "Claude",
-            AgentProvider::Codex => "Codex",
-        }
+        self.spec().name
     }
 
     pub fn command_name(self) -> &'static str {
-        match self {
-            AgentProvider::Claude => "claude",
-            AgentProvider::Codex => "codex",
-        }
+        self.spec().command_name
+    }
+
+    pub fn current_transcript_env(self) -> Option<&'static str> {
+        self.spec().current_transcript_env
+    }
+
+    pub fn current_session_id_env(self) -> Option<&'static str> {
+        self.spec().current_session_id_env
+    }
+
+    pub fn session_provider(self) -> Box<dyn AgentSessionProvider> {
+        (self.spec().factory)()
     }
 }
 

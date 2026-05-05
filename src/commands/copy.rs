@@ -17,8 +17,6 @@ use sivtr_core::ai::{
     AgentSession, AgentSessionInfo, AgentSessionProvider,
 };
 use sivtr_core::capture::scrollback;
-use sivtr_core::claude::ClaudeProvider;
-use sivtr_core::codex::CodexProvider;
 use sivtr_core::session::{self, SessionEntry};
 
 mod picker;
@@ -77,18 +75,11 @@ pub struct AgentPickerRequest<'a> {
     pub lines: Option<&'a str>,
 }
 
-fn agent_session_provider(provider: AgentProvider) -> Box<dyn AgentSessionProvider> {
-    match provider {
-        AgentProvider::Claude => Box::new(ClaudeProvider),
-        AgentProvider::Codex => Box::new(CodexProvider),
-    }
-}
-
 fn agent_session_providers(providers: &[AgentProvider]) -> Vec<Box<dyn AgentSessionProvider>> {
     providers
         .iter()
         .copied()
-        .map(agent_session_provider)
+        .map(AgentProvider::session_provider)
         .collect()
 }
 
@@ -98,8 +89,7 @@ fn agent_copy_command(provider: AgentProvider) -> String {
 
 fn agent_picker_command(providers: &[AgentProvider]) -> String {
     let provider = match providers {
-        [AgentProvider::Codex] => "codex",
-        [AgentProvider::Claude] => "claude",
+        [provider] => provider.command_name(),
         _ => "all",
     };
     format!("sivtr hotkey-pick-agent --provider {provider}")
@@ -264,7 +254,7 @@ pub fn execute(request: CopyRequest<'_>) -> Result<()> {
 }
 
 pub fn execute_agent(request: AgentCopyRequest<'_>) -> Result<()> {
-    let source = agent_session_provider(request.provider);
+    let source = request.provider.session_provider();
     if request.pick && !request.pick_current_session {
         return execute_agent_session_pick(source.as_ref(), request);
     }
@@ -1266,10 +1256,7 @@ fn current_agent_session_path(
 }
 
 fn current_agent_transcript_path(provider: AgentProvider) -> Option<std::path::PathBuf> {
-    let env_name = match provider {
-        AgentProvider::Claude => "CLAUDE_TRANSCRIPT_PATH",
-        AgentProvider::Codex => return None,
-    };
+    let env_name = provider.current_transcript_env()?;
 
     std::env::var(env_name)
         .ok()
@@ -1279,10 +1266,7 @@ fn current_agent_transcript_path(provider: AgentProvider) -> Option<std::path::P
 }
 
 fn current_agent_session_id(provider: AgentProvider) -> Option<String> {
-    let env_name = match provider {
-        AgentProvider::Claude => "CLAUDE_SESSION_ID",
-        AgentProvider::Codex => "CODEX_THREAD_ID",
-    };
+    let env_name = provider.current_session_id_env()?;
 
     std::env::var(env_name)
         .ok()
