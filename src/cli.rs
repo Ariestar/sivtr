@@ -1,4 +1,5 @@
-use clap::{ArgGroup, Args, Parser, Subcommand};
+use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 const COPY_AFTER_HELP: &str = "\
@@ -123,6 +124,33 @@ Examples:
   sivtr copy codex all --lines 1:20
 ";
 
+const COPY_CLAUDE_AFTER_HELP: &str = "\
+Defaults:
+  `sivtr copy claude` copies the last completed user + assistant turn
+  from the current Claude Code session.
+
+Session Resolution:
+  By default, sivtr reads the newest Claude Code transcript whose `cwd`
+  matches the current working directory.
+
+Selector Semantics:
+  Selection is relative to the newest matching Claude Code item.
+  `1` means the latest turn/message/tool output, `2` means the 2nd-latest.
+
+Modes:
+  sivtr copy claude       Copy the last user + assistant turn
+  sivtr copy claude out   Copy the last assistant reply
+  sivtr copy claude in    Copy the last user message
+  sivtr copy claude tool  Copy the last tool output
+  sivtr copy claude all   Copy the whole parsed session
+
+Examples:
+  sivtr copy claude
+  sivtr copy claude out --print
+  sivtr copy claude --pick
+  sivtr copy claude all --lines 1:20
+";
+
 const DIFF_AFTER_HELP: &str = "\
 Defaults:
   `sivtr diff <left> <right>` compares two command blocks from the current session.
@@ -153,12 +181,13 @@ const HOTKEY_AFTER_HELP: &str = "\
 Examples:
   sivtr hotkey start
   sivtr hotkey start --chord alt+y
+  sivtr hotkey start --provider claude
   sivtr hotkey status
   sivtr hotkey stop
 
 Behavior:
   The hotkey daemon registers one global shortcut and opens a new
-  terminal window for picking from the current Codex session.
+  terminal window for picking from current AI sessions.
 ";
 
 /// sivtr - Terminal output workspace.
@@ -219,7 +248,7 @@ pub enum Commands {
     #[command(after_help = DIFF_AFTER_HELP)]
     Diff(DiffArgs),
 
-    /// Manage the global Codex picker hotkey
+    /// Manage the global AI session picker hotkey
     #[command(after_help = HOTKEY_AFTER_HELP)]
     Hotkey(HotkeyCommand),
 
@@ -234,9 +263,9 @@ pub enum Commands {
     #[command(hide = true)]
     HotkeyServe(HotkeyServeArgs),
 
-    /// Internal: open the Codex picker from the Windows hotkey daemon
+    /// Internal: open the AI session picker from the Windows hotkey daemon
     #[command(hide = true)]
-    HotkeyPickCodex(HotkeyPickCodexArgs),
+    HotkeyPickAgent(HotkeyPickAgentArgs),
 }
 
 #[derive(Args, Debug)]
@@ -265,6 +294,10 @@ pub enum CopySubcommand {
     /// Copy content from the current Codex conversation session
     #[command(after_help = COPY_CODEX_AFTER_HELP)]
     Codex(AgentCopyCommand),
+
+    /// Copy content from the current Claude Code conversation session
+    #[command(after_help = COPY_CLAUDE_AFTER_HELP)]
+    Claude(AgentCopyCommand),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -376,6 +409,10 @@ pub struct HotkeyStartArgs {
     /// Override the configured hotkey chord, for example `alt+y`
     #[arg(long, value_name = "CHORD")]
     pub chord: Option<String>,
+
+    /// AI provider opened by the hotkey
+    #[arg(long, value_enum, default_value_t = HotkeyProviderSelection::All)]
+    pub provider: HotkeyProviderSelection,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -387,13 +424,48 @@ pub struct HotkeyServeArgs {
     /// Registered global hotkey chord, for example `alt+y`
     #[arg(long, value_name = "CHORD")]
     pub chord: String,
+
+    /// AI provider opened by the hotkey
+    #[arg(long, value_enum, default_value_t = HotkeyProviderSelection::All)]
+    pub provider: HotkeyProviderSelection,
 }
 
 #[derive(Args, Debug, Clone)]
-pub struct HotkeyPickCodexArgs {
-    /// Working directory used to resolve the current Codex session
+pub struct HotkeyPickAgentArgs {
+    /// Working directory used to resolve current AI sessions
     #[arg(long, value_name = "PATH")]
     pub cwd: PathBuf,
+
+    /// AI provider sessions to show
+    #[arg(long, value_enum, default_value_t = HotkeyProviderSelection::All)]
+    pub provider: HotkeyProviderSelection,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum HotkeyProviderSelection {
+    #[default]
+    All,
+    Codex,
+    Claude,
+}
+
+impl HotkeyProviderSelection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Codex => "codex",
+            Self::Claude => "claude",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "all AI providers",
+            Self::Codex => "Codex",
+            Self::Claude => "Claude",
+        }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -556,12 +628,31 @@ mod tests {
     }
 
     #[test]
+    fn claude_copy_accepts_nested_mode() {
+        let cli = Cli::try_parse_from(["sivtr", "copy", "claude", "out", "--print"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Copy(cmd)) => match cmd.mode {
+                Some(CopySubcommand::Claude(claude)) => match claude.mode {
+                    Some(AgentCopyMode::Out(args)) => assert!(args.common.print),
+                    _ => panic!("expected copy claude out mode"),
+                },
+                _ => panic!("expected copy claude mode"),
+            },
+            _ => panic!("expected copy command"),
+        }
+    }
+
+    #[test]
     fn hotkey_start_accepts_chord_override() {
         let cli = Cli::try_parse_from(["sivtr", "hotkey", "start", "--chord", "alt+y"]).unwrap();
 
         match cli.command {
             Some(Commands::Hotkey(cmd)) => match cmd.action {
-                Some(HotkeyAction::Start(args)) => assert_eq!(args.chord.as_deref(), Some("alt+y")),
+                Some(HotkeyAction::Start(args)) => {
+                    assert_eq!(args.chord.as_deref(), Some("alt+y"));
+                    assert_eq!(args.provider, HotkeyProviderSelection::All);
+                }
                 _ => panic!("expected hotkey start"),
             },
             _ => panic!("expected hotkey command"),
@@ -569,12 +660,31 @@ mod tests {
     }
 
     #[test]
-    fn hotkey_pick_codex_accepts_cwd() {
-        let cli = Cli::try_parse_from(["sivtr", "hotkey-pick-codex", "--cwd", "."]).unwrap();
+    fn hotkey_start_accepts_provider_override() {
+        let cli =
+            Cli::try_parse_from(["sivtr", "hotkey", "start", "--provider", "claude"]).unwrap();
 
         match cli.command {
-            Some(Commands::HotkeyPickCodex(args)) => assert_eq!(args.cwd, PathBuf::from(".")),
-            _ => panic!("expected hotkey-pick-codex command"),
+            Some(Commands::Hotkey(cmd)) => match cmd.action {
+                Some(HotkeyAction::Start(args)) => {
+                    assert_eq!(args.provider, HotkeyProviderSelection::Claude);
+                }
+                _ => panic!("expected hotkey start"),
+            },
+            _ => panic!("expected hotkey command"),
+        }
+    }
+
+    #[test]
+    fn hotkey_pick_agent_defaults_to_all() {
+        let cli = Cli::try_parse_from(["sivtr", "hotkey-pick-agent", "--cwd", "."]).unwrap();
+
+        match cli.command {
+            Some(Commands::HotkeyPickAgent(args)) => {
+                assert_eq!(args.cwd, PathBuf::from("."));
+                assert_eq!(args.provider, HotkeyProviderSelection::All);
+            }
+            _ => panic!("expected hotkey-pick-agent command"),
         }
     }
 }

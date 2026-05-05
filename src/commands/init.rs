@@ -246,16 +246,19 @@ fn maybe_start_hotkey() -> Result<()> {
     #[cfg(windows)]
     {
         if !atty::is(atty::Stream::Stdin) {
-            eprintln!("sivtr: start the Codex hotkey later with `sivtr hotkey start`");
+            eprintln!("sivtr: start the AI session hotkey later with `sivtr hotkey start`");
             return Ok(());
         }
 
         if prompt_start_hotkey()? {
             crate::commands::hotkey::execute(HotkeyCommand {
-                action: Some(HotkeyAction::Start(HotkeyStartArgs { chord: None })),
+                action: Some(HotkeyAction::Start(HotkeyStartArgs {
+                    chord: None,
+                    provider: Default::default(),
+                })),
             })?;
         } else {
-            eprintln!("sivtr: start the Codex hotkey later with `sivtr hotkey start`");
+            eprintln!("sivtr: start the AI session hotkey later with `sivtr hotkey start`");
         }
     }
 
@@ -264,7 +267,7 @@ fn maybe_start_hotkey() -> Result<()> {
 
 #[cfg(windows)]
 fn prompt_start_hotkey() -> Result<bool> {
-    eprint!("sivtr: start the Windows Codex hotkey now? [Y/n] ");
+    eprint!("sivtr: start the Windows AI session hotkey now? [Y/n] ");
     io::stderr().flush()?;
 
     let mut input = String::new();

@@ -16,7 +16,7 @@ Use this page as the public release-notes home. Keep detailed version entries in
 - Codex session copy workflows;
 - SQLite history search;
 - TOML configuration;
-- Windows global Codex picker hotkey.
+- Windows global AI session picker hotkey.
 
 ## Recommended changelog format
 

@@ -12,7 +12,7 @@ const INSTALL_DOCS_URL = "https://github.com/Ariestar/sivtr#installation";
 
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
-    vscode.commands.registerCommand("sivtr.pickCodex", pickCodex),
+    vscode.commands.registerCommand("sivtr.pickAgent", pickAgent),
     vscode.window.onDidCloseTerminal((terminal) => {
       if (terminal === sivtrTerminal) {
         sivtrTerminal = undefined;
@@ -27,7 +27,7 @@ export function deactivate(): void {
   sivtrTerminalCwd = undefined;
 }
 
-async function pickCodex(): Promise<void> {
+async function pickAgent(): Promise<void> {
   const workspaceFolder = resolveWorkspaceFolder();
   if (!workspaceFolder) {
     void vscode.window.showErrorMessage("sivtr: open a workspace folder first.");
@@ -36,7 +36,13 @@ async function pickCodex(): Promise<void> {
 
   const config = vscode.workspace.getConfiguration("sivtr");
   const command = config.get<string>("command", "sivtr").trim();
-  const args = config.get<string[]>("args", ["copy", "codex", "--pick"]);
+  const args = config.get<string[]>("args", [
+    "hotkey-pick-agent",
+    "--cwd",
+    ".",
+    "--provider",
+    "all",
+  ]);
   const terminalName = config.get<string>("terminalName", "sivtr");
   const reuseTerminal = config.get<boolean>("reuseTerminal", true);
   const closeTerminalOnSuccess = config.get<boolean>("closeTerminalOnSuccess", true);

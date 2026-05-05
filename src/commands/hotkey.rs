@@ -5,9 +5,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::cli::{
-    HotkeyAction, HotkeyCommand, HotkeyPickCodexArgs, HotkeyServeArgs, HotkeyStartArgs,
+    HotkeyAction, HotkeyCommand, HotkeyPickAgentArgs, HotkeyProviderSelection, HotkeyServeArgs,
+    HotkeyStartArgs,
 };
-use crate::commands::copy::{self, AgentCopyRequest};
+use crate::commands::copy::{self, AgentPickerRequest};
 use sivtr_core::ai::{AgentProvider, AgentSelection};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,6 +16,8 @@ struct HotkeyState {
     pid: u32,
     chord: String,
     cwd: String,
+    #[serde(default)]
+    provider: HotkeyProviderSelection,
     #[serde(default)]
     exe: Option<String>,
 }
@@ -40,7 +43,7 @@ pub fn serve(args: &HotkeyServeArgs) -> Result<()> {
     }
 }
 
-pub fn pick_codex(args: &HotkeyPickCodexArgs) -> Result<()> {
+pub fn pick_agent(args: &HotkeyPickAgentArgs) -> Result<()> {
     #[cfg(windows)]
     let _ = bind_stdio_to_console();
 
@@ -52,10 +55,9 @@ pub fn pick_codex(args: &HotkeyPickCodexArgs) -> Result<()> {
     }
 
     let result = std::panic::catch_unwind(|| {
-        copy::execute_agent(AgentCopyRequest {
-            provider: AgentProvider::Codex,
-            selector: None,
-            pick: true,
+        let providers = selected_providers(args.provider);
+        copy::execute_agent_picker(AgentPickerRequest {
+            providers: &providers,
             pick_current_session: true,
             selection_mode: AgentSelection::LastTurn,
             print_full: false,
@@ -73,7 +75,7 @@ pub fn pick_codex(args: &HotkeyPickCodexArgs) -> Result<()> {
         }
         Err(panic) => {
             let message = panic_message(&panic);
-            eprintln!("sivtr: Codex picker panicked");
+            eprintln!("sivtr: AI session picker panicked");
             eprintln!("{message}");
             wait_for_enter();
         }
@@ -90,6 +92,7 @@ fn start(args: HotkeyStartArgs) -> Result<()> {
             eprintln!("sivtr: hotkey daemon already running (pid {})", state.pid);
             eprintln!("  chord: {}", state.chord);
             eprintln!("  cwd:   {}", state.cwd);
+            eprintln!("  provider: {}", state.provider.label());
             if let Some(exe) = state.exe {
                 eprintln!("  exe:   {exe}");
             }
@@ -103,13 +106,14 @@ fn start(args: HotkeyStartArgs) -> Result<()> {
     let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
     let exe = std::env::current_exe().context("Failed to resolve current executable")?;
 
-    spawn_daemon(&exe, &cwd, &chord)?;
+    spawn_daemon(&exe, &cwd, &chord, args.provider)?;
     wait_for_state_file()?;
 
     if let Some(state) = read_state()? {
         eprintln!("sivtr: hotkey daemon started");
         eprintln!("  chord: {}", state.chord);
         eprintln!("  cwd:   {}", state.cwd);
+        eprintln!("  provider: {}", state.provider.label());
         if let Some(exe) = state.exe {
             eprintln!("  exe:   {exe}");
         }
@@ -158,6 +162,7 @@ fn status() -> Result<()> {
     eprintln!("  pid:   {}", state.pid);
     eprintln!("  chord: {}", state.chord);
     eprintln!("  cwd:   {}", state.cwd);
+    eprintln!("  provider: {}", state.provider.label());
     if let Some(exe) = state.exe {
         eprintln!("  exe:   {exe}");
     }
@@ -173,7 +178,7 @@ fn state_path() -> Result<PathBuf> {
 }
 
 fn show_pick_error_and_wait(error: &anyhow::Error) {
-    eprintln!("sivtr: Codex picker failed");
+    eprintln!("sivtr: AI session picker failed");
     eprintln!("{error:#}");
     wait_for_enter();
 }
@@ -299,8 +304,21 @@ fn ensure_windows() -> Result<()> {
     }
 }
 
+fn selected_providers(selection: HotkeyProviderSelection) -> Vec<AgentProvider> {
+    match selection {
+        HotkeyProviderSelection::All => vec![AgentProvider::Codex, AgentProvider::Claude],
+        HotkeyProviderSelection::Codex => vec![AgentProvider::Codex],
+        HotkeyProviderSelection::Claude => vec![AgentProvider::Claude],
+    }
+}
+
 #[cfg(windows)]
-fn spawn_daemon(exe: &Path, cwd: &Path, chord: &str) -> Result<()> {
+fn spawn_daemon(
+    exe: &Path,
+    cwd: &Path,
+    chord: &str,
+    provider: HotkeyProviderSelection,
+) -> Result<()> {
     use std::os::windows::process::CommandExt;
 
     const DETACHED_PROCESS: u32 = 0x0000_0008;
@@ -313,6 +331,8 @@ fn spawn_daemon(exe: &Path, cwd: &Path, chord: &str) -> Result<()> {
         .arg(cwd.to_string_lossy().to_string())
         .arg("--chord")
         .arg(chord)
+        .arg("--provider")
+        .arg(provider.as_str())
         .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW)
         .spawn()
         .context("Failed to start hotkey daemon")?;
@@ -320,7 +340,12 @@ fn spawn_daemon(exe: &Path, cwd: &Path, chord: &str) -> Result<()> {
 }
 
 #[cfg(not(windows))]
-fn spawn_daemon(_exe: &Path, _cwd: &Path, _chord: &str) -> Result<()> {
+fn spawn_daemon(
+    _exe: &Path,
+    _cwd: &Path,
+    _chord: &str,
+    _provider: HotkeyProviderSelection,
+) -> Result<()> {
     anyhow::bail!("sivtr hotkey is currently supported on Windows only")
 }
 
@@ -337,6 +362,7 @@ fn serve_windows(args: &HotkeyServeArgs) -> Result<()> {
         pid: std::process::id(),
         chord: args.chord.clone(),
         cwd: args.cwd.clone(),
+        provider: args.provider,
         exe: std::env::current_exe()
             .ok()
             .map(|path| path.to_string_lossy().to_string()),
@@ -350,7 +376,7 @@ fn serve_windows(args: &HotkeyServeArgs) -> Result<()> {
         }
 
         if msg.message == WM_HOTKEY && msg.wParam == hotkey_id as usize {
-            let _ = spawn_picker_terminal(&args.cwd);
+            let _ = spawn_picker_terminal(&args.cwd, args.provider);
         }
 
         unsafe {
@@ -441,7 +467,7 @@ fn unregister_hotkey(id: i32) -> Result<()> {
 }
 
 #[cfg(windows)]
-fn spawn_picker_terminal(cwd: &str) -> Result<()> {
+fn spawn_picker_terminal(cwd: &str, provider: HotkeyProviderSelection) -> Result<()> {
     use std::os::windows::process::CommandExt;
 
     const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
@@ -452,9 +478,11 @@ fn spawn_picker_terminal(cwd: &str) -> Result<()> {
 
     Command::new(exe)
         .current_dir(&cwd)
-        .arg("hotkey-pick-codex")
+        .arg("hotkey-pick-agent")
         .arg("--cwd")
         .arg(&cwd)
+        .arg("--provider")
+        .arg(provider.as_str())
         .creation_flags(CREATE_NEW_CONSOLE)
         .spawn()
         .context("Failed to open picker terminal")?;

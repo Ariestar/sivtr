@@ -56,7 +56,7 @@ sivtr hotkey stop
 按下组合键时，守护进程会启动：
 
 ```bash
-sivtr hotkey-pick-codex --cwd <daemon-working-directory>
+sivtr hotkey-pick-agent --cwd <daemon-working-directory> --provider all
 ```
 
 这个内部命令会先打开守护进程工作目录下最新的非空 Codex 会话。如果这个会话不存在或为空，再退回到会话选择器。

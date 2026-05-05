@@ -1,13 +1,14 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::Value;
-use std::fs;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use crate::ai::{
-    AgentBlock, AgentBlockKind, AgentProvider, AgentSession, AgentSessionInfo, AgentSessionProvider,
+    extract_content_text, list_recent_jsonl_sessions, parse_jsonl_meta, parse_jsonl_session,
+    pretty_json_string, pretty_json_value, push_block, AgentBlockKind, AgentProvider, AgentSession,
+    AgentSessionInfo, AgentSessionMeta, AgentSessionProvider,
 };
+
+const PROVIDER_NAME: &str = "Codex";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CodexProvider;
@@ -18,11 +19,11 @@ impl AgentSessionProvider for CodexProvider {
     }
 
     fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
-        list_recent_sessions(cwd)
+        list_recent_jsonl_sessions(&codex_home().join("sessions"), cwd, parse_session_meta)
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_session_file(path)
+        parse_jsonl_session(path, PROVIDER_NAME, apply_event)
     }
 }
 
@@ -36,141 +37,18 @@ pub fn codex_home() -> PathBuf {
         .join(".codex")
 }
 
-fn list_recent_sessions(cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
-    let wanted = cwd.map(normalize_path_for_match);
-    let mut sessions = Vec::new();
-
-    for path in session_files()? {
-        let meta = parse_session_meta(&path)?;
-        if let Some(wanted) = wanted.as_deref() {
-            let matches_cwd = meta
-                .cwd
-                .as_deref()
-                .map(|cwd| normalize_path_for_match(Path::new(cwd)) == wanted)
-                .unwrap_or(false);
-            if !matches_cwd {
-                continue;
-            }
-        }
-
-        sessions.push(AgentSessionInfo {
-            modified: modified_time(&path).unwrap_or(SystemTime::UNIX_EPOCH),
-            path,
-            id: meta.id,
-            cwd: meta.cwd,
-        });
-    }
-
-    sessions.sort_by_key(|session| session.modified);
-    sessions.reverse();
-    Ok(sessions)
-}
-
-fn parse_session_file(path: &Path) -> Result<AgentSession> {
-    let file = fs::File::open(path)
-        .with_context(|| format!("Failed to read Codex session: {}", path.display()))?;
-    let reader = BufReader::new(file);
-    let mut session = AgentSession {
-        path: path.to_path_buf(),
-        id: None,
-        cwd: None,
-        blocks: Vec::new(),
-    };
-
-    for (idx, line) in reader.lines().enumerate() {
-        let line = line.with_context(|| {
-            format!(
-                "Failed to read Codex session line {}: {}",
-                idx + 1,
-                path.display()
-            )
-        })?;
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        let value: Value = serde_json::from_str(&line).with_context(|| {
-            format!(
-                "Failed to parse Codex session line {} as JSON: {}",
-                idx + 1,
-                path.display()
-            )
-        })?;
-        apply_event(&mut session, &value);
-    }
-
-    Ok(session)
-}
-
-fn session_files() -> Result<Vec<PathBuf>> {
-    let sessions_dir = codex_home().join("sessions");
-    if !sessions_dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut files = Vec::new();
-    collect_jsonl_files(&sessions_dir, &mut files)?;
-    Ok(files)
-}
-
-fn collect_jsonl_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in fs::read_dir(dir).with_context(|| format!("Failed to read {}", dir.display()))? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            collect_jsonl_files(&path, files)?;
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
-            files.push(path);
-        }
-    }
-    Ok(())
-}
-
-fn modified_time(path: &Path) -> Result<SystemTime> {
-    Ok(fs::metadata(path)?.modified()?)
-}
-
-#[derive(Default)]
-struct CodexMeta {
-    id: Option<String>,
-    cwd: Option<String>,
-}
-
-fn parse_session_meta(path: &Path) -> Result<CodexMeta> {
-    let file = fs::File::open(path)
-        .with_context(|| format!("Failed to read Codex session: {}", path.display()))?;
-    let mut reader = BufReader::new(file);
-    let mut line = String::new();
-    reader.read_line(&mut line)?;
-    if line.trim().is_empty() {
-        return Ok(CodexMeta::default());
-    }
-
-    let value: Value = serde_json::from_str(&line).with_context(|| {
-        format!(
-            "Failed to parse Codex session metadata as JSON: {}",
-            path.display()
-        )
-    })?;
-    let payload = value.get("payload").unwrap_or(&Value::Null);
-    Ok(CodexMeta {
-        id: payload
+fn parse_session_meta(path: &Path) -> Result<AgentSessionMeta> {
+    parse_jsonl_meta(path, PROVIDER_NAME, 1, |meta, value| {
+        let payload = value.get("payload").unwrap_or(&Value::Null);
+        meta.id = payload
             .get("id")
             .and_then(Value::as_str)
-            .map(str::to_string),
-        cwd: payload
+            .map(str::to_string);
+        meta.cwd = payload
             .get("cwd")
             .and_then(Value::as_str)
-            .map(str::to_string),
+            .map(str::to_string);
     })
-}
-
-fn normalize_path_for_match(path: &Path) -> String {
-    path.canonicalize()
-        .unwrap_or_else(|_| path.to_path_buf())
-        .to_string_lossy()
-        .replace('/', "\\")
-        .to_lowercase()
 }
 
 fn apply_event(session: &mut AgentSession, value: &Value) {
@@ -209,86 +87,53 @@ fn apply_response_item(session: &mut AgentSession, payload: &Value, timestamp: O
                 }
                 _ => return,
             };
-            let text = extract_content_text(payload.get("content").unwrap_or(&Value::Null));
-            push_block(session, kind, timestamp, None, text);
+            push_block(
+                session,
+                kind,
+                timestamp,
+                None,
+                extract_content_text(payload.get("content").unwrap_or(&Value::Null)),
+            );
         }
-        Some("function_call") => {
-            let label = payload
+        Some("function_call") => push_block(
+            session,
+            AgentBlockKind::ToolCall,
+            timestamp,
+            payload
                 .get("name")
                 .and_then(Value::as_str)
-                .map(str::to_string);
-            let text = extract_tool_call_text(payload);
-            push_block(session, AgentBlockKind::ToolCall, timestamp, label, text);
-        }
-        Some("function_call_output") => {
-            let text = payload
+                .map(str::to_string),
+            extract_tool_call_text(payload),
+        ),
+        Some("function_call_output") => push_block(
+            session,
+            AgentBlockKind::ToolOutput,
+            timestamp,
+            None,
+            payload
                 .get("output")
                 .and_then(Value::as_str)
                 .unwrap_or_default()
-                .to_string();
-            push_block(session, AgentBlockKind::ToolOutput, timestamp, None, text);
-        }
+                .to_string(),
+        ),
         _ => {}
     }
 }
 
-fn push_block(
-    session: &mut AgentSession,
-    kind: AgentBlockKind,
-    timestamp: Option<String>,
-    label: Option<String>,
-    text: String,
-) {
-    let text = text.trim().to_string();
-    if !text.is_empty() {
-        session.blocks.push(AgentBlock {
-            kind,
-            timestamp,
-            label,
-            text,
-        });
-    }
-}
-
-fn extract_content_text(content: &Value) -> String {
-    match content {
-        Value::String(text) => text.clone(),
-        Value::Array(items) => items
-            .iter()
-            .filter_map(|item| {
-                item.get("text")
-                    .and_then(Value::as_str)
-                    .or_else(|| item.get("input_text").and_then(Value::as_str))
-                    .or_else(|| item.get("output_text").and_then(Value::as_str))
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n"),
-        _ => String::new(),
-    }
-}
-
 fn extract_tool_call_text(payload: &Value) -> String {
-    if let Some(arguments) = payload.get("arguments") {
-        if let Some(arguments) = arguments.as_str() {
-            return pretty_json_string(arguments);
-        }
-        return serde_json::to_string_pretty(arguments).unwrap_or_else(|_| arguments.to_string());
+    match payload.get("arguments") {
+        Some(Value::String(arguments)) => pretty_json_string(arguments),
+        Some(arguments) => pretty_json_value(arguments),
+        None => pretty_json_value(payload),
     }
-
-    serde_json::to_string_pretty(payload).unwrap_or_default()
-}
-
-fn pretty_json_string(text: &str) -> String {
-    serde_json::from_str::<Value>(text)
-        .ok()
-        .and_then(|value| serde_json::to_string_pretty(&value).ok())
-        .unwrap_or_else(|| text.to_string())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_session_file;
-    use crate::ai::{format_blocks, select_blocks, AgentBlockKind, AgentSelection};
+    use super::CodexProvider;
+    use crate::ai::{
+        format_blocks, select_blocks, AgentBlockKind, AgentSelection, AgentSessionProvider,
+    };
 
     #[test]
     fn parses_codex_rollout_messages_and_tools() {
@@ -305,7 +150,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = parse_session_file(&path).unwrap();
+        let session = CodexProvider.parse_session_file(&path).unwrap();
 
         assert_eq!(session.id.as_deref(), Some("abc"));
         assert_eq!(session.cwd.as_deref(), Some("C:\\repo"));
@@ -331,7 +176,7 @@ mod tests {
 "#,
         )
         .unwrap();
-        let session = parse_session_file(&path).unwrap();
+        let session = CodexProvider.parse_session_file(&path).unwrap();
 
         let blocks = select_blocks(&session, AgentSelection::LastTurn);
 
@@ -357,7 +202,7 @@ mod tests {
 "#,
         )
         .unwrap();
-        let session = parse_session_file(&path).unwrap();
+        let session = CodexProvider.parse_session_file(&path).unwrap();
 
         let blocks = select_blocks(&session, AgentSelection::LastAssistant);
 

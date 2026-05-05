@@ -40,7 +40,7 @@ Inside the browser, use `j` and `k` to move, `/` to search, `v` or `V` to select
 | Pick one or more recent blocks | `sivtr copy --pick` |
 | Copy the latest assistant reply from Codex | `sivtr copy codex out` |
 | Search saved captures | `sivtr history search "panic"` |
-| Start the Windows Codex hotkey | `sivtr hotkey start` |
+| Start the Windows AI session hotkey | `sivtr hotkey start` |
 
 ## Documentation map
 

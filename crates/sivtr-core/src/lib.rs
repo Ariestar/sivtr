@@ -1,6 +1,7 @@
 pub mod ai;
 pub mod buffer;
 pub mod capture;
+pub mod claude;
 pub mod codex;
 pub mod config;
 pub mod export;

@@ -17,6 +17,7 @@ use sivtr_core::ai::{
     AgentSession, AgentSessionInfo, AgentSessionProvider,
 };
 use sivtr_core::capture::scrollback;
+use sivtr_core::claude::ClaudeProvider;
 use sivtr_core::codex::CodexProvider;
 use sivtr_core::session::{self, SessionEntry};
 
@@ -66,14 +67,42 @@ pub struct AgentCopyRequest<'a> {
     pub lines: Option<&'a str>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct AgentPickerRequest<'a> {
+    pub providers: &'a [AgentProvider],
+    pub pick_current_session: bool,
+    pub selection_mode: AgentSelection,
+    pub print_full: bool,
+    pub regex: Option<&'a str>,
+    pub lines: Option<&'a str>,
+}
+
 fn agent_session_provider(provider: AgentProvider) -> Box<dyn AgentSessionProvider> {
     match provider {
+        AgentProvider::Claude => Box::new(ClaudeProvider),
         AgentProvider::Codex => Box::new(CodexProvider),
     }
 }
 
+fn agent_session_providers(providers: &[AgentProvider]) -> Vec<Box<dyn AgentSessionProvider>> {
+    providers
+        .iter()
+        .copied()
+        .map(agent_session_provider)
+        .collect()
+}
+
 fn agent_copy_command(provider: AgentProvider) -> String {
     format!("sivtr copy {}", provider.command_name())
+}
+
+fn agent_picker_command(providers: &[AgentProvider]) -> String {
+    let provider = match providers {
+        [AgentProvider::Codex] => "codex",
+        [AgentProvider::Claude] => "claude",
+        _ => "all",
+    };
+    format!("sivtr hotkey-pick-agent --provider {provider}")
 }
 
 #[derive(Clone, Debug)]
@@ -278,6 +307,46 @@ pub fn execute_agent(request: AgentCopyRequest<'_>) -> Result<()> {
     finish_agent_copy(&units, selection, &request)
 }
 
+pub fn execute_agent_picker(request: AgentPickerRequest<'_>) -> Result<()> {
+    let sources = agent_session_providers(request.providers);
+    if sources.is_empty() {
+        anyhow::bail!("No AI providers configured for picker");
+    }
+
+    let title = agent_picker_command(request.providers);
+    let mut terminal = init_tui()?;
+    let result = if request.pick_current_session {
+        let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
+        pick_current_agent_sessions_content_on_terminal(
+            &sources,
+            &mut terminal,
+            &cwd,
+            request.selection_mode,
+            &title,
+        )
+    } else {
+        pick_agent_sessions_content_on_terminal(
+            &sources,
+            &mut terminal,
+            request.selection_mode,
+            &title,
+        )
+    };
+    restore_tui(&mut terminal)?;
+    let picked = result?;
+    let copy_request = AgentCopyRequest {
+        provider: picked.provider,
+        selector: None,
+        pick: true,
+        pick_current_session: request.pick_current_session,
+        selection_mode: request.selection_mode,
+        print_full: request.print_full,
+        regex: request.regex,
+        lines: request.lines,
+    };
+    finish_agent_copy(&picked.units, picked.selection, &copy_request)
+}
+
 fn execute_agent_session_pick(
     source: &dyn AgentSessionProvider,
     request: AgentCopyRequest<'_>,
@@ -286,8 +355,8 @@ fn execute_agent_session_pick(
     let result =
         pick_agent_session_content_on_terminal(source, &mut terminal, request.selection_mode);
     restore_tui(&mut terminal)?;
-    let (units, selection) = result?;
-    finish_agent_copy(&units, selection, &request)
+    let picked = result?;
+    finish_agent_copy(&picked.units, picked.selection, &request)
 }
 
 fn execute_current_agent_session_pick(
@@ -303,15 +372,15 @@ fn execute_current_agent_session_pick(
         request.selection_mode,
     );
     restore_tui(&mut terminal)?;
-    let (units, selection) = result?;
-    finish_agent_copy(&units, selection, &request)
+    let picked = result?;
+    finish_agent_copy(&picked.units, picked.selection, &request)
 }
 
 fn pick_agent_session_content_on_terminal(
     source: &dyn AgentSessionProvider,
     terminal: &mut crate::tui::terminal::Tui,
     selection_mode: AgentSelection,
-) -> Result<(Vec<TextPair>, CommandSelection)> {
+) -> Result<AgentPickedContent> {
     let sessions = source.list_recent_sessions(None)?;
     let choices = build_agent_session_choices(source, &sessions, selection_mode)?;
     if choices.is_empty() {
@@ -321,11 +390,70 @@ fn pick_agent_session_content_on_terminal(
         );
     }
     run_agent_hierarchy_picker_on_terminal(
-        source.provider(),
+        &format!("{} --pick", agent_copy_command(source.provider())),
         terminal,
         choices,
         AgentHierarchyFocus::Sessions,
     )
+}
+
+fn pick_agent_sessions_content_on_terminal(
+    sources: &[Box<dyn AgentSessionProvider>],
+    terminal: &mut crate::tui::terminal::Tui,
+    selection_mode: AgentSelection,
+    title: &str,
+) -> Result<AgentPickedContent> {
+    let mut choices = Vec::new();
+    for source in sources {
+        let sessions = source.list_recent_sessions(None)?;
+        choices.extend(build_agent_session_choices(
+            source.as_ref(),
+            &sessions,
+            selection_mode,
+        )?);
+    }
+    choices.sort_by(|a, b| b.modified.cmp(&a.modified));
+    choices.truncate(PICK_LIMIT);
+
+    if choices.is_empty() {
+        anyhow::bail!("No AI sessions with selectable content found");
+    }
+
+    run_agent_hierarchy_picker_on_terminal(title, terminal, choices, AgentHierarchyFocus::Sessions)
+}
+
+fn pick_current_agent_sessions_content_on_terminal(
+    sources: &[Box<dyn AgentSessionProvider>],
+    terminal: &mut crate::tui::terminal::Tui,
+    cwd: &std::path::Path,
+    selection_mode: AgentSelection,
+    title: &str,
+) -> Result<AgentPickedContent> {
+    let mut choices = Vec::new();
+    for source in sources {
+        let Some(path) = resolve_current_agent_session_with_blocks(source.as_ref(), cwd)? else {
+            continue;
+        };
+        let session = source.parse_session_file(&path)?;
+        let info = AgentSessionInfo {
+            path,
+            id: session.id.clone(),
+            cwd: session.cwd.clone(),
+            modified: session_modified_time(&session.path),
+        };
+        if let Some(choice) =
+            build_agent_session_choice(source.as_ref(), &info, session, selection_mode)
+        {
+            choices.push(choice);
+        }
+    }
+    choices.sort_by(|a, b| b.modified.cmp(&a.modified));
+
+    if choices.is_empty() {
+        return pick_agent_sessions_content_on_terminal(sources, terminal, selection_mode, title);
+    }
+
+    run_agent_hierarchy_picker_on_terminal(title, terminal, choices, AgentHierarchyFocus::Sessions)
 }
 
 fn pick_current_agent_session_content_on_terminal(
@@ -333,7 +461,7 @@ fn pick_current_agent_session_content_on_terminal(
     terminal: &mut crate::tui::terminal::Tui,
     path: &std::path::Path,
     selection_mode: AgentSelection,
-) -> Result<(Vec<TextPair>, CommandSelection)> {
+) -> Result<AgentPickedContent> {
     let session = source.parse_session_file(path)?;
     let info = AgentSessionInfo {
         path: path.to_path_buf(),
@@ -341,14 +469,15 @@ fn pick_current_agent_session_content_on_terminal(
         cwd: session.cwd.clone(),
         modified: SystemTime::UNIX_EPOCH,
     };
-    let choice = build_agent_session_choice(&info, session, selection_mode).with_context(|| {
-        format!(
-            "Current {} session has no selectable content",
-            source.provider().name()
-        )
-    })?;
+    let choice =
+        build_agent_session_choice(source, &info, session, selection_mode).with_context(|| {
+            format!(
+                "Current {} session has no selectable content",
+                source.provider().name()
+            )
+        })?;
     run_agent_hierarchy_picker_on_terminal(
-        source.provider(),
+        &format!("{} --pick", agent_copy_command(source.provider())),
         terminal,
         vec![choice],
         AgentHierarchyFocus::Dialogues,
@@ -356,7 +485,16 @@ fn pick_current_agent_session_content_on_terminal(
 }
 
 #[derive(Clone, Debug)]
+struct AgentPickedContent {
+    provider: AgentProvider,
+    units: Vec<TextPair>,
+    selection: CommandSelection,
+}
+
+#[derive(Clone, Debug)]
 struct AgentSessionChoice {
+    provider: AgentProvider,
+    modified: SystemTime,
     title: String,
     units: Vec<TextPair>,
     dialogue_titles: Vec<String>,
@@ -378,7 +516,7 @@ fn build_agent_session_choices(
 
     for info in sessions.iter().take(PICK_LIMIT) {
         let session = source.parse_session_file(&info.path)?;
-        if let Some(choice) = build_agent_session_choice(info, session, selection_mode) {
+        if let Some(choice) = build_agent_session_choice(source, info, session, selection_mode) {
             choices.push(choice);
         }
     }
@@ -387,6 +525,7 @@ fn build_agent_session_choices(
 }
 
 fn build_agent_session_choice(
+    source: &dyn AgentSessionProvider,
     info: &AgentSessionInfo,
     session: AgentSession,
     selection_mode: AgentSelection,
@@ -396,7 +535,11 @@ fn build_agent_session_choice(
         return None;
     }
 
-    let title = agent_session_display_title(info, &session);
+    let title = format!(
+        "[{}] {}",
+        source.provider().name(),
+        agent_session_display_title(info, &session)
+    );
     let dialogue_titles = units
         .iter()
         .rev()
@@ -405,6 +548,8 @@ fn build_agent_session_choice(
         .collect();
 
     Some(AgentSessionChoice {
+        provider: source.provider(),
+        modified: info.modified,
         title,
         units,
         dialogue_titles,
@@ -412,11 +557,11 @@ fn build_agent_session_choice(
 }
 
 fn run_agent_hierarchy_picker_on_terminal(
-    provider: AgentProvider,
+    title: &str,
     terminal: &mut crate::tui::terminal::Tui,
     choices: Vec<AgentSessionChoice>,
     initial_focus: AgentHierarchyFocus,
-) -> Result<(Vec<TextPair>, CommandSelection)> {
+) -> Result<AgentPickedContent> {
     let mut session_state = ListState::default();
     session_state.select(Some(0));
     let mut dialogue_state = ListState::default();
@@ -439,7 +584,7 @@ fn run_agent_hierarchy_picker_on_terminal(
 
         terminal.draw(|frame| {
             render_agent_hierarchy_picker(
-                provider,
+                title,
                 frame,
                 &choices,
                 &session_state,
@@ -555,11 +700,19 @@ fn run_agent_hierarchy_picker_on_terminal(
                     }
                     AgentHierarchyFocus::Dialogues => {
                         let selection = agent_dialogue_selection(&selected_dialogues, dialogue_idx);
-                        return Ok((choices[session_idx].units.clone(), selection));
+                        return Ok(AgentPickedContent {
+                            provider: choices[session_idx].provider,
+                            units: choices[session_idx].units.clone(),
+                            selection,
+                        });
                     }
                     AgentHierarchyFocus::Content => {
                         let selection = agent_dialogue_selection(&selected_dialogues, dialogue_idx);
-                        return Ok((choices[session_idx].units.clone(), selection));
+                        return Ok(AgentPickedContent {
+                            provider: choices[session_idx].provider,
+                            units: choices[session_idx].units.clone(),
+                            selection,
+                        });
                     }
                 },
                 _ => {}
@@ -614,7 +767,7 @@ fn current_agent_dialogue_text(choice: &AgentSessionChoice, dialogue_idx: usize)
 }
 
 fn render_agent_hierarchy_picker(
-    provider: AgentProvider,
+    title: &str,
     frame: &mut Frame,
     choices: &[AgentSessionChoice],
     session_state: &ListState,
@@ -658,7 +811,7 @@ fn render_agent_hierarchy_picker(
     .block(
         Block::default()
             .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
-            .title(format!("{} --pick", agent_copy_command(provider))),
+            .title(title),
     );
     frame.render_widget(title, chunks[0]);
 
@@ -1079,16 +1232,8 @@ fn resolve_current_agent_session_with_blocks(
     source: &dyn AgentSessionProvider,
     cwd: &std::path::Path,
 ) -> Result<Option<std::path::PathBuf>> {
-    if source.provider() == AgentProvider::Codex {
-        if let Ok(thread_id) = std::env::var("CODEX_THREAD_ID") {
-            if !thread_id.trim().is_empty() {
-                if let Some(path) = source.find_session_by_id(thread_id.trim())? {
-                    if agent_session_has_blocks(source, &path)? {
-                        return Ok(Some(path));
-                    }
-                }
-            }
-        }
+    if let Some(path) = current_agent_session_path(source)? {
+        return Ok(Some(path));
     }
 
     for session in source.list_recent_sessions(Some(cwd))? {
@@ -1100,11 +1245,62 @@ fn resolve_current_agent_session_with_blocks(
     Ok(None)
 }
 
+fn current_agent_session_path(
+    source: &dyn AgentSessionProvider,
+) -> Result<Option<std::path::PathBuf>> {
+    if let Some(path) = current_agent_transcript_path(source.provider()) {
+        if agent_session_has_blocks(source, &path)? {
+            return Ok(Some(path));
+        }
+    }
+
+    if let Some(session_id) = current_agent_session_id(source.provider()) {
+        if let Some(path) = source.find_session_by_id(&session_id)? {
+            if agent_session_has_blocks(source, &path)? {
+                return Ok(Some(path));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn current_agent_transcript_path(provider: AgentProvider) -> Option<std::path::PathBuf> {
+    let env_name = match provider {
+        AgentProvider::Claude => "CLAUDE_TRANSCRIPT_PATH",
+        AgentProvider::Codex => return None,
+    };
+
+    std::env::var(env_name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+}
+
+fn current_agent_session_id(provider: AgentProvider) -> Option<String> {
+    let env_name = match provider {
+        AgentProvider::Claude => "CLAUDE_SESSION_ID",
+        AgentProvider::Codex => "CODEX_THREAD_ID",
+    };
+
+    std::env::var(env_name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 fn agent_session_has_blocks(
     source: &dyn AgentSessionProvider,
     path: &std::path::Path,
 ) -> Result<bool> {
     Ok(!source.parse_session_file(path)?.blocks.is_empty())
+}
+
+fn session_modified_time(path: &std::path::Path) -> SystemTime {
+    path.metadata()
+        .and_then(|metadata| metadata.modified())
+        .unwrap_or(SystemTime::UNIX_EPOCH)
 }
 
 fn pick_agent_session_path(

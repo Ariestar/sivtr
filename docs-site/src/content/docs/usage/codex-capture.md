@@ -70,7 +70,7 @@ Context-aware launchers such as the Windows hotkey and VS Code extension first o
 
 ## Windows hotkey
 
-On Windows, the hotkey daemon opens the Codex picker for the project directory where it was started:
+On Windows, the hotkey daemon opens the AI session picker for the project directory where it was started:
 
 ```bash
 sivtr hotkey start

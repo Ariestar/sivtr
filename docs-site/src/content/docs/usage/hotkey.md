@@ -1,9 +1,9 @@
 ---
 title: Hotkey
-description: Start, stop, and configure the Windows Codex picker hotkey.
+description: Start, stop, and configure the Windows AI session picker hotkey.
 ---
 
-The hotkey daemon is currently Windows-only. It registers one global shortcut and opens a new terminal window that runs the Codex picker for the working directory where the daemon was started.
+The hotkey daemon is currently Windows-only. It registers one global shortcut and opens a new terminal window that runs the AI session picker for the working directory where the daemon was started.
 
 ## Start
 
@@ -56,7 +56,7 @@ If the stored pid is stale, `sivtr` clears the state file.
 When the chord is pressed, the daemon launches:
 
 ```bash
-sivtr hotkey-pick-codex --cwd <daemon-working-directory>
+sivtr hotkey-pick-agent --cwd <daemon-working-directory> --provider all
 ```
 
 That internal command first opens the newest non-empty Codex session for the

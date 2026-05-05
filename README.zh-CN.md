@@ -42,7 +42,7 @@
 - 把任意命令输出通过管道送入可搜索、可选择的浏览器。
 - 记录 shell 命令块，之后复制最近的输入、输出或纯命令。
 - 读取 Codex 的 JSONL 会话文件，复制用户消息、助手回复或工具输出。
-- 在 VS Code 中用一个快捷键打开 Codex picker。
+- 在 VS Code 中用一个快捷键打开 AI session picker。
 - 支持用正则和行号范围过滤复制内容。
 - 用本地 SQLite 保存历史，之后可以检索。
 - 迭代测试和构建时，对比最近几次命令输出。
@@ -69,7 +69,7 @@ VS Code 插件：
 ariestar.sivtr-vscode
 ```
 
-插件会从当前 workspace 启动 Codex picker。如果没有安装 `sivtr` CLI，它会提示你是否在可见终端里运行 `cargo install sivtr`。
+插件会从当前 workspace 启动 AI session picker。如果没有安装 `sivtr` CLI，它会提示你是否在可见终端里运行 `cargo install sivtr`。
 
 ## 快速开始
 
@@ -166,7 +166,7 @@ sivtr copy codex all    # 整个解析后的会话
 VS Code 插件提供命令：
 
 ```text
-Sivtr: Pick Codex Turn
+Sivtr: Pick AI Session
 ```
 
 默认快捷键：
@@ -202,7 +202,7 @@ sivtr hotkey stop
 | `sivtr config` | 管理 TOML 配置。 |
 | `sivtr init <shell>` | 生成命令块捕获所需的 shell 集成。 |
 | `sivtr import` | 打开当前 session log。 |
-| `sivtr hotkey` | 管理 Windows Codex picker 热键。 |
+| `sivtr hotkey` | 管理 Windows AI session picker 热键。 |
 | `sivtr clear` | 清空 session logs。 |
 
 ## TUI 按键
@@ -254,7 +254,7 @@ sivtr/
 |- crates/sivtr-core/    # 捕获、解析、缓冲区、选择、搜索、历史、导出
 |- src/                  # CLI、TUI、命令、热键集成
 |- docs-site/            # Astro/Starlight 文档站
-|- editors/vscode/       # Codex picker 的 VS Code 插件桥接
+|- editors/vscode/       # AI session picker 的 VS Code 插件桥接
 `- .github/workflows/    # CI 和发布自动化
 ```
 

@@ -1,7 +1,7 @@
 {
   "name": "sivtr-vscode",
   "displayName": "sivtr",
-  "description": "Launch the sivtr Codex picker from VS Code.",
+  "description": "Launch the sivtr AI session picker from VS Code.",
   "version": "0.1.2",
   "publisher": "ariestar",
   "icon": "icon.png",
@@ -25,13 +25,13 @@
   "contributes": {
     "commands": [
       {
-        "command": "sivtr.pickCodex",
-        "title": "Sivtr: Pick Codex Turn"
+        "command": "sivtr.pickAgent",
+        "title": "Sivtr: Pick AI Session"
       }
     ],
     "keybindings": [
       {
-        "command": "sivtr.pickCodex",
+        "command": "sivtr.pickAgent",
         "key": "alt+y",
         "mac": "cmd+alt+y",
         "when": "!terminalFocus"
@@ -48,9 +48,11 @@
         "sivtr.args": {
           "type": "array",
           "default": [
-            "hotkey-pick-codex",
+            "hotkey-pick-agent",
             "--cwd",
-            "."
+            ".",
+            "--provider",
+            "all"
           ],
           "items": {
             "type": "string"

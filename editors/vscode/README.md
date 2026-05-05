@@ -1,6 +1,6 @@
 # sivtr VS Code extension
 
-Launch the sivtr Codex picker from VS Code.
+Launch the sivtr AI session picker from VS Code.
 
 ## Usage
 
@@ -13,13 +13,13 @@ cargo install sivtr
 If `sivtr` is missing, the extension will offer to open a terminal and run that
 install command.
 
-Run `Sivtr: Pick Codex Turn` from the command palette, or press `Alt+Y`.
+Run `Sivtr: Pick AI Session` from the command palette, or press `Alt+Y`.
 
 The extension opens a VS Code terminal in the current workspace and runs the
-context-aware Codex picker:
+context-aware AI session picker:
 
 ```bash
-sivtr hotkey-pick-codex --cwd .
+sivtr hotkey-pick-agent --cwd . --provider all
 ```
 
 ## Settings
@@ -27,7 +27,7 @@ sivtr hotkey-pick-codex --cwd .
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `sivtr.command` | `sivtr` | Command used to launch sivtr |
-| `sivtr.args` | `["hotkey-pick-codex", "--cwd", "."]` | Arguments passed to sivtr |
+| `sivtr.args` | `["hotkey-pick-agent", "--cwd", ".", "--provider", "all"]` | Arguments passed to sivtr |
 | `sivtr.reuseTerminal` | `true` | Reuse the existing sivtr terminal |
 | `sivtr.closeTerminalOnSuccess` | `true` | Close the sivtr terminal when the picker exits successfully |
 | `sivtr.terminalName` | `sivtr` | Terminal name |

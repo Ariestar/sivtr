@@ -9,7 +9,7 @@ use clap::Parser;
 
 use cli::{
     AgentCopyCommand, AgentCopyMode, Cli, Commands, CopyArgs, CopySimpleArgs, CopySubcommand,
-    DiffArgs, HotkeyPickCodexArgs, HotkeyServeArgs,
+    DiffArgs, HotkeyPickAgentArgs, HotkeyServeArgs,
 };
 use command_blocks::CommandBlockTextMode;
 use commands::copy::{AgentCopyRequest, CopyMode, CopyRequest};
@@ -57,6 +57,9 @@ fn run() -> Result<()> {
             Some(CopySubcommand::Cmd(sub_args)) => {
                 run_copy_simple(&sub_args, CopyMode::CommandOnly, false)?
             }
+            Some(CopySubcommand::Claude(sub_args)) => {
+                run_agent_copy(AgentProvider::Claude, sub_args)?
+            }
             Some(CopySubcommand::Codex(sub_args)) => {
                 run_agent_copy(AgentProvider::Codex, sub_args)?
             }
@@ -77,8 +80,8 @@ fn run() -> Result<()> {
         Some(Commands::HotkeyServe(args)) => {
             run_hotkey_serve(&args)?;
         }
-        Some(Commands::HotkeyPickCodex(args)) => {
-            run_hotkey_pick_codex(&args)?;
+        Some(Commands::HotkeyPickAgent(args)) => {
+            run_hotkey_pick_agent(&args)?;
         }
         None => {
             if atty::isnt(atty::Stream::Stdin) {
@@ -178,6 +181,6 @@ fn run_hotkey_serve(args: &HotkeyServeArgs) -> Result<()> {
     commands::hotkey::serve(args)
 }
 
-fn run_hotkey_pick_codex(args: &HotkeyPickCodexArgs) -> Result<()> {
-    commands::hotkey::pick_codex(args)
+fn run_hotkey_pick_agent(args: &HotkeyPickAgentArgs) -> Result<()> {
+    commands::hotkey::pick_agent(args)
 }
