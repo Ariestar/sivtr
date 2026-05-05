@@ -74,45 +74,6 @@ pub(super) fn run_single_picker(
     }
 }
 
-pub(super) fn run_picker_with_back_on_terminal(
-    terminal: &mut Tui,
-    entries: Vec<PickEntry>,
-    total: usize,
-    title: &str,
-    tui_target: PickerTuiTarget,
-) -> Result<PickerOutcome> {
-    run_picker_on_terminal(
-        terminal,
-        entries,
-        total,
-        title,
-        tui_target,
-        PickerSubmitMode::Selected,
-        true,
-    )
-}
-
-pub(super) fn run_picker_selection_on_terminal(
-    terminal: &mut Tui,
-    entries: Vec<PickEntry>,
-    total: usize,
-    title: &str,
-    tui_target: PickerTuiTarget,
-) -> Result<CommandSelection> {
-    match run_picker_on_terminal(
-        terminal,
-        entries,
-        total,
-        title,
-        tui_target,
-        PickerSubmitMode::Selected,
-        false,
-    )? {
-        PickerOutcome::Submitted(selection) => Ok(selection),
-        PickerOutcome::Back => anyhow::bail!(PICK_CANCELLED_MESSAGE),
-    }
-}
-
 pub(super) fn run_single_picker_on_terminal(
     terminal: &mut Tui,
     entries: Vec<PickEntry>,
@@ -429,16 +390,17 @@ fn render_picker(frame: &mut Frame, context: PickerRenderContext<'_>) {
     } else {
         "q/Esc cancel"
     };
+    let preview_hint = if show_preview { "p hide" } else { "p preview" };
     let controls = match submit_mode {
         PickerSubmitMode::Selected => {
             if tui_available {
-                format!("Space toggle  v mark-range  p preview  Tab focus  / search  t tui  a toggle-all  Enter confirm  {exit_hint}")
+                format!("Space toggle  v mark-range  {preview_hint}  Tab focus  / search  t tui  a toggle-all  Enter confirm  {exit_hint}")
             } else {
-                format!("Space toggle  v mark-range  p preview  Tab focus  / search  a toggle-all  Enter confirm  {exit_hint}")
+                format!("Space toggle  v mark-range  {preview_hint}  Tab focus  / search  a toggle-all  Enter confirm  {exit_hint}")
             }
         }
         PickerSubmitMode::Highlighted => {
-            format!("p preview  Tab focus  / search  Enter choose  {exit_hint}")
+            format!("{preview_hint}  Tab focus  / search  Enter choose  {exit_hint}")
         }
     };
     let title_widget = Paragraph::new(format!(
@@ -499,9 +461,9 @@ fn render_picker(frame: &mut Frame, context: PickerRenderContext<'_>) {
         .collect();
 
     let list_title = if focus == PickerFocus::List {
-        "Commands *"
+        "Commands *".to_string()
     } else {
-        "Commands"
+        "Commands".to_string()
     };
     let list = List::new(items)
         .block(Block::default().borders(Borders::ALL).title(list_title))
@@ -582,7 +544,7 @@ pub(super) fn selection_from_entries(entries: &[PickEntry]) -> Result<CommandSel
         .collect();
 
     if selected.is_empty() {
-        anyhow::bail!("No command blocks selected. Toggle one or more entries, then press Enter.");
+        anyhow::bail!(PICK_CANCELLED_MESSAGE);
     }
 
     selected.sort_unstable();

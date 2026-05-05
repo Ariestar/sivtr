@@ -59,8 +59,6 @@ sivtr hotkey stop
 sivtr hotkey-pick-codex --cwd <daemon-working-directory>
 ```
 
-这个内部命令打开的选择流程等同于：
+这个内部命令会先打开守护进程工作目录下最新的非空 Codex 会话。如果这个会话不存在或为空，再退回到会话选择器。
 
-```bash
-sivtr copy codex --pick
-```
+普通的 `sivtr copy codex --pick` 不同：它总是从会话选择器开始。

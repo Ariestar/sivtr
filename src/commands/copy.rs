@@ -1,4 +1,8 @@
 use anyhow::{Context, Result};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::prelude::{Color, Frame, Modifier, Style};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use regex::Regex;
 use serde::Serialize;
 use std::io::Write;
@@ -10,18 +14,15 @@ use crate::command_blocks::ParsedCommandBlock as CommandBlock;
 use crate::commands::command_block_selector::{parse_selector, resolve_selector, CommandSelection};
 use sivtr_core::capture::scrollback;
 use sivtr_core::codex::{
-    find_current_session, format_blocks, list_recent_sessions, parse_session_file, CodexBlock,
-    CodexBlockKind, CodexSession, CodexSessionInfo,
+    find_current_session, find_session_by_id, format_blocks, list_recent_sessions,
+    parse_session_file, CodexBlock, CodexBlockKind, CodexSession, CodexSessionInfo,
 };
 use sivtr_core::session::{self, SessionEntry};
 
 mod picker;
 
 use crate::tui::terminal::{init as init_tui, restore as restore_tui};
-use picker::{
-    run_picker, run_picker_selection_on_terminal, run_picker_with_back_on_terminal,
-    run_single_picker, run_single_picker_on_terminal, PickEntry, PickerOutcome,
-};
+use picker::{run_picker, run_single_picker, PickEntry};
 
 pub(crate) const PICK_CANCELLED_MESSAGE: &str = "Pick cancelled";
 const PICK_LIMIT: usize = 50;
@@ -232,10 +233,18 @@ pub fn execute(request: CopyRequest<'_>) -> Result<()> {
 
 pub fn execute_codex(request: CodexCopyRequest<'_>) -> Result<()> {
     if request.pick && !request.pick_current_session {
-        return execute_codex_pick(request);
+        return execute_codex_session_pick(request);
     }
 
-    let path = resolve_codex_session_path(request.pick_current_session)?;
+    let path = if request.pick && request.pick_current_session {
+        let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
+        match resolve_current_codex_session_with_blocks(&cwd)? {
+            Some(path) => return execute_current_codex_session_pick(request, &path),
+            None => return execute_codex_session_pick(request),
+        }
+    } else {
+        resolve_codex_session_path(request.pick_current_session)?
+    };
     let session = parse_session_file(&path)?;
 
     if session.blocks.is_empty() {
@@ -261,41 +270,24 @@ pub fn execute_codex(request: CodexCopyRequest<'_>) -> Result<()> {
     finish_codex_copy(&units, selection, &request)
 }
 
-fn execute_codex_pick(request: CodexCopyRequest<'_>) -> Result<()> {
+fn execute_codex_session_pick(request: CodexCopyRequest<'_>) -> Result<()> {
     let mut terminal = init_tui()?;
-    let result = pick_current_codex_session_content_or_fallback_on_terminal(
-        &mut terminal,
-        request.selection_mode,
-    );
+    let result = pick_codex_session_content_on_terminal(&mut terminal, request.selection_mode);
     restore_tui(&mut terminal)?;
     let (units, selection) = result?;
     finish_codex_copy(&units, selection, &request)
 }
 
-fn pick_current_codex_session_content_or_fallback_on_terminal(
-    terminal: &mut crate::tui::terminal::Tui,
-    selection_mode: CodexSelectionMode,
-) -> Result<(Vec<TextPair>, CommandSelection)> {
-    let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
-    if let Some(path) = resolve_current_codex_session_with_blocks(&cwd)? {
-        let session = parse_session_file(&path)?;
-        let units = build_codex_units(&session, selection_mode);
-        if units.is_empty() {
-            eprintln!("sivtr: selected Codex content is empty");
-            anyhow::bail!(PICK_CANCELLED_MESSAGE);
-        }
-
-        let selection = run_picker_selection_on_terminal(
-            terminal,
-            build_text_pick_entries(&units),
-            units.len(),
-            "sivtr copy codex --pick",
-            PickerTuiTarget::Text(build_codex_vim_view(&session.blocks)),
-        )?;
-        return Ok((units, selection));
-    }
-
-    pick_codex_session_content_on_terminal(terminal, selection_mode)
+fn execute_current_codex_session_pick(
+    request: CodexCopyRequest<'_>,
+    path: &std::path::Path,
+) -> Result<()> {
+    let mut terminal = init_tui()?;
+    let result =
+        pick_current_codex_session_content_on_terminal(&mut terminal, path, request.selection_mode);
+    restore_tui(&mut terminal)?;
+    let (units, selection) = result?;
+    finish_codex_copy(&units, selection, &request)
 }
 
 fn pick_codex_session_content_on_terminal(
@@ -303,37 +295,454 @@ fn pick_codex_session_content_on_terminal(
     selection_mode: CodexSelectionMode,
 ) -> Result<(Vec<TextPair>, CommandSelection)> {
     let sessions = list_recent_sessions(None)?;
+    let choices = build_codex_session_choices(&sessions, selection_mode)?;
+    if choices.is_empty() {
+        anyhow::bail!("No Codex sessions with selectable content found");
+    }
+    run_codex_hierarchy_picker_on_terminal(terminal, choices, CodexHierarchyFocus::Sessions)
+}
+
+fn pick_current_codex_session_content_on_terminal(
+    terminal: &mut crate::tui::terminal::Tui,
+    path: &std::path::Path,
+    selection_mode: CodexSelectionMode,
+) -> Result<(Vec<TextPair>, CommandSelection)> {
+    let session = parse_session_file(path)?;
+    let info = CodexSessionInfo {
+        path: path.to_path_buf(),
+        id: session.id.clone(),
+        cwd: session.cwd.clone(),
+        modified: SystemTime::UNIX_EPOCH,
+    };
+    let choice = build_codex_session_choice(&info, session, selection_mode)
+        .context("Current Codex session has no selectable content")?;
+    run_codex_hierarchy_picker_on_terminal(terminal, vec![choice], CodexHierarchyFocus::Dialogues)
+}
+
+#[derive(Clone, Debug)]
+struct CodexSessionChoice {
+    title: String,
+    units: Vec<TextPair>,
+    dialogue_titles: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CodexHierarchyFocus {
+    Sessions,
+    Dialogues,
+    Content,
+}
+
+fn build_codex_session_choices(
+    sessions: &[CodexSessionInfo],
+    selection_mode: CodexSelectionMode,
+) -> Result<Vec<CodexSessionChoice>> {
+    let mut choices = Vec::new();
+
+    for info in sessions.iter().take(PICK_LIMIT) {
+        let session = parse_session_file(&info.path)?;
+        if let Some(choice) = build_codex_session_choice(info, session, selection_mode) {
+            choices.push(choice);
+        }
+    }
+
+    Ok(choices)
+}
+
+fn build_codex_session_choice(
+    info: &CodexSessionInfo,
+    session: CodexSession,
+    selection_mode: CodexSelectionMode,
+) -> Option<CodexSessionChoice> {
+    let units = build_codex_units(&session, selection_mode);
+    if session.blocks.is_empty() || units.is_empty() {
+        return None;
+    }
+
+    let title = codex_session_display_title(info, &session);
+    let dialogue_titles = units
+        .iter()
+        .rev()
+        .take(PICK_LIMIT)
+        .map(|unit| build_text_preview(&unit.plain))
+        .collect();
+
+    Some(CodexSessionChoice {
+        title,
+        units,
+        dialogue_titles,
+    })
+}
+
+fn run_codex_hierarchy_picker_on_terminal(
+    terminal: &mut crate::tui::terminal::Tui,
+    choices: Vec<CodexSessionChoice>,
+    initial_focus: CodexHierarchyFocus,
+) -> Result<(Vec<TextPair>, CommandSelection)> {
+    let mut session_state = ListState::default();
+    session_state.select(Some(0));
+    let mut dialogue_state = ListState::default();
+    dialogue_state.select(Some(0));
+    let mut focus = initial_focus;
+    let mut selected_dialogues = vec![false; choices[0].dialogue_titles.len()];
+    let mut content_scroll = 0usize;
+
     loop {
-        let path = match pick_codex_session_path_on_terminal(terminal, &sessions)? {
-            Some(path) => path,
-            None => anyhow::bail!(PICK_CANCELLED_MESSAGE),
-        };
-        let session = parse_session_file(&path)?;
+        let session_idx = selected_index(&session_state).min(choices.len().saturating_sub(1));
+        let dialogue_count = choices[session_idx].dialogue_titles.len();
+        let dialogue_idx = selected_index(&dialogue_state).min(dialogue_count.saturating_sub(1));
+        dialogue_state.select((dialogue_count > 0).then_some(dialogue_idx));
+        content_scroll = content_scroll.min(
+            current_dialogue_text(&choices[session_idx], dialogue_idx)
+                .lines()
+                .count()
+                .saturating_sub(1),
+        );
 
-        if session.blocks.is_empty() {
-            eprintln!("sivtr: Codex session has no parsed conversation blocks");
-            continue;
-        }
+        terminal.draw(|frame| {
+            render_codex_hierarchy_picker(
+                frame,
+                &choices,
+                &session_state,
+                &dialogue_state,
+                &selected_dialogues,
+                focus,
+                content_scroll,
+            )
+        })?;
 
-        let units = build_codex_units(&session, selection_mode);
-        if units.is_empty() {
-            eprintln!("sivtr: selected Codex content is empty");
-            continue;
-        }
+        if let Event::Key(key) = event::read()? {
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
 
-        match run_picker_with_back_on_terminal(
-            terminal,
-            build_text_pick_entries(&units),
-            units.len(),
-            "sivtr copy codex --pick",
-            PickerTuiTarget::Text(build_codex_vim_view(&session.blocks)),
-        )? {
-            PickerOutcome::Back => continue,
-            PickerOutcome::Submitted(selection) => {
-                return Ok((units, selection));
+            match key.code {
+                KeyCode::Char('q') => anyhow::bail!(PICK_CANCELLED_MESSAGE),
+                KeyCode::Esc => match focus {
+                    CodexHierarchyFocus::Sessions => anyhow::bail!(PICK_CANCELLED_MESSAGE),
+                    CodexHierarchyFocus::Dialogues => focus = CodexHierarchyFocus::Sessions,
+                    CodexHierarchyFocus::Content => focus = CodexHierarchyFocus::Dialogues,
+                },
+                KeyCode::Left | KeyCode::Char('h') => match focus {
+                    CodexHierarchyFocus::Sessions => {}
+                    CodexHierarchyFocus::Dialogues => focus = CodexHierarchyFocus::Sessions,
+                    CodexHierarchyFocus::Content => focus = CodexHierarchyFocus::Dialogues,
+                },
+                KeyCode::Right | KeyCode::Char('l') => match focus {
+                    CodexHierarchyFocus::Sessions if dialogue_count > 0 => {
+                        focus = CodexHierarchyFocus::Dialogues;
+                    }
+                    CodexHierarchyFocus::Dialogues => {
+                        focus = CodexHierarchyFocus::Content;
+                    }
+                    _ => {}
+                },
+                KeyCode::Up | KeyCode::Char('k') => match focus {
+                    CodexHierarchyFocus::Sessions => {
+                        let next = selected_index(&session_state).saturating_sub(1);
+                        if next != selected_index(&session_state) {
+                            session_state.select(Some(next));
+                            reset_codex_dialogue_state(
+                                &choices,
+                                next,
+                                &mut dialogue_state,
+                                &mut selected_dialogues,
+                            );
+                            content_scroll = 0;
+                        }
+                    }
+                    CodexHierarchyFocus::Dialogues => {
+                        let next = selected_index(&dialogue_state).saturating_sub(1);
+                        dialogue_state.select(Some(next));
+                        content_scroll = 0;
+                    }
+                    CodexHierarchyFocus::Content => {
+                        content_scroll = content_scroll.saturating_sub(1);
+                    }
+                },
+                KeyCode::Down | KeyCode::Char('j') => match focus {
+                    CodexHierarchyFocus::Sessions => {
+                        let current = selected_index(&session_state);
+                        let next = (current + 1).min(choices.len().saturating_sub(1));
+                        if next != current {
+                            session_state.select(Some(next));
+                            reset_codex_dialogue_state(
+                                &choices,
+                                next,
+                                &mut dialogue_state,
+                                &mut selected_dialogues,
+                            );
+                            content_scroll = 0;
+                        }
+                    }
+                    CodexHierarchyFocus::Dialogues => {
+                        let current = selected_index(&dialogue_state);
+                        let next = (current + 1).min(dialogue_count.saturating_sub(1));
+                        dialogue_state.select(Some(next));
+                        content_scroll = 0;
+                    }
+                    CodexHierarchyFocus::Content => {
+                        content_scroll = content_scroll.saturating_add(1);
+                    }
+                },
+                KeyCode::PageDown | KeyCode::Char('d')
+                    if focus == CodexHierarchyFocus::Content
+                        && (key.code == KeyCode::PageDown
+                            || key.modifiers.contains(KeyModifiers::CONTROL)) =>
+                {
+                    content_scroll = content_scroll.saturating_add(10);
+                }
+                KeyCode::PageUp | KeyCode::Char('u')
+                    if focus == CodexHierarchyFocus::Content
+                        && (key.code == KeyCode::PageUp
+                            || key.modifiers.contains(KeyModifiers::CONTROL)) =>
+                {
+                    content_scroll = content_scroll.saturating_sub(10);
+                }
+                KeyCode::Char(' ') if focus == CodexHierarchyFocus::Dialogues => {
+                    if let Some(selected) = selected_dialogues.get_mut(dialogue_idx) {
+                        *selected = !*selected;
+                    }
+                }
+                KeyCode::Char('a') if focus == CodexHierarchyFocus::Dialogues => {
+                    let select_all = selected_dialogues.iter().any(|selected| !selected);
+                    selected_dialogues.fill(select_all);
+                }
+                KeyCode::Enter => match focus {
+                    CodexHierarchyFocus::Sessions => {
+                        if dialogue_count > 0 {
+                            focus = CodexHierarchyFocus::Dialogues;
+                        }
+                    }
+                    CodexHierarchyFocus::Dialogues => {
+                        let selection = codex_dialogue_selection(&selected_dialogues, dialogue_idx);
+                        return Ok((choices[session_idx].units.clone(), selection));
+                    }
+                    CodexHierarchyFocus::Content => {
+                        let selection = codex_dialogue_selection(&selected_dialogues, dialogue_idx);
+                        return Ok((choices[session_idx].units.clone(), selection));
+                    }
+                },
+                _ => {}
             }
         }
     }
+}
+
+fn reset_codex_dialogue_state(
+    choices: &[CodexSessionChoice],
+    session_idx: usize,
+    dialogue_state: &mut ListState,
+    selected_dialogues: &mut Vec<bool>,
+) {
+    dialogue_state.select(Some(0));
+    selected_dialogues.clear();
+    selected_dialogues.resize(choices[session_idx].dialogue_titles.len(), false);
+}
+
+fn codex_dialogue_selection(
+    selected_dialogues: &[bool],
+    highlighted_idx: usize,
+) -> CommandSelection {
+    let mut selected: Vec<usize> = selected_dialogues
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, selected)| selected.then_some(idx + 1))
+        .collect();
+
+    if selected.is_empty() {
+        selected.push(highlighted_idx + 1);
+    }
+
+    CommandSelection::RecentExplicit(selected)
+}
+
+fn selected_index(state: &ListState) -> usize {
+    state.selected().unwrap_or(0)
+}
+
+fn current_dialogue_text(choice: &CodexSessionChoice, dialogue_idx: usize) -> &str {
+    let total = choice.units.len();
+    if total == 0 {
+        return "<empty>";
+    }
+    let unit_idx = total.saturating_sub(dialogue_idx + 1);
+    choice
+        .units
+        .get(unit_idx)
+        .map(|unit| unit.plain.as_str())
+        .unwrap_or("<empty>")
+}
+
+fn render_codex_hierarchy_picker(
+    frame: &mut Frame,
+    choices: &[CodexSessionChoice],
+    session_state: &ListState,
+    dialogue_state: &ListState,
+    selected_dialogues: &[bool],
+    focus: CodexHierarchyFocus,
+    content_scroll: usize,
+) {
+    let area = frame.area();
+    frame.render_widget(Clear, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(1)])
+        .split(area);
+
+    let controls = match focus {
+        CodexHierarchyFocus::Sessions => "j/k move  l/Right/Enter open dialogues  q/Esc cancel",
+        CodexHierarchyFocus::Dialogues => {
+            "j/k move  Space toggle  a toggle-all  h/Left/Esc back  Enter copy  q cancel"
+        }
+        CodexHierarchyFocus::Content => {
+            "j/k scroll  Ctrl-d/PageDown down  Ctrl-u/PageUp up  h/Left/Esc back  Enter copy  q cancel"
+        }
+    };
+    let session_idx = selected_index(session_state).min(choices.len().saturating_sub(1));
+    let selected_count = selected_dialogues
+        .iter()
+        .filter(|selected| **selected)
+        .count();
+    let title = Paragraph::new(format!(
+        "{controls}\nshowing {} session(s), {} dialogue(s){}",
+        choices.len(),
+        choices[session_idx].dialogue_titles.len(),
+        if selected_count == 0 {
+            String::new()
+        } else {
+            format!(", {selected_count} selected")
+        }
+    ))
+    .block(
+        Block::default()
+            .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
+            .title("sivtr copy codex --pick"),
+    );
+    frame.render_widget(title, chunks[0]);
+
+    let body_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
+        .split(chunks[1]);
+
+    match focus {
+        CodexHierarchyFocus::Sessions => {
+            render_codex_session_list(frame, body_chunks[0], choices, session_state, true);
+            render_codex_dialogue_list(
+                frame,
+                body_chunks[1],
+                &choices[session_idx],
+                dialogue_state,
+                selected_dialogues,
+                false,
+            );
+        }
+        CodexHierarchyFocus::Dialogues => {
+            render_codex_dialogue_list(
+                frame,
+                body_chunks[0],
+                &choices[session_idx],
+                dialogue_state,
+                selected_dialogues,
+                true,
+            );
+            let dialogue_idx = selected_index(dialogue_state)
+                .min(choices[session_idx].dialogue_titles.len().saturating_sub(1));
+            let content =
+                Paragraph::new(current_dialogue_text(&choices[session_idx], dialogue_idx))
+                    .scroll((content_scroll as u16, 0))
+                    .wrap(ratatui::widgets::Wrap { trim: false })
+                    .block(Block::default().borders(Borders::ALL).title("Content"));
+            frame.render_widget(content, body_chunks[1]);
+        }
+        CodexHierarchyFocus::Content => {
+            render_codex_dialogue_list(
+                frame,
+                body_chunks[0],
+                &choices[session_idx],
+                dialogue_state,
+                selected_dialogues,
+                false,
+            );
+            let dialogue_idx = selected_index(dialogue_state)
+                .min(choices[session_idx].dialogue_titles.len().saturating_sub(1));
+            let content =
+                Paragraph::new(current_dialogue_text(&choices[session_idx], dialogue_idx))
+                    .scroll((content_scroll as u16, 0))
+                    .wrap(ratatui::widgets::Wrap { trim: false })
+                    .block(Block::default().borders(Borders::ALL).title("Content *"));
+            frame.render_widget(content, body_chunks[1]);
+        }
+    }
+}
+
+fn render_codex_session_list(
+    frame: &mut Frame,
+    area: Rect,
+    choices: &[CodexSessionChoice],
+    state: &ListState,
+    active: bool,
+) {
+    let items: Vec<ListItem> = choices
+        .iter()
+        .enumerate()
+        .map(|(idx, choice)| {
+            let line = format!("{:>2}. {}", idx + 1, choice.title);
+            ListItem::new(line)
+        })
+        .collect();
+    let title = if active { "Sessions *" } else { "Sessions" };
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .highlight_style(Style::default().bg(Color::Blue).fg(Color::White))
+        .highlight_symbol(">> ");
+    let mut local_state = state.clone();
+    frame.render_stateful_widget(list, area, &mut local_state);
+}
+
+fn render_codex_dialogue_list(
+    frame: &mut Frame,
+    area: Rect,
+    choice: &CodexSessionChoice,
+    state: &ListState,
+    selected_dialogues: &[bool],
+    active: bool,
+) {
+    let mut items: Vec<ListItem> = choice
+        .dialogue_titles
+        .iter()
+        .enumerate()
+        .map(|(idx, title)| {
+            let marker = if active {
+                if selected_dialogues.get(idx).copied().unwrap_or(false) {
+                    "[x] "
+                } else {
+                    "[ ] "
+                }
+            } else {
+                ""
+            };
+            ListItem::new(format!("{marker}{:>2}. {title}", idx + 1))
+        })
+        .collect();
+
+    if items.is_empty() {
+        items.push(ListItem::new("<empty>"));
+    }
+
+    let title = if active { "Dialogues *" } else { "Dialogues" };
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .highlight_style(if active {
+            Style::default().bg(Color::Blue).fg(Color::White)
+        } else {
+            Style::default().add_modifier(Modifier::DIM)
+        })
+        .highlight_symbol(if active { ">> " } else { "   " });
+    let mut local_state = state.clone();
+    frame.render_stateful_widget(list, area, &mut local_state);
 }
 
 fn finish_codex_copy(
@@ -610,11 +1019,17 @@ fn resolve_current_codex_pick_session_path(cwd: &std::path::Path) -> Result<std:
 fn resolve_current_codex_session_with_blocks(
     cwd: &std::path::Path,
 ) -> Result<Option<std::path::PathBuf>> {
-    for session in list_recent_sessions(Some(cwd))? {
-        if codex_session_has_blocks(&session.path)? {
-            return Ok(Some(session.path));
+    if let Ok(thread_id) = std::env::var("CODEX_THREAD_ID") {
+        if !thread_id.trim().is_empty() {
+            if let Some(path) = find_session_by_id(thread_id.trim())? {
+                if codex_session_has_blocks(&path)? {
+                    return Ok(Some(path));
+                }
+            }
         }
     }
+
+    let _ = cwd;
 
     Ok(None)
 }
@@ -641,30 +1056,6 @@ fn pick_codex_session_path(sessions: &[CodexSessionInfo]) -> Result<Option<std::
         .map(|session| session.path.clone()))
 }
 
-fn pick_codex_session_path_on_terminal(
-    terminal: &mut crate::tui::terminal::Tui,
-    sessions: &[CodexSessionInfo],
-) -> Result<Option<std::path::PathBuf>> {
-    if sessions.is_empty() {
-        return Ok(None);
-    }
-
-    let entries = build_codex_session_pick_entries(sessions)?;
-
-    Ok(run_single_picker_on_terminal(
-        terminal,
-        entries,
-        sessions.len(),
-        "sivtr copy codex --session",
-        PickerTuiTarget::Unavailable,
-    )?
-    .and_then(|selected| {
-        sessions
-            .get(selected.saturating_sub(1))
-            .map(|session| session.path.clone())
-    }))
-}
-
 fn build_codex_session_pick_entries(sessions: &[CodexSessionInfo]) -> Result<Vec<PickEntry>> {
     sessions
         .iter()
@@ -680,21 +1071,16 @@ fn build_codex_session_pick_entry(idx: usize, session: &CodexSessionInfo) -> Res
         .or_else(|| session.id.clone())
         .unwrap_or_else(|| "<empty Codex session>".to_string());
     let meta = format_codex_session_meta(session, &parsed);
-    let full_preview = if parsed.blocks.is_empty() {
-        meta
-    } else {
-        format!("{meta}\n\n{}", format_blocks(&parsed.blocks))
-    };
 
     Ok(PickEntry {
         recent: idx + 1,
         preview,
-        output_preview: full_preview
+        output_preview: meta
             .lines()
             .take(PICK_PREVIEW_LINES)
             .collect::<Vec<_>>()
             .join("\n"),
-        full_preview,
+        full_preview: meta,
         selected: false,
     })
 }
@@ -703,11 +1089,56 @@ fn codex_session_preview(session: &CodexSession) -> Option<String> {
     session
         .blocks
         .iter()
-        .find(|block| matches!(block.kind, CodexBlockKind::User | CodexBlockKind::Assistant))
-        .and_then(|block| {
-            let text = block.text.lines().find(|line| !line.trim().is_empty())?;
-            Some(text.trim().chars().take(80).collect())
+        .find(|block| is_real_user_block(block))
+        .and_then(|block| preview_line(&block.text, 80))
+        .or_else(|| {
+            session
+                .blocks
+                .iter()
+                .find(|block| block.kind == CodexBlockKind::Assistant)
+                .and_then(|block| preview_line(&block.text, 80))
         })
+}
+
+fn codex_session_display_title(info: &CodexSessionInfo, session: &CodexSession) -> String {
+    let title = codex_session_preview(session)
+        .or_else(|| session.id.clone())
+        .or_else(|| info.id.clone())
+        .unwrap_or_else(|| "<empty Codex session>".to_string());
+    let id = session
+        .id
+        .as_deref()
+        .or(info.id.as_deref())
+        .map(short_codex_id);
+
+    match id {
+        Some(id) if !id.is_empty() => format!("{title}  [{id}]"),
+        _ => title,
+    }
+}
+
+fn short_codex_id(id: &str) -> String {
+    id.chars().take(8).collect()
+}
+
+fn is_real_user_block(block: &CodexBlock) -> bool {
+    if block.kind != CodexBlockKind::User {
+        return false;
+    }
+
+    let text = block.text.trim_start();
+    !is_codex_startup_user_text(text)
+}
+
+fn is_codex_startup_user_text(text: &str) -> bool {
+    text.starts_with("# AGENTS.md instructions for")
+        || text.starts_with("<environment_context>")
+        || text.starts_with("<turn_aborted>")
+}
+
+fn preview_line(text: &str, limit: usize) -> Option<String> {
+    let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
+    Some(line.chars().take(limit).collect())
 }
 
 fn format_codex_session_meta(info: &CodexSessionInfo, session: &CodexSession) -> String {
@@ -1342,9 +1773,9 @@ fn build_text_preview_lines(text: &str) -> String {
 mod tests {
     use super::picker::{apply_range_toggle, selection_from_entries, PickEntry};
     use super::{
-        build_codex_vim_view, build_output_preview, filter_lines_by_regex, filter_lines_by_spec,
-        format_block, is_vim_command, vim_single_quote, CodexBlock, CodexBlockKind, CommandBlock,
-        CommandSelection, CopyMode, TextPair,
+        build_codex_vim_view, build_output_preview, codex_session_preview, filter_lines_by_regex,
+        filter_lines_by_spec, format_block, is_vim_command, vim_single_quote, CodexBlock,
+        CodexBlockKind, CodexSession, CommandBlock, CommandSelection, CopyMode, TextPair,
     };
 
     #[test]
@@ -1598,5 +2029,45 @@ mod tests {
         assert_eq!(full.blocks.len(), 2);
         assert!(full.blocks[0].output_text.contains("tool output"));
         assert!(full.blocks[0].output_text.contains("first answer"));
+    }
+
+    #[test]
+    fn codex_session_picker_uses_first_real_user_message() {
+        let session = CodexSession {
+            path: "rollout.jsonl".into(),
+            id: Some("abc".to_string()),
+            cwd: Some("d:\\repo".to_string()),
+            blocks: vec![
+                CodexBlock {
+                    kind: CodexBlockKind::User,
+                    timestamp: None,
+                    label: None,
+                    text: "# AGENTS.md instructions for d:\\repo\n\n<INSTRUCTIONS>".to_string(),
+                },
+                CodexBlock {
+                    kind: CodexBlockKind::User,
+                    timestamp: None,
+                    label: None,
+                    text: "first actual task\nmore details".to_string(),
+                },
+                CodexBlock {
+                    kind: CodexBlockKind::Assistant,
+                    timestamp: None,
+                    label: None,
+                    text: "first answer".to_string(),
+                },
+                CodexBlock {
+                    kind: CodexBlockKind::User,
+                    timestamp: None,
+                    label: None,
+                    text: "second actual task".to_string(),
+                },
+            ],
+        };
+
+        assert_eq!(
+            codex_session_preview(&session).as_deref(),
+            Some("first actual task")
+        );
     }
 }

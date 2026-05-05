@@ -59,8 +59,9 @@ When the chord is pressed, the daemon launches:
 sivtr hotkey-pick-codex --cwd <daemon-working-directory>
 ```
 
-That internal command opens the same selection workflow as:
+That internal command first opens the newest non-empty Codex session for the
+daemon working directory. If that session is missing or empty, it falls back to
+the session picker.
 
-```bash
-sivtr copy codex --pick
-```
+Plain `sivtr copy codex --pick` is different: it always starts with the session
+picker.

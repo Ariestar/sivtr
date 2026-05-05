@@ -64,7 +64,9 @@ sivtr copy codex --pick
 sivtr copy codex out --pick
 ```
 
-选择器会显示最近单元，让你选择一个或多个。按 `t` 打开 Vim 风格视图。在 Codex 视图里，如果存在替代完整视图，`T` 可以切换工具内容。
+普通 CLI 选择器会先显示会话列表，进入某个会话后再选择一个或多个单元。按 `t` 打开 Vim 风格视图。在 Codex 视图里，如果存在替代完整视图，`T` 可以切换工具内容。
+
+Windows 热键和 VS Code 插件这类带上下文的入口会先打开当前 workspace 下最新的非空会话。如果这个会话不存在或为空，再退回到会话列表。
 
 ## Windows 热键
 

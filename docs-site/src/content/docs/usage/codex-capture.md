@@ -64,7 +64,9 @@ sivtr copy codex --pick
 sivtr copy codex out --pick
 ```
 
-The picker shows recent units and lets you choose one or more. Press `t` to open the Vim-style view. In Codex views, `T` toggles tool content when an alternate full view is available.
+The plain CLI picker starts with the session list, then lets you choose one or more units from that session. Press `t` to open the Vim-style view. In Codex views, `T` toggles tool content when an alternate full view is available.
+
+Context-aware launchers such as the Windows hotkey and VS Code extension first open the newest non-empty session for the current workspace. If that session is missing or empty, they fall back to the session list.
 
 ## Windows hotkey
 

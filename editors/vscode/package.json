@@ -48,9 +48,9 @@
         "sivtr.args": {
           "type": "array",
           "default": [
-            "copy",
-            "codex",
-            "--pick"
+            "hotkey-pick-codex",
+            "--cwd",
+            "."
           ],
           "items": {
             "type": "string"

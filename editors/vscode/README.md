@@ -15,10 +15,11 @@ install command.
 
 Run `Sivtr: Pick Codex Turn` from the command palette, or press `Alt+Y`.
 
-The extension opens a VS Code terminal in the current workspace and runs:
+The extension opens a VS Code terminal in the current workspace and runs the
+context-aware Codex picker:
 
 ```bash
-sivtr copy codex --pick
+sivtr hotkey-pick-codex --cwd .
 ```
 
 ## Settings
@@ -26,7 +27,7 @@ sivtr copy codex --pick
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `sivtr.command` | `sivtr` | Command used to launch sivtr |
-| `sivtr.args` | `["copy", "codex", "--pick"]` | Arguments passed to sivtr |
+| `sivtr.args` | `["hotkey-pick-codex", "--cwd", "."]` | Arguments passed to sivtr |
 | `sivtr.reuseTerminal` | `true` | Reuse the existing sivtr terminal |
 | `sivtr.closeTerminalOnSuccess` | `true` | Close the sivtr terminal when the picker exits successfully |
 | `sivtr.terminalName` | `sivtr` | Terminal name |
