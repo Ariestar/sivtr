@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sivtr_core::config::SivtrConfig;
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
 use std::process::Command;
 
 use crate::cli::{
@@ -257,6 +258,7 @@ fn read_state() -> Result<Option<HotkeyState>> {
     Ok(Some(state))
 }
 
+#[cfg(windows)]
 fn write_state(state: &HotkeyState) -> Result<()> {
     let path = state_path()?;
     if let Some(parent) = path.parent() {
