@@ -28,6 +28,7 @@ impl HistoryStore {
 
     /// Full-text search across history content and commands.
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<HistoryEntry>> {
+        let fts_query = build_fts_query(query);
         let mut stmt = self.conn.prepare(
             "SELECT h.id, h.content, h.command, h.timestamp, h.hostname, h.session_id, h.source
              FROM history h
@@ -38,7 +39,7 @@ impl HistoryStore {
         )?;
 
         let entries = stmt
-            .query_map(rusqlite::params![query, limit], |row| {
+            .query_map(rusqlite::params![fts_query, limit], |row| {
                 Ok(HistoryEntry {
                     id: row.get(0)?,
                     content: row.get(1)?,
@@ -78,6 +79,38 @@ impl HistoryStore {
             Some(Err(e)) => Err(e.into()),
             None => Ok(None),
         }
+    }
+
+    /// Keep only the most recent `max_entries` entries.
+    /// `0` means unlimited retention.
+    pub fn trim_to_max_entries(&self, max_entries: usize) -> Result<()> {
+        if max_entries == 0 {
+            return Ok(());
+        }
+
+        self.conn.execute(
+            "DELETE FROM history
+             WHERE id NOT IN (
+               SELECT id FROM history ORDER BY id DESC LIMIT ?1
+             )",
+            rusqlite::params![max_entries],
+        )?;
+
+        Ok(())
+    }
+}
+
+fn build_fts_query(query: &str) -> String {
+    let terms: Vec<String> = query
+        .split_whitespace()
+        .filter(|term| !term.is_empty())
+        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+        .collect();
+
+    if terms.is_empty() {
+        "\"\"".to_string()
+    } else {
+        terms.join(" ")
     }
 }
 
@@ -126,6 +159,22 @@ mod tests {
     }
 
     #[test]
+    fn test_fts_search_handles_hyphenated_terms() {
+        let store = HistoryStore::open_memory().unwrap();
+        store
+            .insert(
+                "pipe-history-ok output",
+                Some("echo pipe-history-ok"),
+                CaptureSource::Run,
+            )
+            .unwrap();
+
+        let results = store.search("pipe-history-ok", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].content.contains("pipe-history-ok"));
+    }
+
+    #[test]
     fn test_get_by_id() {
         let store = HistoryStore::open_memory().unwrap();
         let id = store
@@ -135,5 +184,22 @@ mod tests {
         let entry = store.get_by_id(id).unwrap().unwrap();
         assert_eq!(entry.content, "some output");
         assert_eq!(entry.source, "pipe");
+    }
+
+    #[test]
+    fn test_trim_to_max_entries_keeps_newest_rows() {
+        let store = HistoryStore::open_memory().unwrap();
+        store
+            .insert("old output", Some("echo old"), CaptureSource::Run)
+            .unwrap();
+        store
+            .insert("new output", Some("echo new"), CaptureSource::Run)
+            .unwrap();
+
+        store.trim_to_max_entries(1).unwrap();
+
+        let entries = store.list_recent(10).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].content, "new output");
     }
 }

@@ -3,9 +3,10 @@ use sivtr_core::buffer::Buffer;
 use sivtr_core::capture::subprocess;
 use sivtr_core::config::{OpenMode, SivtrConfig};
 use sivtr_core::export::editor;
+use sivtr_core::history::CaptureSource;
 use sivtr_core::parse;
 
-use super::browse;
+use super::{browse, capture_history};
 use crate::app::App;
 
 /// Execute a command, capture its output, then open based on config.
@@ -26,6 +27,15 @@ pub fn execute(command: &str, args: &[String]) -> Result<()> {
     }
 
     let config = SivtrConfig::load().unwrap_or_default();
+    let command_line = render_command_line(command, args);
+    if let Err(error) = capture_history::maybe_save_default(
+        &config,
+        &result.combined,
+        Some(command_line.as_str()),
+        CaptureSource::Run,
+    ) {
+        eprintln!("sivtr: failed to save history: {error:#}");
+    }
 
     match config.general.open_mode {
         OpenMode::Editor => {
@@ -41,5 +51,13 @@ pub fn execute(command: &str, args: &[String]) -> Result<()> {
             app.config = config;
             browse::run_tui(&mut app, false)
         }
+    }
+}
+
+fn render_command_line(command: &str, args: &[String]) -> String {
+    if args.is_empty() {
+        command.to_string()
+    } else {
+        format!("{command} {}", args.join(" "))
     }
 }
