@@ -224,9 +224,9 @@ pub enum Commands {
     /// Manage configuration
     Config(ConfigCommand),
 
-    /// Generate shell integration hook
+    /// Generate shell integration or Linux shortcut helpers
     Init {
-        /// Shell type: powershell, bash, zsh, nushell
+        /// Integration target: powershell, bash, zsh, nushell, tmux, linux-shortcut
         shell: String,
     },
 
@@ -751,6 +751,26 @@ mod tests {
                 assert_eq!(args, vec!["-lc".to_string(), "printf ok".to_string()]);
             }
             _ => panic!("expected run command"),
+        }
+    }
+
+    #[test]
+    fn init_accepts_tmux_target() {
+        let cli = Cli::try_parse_from(["sivtr", "init", "tmux"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Init { shell }) => assert_eq!(shell, "tmux"),
+            _ => panic!("expected init command"),
+        }
+    }
+
+    #[test]
+    fn init_accepts_linux_shortcut_target() {
+        let cli = Cli::try_parse_from(["sivtr", "init", "linux-shortcut"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Init { shell }) => assert_eq!(shell, "linux-shortcut"),
+            _ => panic!("expected init command"),
         }
     }
 }

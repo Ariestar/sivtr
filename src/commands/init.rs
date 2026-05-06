@@ -4,6 +4,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 #[cfg(windows)]
 use crate::cli::{HotkeyAction, HotkeyCommand, HotkeyStartArgs};
 #[cfg(windows)]
@@ -126,6 +129,13 @@ if (($env.SIVTR_PROMPT_WRAPPED? | default false) != true) {
 # <<< sivtr shell integration <<<
 "#;
 
+const TMUX_MARKER_START: &str = "# >>> sivtr tmux shortcut >>>";
+const TMUX_MARKER_END: &str = "# <<< sivtr tmux shortcut <<<";
+const TMUX_HOOK: &str = r##"# >>> sivtr tmux shortcut >>>
+bind-key y new-window -c "#{pane_current_path}" "sivtr hotkey-pick-codex --cwd '#{pane_current_path}'"
+# <<< sivtr tmux shortcut <<<
+"##;
+
 const POWERSHELL_SPEC: HookSpec = HookSpec {
     hook: POWERSHELL_HOOK,
     marker_start: POWERSHELL_MARKER_START,
@@ -162,6 +172,15 @@ const NUSHELL_SPEC: HookSpec = HookSpec {
     legacy_hook: None,
 };
 
+const TMUX_SPEC: HookSpec = HookSpec {
+    hook: TMUX_HOOK,
+    marker_start: TMUX_MARKER_START,
+    marker_end: TMUX_MARKER_END,
+    legacy_marker_start: TMUX_MARKER_START,
+    legacy_marker_end: TMUX_MARKER_END,
+    legacy_hook: None,
+};
+
 enum InstallStatus {
     Installed,
     Updated,
@@ -175,9 +194,13 @@ pub fn execute(shell: &str) -> Result<()> {
         "bash" => install_single_shell_hook(&bash_profile_path()?, &BASH_SPEC),
         "zsh" => install_single_shell_hook(&zsh_profile_path()?, &ZSH_SPEC),
         "nu" | "nushell" => install_single_shell_hook(&nushell_config_path()?, &NUSHELL_SPEC),
+        "tmux" => install_tmux_shortcut(),
+        "linux-shortcut" => install_linux_shortcut(),
         _ => {
-            eprintln!("sivtr: supported shells are powershell, bash, zsh, nushell");
-            eprintln!("  usage: sivtr init <powershell|bash|zsh|nushell>");
+            eprintln!(
+                "sivtr: supported targets are powershell, bash, zsh, nushell, tmux, linux-shortcut"
+            );
+            eprintln!("  usage: sivtr init <powershell|bash|zsh|nushell|tmux|linux-shortcut>");
             std::process::exit(1);
         }
     }?;
@@ -224,6 +247,69 @@ fn install_single_shell_hook(profile_path: &Path, spec: &HookSpec) -> Result<()>
             eprintln!("sivtr: no new installation needed (already set up)");
         }
     }
+    Ok(())
+}
+
+fn install_tmux_shortcut() -> Result<()> {
+    #[cfg(not(unix))]
+    {
+        anyhow::bail!("`sivtr init tmux` is only supported on Unix-like systems");
+    }
+
+    let path = tmux_config_path()?;
+    match install_into_profile(&path, &TMUX_SPEC)? {
+        InstallStatus::Installed => {
+            eprintln!("sivtr: installed tmux shortcut into {}", path.display());
+            eprintln!("  shortcut: prefix + y");
+            eprintln!("  reload with: tmux source-file {}", path.display());
+        }
+        InstallStatus::Updated => {
+            eprintln!("sivtr: updated tmux shortcut in {}", path.display());
+            eprintln!("  shortcut: prefix + y");
+            eprintln!("  reload with: tmux source-file {}", path.display());
+        }
+        InstallStatus::Unchanged => {
+            eprintln!(
+                "sivtr: tmux shortcut already installed in {}",
+                path.display()
+            );
+            eprintln!("  shortcut: prefix + y");
+        }
+    }
+    Ok(())
+}
+
+fn install_linux_shortcut() -> Result<()> {
+    #[cfg(not(unix))]
+    {
+        anyhow::bail!("`sivtr init linux-shortcut` is only supported on Unix-like systems");
+    }
+
+    let home = dirs::home_dir().context("Failed to resolve home directory")?;
+    let bin_dir = home.join(".local").join("bin");
+    let applications_dir = home.join(".local").join("share").join("applications");
+    fs::create_dir_all(&bin_dir)?;
+    fs::create_dir_all(&applications_dir)?;
+
+    let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
+    let terminal = detect_linux_terminal();
+    let script_path = bin_dir.join("sivtr-pick-codex");
+    let desktop_path = applications_dir.join("sivtr-pick-codex.desktop");
+
+    write_linux_shortcut_script(&script_path, &cwd, terminal.as_deref())?;
+    write_linux_shortcut_desktop_entry(&desktop_path, &script_path)?;
+
+    eprintln!("sivtr: installed Linux shortcut launcher");
+    eprintln!("  script:  {}", script_path.display());
+    eprintln!("  desktop: {}", desktop_path.display());
+    if let Some(terminal) = terminal {
+        eprintln!("  terminal: {terminal}");
+    } else {
+        eprintln!(
+            "  terminal: not auto-detected; edit the script before binding a desktop shortcut"
+        );
+    }
+    eprintln!("  bind your desktop shortcut to: {}", script_path.display());
     Ok(())
 }
 
@@ -323,6 +409,11 @@ fn nushell_config_path() -> Result<PathBuf> {
     Ok(config_dir.join("nushell").join("config.nu"))
 }
 
+fn tmux_config_path() -> Result<PathBuf> {
+    let home = dirs::home_dir().context("Failed to resolve home directory")?;
+    Ok(home.join(".tmux.conf"))
+}
+
 fn get_ps_profile(cmd: &str) -> Result<String> {
     let output = Command::new(cmd)
         .args(["-NoProfile", "-Command", "Write-Output $PROFILE"])
@@ -379,6 +470,86 @@ fn update_existing_hook(content: &str, spec: &HookSpec) -> Option<String> {
     None
 }
 
+fn detect_linux_terminal() -> Option<String> {
+    for candidate in [
+        "x-terminal-emulator",
+        "gnome-terminal",
+        "konsole",
+        "kitty",
+        "alacritty",
+        "foot",
+        "wezterm",
+        "xterm",
+    ] {
+        if command_exists(candidate) {
+            return Some(candidate.to_string());
+        }
+    }
+    None
+}
+
+fn command_exists(name: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| {
+            std::env::split_paths(&paths).any(|dir| {
+                let candidate = dir.join(name);
+                candidate.is_file()
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn write_linux_shortcut_script(path: &Path, cwd: &Path, terminal: Option<&str>) -> Result<()> {
+    let script = render_linux_shortcut_script(cwd, terminal);
+    fs::write(path, script)?;
+    #[cfg(unix)]
+    {
+        let mut perms = fs::metadata(path)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms)?;
+    }
+    Ok(())
+}
+
+fn render_linux_shortcut_script(cwd: &Path, terminal: Option<&str>) -> String {
+    let cwd = shell_single_quote(&cwd.to_string_lossy());
+    let launcher = terminal
+        .map(build_terminal_launch_command)
+        .unwrap_or_else(|| {
+            "printf 'Edit this launcher to choose a terminal, then run again.\\n'; read -r _"
+                .to_string()
+        });
+
+    format!("#!/usr/bin/env bash\nset -euo pipefail\nexport PROJECT_CWD='{cwd}'\n{launcher}\n")
+}
+
+fn build_terminal_launch_command(terminal: &str) -> String {
+    let picker = "sivtr hotkey-pick-codex --cwd \"$PROJECT_CWD\"";
+    match terminal {
+        "gnome-terminal" => format!("exec gnome-terminal -- bash -lc '{picker}'"),
+        "konsole" => format!("exec konsole --noclose -e bash -lc '{picker}'"),
+        "kitty" => format!("exec kitty bash -lc '{picker}'"),
+        "alacritty" => format!("exec alacritty -e bash -lc '{picker}'"),
+        "foot" => format!("exec foot bash -lc '{picker}'"),
+        "wezterm" => format!("exec wezterm start --cwd \"$PROJECT_CWD\" -- bash -lc '{picker}'"),
+        "xterm" => format!("exec xterm -e bash -lc '{picker}'"),
+        _ => format!("exec {terminal} -e bash -lc '{picker}'"),
+    }
+}
+
+fn write_linux_shortcut_desktop_entry(path: &Path, script_path: &Path) -> Result<()> {
+    let desktop = format!(
+        "[Desktop Entry]\nType=Application\nName=Sivtr Pick Codex\nExec={}\nTerminal=false\nCategories=Development;\n",
+        script_path.display()
+    );
+    fs::write(path, desktop)?;
+    Ok(())
+}
+
+fn shell_single_quote(value: &str) -> String {
+    value.replace('\'', "'\"'\"'")
+}
+
 fn find_marked_block(
     content: &str,
     start_marker: &str,
@@ -393,9 +564,12 @@ fn find_marked_block(
 #[cfg(test)]
 mod tests {
     use super::{
-        update_existing_hook, BASH_HOOK, BASH_SPEC, LEGACY_POWERSHELL_HOOK, NUSHELL_HOOK,
-        NUSHELL_SPEC, POWERSHELL_HOOK, POWERSHELL_SPEC, ZSH_HOOK, ZSH_SPEC,
+        build_terminal_launch_command, command_exists, render_linux_shortcut_script,
+        shell_single_quote, update_existing_hook, BASH_HOOK, BASH_SPEC, LEGACY_POWERSHELL_HOOK,
+        NUSHELL_HOOK, NUSHELL_SPEC, POWERSHELL_HOOK, POWERSHELL_SPEC, TMUX_HOOK, TMUX_SPEC,
+        ZSH_HOOK, ZSH_SPEC,
     };
+    use std::path::Path;
 
     #[cfg(windows)]
     use super::parse_yes_no_default_yes;
@@ -452,6 +626,41 @@ mod tests {
             update_existing_hook(&profile, &NUSHELL_SPEC).expect("nushell hook should be detected");
 
         assert_eq!(updated, profile);
+    }
+
+    #[test]
+    fn replaces_existing_tmux_block() {
+        let profile = format!("before\n{TMUX_HOOK}\nafter\n");
+        let updated =
+            update_existing_hook(&profile, &TMUX_SPEC).expect("tmux hook should be detected");
+
+        assert_eq!(updated, profile);
+    }
+
+    #[test]
+    fn gnome_terminal_launcher_uses_project_cwd() {
+        let command = build_terminal_launch_command("gnome-terminal");
+
+        assert!(command.contains("gnome-terminal"));
+        assert!(command.contains("sivtr hotkey-pick-codex --cwd \"$PROJECT_CWD\""));
+    }
+
+    #[test]
+    fn shell_single_quote_escapes_single_quotes() {
+        assert_eq!(shell_single_quote("/tmp/it's"), "/tmp/it'\"'\"'s");
+    }
+
+    #[test]
+    fn linux_shortcut_script_exports_project_cwd() {
+        let script = render_linux_shortcut_script(Path::new("/tmp/project"), Some("xterm"));
+
+        assert!(script.contains("export PROJECT_CWD='/tmp/project'"));
+        assert!(script.contains("sivtr hotkey-pick-codex --cwd \"$PROJECT_CWD\""));
+    }
+
+    #[test]
+    fn command_exists_detects_programs_via_path_scan() {
+        assert!(command_exists("sh"));
     }
 
     #[cfg(windows)]
