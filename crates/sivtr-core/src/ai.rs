@@ -305,6 +305,14 @@ pub fn push_block(
 pub fn extract_content_text(content: &Value) -> String {
     match content {
         Value::String(text) => text.clone(),
+        Value::Object(object) => object
+            .get("text")
+            .and_then(Value::as_str)
+            .or_else(|| object.get("input_text").and_then(Value::as_str))
+            .or_else(|| object.get("output_text").and_then(Value::as_str))
+            .or_else(|| object.get("content").and_then(Value::as_str))
+            .unwrap_or_default()
+            .to_string(),
         Value::Array(items) => items
             .iter()
             .filter_map(|item| {

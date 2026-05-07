@@ -382,7 +382,7 @@ fn pick_agent_session_content_on_terminal(
     run_agent_hierarchy_picker_on_terminal(
         &format!("{} --pick", agent_copy_command(source.provider())),
         terminal,
-        choices,
+        agent_groups_from_choices(choices),
         AgentHierarchyFocus::Sessions,
     )
 }
@@ -409,7 +409,13 @@ fn pick_agent_sessions_content_on_terminal(
         anyhow::bail!("No AI sessions with selectable content found");
     }
 
-    run_agent_hierarchy_picker_on_terminal(title, terminal, choices, AgentHierarchyFocus::Sessions)
+    let groups = agent_groups_from_choices(choices);
+    let initial_focus = if groups.len() > 1 {
+        AgentHierarchyFocus::Agents
+    } else {
+        AgentHierarchyFocus::Sessions
+    };
+    run_agent_hierarchy_picker_on_terminal(title, terminal, groups, initial_focus)
 }
 
 fn pick_current_agent_sessions_content_on_terminal(
@@ -443,7 +449,13 @@ fn pick_current_agent_sessions_content_on_terminal(
         return pick_agent_sessions_content_on_terminal(sources, terminal, selection_mode, title);
     }
 
-    run_agent_hierarchy_picker_on_terminal(title, terminal, choices, AgentHierarchyFocus::Sessions)
+    let groups = agent_groups_from_choices(choices);
+    let initial_focus = if groups.len() > 1 {
+        AgentHierarchyFocus::Agents
+    } else {
+        AgentHierarchyFocus::Sessions
+    };
+    run_agent_hierarchy_picker_on_terminal(title, terminal, groups, initial_focus)
 }
 
 fn pick_current_agent_session_content_on_terminal(
@@ -469,7 +481,7 @@ fn pick_current_agent_session_content_on_terminal(
     run_agent_hierarchy_picker_on_terminal(
         &format!("{} --pick", agent_copy_command(source.provider())),
         terminal,
-        vec![choice],
+        agent_groups_from_choices(vec![choice]),
         AgentHierarchyFocus::Dialogues,
     )
 }
@@ -479,6 +491,13 @@ struct AgentPickedContent {
     provider: AgentProvider,
     units: Vec<TextPair>,
     selection: CommandSelection,
+}
+
+#[derive(Clone, Debug)]
+struct AgentGroup {
+    provider: AgentProvider,
+    title: String,
+    choices: Vec<AgentSessionChoice>,
 }
 
 #[derive(Clone, Debug)]
@@ -492,6 +511,7 @@ struct AgentSessionChoice {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AgentHierarchyFocus {
+    Agents,
     Sessions,
     Dialogues,
     Content,
@@ -546,21 +566,55 @@ fn build_agent_session_choice(
     })
 }
 
+fn agent_groups_from_choices(choices: Vec<AgentSessionChoice>) -> Vec<AgentGroup> {
+    let mut groups: Vec<AgentGroup> = Vec::new();
+
+    for choice in choices {
+        if let Some(group) = groups
+            .iter_mut()
+            .find(|group| group.provider == choice.provider)
+        {
+            group.choices.push(choice);
+        } else {
+            groups.push(AgentGroup {
+                provider: choice.provider,
+                title: agent_group_title(choice.provider).to_string(),
+                choices: vec![choice],
+            });
+        }
+    }
+
+    groups
+}
+
+fn agent_group_title(provider: AgentProvider) -> &'static str {
+    match provider.command_name() {
+        "claude" => "claude code",
+        "codex" => "codex",
+        _ => provider.command_name(),
+    }
+}
+
 fn run_agent_hierarchy_picker_on_terminal(
     title: &str,
     terminal: &mut crate::tui::terminal::Tui,
-    choices: Vec<AgentSessionChoice>,
+    groups: Vec<AgentGroup>,
     initial_focus: AgentHierarchyFocus,
 ) -> Result<AgentPickedContent> {
+    let mut agent_state = ListState::default();
+    agent_state.select(Some(0));
     let mut session_state = ListState::default();
     session_state.select(Some(0));
     let mut dialogue_state = ListState::default();
     dialogue_state.select(Some(0));
     let mut focus = initial_focus;
-    let mut selected_dialogues = vec![false; choices[0].dialogue_titles.len()];
+    let has_agent_layer = initial_focus == AgentHierarchyFocus::Agents;
+    let mut selected_dialogues = vec![false; groups[0].choices[0].dialogue_titles.len()];
     let mut content_scroll = 0usize;
 
     loop {
+        let agent_idx = selected_index(&agent_state).min(groups.len().saturating_sub(1));
+        let choices = &groups[agent_idx].choices;
         let session_idx = selected_index(&session_state).min(choices.len().saturating_sub(1));
         let dialogue_count = choices[session_idx].dialogue_titles.len();
         let dialogue_idx = selected_index(&dialogue_state).min(dialogue_count.saturating_sub(1));
@@ -576,7 +630,8 @@ fn run_agent_hierarchy_picker_on_terminal(
             render_agent_hierarchy_picker(
                 title,
                 frame,
-                &choices,
+                &groups,
+                &agent_state,
                 &session_state,
                 &dialogue_state,
                 &selected_dialogues,
@@ -593,16 +648,27 @@ fn run_agent_hierarchy_picker_on_terminal(
             match key.code {
                 KeyCode::Char('q') => anyhow::bail!(PICK_CANCELLED_MESSAGE),
                 KeyCode::Esc => match focus {
+                    AgentHierarchyFocus::Agents => anyhow::bail!(PICK_CANCELLED_MESSAGE),
+                    AgentHierarchyFocus::Sessions if has_agent_layer => {
+                        focus = AgentHierarchyFocus::Agents
+                    }
                     AgentHierarchyFocus::Sessions => anyhow::bail!(PICK_CANCELLED_MESSAGE),
                     AgentHierarchyFocus::Dialogues => focus = AgentHierarchyFocus::Sessions,
                     AgentHierarchyFocus::Content => focus = AgentHierarchyFocus::Dialogues,
                 },
                 KeyCode::Left | KeyCode::Char('h') => match focus {
+                    AgentHierarchyFocus::Agents => {}
+                    AgentHierarchyFocus::Sessions if has_agent_layer => {
+                        focus = AgentHierarchyFocus::Agents
+                    }
                     AgentHierarchyFocus::Sessions => {}
                     AgentHierarchyFocus::Dialogues => focus = AgentHierarchyFocus::Sessions,
                     AgentHierarchyFocus::Content => focus = AgentHierarchyFocus::Dialogues,
                 },
                 KeyCode::Right | KeyCode::Char('l') => match focus {
+                    AgentHierarchyFocus::Agents => {
+                        focus = AgentHierarchyFocus::Sessions;
+                    }
                     AgentHierarchyFocus::Sessions if dialogue_count > 0 => {
                         focus = AgentHierarchyFocus::Dialogues;
                     }
@@ -612,6 +678,20 @@ fn run_agent_hierarchy_picker_on_terminal(
                     _ => {}
                 },
                 KeyCode::Up | KeyCode::Char('k') => match focus {
+                    AgentHierarchyFocus::Agents => {
+                        let next = selected_index(&agent_state).saturating_sub(1);
+                        if next != selected_index(&agent_state) {
+                            agent_state.select(Some(next));
+                            reset_agent_selection_state(
+                                &groups,
+                                next,
+                                &mut session_state,
+                                &mut dialogue_state,
+                                &mut selected_dialogues,
+                            );
+                            content_scroll = 0;
+                        }
+                    }
                     AgentHierarchyFocus::Sessions => {
                         let next = selected_index(&session_state).saturating_sub(1);
                         if next != selected_index(&session_state) {
@@ -635,6 +715,21 @@ fn run_agent_hierarchy_picker_on_terminal(
                     }
                 },
                 KeyCode::Down | KeyCode::Char('j') => match focus {
+                    AgentHierarchyFocus::Agents => {
+                        let current = selected_index(&agent_state);
+                        let next = (current + 1).min(groups.len().saturating_sub(1));
+                        if next != current {
+                            agent_state.select(Some(next));
+                            reset_agent_selection_state(
+                                &groups,
+                                next,
+                                &mut session_state,
+                                &mut dialogue_state,
+                                &mut selected_dialogues,
+                            );
+                            content_scroll = 0;
+                        }
+                    }
                     AgentHierarchyFocus::Sessions => {
                         let current = selected_index(&session_state);
                         let next = (current + 1).min(choices.len().saturating_sub(1));
@@ -683,6 +778,9 @@ fn run_agent_hierarchy_picker_on_terminal(
                     selected_dialogues.fill(select_all);
                 }
                 KeyCode::Enter => match focus {
+                    AgentHierarchyFocus::Agents => {
+                        focus = AgentHierarchyFocus::Sessions;
+                    }
                     AgentHierarchyFocus::Sessions => {
                         if dialogue_count > 0 {
                             focus = AgentHierarchyFocus::Dialogues;
@@ -722,6 +820,22 @@ fn reset_agent_dialogue_state(
     selected_dialogues.resize(choices[session_idx].dialogue_titles.len(), false);
 }
 
+fn reset_agent_selection_state(
+    groups: &[AgentGroup],
+    agent_idx: usize,
+    session_state: &mut ListState,
+    dialogue_state: &mut ListState,
+    selected_dialogues: &mut Vec<bool>,
+) {
+    session_state.select(Some(0));
+    reset_agent_dialogue_state(
+        &groups[agent_idx].choices,
+        0,
+        dialogue_state,
+        selected_dialogues,
+    );
+}
+
 fn agent_dialogue_selection(
     selected_dialogues: &[bool],
     highlighted_idx: usize,
@@ -759,7 +873,8 @@ fn current_agent_dialogue_text(choice: &AgentSessionChoice, dialogue_idx: usize)
 fn render_agent_hierarchy_picker(
     title: &str,
     frame: &mut Frame,
-    choices: &[AgentSessionChoice],
+    groups: &[AgentGroup],
+    agent_state: &ListState,
     session_state: &ListState,
     dialogue_state: &ListState,
     selected_dialogues: &[bool],
@@ -775,6 +890,7 @@ fn render_agent_hierarchy_picker(
         .split(area);
 
     let controls = match focus {
+        AgentHierarchyFocus::Agents => "j/k move  l/Right/Enter open sessions  q/Esc cancel",
         AgentHierarchyFocus::Sessions => "j/k move  l/Right/Enter open dialogues  q/Esc cancel",
         AgentHierarchyFocus::Dialogues => {
             "j/k move  Space toggle  a toggle-all  h/Left/Esc back  Enter copy  q cancel"
@@ -783,13 +899,16 @@ fn render_agent_hierarchy_picker(
             "j/k scroll  Ctrl-d/PageDown down  Ctrl-u/PageUp up  h/Left/Esc back  Enter copy  q cancel"
         }
     };
+    let agent_idx = selected_index(agent_state).min(groups.len().saturating_sub(1));
+    let choices = &groups[agent_idx].choices;
     let session_idx = selected_index(session_state).min(choices.len().saturating_sub(1));
     let selected_count = selected_dialogues
         .iter()
         .filter(|selected| **selected)
         .count();
     let title = Paragraph::new(format!(
-        "{controls}\nshowing {} session(s), {} dialogue(s){}",
+        "{controls}\nshowing {} agent(s), {} session(s), {} dialogue(s){}",
+        groups.len(),
         choices.len(),
         choices[session_idx].dialogue_titles.len(),
         if selected_count == 0 {
@@ -811,6 +930,10 @@ fn render_agent_hierarchy_picker(
         .split(chunks[1]);
 
     match focus {
+        AgentHierarchyFocus::Agents => {
+            render_agent_group_list(frame, body_chunks[0], groups, agent_state, true);
+            render_agent_session_list(frame, body_chunks[1], choices, session_state, false);
+        }
         AgentHierarchyFocus::Sessions => {
             render_agent_session_list(frame, body_chunks[0], choices, session_state, true);
             render_agent_dialogue_list(
@@ -885,6 +1008,31 @@ fn render_agent_session_list(
         .block(Block::default().borders(Borders::ALL).title(title))
         .highlight_style(Style::default().bg(Color::Blue).fg(Color::White))
         .highlight_symbol(">> ");
+    let mut local_state = state.clone();
+    frame.render_stateful_widget(list, area, &mut local_state);
+}
+
+fn render_agent_group_list(
+    frame: &mut Frame,
+    area: Rect,
+    groups: &[AgentGroup],
+    state: &ListState,
+    active: bool,
+) {
+    let items: Vec<ListItem> = groups
+        .iter()
+        .enumerate()
+        .map(|(idx, group)| ListItem::new(format!("{:>2}. {}", idx + 1, group.title)))
+        .collect();
+    let title = if active { "Agents *" } else { "Agents" };
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .highlight_style(if active {
+            Style::default().bg(Color::Blue).fg(Color::White)
+        } else {
+            Style::default().add_modifier(Modifier::DIM)
+        })
+        .highlight_symbol(if active { ">> " } else { "   " });
     let mut local_state = state.clone();
     frame.render_stateful_widget(list, area, &mut local_state);
 }
@@ -1393,6 +1541,12 @@ fn is_agent_startup_user_text(text: &str) -> bool {
     text.starts_with("# AGENTS.md instructions for")
         || text.starts_with("<environment_context>")
         || text.starts_with("<turn_aborted>")
+        || text.starts_with("<local-command-caveat>")
+        || text.starts_with("<local-command-stdout>")
+        || text.starts_with("<command-message>")
+        || text.starts_with("<command-name>")
+        || text.starts_with("<ide_opened_file>")
+        || text.starts_with("[Request interrupted by user]")
 }
 
 fn preview_line(text: &str, limit: usize) -> Option<String> {
@@ -1434,17 +1588,8 @@ fn build_agent_units(session: &AgentSession, selection_mode: AgentSelection) -> 
 fn build_agent_turn_units(session: &AgentSession) -> Vec<TextPair> {
     let mut turns = Vec::new();
 
-    for (idx, block) in session.blocks.iter().enumerate() {
-        if block.kind != AgentBlockKind::Assistant {
-            continue;
-        }
-
-        let start = session.blocks[..idx]
-            .iter()
-            .rposition(|block| block.kind == AgentBlockKind::User)
-            .unwrap_or(idx);
-
-        let turn_blocks: Vec<AgentBlock> = session.blocks[start..=idx]
+    for (start, end) in agent_turn_ranges(&session.blocks) {
+        let turn_blocks: Vec<AgentBlock> = session.blocks[start..end]
             .iter()
             .filter(|block| matches!(block.kind, AgentBlockKind::User | AgentBlockKind::Assistant))
             .cloned()
@@ -1460,6 +1605,34 @@ fn build_agent_turn_units(session: &AgentSession) -> Vec<TextPair> {
     }
 
     turns
+}
+
+fn agent_turn_ranges(blocks: &[AgentBlock]) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut start = None;
+    let mut has_assistant = false;
+
+    for (idx, block) in blocks.iter().enumerate() {
+        if block.kind == AgentBlockKind::User && is_real_user_block(block) {
+            if let Some(start) = start {
+                if has_assistant {
+                    ranges.push((start, idx));
+                }
+            }
+            start = Some(idx);
+            has_assistant = false;
+        } else if start.is_some() && block.kind == AgentBlockKind::Assistant {
+            has_assistant = true;
+        }
+    }
+
+    if let Some(start) = start {
+        if has_assistant {
+            ranges.push((start, blocks.len()));
+        }
+    }
+
+    ranges
 }
 
 fn build_agent_kind_units(session: &AgentSession, kind: AgentBlockKind) -> Vec<TextPair> {
@@ -1478,16 +1651,8 @@ fn build_agent_vim_view(blocks: &[AgentBlock]) -> VimView {
     let mut main_turns = Vec::new();
     let mut full_turns = Vec::new();
 
-    for (idx, block) in blocks.iter().enumerate() {
-        if block.kind != AgentBlockKind::Assistant {
-            continue;
-        }
-
-        let start = blocks[..idx]
-            .iter()
-            .rposition(|block| block.kind == AgentBlockKind::User)
-            .unwrap_or(idx);
-        let full_blocks = &blocks[start..=idx];
+    for (start, end) in agent_turn_ranges(blocks) {
+        let full_blocks = &blocks[start..end];
         let main_blocks: Vec<AgentBlock> = full_blocks
             .iter()
             .filter(|block| matches!(block.kind, AgentBlockKind::User | AgentBlockKind::Assistant))
@@ -1498,16 +1663,6 @@ fn build_agent_vim_view(blocks: &[AgentBlock]) -> VimView {
             main_turns.push(main_blocks);
             full_turns.push(full_blocks.to_vec());
         }
-    }
-
-    if main_turns.is_empty() {
-        main_turns = blocks
-            .iter()
-            .filter(|block| matches!(block.kind, AgentBlockKind::User | AgentBlockKind::Assistant))
-            .cloned()
-            .map(|block| vec![block])
-            .collect();
-        full_turns = main_turns.clone();
     }
 
     let main = build_agent_turn_view(&main_turns);
@@ -1903,17 +2058,17 @@ endfunction
 
 function! s:SivtrCurrentBlockIndex() abort
   let l:line = line('.')
-  let l:fallback = -1
+  let l:previous = -1
   for l:i in range(0, len(s:sivtr_blocks) - 1)
     let l:block = s:sivtr_blocks[l:i]
     if l:line >= l:block.start && l:line <= l:block.end
       return l:i
     endif
     if l:block.start <= l:line
-      let l:fallback = l:i
+      let l:previous = l:i
     endif
   endfor
-  return l:fallback >= 0 ? l:fallback : 0
+  return l:previous >= 0 ? l:previous : 0
 endfunction
 
 function! s:SivtrCurrentBlock() abort
@@ -2034,9 +2189,10 @@ fn build_text_preview_lines(text: &str) -> String {
 mod tests {
     use super::picker::{apply_range_toggle, selection_from_entries, PickEntry};
     use super::{
-        agent_session_preview, build_agent_vim_view, build_output_preview, filter_lines_by_regex,
-        filter_lines_by_spec, format_block, is_vim_command, vim_single_quote, AgentBlock,
-        AgentBlockKind, AgentSession, CommandBlock, CommandSelection, CopyMode, TextPair,
+        agent_session_preview, build_agent_units, build_agent_vim_view, build_output_preview,
+        filter_lines_by_regex, filter_lines_by_spec, format_block, is_vim_command,
+        vim_single_quote, AgentBlock, AgentBlockKind, AgentSelection, AgentSession, CommandBlock,
+        CommandSelection, CopyMode, TextPair,
     };
 
     #[test]
@@ -2290,6 +2446,102 @@ mod tests {
         assert_eq!(full.blocks.len(), 2);
         assert!(full.blocks[0].output_text.contains("tool output"));
         assert!(full.blocks[0].output_text.contains("first answer"));
+    }
+
+    #[test]
+    fn agent_turn_units_group_multiple_assistant_messages_for_one_user() {
+        let session = AgentSession {
+            path: "claude.jsonl".into(),
+            id: Some("abc".to_string()),
+            cwd: Some("d:\\repo".to_string()),
+            blocks: vec![
+                AgentBlock {
+                    kind: AgentBlockKind::User,
+                    timestamp: None,
+                    label: None,
+                    text: "review the project".to_string(),
+                },
+                AgentBlock {
+                    kind: AgentBlockKind::ToolCall,
+                    timestamp: None,
+                    label: Some("Bash".to_string()),
+                    text: "{\"command\":\"rtk ls\"}".to_string(),
+                },
+                AgentBlock {
+                    kind: AgentBlockKind::ToolOutput,
+                    timestamp: None,
+                    label: Some("Bash".to_string()),
+                    text: "Cargo.toml".to_string(),
+                },
+                AgentBlock {
+                    kind: AgentBlockKind::Assistant,
+                    timestamp: None,
+                    label: None,
+                    text: "first observation".to_string(),
+                },
+                AgentBlock {
+                    kind: AgentBlockKind::Assistant,
+                    timestamp: None,
+                    label: None,
+                    text: "final review".to_string(),
+                },
+            ],
+        };
+
+        let units = build_agent_units(&session, AgentSelection::LastTurn);
+
+        assert_eq!(units.len(), 1);
+        assert!(units[0].plain.contains("review the project"));
+        assert!(units[0].plain.contains("first observation"));
+        assert!(units[0].plain.contains("final review"));
+        assert!(!units[0].plain.contains("Cargo.toml"));
+    }
+
+    #[test]
+    fn agent_vim_view_groups_multiple_assistant_messages_for_one_user() {
+        let blocks = vec![
+            AgentBlock {
+                kind: AgentBlockKind::User,
+                timestamp: None,
+                label: None,
+                text: "review the project".to_string(),
+            },
+            AgentBlock {
+                kind: AgentBlockKind::ToolCall,
+                timestamp: None,
+                label: Some("Bash".to_string()),
+                text: "{\"command\":\"rtk ls\"}".to_string(),
+            },
+            AgentBlock {
+                kind: AgentBlockKind::ToolOutput,
+                timestamp: None,
+                label: Some("Bash".to_string()),
+                text: "Cargo.toml".to_string(),
+            },
+            AgentBlock {
+                kind: AgentBlockKind::Assistant,
+                timestamp: None,
+                label: None,
+                text: "first observation".to_string(),
+            },
+            AgentBlock {
+                kind: AgentBlockKind::Assistant,
+                timestamp: None,
+                label: None,
+                text: "final review".to_string(),
+            },
+        ];
+
+        let view = build_agent_vim_view(&blocks);
+
+        assert_eq!(view.blocks.len(), 1);
+        assert!(view.raw.contains("first observation"));
+        assert!(view.raw.contains("final review"));
+        assert!(!view.raw.contains("Cargo.toml"));
+
+        let full = view.alternate.expect("tools view should exist");
+        assert_eq!(full.blocks.len(), 1);
+        assert!(full.raw.contains("Cargo.toml"));
     }
 
     #[test]
