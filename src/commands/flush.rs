@@ -1,7 +1,11 @@
 use anyhow::Result;
+
+#[cfg(windows)]
 use std::env;
 
+#[cfg(windows)]
 use sivtr_core::capture::scrollback;
+#[cfg(windows)]
 use sivtr_core::session::{self, SessionEntry, SessionState};
 
 /// Flush: read console buffer, append new content to session.log.

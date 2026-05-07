@@ -1,4 +1,5 @@
 pub mod browse;
+pub mod capture_history;
 pub mod clear;
 pub mod command_block_selector;
 pub mod config;
