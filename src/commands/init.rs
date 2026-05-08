@@ -129,8 +129,11 @@ if (($env.SIVTR_PROMPT_WRAPPED? | default false) != true) {
 # <<< sivtr shell integration <<<
 "#;
 
+#[cfg(unix)]
 const TMUX_MARKER_START: &str = "# >>> sivtr tmux shortcut >>>";
+#[cfg(unix)]
 const TMUX_MARKER_END: &str = "# <<< sivtr tmux shortcut <<<";
+#[cfg(unix)]
 const TMUX_HOOK: &str = r##"# >>> sivtr tmux shortcut >>>
 bind-key y new-window -c "#{pane_current_path}" "sivtr hotkey-pick-codex --cwd '#{pane_current_path}'"
 # <<< sivtr tmux shortcut <<<
@@ -172,6 +175,7 @@ const NUSHELL_SPEC: HookSpec = HookSpec {
     legacy_hook: None,
 };
 
+#[cfg(unix)]
 const TMUX_SPEC: HookSpec = HookSpec {
     hook: TMUX_HOOK,
     marker_start: TMUX_MARKER_START,
@@ -411,6 +415,7 @@ fn nushell_config_path() -> Result<PathBuf> {
     Ok(config_dir.join("nushell").join("config.nu"))
 }
 
+#[cfg(unix)]
 fn tmux_config_path() -> Result<PathBuf> {
     let home = dirs::home_dir().context("Failed to resolve home directory")?;
     Ok(home.join(".tmux.conf"))
@@ -472,6 +477,7 @@ fn update_existing_hook(content: &str, spec: &HookSpec) -> Option<String> {
     None
 }
 
+#[cfg(unix)]
 fn detect_linux_terminal() -> Option<String> {
     for candidate in [
         "x-terminal-emulator",
@@ -490,6 +496,7 @@ fn detect_linux_terminal() -> Option<String> {
     None
 }
 
+#[cfg(unix)]
 fn command_exists(name: &str) -> bool {
     std::env::var_os("PATH")
         .map(|paths| {
@@ -501,6 +508,7 @@ fn command_exists(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(unix)]
 fn write_linux_shortcut_script(path: &Path, cwd: &Path, terminal: Option<&str>) -> Result<()> {
     let script = render_linux_shortcut_script(cwd, terminal);
     fs::write(path, script)?;
@@ -513,6 +521,7 @@ fn write_linux_shortcut_script(path: &Path, cwd: &Path, terminal: Option<&str>) 
     Ok(())
 }
 
+#[cfg(unix)]
 fn render_linux_shortcut_script(cwd: &Path, terminal: Option<&str>) -> String {
     let cwd = shell_single_quote(&cwd.to_string_lossy());
     let launcher = terminal
@@ -525,6 +534,7 @@ fn render_linux_shortcut_script(cwd: &Path, terminal: Option<&str>) -> String {
     format!("#!/usr/bin/env bash\nset -euo pipefail\nexport PROJECT_CWD='{cwd}'\n{launcher}\n")
 }
 
+#[cfg(unix)]
 fn build_terminal_launch_command(terminal: &str) -> String {
     let picker = "sivtr hotkey-pick-codex --cwd \"$PROJECT_CWD\"";
     match terminal {
@@ -539,6 +549,7 @@ fn build_terminal_launch_command(terminal: &str) -> String {
     }
 }
 
+#[cfg(unix)]
 fn write_linux_shortcut_desktop_entry(path: &Path, script_path: &Path) -> Result<()> {
     let desktop = format!(
         "[Desktop Entry]\nType=Application\nName=Sivtr Pick Codex\nExec={}\nTerminal=false\nCategories=Development;\n",
@@ -548,6 +559,7 @@ fn write_linux_shortcut_desktop_entry(path: &Path, script_path: &Path) -> Result
     Ok(())
 }
 
+#[cfg(unix)]
 fn shell_single_quote(value: &str) -> String {
     value.replace('\'', "'\"'\"'")
 }
@@ -565,12 +577,16 @@ fn find_marked_block(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::{
         build_terminal_launch_command, command_exists, render_linux_shortcut_script,
-        shell_single_quote, update_existing_hook, BASH_HOOK, BASH_SPEC, LEGACY_POWERSHELL_HOOK,
-        NUSHELL_HOOK, NUSHELL_SPEC, POWERSHELL_HOOK, POWERSHELL_SPEC, TMUX_HOOK, TMUX_SPEC,
-        ZSH_HOOK, ZSH_SPEC,
+        shell_single_quote, TMUX_HOOK, TMUX_SPEC,
     };
+    use super::{
+        update_existing_hook, BASH_HOOK, BASH_SPEC, LEGACY_POWERSHELL_HOOK, NUSHELL_HOOK,
+        NUSHELL_SPEC, POWERSHELL_HOOK, POWERSHELL_SPEC, ZSH_HOOK, ZSH_SPEC,
+    };
+    #[cfg(unix)]
     use std::path::Path;
 
     #[cfg(windows)]
@@ -630,6 +646,7 @@ mod tests {
         assert_eq!(updated, profile);
     }
 
+    #[cfg(unix)]
     #[test]
     fn replaces_existing_tmux_block() {
         let profile = format!("before\n{TMUX_HOOK}\nafter\n");
@@ -639,6 +656,7 @@ mod tests {
         assert_eq!(updated, profile);
     }
 
+    #[cfg(unix)]
     #[test]
     fn gnome_terminal_launcher_uses_project_cwd() {
         let command = build_terminal_launch_command("gnome-terminal");
@@ -647,11 +665,13 @@ mod tests {
         assert!(command.contains("sivtr hotkey-pick-codex --cwd \"$PROJECT_CWD\""));
     }
 
+    #[cfg(unix)]
     #[test]
     fn shell_single_quote_escapes_single_quotes() {
         assert_eq!(shell_single_quote("/tmp/it's"), "/tmp/it'\"'\"'s");
     }
 
+    #[cfg(unix)]
     #[test]
     fn linux_shortcut_script_exports_project_cwd() {
         let script = render_linux_shortcut_script(Path::new("/tmp/project"), Some("xterm"));
@@ -660,6 +680,7 @@ mod tests {
         assert!(script.contains("sivtr hotkey-pick-codex --cwd \"$PROJECT_CWD\""));
     }
 
+    #[cfg(unix)]
     #[test]
     fn command_exists_detects_programs_via_path_scan() {
         assert!(command_exists("sh"));
