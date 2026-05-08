@@ -62,7 +62,7 @@ async function pickCodex(): Promise<void> {
   terminal.show();
   terminal.sendText(
     buildTerminalCommandLine(
-      buildCommandLine(command, args),
+      buildCommandLine(command, args, vscode.env.shell),
       closeTerminalOnSuccess,
       vscode.env.shell,
     ),
