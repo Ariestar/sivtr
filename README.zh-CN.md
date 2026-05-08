@@ -149,7 +149,9 @@ sivtr copy out --lines 10:40
 
 ### 复用 Codex 会话
 
-`sivtr copy codex` 会读取 `~/.codex/sessions` 下的 Codex rollout JSONL 文件，并优先选择 `cwd` 与当前目录匹配的最新会话。
+`sivtr copy codex` 会读取 `~/.codex/sessions` 下的 Codex rollout JSONL 文件。如果当前 Codex shell 暴露了 `CODEX_THREAD_ID`，`sivtr` 会优先匹配这个本地精确会话；否则会优先选择 `cwd` 与当前目录匹配的最新本地会话。
+
+如果要只读共享另一个账号的 Codex 会话，推荐先把它们镜像到独立目录，再通过 `[codex].session_dirs` 读取，而不是用提权方式运行 `sivtr`。共享/镜像目录只参与 `--pick` 这类显式浏览，不会抢占当前本地会话解析。
 
 用 `--session N` 可以显式选择第 N 新的已记录会话；用 `--session ID` 可以按会话 id 或 id 前缀匹配。
 
@@ -163,9 +165,23 @@ sivtr copy codex in     # 最近用户消息
 sivtr copy codex tool   # 最近工具输出
 sivtr copy codex all    # 整个解析后的会话
 sivtr copy codex --session 2 --pick
+sivtr copy codex --pick # 浏览本地和共享镜像会话
 ```
 
 默认会过滤过程性 commentary，所以 `sivtr copy codex out` 更倾向返回最终助手回复，而不是中间状态更新。
+
+先把当前账号的会话持续镜像成共享树：
+
+```bash
+sivtr codex export --dest /srv/sivtr/root-codex --watch
+```
+
+再让另一个账号在配置里引用镜像目录：
+
+```toml
+[codex]
+session_dirs = ["/srv/sivtr/root-codex/sessions"]
+```
 
 ### VS Code 快捷键
 
@@ -262,6 +278,7 @@ sivtr hotkey stop
 | `sivtr run <command>` | 执行命令、捕获输出并浏览。 |
 | `sivtr copy` | 复制最近命令块。 |
 | `sivtr copy codex` | 复制当前 Codex 会话中的有用内容。 |
+| `sivtr codex export --dest <path>` | 把本地 Codex 会话镜像成共享只读目录树。 |
 | `sivtr diff <left> <right>` | 对比最近命令输出。 |
 | `sivtr history` | 列出、搜索、查看输出历史。 |
 | `sivtr config` | 管理 TOML 配置。 |

@@ -1,6 +1,7 @@
 pub mod browse;
 pub mod capture_history;
 pub mod clear;
+pub mod codex;
 pub mod command_block_selector;
 pub mod config;
 pub mod copy;

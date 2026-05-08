@@ -149,7 +149,9 @@ sivtr copy out --lines 10:40
 
 ### Reuse Codex Sessions
 
-`sivtr copy codex` reads Codex rollout JSONL files from `~/.codex/sessions` and chooses the newest session whose `cwd` matches your current directory.
+`sivtr copy codex` reads Codex rollout JSONL files from `~/.codex/sessions`. When an active Codex shell exports `CODEX_THREAD_ID`, `sivtr` prefers that exact local session first. Otherwise it chooses the newest local session whose `cwd` matches your current directory.
+
+For shared read-only access to another account's Codex sessions, mirror them into a separate directory and add that directory to `[codex].session_dirs` instead of running `sivtr` with elevated privileges. Shared/mirrored trees only participate in explicit browsing through `--pick`.
 
 Use `--session N` to open the Nth newest recorded session, or `--session ID` to match a session id / id prefix explicitly.
 
@@ -163,9 +165,23 @@ sivtr copy codex in     # latest user message
 sivtr copy codex tool   # latest tool output
 sivtr copy codex all    # parsed session
 sivtr copy codex --session 2 --pick
+sivtr copy codex --pick # browse local and mirrored sessions
 ```
 
 Progress commentary is filtered by default, so `sivtr copy codex out` returns the final assistant reply instead of intermediate status updates.
+
+Mirror the current account's sessions into a shared tree:
+
+```bash
+sivtr codex export --dest /srv/sivtr/root-codex --watch
+```
+
+Then point another account at that mirrored tree:
+
+```toml
+[codex]
+session_dirs = ["/srv/sivtr/root-codex/sessions"]
+```
 
 ### VS Code Shortcut
 
@@ -265,6 +281,7 @@ The default shortcut is `alt+y`.
 | `sivtr run <command>` | Execute a command, capture output, then browse it. |
 | `sivtr copy` | Copy recent command blocks. |
 | `sivtr copy codex` | Copy useful content from the current Codex session. |
+| `sivtr codex export --dest <path>` | Mirror local Codex sessions into a shared read-only tree. |
 | `sivtr diff <left> <right>` | Compare recent command blocks. |
 | `sivtr history` | List, search, and show captured output history. |
 | `sivtr config` | Manage the TOML config file. |
