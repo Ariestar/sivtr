@@ -73,7 +73,7 @@ picker.
 
 ## Linux setups
 
-Use one of these Linux-specific entry points instead of a built-in global
+Use one of these platform-specific entry points instead of a built-in global
 daemon:
 
 - VS Code: use the extension command bound to `Alt+Y` by default.
@@ -95,3 +95,17 @@ sivtr init linux-shortcut
 This writes `~/.local/bin/sivtr-pick-codex` plus a desktop entry at
 `~/.local/share/applications/sivtr-pick-codex.desktop`. Bind your desktop
 shortcut to the script, or run it directly from a terminal.
+
+- macOS: generate a Terminal launcher plus a LaunchAgent wrapper:
+
+```bash
+sivtr init macos-shortcut
+```
+
+This writes `~/.local/bin/sivtr-pick-codex` and
+`~/Library/LaunchAgents/dev.sivtr.pick-codex.plist`. Run the script directly,
+or load the LaunchAgent with:
+
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sivtr.pick-codex.plist
+```

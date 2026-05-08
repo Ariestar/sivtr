@@ -42,7 +42,7 @@ It is not a terminal emulator and not a multiplexer. It is a companion tool for 
 - Pipe any command into a searchable, selectable output viewer.
 - Record shell command blocks and copy recent inputs, outputs, or bare commands.
 - Read Codex session JSONL files and copy useful user, assistant, or tool blocks.
-- Open an AI session picker from VS Code with one shortcut.
+- Open a Codex picker from VS Code with one shortcut.
 - Filter copied text with regex and line ranges.
 - Keep a local SQLite history for later search.
 - Compare recent command outputs while iterating on tests and builds.
@@ -69,7 +69,7 @@ Install the VS Code bridge from the Marketplace:
 ariestar.sivtr-vscode
 ```
 
-The extension launches the AI session picker from the current workspace. If the `sivtr` CLI is missing, it offers to run `cargo install sivtr` in a visible terminal.
+The extension launches the Codex picker from the current workspace. If the `sivtr` CLI is missing, it offers to run `cargo install sivtr` in a visible terminal.
 
 ## Quick Start
 
@@ -149,9 +149,7 @@ sivtr copy out --lines 10:40
 
 ### Reuse Codex Sessions
 
-`sivtr copy codex` reads Codex rollout JSONL files from `~/.codex/sessions` and chooses the newest session whose `cwd` matches your current directory.
-
-Use `--session N` to open the Nth newest recorded session, or `--session ID` to match a session id / id prefix explicitly.
+`sivtr copy codex` reads Codex rollout JSONL files from `~/.codex/sessions`. When you run it inside an active `codex` or `codex resume` shell, it prefers that exact session id first. Otherwise it chooses the newest session whose `cwd` matches your current directory. Use `--session N` to target the Nth newest recorded session, or `--session ID` to target a specific session id / id prefix.
 
 ```bash
 sivtr copy codex        # latest completed user + assistant turn
@@ -163,16 +161,20 @@ sivtr copy codex in     # latest user message
 sivtr copy codex tool   # latest tool output
 sivtr copy codex all    # parsed session
 sivtr copy codex --session 2 --pick
+sivtr copy codex all --max-blocks 0
+sivtr copy codex all --max-blocks 10000
 ```
 
 Progress commentary is filtered by default, so `sivtr copy codex out` returns the final assistant reply instead of intermediate status updates.
+
+Large Codex transcripts are capped to the latest `10000` parsed blocks by default for robustness. Set `[codex].max_blocks = 0` in config or pass `--max-blocks 0` for a full import.
 
 ### VS Code Shortcut
 
 The VS Code extension contributes:
 
 ```text
-Sivtr: Pick AI Session
+Sivtr: Pick Codex Turn
 ```
 
 Default keybinding:
@@ -193,6 +195,9 @@ sivtr hotkey-pick-codex --cwd .
 and `sivtr` prefers the active `codex` / `codex resume` session when one is
 available.
 
+On macOS, the same VS Code shortcut works as the default picker shortcut when
+the editor has focus.
+
 ### Linux Shortcut Setup
 
 Linux does not currently ship a default global `sivtr` hotkey outside VS Code.
@@ -209,45 +214,42 @@ Reasons:
 Recommended Linux setups:
 
 - VS Code: use the built-in `Alt+Y` command binding.
-- tmux: install a helper that binds `prefix + y` to the current pane's working
-  directory:
-
-```bash
-sivtr init tmux
-tmux source-file ~/.tmux.conf
-```
-
-The generated block is:
+- tmux: bind a key to the current pane's working directory:
 
 ```tmux
 bind-key y new-window -c "#{pane_current_path}" "sivtr hotkey-pick-codex --cwd '#{pane_current_path}'"
 ```
 
-- Terminal / desktop environment: generate a launcher for the current project:
+- Terminal / desktop environment: create a custom shortcut that launches
+  `sivtr hotkey-pick-codex --cwd <project-path>` in a terminal for the project
+  you want to inspect.
+
+### macOS Shortcut Setup
+
+macOS does not currently ship a built-in `sivtr` global hotkey daemon. The
+recommended default is the VS Code shortcut above.
+
+For a project-local Terminal launcher plus a LaunchAgent wrapper, generate the
+helper files on macOS:
 
 ```bash
-sivtr init linux-shortcut
+sivtr init macos-shortcut
 ```
 
 This writes:
 
 - `~/.local/bin/sivtr-pick-codex`
-- `~/.local/share/applications/sivtr-pick-codex.desktop`
+- `~/Library/LaunchAgents/dev.sivtr.pick-codex.plist`
 
-The launcher opens a terminal and runs:
+You can:
 
-```bash
-sivtr hotkey-pick-codex --cwd "<project-path>"
-```
+- run `~/.local/bin/sivtr-pick-codex` directly;
+- load the LaunchAgent with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sivtr.pick-codex.plist`;
+- keep using the VS Code command for the most reliable shortcut-driven flow.
 
-Typical Linux usage examples:
-
-- GNOME / KDE: bind your desktop shortcut to `~/.local/bin/sivtr-pick-codex`.
-- Plain terminal launcher: run `~/.local/bin/sivtr-pick-codex`.
-- Manual one-off command: `sivtr hotkey-pick-codex --cwd /path/to/project`.
 ### Windows Global Hotkey
 
-On Windows, the hotkey daemon can open the AI session picker from anywhere:
+On Windows, the hotkey daemon can open the Codex picker from anywhere:
 
 ```bash
 sivtr hotkey start
@@ -268,9 +270,9 @@ The default shortcut is `alt+y`.
 | `sivtr diff <left> <right>` | Compare recent command blocks. |
 | `sivtr history` | List, search, and show captured output history. |
 | `sivtr config` | Manage the TOML config file. |
-| `sivtr init <target>` | Generate shell integration or Linux shortcut helpers. |
+| `sivtr init <shell>` | Generate shell integration for command-block capture. |
 | `sivtr import` | Open the current session log. |
-| `sivtr hotkey` | Manage the Windows AI session picker hotkey. |
+| `sivtr hotkey` | Manage the Windows Codex picker hotkey. |
 | `sivtr clear` | Clear session logs. |
 
 ## TUI Keys
@@ -322,7 +324,7 @@ sivtr/
 |- crates/sivtr-core/    # Capture, parsing, buffers, selection, search, history, export
 |- src/                  # CLI, TUI, commands, hotkey integration
 |- docs-site/            # Astro/Starlight documentation site
-|- editors/vscode/       # VS Code extension bridge for the AI session picker
+|- editors/vscode/       # VS Code extension bridge for the Codex picker
 `- .github/workflows/    # CI and release automation
 ```
 

@@ -3,6 +3,7 @@ use sivtr_core::buffer::Buffer;
 use sivtr_core::capture::scrollback;
 use sivtr_core::config::{OpenMode, SivtrConfig};
 use sivtr_core::export::editor;
+use sivtr_core::history::store::CaptureSource;
 use sivtr_core::parse;
 
 use super::browse;
@@ -19,6 +20,7 @@ pub fn execute() -> Result<()> {
             }
 
             let config = SivtrConfig::load().unwrap_or_default();
+            browse::record_history(&config, &raw, Some("sivtr import"), CaptureSource::Import);
 
             match config.general.open_mode {
                 OpenMode::Editor => {
