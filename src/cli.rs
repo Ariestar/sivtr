@@ -254,6 +254,9 @@ pub enum Commands {
     #[command(after_help = HOTKEY_AFTER_HELP)]
     Hotkey(HotkeyCommand),
 
+    /// Export local Codex session files into a shared read-only tree
+    Codex(CodexCommand),
+
     /// Clear session logs
     Clear(ClearArgs),
 
@@ -535,6 +538,37 @@ pub enum AgentCopyMode {
     All(CopySimpleArgs),
 }
 
+#[derive(Parser, Debug)]
+pub struct CodexCommand {
+    #[command(subcommand)]
+    pub action: CodexAction,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CodexAction {
+    /// Export local Codex rollout JSONL files into a target directory
+    Export(CodexExportArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct CodexExportArgs {
+    /// Destination directory that will receive a sessions/ tree copy
+    #[arg(long, value_name = "PATH")]
+    pub dest: PathBuf,
+
+    /// Keep only the newest N session files; `0` means export all
+    #[arg(long, value_name = "N", default_value_t = 0)]
+    pub limit: usize,
+
+    /// Continue mirroring local sessions into the destination tree
+    #[arg(long, default_value_t = false)]
+    pub watch: bool,
+
+    /// Seconds between sync passes when `--watch` is enabled
+    #[arg(long, value_name = "SECONDS", default_value_t = 2, requires = "watch")]
+    pub interval: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -731,6 +765,35 @@ mod tests {
                 assert_eq!(args.provider, HotkeyProviderSelection::default());
             }
             _ => panic!("expected hotkey-pick-agent command"),
+        }
+    }
+
+    #[test]
+    fn codex_export_accepts_destination_and_watch_flags() {
+        let cli = Cli::try_parse_from([
+            "sivtr",
+            "codex",
+            "export",
+            "--dest",
+            "/tmp/shared-codex",
+            "--limit",
+            "5",
+            "--watch",
+            "--interval",
+            "3",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Commands::Codex(cmd)) => match cmd.action {
+                CodexAction::Export(args) => {
+                    assert_eq!(args.dest, PathBuf::from("/tmp/shared-codex"));
+                    assert_eq!(args.limit, 5);
+                    assert!(args.watch);
+                    assert_eq!(args.interval, 3);
+                }
+            },
+            _ => panic!("expected codex export command"),
         }
     }
 

@@ -43,6 +43,9 @@ fn run() -> Result<()> {
         Some(Commands::Hotkey(cmd)) => {
             commands::hotkey::execute(cmd)?;
         }
+        Some(Commands::Codex(cmd)) => {
+            commands::codex::execute(cmd)?;
+        }
         Some(Commands::Config(cfg_cmd)) => {
             commands::config::execute(cfg_cmd)?;
         }

@@ -3,7 +3,9 @@ title: Codex 捕获
 description: 从当前 Codex 会话复制有用块。
 ---
 
-`sivtr copy codex` 会读取 `~/.codex/sessions` 下的 Codex rollout JSONL 文件。默认选择 `cwd` 与当前工作目录匹配的最新会话。
+`sivtr copy codex` 会读取 `~/.codex/sessions` 下的 Codex rollout JSONL 文件。如果当前 shell 暴露了 `CODEX_THREAD_ID`，`sivtr` 会优先匹配这个本地精确会话；否则默认选择 `cwd` 与当前工作目录匹配的最新本地会话。
+
+如果另一个账号先用 `sivtr codex export --dest ...` 发布了只读镜像，就把镜像后的 `sessions` 目录加入 `[codex].session_dirs`。这样显式 `--pick` 浏览就能在不提权的前提下读取它。
 
 当你想复用最后一个回答、输入、工具输出，或整个解析后的会话，但不想手动打开 Codex transcript 时，这个功能很有用。
 
@@ -62,11 +64,29 @@ sivtr copy codex out --print
 ```bash
 sivtr copy codex --pick
 sivtr copy codex out --pick
+sivtr copy codex --pick  # 同时浏览 [codex].session_dirs 里的共享镜像会话
 ```
 
 普通 CLI 选择器会先显示会话列表，进入某个会话后再选择一个或多个单元。按 `t` 打开 Vim 风格视图。在 Codex 视图里，如果存在替代完整视图，`T` 可以切换工具内容。
 
 Windows 热键和 VS Code 插件这类带上下文的入口会先打开当前 workspace 下最新的非空会话。如果这个会话不存在或为空，再退回到会话列表。
+
+共享/镜像会话树只参与显式 `--pick` 浏览。隐式“当前会话”解析仍然只看本地会话，避免另一个账号导出的历史抢占当前用户的 Codex 工作流。
+
+## 为另一个账号镜像会话
+
+先在源账号侧持续发布镜像树：
+
+```bash
+sivtr codex export --dest /srv/sivtr/root-codex --watch
+```
+
+再在另一个账号的配置里引用镜像目录：
+
+```toml
+[codex]
+session_dirs = ["/srv/sivtr/root-codex/sessions"]
+```
 
 ## Windows 热键
 
