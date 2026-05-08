@@ -1,7 +1,7 @@
 {
   "name": "sivtr-vscode",
   "displayName": "sivtr",
-  "description": "Launch the sivtr AI session picker from VS Code.",
+  "description": "Launch the sivtr Codex picker from VS Code.",
   "version": "0.1.2",
   "publisher": "ariestar",
   "icon": "icon.png",
@@ -25,13 +25,13 @@
   "contributes": {
     "commands": [
       {
-        "command": "sivtr.pickAgent",
-        "title": "Sivtr: Pick AI Session"
+        "command": "sivtr.pickCodex",
+        "title": "Sivtr: Pick Codex Turn"
       }
     ],
     "keybindings": [
       {
-        "command": "sivtr.pickAgent",
+        "command": "sivtr.pickCodex",
         "key": "alt+y",
         "mac": "cmd+alt+y",
         "when": "!terminalFocus"
@@ -48,11 +48,9 @@
         "sivtr.args": {
           "type": "array",
           "default": [
-            "hotkey-pick-agent",
+            "hotkey-pick-codex",
             "--cwd",
-            ".",
-            "--provider",
-            "all"
+            "."
           ],
           "items": {
             "type": "string"
@@ -80,6 +78,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "test": "pnpm run compile && rm -f out/extension.test.js && node --test out/commandLine.test.js",
     "package": "pnpm run compile && node node_modules/@vscode/vsce/vsce package --no-dependencies --no-yarn --allow-missing-repository"
   },
   "devDependencies": {
