@@ -7,6 +7,8 @@ description: 从当前 Codex 会话复制有用块。
 
 如果另一个账号先用 `sivtr codex export --dest ...` 发布了只读镜像，就把镜像后的 `sessions` 目录加入 `[codex].session_dirs`。这样显式 `--pick` 浏览就能在不提权的前提下读取它。
 
+用 `--session N` 可以显式选择第 N 新的已记录会话；用 `--session ID` 可以按会话 id 或 id 前缀匹配。
+
 当你想复用最后一个回答、输入、工具输出，或整个解析后的会话，但不想手动打开 Codex transcript 时，这个功能很有用。
 
 ## 默认行为
@@ -39,9 +41,11 @@ sivtr copy codex all
 选择器和命令块复制相同：
 
 ```bash
+sivtr copy codex --session 2
+sivtr copy codex --session 019df7fb
 sivtr copy codex 2
 sivtr copy codex 2..4
-sivtr copy codex out 3
+sivtr copy codex out --session 3
 ```
 
 `1` 表示最新匹配的 Codex 单元，`2` 表示第二新，依此类推。
@@ -62,6 +66,7 @@ sivtr copy codex out --print
 ## 交互式选择
 
 ```bash
+sivtr copy codex --session 2 --pick
 sivtr copy codex --pick
 sivtr copy codex out --pick
 sivtr copy codex --pick  # 同时浏览 [codex].session_dirs 里的共享镜像会话
