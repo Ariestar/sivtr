@@ -432,7 +432,11 @@ mod tests {
     #[test]
     fn configured_codex_session_dirs_reads_env_override_once() {
         let previous = env::var_os("SIVTR_CODEX_SESSION_DIRS");
-        env::set_var("SIVTR_CODEX_SESSION_DIRS", "/tmp/a:/tmp/b:/tmp/a");
+        let separator = if cfg!(windows) { ";" } else { ":" };
+        env::set_var(
+            "SIVTR_CODEX_SESSION_DIRS",
+            format!("/tmp/a{separator}/tmp/b{separator}/tmp/a"),
+        );
 
         let dirs = configured_codex_session_dirs();
 
