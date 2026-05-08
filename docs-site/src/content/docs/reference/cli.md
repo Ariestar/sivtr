@@ -62,6 +62,9 @@ Supported shell names:
 - `zsh`
 - `nushell`
 - `nu`
+- `tmux`
+- `linux-shortcut`
+- `macos-shortcut`
 
 ## copy
 

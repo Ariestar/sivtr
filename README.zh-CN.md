@@ -42,7 +42,7 @@
 - 把任意命令输出通过管道送入可搜索、可选择的浏览器。
 - 记录 shell 命令块，之后复制最近的输入、输出或纯命令。
 - 读取 Codex 的 JSONL 会话文件，复制用户消息、助手回复或工具输出。
-- 在 VS Code 中用一个快捷键打开 AI session picker。
+- 在 VS Code 中用一个快捷键打开 Codex picker。
 - 支持用正则和行号范围过滤复制内容。
 - 用本地 SQLite 保存历史，之后可以检索。
 - 迭代测试和构建时，对比最近几次命令输出。
@@ -69,7 +69,7 @@ VS Code 插件：
 ariestar.sivtr-vscode
 ```
 
-插件会从当前 workspace 启动 AI session picker。如果没有安装 `sivtr` CLI，它会提示你是否在可见终端里运行 `cargo install sivtr`。
+插件会从当前 workspace 启动 Codex picker。如果没有安装 `sivtr` CLI，它会提示你是否在可见终端里运行 `cargo install sivtr`。
 
 ## 快速开始
 
@@ -149,40 +149,32 @@ sivtr copy out --lines 10:40
 
 ### 复用 Codex 会话
 
-`sivtr copy codex` 会读取 `~/.codex/sessions` 下的 Codex rollout JSONL 文件。如果当前 Codex shell 暴露了 `CODEX_THREAD_ID`，`sivtr` 会优先匹配这个本地精确会话；否则会优先选择 `cwd` 与当前目录匹配的最新本地会话。
-
-如果要只读共享另一个账号的 Codex 会话，推荐先把它们镜像到独立目录，再通过 `[codex].session_dirs` 读取，而不是用提权方式运行 `sivtr`。共享/镜像目录只参与 `--pick` 这类显式浏览，不会抢占当前本地会话解析。
+`sivtr copy codex` 会读取 `~/.codex/sessions` 下的 Codex rollout JSONL 文件。如果当前 shell 正运行在活动中的 `codex` 或 `codex resume` 会话里，它会优先使用这个精确会话 id；否则会优先选择 `cwd` 与当前目录匹配的最新会话。
 
 ```bash
 sivtr copy codex        # 最近一轮用户消息 + 助手回复
+sivtr copy codex --session 2
+sivtr copy codex --session 019df7fb
 sivtr copy codex out    # 最近助手回复
+sivtr copy codex out --session 2 --print
 sivtr copy codex in     # 最近用户消息
 sivtr copy codex tool   # 最近工具输出
 sivtr copy codex all    # 整个解析后的会话
-sivtr copy codex --pick # 浏览本地和共享镜像会话
+sivtr copy codex --session 2 --pick
+sivtr copy codex all --max-blocks 0
+sivtr copy codex all --max-blocks 10000
 ```
 
 默认会过滤过程性 commentary，所以 `sivtr copy codex out` 更倾向返回最终助手回复，而不是中间状态更新。
 
-先把当前账号的会话持续镜像成共享树：
-
-```bash
-sivtr codex export --dest /srv/sivtr/root-codex --watch
-```
-
-再让另一个账号在配置里引用镜像目录：
-
-```toml
-[codex]
-session_dirs = ["/srv/sivtr/root-codex/sessions"]
-```
+为避免超大 Codex transcript 让导入或 picker 变慢，默认只保留最近 `10000` 个解析后的 block。若要全量导入，可在配置里设置 `[codex].max_blocks = 0`，或在命令行传 `--max-blocks 0`。
 
 ### VS Code 快捷键
 
 VS Code 插件提供命令：
 
 ```text
-Sivtr: Pick AI Session
+Sivtr: Pick Codex Turn
 ```
 
 默认快捷键：
@@ -192,6 +184,39 @@ Alt+Y
 ```
 
 你可以改成 `Ctrl+Y`，但它通常会覆盖编辑器的 Redo。
+
+在 Linux 上，当焦点位于 VS Code 编辑器时，这个快捷键就是默认的
+Codex picker 快捷键。插件实际执行的是：
+
+```bash
+sivtr hotkey-pick-codex --cwd .
+```
+
+如果当前终端正运行在活动中的 `codex` 或 `codex resume` 会话里，
+`sivtr` 会优先使用这个精确会话。
+
+### Linux 快捷键设置
+
+Linux 目前没有提供 VS Code 之外的默认全局 `sivtr` 热键。
+
+原因：
+
+- Wayland 不给普通 CLI 工具提供统一的跨桌面全局热键接口。
+- 只做 X11 方案已经不够，因为很多 Linux 桌面环境默认是 Wayland。
+- 打开 picker 还需要一个交互式终端，而 GNOME、KDE、Sway、纯 SSH、
+  tmux 等环境并没有统一可移植的终端启动命令。
+
+推荐的 Linux 设置方式：
+
+- VS Code：直接使用内置的 `Alt+Y`。
+- tmux：给当前 pane 目录绑定一个快捷键：
+
+```tmux
+bind-key y new-window -c "#{pane_current_path}" "sivtr hotkey-pick-codex --cwd '#{pane_current_path}'"
+```
+
+- 终端或桌面环境：手动创建一个自定义快捷键，在终端中执行
+  `sivtr hotkey-pick-codex --cwd <project-path>`。
 
 ### Windows 全局热键
 
@@ -213,13 +238,12 @@ sivtr hotkey stop
 | `sivtr run <command>` | 执行命令、捕获输出并浏览。 |
 | `sivtr copy` | 复制最近命令块。 |
 | `sivtr copy codex` | 复制当前 Codex 会话中的有用内容。 |
-| `sivtr codex export --dest <path>` | 把本地 Codex 会话镜像成共享只读目录树。 |
 | `sivtr diff <left> <right>` | 对比最近命令输出。 |
 | `sivtr history` | 列出、搜索、查看输出历史。 |
 | `sivtr config` | 管理 TOML 配置。 |
 | `sivtr init <shell>` | 生成命令块捕获所需的 shell 集成。 |
 | `sivtr import` | 打开当前 session log。 |
-| `sivtr hotkey` | 管理 Windows AI session picker 热键。 |
+| `sivtr hotkey` | 管理 Windows Codex picker 热键。 |
 | `sivtr clear` | 清空 session logs。 |
 
 ## TUI 按键
@@ -271,7 +295,7 @@ sivtr/
 |- crates/sivtr-core/    # 捕获、解析、缓冲区、选择、搜索、历史、导出
 |- src/                  # CLI、TUI、命令、热键集成
 |- docs-site/            # Astro/Starlight 文档站
-|- editors/vscode/       # AI session picker 的 VS Code 插件桥接
+|- editors/vscode/       # Codex picker 的 VS Code 插件桥接
 `- .github/workflows/    # CI 和发布自动化
 ```
 

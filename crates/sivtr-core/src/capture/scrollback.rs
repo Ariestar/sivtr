@@ -85,6 +85,11 @@ fn session_pid_from_path(path: &Path) -> Option<u32> {
         .and_then(|rest| rest.strip_suffix(".state"))
     {
         pid
+    } else if let Some(pid) = name
+        .strip_prefix("session_")
+        .and_then(|rest| rest.strip_suffix(".capture"))
+    {
+        pid
     } else {
         return None;
     };
@@ -121,6 +126,15 @@ fn process_is_alive(pid: u32) -> bool {
 /// Get the flush state file path (derived from session log path).
 pub fn flush_state_path() -> std::path::PathBuf {
     session_log_path().with_extension("state")
+}
+
+/// Get the per-command capture file path used by Unix shell hooks.
+pub fn capture_file_path() -> std::path::PathBuf {
+    if let Ok(path) = env::var("SIVTR_CAPTURE_FILE") {
+        return PathBuf::from(path);
+    }
+
+    session_log_path().with_extension("capture")
 }
 
 /// Read the current session log populated by the shell hook.
@@ -354,6 +368,10 @@ mod tests {
         assert_eq!(session_pid_from_path(Path::new("session_42.log")), Some(42));
         assert_eq!(
             session_pid_from_path(Path::new("session_42.state")),
+            Some(42)
+        );
+        assert_eq!(
+            session_pid_from_path(Path::new("session_42.capture")),
             Some(42)
         );
         assert_eq!(session_pid_from_path(Path::new("session.log")), None);
