@@ -162,16 +162,18 @@ fn remove_stale_exported_files_inner(
     Ok(())
 }
 
+#[cfg(unix)]
 fn set_shared_read_permissions(path: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::PermissionsExt;
 
-        let mode = if path.is_dir() { 0o755 } else { 0o644 };
-        fs::set_permissions(path, fs::Permissions::from_mode(mode))
-            .with_context(|| format!("Failed to chmod {}", path.display()))?;
-    }
+    let mode = if path.is_dir() { 0o755 } else { 0o644 };
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+        .with_context(|| format!("Failed to chmod {}", path.display()))?;
+    Ok(())
+}
 
+#[cfg(not(unix))]
+fn set_shared_read_permissions(_path: &Path) -> Result<()> {
     Ok(())
 }
 
@@ -193,10 +195,10 @@ fn set_shared_read_permissions_recursive(root: &Path, path: &Path) -> Result<()>
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        collect_session_files, copy_session_file_atomically, export_once,
-        set_shared_read_permissions_recursive,
-    };
+    #[cfg(unix)]
+    use super::set_shared_read_permissions_recursive;
+    use super::{collect_session_files, copy_session_file_atomically, export_once};
+    #[cfg(unix)]
     use std::path::Path;
 
     #[test]
