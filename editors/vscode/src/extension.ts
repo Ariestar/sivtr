@@ -1,6 +1,10 @@
 import { execFile } from "node:child_process";
-import * as path from "node:path";
 import * as vscode from "vscode";
+import {
+  buildCommandLine,
+  buildTerminalCommandLine,
+  resolveArgs,
+} from "./commandLine";
 
 let sivtrTerminal: vscode.Terminal | undefined;
 let sivtrTerminalCwd: string | undefined;
@@ -12,7 +16,7 @@ const INSTALL_DOCS_URL = "https://github.com/Ariestar/sivtr#installation";
 
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
-    vscode.commands.registerCommand("sivtr.pickAgent", pickAgent),
+    vscode.commands.registerCommand("sivtr.pickCodex", pickCodex),
     vscode.window.onDidCloseTerminal((terminal) => {
       if (terminal === sivtrTerminal) {
         sivtrTerminal = undefined;
@@ -27,7 +31,7 @@ export function deactivate(): void {
   sivtrTerminalCwd = undefined;
 }
 
-async function pickAgent(): Promise<void> {
+async function pickCodex(): Promise<void> {
   const workspaceFolder = resolveWorkspaceFolder();
   if (!workspaceFolder) {
     void vscode.window.showErrorMessage("sivtr: open a workspace folder first.");
@@ -36,13 +40,10 @@ async function pickAgent(): Promise<void> {
 
   const config = vscode.workspace.getConfiguration("sivtr");
   const command = config.get<string>("command", "sivtr").trim();
-  const args = config.get<string[]>("args", [
-    "hotkey-pick-agent",
-    "--cwd",
-    ".",
-    "--provider",
-    "all",
-  ]);
+  const args = resolveArgs(
+    config.get<string[]>("args", ["hotkey-pick-codex", "--cwd", "."]),
+    workspaceFolder.uri.fsPath,
+  );
   const terminalName = config.get<string>("terminalName", "sivtr");
   const reuseTerminal = config.get<boolean>("reuseTerminal", true);
   const closeTerminalOnSuccess = config.get<boolean>("closeTerminalOnSuccess", true);
@@ -60,7 +61,11 @@ async function pickAgent(): Promise<void> {
   const terminal = getTerminal(terminalName, workspaceFolder.uri.fsPath, reuseTerminal);
   terminal.show();
   terminal.sendText(
-    buildTerminalCommandLine(buildCommandLine(command, args), closeTerminalOnSuccess),
+    buildTerminalCommandLine(
+      buildCommandLine(command, args),
+      closeTerminalOnSuccess,
+      vscode.env.shell,
+    ),
     true,
   );
 }
@@ -127,35 +132,4 @@ function getTerminal(name: string, cwd: string, reuse: boolean): vscode.Terminal
   });
   sivtrTerminalCwd = cwd;
   return sivtrTerminal;
-}
-
-function buildCommandLine(command: string, args: string[]): string {
-  return [command, ...args].map(quoteShellToken).join(" ");
-}
-
-function buildTerminalCommandLine(commandLine: string, closeOnSuccess: boolean): string {
-  if (!closeOnSuccess) {
-    return commandLine;
-  }
-
-  const shellName = path.basename(vscode.env.shell).toLowerCase();
-  if (shellName.includes("powershell") || shellName.includes("pwsh")) {
-    return `${commandLine}; if ($LASTEXITCODE -eq 0) { exit }`;
-  }
-  if (shellName === "cmd.exe" || shellName === "cmd") {
-    return `${commandLine} & if not errorlevel 1 exit`;
-  }
-  if (shellName.includes("fish")) {
-    return `${commandLine}; test $status -eq 0; and exit`;
-  }
-
-  return `${commandLine}; code=$?; if [ "$code" -eq 0 ]; then exit 0; fi`;
-}
-
-function quoteShellToken(value: string): string {
-  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) {
-    return value;
-  }
-
-  return `'${value.replace(/'/g, "''")}'`;
 }
