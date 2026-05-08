@@ -250,12 +250,8 @@ fn install_single_shell_hook(profile_path: &Path, spec: &HookSpec) -> Result<()>
     Ok(())
 }
 
+#[cfg(unix)]
 fn install_tmux_shortcut() -> Result<()> {
-    #[cfg(not(unix))]
-    {
-        anyhow::bail!("`sivtr init tmux` is only supported on Unix-like systems");
-    }
-
     let path = tmux_config_path()?;
     match install_into_profile(&path, &TMUX_SPEC)? {
         InstallStatus::Installed => {
@@ -279,12 +275,13 @@ fn install_tmux_shortcut() -> Result<()> {
     Ok(())
 }
 
-fn install_linux_shortcut() -> Result<()> {
-    #[cfg(not(unix))]
-    {
-        anyhow::bail!("`sivtr init linux-shortcut` is only supported on Unix-like systems");
-    }
+#[cfg(not(unix))]
+fn install_tmux_shortcut() -> Result<()> {
+    anyhow::bail!("`sivtr init tmux` is only supported on Unix-like systems");
+}
 
+#[cfg(unix)]
+fn install_linux_shortcut() -> Result<()> {
     let home = dirs::home_dir().context("Failed to resolve home directory")?;
     let bin_dir = home.join(".local").join("bin");
     let applications_dir = home.join(".local").join("share").join("applications");
@@ -311,6 +308,11 @@ fn install_linux_shortcut() -> Result<()> {
     }
     eprintln!("  bind your desktop shortcut to: {}", script_path.display());
     Ok(())
+}
+
+#[cfg(not(unix))]
+fn install_linux_shortcut() -> Result<()> {
+    anyhow::bail!("`sivtr init linux-shortcut` is only supported on Unix-like systems");
 }
 
 fn print_install_summary(installed: &[String], updated: &[String]) {
