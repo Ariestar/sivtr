@@ -520,6 +520,16 @@ enum AgentHierarchyFocus {
     Content,
 }
 
+struct AgentHierarchyView<'a> {
+    groups: &'a [AgentGroup],
+    agent_state: &'a ListState,
+    session_state: &'a ListState,
+    dialogue_state: &'a ListState,
+    selected_dialogues: &'a [bool],
+    focus: AgentHierarchyFocus,
+    content_scroll: usize,
+}
+
 fn build_agent_session_choices(
     source: &dyn AgentSessionProvider,
     sessions: &[AgentSessionInfo],
@@ -633,13 +643,15 @@ fn run_agent_hierarchy_picker_on_terminal(
             render_agent_hierarchy_picker(
                 title,
                 frame,
-                &groups,
-                &agent_state,
-                &session_state,
-                &dialogue_state,
-                &selected_dialogues,
-                focus,
-                content_scroll,
+                AgentHierarchyView {
+                    groups: &groups,
+                    agent_state: &agent_state,
+                    session_state: &session_state,
+                    dialogue_state: &dialogue_state,
+                    selected_dialogues: &selected_dialogues,
+                    focus,
+                    content_scroll,
+                },
             )
         })?;
 
@@ -700,7 +712,7 @@ fn run_agent_hierarchy_picker_on_terminal(
                         if next != selected_index(&session_state) {
                             session_state.select(Some(next));
                             reset_agent_dialogue_state(
-                                &choices,
+                                choices,
                                 next,
                                 &mut dialogue_state,
                                 &mut selected_dialogues,
@@ -739,7 +751,7 @@ fn run_agent_hierarchy_picker_on_terminal(
                         if next != current {
                             session_state.select(Some(next));
                             reset_agent_dialogue_state(
-                                &choices,
+                                choices,
                                 next,
                                 &mut dialogue_state,
                                 &mut selected_dialogues,
@@ -873,17 +885,7 @@ fn current_agent_dialogue_text(choice: &AgentSessionChoice, dialogue_idx: usize)
         .unwrap_or("<empty>")
 }
 
-fn render_agent_hierarchy_picker(
-    title: &str,
-    frame: &mut Frame,
-    groups: &[AgentGroup],
-    agent_state: &ListState,
-    session_state: &ListState,
-    dialogue_state: &ListState,
-    selected_dialogues: &[bool],
-    focus: AgentHierarchyFocus,
-    content_scroll: usize,
-) {
+fn render_agent_hierarchy_picker(title: &str, frame: &mut Frame, view: AgentHierarchyView<'_>) {
     let area = frame.area();
     frame.render_widget(Clear, area);
 
@@ -892,7 +894,7 @@ fn render_agent_hierarchy_picker(
         .constraints([Constraint::Length(3), Constraint::Min(1)])
         .split(area);
 
-    let controls = match focus {
+    let controls = match view.focus {
         AgentHierarchyFocus::Agents => "j/k move  l/Right/Enter open sessions  q/Esc cancel",
         AgentHierarchyFocus::Sessions => "j/k move  l/Right/Enter open dialogues  q/Esc cancel",
         AgentHierarchyFocus::Dialogues => {
@@ -902,16 +904,17 @@ fn render_agent_hierarchy_picker(
             "j/k scroll  Ctrl-d/PageDown down  Ctrl-u/PageUp up  h/Left/Esc back  Enter copy  q cancel"
         }
     };
-    let agent_idx = selected_index(agent_state).min(groups.len().saturating_sub(1));
-    let choices = &groups[agent_idx].choices;
-    let session_idx = selected_index(session_state).min(choices.len().saturating_sub(1));
-    let selected_count = selected_dialogues
+    let agent_idx = selected_index(view.agent_state).min(view.groups.len().saturating_sub(1));
+    let choices = &view.groups[agent_idx].choices;
+    let session_idx = selected_index(view.session_state).min(choices.len().saturating_sub(1));
+    let selected_count = view
+        .selected_dialogues
         .iter()
         .filter(|selected| **selected)
         .count();
     let title = Paragraph::new(format!(
         "{controls}\nshowing {} agent(s), {} session(s), {} dialogue(s){}",
-        groups.len(),
+        view.groups.len(),
         choices.len(),
         choices[session_idx].dialogue_titles.len(),
         if selected_count == 0 {
@@ -932,19 +935,19 @@ fn render_agent_hierarchy_picker(
         .constraints([Constraint::Percentage(42), Constraint::Percentage(58)])
         .split(chunks[1]);
 
-    match focus {
+    match view.focus {
         AgentHierarchyFocus::Agents => {
-            render_agent_group_list(frame, body_chunks[0], groups, agent_state, true);
-            render_agent_session_list(frame, body_chunks[1], choices, session_state, false);
+            render_agent_group_list(frame, body_chunks[0], view.groups, view.agent_state, true);
+            render_agent_session_list(frame, body_chunks[1], choices, view.session_state, false);
         }
         AgentHierarchyFocus::Sessions => {
-            render_agent_session_list(frame, body_chunks[0], choices, session_state, true);
+            render_agent_session_list(frame, body_chunks[0], choices, view.session_state, true);
             render_agent_dialogue_list(
                 frame,
                 body_chunks[1],
                 &choices[session_idx],
-                dialogue_state,
-                selected_dialogues,
+                view.dialogue_state,
+                view.selected_dialogues,
                 false,
             );
         }
@@ -953,17 +956,17 @@ fn render_agent_hierarchy_picker(
                 frame,
                 body_chunks[0],
                 &choices[session_idx],
-                dialogue_state,
-                selected_dialogues,
+                view.dialogue_state,
+                view.selected_dialogues,
                 true,
             );
-            let dialogue_idx = selected_index(dialogue_state)
+            let dialogue_idx = selected_index(view.dialogue_state)
                 .min(choices[session_idx].dialogue_titles.len().saturating_sub(1));
             let content = Paragraph::new(current_agent_dialogue_text(
                 &choices[session_idx],
                 dialogue_idx,
             ))
-            .scroll((content_scroll as u16, 0))
+            .scroll((view.content_scroll as u16, 0))
             .wrap(ratatui::widgets::Wrap { trim: false })
             .block(Block::default().borders(Borders::ALL).title("Content"));
             frame.render_widget(content, body_chunks[1]);
@@ -973,17 +976,17 @@ fn render_agent_hierarchy_picker(
                 frame,
                 body_chunks[0],
                 &choices[session_idx],
-                dialogue_state,
-                selected_dialogues,
+                view.dialogue_state,
+                view.selected_dialogues,
                 false,
             );
-            let dialogue_idx = selected_index(dialogue_state)
+            let dialogue_idx = selected_index(view.dialogue_state)
                 .min(choices[session_idx].dialogue_titles.len().saturating_sub(1));
             let content = Paragraph::new(current_agent_dialogue_text(
                 &choices[session_idx],
                 dialogue_idx,
             ))
-            .scroll((content_scroll as u16, 0))
+            .scroll((view.content_scroll as u16, 0))
             .wrap(ratatui::widgets::Wrap { trim: false })
             .block(Block::default().borders(Borders::ALL).title("Content *"));
             frame.render_widget(content, body_chunks[1]);
@@ -1430,12 +1433,6 @@ fn agent_session_has_blocks(
     path: &std::path::Path,
 ) -> Result<bool> {
     Ok(!source.parse_session_file(path)?.blocks.is_empty())
-}
-
-fn session_modified_time(path: &std::path::Path) -> SystemTime {
-    path.metadata()
-        .and_then(|metadata| metadata.modified())
-        .unwrap_or(SystemTime::UNIX_EPOCH)
 }
 
 fn pick_agent_session_path(
