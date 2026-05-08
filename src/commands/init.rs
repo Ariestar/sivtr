@@ -340,9 +340,7 @@ fn install_tmux_shortcut() -> Result<()> {
 
 #[cfg(not(unix))]
 fn install_tmux_shortcut() -> Result<()> {
-    Err(anyhow::anyhow!(
-        "`sivtr init tmux` is only supported on Unix-like systems"
-    ))
+    anyhow::bail!("`sivtr init tmux` is only supported on Unix-like systems");
 }
 
 #[cfg(unix)]
@@ -377,9 +375,7 @@ fn install_linux_shortcut() -> Result<()> {
 
 #[cfg(not(unix))]
 fn install_linux_shortcut() -> Result<()> {
-    Err(anyhow::anyhow!(
-        "`sivtr init linux-shortcut` is only supported on Unix-like systems"
-    ))
+    anyhow::bail!("`sivtr init linux-shortcut` is only supported on Unix-like systems");
 }
 
 #[cfg(unix)]
@@ -419,9 +415,7 @@ fn install_macos_shortcut() -> Result<()> {
 
 #[cfg(not(unix))]
 fn install_macos_shortcut() -> Result<()> {
-    Err(anyhow::anyhow!(
-        "`sivtr init macos-shortcut` is only supported on macOS"
-    ))
+    anyhow::bail!("`sivtr init macos-shortcut` is only supported on macOS");
 }
 
 fn print_install_summary(installed: &[String], updated: &[String]) {
