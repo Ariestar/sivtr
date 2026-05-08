@@ -151,12 +151,18 @@ sivtr copy out --lines 10:40
 
 `sivtr copy codex` 会读取 `~/.codex/sessions` 下的 Codex rollout JSONL 文件，并优先选择 `cwd` 与当前目录匹配的最新会话。
 
+用 `--session N` 可以显式选择第 N 新的已记录会话；用 `--session ID` 可以按会话 id 或 id 前缀匹配。
+
 ```bash
 sivtr copy codex        # 最近一轮用户消息 + 助手回复
+sivtr copy codex --session 2
+sivtr copy codex --session 019df7fb
 sivtr copy codex out    # 最近助手回复
+sivtr copy codex out --session 2 --print
 sivtr copy codex in     # 最近用户消息
 sivtr copy codex tool   # 最近工具输出
 sivtr copy codex all    # 整个解析后的会话
+sivtr copy codex --session 2 --pick
 ```
 
 默认会过滤过程性 commentary，所以 `sivtr copy codex out` 更倾向返回最终助手回复，而不是中间状态更新。

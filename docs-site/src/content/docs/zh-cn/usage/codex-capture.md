@@ -5,6 +5,8 @@ description: 从当前 Codex 会话复制有用块。
 
 `sivtr copy codex` 会读取 `~/.codex/sessions` 下的 Codex rollout JSONL 文件。默认选择 `cwd` 与当前工作目录匹配的最新会话。
 
+用 `--session N` 可以显式选择第 N 新的已记录会话；用 `--session ID` 可以按会话 id 或 id 前缀匹配。
+
 当你想复用最后一个回答、输入、工具输出，或整个解析后的会话，但不想手动打开 Codex transcript 时，这个功能很有用。
 
 ## 默认行为
@@ -37,9 +39,11 @@ sivtr copy codex all
 选择器和命令块复制相同：
 
 ```bash
+sivtr copy codex --session 2
+sivtr copy codex --session 019df7fb
 sivtr copy codex 2
 sivtr copy codex 2..4
-sivtr copy codex out 3
+sivtr copy codex out --session 3
 ```
 
 `1` 表示最新匹配的 Codex 单元，`2` 表示第二新，依此类推。
@@ -60,6 +64,7 @@ sivtr copy codex out --print
 ## 交互式选择
 
 ```bash
+sivtr copy codex --session 2 --pick
 sivtr copy codex --pick
 sivtr copy codex out --pick
 ```
