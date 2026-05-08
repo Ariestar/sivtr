@@ -5,6 +5,8 @@ description: Copy useful blocks from the current Codex session.
 
 `sivtr copy codex` reads Codex rollout JSONL files from `~/.codex/sessions`. By default it chooses the newest session whose `cwd` matches the current working directory.
 
+Use `--session N` to select the Nth newest recorded session, or `--session ID` to match a session id / id prefix explicitly.
+
 This is useful when you want to reuse the last answer, input, tool output, or whole parsed session without opening the Codex transcript manually.
 
 ## Defaults
@@ -37,9 +39,11 @@ sivtr copy codex all
 Selectors work the same way as command-block copy:
 
 ```bash
+sivtr copy codex --session 2
+sivtr copy codex --session 019df7fb
 sivtr copy codex 2
 sivtr copy codex 2..4
-sivtr copy codex out 3
+sivtr copy codex out --session 3
 ```
 
 `1` means the newest matching Codex unit, `2` means the second newest, and so on.
@@ -60,6 +64,7 @@ sivtr copy codex out --print
 ## Pick interactively
 
 ```bash
+sivtr copy codex --session 2 --pick
 sivtr copy codex --pick
 sivtr copy codex out --pick
 ```

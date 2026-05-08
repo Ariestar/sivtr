@@ -151,12 +151,18 @@ sivtr copy out --lines 10:40
 
 `sivtr copy codex` reads Codex rollout JSONL files from `~/.codex/sessions` and chooses the newest session whose `cwd` matches your current directory.
 
+Use `--session N` to open the Nth newest recorded session, or `--session ID` to match a session id / id prefix explicitly.
+
 ```bash
 sivtr copy codex        # latest completed user + assistant turn
+sivtr copy codex --session 2
+sivtr copy codex --session 019df7fb
 sivtr copy codex out    # latest assistant reply
+sivtr copy codex out --session 2 --print
 sivtr copy codex in     # latest user message
 sivtr copy codex tool   # latest tool output
 sivtr copy codex all    # parsed session
+sivtr copy codex --session 2 --pick
 ```
 
 Progress commentary is filtered by default, so `sivtr copy codex out` returns the final assistant reply instead of intermediate status updates.

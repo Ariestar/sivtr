@@ -8,8 +8,8 @@ use anyhow::Result;
 use clap::Parser;
 
 use cli::{
-    AgentCopyCommand, AgentCopyMode, Cli, Commands, CopyArgs, CopySimpleArgs, CopySubcommand,
-    DiffArgs, HotkeyPickAgentArgs, HotkeyServeArgs,
+    AgentCopyArgs, AgentCopyCommand, AgentCopyMode, Cli, Commands, CopyArgs, CopySimpleArgs,
+    CopySubcommand, DiffArgs, HotkeyPickAgentArgs, HotkeyServeArgs,
 };
 use command_blocks::CommandBlockTextMode;
 use commands::copy::{AgentCopyRequest, CopyMode, CopyRequest};
@@ -143,18 +143,19 @@ fn run_agent_copy(provider: AgentProvider, cmd: AgentCopyCommand) -> Result<()> 
 
 fn run_agent_copy_args(
     provider: AgentProvider,
-    args: &CopySimpleArgs,
+    args: &AgentCopyArgs,
     selection_mode: AgentSelection,
 ) -> Result<()> {
     commands::copy::execute_agent(AgentCopyRequest {
         provider,
-        selector: args.common.selector.as_deref(),
-        pick: args.common.pick,
+        selector: args.common.common.selector.as_deref(),
+        session_selector: args.session.as_deref(),
+        pick: args.common.common.pick,
         pick_current_session: false,
         selection_mode,
-        print_full: args.common.print,
-        regex: args.common.regex.as_deref(),
-        lines: args.common.lines.as_deref(),
+        print_full: args.common.common.print,
+        regex: args.common.common.regex.as_deref(),
+        lines: args.common.common.lines.as_deref(),
     })
 }
 
