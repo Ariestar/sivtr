@@ -169,6 +169,16 @@ Progress commentary is filtered by default, so `sivtr copy codex out` returns th
 
 Large Codex transcripts are capped to the latest `10000` parsed blocks by default for robustness. Set `[codex].max_blocks = 0` in config or pass `--max-blocks 0` for a full import.
 
+To mirror sessions for another local account (for example read-only sharing),
+run export watch mode from the source account:
+
+```bash
+sivtr codex export --dest /srv/sivtr/root-codex --watch --interval-ms 500
+```
+
+`--watch` defaults to a 1-second sync interval. Use `--interval-ms` for
+sub-second updates when you need faster session visibility.
+
 ### VS Code Shortcut
 
 The VS Code extension contributes:

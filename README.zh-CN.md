@@ -169,6 +169,16 @@ sivtr copy codex all --max-blocks 10000
 
 为避免超大 Codex transcript 让导入或 picker 变慢，默认只保留最近 `10000` 个解析后的 block。若要全量导入，可在配置里设置 `[codex].max_blocks = 0`，或在命令行传 `--max-blocks 0`。
 
+如果你要把会话镜像给另一个本地账号做只读访问（例如 root 导出，jacob
+读取），可以在源账号启动持续导出：
+
+```bash
+sivtr codex export --dest /srv/sivtr/root-codex --watch --interval-ms 500
+```
+
+`--watch` 默认每 1 秒同步一次；需要更快可见性时可用 `--interval-ms`
+改成毫秒级同步。
+
 ### VS Code 快捷键
 
 VS Code 插件提供命令：

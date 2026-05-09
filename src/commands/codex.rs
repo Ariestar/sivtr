@@ -21,6 +21,10 @@ fn export(args: CodexExportArgs) -> Result<()> {
     }
 
     let target_root = args.dest.join("sessions");
+    let watch_interval = args
+        .watch
+        .then(|| resolve_watch_interval(&args))
+        .transpose()?;
 
     loop {
         let copied = export_once(&source_root, &target_root, args.limit)?;
@@ -30,12 +34,26 @@ fn export(args: CodexExportArgs) -> Result<()> {
             target_root.display()
         );
 
-        if !args.watch {
+        let Some(watch_interval) = watch_interval else {
             return Ok(());
-        }
-
-        thread::sleep(Duration::from_secs(args.interval));
+        };
+        thread::sleep(watch_interval);
     }
+}
+
+fn resolve_watch_interval(args: &CodexExportArgs) -> Result<Duration> {
+    if let Some(interval_ms) = args.interval_ms {
+        if interval_ms == 0 {
+            anyhow::bail!("`--interval-ms` must be greater than 0 when `--watch` is enabled");
+        }
+        return Ok(Duration::from_millis(interval_ms));
+    }
+
+    if args.interval == 0 {
+        anyhow::bail!("`--interval` must be greater than 0 when `--watch` is enabled");
+    }
+
+    Ok(Duration::from_secs(args.interval))
 }
 
 fn export_once(source_root: &Path, target_root: &Path, limit: usize) -> Result<usize> {
@@ -246,9 +264,14 @@ fn set_shared_read_permissions_recursive(root: &Path, path: &Path) -> Result<()>
 mod tests {
     #[cfg(unix)]
     use super::set_shared_read_permissions_recursive;
-    use super::{collect_session_files, copy_session_file_atomically, export_once};
+    use super::{
+        collect_session_files, copy_session_file_atomically, export_once, resolve_watch_interval,
+    };
+    use crate::cli::CodexExportArgs;
     #[cfg(unix)]
     use std::path::Path;
+    use std::path::PathBuf;
+    use std::time::Duration;
 
     #[test]
     fn collect_session_files_sorts_newest_first() {
@@ -342,5 +365,65 @@ mod tests {
 
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "new data\n");
         assert!(!dir.path().join("target.jsonl.tmp").exists());
+    }
+
+    #[test]
+    fn resolve_watch_interval_defaults_to_seconds() {
+        let args = CodexExportArgs {
+            dest: PathBuf::from("/tmp/shared-codex"),
+            limit: 0,
+            watch: true,
+            interval: 2,
+            interval_ms: None,
+        };
+
+        let interval = resolve_watch_interval(&args).unwrap();
+        assert_eq!(interval, Duration::from_secs(2));
+    }
+
+    #[test]
+    fn resolve_watch_interval_prefers_milliseconds_override() {
+        let args = CodexExportArgs {
+            dest: PathBuf::from("/tmp/shared-codex"),
+            limit: 0,
+            watch: true,
+            interval: 10,
+            interval_ms: Some(250),
+        };
+
+        let interval = resolve_watch_interval(&args).unwrap();
+        assert_eq!(interval, Duration::from_millis(250));
+    }
+
+    #[test]
+    fn resolve_watch_interval_rejects_zero_seconds() {
+        let args = CodexExportArgs {
+            dest: PathBuf::from("/tmp/shared-codex"),
+            limit: 0,
+            watch: true,
+            interval: 0,
+            interval_ms: None,
+        };
+
+        let error = resolve_watch_interval(&args).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("`--interval` must be greater than 0"));
+    }
+
+    #[test]
+    fn resolve_watch_interval_rejects_zero_milliseconds() {
+        let args = CodexExportArgs {
+            dest: PathBuf::from("/tmp/shared-codex"),
+            limit: 0,
+            watch: true,
+            interval: 1,
+            interval_ms: Some(0),
+        };
+
+        let error = resolve_watch_interval(&args).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("`--interval-ms` must be greater than 0"));
     }
 }

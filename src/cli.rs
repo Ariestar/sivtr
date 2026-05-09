@@ -585,8 +585,12 @@ pub struct CodexExportArgs {
     pub watch: bool,
 
     /// Seconds between sync passes when `--watch` is enabled
-    #[arg(long, value_name = "SECONDS", default_value_t = 2, requires = "watch")]
+    #[arg(long, value_name = "SECONDS", default_value_t = 1, requires = "watch")]
     pub interval: u64,
+
+    /// Milliseconds between sync passes when `--watch` is enabled (overrides `--interval`)
+    #[arg(long, value_name = "MILLISECONDS", requires = "watch")]
+    pub interval_ms: Option<u64>,
 }
 
 #[cfg(test)]
@@ -841,6 +845,34 @@ mod tests {
                     assert_eq!(args.limit, 5);
                     assert!(args.watch);
                     assert_eq!(args.interval, 3);
+                    assert_eq!(args.interval_ms, None);
+                }
+            },
+            _ => panic!("expected codex export command"),
+        }
+    }
+
+    #[test]
+    fn codex_export_accepts_millisecond_interval() {
+        let cli = Cli::try_parse_from([
+            "sivtr",
+            "codex",
+            "export",
+            "--dest",
+            "/tmp/shared-codex",
+            "--watch",
+            "--interval-ms",
+            "250",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Commands::Codex(cmd)) => match cmd.action {
+                CodexAction::Export(args) => {
+                    assert_eq!(args.dest, PathBuf::from("/tmp/shared-codex"));
+                    assert!(args.watch);
+                    assert_eq!(args.interval, 1);
+                    assert_eq!(args.interval_ms, Some(250));
                 }
             },
             _ => panic!("expected codex export command"),
