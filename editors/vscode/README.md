@@ -19,7 +19,7 @@ The extension opens a VS Code terminal in the current workspace and runs the
 context-aware Codex picker:
 
 ```bash
-sivtr hotkey-pick-codex --cwd .
+sivtr hotkey-pick-agent --cwd . --provider all
 ```
 
 If the terminal was opened from a live `codex resume` session, `sivtr` prefers
@@ -40,7 +40,7 @@ If you want a Terminal-based launcher outside VS Code, run
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `sivtr.command` | `sivtr` | Command used to launch sivtr |
-| `sivtr.args` | `["hotkey-pick-codex", "--cwd", "."]` | Arguments passed to sivtr |
+| `sivtr.args` | `["hotkey-pick-agent", "--cwd", ".", "--provider", "all"]` | Arguments passed to sivtr |
 | `sivtr.reuseTerminal` | `true` | Reuse the existing sivtr terminal |
 | `sivtr.closeTerminalOnSuccess` | `true` | Close the sivtr terminal when the picker exits successfully |
 | `sivtr.terminalName` | `sivtr` | Terminal name |

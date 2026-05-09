@@ -189,7 +189,7 @@ Alt+Y
 Codex picker 快捷键。插件实际执行的是：
 
 ```bash
-sivtr hotkey-pick-codex --cwd .
+sivtr hotkey-pick-agent --cwd . --provider all
 ```
 
 如果当前终端正运行在活动中的 `codex` 或 `codex resume` 会话里，
@@ -212,11 +212,11 @@ Linux 目前没有提供 VS Code 之外的默认全局 `sivtr` 热键。
 - tmux：给当前 pane 目录绑定一个快捷键：
 
 ```tmux
-bind-key y new-window -c "#{pane_current_path}" "sivtr hotkey-pick-codex --cwd '#{pane_current_path}'"
+bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex all --pick"
 ```
 
 - 终端或桌面环境：手动创建一个自定义快捷键，在终端中执行
-  `sivtr hotkey-pick-codex --cwd <project-path>`。
+  `cd <project-path> && sivtr copy codex all --pick`。
 
 ### Windows 全局热键
 
