@@ -183,6 +183,16 @@ Then point another account at that mirrored tree:
 session_dirs = ["/srv/sivtr/root-codex/sessions"]
 ```
 
+To mirror sessions for another local account (for example read-only sharing),
+run export watch mode from the source account:
+
+```bash
+sivtr codex export --dest /srv/sivtr/root-codex --watch --interval-ms 500
+```
+
+`--watch` defaults to a 1-second sync interval. Use `--interval-ms` for
+sub-second updates when you need faster session visibility.
+
 ### VS Code Shortcut
 
 The VS Code extension contributes:

@@ -183,6 +183,16 @@ sivtr codex export --dest /srv/sivtr/root-codex --watch
 session_dirs = ["/srv/sivtr/root-codex/sessions"]
 ```
 
+如果你要把会话镜像给另一个本地账号做只读访问（例如 root 导出，jacob
+读取），可以在源账号启动持续导出：
+
+```bash
+sivtr codex export --dest /srv/sivtr/root-codex --watch --interval-ms 500
+```
+
+`--watch` 默认每 1 秒同步一次；需要更快可见性时可用 `--interval-ms`
+改成毫秒级同步。
+
 ### VS Code 快捷键
 
 VS Code 插件提供命令：
