@@ -217,11 +217,11 @@ Recommended Linux setups:
 - tmux: bind a key to the current pane's working directory:
 
 ```tmux
-bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex all --pick"
+bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex --pick"
 ```
 
 - Terminal / desktop environment: create a custom shortcut that launches
-  `cd <project-path> && sivtr copy codex all --pick` in a terminal for the project
+  `cd <project-path> && sivtr copy codex --pick` in a terminal for the project
   you want to inspect.
 
 ### macOS Shortcut Setup

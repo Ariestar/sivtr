@@ -212,11 +212,11 @@ Linux 目前没有提供 VS Code 之外的默认全局 `sivtr` 热键。
 - tmux：给当前 pane 目录绑定一个快捷键：
 
 ```tmux
-bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex all --pick"
+bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex --pick"
 ```
 
 - 终端或桌面环境：手动创建一个自定义快捷键，在终端中执行
-  `cd <project-path> && sivtr copy codex all --pick`。
+  `cd <project-path> && sivtr copy codex --pick`。
 
 ### Windows 全局热键
 

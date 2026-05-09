@@ -188,7 +188,7 @@ const TMUX_MARKER_START: &str = "# >>> sivtr tmux shortcut >>>";
 const TMUX_MARKER_END: &str = "# <<< sivtr tmux shortcut <<<";
 #[cfg(unix)]
 const TMUX_HOOK: &str = r##"# >>> sivtr tmux shortcut >>>
-bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex all --pick"
+bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex --pick"
 # <<< sivtr tmux shortcut <<<
 "##;
 
@@ -632,7 +632,7 @@ fn render_linux_shortcut_script(cwd: &Path, terminal: Option<&str>) -> String {
 
 #[cfg(unix)]
 fn build_terminal_launch_command(terminal: &str) -> String {
-    let picker = "cd \"$PROJECT_CWD\"; exec sivtr copy codex all --pick";
+    let picker = "cd \"$PROJECT_CWD\"; exec sivtr copy codex --pick";
     match terminal {
         "gnome-terminal" => format!("exec gnome-terminal -- bash -lc '{picker}'"),
         "konsole" => format!("exec konsole --noclose -e bash -lc '{picker}'"),
@@ -662,7 +662,7 @@ fn write_macos_shortcut_script(path: &Path, cwd: &Path) -> Result<()> {
 fn render_macos_shortcut_script(cwd: &Path) -> String {
     let cwd = shell_single_quote(&cwd.to_string_lossy());
     format!(
-        "#!/usr/bin/env bash\nset -euo pipefail\nexport PROJECT_CWD='{cwd}'\ncd \"$PROJECT_CWD\"\nexec sivtr copy codex all --pick\n"
+        "#!/usr/bin/env bash\nset -euo pipefail\nexport PROJECT_CWD='{cwd}'\ncd \"$PROJECT_CWD\"\nexec sivtr copy codex --pick\n"
     )
 }
 
@@ -748,9 +748,9 @@ mod tests {
     };
     use super::{
         desktop_exec_quote, render_macos_shortcut_plist, render_macos_shortcut_script,
-        update_existing_hook, xml_escape, BASH_HOOK, BASH_SPEC,
-        LEGACY_POWERSHELL_HOOK, MACOS_SHORTCUT_LABEL, NUSHELL_HOOK, NUSHELL_SPEC, POWERSHELL_HOOK,
-        POWERSHELL_SPEC, ZSH_HOOK, ZSH_SPEC,
+        update_existing_hook, xml_escape, BASH_HOOK, BASH_SPEC, LEGACY_POWERSHELL_HOOK,
+        MACOS_SHORTCUT_LABEL, NUSHELL_HOOK, NUSHELL_SPEC, POWERSHELL_HOOK, POWERSHELL_SPEC,
+        ZSH_HOOK, ZSH_SPEC,
     };
     use std::path::Path;
 
@@ -842,7 +842,7 @@ mod tests {
         let command = build_terminal_launch_command("gnome-terminal");
 
         assert!(command.contains("gnome-terminal"));
-        assert!(command.contains("cd \"$PROJECT_CWD\"; exec sivtr copy codex all --pick"));
+        assert!(command.contains("cd \"$PROJECT_CWD\"; exec sivtr copy codex --pick"));
     }
 
     #[cfg(unix)]
@@ -857,7 +857,7 @@ mod tests {
         let script = render_linux_shortcut_script(Path::new("/tmp/project"), Some("xterm"));
 
         assert!(script.contains("export PROJECT_CWD='/tmp/project'"));
-        assert!(script.contains("cd \"$PROJECT_CWD\"; exec sivtr copy codex all --pick"));
+        assert!(script.contains("cd \"$PROJECT_CWD\"; exec sivtr copy codex --pick"));
     }
 
     #[test]
@@ -881,7 +881,7 @@ mod tests {
         let script = render_macos_shortcut_script(Path::new("/tmp/project"));
 
         assert!(script.contains("export PROJECT_CWD='/tmp/project'"));
-        assert!(script.contains("exec sivtr copy codex all --pick"));
+        assert!(script.contains("exec sivtr copy codex --pick"));
     }
 
     #[test]
