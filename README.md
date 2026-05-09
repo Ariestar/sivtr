@@ -189,7 +189,7 @@ On Linux, this VS Code shortcut works as the default picker shortcut when the
 editor has focus. The extension runs:
 
 ```bash
-sivtr hotkey-pick-codex --cwd .
+sivtr hotkey-pick-agent --cwd . --provider all
 ```
 
 and `sivtr` prefers the active `codex` / `codex resume` session when one is
@@ -217,11 +217,11 @@ Recommended Linux setups:
 - tmux: bind a key to the current pane's working directory:
 
 ```tmux
-bind-key y new-window -c "#{pane_current_path}" "sivtr hotkey-pick-codex --cwd '#{pane_current_path}'"
+bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex all --pick"
 ```
 
 - Terminal / desktop environment: create a custom shortcut that launches
-  `sivtr hotkey-pick-codex --cwd <project-path>` in a terminal for the project
+  `cd <project-path> && sivtr copy codex all --pick` in a terminal for the project
   you want to inspect.
 
 ### macOS Shortcut Setup

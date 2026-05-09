@@ -188,7 +188,7 @@ const TMUX_MARKER_START: &str = "# >>> sivtr tmux shortcut >>>";
 const TMUX_MARKER_END: &str = "# <<< sivtr tmux shortcut <<<";
 #[cfg(unix)]
 const TMUX_HOOK: &str = r##"# >>> sivtr tmux shortcut >>>
-bind-key y new-window -c "#{pane_current_path}" "sivtr hotkey-pick-codex --cwd '#{pane_current_path}'"
+bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex all --pick"
 # <<< sivtr tmux shortcut <<<
 "##;
 
@@ -632,7 +632,7 @@ fn render_linux_shortcut_script(cwd: &Path, terminal: Option<&str>) -> String {
 
 #[cfg(unix)]
 fn build_terminal_launch_command(terminal: &str) -> String {
-    let picker = "sivtr hotkey-pick-codex --cwd \"$PROJECT_CWD\"";
+    let picker = "cd \"$PROJECT_CWD\"; exec sivtr copy codex all --pick";
     match terminal {
         "gnome-terminal" => format!("exec gnome-terminal -- bash -lc '{picker}'"),
         "konsole" => format!("exec konsole --noclose -e bash -lc '{picker}'"),
@@ -662,7 +662,7 @@ fn write_macos_shortcut_script(path: &Path, cwd: &Path) -> Result<()> {
 fn render_macos_shortcut_script(cwd: &Path) -> String {
     let cwd = shell_single_quote(&cwd.to_string_lossy());
     format!(
-        "#!/usr/bin/env bash\nset -euo pipefail\nexport PROJECT_CWD='{cwd}'\ncd \"$PROJECT_CWD\"\nexec sivtr hotkey-pick-codex --cwd \"$PROJECT_CWD\"\n"
+        "#!/usr/bin/env bash\nset -euo pipefail\nexport PROJECT_CWD='{cwd}'\ncd \"$PROJECT_CWD\"\nexec sivtr copy codex all --pick\n"
     )
 }
 
@@ -842,7 +842,7 @@ mod tests {
         let command = build_terminal_launch_command("gnome-terminal");
 
         assert!(command.contains("gnome-terminal"));
-        assert!(command.contains("sivtr hotkey-pick-codex --cwd \"$PROJECT_CWD\""));
+        assert!(command.contains("cd \"$PROJECT_CWD\"; exec sivtr copy codex all --pick"));
     }
 
     #[cfg(unix)]
@@ -857,7 +857,7 @@ mod tests {
         let script = render_linux_shortcut_script(Path::new("/tmp/project"), Some("xterm"));
 
         assert!(script.contains("export PROJECT_CWD='/tmp/project'"));
-        assert!(script.contains("sivtr hotkey-pick-codex --cwd \"$PROJECT_CWD\""));
+        assert!(script.contains("cd \"$PROJECT_CWD\"; exec sivtr copy codex all --pick"));
     }
 
     #[test]
@@ -881,7 +881,7 @@ mod tests {
         let script = render_macos_shortcut_script(Path::new("/tmp/project"));
 
         assert!(script.contains("export PROJECT_CWD='/tmp/project'"));
-        assert!(script.contains("exec sivtr hotkey-pick-codex --cwd \"$PROJECT_CWD\""));
+        assert!(script.contains("exec sivtr copy codex all --pick"));
     }
 
     #[test]
