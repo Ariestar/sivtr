@@ -55,7 +55,17 @@ impl AgentSessionProvider for CodexProvider {
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_jsonl_session(path, PROVIDER_NAME, apply_event)
+        let session = parse_jsonl_session(path, PROVIDER_NAME, apply_event)?;
+        if !session.blocks.is_empty() {
+            return Ok(session);
+        }
+
+        let fallback = parse_jsonl_session(path, PROVIDER_NAME, apply_event_with_event_fallback)?;
+        if !fallback.blocks.is_empty() {
+            return Ok(fallback);
+        }
+
+        Ok(session)
     }
 
     fn find_session_by_id(&self, id: &str) -> Result<Option<PathBuf>> {
@@ -162,6 +172,30 @@ fn apply_event(session: &mut AgentSession, value: &Value) {
     }
 }
 
+fn apply_event_with_event_fallback(session: &mut AgentSession, value: &Value) {
+    let timestamp = value
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let payload = value.get("payload").unwrap_or(&Value::Null);
+
+    match value.get("type").and_then(Value::as_str) {
+        Some("session_meta") => {
+            session.id = payload
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            session.cwd = payload
+                .get("cwd")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+        }
+        Some("response_item") => apply_response_item(session, payload, timestamp.clone()),
+        Some("event_msg") => apply_event_msg(session, payload, timestamp),
+        _ => {}
+    }
+}
+
 fn apply_response_item(session: &mut AgentSession, payload: &Value, timestamp: Option<String>) {
     match payload.get("type").and_then(Value::as_str) {
         Some("message") => {
@@ -204,6 +238,31 @@ fn apply_response_item(session: &mut AgentSession, payload: &Value, timestamp: O
                 .unwrap_or_default()
                 .to_string(),
         ),
+        _ => {}
+    }
+}
+
+fn apply_event_msg(session: &mut AgentSession, payload: &Value, timestamp: Option<String>) {
+    match payload.get("type").and_then(Value::as_str) {
+        Some("user_message") => push_block(
+            session,
+            AgentBlockKind::User,
+            timestamp,
+            None,
+            extract_content_text(payload.get("message").unwrap_or(&Value::Null)),
+        ),
+        Some("agent_message") => {
+            if payload.get("phase").and_then(Value::as_str) == Some("commentary") {
+                return;
+            }
+            push_block(
+                session,
+                AgentBlockKind::Assistant,
+                timestamp,
+                None,
+                extract_content_text(payload.get("message").unwrap_or(&Value::Null)),
+            );
+        }
         _ => {}
     }
 }
@@ -541,5 +600,51 @@ mod tests {
         assert_eq!(session.blocks.len(), 2);
         assert_eq!(session.blocks[0].text, "hello");
         assert_eq!(session.blocks[1].text, "done");
+    }
+
+    #[test]
+    fn falls_back_to_event_messages_when_response_items_are_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"type":"session_meta","payload":{"id":"abc","cwd":"/tmp/repo"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"hello from event"}}
+{"type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"working"}}
+{"type":"event_msg","payload":{"type":"agent_message","phase":"final_answer","message":"done from event"}}
+"#,
+        )
+        .unwrap();
+
+        let session = CodexProvider.parse_session_file(&path).unwrap();
+
+        assert_eq!(session.id.as_deref(), Some("abc"));
+        assert_eq!(session.blocks.len(), 2);
+        assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
+        assert_eq!(session.blocks[0].text, "hello from event");
+        assert_eq!(session.blocks[1].kind, AgentBlockKind::Assistant);
+        assert_eq!(session.blocks[1].text, "done from event");
+    }
+
+    #[test]
+    fn response_items_remain_primary_over_event_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"type":"session_meta","payload":{"id":"abc"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"event user"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"response user"}]}}
+{"type":"event_msg","payload":{"type":"agent_message","phase":"final_answer","message":"event answer"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"response answer"}]}}
+"#,
+        )
+        .unwrap();
+
+        let session = CodexProvider.parse_session_file(&path).unwrap();
+
+        assert_eq!(session.blocks.len(), 2);
+        assert_eq!(session.blocks[0].text, "response user");
+        assert_eq!(session.blocks[1].text, "response answer");
     }
 }
