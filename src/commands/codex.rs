@@ -49,6 +49,7 @@ fn export_once(source_root: &Path, target_root: &Path, limit: usize) -> Result<u
     set_shared_read_permissions(target_root)?;
 
     let mut kept = HashSet::new();
+    let mut seen_dirs = HashSet::new();
     for source in &files {
         let relative = source
             .strip_prefix(source_root)
@@ -57,14 +58,16 @@ fn export_once(source_root: &Path, target_root: &Path, limit: usize) -> Result<u
 
         let target = target_root.join(relative);
         if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create {}", parent.display()))?;
-            set_shared_read_permissions_recursive(target_root, parent)?;
+            if seen_dirs.insert(parent.to_path_buf()) {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("Failed to create {}", parent.display()))?;
+                set_shared_read_permissions_recursive(target_root, parent)?;
+            }
         }
         copy_session_file_atomically(source, &target)?;
     }
 
-    remove_stale_exported_files(target_root, &kept)?;
+    remove_stale_exported_files(target_root, &kept);
     Ok(files.len())
 }
 
@@ -121,27 +124,62 @@ fn copy_session_file_atomically(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-fn remove_stale_exported_files(root: &Path, kept: &HashSet<PathBuf>) -> Result<()> {
+fn remove_stale_exported_files(root: &Path, kept: &HashSet<PathBuf>) {
     if !root.exists() {
-        return Ok(());
+        return;
     }
 
-    remove_stale_exported_files_inner(root, root, kept)
+    remove_stale_exported_files_inner(root, root, kept);
 }
 
-fn remove_stale_exported_files_inner(
-    root: &Path,
-    dir: &Path,
-    kept: &HashSet<PathBuf>,
-) -> Result<()> {
-    for entry in fs::read_dir(dir).with_context(|| format!("Failed to read {}", dir.display()))? {
-        let entry = entry?;
+fn remove_stale_exported_files_inner(root: &Path, dir: &Path, kept: &HashSet<PathBuf>) {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) => {
+            eprintln!(
+                "sivtr: warning: failed to read {} during stale export cleanup: {}",
+                dir.display(),
+                err
+            );
+            return;
+        }
+    };
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                eprintln!(
+                    "sivtr: warning: failed to inspect an entry under {}: {}",
+                    dir.display(),
+                    err
+                );
+                continue;
+            }
+        };
         let path = entry.path();
         if path.is_dir() {
-            remove_stale_exported_files_inner(root, &path, kept)?;
-            if fs::read_dir(&path)?.next().is_none() {
-                fs::remove_dir(&path)
-                    .with_context(|| format!("Failed to remove {}", path.display()))?;
+            remove_stale_exported_files_inner(root, &path, kept);
+
+            match fs::read_dir(&path) {
+                Ok(mut children) => {
+                    if children.next().is_none() {
+                        if let Err(err) = fs::remove_dir(&path) {
+                            eprintln!(
+                                "sivtr: warning: failed to remove empty export directory {}: {}",
+                                path.display(),
+                                err
+                            );
+                        }
+                    }
+                }
+                Err(err) => {
+                    eprintln!(
+                        "sivtr: warning: failed to re-read {} for cleanup: {}",
+                        path.display(),
+                        err
+                    );
+                }
             }
             continue;
         }
@@ -150,16 +188,27 @@ fn remove_stale_exported_files_inner(
             continue;
         }
 
-        let relative = path
-            .strip_prefix(root)
-            .with_context(|| format!("Failed to relativize {}", path.display()))?;
+        let relative = match path.strip_prefix(root) {
+            Ok(relative) => relative,
+            Err(err) => {
+                eprintln!(
+                    "sivtr: warning: failed to relativize {}: {}",
+                    path.display(),
+                    err
+                );
+                continue;
+            }
+        };
         if !kept.contains(relative) {
-            fs::remove_file(&path)
-                .with_context(|| format!("Failed to remove stale export {}", path.display()))?;
+            if let Err(err) = fs::remove_file(&path) {
+                eprintln!(
+                    "sivtr: warning: failed to remove stale export {}: {}",
+                    path.display(),
+                    err
+                );
+            }
         }
     }
-
-    Ok(())
 }
 
 #[cfg(unix)]
