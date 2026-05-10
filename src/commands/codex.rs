@@ -131,14 +131,7 @@ fn copy_session_file_atomically(source: &Path, target: &Path) -> Result<()> {
         )
     })?;
     set_shared_read_permissions(&temp)?;
-
-    if target.exists() {
-        fs::remove_file(target)
-            .with_context(|| format!("Failed to replace {}", target.display()))?;
-    }
-
     fs::rename(&temp, target).with_context(|| format!("Failed to publish {}", target.display()))?;
-    set_shared_read_permissions(target)?;
     Ok(())
 }
 

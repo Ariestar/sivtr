@@ -345,7 +345,7 @@ pub fn pretty_json_string(text: &str) -> String {
         .unwrap_or_else(|| text.to_string())
 }
 
-fn jsonl_files(root: &Path) -> Result<Vec<PathBuf>> {
+pub fn jsonl_files(root: &Path) -> Result<Vec<PathBuf>> {
     if !root.exists() {
         return Ok(Vec::new());
     }
@@ -372,7 +372,7 @@ fn modified_time(path: &Path) -> Result<SystemTime> {
     Ok(fs::metadata(path)?.modified()?)
 }
 
-fn normalize_path_for_match(path: &Path) -> String {
+pub fn normalize_path_for_match(path: &Path) -> String {
     path.canonicalize()
         .unwrap_or_else(|_| path.to_path_buf())
         .to_string_lossy()

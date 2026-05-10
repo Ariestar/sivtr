@@ -1,12 +1,14 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::ai::{
-    extract_content_text, list_recent_jsonl_sessions, parse_jsonl_meta, parse_jsonl_session,
-    pretty_json_string, pretty_json_value, push_block, AgentBlockKind, AgentProvider, AgentSession,
-    AgentSessionInfo, AgentSessionMeta, AgentSessionProvider,
+    extract_content_text, jsonl_files, list_recent_jsonl_sessions, normalize_path_for_match,
+    parse_jsonl_meta, parse_jsonl_session, pretty_json_string, pretty_json_value, push_block,
+    AgentBlockKind, AgentProvider, AgentSession, AgentSessionInfo, AgentSessionMeta,
+    AgentSessionProvider,
 };
 use crate::config::SivtrConfig;
 
@@ -25,8 +27,28 @@ impl AgentSessionProvider for CodexProvider {
         let mut sessions = Vec::new();
 
         for root in configured_codex_session_dirs() {
-            for path in jsonl_files(&root)? {
-                let meta = parse_session_meta(&path)?;
+            let paths = match jsonl_files(&root) {
+                Ok(paths) => paths,
+                Err(error) => {
+                    eprintln!(
+                        "sivtr: warning: failed to read Codex session dir {}: {error:#}",
+                        root.display()
+                    );
+                    continue;
+                }
+            };
+
+            for path in paths {
+                let meta = match parse_session_meta(&path) {
+                    Ok(meta) => meta,
+                    Err(error) => {
+                        eprintln!(
+                            "sivtr: warning: failed to parse Codex session metadata {}: {error:#}",
+                            path.display()
+                        );
+                        continue;
+                    }
+                };
                 if let Some(wanted) = wanted.as_deref() {
                     let matches_cwd = meta
                         .cwd
@@ -55,17 +77,7 @@ impl AgentSessionProvider for CodexProvider {
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        let session = parse_jsonl_session(path, PROVIDER_NAME, apply_event)?;
-        if !session.blocks.is_empty() {
-            return Ok(session);
-        }
-
-        let fallback = parse_jsonl_session(path, PROVIDER_NAME, apply_event_with_event_fallback)?;
-        if !fallback.blocks.is_empty() {
-            return Ok(fallback);
-        }
-
-        Ok(session)
+        parse_jsonl_session(path, PROVIDER_NAME, apply_event_with_event_fallback)
     }
 
     fn find_session_by_id(&self, id: &str) -> Result<Option<PathBuf>> {
@@ -149,29 +161,6 @@ fn parse_session_meta(path: &Path) -> Result<AgentSessionMeta> {
             .and_then(Value::as_str)
             .map(str::to_string);
     })
-}
-
-fn apply_event(session: &mut AgentSession, value: &Value) {
-    let timestamp = value
-        .get("timestamp")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let payload = value.get("payload").unwrap_or(&Value::Null);
-
-    match value.get("type").and_then(Value::as_str) {
-        Some("session_meta") => {
-            session.id = payload
-                .get("id")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            session.cwd = payload
-                .get("cwd")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-        }
-        Some("response_item") => apply_response_item(session, payload, timestamp),
-        _ => {}
-    }
 }
 
 fn apply_event_with_event_fallback(session: &mut AgentSession, value: &Value) {
@@ -299,47 +288,15 @@ fn find_current_thread_session() -> Result<Option<PathBuf>> {
 }
 
 fn dedup_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
     let mut deduped = Vec::new();
     for path in paths {
-        if deduped.iter().any(|existing| existing == &path) {
+        if !seen.insert(normalize_path_for_match(&path)) {
             continue;
         }
         deduped.push(path);
     }
     deduped
-}
-
-fn jsonl_files(root: &Path) -> Result<Vec<PathBuf>> {
-    if !root.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut files = Vec::new();
-    collect_jsonl_files(root, &mut files)?;
-    Ok(files)
-}
-
-fn collect_jsonl_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in
-        std::fs::read_dir(dir).with_context(|| format!("Failed to read {}", dir.display()))?
-    {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            collect_jsonl_files(&path, files)?;
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
-            files.push(path);
-        }
-    }
-    Ok(())
-}
-
-fn normalize_path_for_match(path: &Path) -> String {
-    path.canonicalize()
-        .unwrap_or_else(|_| path.to_path_buf())
-        .to_string_lossy()
-        .replace('/', "\\")
-        .to_lowercase()
 }
 
 #[cfg(test)]
