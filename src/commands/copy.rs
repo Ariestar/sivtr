@@ -792,6 +792,17 @@ fn run_agent_hierarchy_picker_on_terminal(
                     let select_all = selected_dialogues.iter().any(|selected| !selected);
                     selected_dialogues.fill(select_all);
                 }
+                KeyCode::Char('t')
+                    if matches!(
+                        focus,
+                        AgentHierarchyFocus::Dialogues | AgentHierarchyFocus::Content
+                    ) && dialogue_count > 0 =>
+                {
+                    let view = agent_dialogue_vim_view(&choices[session_idx], dialogue_idx);
+                    restore_tui(terminal)?;
+                    open_vim_view(&view)?;
+                    *terminal = init_tui()?;
+                }
                 KeyCode::Enter => match focus {
                     AgentHierarchyFocus::Agents => {
                         focus = AgentHierarchyFocus::Sessions;
@@ -885,6 +896,27 @@ fn current_agent_dialogue_text(choice: &AgentSessionChoice, dialogue_idx: usize)
         .unwrap_or("<empty>")
 }
 
+fn agent_dialogue_vim_view(choice: &AgentSessionChoice, dialogue_idx: usize) -> VimView {
+    let text = current_agent_dialogue_text(choice, dialogue_idx).to_string();
+    let end = line_count(&text).max(1);
+    VimView {
+        raw: text.clone(),
+        blocks: vec![VimBlock {
+            start: 1,
+            end,
+            input_start: 1,
+            input_end: end,
+            output_start: 1,
+            output_end: end,
+            block_text: text.clone(),
+            input_text: text.clone(),
+            output_text: text.clone(),
+            command_text: String::new(),
+        }],
+        alternate: None,
+    }
+}
+
 fn render_agent_hierarchy_picker(title: &str, frame: &mut Frame, view: AgentHierarchyView<'_>) {
     let area = frame.area();
     frame.render_widget(Clear, area);
@@ -898,10 +930,10 @@ fn render_agent_hierarchy_picker(title: &str, frame: &mut Frame, view: AgentHier
         AgentHierarchyFocus::Agents => "j/k move  l/Right/Enter open sessions  q/Esc cancel",
         AgentHierarchyFocus::Sessions => "j/k move  l/Right/Enter open dialogues  q/Esc cancel",
         AgentHierarchyFocus::Dialogues => {
-            "j/k move  Space toggle  a toggle-all  h/Left/Esc back  Enter copy  q cancel"
+            "j/k move  Space toggle  a toggle-all  t open-vim  h/Left/Esc back  Enter copy  q cancel"
         }
         AgentHierarchyFocus::Content => {
-            "j/k scroll  Ctrl-d/PageDown down  Ctrl-u/PageUp up  h/Left/Esc back  Enter copy  q cancel"
+            "j/k scroll  Ctrl-d/PageDown down  Ctrl-u/PageUp up  t open-vim  h/Left/Esc back  Enter copy  q cancel"
         }
     };
     let agent_idx = selected_index(view.agent_state).min(view.groups.len().saturating_sub(1));
@@ -1331,10 +1363,7 @@ fn finish_copy(text: String, print_full: bool, success_message: String) -> Resul
         return Ok(());
     }
 
-    arboard::Clipboard::new()
-        .context("Failed to open clipboard")?
-        .set_text(&text)
-        .context("Failed to set clipboard")?;
+    sivtr_core::export::clipboard::copy_to_clipboard(&text)?;
 
     if print_full {
         for line in text.lines() {
@@ -2189,11 +2218,11 @@ fn build_text_preview_lines(text: &str) -> String {
 mod tests {
     use super::picker::{apply_range_toggle, selection_from_entries, PickEntry};
     use super::{
-        agent_session_preview, build_agent_units, build_agent_vim_view,
+        agent_dialogue_vim_view, agent_session_preview, build_agent_units, build_agent_vim_view,
         build_current_agent_session_choices, build_output_preview, filter_lines_by_regex,
         filter_lines_by_spec, format_block, is_vim_command, vim_single_quote, AgentBlock,
-        AgentBlockKind, AgentProvider, AgentSelection, AgentSession, AgentSessionInfo,
-        AgentSessionProvider, CommandBlock, CommandSelection, CopyMode, TextPair,
+        AgentBlockKind, AgentProvider, AgentSelection, AgentSession, AgentSessionChoice,
+        AgentSessionInfo, AgentSessionProvider, CommandBlock, CommandSelection, CopyMode, TextPair,
     };
     use anyhow::Result;
     use std::path::{Path, PathBuf};
@@ -2656,5 +2685,35 @@ mod tests {
             agent_session_preview(&session).as_deref(),
             Some("first actual task")
         );
+    }
+
+    #[test]
+    fn agent_dialogue_vim_view_tracks_exact_dialogue_lines() {
+        let choice = AgentSessionChoice {
+            provider: AgentProvider::Codex,
+            modified: SystemTime::UNIX_EPOCH,
+            title: "session".to_string(),
+            units: vec![
+                TextPair {
+                    plain: "older dialogue".to_string(),
+                    ansi: "older dialogue".to_string(),
+                },
+                TextPair {
+                    plain: "line1\nline2\nline3\nline4".to_string(),
+                    ansi: "line1\nline2\nline3\nline4".to_string(),
+                },
+            ],
+            dialogue_titles: vec!["older dialogue".to_string(), "line1".to_string()],
+        };
+
+        let view = agent_dialogue_vim_view(&choice, 0);
+        assert_eq!(view.raw, "line1\nline2\nline3\nline4");
+        assert_eq!(view.blocks.len(), 1);
+        assert_eq!(view.blocks[0].start, 1);
+        assert_eq!(view.blocks[0].end, 4);
+        assert_eq!(view.blocks[0].block_text, view.raw);
+        assert_eq!(view.blocks[0].input_text, view.raw);
+        assert_eq!(view.blocks[0].output_text, view.raw);
+        assert!(view.alternate.is_none());
     }
 }
