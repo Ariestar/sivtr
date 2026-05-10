@@ -380,11 +380,17 @@ mod tests {
 
         let older = nested.join("older.jsonl");
         let newer = nested.join("newer.jsonl");
-        std::fs::write(&older, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"older\"}}\n")
-            .unwrap();
+        std::fs::write(
+            &older,
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"older\"}}\n",
+        )
+        .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(5));
-        std::fs::write(&newer, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"newer\"}}\n")
-            .unwrap();
+        std::fs::write(
+            &newer,
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"newer\"}}\n",
+        )
+        .unwrap();
 
         export_once(&source_root, &target_root, 0).unwrap();
 
