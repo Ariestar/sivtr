@@ -332,6 +332,7 @@ mod tests {
         format_blocks, normalize_path_for_match, select_blocks, AgentBlockKind, AgentSelection,
         AgentSessionProvider,
     };
+    use crate::config::SivtrConfig;
     use serde_json::json;
     use std::path::Path;
     use std::{
@@ -528,13 +529,6 @@ mod tests {
         let _guard = env_lock();
         let temp = tempfile::tempdir().unwrap();
         let config_home = temp.path().join("config-home");
-        let config_dir = config_home.join("sivtr");
-        fs::create_dir_all(&config_dir).unwrap();
-        fs::write(
-            config_dir.join("config.toml"),
-            "[codex]\nsession_dirs = [\"/tmp/from-config\", \"/tmp/shared\"]\n",
-        )
-        .unwrap();
 
         let previous_xdg_config_home = env::var_os("XDG_CONFIG_HOME");
         let previous_appdata = env::var_os("APPDATA");
@@ -544,12 +538,28 @@ mod tests {
         if cfg!(windows) {
             env::set_var("APPDATA", &config_home);
         }
+        let config_path = SivtrConfig::config_path().unwrap();
+        let previous_config_bytes = fs::read(&config_path).ok();
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(
+            &config_path,
+            "[codex]\nsession_dirs = [\"/tmp/from-config\", \"/tmp/shared\"]\n",
+        )
+        .unwrap();
         env::set_var(
             "SIVTR_CODEX_SESSION_DIRS",
             format!("/tmp/from-env{separator}/tmp/shared"),
         );
 
         let dirs = configured_codex_session_dirs();
+
+        if let Some(bytes) = previous_config_bytes {
+            fs::write(&config_path, bytes).unwrap();
+        } else {
+            let _ = fs::remove_file(&config_path);
+        }
 
         match previous_xdg_config_home {
             Some(value) => env::set_var("XDG_CONFIG_HOME", value),
