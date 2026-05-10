@@ -134,7 +134,29 @@ fn copy_session_file_atomically(source: &Path, target: &Path) -> Result<()> {
     })?;
     set_shared_read_permissions(&temp)?;
     fs::rename(&temp, target).with_context(|| format!("Failed to publish {}", target.display()))?;
+    preserve_source_modified_time(source, target);
     Ok(())
+}
+
+fn preserve_source_modified_time(source: &Path, target: &Path) {
+    let modified = match fs::metadata(source).and_then(|metadata| metadata.modified()) {
+        Ok(modified) => modified,
+        Err(_) => return,
+    };
+
+    let file = match fs::OpenOptions::new().write(true).open(target) {
+        Ok(file) => file,
+        Err(_) => return,
+    };
+
+    if let Err(error) = file.set_times(fs::FileTimes::new().set_modified(modified)) {
+        eprintln!(
+            "sivtr: warning: failed to preserve mtime from {} to {}: {}",
+            source.display(),
+            target.display(),
+            error
+        );
+    }
 }
 
 fn remove_stale_exported_files(root: &Path, kept: &HashSet<PathBuf>) {
