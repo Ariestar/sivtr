@@ -26,29 +26,20 @@ pub fn copy_to_clipboard(text: &str) -> Result<()> {
         let hold_env = std::env::var("SIVTR_LINUX_CLIPBOARD_HOLD_MS").ok();
         let hold_ms = parse_linux_clipboard_hold_ms(hold_env.as_deref());
 
-        if hold_ms == 0 {
-            clipboard
-                .set_text(text)
-                .context("Failed to set clipboard")?;
-        } else {
+        if hold_ms > 0 {
             let deadline = Instant::now() + Duration::from_millis(hold_ms);
             clipboard
                 .set()
                 .wait_until(deadline)
                 .text(text)
                 .context("Failed to set clipboard")?;
+            return Ok(());
         }
     }
 
-    #[cfg(not(all(
-        unix,
-        not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
-    )))]
-    {
-        clipboard
-            .set_text(text)
-            .context("Failed to set clipboard")?;
-    }
+    clipboard
+        .set_text(text)
+        .context("Failed to set clipboard")?;
 
     Ok(())
 }

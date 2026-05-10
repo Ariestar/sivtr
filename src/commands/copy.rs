@@ -900,7 +900,6 @@ fn agent_dialogue_vim_view(choice: &AgentSessionChoice, dialogue_idx: usize) -> 
     let text = current_agent_dialogue_text(choice, dialogue_idx).to_string();
     let end = line_count(&text).max(1);
     VimView {
-        raw: text.clone(),
         blocks: vec![VimBlock {
             start: 1,
             end,
@@ -914,6 +913,7 @@ fn agent_dialogue_vim_view(choice: &AgentSessionChoice, dialogue_idx: usize) -> 
             command_text: String::new(),
         }],
         alternate: None,
+        raw: text,
     }
 }
 
@@ -2703,7 +2703,7 @@ mod tests {
                     ansi: "line1\nline2\nline3\nline4".to_string(),
                 },
             ],
-            dialogue_titles: vec!["older dialogue".to_string(), "line1".to_string()],
+            dialogue_titles: vec!["line1".to_string(), "older dialogue".to_string()],
         };
 
         let view = agent_dialogue_vim_view(&choice, 0);
