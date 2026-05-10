@@ -119,6 +119,10 @@ pub fn local_codex_sessions_dir() -> PathBuf {
 pub fn configured_codex_session_dirs() -> Vec<PathBuf> {
     let mut dirs = vec![local_codex_sessions_dir()];
 
+    if let Ok(config) = SivtrConfig::load() {
+        dirs.extend(config.codex.session_dirs);
+    }
+
     if let Ok(extra) = std::env::var("SIVTR_CODEX_SESSION_DIRS") {
         let separator = if cfg!(windows) { ';' } else { ':' };
         dirs.extend(
@@ -128,8 +132,6 @@ pub fn configured_codex_session_dirs() -> Vec<PathBuf> {
                 .filter(|entry| !entry.is_empty())
                 .map(PathBuf::from),
         );
-    } else if let Ok(config) = SivtrConfig::load() {
-        dirs.extend(config.codex.session_dirs);
     }
 
     dedup_paths(dirs)
@@ -347,7 +349,7 @@ mod tests {
         format_blocks, select_blocks, AgentBlockKind, AgentSelection, AgentSessionProvider,
     };
     use serde_json::json;
-    use std::{env, path::PathBuf, time::Duration};
+    use std::{env, fs, path::PathBuf, time::Duration};
 
     #[test]
     fn parses_codex_rollout_messages_and_tools() {
@@ -509,6 +511,48 @@ mod tests {
         assert_eq!(
             dirs.iter()
                 .filter(|path| *path == &PathBuf::from("/tmp/a"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn configured_codex_session_dirs_combines_env_and_config_entries() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_home = temp.path().join("config-home");
+        let config_dir = config_home.join("sivtr");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("config.toml"),
+            "[codex]\nsession_dirs = [\"/tmp/from-config\", \"/tmp/shared\"]\n",
+        )
+        .unwrap();
+
+        let previous_xdg_config_home = env::var_os("XDG_CONFIG_HOME");
+        let previous_extra_dirs = env::var_os("SIVTR_CODEX_SESSION_DIRS");
+        let separator = if cfg!(windows) { ";" } else { ":" };
+        env::set_var("XDG_CONFIG_HOME", &config_home);
+        env::set_var(
+            "SIVTR_CODEX_SESSION_DIRS",
+            format!("/tmp/from-env{separator}/tmp/shared"),
+        );
+
+        let dirs = configured_codex_session_dirs();
+
+        match previous_xdg_config_home {
+            Some(value) => env::set_var("XDG_CONFIG_HOME", value),
+            None => env::remove_var("XDG_CONFIG_HOME"),
+        }
+        match previous_extra_dirs {
+            Some(value) => env::set_var("SIVTR_CODEX_SESSION_DIRS", value),
+            None => env::remove_var("SIVTR_CODEX_SESSION_DIRS"),
+        }
+
+        assert!(dirs.contains(&PathBuf::from("/tmp/from-config")));
+        assert!(dirs.contains(&PathBuf::from("/tmp/from-env")));
+        assert_eq!(
+            dirs.iter()
+                .filter(|path| *path == &PathBuf::from("/tmp/shared"))
                 .count(),
             1
         );

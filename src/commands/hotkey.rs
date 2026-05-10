@@ -59,7 +59,7 @@ pub fn pick_agent(args: &HotkeyPickAgentArgs) -> Result<()> {
         let providers = args.provider.providers();
         copy::execute_agent_picker(AgentPickerRequest {
             providers: &providers,
-            pick_current_session: true,
+            pick_current_session: args.current_session,
             selection_mode: AgentSelection::LastTurn,
             print_full: false,
             regex: None,
@@ -475,6 +475,7 @@ fn spawn_picker_terminal(cwd: &str, provider: HotkeyProviderSelection) -> Result
         .arg("hotkey-pick-agent")
         .arg("--cwd")
         .arg(&cwd)
+        .arg("--current-session")
         .arg("--provider")
         .arg(provider.as_str())
         .creation_flags(CREATE_NEW_CONSOLE)
