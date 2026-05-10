@@ -2,10 +2,22 @@ use anyhow::{Context, Result};
 use arboard::Clipboard;
 use std::io::Write;
 use std::process::{Command, Stdio};
+#[cfg(all(
+    unix,
+    not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+))]
 use std::time::{Duration, Instant};
 
+#[cfg(all(
+    unix,
+    not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+))]
 const DEFAULT_LINUX_CLIPBOARD_HOLD_MS: u64 = 200;
 
+#[cfg(all(
+    unix,
+    not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+))]
 fn parse_linux_clipboard_hold_ms(value: Option<&str>) -> u64 {
     value
         .and_then(|raw| raw.trim().parse::<u64>().ok())
@@ -119,7 +131,11 @@ fn clipboard_command_candidates() -> Vec<&'static [&'static str]> {
     candidates
 }
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    unix,
+    not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+))]
 mod tests {
     use super::{parse_linux_clipboard_hold_ms, DEFAULT_LINUX_CLIPBOARD_HOLD_MS};
 
