@@ -398,7 +398,10 @@ fn maybe_start_hotkey() -> Result<()> {
 
         if prompt_start_hotkey()? {
             crate::commands::hotkey::execute(HotkeyCommand {
-                action: Some(HotkeyAction::Start(HotkeyStartArgs { chord: None })),
+                action: Some(HotkeyAction::Start(HotkeyStartArgs {
+                    chord: None,
+                    provider: Default::default(),
+                })),
             })?;
         } else {
             eprintln!("sivtr: start the Codex hotkey later with `sivtr hotkey start`");
@@ -660,7 +663,7 @@ fn write_linux_shortcut_desktop_entry(path: &Path, script_path: &Path) -> Result
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg_attr(not(unix), allow(dead_code))]
 fn shell_single_quote(value: &str) -> String {
     value.replace('\'', "'\"'\"'")
 }

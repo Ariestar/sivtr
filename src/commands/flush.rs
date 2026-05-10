@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::env;
+#[cfg(not(windows))]
 use std::fs;
 
 use sivtr_core::capture::scrollback;
