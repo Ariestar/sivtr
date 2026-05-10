@@ -68,7 +68,9 @@ fn export_once(source_root: &Path, target_root: &Path, limit: usize) -> Result<u
 
     let mut kept = HashSet::new();
     let mut seen_dirs = HashSet::new();
-    for source in &files {
+    // Copy oldest -> newest so exported mtimes preserve true recency.
+    // Copying newest first would make older files appear newer in the shared tree.
+    for source in files.iter().rev() {
         let relative = source
             .strip_prefix(source_root)
             .with_context(|| format!("Failed to relativize {}", source.display()))?;
@@ -344,6 +346,36 @@ mod tests {
 
         assert!(target_root.join("2026/05/08/newest.jsonl").exists());
         assert!(!target_root.join("2026/05/08/older.jsonl").exists());
+    }
+
+    #[test]
+    fn export_once_preserves_newest_order_in_target_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let source_root = dir.path().join("source");
+        let target_root = dir.path().join("target").join("sessions");
+        let nested = source_root.join("2026/05/08");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let older = nested.join("older.jsonl");
+        let newer = nested.join("newer.jsonl");
+        std::fs::write(&older, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"older\"}}\n")
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        std::fs::write(&newer, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"newer\"}}\n")
+            .unwrap();
+
+        export_once(&source_root, &target_root, 0).unwrap();
+
+        let exported = collect_session_files(&target_root, 0).unwrap();
+        assert_eq!(exported.len(), 2);
+        assert_eq!(
+            exported[0].file_name().and_then(|name| name.to_str()),
+            Some("newer.jsonl")
+        );
+        assert_eq!(
+            exported[1].file_name().and_then(|name| name.to_str()),
+            Some("older.jsonl")
+        );
     }
 
     #[test]
