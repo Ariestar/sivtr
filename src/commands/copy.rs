@@ -792,11 +792,7 @@ fn run_agent_hierarchy_picker_on_terminal(
                     let select_all = selected_dialogues.iter().any(|selected| !selected);
                     selected_dialogues.fill(select_all);
                 }
-                KeyCode::Char('t')
-                    if matches!(
-                        focus,
-                        AgentHierarchyFocus::Dialogues | AgentHierarchyFocus::Content
-                    ) && dialogue_count > 0 =>
+                KeyCode::Char('t') if can_open_dialogue_vim(focus, dialogue_count) =>
                 {
                     let view = agent_dialogue_vim_view(&choices[session_idx], dialogue_idx);
                     restore_tui(terminal)?;
@@ -883,6 +879,16 @@ fn selected_index(state: &ListState) -> usize {
     state.selected().unwrap_or(0)
 }
 
+fn can_open_dialogue_vim(focus: AgentHierarchyFocus, dialogue_count: usize) -> bool {
+    dialogue_count > 0
+        && matches!(
+            focus,
+            AgentHierarchyFocus::Sessions
+                | AgentHierarchyFocus::Dialogues
+                | AgentHierarchyFocus::Content
+        )
+}
+
 fn current_agent_dialogue_text(choice: &AgentSessionChoice, dialogue_idx: usize) -> &str {
     let total = choice.units.len();
     if total == 0 {
@@ -928,7 +934,9 @@ fn render_agent_hierarchy_picker(title: &str, frame: &mut Frame, view: AgentHier
 
     let controls = match view.focus {
         AgentHierarchyFocus::Agents => "j/k move  l/Right/Enter open sessions  q/Esc cancel",
-        AgentHierarchyFocus::Sessions => "j/k move  l/Right/Enter open dialogues  q/Esc cancel",
+        AgentHierarchyFocus::Sessions => {
+            "j/k move  l/Right/Enter open dialogues  t open-vim  q/Esc cancel"
+        }
         AgentHierarchyFocus::Dialogues => {
             "j/k move  Space toggle  a toggle-all  t open-vim  h/Left/Esc back  Enter copy  q cancel"
         }
@@ -2219,10 +2227,11 @@ mod tests {
     use super::picker::{apply_range_toggle, selection_from_entries, PickEntry};
     use super::{
         agent_dialogue_vim_view, agent_session_preview, build_agent_units, build_agent_vim_view,
-        build_current_agent_session_choices, build_output_preview, filter_lines_by_regex,
-        filter_lines_by_spec, format_block, is_vim_command, vim_single_quote, AgentBlock,
-        AgentBlockKind, AgentProvider, AgentSelection, AgentSession, AgentSessionChoice,
-        AgentSessionInfo, AgentSessionProvider, CommandBlock, CommandSelection, CopyMode, TextPair,
+        build_current_agent_session_choices, build_output_preview, can_open_dialogue_vim,
+        filter_lines_by_regex, filter_lines_by_spec, format_block, is_vim_command, vim_single_quote,
+        AgentBlock, AgentBlockKind, AgentHierarchyFocus, AgentProvider, AgentSelection,
+        AgentSession, AgentSessionChoice, AgentSessionInfo, AgentSessionProvider, CommandBlock,
+        CommandSelection, CopyMode, TextPair,
     };
     use anyhow::Result;
     use std::path::{Path, PathBuf};
@@ -2685,6 +2694,15 @@ mod tests {
             agent_session_preview(&session).as_deref(),
             Some("first actual task")
         );
+    }
+
+    #[test]
+    fn can_open_dialogue_vim_accepts_sessions_when_dialogues_exist() {
+        assert!(!can_open_dialogue_vim(AgentHierarchyFocus::Agents, 1));
+        assert!(can_open_dialogue_vim(AgentHierarchyFocus::Sessions, 1));
+        assert!(can_open_dialogue_vim(AgentHierarchyFocus::Dialogues, 1));
+        assert!(can_open_dialogue_vim(AgentHierarchyFocus::Content, 1));
+        assert!(!can_open_dialogue_vim(AgentHierarchyFocus::Sessions, 0));
     }
 
     #[test]
