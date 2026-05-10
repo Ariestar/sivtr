@@ -115,6 +115,7 @@ fn append_entry_from_output(
     session::save_state(state_path, &state)
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn trim_trailing_prompt_artifact(output: String, prompt: &str) -> String {
     let prompt_last_line = SessionEntry::new(prompt, "", "")
         .prompt
