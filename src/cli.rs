@@ -457,13 +457,17 @@ pub struct HotkeyServeArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct HotkeyPickAgentArgs {
-    /// Working directory used to resolve current AI sessions
+    /// Working directory used for launching the picker process
     #[arg(long, value_name = "PATH")]
     pub cwd: PathBuf,
 
     /// AI provider sessions to show
     #[arg(long, default_value_t = HotkeyProviderSelection::default(), value_name = "PROVIDER")]
     pub provider: HotkeyProviderSelection,
+
+    /// Restrict the picker to sessions whose cwd matches `--cwd`
+    #[arg(long, default_value_t = false)]
+    pub current_session: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -817,6 +821,27 @@ mod tests {
             Some(Commands::HotkeyPickAgent(args)) => {
                 assert_eq!(args.cwd, PathBuf::from("."));
                 assert_eq!(args.provider, HotkeyProviderSelection::default());
+                assert!(!args.current_session);
+            }
+            _ => panic!("expected hotkey-pick-agent command"),
+        }
+    }
+
+    #[test]
+    fn hotkey_pick_agent_accepts_current_session_flag() {
+        let cli = Cli::try_parse_from([
+            "sivtr",
+            "hotkey-pick-agent",
+            "--cwd",
+            ".",
+            "--current-session",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Commands::HotkeyPickAgent(args)) => {
+                assert_eq!(args.cwd, PathBuf::from("."));
+                assert!(args.current_session);
             }
             _ => panic!("expected hotkey-pick-agent command"),
         }
