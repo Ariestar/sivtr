@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
 use arboard::Clipboard;
+use std::io::Write;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 const DEFAULT_LINUX_CLIPBOARD_HOLD_MS: u64 = 200;
@@ -12,6 +14,14 @@ fn parse_linux_clipboard_hold_ms(value: Option<&str>) -> u64 {
 
 /// Copy text to the system clipboard.
 pub fn copy_to_clipboard(text: &str) -> Result<()> {
+    if let Ok(()) = copy_with_arboard(text) {
+        return Ok(());
+    }
+
+    copy_with_external_clipboard(text)
+}
+
+fn copy_with_arboard(text: &str) -> Result<()> {
     let mut clipboard = Clipboard::new().context("Failed to open clipboard")?;
 
     #[cfg(all(
@@ -42,6 +52,71 @@ pub fn copy_to_clipboard(text: &str) -> Result<()> {
         .context("Failed to set clipboard")?;
 
     Ok(())
+}
+
+fn copy_with_external_clipboard(text: &str) -> Result<()> {
+    for candidate in clipboard_command_candidates() {
+        if try_copy_with_command(candidate, text).is_ok() {
+            return Ok(());
+        }
+    }
+
+    anyhow::bail!("Failed to copy clipboard via arboard and external clipboard commands")
+}
+
+fn try_copy_with_command(command: &[&str], text: &str) -> Result<()> {
+    let (program, args) = command
+        .split_first()
+        .ok_or_else(|| anyhow::anyhow!("Empty clipboard command"))?;
+
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("Failed to spawn clipboard command `{}`", command.join(" ")))?;
+
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(text.as_bytes())?;
+    }
+
+    let status = child.wait()?;
+    if status.success() {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "Clipboard command `{}` exited with {status}",
+            command.join(" ")
+        )
+    }
+}
+
+fn clipboard_command_candidates() -> Vec<&'static [&'static str]> {
+    let mut candidates: Vec<&'static [&'static str]> = Vec::new();
+
+    #[cfg(all(
+        unix,
+        not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+    ))]
+    {
+        candidates.push(&["wl-copy"]);
+        candidates.push(&["xclip", "-selection", "clipboard", "-in"]);
+        candidates.push(&["xsel", "--clipboard", "--input"]);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        candidates.push(&["pbcopy"]);
+    }
+
+    #[cfg(windows)]
+    {
+        candidates.push(&["clip"]);
+        candidates.push(&["clip.exe"]);
+    }
+
+    candidates
 }
 
 #[cfg(test)]

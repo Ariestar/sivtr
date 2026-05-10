@@ -100,6 +100,9 @@ Defaults:
 Session Resolution:
   By default, sivtr reads the newest Codex rollout whose `cwd`
   matches the current working directory.
+  `--session N` picks the Nth newest selectable Codex session
+  (the same session numbering shown in `--pick`).
+  `--session ID` matches a session id or id prefix.
 
 Selector Semantics:
   Selection is relative to the newest matching Codex item.
@@ -134,6 +137,9 @@ Defaults:
 Session Resolution:
   By default, sivtr reads the newest Claude Code transcript whose `cwd`
   matches the current working directory.
+  `--session N` picks the Nth newest selectable Claude session
+  (the same session numbering shown in `--pick`).
+  `--session ID` matches a session id or id prefix.
 
 Selector Semantics:
   Selection is relative to the newest matching Claude Code item.
@@ -232,7 +238,7 @@ pub enum Commands {
 
     /// Copy recent command blocks to clipboard
     #[command(visible_alias = "c", after_help = COPY_AFTER_HELP)]
-    Copy(CopyCommand),
+    Copy(Box<CopyCommand>),
 
     /// Alias for `copy in`
     #[command(name = "ci", hide = true)]
@@ -343,6 +349,16 @@ pub struct CopyArgs {
 pub struct CopySimpleArgs {
     #[command(flatten)]
     pub common: CopyCommonArgs,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct AgentCopyArgs {
+    #[command(flatten)]
+    pub common: CopySimpleArgs,
+
+    /// Which session to read; `1` means the newest selectable session from `--pick`, or pass an id / id prefix
+    #[arg(long, value_name = "N|ID")]
+    pub session: Option<String>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -517,22 +533,22 @@ pub struct AgentCopyCommand {
     pub mode: Option<AgentCopyMode>,
 
     #[command(flatten)]
-    pub args: CopySimpleArgs,
+    pub args: AgentCopyArgs,
 }
 
 #[derive(Subcommand, Debug)]
 pub enum AgentCopyMode {
     /// Copy the last user message
-    In(CopySimpleArgs),
+    In(AgentCopyArgs),
 
     /// Copy the last assistant reply
-    Out(CopySimpleArgs),
+    Out(AgentCopyArgs),
 
     /// Copy the last tool output
-    Tool(CopySimpleArgs),
+    Tool(AgentCopyArgs),
 
     /// Copy the whole parsed session
-    All(CopySimpleArgs),
+    All(AgentCopyArgs),
 }
 
 #[cfg(test)]
@@ -631,7 +647,7 @@ mod tests {
             Some(Commands::Copy(cmd)) => match cmd.mode {
                 Some(CopySubcommand::Codex(codex)) => {
                     assert!(codex.mode.is_none());
-                    assert_eq!(codex.args.common.selector, None);
+                    assert_eq!(codex.args.common.common.selector, None);
                 }
                 _ => panic!("expected copy codex mode"),
             },
@@ -646,7 +662,7 @@ mod tests {
         match cli.command {
             Some(Commands::Copy(cmd)) => match cmd.mode {
                 Some(CopySubcommand::Codex(codex)) => match codex.mode {
-                    Some(AgentCopyMode::Out(args)) => assert!(args.common.print),
+                    Some(AgentCopyMode::Out(args)) => assert!(args.common.common.print),
                     _ => panic!("expected copy codex out mode"),
                 },
                 _ => panic!("expected copy codex mode"),
@@ -662,7 +678,22 @@ mod tests {
         match cli.command {
             Some(Commands::Copy(cmd)) => match cmd.mode {
                 Some(CopySubcommand::Codex(codex)) => {
-                    assert_eq!(codex.args.common.selector.as_deref(), Some("2..4"));
+                    assert_eq!(codex.args.common.common.selector.as_deref(), Some("2..4"));
+                }
+                _ => panic!("expected copy codex mode"),
+            },
+            _ => panic!("expected copy command"),
+        }
+    }
+
+    #[test]
+    fn codex_copy_accepts_session_selector() {
+        let cli = Cli::try_parse_from(["sivtr", "copy", "codex", "--session", "2"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Copy(cmd)) => match cmd.mode {
+                Some(CopySubcommand::Codex(codex)) => {
+                    assert_eq!(codex.args.session.as_deref(), Some("2"));
                 }
                 _ => panic!("expected copy codex mode"),
             },
@@ -677,9 +708,24 @@ mod tests {
         match cli.command {
             Some(Commands::Copy(cmd)) => match cmd.mode {
                 Some(CopySubcommand::Claude(claude)) => match claude.mode {
-                    Some(AgentCopyMode::Out(args)) => assert!(args.common.print),
+                    Some(AgentCopyMode::Out(args)) => assert!(args.common.common.print),
                     _ => panic!("expected copy claude out mode"),
                 },
+                _ => panic!("expected copy claude mode"),
+            },
+            _ => panic!("expected copy command"),
+        }
+    }
+
+    #[test]
+    fn claude_copy_accepts_session_selector() {
+        let cli = Cli::try_parse_from(["sivtr", "copy", "claude", "--session", "abc123"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Copy(cmd)) => match cmd.mode {
+                Some(CopySubcommand::Claude(claude)) => {
+                    assert_eq!(claude.args.session.as_deref(), Some("abc123"));
+                }
                 _ => panic!("expected copy claude mode"),
             },
             _ => panic!("expected copy command"),
