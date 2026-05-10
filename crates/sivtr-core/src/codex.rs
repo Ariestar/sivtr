@@ -77,7 +77,57 @@ impl AgentSessionProvider for CodexProvider {
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_jsonl_session(path, PROVIDER_NAME, apply_event_with_event_fallback)
+        let mut saw_response_item = false;
+        let mut event_fallback_indices = Vec::new();
+        let mut session = parse_jsonl_session(path, PROVIDER_NAME, |session, value| {
+            let timestamp = value
+                .get("timestamp")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let payload = value.get("payload").unwrap_or(&Value::Null);
+
+            match value.get("type").and_then(Value::as_str) {
+                Some("session_meta") => {
+                    session.id = payload
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    session.cwd = payload
+                        .get("cwd")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                }
+                Some("response_item") => {
+                    saw_response_item = true;
+                    apply_response_item(session, payload, timestamp.clone());
+                }
+                Some("event_msg") => {
+                    let start = session.blocks.len();
+                    apply_event_msg(session, payload, timestamp);
+                    if session.blocks.len() > start {
+                        event_fallback_indices.extend(start..session.blocks.len());
+                    }
+                }
+                _ => {}
+            }
+        })?;
+
+        if saw_response_item && !event_fallback_indices.is_empty() {
+            let mut drop_mask = vec![false; session.blocks.len()];
+            for index in event_fallback_indices {
+                if let Some(slot) = drop_mask.get_mut(index) {
+                    *slot = true;
+                }
+            }
+            session.blocks = session
+                .blocks
+                .into_iter()
+                .enumerate()
+                .filter_map(|(index, block)| (!drop_mask[index]).then_some(block))
+                .collect();
+        }
+
+        Ok(session)
     }
 
     fn find_session_by_id(&self, id: &str) -> Result<Option<PathBuf>> {
@@ -161,30 +211,6 @@ fn parse_session_meta(path: &Path) -> Result<AgentSessionMeta> {
             .and_then(Value::as_str)
             .map(str::to_string);
     })
-}
-
-fn apply_event_with_event_fallback(session: &mut AgentSession, value: &Value) {
-    let timestamp = value
-        .get("timestamp")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let payload = value.get("payload").unwrap_or(&Value::Null);
-
-    match value.get("type").and_then(Value::as_str) {
-        Some("session_meta") => {
-            session.id = payload
-                .get("id")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            session.cwd = payload
-                .get("cwd")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-        }
-        Some("response_item") => apply_response_item(session, payload, timestamp.clone()),
-        Some("event_msg") => apply_event_msg(session, payload, timestamp),
-        _ => {}
-    }
 }
 
 fn apply_response_item(session: &mut AgentSession, payload: &Value, timestamp: Option<String>) {
@@ -306,7 +332,17 @@ mod tests {
         format_blocks, select_blocks, AgentBlockKind, AgentSelection, AgentSessionProvider,
     };
     use serde_json::json;
-    use std::{env, fs, path::PathBuf, time::Duration};
+    use std::{
+        env, fs,
+        path::PathBuf,
+        sync::{Mutex, OnceLock},
+        time::Duration,
+    };
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
 
     #[test]
     fn parses_codex_rollout_messages_and_tools() {
@@ -385,6 +421,7 @@ mod tests {
 
     #[test]
     fn find_current_session_prefers_codex_thread_id_over_cwd_match() {
+        let _guard = env_lock();
         let temp = tempfile::tempdir().unwrap();
         let codex_home = temp.path().join("codex-home");
         let sessions_dir = codex_home
@@ -449,6 +486,7 @@ mod tests {
 
     #[test]
     fn configured_codex_session_dirs_reads_env_override_once() {
+        let _guard = env_lock();
         let previous = env::var_os("SIVTR_CODEX_SESSION_DIRS");
         let separator = if cfg!(windows) { ";" } else { ":" };
         env::set_var(
@@ -475,6 +513,7 @@ mod tests {
 
     #[test]
     fn configured_codex_session_dirs_combines_env_and_config_entries() {
+        let _guard = env_lock();
         let temp = tempfile::tempdir().unwrap();
         let config_home = temp.path().join("config-home");
         let config_dir = config_home.join("sivtr");
@@ -517,6 +556,7 @@ mod tests {
 
     #[test]
     fn list_recent_sessions_includes_exported_session_dirs() {
+        let _guard = env_lock();
         let temp = tempfile::tempdir().unwrap();
         let codex_home = temp.path().join("codex-home");
         let local_sessions = codex_home
