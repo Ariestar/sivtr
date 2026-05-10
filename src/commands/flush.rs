@@ -131,10 +131,6 @@ fn trim_trailing_prompt_artifact(output: String, prompt: &str) -> String {
         return output;
     };
 
-    if !last_raw_line.contains('\x1b') && !last_raw_line.contains('\r') {
-        return output;
-    }
-
     let last_plain_line = SessionEntry::new("", "", last_raw_line)
         .output
         .trim()
@@ -240,6 +236,17 @@ mod tests {
         assert_eq!(
             trim_trailing_prompt_artifact(output.to_string(), prompt),
             "hello from zsh"
+        );
+    }
+
+    #[test]
+    fn trims_plain_text_prompt_suffix_from_capture() {
+        let prompt = "repo> ";
+        let output = "build complete\nrepo>";
+
+        assert_eq!(
+            trim_trailing_prompt_artifact(output.to_string(), prompt),
+            "build complete"
         );
     }
 }

@@ -66,27 +66,8 @@ else
 fi
 export SIVTR_CAPTURE_FILE="${SIVTR_SESSION_LOG%.log}.capture"
 mkdir -p "${SIVTR_SESSION_LOG%/*}"
-__sivtr_capture_active=0
-__sivtr_prompt_phase=0
-__sivtr_restore_capture() {
-  if [[ "${__sivtr_capture_active:-0}" -eq 1 ]]; then
-    exec 1>&19 2>&20
-    exec 19>&- 20>&-
-    __sivtr_capture_active=0
-  fi
-}
-__sivtr_preexec() {
-  [[ "${__sivtr_prompt_phase:-0}" -eq 1 ]] && return
-  [[ "${__sivtr_capture_active:-0}" -eq 1 ]] && return
-  : >| "$SIVTR_CAPTURE_FILE"
-  exec 19>&1 20>&2
-  exec > >(tee "$SIVTR_CAPTURE_FILE" >&19) 2>&1
-  __sivtr_capture_active=1
-}
 __sivtr_precmd() {
   local exit_status=$?
-  __sivtr_prompt_phase=1
-  __sivtr_restore_capture
   local hist_entry
   hist_entry="$(HISTTIMEFORMAT= history 1)"
   if [[ $hist_entry =~ ^[[:space:]]*([0-9]+)[[:space:]]+(.*)$ ]]; then
@@ -95,10 +76,8 @@ __sivtr_precmd() {
   fi
   export SIVTR_LAST_PROMPT="${PS1@P}"
   sivtr flush >/dev/null 2>&1 || true
-  __sivtr_prompt_phase=0
   return $exit_status
 }
-trap '__sivtr_preexec' DEBUG
 if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then
   if [[ " ${PROMPT_COMMAND[*]} " != *" __sivtr_precmd "* ]]; then
     PROMPT_COMMAND=(__sivtr_precmd "${PROMPT_COMMAND[@]}")
@@ -124,38 +103,14 @@ else
 fi
 export SIVTR_CAPTURE_FILE="${SIVTR_SESSION_LOG%.log}.capture"
 mkdir -p "${SIVTR_SESSION_LOG%/*}"
-typeset -ga preexec_functions precmd_functions
-typeset -g __sivtr_capture_active=0
-typeset -gi __sivtr_stdout_fd=-1 __sivtr_stderr_fd=-1
-_sivtr_restore_capture() {
-  if (( __sivtr_capture_active )); then
-    exec 1>&$__sivtr_stdout_fd
-    exec 2>&$__sivtr_stderr_fd
-    exec {__sivtr_stdout_fd}>&-
-    exec {__sivtr_stderr_fd}>&-
-    __sivtr_capture_active=0
-  fi
-}
-_sivtr_preexec() {
-  (( __sivtr_capture_active )) && return
-  : >| "$SIVTR_CAPTURE_FILE"
-  exec {__sivtr_stdout_fd}>&1
-  exec {__sivtr_stderr_fd}>&2
-  exec > >(tee "$SIVTR_CAPTURE_FILE" >&$__sivtr_stdout_fd) 2>&1
-  __sivtr_capture_active=1
-}
 _sivtr_precmd() {
   local exit_status=$?
-  _sivtr_restore_capture
   export SIVTR_LAST_COMMAND="$(fc -ln -1)"
   export SIVTR_LAST_COMMAND_ID="$HISTCMD"
   export SIVTR_LAST_PROMPT="$(print -P "$PROMPT")"
   sivtr flush >/dev/null 2>&1 || true
   return $exit_status
 }
-if [[ " ${preexec_functions[*]:-} " != *" _sivtr_preexec "* ]]; then
-  preexec_functions=(_sivtr_preexec $preexec_functions)
-fi
 if [[ " ${precmd_functions[*]:-} " != *" _sivtr_precmd "* ]]; then
   precmd_functions=(_sivtr_precmd $precmd_functions)
 fi
@@ -794,10 +749,10 @@ mod tests {
     }
 
     #[test]
-    fn bash_hook_sets_up_capture_file_and_debug_trap() {
+    fn bash_hook_keeps_capture_path_without_tty_redirection() {
         assert!(BASH_HOOK.contains("export SIVTR_CAPTURE_FILE="));
-        assert!(BASH_HOOK.contains("trap '__sivtr_preexec' DEBUG"));
-        assert!(BASH_HOOK.contains("tee \"$SIVTR_CAPTURE_FILE\""));
+        assert!(!BASH_HOOK.contains("trap '__sivtr_preexec' DEBUG"));
+        assert!(!BASH_HOOK.contains("exec > >(tee \"$SIVTR_CAPTURE_FILE\""));
     }
 
     #[test]
@@ -810,11 +765,10 @@ mod tests {
     }
 
     #[test]
-    fn zsh_hook_sets_up_preexec_capture() {
+    fn zsh_hook_keeps_capture_path_without_tty_redirection() {
         assert!(ZSH_HOOK.contains("export SIVTR_CAPTURE_FILE="));
-        assert!(ZSH_HOOK.contains("preexec_functions=(_sivtr_preexec"));
-        assert!(ZSH_HOOK.contains("typeset -ga preexec_functions precmd_functions"));
-        assert!(ZSH_HOOK.contains("tee \"$SIVTR_CAPTURE_FILE\""));
+        assert!(!ZSH_HOOK.contains("preexec_functions=(_sivtr_preexec"));
+        assert!(!ZSH_HOOK.contains("exec > >(tee \"$SIVTR_CAPTURE_FILE\""));
     }
 
     #[test]
