@@ -329,9 +329,11 @@ fn dedup_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 mod tests {
     use super::{configured_codex_session_dirs, CodexProvider};
     use crate::ai::{
-        format_blocks, select_blocks, AgentBlockKind, AgentSelection, AgentSessionProvider,
+        format_blocks, normalize_path_for_match, select_blocks, AgentBlockKind, AgentSelection,
+        AgentSessionProvider,
     };
     use serde_json::json;
+    use std::path::Path;
     use std::{
         env, fs,
         path::PathBuf,
@@ -341,7 +343,22 @@ mod tests {
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn contains_path(dirs: &[PathBuf], expected: &str) -> bool {
+        let expected = normalize_path_for_match(Path::new(expected));
+        dirs.iter()
+            .any(|path| normalize_path_for_match(path) == expected)
+    }
+
+    fn count_path(dirs: &[PathBuf], expected: &str) -> usize {
+        let expected = normalize_path_for_match(Path::new(expected));
+        dirs.iter()
+            .filter(|path| normalize_path_for_match(path) == expected)
+            .count()
     }
 
     #[test]
@@ -501,14 +518,9 @@ mod tests {
             None => env::remove_var("SIVTR_CODEX_SESSION_DIRS"),
         }
 
-        assert!(dirs.contains(&PathBuf::from("/tmp/a")));
-        assert!(dirs.contains(&PathBuf::from("/tmp/b")));
-        assert_eq!(
-            dirs.iter()
-                .filter(|path| *path == &PathBuf::from("/tmp/a"))
-                .count(),
-            1
-        );
+        assert!(contains_path(&dirs, "/tmp/a"));
+        assert!(contains_path(&dirs, "/tmp/b"));
+        assert_eq!(count_path(&dirs, "/tmp/a"), 1);
     }
 
     #[test]
@@ -525,9 +537,13 @@ mod tests {
         .unwrap();
 
         let previous_xdg_config_home = env::var_os("XDG_CONFIG_HOME");
+        let previous_appdata = env::var_os("APPDATA");
         let previous_extra_dirs = env::var_os("SIVTR_CODEX_SESSION_DIRS");
         let separator = if cfg!(windows) { ";" } else { ":" };
         env::set_var("XDG_CONFIG_HOME", &config_home);
+        if cfg!(windows) {
+            env::set_var("APPDATA", &config_home);
+        }
         env::set_var(
             "SIVTR_CODEX_SESSION_DIRS",
             format!("/tmp/from-env{separator}/tmp/shared"),
@@ -539,19 +555,18 @@ mod tests {
             Some(value) => env::set_var("XDG_CONFIG_HOME", value),
             None => env::remove_var("XDG_CONFIG_HOME"),
         }
+        match previous_appdata {
+            Some(value) => env::set_var("APPDATA", value),
+            None => env::remove_var("APPDATA"),
+        }
         match previous_extra_dirs {
             Some(value) => env::set_var("SIVTR_CODEX_SESSION_DIRS", value),
             None => env::remove_var("SIVTR_CODEX_SESSION_DIRS"),
         }
 
-        assert!(dirs.contains(&PathBuf::from("/tmp/from-config")));
-        assert!(dirs.contains(&PathBuf::from("/tmp/from-env")));
-        assert_eq!(
-            dirs.iter()
-                .filter(|path| *path == &PathBuf::from("/tmp/shared"))
-                .count(),
-            1
-        );
+        assert!(contains_path(&dirs, "/tmp/from-config"));
+        assert!(contains_path(&dirs, "/tmp/from-env"));
+        assert_eq!(count_path(&dirs, "/tmp/shared"), 1);
     }
 
     #[test]
