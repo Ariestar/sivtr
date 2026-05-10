@@ -51,10 +51,24 @@ test("buildCommandLine uses shell-aware quoting for Windows shells", () => {
   );
 });
 
-test("resolveArgs expands workspaceFolder placeholder only after --cwd", () => {
+test("resolveArgs expands workspaceFolder placeholder in all arguments", () => {
   assert.deepEqual(
-    resolveArgs(["hotkey-pick-codex", "--cwd", "${workspaceFolder}", "--session", "2"], "/tmp/repo"),
-    ["hotkey-pick-codex", "--cwd", "/tmp/repo", "--session", "2"],
+    resolveArgs(
+      ["hotkey-pick-codex", "--cwd", "${workspaceFolder}", "--output", "${workspaceFolder}/logs"],
+      "/tmp/repo",
+    ),
+    ["hotkey-pick-codex", "--cwd", "/tmp/repo", "--output", "/tmp/repo/logs"],
+  );
+});
+
+test("resolveArgs supports --cwd=<value> and relative cwd values", () => {
+  assert.deepEqual(
+    resolveArgs(["hotkey-pick-codex", "--cwd=.", "--session", "2"], "/tmp/repo"),
+    ["hotkey-pick-codex", "--cwd=/tmp/repo", "--session", "2"],
+  );
+  assert.deepEqual(
+    resolveArgs(["hotkey-pick-codex", "--cwd", "./nested"], "/tmp/repo"),
+    ["hotkey-pick-codex", "--cwd", "/tmp/repo/nested"],
   );
 });
 

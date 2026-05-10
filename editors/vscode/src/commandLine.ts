@@ -34,11 +34,28 @@ export function resolveArgs(
   configured: string[],
   cwd: string,
 ): string[] {
-  return configured.map((arg, index, args) => {
-    if ((arg === "." || arg === "${workspaceFolder}") && args[index - 1] === "--cwd") {
+  const resolveCwdValue = (value: string): string => {
+    if (value === ".") {
       return cwd;
     }
-    return arg;
+    if (value.startsWith("./")) {
+      return path.join(cwd, value.slice(2));
+    }
+    return value;
+  };
+
+  const expandWorkspaceFolder = (value: string): string =>
+    value.split("${workspaceFolder}").join(cwd);
+
+  return configured.map((arg, index, args) => {
+    if (args[index - 1] === "--cwd") {
+      return resolveCwdValue(expandWorkspaceFolder(arg));
+    }
+    if (arg.startsWith("--cwd=")) {
+      const value = arg.slice("--cwd=".length);
+      return `--cwd=${resolveCwdValue(expandWorkspaceFolder(value))}`;
+    }
+    return expandWorkspaceFolder(arg);
   });
 }
 
@@ -79,7 +96,7 @@ export function buildTerminalCommandLine(
 
 export function quoteShellToken(value: string, shellPathOrKind = ""): string {
   const shellKind = shellKindFromPath(shellPathOrKind);
-  if (/^[A-Za-z0-9_./:\\@+=,-]+$/.test(value)) {
+  if (/^[A-Za-z0-9_./:@+=,-]+$/.test(value)) {
     return value;
   }
 
