@@ -908,6 +908,23 @@ fn current_agent_dialogue_text(choice: &AgentSessionChoice, dialogue_idx: usize)
         .unwrap_or("<empty>")
 }
 
+fn format_content_with_line_numbers(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let line_count = lines.len().max(1);
+    let width = line_count.to_string().len();
+
+    if lines.is_empty() {
+        return format!("{:>width$} | ", 1, width = width);
+    }
+
+    lines
+        .iter()
+        .enumerate()
+        .map(|(idx, line)| format!("{:>width$} | {line}", idx + 1, width = width))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn agent_dialogue_vim_view(choice: &AgentSessionChoice, dialogue_idx: usize) -> VimView {
     let text = current_agent_dialogue_text(choice, dialogue_idx).to_string();
     let end = line_count(&text).max(1);
@@ -1008,9 +1025,8 @@ fn render_agent_hierarchy_picker(title: &str, frame: &mut Frame, view: AgentHier
             );
             let dialogue_idx = selected_index(view.dialogue_state)
                 .min(choices[session_idx].dialogue_titles.len().saturating_sub(1));
-            let content = Paragraph::new(current_agent_dialogue_text(
-                &choices[session_idx],
-                dialogue_idx,
+            let content = Paragraph::new(format_content_with_line_numbers(
+                current_agent_dialogue_text(&choices[session_idx], dialogue_idx),
             ))
             .scroll((view.content_scroll as u16, 0))
             .wrap(ratatui::widgets::Wrap { trim: false })
@@ -1028,9 +1044,8 @@ fn render_agent_hierarchy_picker(title: &str, frame: &mut Frame, view: AgentHier
             );
             let dialogue_idx = selected_index(view.dialogue_state)
                 .min(choices[session_idx].dialogue_titles.len().saturating_sub(1));
-            let content = Paragraph::new(current_agent_dialogue_text(
-                &choices[session_idx],
-                dialogue_idx,
+            let content = Paragraph::new(format_content_with_line_numbers(
+                current_agent_dialogue_text(&choices[session_idx], dialogue_idx),
             ))
             .scroll((view.content_scroll as u16, 0))
             .wrap(ratatui::widgets::Wrap { trim: false })
@@ -2317,10 +2332,11 @@ mod tests {
     use super::{
         agent_dialogue_vim_view, agent_session_preview, build_agent_units, build_agent_vim_view,
         build_current_agent_session_choices, build_output_preview, can_open_dialogue_vim,
-        filter_lines_by_regex, filter_lines_by_spec, format_block, is_vim_command,
-        resolve_agent_session_selector, vim_single_quote, AgentBlock, AgentBlockKind,
-        AgentHierarchyFocus, AgentProvider, AgentSelection, AgentSession, AgentSessionChoice,
-        AgentSessionInfo, AgentSessionProvider, CommandBlock, CommandSelection, CopyMode, TextPair,
+        filter_lines_by_regex, filter_lines_by_spec, format_block,
+        format_content_with_line_numbers, is_vim_command, resolve_agent_session_selector,
+        vim_single_quote, AgentBlock, AgentBlockKind, AgentHierarchyFocus, AgentProvider,
+        AgentSelection, AgentSession, AgentSessionChoice, AgentSessionInfo, AgentSessionProvider,
+        CommandBlock, CommandSelection, CopyMode, TextPair,
     };
     use anyhow::Result;
     use std::collections::HashMap;
@@ -2768,6 +2784,29 @@ mod tests {
         assert_eq!(view.blocks[0].input_text, view.raw);
         assert_eq!(view.blocks[0].output_text, view.raw);
         assert!(view.alternate.is_none());
+    }
+
+    #[test]
+    fn format_content_with_line_numbers_adds_aligned_prefixes() {
+        let text = (1..=12)
+            .map(|idx| format!("line {idx}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let formatted = format_content_with_line_numbers(&text);
+        let lines: Vec<&str> = formatted.lines().collect();
+
+        assert_eq!(lines.len(), 12);
+        assert_eq!(lines[0], " 1 | line 1");
+        assert_eq!(lines[8], " 9 | line 9");
+        assert_eq!(lines[9], "10 | line 10");
+        assert_eq!(lines[11], "12 | line 12");
+    }
+
+    #[test]
+    fn format_content_with_line_numbers_preserves_blank_lines() {
+        let formatted = format_content_with_line_numbers("alpha\n\nomega");
+        assert_eq!(formatted, "1 | alpha\n2 | \n3 | omega");
     }
 
     #[test]
