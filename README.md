@@ -181,6 +181,43 @@ Alt+Y
 
 You can rebind it to `Ctrl+Y`, but that usually overrides the editor Redo shortcut.
 
+### Linux Desktop Shortcut
+
+Linux does not have a built-in cross-desktop global `sivtr` daemon. The
+recommended setup is a launcher script plus your desktop's custom shortcut.
+
+1. Create a launcher:
+
+```bash
+mkdir -p ~/.local/bin
+cat > ~/.local/bin/sivtr-pick-codex <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+export PROJECT_CWD="$HOME"
+# Optional cross-account mirror:
+# export SIVTR_CODEX_SESSION_DIRS='/srv/sivtr/root-codex/sessions:/home/<user>/codex_transfer/sessions'
+exec x-terminal-emulator -e bash -lc 'cd "$PROJECT_CWD"; exec sivtr copy codex --pick'
+EOF
+chmod +x ~/.local/bin/sivtr-pick-codex
+```
+
+2. Bind a desktop shortcut to `~/.local/bin/sivtr-pick-codex`.
+   GNOME path: `Settings -> Keyboard -> Keyboard Shortcuts -> View and
+   Customize Shortcuts -> Custom Shortcuts`.
+   KDE path: `System Settings -> Shortcuts -> Custom Shortcuts`.
+
+3. Press your chosen key chord (for example `Ctrl+Alt+Q`) to open the picker.
+
+### Other Terminal Shortcuts
+
+If you do not use desktop-level shortcuts, bind a terminal-native key to run
+the same launcher or command:
+
+- tmux: `bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex --pick"`
+- WezTerm / Kitty / Alacritty / Ghostty: bind a key to run
+  `~/.local/bin/sivtr-pick-codex`
+- one-off in any terminal: `sivtr copy codex --pick`
+
 ### Windows Global Hotkey
 
 On Windows, the hotkey daemon can open the AI session picker from anywhere:

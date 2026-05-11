@@ -177,6 +177,42 @@ Alt+Y
 
 你可以改成 `Ctrl+Y`，但它通常会覆盖编辑器的 Redo。
 
+### Linux 桌面快捷键
+
+Linux 没有内置的跨桌面全局 `sivtr` 守护进程。推荐做法是：先准备一个
+launcher 脚本，再把它绑定到桌面快捷键。
+
+1. 创建 launcher：
+
+```bash
+mkdir -p ~/.local/bin
+cat > ~/.local/bin/sivtr-pick-codex <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+export PROJECT_CWD="$HOME"
+# 可选：跨账号会话镜像目录
+# export SIVTR_CODEX_SESSION_DIRS='/srv/sivtr/root-codex/sessions:/home/<user>/codex_transfer/sessions'
+exec x-terminal-emulator -e bash -lc 'cd "$PROJECT_CWD"; exec sivtr copy codex --pick'
+EOF
+chmod +x ~/.local/bin/sivtr-pick-codex
+```
+
+2. 把 `~/.local/bin/sivtr-pick-codex` 绑定到桌面快捷键。
+   GNOME 路径：`设置 -> 键盘 -> 键盘快捷键 -> 查看和自定义快捷键 -> 自定义快捷键`。
+   KDE 路径：`系统设置 -> 快捷键 -> 自定义快捷键`。
+
+3. 按下你设置的组合键（例如 `Ctrl+Alt+Q`）即可打开 picker。
+
+### 其他终端快捷键
+
+如果你不使用桌面级快捷键，可以在终端里绑定原生快捷键执行同一个 launcher
+或直接执行命令：
+
+- tmux：`bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex --pick"`
+- WezTerm / Kitty / Alacritty / Ghostty：把某个按键绑定为执行
+  `~/.local/bin/sivtr-pick-codex`
+- 任意终端一次性执行：`sivtr copy codex --pick`
+
 ### Windows 全局热键
 
 Windows 上可以启动全局热键守护进程：
