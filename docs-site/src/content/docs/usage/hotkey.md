@@ -111,3 +111,17 @@ bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex --pick"
 ```bash
 sivtr copy codex --pick
 ```
+
+## macOS shortcuts
+
+This branch does not add a desktop-wide macOS `sivtr` daemon. Recommended
+macOS entry points are:
+
+- VS Code: use the extension shortcut bound to `Cmd+Alt+Y` by default.
+- Terminal / iTerm / WezTerm: bind a key to run
+  `cd <project-path> && sivtr copy codex --pick`.
+- One-off command in any terminal:
+
+```bash
+sivtr copy codex --pick
+```

@@ -176,7 +176,8 @@ Sivtr: Pick AI Session
 Default keybinding:
 
 ```text
-Alt+Y
+Alt+Y (Linux / Windows)
+Cmd+Alt+Y (macOS)
 ```
 
 You can rebind it to `Ctrl+Y`, but that usually overrides the editor Redo shortcut.
@@ -216,6 +217,16 @@ the same launcher or command:
 - tmux: `bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex --pick"`
 - WezTerm / Kitty / Alacritty / Ghostty: bind a key to run
   `~/.local/bin/sivtr-pick-codex`
+- one-off in any terminal: `sivtr copy codex --pick`
+
+### macOS Shortcuts
+
+This branch does not add a built-in macOS-wide `sivtr` daemon. The recommended
+macOS entry points are:
+
+- VS Code: use the extension shortcut bound to `Cmd+Alt+Y` by default.
+- Terminal / iTerm / WezTerm: bind a key to run
+  `cd <project-path> && sivtr copy codex --pick`.
 - one-off in any terminal: `sivtr copy codex --pick`
 
 ### Windows Global Hotkey

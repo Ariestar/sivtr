@@ -172,7 +172,8 @@ Sivtr: Pick AI Session
 默认快捷键：
 
 ```text
-Alt+Y
+Alt+Y（Linux / Windows）
+Cmd+Alt+Y（macOS）
 ```
 
 你可以改成 `Ctrl+Y`，但它通常会覆盖编辑器的 Redo。
@@ -211,6 +212,15 @@ chmod +x ~/.local/bin/sivtr-pick-codex
 - tmux：`bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex --pick"`
 - WezTerm / Kitty / Alacritty / Ghostty：把某个按键绑定为执行
   `~/.local/bin/sivtr-pick-codex`
+- 任意终端一次性执行：`sivtr copy codex --pick`
+
+### macOS 快捷方式
+
+这个分支没有新增 macOS 桌面级全局 `sivtr` 守护进程。推荐的 macOS 入口是：
+
+- VS Code：使用插件默认绑定的 `Cmd+Alt+Y`。
+- Terminal / iTerm / WezTerm：给某个按键绑定
+  `cd <project-path> && sivtr copy codex --pick`。
 - 任意终端一次性执行：`sivtr copy codex --pick`
 
 ### Windows 全局热键

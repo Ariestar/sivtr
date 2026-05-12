@@ -106,3 +106,16 @@ bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex --pick"
 ```bash
 sivtr copy codex --pick
 ```
+
+## macOS 快捷方式
+
+这个分支没有新增 macOS 桌面级 `sivtr` 守护进程。推荐的 macOS 入口是：
+
+- VS Code：使用插件默认绑定的 `Cmd+Alt+Y`。
+- Terminal / iTerm / WezTerm：给某个按键绑定
+  `cd <project-path> && sivtr copy codex --pick`。
+- 任意终端一次性命令：
+
+```bash
+sivtr copy codex --pick
+```
