@@ -195,6 +195,11 @@ sivtr codex export --dest /Users/Shared/sivtr/root-codex --watch
 session_dirs = ["/Users/Shared/sivtr/root-codex/sessions"]
 ```
 
+Quick one-line checks:
+
+- export side: `rm -rf /Users/Shared/sivtr/root-codex-smoke && sivtr codex export --dest /Users/Shared/sivtr/root-codex-smoke && find /Users/Shared/sivtr/root-codex-smoke -maxdepth 2 -type f | sed -n '1,5p'`
+- read side after configuring `[codex].session_dirs`: `sivtr copy codex --pick`
+
 To mirror sessions for another local account (for example read-only sharing),
 run export watch mode from the source account:
 

@@ -194,6 +194,11 @@ sivtr codex export --dest /Users/Shared/sivtr/root-codex --watch
 session_dirs = ["/Users/Shared/sivtr/root-codex/sessions"]
 ```
 
+可直接复制的一行验证命令：
+
+- 导出侧：`rm -rf /Users/Shared/sivtr/root-codex-smoke && sivtr codex export --dest /Users/Shared/sivtr/root-codex-smoke && find /Users/Shared/sivtr/root-codex-smoke -maxdepth 2 -type f | sed -n '1,5p'`
+- 读取侧（在 `[codex].session_dirs` 配好之后）：`sivtr copy codex --pick`
+
 如果你要把会话镜像给另一个本地账号做只读访问（例如 root 导出，jacob
 读取），可以在源账号启动持续导出：
 
