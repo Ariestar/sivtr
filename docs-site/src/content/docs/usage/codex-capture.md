@@ -3,7 +3,9 @@ title: Codex Capture
 description: Copy useful blocks from the current Codex session.
 ---
 
-`sivtr copy codex` reads Codex rollout JSONL files from `~/.codex/sessions`. By default it chooses the newest session whose `cwd` matches the current working directory.
+`sivtr copy codex` reads Codex rollout JSONL files from `~/.codex/sessions`. If the current shell exports `CODEX_THREAD_ID`, `sivtr` prefers that exact local session first. Otherwise it chooses the newest local session whose `cwd` matches the current working directory.
+
+If another account publishes a read-only mirror with `sivtr codex export --dest ...`, add that mirrored `sessions` directory to `[codex].session_dirs` so explicit `--pick` browsing can read it without elevated privileges.
 
 Use `--session N` to select the Nth newest recorded session, or `--session ID` to match a session id / id prefix explicitly.
 
@@ -67,11 +69,46 @@ sivtr copy codex out --print
 sivtr copy codex --session 2 --pick
 sivtr copy codex --pick
 sivtr copy codex out --pick
+sivtr copy codex --pick  # includes mirrored session trees from [codex].session_dirs
 ```
 
 The plain CLI picker starts with the session list, then lets you choose one or more units from that session. Press `t` to open the Vim-style view. In Codex views, `T` toggles tool content when an alternate full view is available.
 
 Context-aware launchers such as the Windows hotkey and VS Code extension first open the newest non-empty session for the current workspace. If that session is missing or empty, they fall back to the session list.
+
+Shared/mirrored session trees only participate in explicit `--pick` browsing. Implicit current-session lookup stays local so another account's exported history does not override the current user's active Codex workflow.
+
+## Mirror sessions for another account
+
+Create a shared mirror from the source account:
+
+```bash
+sivtr codex export --dest /srv/sivtr/root-codex --watch
+```
+
+Then consume it from another account:
+
+```toml
+[codex]
+session_dirs = ["/srv/sivtr/root-codex/sessions"]
+```
+
+On macOS, `/Users/Shared/sivtr/root-codex` is a good shared location between
+local accounts:
+
+```bash
+sivtr codex export --dest /Users/Shared/sivtr/root-codex --watch
+```
+
+```toml
+[codex]
+session_dirs = ["/Users/Shared/sivtr/root-codex/sessions"]
+```
+
+Quick one-line checks:
+
+- export side: `rm -rf /Users/Shared/sivtr/root-codex-smoke && sivtr codex export --dest /Users/Shared/sivtr/root-codex-smoke && find /Users/Shared/sivtr/root-codex-smoke -maxdepth 2 -type f | sed -n '1,5p'`
+- read side after configuring `[codex].session_dirs`: `sivtr copy codex --pick`
 
 ## Windows hotkey
 

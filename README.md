@@ -165,6 +165,7 @@ sivtr copy codex in     # latest user message
 sivtr copy codex tool   # latest tool output
 sivtr copy codex all    # parsed session
 sivtr copy codex --session 2 --pick
+sivtr copy codex --pick # browse local and mirrored sessions
 sivtr copy codex all --max-blocks 0
 sivtr copy codex all --max-blocks 10000
 ```
@@ -177,6 +178,46 @@ Quick one-line checks:
 Progress commentary is filtered by default, so `sivtr copy codex out` returns the final assistant reply instead of intermediate status updates.
 
 Large Codex transcripts are capped to the latest `10000` parsed blocks by default for robustness. Set `[codex].max_blocks = 0` in config or pass `--max-blocks 0` for a full import.
+
+Mirror the current account's sessions into a shared tree:
+
+```bash
+sivtr codex export --dest /srv/sivtr/root-codex --watch
+```
+
+Then point another account at that mirrored tree:
+
+```toml
+[codex]
+session_dirs = ["/srv/sivtr/root-codex/sessions"]
+```
+
+On macOS, a shared path under `/Users/Shared` works well for read-only access
+across local accounts:
+
+```bash
+sivtr codex export --dest /Users/Shared/sivtr/root-codex --watch
+```
+
+```toml
+[codex]
+session_dirs = ["/Users/Shared/sivtr/root-codex/sessions"]
+```
+
+Quick one-line checks:
+
+- export side: `rm -rf /Users/Shared/sivtr/root-codex-smoke && sivtr codex export --dest /Users/Shared/sivtr/root-codex-smoke && find /Users/Shared/sivtr/root-codex-smoke -maxdepth 2 -type f | sed -n '1,5p'`
+- read side after configuring `[codex].session_dirs`: `sivtr copy codex --pick`
+
+To mirror sessions for another local account (for example read-only sharing),
+run export watch mode from the source account:
+
+```bash
+sivtr codex export --dest /srv/sivtr/root-codex --watch --interval-ms 500
+```
+
+`--watch` defaults to a 1-second sync interval. Use `--interval-ms` for
+sub-second updates when you need faster session visibility.
 
 ### VS Code Shortcut
 
@@ -282,6 +323,7 @@ The default shortcut is `alt+y`.
 | `sivtr run <command>` | Execute a command, capture output, then browse it. |
 | `sivtr copy` | Copy recent command blocks. |
 | `sivtr copy codex` | Copy useful content from the current Codex session. |
+| `sivtr codex export --dest <path>` | Mirror local Codex sessions into a shared read-only tree. |
 | `sivtr diff <left> <right>` | Compare recent command blocks. |
 | `sivtr history` | List, search, and show captured output history. |
 | `sivtr config` | Manage the TOML config file. |

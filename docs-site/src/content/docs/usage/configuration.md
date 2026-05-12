@@ -36,6 +36,9 @@ max_entries = 0
 [copy]
 prompts = []
 
+[codex]
+session_dirs = []
+
 [hotkey]
 chord = "alt+y"
 ```
@@ -62,3 +65,25 @@ prompts = ["dev>", "repo $", "PS C:\\repo>"]
 ```
 
 This helps command-block parsing identify the command input lines in session logs.
+
+## Shared Codex session trees
+
+Add shared exported session trees when another account publishes a read-only copy:
+
+```toml
+[codex]
+session_dirs = ["/srv/sivtr/root-codex/sessions"]
+```
+
+Create that shared tree from the source account with:
+
+```bash
+sivtr codex export --dest /srv/sivtr/root-codex
+```
+
+On macOS, a shared path under `/Users/Shared` works well:
+
+```toml
+[codex]
+session_dirs = ["/Users/Shared/sivtr/root-codex/sessions"]
+```

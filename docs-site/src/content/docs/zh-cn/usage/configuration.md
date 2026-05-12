@@ -36,6 +36,9 @@ max_entries = 0
 [copy]
 prompts = []
 
+[codex]
+session_dirs = []
+
 [hotkey]
 chord = "alt+y"
 ```
@@ -62,3 +65,25 @@ prompts = ["dev>", "repo $", "PS C:\\repo>"]
 ```
 
 这有助于命令块解析识别会话日志里的命令输入行。
+
+## 共享 Codex 会话树
+
+当另一个账号发布了只读副本时，可以把共享导出的会话树加入配置：
+
+```toml
+[codex]
+session_dirs = ["/srv/sivtr/root-codex/sessions"]
+```
+
+源账号可以这样创建共享树：
+
+```bash
+sivtr codex export --dest /srv/sivtr/root-codex
+```
+
+在 macOS 上，推荐把共享目录放在 `/Users/Shared` 下：
+
+```toml
+[codex]
+session_dirs = ["/Users/Shared/sivtr/root-codex/sessions"]
+```

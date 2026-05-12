@@ -266,6 +266,9 @@ pub enum Commands {
     #[command(after_help = HOTKEY_AFTER_HELP)]
     Hotkey(HotkeyCommand),
 
+    /// Export local Codex session files into a shared read-only tree
+    Codex(CodexCommand),
+
     /// Clear session logs
     Clear(ClearArgs),
 
@@ -456,13 +459,17 @@ pub struct HotkeyServeArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct HotkeyPickAgentArgs {
-    /// Working directory used to resolve current AI sessions
+    /// Working directory used for launching the picker process
     #[arg(long, value_name = "PATH")]
     pub cwd: PathBuf,
 
     /// AI provider sessions to show
     #[arg(long, default_value_t = HotkeyProviderSelection::default(), value_name = "PROVIDER")]
     pub provider: HotkeyProviderSelection,
+
+    /// Restrict the picker to sessions whose cwd matches `--cwd`
+    #[arg(long, default_value_t = false)]
+    pub current_session: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -555,6 +562,41 @@ pub enum AgentCopyMode {
 
     /// Copy the whole parsed session
     All(AgentCopyArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct CodexCommand {
+    #[command(subcommand)]
+    pub action: CodexAction,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CodexAction {
+    /// Export local Codex rollout JSONL files into a target directory
+    Export(CodexExportArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct CodexExportArgs {
+    /// Destination directory that will receive a sessions/ tree copy
+    #[arg(long, value_name = "PATH")]
+    pub dest: PathBuf,
+
+    /// Keep only the newest N session files; `0` means export all
+    #[arg(long, value_name = "N", default_value_t = 0)]
+    pub limit: usize,
+
+    /// Continue mirroring local sessions into the destination tree
+    #[arg(long, default_value_t = false)]
+    pub watch: bool,
+
+    /// Seconds between sync passes when `--watch` is enabled
+    #[arg(long, value_name = "SECONDS", default_value_t = 1, requires = "watch")]
+    pub interval: u64,
+
+    /// Milliseconds between sync passes when `--watch` is enabled (overrides `--interval`)
+    #[arg(long, value_name = "MILLISECONDS", requires = "watch")]
+    pub interval_ms: Option<u64>,
 }
 
 #[cfg(test)]
@@ -781,8 +823,86 @@ mod tests {
             Some(Commands::HotkeyPickAgent(args)) => {
                 assert_eq!(args.cwd, PathBuf::from("."));
                 assert_eq!(args.provider, HotkeyProviderSelection::default());
+                assert!(!args.current_session);
             }
             _ => panic!("expected hotkey-pick-agent command"),
+        }
+    }
+
+    #[test]
+    fn hotkey_pick_agent_accepts_current_session_flag() {
+        let cli = Cli::try_parse_from([
+            "sivtr",
+            "hotkey-pick-agent",
+            "--cwd",
+            ".",
+            "--current-session",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Commands::HotkeyPickAgent(args)) => {
+                assert_eq!(args.cwd, PathBuf::from("."));
+                assert!(args.current_session);
+            }
+            _ => panic!("expected hotkey-pick-agent command"),
+        }
+    }
+
+    #[test]
+    fn codex_export_accepts_destination_and_watch_flags() {
+        let cli = Cli::try_parse_from([
+            "sivtr",
+            "codex",
+            "export",
+            "--dest",
+            "/tmp/shared-codex",
+            "--limit",
+            "5",
+            "--watch",
+            "--interval",
+            "3",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Commands::Codex(cmd)) => match cmd.action {
+                CodexAction::Export(args) => {
+                    assert_eq!(args.dest, PathBuf::from("/tmp/shared-codex"));
+                    assert_eq!(args.limit, 5);
+                    assert!(args.watch);
+                    assert_eq!(args.interval, 3);
+                    assert_eq!(args.interval_ms, None);
+                }
+            },
+            _ => panic!("expected codex export command"),
+        }
+    }
+
+    #[test]
+    fn codex_export_accepts_millisecond_interval() {
+        let cli = Cli::try_parse_from([
+            "sivtr",
+            "codex",
+            "export",
+            "--dest",
+            "/tmp/shared-codex",
+            "--watch",
+            "--interval-ms",
+            "250",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Commands::Codex(cmd)) => match cmd.action {
+                CodexAction::Export(args) => {
+                    assert_eq!(args.dest, PathBuf::from("/tmp/shared-codex"));
+                    assert!(args.watch);
+                    assert_eq!(args.interval, 1);
+                    assert_eq!(args.interval_ms, Some(250));
+                }
+            },
+            _ => panic!("expected codex export command"),
         }
     }
 

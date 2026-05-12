@@ -233,13 +233,19 @@ pub fn parse_jsonl_session(
             continue;
         }
 
-        let value: Value = serde_json::from_str(&line).with_context(|| {
-            format!(
-                "Failed to parse {provider_name} session line {} as JSON: {}",
-                idx + 1,
-                path.display()
-            )
-        })?;
+        let value: Value = match serde_json::from_str(&line) {
+            Ok(value) => value,
+            Err(error) if idx > 0 && is_trailing_partial_json_line(&error) => break,
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "Failed to parse {provider_name} session line {} as JSON: {}",
+                        idx + 1,
+                        path.display()
+                    )
+                });
+            }
+        };
         apply_event(&mut session, &value);
     }
 
@@ -339,7 +345,7 @@ pub fn pretty_json_string(text: &str) -> String {
         .unwrap_or_else(|| text.to_string())
 }
 
-fn jsonl_files(root: &Path) -> Result<Vec<PathBuf>> {
+pub fn jsonl_files(root: &Path) -> Result<Vec<PathBuf>> {
     if !root.exists() {
         return Ok(Vec::new());
     }
@@ -366,12 +372,16 @@ fn modified_time(path: &Path) -> Result<SystemTime> {
     Ok(fs::metadata(path)?.modified()?)
 }
 
-fn normalize_path_for_match(path: &Path) -> String {
+pub fn normalize_path_for_match(path: &Path) -> String {
     path.canonicalize()
         .unwrap_or_else(|_| path.to_path_buf())
         .to_string_lossy()
         .replace('/', "\\")
         .to_lowercase()
+}
+
+fn is_trailing_partial_json_line(error: &serde_json::Error) -> bool {
+    matches!(error.classify(), serde_json::error::Category::Eof)
 }
 
 pub fn select_blocks(session: &AgentSession, selection: AgentSelection) -> Vec<AgentBlock> {

@@ -25,7 +25,7 @@ use crate::tui::terminal::{init as init_tui, restore as restore_tui};
 use picker::{run_picker, run_single_picker, PickEntry};
 
 pub(crate) const PICK_CANCELLED_MESSAGE: &str = "Pick cancelled";
-const PICK_LIMIT: usize = 50;
+const COMMAND_PICK_LIMIT: usize = 50;
 const PICK_PREVIEW_LINES: usize = 8;
 
 pub(crate) fn is_pick_cancelled(error: &anyhow::Error) -> bool {
@@ -411,7 +411,6 @@ fn pick_agent_sessions_content_on_terminal(
         )?);
     }
     choices.sort_by(|a, b| b.modified.cmp(&a.modified));
-    choices.truncate(PICK_LIMIT);
 
     if choices.is_empty() {
         anyhow::bail!("No AI sessions with selectable content found");
@@ -465,7 +464,6 @@ fn build_current_agent_session_choices(
     }
 
     choices.sort_by(|a, b| b.modified.cmp(&a.modified));
-    choices.truncate(PICK_LIMIT);
     Ok(choices)
 }
 
@@ -545,7 +543,7 @@ fn build_agent_session_choices(
 ) -> Result<Vec<AgentSessionChoice>> {
     let mut choices = Vec::new();
 
-    for info in sessions.iter().take(PICK_LIMIT) {
+    for info in sessions {
         let session = source.parse_session_file(&info.path)?;
         if let Some(choice) = build_agent_session_choice(source, info, session, selection_mode) {
             choices.push(choice);
@@ -574,7 +572,6 @@ fn build_agent_session_choice(
     let dialogue_titles = units
         .iter()
         .rev()
-        .take(PICK_LIMIT)
         .map(|unit| build_text_preview(&unit.plain))
         .collect();
 
@@ -1274,7 +1271,7 @@ fn render_prompt_override(prompt: &str, command: &str) -> String {
 
 fn pick_selection(blocks: &[IndexedCommandBlock]) -> Result<CommandSelection> {
     let total = blocks.len();
-    let shown = total.min(PICK_LIMIT);
+    let shown = total.min(COMMAND_PICK_LIMIT);
     let entries: Vec<PickEntry> = blocks
         .iter()
         .rev()
@@ -1605,7 +1602,6 @@ fn build_agent_session_pick_entries(
 ) -> Result<Vec<PickEntry>> {
     sessions
         .iter()
-        .take(PICK_LIMIT)
         .enumerate()
         .map(|(idx, session)| build_agent_session_pick_entry(source, idx, session))
         .collect()
@@ -1987,7 +1983,6 @@ fn build_text_pick_entries(units: &[TextPair]) -> Vec<PickEntry> {
     units
         .iter()
         .rev()
-        .take(PICK_LIMIT)
         .enumerate()
         .map(|(offset, unit)| PickEntry {
             recent: offset + 1,
@@ -2725,7 +2720,7 @@ mod tests {
     }
 
     #[test]
-    fn current_agent_picker_limits_large_session_lists() {
+    fn current_agent_picker_does_not_truncate_large_session_lists() {
         let cwd = PathBuf::from("d:\\repo");
         let infos = (0..60)
             .map(|idx| AgentSessionInfo {
@@ -2744,9 +2739,25 @@ mod tests {
         let choices =
             build_current_agent_session_choices(&sources, &cwd, AgentSelection::LastTurn).unwrap();
 
-        assert_eq!(choices.len(), 50);
-        assert_eq!(choices[0].title, "[Codex] session-49 task  [session-]");
-        assert_eq!(choices[49].title, "[Codex] session-0 task  [session-]");
+        assert_eq!(choices.len(), 60);
+        assert_eq!(choices[0].title, "[Codex] session-59 task  [session-]");
+        assert_eq!(choices[59].title, "[Codex] session-0 task  [session-]");
+    }
+
+    #[test]
+    fn agent_text_picker_entries_include_all_units() {
+        let units = (0..75)
+            .map(|idx| TextPair {
+                plain: format!("unit {idx}"),
+                ansi: String::new(),
+            })
+            .collect::<Vec<_>>();
+
+        let entries = super::build_text_pick_entries(&units);
+
+        assert_eq!(entries.len(), 75);
+        assert_eq!(entries[0].preview, "unit 74");
+        assert_eq!(entries[74].preview, "unit 0");
     }
 
     #[test]
@@ -2809,22 +2820,6 @@ mod tests {
     fn format_content_with_line_numbers_preserves_blank_lines() {
         let formatted = format_content_with_line_numbers("alpha\n\nomega");
         assert_eq!(formatted, "1 | alpha\n2 | \n3 | omega");
-    }
-
-    #[test]
-    fn agent_text_picker_entries_respect_max_entries() {
-        let units = (0..75)
-            .map(|idx| TextPair {
-                plain: format!("unit {idx}"),
-                ansi: String::new(),
-            })
-            .collect::<Vec<_>>();
-
-        let entries = super::build_text_pick_entries(&units);
-
-        assert_eq!(entries.len(), 50);
-        assert_eq!(entries[0].preview, "unit 74");
-        assert_eq!(entries[49].preview, "unit 25");
     }
 
     #[test]

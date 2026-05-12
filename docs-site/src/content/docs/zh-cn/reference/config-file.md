@@ -32,6 +32,9 @@ max_entries = 0
 [copy]
 prompts = ["PS C:\\repo> ", "dev>"]
 
+[codex]
+session_dirs = ["/srv/sivtr/root-codex/sessions"]
+
 [hotkey]
 chord = "alt+y"
 ```
@@ -94,6 +97,19 @@ prompts = []
 | `prompts` | string array | `[]` | 检测命令行时使用的 prompt 配置或字面前缀 |
 
 `prompt_presets` 是旧字段，当前配置写入器不会序列化它。
+
+## codex
+
+```toml
+[codex]
+session_dirs = []
+```
+
+| 键 | 类型 | 默认值 | 含义 |
+| --- | --- | --- | --- |
+| `session_dirs` | string array | `[]` | 额外的导出 Codex `sessions` 目录，可供 `copy codex --pick` 浏览 |
+
+在 macOS 上，常见的共享路径可以是 `/Users/Shared/sivtr/root-codex/sessions`。
 
 ## hotkey
 

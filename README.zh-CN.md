@@ -149,7 +149,11 @@ sivtr copy out --lines 10:40
 
 ### 复用 Codex 会话
 
-`sivtr copy codex` 会读取 `~/.codex/sessions` 下的 Codex rollout JSONL 文件。如果当前 shell 正运行在活动中的 `codex` 或 `codex resume` 会话里，它会优先使用这个精确会话 id；否则会优先选择 `cwd` 与当前目录匹配的最新会话。
+`sivtr copy codex` 会读取 `~/.codex/sessions` 下的 Codex rollout JSONL 文件。如果当前 Codex shell 暴露了 `CODEX_THREAD_ID`，`sivtr` 会优先匹配这个本地精确会话；否则会优先选择 `cwd` 与当前目录匹配的最新本地会话。
+
+如果要只读共享另一个账号的 Codex 会话，推荐先把它们镜像到独立目录，再通过 `[codex].session_dirs` 读取，而不是用提权方式运行 `sivtr`。共享/镜像目录只参与 `--pick` 这类显式浏览，不会抢占当前本地会话解析。
+
+用 `--session N` 可以显式选择第 N 新的已记录会话；用 `--session ID` 可以按会话 id 或 id 前缀匹配。
 
 ```bash
 sivtr copy codex        # 最近一轮用户消息 + 助手回复
@@ -161,6 +165,7 @@ sivtr copy codex in     # 最近用户消息
 sivtr copy codex tool   # 最近工具输出
 sivtr copy codex all    # 整个解析后的会话
 sivtr copy codex --session 2 --pick
+sivtr copy codex --pick # 浏览本地和共享镜像会话
 sivtr copy codex all --max-blocks 0
 sivtr copy codex all --max-blocks 10000
 ```
@@ -168,6 +173,45 @@ sivtr copy codex all --max-blocks 10000
 默认会过滤过程性 commentary，所以 `sivtr copy codex out` 更倾向返回最终助手回复，而不是中间状态更新。
 
 为避免超大 Codex transcript 让导入或 picker 变慢，默认只保留最近 `10000` 个解析后的 block。若要全量导入，可在配置里设置 `[codex].max_blocks = 0`，或在命令行传 `--max-blocks 0`。
+
+先把当前账号的会话持续镜像成共享树：
+
+```bash
+sivtr codex export --dest /srv/sivtr/root-codex --watch
+```
+
+再让另一个账号在配置里引用镜像目录：
+
+```toml
+[codex]
+session_dirs = ["/srv/sivtr/root-codex/sessions"]
+```
+
+在 macOS 上，推荐把只读共享目录放在 `/Users/Shared` 下，便于不同本地账号读取：
+
+```bash
+sivtr codex export --dest /Users/Shared/sivtr/root-codex --watch
+```
+
+```toml
+[codex]
+session_dirs = ["/Users/Shared/sivtr/root-codex/sessions"]
+```
+
+可直接复制的一行验证命令：
+
+- 导出侧：`rm -rf /Users/Shared/sivtr/root-codex-smoke && sivtr codex export --dest /Users/Shared/sivtr/root-codex-smoke && find /Users/Shared/sivtr/root-codex-smoke -maxdepth 2 -type f | sed -n '1,5p'`
+- 读取侧（在 `[codex].session_dirs` 配好之后）：`sivtr copy codex --pick`
+
+如果你要把会话镜像给另一个本地账号做只读访问（例如 root 导出，jacob
+读取），可以在源账号启动持续导出：
+
+```bash
+sivtr codex export --dest /srv/sivtr/root-codex --watch --interval-ms 500
+```
+
+`--watch` 默认每 1 秒同步一次；需要更快可见性时可用 `--interval-ms`
+改成毫秒级同步。
 
 ### VS Code 快捷键
 
@@ -267,6 +311,7 @@ sivtr hotkey stop
 | `sivtr run <command>` | 执行命令、捕获输出并浏览。 |
 | `sivtr copy` | 复制最近命令块。 |
 | `sivtr copy codex` | 复制当前 Codex 会话中的有用内容。 |
+| `sivtr codex export --dest <path>` | 把本地 Codex 会话镜像成共享只读目录树。 |
 | `sivtr diff <left> <right>` | 对比最近命令输出。 |
 | `sivtr history` | 列出、搜索、查看输出历史。 |
 | `sivtr config` | 管理 TOML 配置。 |
