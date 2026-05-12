@@ -42,7 +42,7 @@ It is not a terminal emulator and not a multiplexer. It is a companion tool for 
 - Pipe any command into a searchable, selectable output viewer.
 - Record shell command blocks and copy recent inputs, outputs, or bare commands.
 - Read Codex session JSONL files and copy useful user, assistant, or tool blocks.
-- Open a Codex picker from VS Code with one shortcut.
+- Open an AI session picker from VS Code with one shortcut.
 - Filter copied text with regex and line ranges.
 - Keep a local SQLite history for later search.
 - Compare recent command outputs while iterating on tests and builds.
@@ -69,7 +69,7 @@ Install the VS Code bridge from the Marketplace:
 ariestar.sivtr-vscode
 ```
 
-The extension launches the Codex picker from the current workspace. If the `sivtr` CLI is missing, it offers to run `cargo install sivtr` in a visible terminal.
+The extension launches the AI session picker from the current workspace. If the `sivtr` CLI is missing, it offers to run `cargo install sivtr` in a visible terminal.
 
 ## Quick Start
 
@@ -174,7 +174,7 @@ Large Codex transcripts are capped to the latest `10000` parsed blocks by defaul
 The VS Code extension contributes:
 
 ```text
-Sivtr: Pick Codex Turn
+Sivtr: Pick AI Session
 ```
 
 Default keybinding:
@@ -254,7 +254,7 @@ Quick one-line checks:
 
 ### Windows Global Hotkey
 
-On Windows, the hotkey daemon can open the Codex picker from anywhere:
+On Windows, the hotkey daemon can open the AI session picker from anywhere:
 
 ```bash
 sivtr hotkey start
@@ -277,7 +277,7 @@ The default shortcut is `alt+y`.
 | `sivtr config` | Manage the TOML config file. |
 | `sivtr init <shell>` | Generate shell integration for command-block capture. |
 | `sivtr import` | Open the current session log. |
-| `sivtr hotkey` | Manage the Windows Codex picker hotkey. |
+| `sivtr hotkey` | Manage the Windows AI session picker hotkey. |
 | `sivtr clear` | Clear session logs. |
 
 ## TUI Keys
@@ -329,7 +329,7 @@ sivtr/
 |- crates/sivtr-core/    # Capture, parsing, buffers, selection, search, history, export
 |- src/                  # CLI, TUI, commands, hotkey integration
 |- docs-site/            # Astro/Starlight documentation site
-|- editors/vscode/       # VS Code extension bridge for the Codex picker
+|- editors/vscode/       # VS Code extension bridge for the AI session picker
 `- .github/workflows/    # CI and release automation
 ```
 
