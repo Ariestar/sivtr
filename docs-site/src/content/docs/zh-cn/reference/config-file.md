@@ -109,6 +109,8 @@ session_dirs = []
 | --- | --- | --- | --- |
 | `session_dirs` | string array | `[]` | 额外的导出 Codex `sessions` 目录，可供 `copy codex --pick` 浏览 |
 
+在 macOS 上，常见的共享路径可以是 `/Users/Shared/sivtr/root-codex/sessions`。
+
 ## hotkey
 
 ```toml

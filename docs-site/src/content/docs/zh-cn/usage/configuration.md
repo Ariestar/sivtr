@@ -80,3 +80,10 @@ session_dirs = ["/srv/sivtr/root-codex/sessions"]
 ```bash
 sivtr codex export --dest /srv/sivtr/root-codex
 ```
+
+在 macOS 上，推荐把共享目录放在 `/Users/Shared` 下：
+
+```toml
+[codex]
+session_dirs = ["/Users/Shared/sivtr/root-codex/sessions"]
+```

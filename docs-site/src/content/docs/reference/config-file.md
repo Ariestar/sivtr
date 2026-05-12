@@ -109,6 +109,8 @@ session_dirs = []
 | --- | --- | --- | --- |
 | `session_dirs` | string array | `[]` | Extra exported Codex `sessions` directories to browse with `copy codex --pick` |
 
+On macOS, a typical shared path is `/Users/Shared/sivtr/root-codex/sessions`.
+
 ## hotkey
 
 ```toml

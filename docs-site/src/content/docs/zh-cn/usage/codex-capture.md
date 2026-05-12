@@ -93,6 +93,18 @@ sivtr codex export --dest /srv/sivtr/root-codex --watch
 session_dirs = ["/srv/sivtr/root-codex/sessions"]
 ```
 
+在 macOS 上，`/Users/Shared/sivtr/root-codex` 很适合作为不同本地账号之间
+共享的只读目录：
+
+```bash
+sivtr codex export --dest /Users/Shared/sivtr/root-codex --watch
+```
+
+```toml
+[codex]
+session_dirs = ["/Users/Shared/sivtr/root-codex/sessions"]
+```
+
 ## Windows 热键
 
 在 Windows 上，热键守护进程会为启动它的项目目录打开 Codex 选择器：

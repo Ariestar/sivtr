@@ -93,6 +93,18 @@ Then consume it from another account:
 session_dirs = ["/srv/sivtr/root-codex/sessions"]
 ```
 
+On macOS, `/Users/Shared/sivtr/root-codex` is a good shared location between
+local accounts:
+
+```bash
+sivtr codex export --dest /Users/Shared/sivtr/root-codex --watch
+```
+
+```toml
+[codex]
+session_dirs = ["/Users/Shared/sivtr/root-codex/sessions"]
+```
+
 ## Windows hotkey
 
 On Windows, the hotkey daemon opens the AI session picker for the project directory where it was started:

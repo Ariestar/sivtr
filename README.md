@@ -183,6 +183,18 @@ Then point another account at that mirrored tree:
 session_dirs = ["/srv/sivtr/root-codex/sessions"]
 ```
 
+On macOS, a shared path under `/Users/Shared` works well for read-only access
+across local accounts:
+
+```bash
+sivtr codex export --dest /Users/Shared/sivtr/root-codex --watch
+```
+
+```toml
+[codex]
+session_dirs = ["/Users/Shared/sivtr/root-codex/sessions"]
+```
+
 To mirror sessions for another local account (for example read-only sharing),
 run export watch mode from the source account:
 

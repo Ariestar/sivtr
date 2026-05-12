@@ -183,6 +183,17 @@ sivtr codex export --dest /srv/sivtr/root-codex --watch
 session_dirs = ["/srv/sivtr/root-codex/sessions"]
 ```
 
+在 macOS 上，推荐把只读共享目录放在 `/Users/Shared` 下，便于不同本地账号读取：
+
+```bash
+sivtr codex export --dest /Users/Shared/sivtr/root-codex --watch
+```
+
+```toml
+[codex]
+session_dirs = ["/Users/Shared/sivtr/root-codex/sessions"]
+```
+
 如果你要把会话镜像给另一个本地账号做只读访问（例如 root 导出，jacob
 读取），可以在源账号启动持续导出：
 

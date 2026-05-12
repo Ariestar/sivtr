@@ -80,3 +80,10 @@ Create that shared tree from the source account with:
 ```bash
 sivtr codex export --dest /srv/sivtr/root-codex
 ```
+
+On macOS, a shared path under `/Users/Shared` works well:
+
+```toml
+[codex]
+session_dirs = ["/Users/Shared/sivtr/root-codex/sessions"]
+```
