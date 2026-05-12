@@ -18,6 +18,7 @@ pub fn execute(clear_all: bool) -> Result<()> {
 
     let log = scrollback::session_log_path();
     let state = scrollback::flush_state_path();
+    let capture = scrollback::capture_file_path();
 
     let mut cleared = false;
 
@@ -25,7 +26,7 @@ pub fn execute(clear_all: bool) -> Result<()> {
         fs::remove_file(&log)?;
         cleared = true;
     }
-    for f in [&state] {
+    for f in [&state, &capture] {
         if f.exists() {
             let _ = fs::remove_file(f);
         }
@@ -81,7 +82,8 @@ fn is_session_artifact(path: &Path) -> bool {
     };
 
     (name == "session.log" || name == "session.state")
-        || (name.starts_with("session_") && (name.ends_with(".log") || name.ends_with(".state")))
+        || (name.starts_with("session_")
+            && (name.ends_with(".log") || name.ends_with(".state") || name.ends_with(".capture")))
 }
 
 #[cfg(test)]
@@ -95,6 +97,7 @@ mod tests {
         assert!(is_session_artifact(Path::new("session.state")));
         assert!(is_session_artifact(Path::new("session_1234.log")));
         assert!(is_session_artifact(Path::new("session_1234.state")));
+        assert!(is_session_artifact(Path::new("session_1234.capture")));
         assert!(!is_session_artifact(Path::new("config.toml")));
         assert!(!is_session_artifact(Path::new("history.db")));
     }

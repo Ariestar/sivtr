@@ -32,6 +32,9 @@ max_entries = 0
 [copy]
 prompts = ["PS C:\\repo> ", "dev>"]
 
+[codex]
+session_dirs = ["/srv/sivtr/root-codex/sessions"]
+
 [hotkey]
 chord = "alt+y"
 ```
@@ -94,6 +97,19 @@ prompts = []
 | `prompts` | string array | `[]` | Prompt profiles or literal prefixes used when detecting command lines |
 
 `prompt_presets` is a legacy field and is not serialized by the current config writer.
+
+## codex
+
+```toml
+[codex]
+session_dirs = []
+```
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `session_dirs` | string array | `[]` | Extra exported Codex `sessions` directories to browse with `copy codex --pick` |
+
+On macOS, a typical shared path is `/Users/Shared/sivtr/root-codex/sessions`.
 
 ## hotkey
 

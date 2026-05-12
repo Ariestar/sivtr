@@ -25,7 +25,7 @@ use crate::tui::terminal::{init as init_tui, restore as restore_tui};
 use picker::{run_picker, run_single_picker, PickEntry};
 
 pub(crate) const PICK_CANCELLED_MESSAGE: &str = "Pick cancelled";
-const PICK_LIMIT: usize = 50;
+const COMMAND_PICK_LIMIT: usize = 50;
 const PICK_PREVIEW_LINES: usize = 8;
 
 pub(crate) fn is_pick_cancelled(error: &anyhow::Error) -> bool {
@@ -274,6 +274,7 @@ pub fn execute_agent(request: AgentCopyRequest<'_>) -> Result<()> {
             source.as_ref(),
             request.session_selector,
             request.pick_current_session,
+            request.selection_mode,
         )?
     };
     let session = source.parse_session_file(&path)?;
@@ -410,7 +411,6 @@ fn pick_agent_sessions_content_on_terminal(
         )?);
     }
     choices.sort_by(|a, b| b.modified.cmp(&a.modified));
-    choices.truncate(PICK_LIMIT);
 
     if choices.is_empty() {
         anyhow::bail!("No AI sessions with selectable content found");
@@ -464,7 +464,6 @@ fn build_current_agent_session_choices(
     }
 
     choices.sort_by(|a, b| b.modified.cmp(&a.modified));
-    choices.truncate(PICK_LIMIT);
     Ok(choices)
 }
 
@@ -544,7 +543,7 @@ fn build_agent_session_choices(
 ) -> Result<Vec<AgentSessionChoice>> {
     let mut choices = Vec::new();
 
-    for info in sessions.iter().take(PICK_LIMIT) {
+    for info in sessions {
         let session = source.parse_session_file(&info.path)?;
         if let Some(choice) = build_agent_session_choice(source, info, session, selection_mode) {
             choices.push(choice);
@@ -569,7 +568,6 @@ fn build_agent_session_choice(
     let dialogue_titles = units
         .iter()
         .rev()
-        .take(PICK_LIMIT)
         .map(|unit| build_text_preview(&unit.plain))
         .collect();
 
@@ -795,6 +793,12 @@ fn run_agent_hierarchy_picker_on_terminal(
                     let select_all = selected_dialogues.iter().any(|selected| !selected);
                     selected_dialogues.fill(select_all);
                 }
+                KeyCode::Char('t') if can_open_dialogue_vim(focus, dialogue_count) => {
+                    let view = agent_dialogue_vim_view(&choices[session_idx], dialogue_idx);
+                    restore_tui(terminal)?;
+                    open_vim_view(&view)?;
+                    *terminal = init_tui()?;
+                }
                 KeyCode::Enter => match focus {
                     AgentHierarchyFocus::Agents => {
                         focus = AgentHierarchyFocus::Sessions;
@@ -875,6 +879,16 @@ fn selected_index(state: &ListState) -> usize {
     state.selected().unwrap_or(0)
 }
 
+fn can_open_dialogue_vim(focus: AgentHierarchyFocus, dialogue_count: usize) -> bool {
+    dialogue_count > 0
+        && matches!(
+            focus,
+            AgentHierarchyFocus::Sessions
+                | AgentHierarchyFocus::Dialogues
+                | AgentHierarchyFocus::Content
+        )
+}
+
 fn current_agent_dialogue_text(choice: &AgentSessionChoice, dialogue_idx: usize) -> &str {
     let total = choice.units.len();
     if total == 0 {
@@ -888,6 +902,44 @@ fn current_agent_dialogue_text(choice: &AgentSessionChoice, dialogue_idx: usize)
         .unwrap_or("<empty>")
 }
 
+fn format_content_with_line_numbers(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let line_count = lines.len().max(1);
+    let width = line_count.to_string().len();
+
+    if lines.is_empty() {
+        return format!("{:>width$} | ", 1, width = width);
+    }
+
+    lines
+        .iter()
+        .enumerate()
+        .map(|(idx, line)| format!("{:>width$} | {line}", idx + 1, width = width))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn agent_dialogue_vim_view(choice: &AgentSessionChoice, dialogue_idx: usize) -> VimView {
+    let text = current_agent_dialogue_text(choice, dialogue_idx).to_string();
+    let end = line_count(&text).max(1);
+    VimView {
+        blocks: vec![VimBlock {
+            start: 1,
+            end,
+            input_start: 1,
+            input_end: end,
+            output_start: 1,
+            output_end: end,
+            block_text: text.clone(),
+            input_text: text.clone(),
+            output_text: text.clone(),
+            command_text: String::new(),
+        }],
+        alternate: None,
+        raw: text,
+    }
+}
+
 fn render_agent_hierarchy_picker(title: &str, frame: &mut Frame, view: AgentHierarchyView<'_>) {
     let area = frame.area();
     frame.render_widget(Clear, area);
@@ -899,12 +951,14 @@ fn render_agent_hierarchy_picker(title: &str, frame: &mut Frame, view: AgentHier
 
     let controls = match view.focus {
         AgentHierarchyFocus::Agents => "j/k move  l/Right/Enter open sessions  q/Esc cancel",
-        AgentHierarchyFocus::Sessions => "j/k move  l/Right/Enter open dialogues  q/Esc cancel",
+        AgentHierarchyFocus::Sessions => {
+            "j/k move  l/Right/Enter open dialogues  t open-vim  q/Esc cancel"
+        }
         AgentHierarchyFocus::Dialogues => {
-            "j/k move  Space toggle  a toggle-all  h/Left/Esc back  Enter copy  q cancel"
+            "j/k move  Space toggle  a toggle-all  t open-vim  h/Left/Esc back  Enter copy  q cancel"
         }
         AgentHierarchyFocus::Content => {
-            "j/k scroll  Ctrl-d/PageDown down  Ctrl-u/PageUp up  h/Left/Esc back  Enter copy  q cancel"
+            "j/k scroll  Ctrl-d/PageDown down  Ctrl-u/PageUp up  t open-vim  h/Left/Esc back  Enter copy  q cancel"
         }
     };
     let agent_idx = selected_index(view.agent_state).min(view.groups.len().saturating_sub(1));
@@ -965,9 +1019,8 @@ fn render_agent_hierarchy_picker(title: &str, frame: &mut Frame, view: AgentHier
             );
             let dialogue_idx = selected_index(view.dialogue_state)
                 .min(choices[session_idx].dialogue_titles.len().saturating_sub(1));
-            let content = Paragraph::new(current_agent_dialogue_text(
-                &choices[session_idx],
-                dialogue_idx,
+            let content = Paragraph::new(format_content_with_line_numbers(
+                current_agent_dialogue_text(&choices[session_idx], dialogue_idx),
             ))
             .scroll((view.content_scroll as u16, 0))
             .wrap(ratatui::widgets::Wrap { trim: false })
@@ -985,9 +1038,8 @@ fn render_agent_hierarchy_picker(title: &str, frame: &mut Frame, view: AgentHier
             );
             let dialogue_idx = selected_index(view.dialogue_state)
                 .min(choices[session_idx].dialogue_titles.len().saturating_sub(1));
-            let content = Paragraph::new(current_agent_dialogue_text(
-                &choices[session_idx],
-                dialogue_idx,
+            let content = Paragraph::new(format_content_with_line_numbers(
+                current_agent_dialogue_text(&choices[session_idx], dialogue_idx),
             ))
             .scroll((view.content_scroll as u16, 0))
             .wrap(ratatui::widgets::Wrap { trim: false })
@@ -1215,7 +1267,7 @@ fn render_prompt_override(prompt: &str, command: &str) -> String {
 
 fn pick_selection(blocks: &[IndexedCommandBlock]) -> Result<CommandSelection> {
     let total = blocks.len();
-    let shown = total.min(PICK_LIMIT);
+    let shown = total.min(COMMAND_PICK_LIMIT);
     let entries: Vec<PickEntry> = blocks
         .iter()
         .rev()
@@ -1334,10 +1386,7 @@ fn finish_copy(text: String, print_full: bool, success_message: String) -> Resul
         return Ok(());
     }
 
-    arboard::Clipboard::new()
-        .context("Failed to open clipboard")?
-        .set_text(&text)
-        .context("Failed to set clipboard")?;
+    sivtr_core::export::clipboard::copy_to_clipboard(&text)?;
 
     if print_full {
         for line in text.lines() {
@@ -1353,11 +1402,11 @@ fn resolve_agent_session_path(
     source: &dyn AgentSessionProvider,
     session_selector: Option<&str>,
     pick_current_session: bool,
+    selection_mode: AgentSelection,
 ) -> Result<std::path::PathBuf> {
     if let Some(selector) = session_selector {
-        return resolve_explicit_agent_session_path(source, selector);
+        return resolve_explicit_agent_session_path(source, selector, selection_mode);
     }
-
     let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
     if pick_current_session {
         return resolve_current_agent_pick_session_path(source, &cwd);
@@ -1371,15 +1420,17 @@ fn resolve_agent_session_path(
 fn resolve_explicit_agent_session_path(
     source: &dyn AgentSessionProvider,
     selector: &str,
+    selection_mode: AgentSelection,
 ) -> Result<std::path::PathBuf> {
     let sessions = source.list_recent_sessions(None)?;
-    resolve_agent_session_selector(source, &sessions, selector)
+    resolve_agent_session_selector(source, &sessions, selector, selection_mode)
 }
 
 fn resolve_agent_session_selector(
     source: &dyn AgentSessionProvider,
     sessions: &[AgentSessionInfo],
     selector: &str,
+    selection_mode: AgentSelection,
 ) -> Result<std::path::PathBuf> {
     let selector = selector.trim();
     if selector.is_empty() {
@@ -1395,8 +1446,11 @@ fn resolve_agent_session_selector(
                 "Session selectors are 1-based. Use `--session 1` for the newest session."
             );
         }
-        if recent <= sessions.len() && !selector.starts_with('0') {
-            return Ok(sessions[recent - 1].path.clone());
+        if !selector.starts_with('0') {
+            let selectable = selectable_agent_sessions(source, sessions, selection_mode)?;
+            if recent <= selectable.len() {
+                return Ok(selectable[recent - 1].path.clone());
+            }
         }
     }
 
@@ -1410,6 +1464,24 @@ fn resolve_agent_session_selector(
                 source.provider().name()
             )
         })
+}
+
+fn selectable_agent_sessions(
+    source: &dyn AgentSessionProvider,
+    sessions: &[AgentSessionInfo],
+    selection_mode: AgentSelection,
+) -> Result<Vec<AgentSessionInfo>> {
+    let mut selectable = Vec::new();
+
+    for info in sessions {
+        let session = source.parse_session_file(&info.path)?;
+        if session.blocks.is_empty() || build_agent_units(&session, selection_mode).is_empty() {
+            continue;
+        }
+        selectable.push(info.clone());
+    }
+
+    Ok(selectable)
 }
 
 fn agent_session_matches_selector(session: &AgentSessionInfo, selector: &str) -> bool {
@@ -1526,7 +1598,6 @@ fn build_agent_session_pick_entries(
 ) -> Result<Vec<PickEntry>> {
     sessions
         .iter()
-        .take(PICK_LIMIT)
         .enumerate()
         .map(|(idx, session)| build_agent_session_pick_entry(source, idx, session))
         .collect()
@@ -1908,7 +1979,6 @@ fn build_text_pick_entries(units: &[TextPair]) -> Vec<PickEntry> {
     units
         .iter()
         .rev()
-        .take(PICK_LIMIT)
         .enumerate()
         .map(|(offset, unit)| PickEntry {
             recent: offset + 1,
@@ -2253,13 +2323,16 @@ fn build_text_preview_lines(text: &str) -> String {
 mod tests {
     use super::picker::{apply_range_toggle, selection_from_entries, PickEntry};
     use super::{
-        agent_session_preview, build_agent_units, build_agent_vim_view,
-        build_current_agent_session_choices, build_output_preview, filter_lines_by_regex,
-        filter_lines_by_spec, format_block, is_vim_command, resolve_agent_session_selector,
-        vim_single_quote, AgentBlock, AgentBlockKind, AgentProvider, AgentSelection, AgentSession,
-        AgentSessionInfo, AgentSessionProvider, CommandBlock, CommandSelection, CopyMode, TextPair,
+        agent_dialogue_vim_view, agent_session_preview, build_agent_units, build_agent_vim_view,
+        build_current_agent_session_choices, build_output_preview, can_open_dialogue_vim,
+        filter_lines_by_regex, filter_lines_by_spec, format_block,
+        format_content_with_line_numbers, is_vim_command, resolve_agent_session_selector,
+        vim_single_quote, AgentBlock, AgentBlockKind, AgentHierarchyFocus, AgentProvider,
+        AgentSelection, AgentSession, AgentSessionChoice, AgentSessionInfo, AgentSessionProvider,
+        CommandBlock, CommandSelection, CopyMode, TextPair,
     };
     use anyhow::Result;
+    use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime};
 
@@ -2643,6 +2716,109 @@ mod tests {
     }
 
     #[test]
+    fn current_agent_picker_does_not_truncate_large_session_lists() {
+        let cwd = PathBuf::from("d:\\repo");
+        let infos = (0..60)
+            .map(|idx| AgentSessionInfo {
+                path: PathBuf::from(format!("session-{idx}.jsonl")),
+                id: Some(format!("s{idx}")),
+                cwd: Some(cwd.display().to_string()),
+                modified: SystemTime::UNIX_EPOCH + Duration::from_secs((idx + 1) as u64),
+            })
+            .collect();
+        let source = FakeAgentSource {
+            require_cwd: true,
+            infos,
+        };
+        let sources: Vec<Box<dyn AgentSessionProvider>> = vec![Box::new(source)];
+
+        let choices =
+            build_current_agent_session_choices(&sources, &cwd, AgentSelection::LastTurn).unwrap();
+
+        assert_eq!(choices.len(), 60);
+        assert_eq!(choices[0].title, "session-59 task  [session-]");
+        assert_eq!(choices[59].title, "session-0 task  [session-]");
+    }
+
+    #[test]
+    fn agent_text_picker_entries_include_all_units() {
+        let units = (0..75)
+            .map(|idx| TextPair {
+                plain: format!("unit {idx}"),
+                ansi: String::new(),
+            })
+            .collect::<Vec<_>>();
+
+        let entries = super::build_text_pick_entries(&units);
+
+        assert_eq!(entries.len(), 75);
+        assert_eq!(entries[0].preview, "unit 74");
+        assert_eq!(entries[74].preview, "unit 0");
+    }
+
+    #[test]
+    fn can_open_dialogue_vim_accepts_sessions_when_dialogues_exist() {
+        assert!(!can_open_dialogue_vim(AgentHierarchyFocus::Agents, 1));
+        assert!(can_open_dialogue_vim(AgentHierarchyFocus::Sessions, 1));
+        assert!(can_open_dialogue_vim(AgentHierarchyFocus::Dialogues, 1));
+        assert!(can_open_dialogue_vim(AgentHierarchyFocus::Content, 1));
+        assert!(!can_open_dialogue_vim(AgentHierarchyFocus::Sessions, 0));
+    }
+
+    #[test]
+    fn agent_dialogue_vim_view_tracks_exact_dialogue_lines() {
+        let choice = AgentSessionChoice {
+            provider: AgentProvider::Codex,
+            modified: SystemTime::UNIX_EPOCH,
+            title: "session".to_string(),
+            units: vec![
+                TextPair {
+                    plain: "older dialogue".to_string(),
+                    ansi: "older dialogue".to_string(),
+                },
+                TextPair {
+                    plain: "line1\nline2\nline3\nline4".to_string(),
+                    ansi: "line1\nline2\nline3\nline4".to_string(),
+                },
+            ],
+            dialogue_titles: vec!["line1".to_string(), "older dialogue".to_string()],
+        };
+
+        let view = agent_dialogue_vim_view(&choice, 0);
+        assert_eq!(view.raw, "line1\nline2\nline3\nline4");
+        assert_eq!(view.blocks.len(), 1);
+        assert_eq!(view.blocks[0].start, 1);
+        assert_eq!(view.blocks[0].end, 4);
+        assert_eq!(view.blocks[0].block_text, view.raw);
+        assert_eq!(view.blocks[0].input_text, view.raw);
+        assert_eq!(view.blocks[0].output_text, view.raw);
+        assert!(view.alternate.is_none());
+    }
+
+    #[test]
+    fn format_content_with_line_numbers_adds_aligned_prefixes() {
+        let text = (1..=12)
+            .map(|idx| format!("line {idx}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let formatted = format_content_with_line_numbers(&text);
+        let lines: Vec<&str> = formatted.lines().collect();
+
+        assert_eq!(lines.len(), 12);
+        assert_eq!(lines[0], " 1 | line 1");
+        assert_eq!(lines[8], " 9 | line 9");
+        assert_eq!(lines[9], "10 | line 10");
+        assert_eq!(lines[11], "12 | line 12");
+    }
+
+    #[test]
+    fn format_content_with_line_numbers_preserves_blank_lines() {
+        let formatted = format_content_with_line_numbers("alpha\n\nomega");
+        assert_eq!(formatted, "1 | alpha\n2 | \n3 | omega");
+    }
+
+    #[test]
     fn resolves_agent_session_selector_by_recent_index() {
         let source = FakeAgentSource {
             require_cwd: false,
@@ -2662,9 +2838,75 @@ mod tests {
             ],
         };
 
-        let path = resolve_agent_session_selector(&source, &source.infos, "2").unwrap();
+        let path =
+            resolve_agent_session_selector(&source, &source.infos, "2", AgentSelection::LastTurn)
+                .unwrap();
 
         assert_eq!(path, PathBuf::from("old.jsonl"));
+    }
+
+    #[test]
+    fn resolves_agent_session_selector_index_uses_selectable_sessions() {
+        let source = SparseSelectableSource {
+            infos: vec![
+                AgentSessionInfo {
+                    path: PathBuf::from("new-empty.jsonl"),
+                    id: Some("new-empty".to_string()),
+                    cwd: Some("d:\\repo".to_string()),
+                    modified: SystemTime::UNIX_EPOCH + Duration::from_secs(2),
+                },
+                AgentSessionInfo {
+                    path: PathBuf::from("older-valid.jsonl"),
+                    id: Some("older-valid".to_string()),
+                    cwd: Some("d:\\repo".to_string()),
+                    modified: SystemTime::UNIX_EPOCH + Duration::from_secs(1),
+                },
+            ],
+            sessions: HashMap::from([
+                (
+                    PathBuf::from("new-empty.jsonl"),
+                    AgentSession {
+                        path: PathBuf::from("new-empty.jsonl"),
+                        id: Some("new-empty".to_string()),
+                        cwd: Some("d:\\repo".to_string()),
+                        blocks: vec![AgentBlock {
+                            kind: AgentBlockKind::ToolOutput,
+                            timestamp: None,
+                            label: Some("Bash".to_string()),
+                            text: "tool-only entry".to_string(),
+                        }],
+                    },
+                ),
+                (
+                    PathBuf::from("older-valid.jsonl"),
+                    AgentSession {
+                        path: PathBuf::from("older-valid.jsonl"),
+                        id: Some("older-valid".to_string()),
+                        cwd: Some("d:\\repo".to_string()),
+                        blocks: vec![
+                            AgentBlock {
+                                kind: AgentBlockKind::User,
+                                timestamp: None,
+                                label: None,
+                                text: "question".to_string(),
+                            },
+                            AgentBlock {
+                                kind: AgentBlockKind::Assistant,
+                                timestamp: None,
+                                label: None,
+                                text: "answer".to_string(),
+                            },
+                        ],
+                    },
+                ),
+            ]),
+        };
+
+        let path =
+            resolve_agent_session_selector(&source, &source.infos, "1", AgentSelection::LastTurn)
+                .unwrap();
+
+        assert_eq!(path, PathBuf::from("older-valid.jsonl"));
     }
 
     #[test]
@@ -2679,7 +2921,13 @@ mod tests {
             }],
         };
 
-        let path = resolve_agent_session_selector(&source, &source.infos, "019df7fb").unwrap();
+        let path = resolve_agent_session_selector(
+            &source,
+            &source.infos,
+            "019df7fb",
+            AgentSelection::LastTurn,
+        )
+        .unwrap();
 
         assert_eq!(path, PathBuf::from("rollout-019df7fb.jsonl"));
     }
@@ -2696,7 +2944,9 @@ mod tests {
             }],
         };
 
-        let error = resolve_agent_session_selector(&source, &source.infos, "0").unwrap_err();
+        let error =
+            resolve_agent_session_selector(&source, &source.infos, "0", AgentSelection::LastTurn)
+                .unwrap_err();
 
         assert!(
             error.to_string().contains("Session selectors are 1-based"),
@@ -2745,6 +2995,28 @@ mod tests {
                     },
                 ],
             })
+        }
+    }
+
+    struct SparseSelectableSource {
+        infos: Vec<AgentSessionInfo>,
+        sessions: HashMap<PathBuf, AgentSession>,
+    }
+
+    impl AgentSessionProvider for SparseSelectableSource {
+        fn provider(&self) -> AgentProvider {
+            AgentProvider::Codex
+        }
+
+        fn list_recent_sessions(&self, _cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
+            Ok(self.infos.clone())
+        }
+
+        fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
+            self.sessions
+                .get(path)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("missing session fixture: {}", path.display()))
         }
     }
 

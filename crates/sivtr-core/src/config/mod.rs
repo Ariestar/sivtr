@@ -16,6 +16,8 @@ pub struct SivtrConfig {
     pub history: HistoryConfig,
     /// Copy command settings.
     pub copy: CopyConfig,
+    /// Codex session settings.
+    pub codex: CodexConfig,
     /// Global hotkey settings.
     pub hotkey: HotkeyConfig,
 }
@@ -77,6 +79,14 @@ impl CopyConfig {
     pub fn prompt_values(&self) -> impl Iterator<Item = &String> {
         self.legacy_prompt_presets.iter().chain(self.prompts.iter())
     }
+}
+
+/// Codex session configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CodexConfig {
+    /// Additional directories that contain exported Codex session JSONL trees.
+    pub session_dirs: Vec<PathBuf>,
 }
 
 /// Global hotkey configuration.
@@ -218,5 +228,21 @@ mod tests {
 
         assert!(toml.contains("[hotkey]"));
         assert!(toml.contains("chord = \"alt+y\""));
+    }
+
+    #[test]
+    fn serializes_codex_config() {
+        let config = SivtrConfig {
+            codex: CodexConfig {
+                session_dirs: vec![PathBuf::from("/srv/sivtr/root-codex/sessions")],
+            },
+            ..SivtrConfig::default()
+        };
+
+        let toml = to_toml_string(&config).unwrap();
+
+        assert!(toml.contains("[codex]"));
+        assert!(toml.contains("session_dirs = ["));
+        assert!(toml.contains("/srv/sivtr/root-codex/sessions"));
     }
 }

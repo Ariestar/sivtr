@@ -62,6 +62,9 @@ sivtr init <SHELL>
 - `zsh`
 - `nushell`
 - `nu`
+- `tmux`
+- `linux-shortcut`
+- `macos-shortcut`
 
 ## copy
 

@@ -1286,6 +1286,7 @@ dependencies = [
  "serde_json",
  "similar",
  "sivtr-core",
+ "tempfile",
  "tokio",
  "winapi",
 ]
