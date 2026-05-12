@@ -225,7 +225,7 @@ sub-second updates when you need faster session visibility.
 The VS Code extension contributes:
 
 ```text
-Sivtr: Pick AI Session
+Sivtr: Pick Codex Turn
 ```
 
 Default keybinding:
@@ -248,7 +248,10 @@ and `sivtr` prefers the active `codex` / `codex resume` session when one is
 available.
 
 On macOS, the same VS Code shortcut works as the default picker shortcut when
-the editor has focus.
+the editor has focus. The extension resolves the workspace path before launch
+and quotes it for the active shell. This keeps the default shortcut reliable
+even when the workspace lives under a path with spaces, such as
+`/Users/me/Code/My Project`.
 
 ### Linux Shortcut Setup
 

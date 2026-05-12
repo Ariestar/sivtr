@@ -219,13 +219,14 @@ sivtr codex export --dest /srv/sivtr/root-codex --watch --interval-ms 500
 VS Code 插件提供命令：
 
 ```text
-Sivtr: Pick AI Session
+Sivtr: Pick Codex Turn
 ```
 
 默认快捷键：
 
 ```text
-Alt+Y
+Alt+Y（Linux / Windows）
+Cmd+Alt+Y（macOS）
 ```
 
 你可以改成 `Ctrl+Y`，但它通常会覆盖编辑器的 Redo。
@@ -241,7 +242,9 @@ sivtr hotkey-pick-agent --cwd . --provider all
 `sivtr` 会优先使用这个精确会话。
 
 在 macOS 上，当焦点位于 VS Code 编辑器时，这个快捷键同样是默认的
-picker 快捷键。
+picker 快捷键。插件会先把 workspace 路径解析成实际路径，再按当前 shell
+的规则做参数引用。因此即使项目路径里有空格（例如
+`/Users/me/Code/My Project`），默认快捷键也能稳定工作。
 
 ### Linux 快捷键设置
 
