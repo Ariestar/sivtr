@@ -109,3 +109,8 @@ or load the LaunchAgent with:
 ```bash
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sivtr.pick-codex.plist
 ```
+
+Quick one-line checks:
+
+- generate and open the picker once: `sivtr init macos-shortcut && ~/.local/bin/sivtr-pick-codex`
+- generate and load the LaunchAgent wrapper: `sivtr init macos-shortcut && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sivtr.pick-codex.plist`

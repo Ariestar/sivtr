@@ -242,6 +242,11 @@ sivtr init macos-shortcut
 - 用 `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sivtr.pick-codex.plist` 加载 LaunchAgent；
 - 继续使用 VS Code 命令，作为最稳定的快捷键驱动入口。
 
+可直接复制的一行验证命令：
+
+- 生成并立即打开 picker：`sivtr init macos-shortcut && ~/.local/bin/sivtr-pick-codex`
+- 生成并加载 LaunchAgent 包装：`sivtr init macos-shortcut && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sivtr.pick-codex.plist`
+
 ### Windows 全局热键
 
 Windows 上可以启动全局热键守护进程：

@@ -104,3 +104,8 @@ sivtr init macos-shortcut
 ```bash
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sivtr.pick-codex.plist
 ```
+
+可直接复制的一行验证命令：
+
+- 生成并立即打开 picker：`sivtr init macos-shortcut && ~/.local/bin/sivtr-pick-codex`
+- 生成并加载 LaunchAgent 包装：`sivtr init macos-shortcut && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sivtr.pick-codex.plist`

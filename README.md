@@ -247,6 +247,11 @@ You can:
 - load the LaunchAgent with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sivtr.pick-codex.plist`;
 - keep using the VS Code command for the most reliable shortcut-driven flow.
 
+Quick one-line checks:
+
+- generate and open the picker once: `sivtr init macos-shortcut && ~/.local/bin/sivtr-pick-codex`
+- generate and load the LaunchAgent wrapper: `sivtr init macos-shortcut && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sivtr.pick-codex.plist`
+
 ### Windows Global Hotkey
 
 On Windows, the hotkey daemon can open the Codex picker from anywhere:

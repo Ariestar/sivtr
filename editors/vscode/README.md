@@ -35,6 +35,12 @@ On macOS, the same VS Code shortcut is also the recommended default shortcut.
 If you want a Terminal-based launcher outside VS Code, run
 `sivtr init macos-shortcut` on the Mac host.
 
+Quick one-line fallback outside VS Code:
+
+```bash
+sivtr init macos-shortcut && ~/.local/bin/sivtr-pick-codex
+```
+
 ## Settings
 
 | Setting | Default | Purpose |
