@@ -121,9 +121,12 @@ Filters:
 
 Examples:
   sivtr copy codex
+  sivtr copy codex --session 2
+  sivtr copy codex --session 019df7fb
   sivtr copy codex 2
   sivtr copy codex 2..4
-  sivtr copy codex out --print
+  sivtr copy codex out --session 2 --print
+  sivtr copy codex --session 2 --pick
   sivtr copy codex out --pick
   sivtr copy codex tool --regex error
   sivtr copy codex all --lines 1:20
@@ -154,7 +157,10 @@ Modes:
 
 Examples:
   sivtr copy claude
+  sivtr copy claude --session 2
+  sivtr copy claude --session abc123
   sivtr copy claude out --print
+  sivtr copy claude --session 2 --pick
   sivtr copy claude --pick
   sivtr copy claude all --lines 1:20
 ";
@@ -230,9 +236,9 @@ pub enum Commands {
     /// Manage configuration
     Config(ConfigCommand),
 
-    /// Generate shell integration hook
+    /// Generate shell integration or Linux shortcut helpers
     Init {
-        /// Shell type: powershell, bash, zsh, nushell
+        /// Integration target: powershell, bash, zsh, nushell, tmux, linux-shortcut
         shell: String,
     },
 
@@ -797,6 +803,26 @@ mod tests {
                 assert_eq!(args, vec!["-lc".to_string(), "printf ok".to_string()]);
             }
             _ => panic!("expected run command"),
+        }
+    }
+
+    #[test]
+    fn init_accepts_tmux_target() {
+        let cli = Cli::try_parse_from(["sivtr", "init", "tmux"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Init { shell }) => assert_eq!(shell, "tmux"),
+            _ => panic!("expected init command"),
+        }
+    }
+
+    #[test]
+    fn init_accepts_linux_shortcut_target() {
+        let cli = Cli::try_parse_from(["sivtr", "init", "linux-shortcut"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Init { shell }) => assert_eq!(shell, "linux-shortcut"),
+            _ => panic!("expected init command"),
         }
     }
 }

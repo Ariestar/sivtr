@@ -256,11 +256,12 @@ pub fn execute(request: CopyRequest<'_>) -> Result<()> {
 
 pub fn execute_agent(request: AgentCopyRequest<'_>) -> Result<()> {
     let source = request.provider.session_provider();
-    if request.pick && !request.pick_current_session {
+    if request.pick && !request.pick_current_session && request.session_selector.is_none() {
         return execute_agent_session_pick(source.as_ref(), request);
     }
 
-    let path = if request.pick && request.pick_current_session {
+    let path = if request.pick && request.pick_current_session && request.session_selector.is_none()
+    {
         let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
         match resolve_current_agent_session_with_blocks(source.as_ref(), &cwd)? {
             Some(path) => {
@@ -1501,6 +1502,7 @@ fn agent_session_matches_selector(session: &AgentSessionInfo, selector: &str) ->
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.contains(selector))
 }
+
 fn resolve_current_agent_pick_session_path(
     source: &dyn AgentSessionProvider,
     cwd: &std::path::Path,
@@ -2960,6 +2962,7 @@ mod tests {
             "{error:#}"
         );
     }
+
     struct FakeAgentSource {
         require_cwd: bool,
         infos: Vec<AgentSessionInfo>,

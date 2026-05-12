@@ -5,6 +5,11 @@ description: 启动、停止和配置 Windows Codex 选择器热键。
 
 热键守护进程目前仅支持 Windows。它注册一个全局快捷键，并打开一个新的终端窗口，为启动守护进程时的工作目录运行 Codex 选择器。
 
+Linux 目前没有内置的桌面级默认 `sivtr` 全局热键。原因是 Wayland
+没有给普通 CLI 工具提供统一的跨桌面全局热键接口，而打开 picker
+还需要一个交互式终端，这在 GNOME、KDE、Sway、tmux 和纯 SSH
+场景之间也没有统一可移植的启动方式。
+
 ## 启动
 
 ```bash
@@ -63,65 +68,25 @@ sivtr hotkey-pick-agent --cwd <daemon-working-directory> --provider all
 
 普通的 `sivtr copy codex --pick` 不同：它总是从会话选择器开始。
 
-## Linux 桌面快捷键（手动配置）
+## Linux 设置方式
 
-Linux 在 GNOME/KDE/Wayland/X11 之间没有统一的 CLI 全局热键 API。
-推荐使用 launcher 脚本 + 桌面快捷键绑定。
+在 Linux 上，推荐使用以下入口之一，而不是依赖内置全局守护进程：
 
-1. 创建 launcher 脚本：
-
-```bash
-mkdir -p ~/.local/bin
-cat > ~/.local/bin/sivtr-pick-codex <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-export PROJECT_CWD="$HOME"
-# 可选：跨账号会话镜像目录
-# export SIVTR_CODEX_SESSION_DIRS='/srv/sivtr/root-codex/sessions:/home/<user>/codex_transfer/sessions'
-exec x-terminal-emulator -e bash -lc 'cd "$PROJECT_CWD"; exec sivtr copy codex --pick'
-EOF
-chmod +x ~/.local/bin/sivtr-pick-codex
-```
-
-2. 把 `~/.local/bin/sivtr-pick-codex` 绑定到快捷键。
-   GNOME 路径：`设置 -> 键盘 -> 键盘快捷键 -> 查看和自定义快捷键 -> 自定义快捷键`。
-   KDE 路径：`系统设置 -> 快捷键 -> 自定义快捷键`。
-
-3. 按下组合键（例如 `Ctrl+Alt+Q`）即可打开 picker。
-
-## 其他终端快捷键
-
-如果你更偏好终端内快捷键：
-
-- tmux：
-
-```tmux
-bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex --pick"
-```
-
-- WezTerm / Kitty / Alacritty / Ghostty：将某个按键绑定为执行
-  `~/.local/bin/sivtr-pick-codex`。
-- 任意终端一次性命令：
+- VS Code：使用插件默认绑定的 `Alt+Y`。
+- tmux：安装 helper 配置块并重新加载 tmux：
 
 ```bash
-sivtr copy codex --pick
+sivtr init tmux
+tmux source-file ~/.tmux.conf
 ```
 
-## macOS 快捷方式
+它会把 `prefix + y` 绑定到当前 pane 的工作目录。
 
-这个分支没有新增 macOS 桌面级 `sivtr` 守护进程。推荐的 macOS 入口是：
-
-- VS Code：使用插件默认绑定的 `Cmd+Alt+Y`。
-- Terminal / iTerm / WezTerm：给某个按键绑定
-  `cd <project-path> && sivtr copy codex --pick`。
-- 任意终端一次性命令：
+- 桌面快捷键或终端 launcher：为当前项目生成 launcher：
 
 ```bash
-sivtr copy codex --pick
+sivtr init linux-shortcut
 ```
 
-可直接复制的一行 macOS 终端验证命令：
-
-```bash
-cd "$HOME" && sivtr copy codex --pick
-```
+它会写入 `~/.local/bin/sivtr-pick-codex`，以及
+`~/.local/share/applications/sivtr-pick-codex.desktop`。你可以把桌面快捷键绑定到这个脚本，或者直接在终端里运行它。

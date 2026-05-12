@@ -151,18 +151,19 @@ sivtr copy out --lines 10:40
 
 `sivtr copy codex` 会读取 `~/.codex/sessions` 下的 Codex rollout JSONL 文件，并优先选择 `cwd` 与当前目录匹配的最新会话。
 
+用 `--session N` 可以显式选择第 N 新的已记录会话；用 `--session ID` 可以按会话 id 或 id 前缀匹配。
+
 ```bash
 sivtr copy codex        # 最近一轮用户消息 + 助手回复
+sivtr copy codex --session 2
+sivtr copy codex --session 019df7fb
 sivtr copy codex out    # 最近助手回复
+sivtr copy codex out --session 2 --print
 sivtr copy codex in     # 最近用户消息
 sivtr copy codex tool   # 最近工具输出
 sivtr copy codex all    # 整个解析后的会话
+sivtr copy codex --session 2 --pick
 ```
-
-可直接复制的一行验证命令：
-
-- 会话 / dialogue picker 流程：`sivtr copy codex --pick`
-- Linux 剪贴板保活回退（先确保至少录过一个 shell 命令块）：`SIVTR_LINUX_CLIPBOARD_HOLD_MS=500 sivtr copy out --print`
 
 默认会过滤过程性 commentary，所以 `sivtr copy codex out` 更倾向返回最终助手回复，而不是中间状态更新。
 
@@ -177,63 +178,70 @@ Sivtr: Pick AI Session
 默认快捷键：
 
 ```text
-Alt+Y（Linux / Windows）
-Cmd+Alt+Y（macOS）
+Alt+Y
 ```
 
 你可以改成 `Ctrl+Y`，但它通常会覆盖编辑器的 Redo。
 
-### Linux 桌面快捷键
-
-Linux 没有内置的跨桌面全局 `sivtr` 守护进程。推荐做法是：先准备一个
-launcher 脚本，再把它绑定到桌面快捷键。
-
-1. 创建 launcher：
+在 Linux 上，当焦点位于 VS Code 编辑器时，这个快捷键就是默认的
+Codex picker 快捷键。插件实际执行的是：
 
 ```bash
-mkdir -p ~/.local/bin
-cat > ~/.local/bin/sivtr-pick-codex <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-export PROJECT_CWD="$HOME"
-# 可选：跨账号会话镜像目录
-# export SIVTR_CODEX_SESSION_DIRS='/srv/sivtr/root-codex/sessions:/home/<user>/codex_transfer/sessions'
-exec x-terminal-emulator -e bash -lc 'cd "$PROJECT_CWD"; exec sivtr copy codex --pick'
-EOF
-chmod +x ~/.local/bin/sivtr-pick-codex
+sivtr hotkey-pick-codex --cwd .
 ```
 
-2. 把 `~/.local/bin/sivtr-pick-codex` 绑定到桌面快捷键。
-   GNOME 路径：`设置 -> 键盘 -> 键盘快捷键 -> 查看和自定义快捷键 -> 自定义快捷键`。
-   KDE 路径：`系统设置 -> 快捷键 -> 自定义快捷键`。
+如果当前终端正运行在活动中的 `codex` 或 `codex resume` 会话里，
+`sivtr` 会优先使用这个精确会话。
 
-3. 按下你设置的组合键（例如 `Ctrl+Alt+Q`）即可打开 picker。
+### Linux 快捷键设置
 
-### 其他终端快捷键
+Linux 目前没有提供 VS Code 之外的默认全局 `sivtr` 热键。
 
-如果你不使用桌面级快捷键，可以在终端里绑定原生快捷键执行同一个 launcher
-或直接执行命令：
+原因：
 
-- tmux：`bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex --pick"`
-- WezTerm / Kitty / Alacritty / Ghostty：把某个按键绑定为执行
-  `~/.local/bin/sivtr-pick-codex`
-- 任意终端一次性执行：`sivtr copy codex --pick`
+- Wayland 不给普通 CLI 工具提供统一的跨桌面全局热键接口。
+- 只做 X11 方案已经不够，因为很多 Linux 桌面环境默认是 Wayland。
+- 打开 picker 还需要一个交互式终端，而 GNOME、KDE、Sway、纯 SSH、
+  tmux 等环境并没有统一可移植的终端启动命令。
 
-### macOS 快捷方式
+推荐的 Linux 设置方式：
 
-这个分支没有新增 macOS 桌面级全局 `sivtr` 守护进程。推荐的 macOS 入口是：
-
-- VS Code：使用插件默认绑定的 `Cmd+Alt+Y`。
-- Terminal / iTerm / WezTerm：给某个按键绑定
-  `cd <project-path> && sivtr copy codex --pick`。
-- 任意终端一次性执行：`sivtr copy codex --pick`
-
-可直接复制的一行 macOS 终端验证命令：
+- VS Code：直接使用内置的 `Alt+Y`。
+- tmux：安装一个把 `prefix + y` 绑定到当前 pane 目录的 helper：
 
 ```bash
-cd "$HOME" && sivtr copy codex --pick
+sivtr init tmux
+tmux source-file ~/.tmux.conf
 ```
 
+生成的配置块是：
+
+```tmux
+bind-key y new-window -c "#{pane_current_path}" "sivtr hotkey-pick-codex --cwd '#{pane_current_path}'"
+```
+
+- 终端或桌面环境：为当前项目生成一个 launcher：
+
+```bash
+sivtr init linux-shortcut
+```
+
+它会写入：
+
+- `~/.local/bin/sivtr-pick-codex`
+- `~/.local/share/applications/sivtr-pick-codex.desktop`
+
+这个 launcher 会打开一个终端，并执行：
+
+```bash
+sivtr hotkey-pick-codex --cwd "<project-path>"
+```
+
+常见 Linux 使用示例：
+
+- GNOME / KDE：把 `~/.local/bin/sivtr-pick-codex` 绑定到你的桌面快捷键。
+- 纯终端启动：直接运行 `~/.local/bin/sivtr-pick-codex`。
+- 一次性手动执行：`sivtr hotkey-pick-codex --cwd /path/to/project`。
 ### Windows 全局热键
 
 Windows 上可以启动全局热键守护进程：
@@ -257,7 +265,7 @@ sivtr hotkey stop
 | `sivtr diff <left> <right>` | 对比最近命令输出。 |
 | `sivtr history` | 列出、搜索、查看输出历史。 |
 | `sivtr config` | 管理 TOML 配置。 |
-| `sivtr init <shell>` | 生成命令块捕获所需的 shell 集成。 |
+| `sivtr init <target>` | 生成 shell 集成或 Linux 快捷键 helper。 |
 | `sivtr import` | 打开当前 session log。 |
 | `sivtr hotkey` | 管理 Windows AI session picker 热键。 |
 | `sivtr clear` | 清空 session logs。 |

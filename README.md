@@ -157,10 +157,14 @@ Use `--session N` to open the Nth newest selectable session (the same numbering 
 
 ```bash
 sivtr copy codex        # latest completed user + assistant turn
+sivtr copy codex --session 2
+sivtr copy codex --session 019df7fb
 sivtr copy codex out    # latest assistant reply
+sivtr copy codex out --session 2 --print
 sivtr copy codex in     # latest user message
 sivtr copy codex tool   # latest tool output
 sivtr copy codex all    # parsed session
+sivtr copy codex --session 2 --pick
 ```
 
 Quick one-line checks:
@@ -187,59 +191,68 @@ Cmd+Alt+Y (macOS)
 
 You can rebind it to `Ctrl+Y`, but that usually overrides the editor Redo shortcut.
 
-### Linux Desktop Shortcut
-
-Linux does not have a built-in cross-desktop global `sivtr` daemon. The
-recommended setup is a launcher script plus your desktop's custom shortcut.
-
-1. Create a launcher:
+On Linux, this VS Code shortcut works as the default picker shortcut when the
+editor has focus. The extension runs:
 
 ```bash
-mkdir -p ~/.local/bin
-cat > ~/.local/bin/sivtr-pick-codex <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-export PROJECT_CWD="$HOME"
-# Optional cross-account mirror:
-# export SIVTR_CODEX_SESSION_DIRS='/srv/sivtr/root-codex/sessions:/home/<user>/codex_transfer/sessions'
-exec x-terminal-emulator -e bash -lc 'cd "$PROJECT_CWD"; exec sivtr copy codex --pick'
-EOF
-chmod +x ~/.local/bin/sivtr-pick-codex
+sivtr hotkey-pick-codex --cwd .
 ```
 
-2. Bind a desktop shortcut to `~/.local/bin/sivtr-pick-codex`.
-   GNOME path: `Settings -> Keyboard -> Keyboard Shortcuts -> View and
-   Customize Shortcuts -> Custom Shortcuts`.
-   KDE path: `System Settings -> Shortcuts -> Custom Shortcuts`.
+and `sivtr` prefers the active `codex` / `codex resume` session when one is
+available.
 
-3. Press your chosen key chord (for example `Ctrl+Alt+Q`) to open the picker.
+### Linux Shortcut Setup
 
-### Other Terminal Shortcuts
+Linux does not currently ship a default global `sivtr` hotkey outside VS Code.
 
-If you do not use desktop-level shortcuts, bind a terminal-native key to run
-the same launcher or command:
+Reasons:
 
-- tmux: `bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex --pick"`
-- WezTerm / Kitty / Alacritty / Ghostty: bind a key to run
-  `~/.local/bin/sivtr-pick-codex`
-- one-off in any terminal: `sivtr copy codex --pick`
+- Wayland does not provide a universal cross-desktop global hotkey API for
+  ordinary CLI apps.
+- X11-only approaches are legacy and do not cover common Wayland desktops.
+- Opening the picker also needs an interactive terminal, and Linux does not
+  have one portable terminal-launch command that works across GNOME, KDE,
+  Sway, headless SSH, and tmux-based Codex setups.
 
-### macOS Shortcuts
+Recommended Linux setups:
 
-This branch does not add a built-in macOS-wide `sivtr` daemon. The recommended
-macOS entry points are:
-
-- VS Code: use the extension shortcut bound to `Cmd+Alt+Y` by default.
-- Terminal / iTerm / WezTerm: bind a key to run
-  `cd <project-path> && sivtr copy codex --pick`.
-- one-off in any terminal: `sivtr copy codex --pick`
-
-Quick one-line terminal check on macOS:
+- VS Code: use the built-in `Alt+Y` command binding.
+- tmux: install a helper that binds `prefix + y` to the current pane's working
+  directory:
 
 ```bash
-cd "$HOME" && sivtr copy codex --pick
+sivtr init tmux
+tmux source-file ~/.tmux.conf
 ```
 
+The generated block is:
+
+```tmux
+bind-key y new-window -c "#{pane_current_path}" "sivtr hotkey-pick-codex --cwd '#{pane_current_path}'"
+```
+
+- Terminal / desktop environment: generate a launcher for the current project:
+
+```bash
+sivtr init linux-shortcut
+```
+
+This writes:
+
+- `~/.local/bin/sivtr-pick-codex`
+- `~/.local/share/applications/sivtr-pick-codex.desktop`
+
+The launcher opens a terminal and runs:
+
+```bash
+sivtr hotkey-pick-codex --cwd "<project-path>"
+```
+
+Typical Linux usage examples:
+
+- GNOME / KDE: bind your desktop shortcut to `~/.local/bin/sivtr-pick-codex`.
+- Plain terminal launcher: run `~/.local/bin/sivtr-pick-codex`.
+- Manual one-off command: `sivtr hotkey-pick-codex --cwd /path/to/project`.
 ### Windows Global Hotkey
 
 On Windows, the hotkey daemon can open the AI session picker from anywhere:
@@ -263,7 +276,7 @@ The default shortcut is `alt+y`.
 | `sivtr diff <left> <right>` | Compare recent command blocks. |
 | `sivtr history` | List, search, and show captured output history. |
 | `sivtr config` | Manage the TOML config file. |
-| `sivtr init <shell>` | Generate shell integration for command-block capture. |
+| `sivtr init <target>` | Generate shell integration or Linux shortcut helpers. |
 | `sivtr import` | Open the current session log. |
 | `sivtr hotkey` | Manage the Windows AI session picker hotkey. |
 | `sivtr clear` | Clear session logs. |
