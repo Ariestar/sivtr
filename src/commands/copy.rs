@@ -565,11 +565,7 @@ fn build_agent_session_choice(
         return None;
     }
 
-    let title = format!(
-        "[{}] {}",
-        source.provider().name(),
-        agent_session_display_title(info, &session)
-    );
+    let title = agent_session_display_title(info, &session);
     let dialogue_titles = units
         .iter()
         .rev()
@@ -2642,8 +2638,8 @@ mod tests {
             build_current_agent_session_choices(&sources, &cwd, AgentSelection::LastTurn).unwrap();
 
         assert_eq!(choices.len(), 2);
-        assert_eq!(choices[0].title, "[Codex] new task  [new]");
-        assert_eq!(choices[1].title, "[Codex] old task  [old]");
+        assert_eq!(choices[0].title, "new task  [new]");
+        assert_eq!(choices[1].title, "old task  [old]");
     }
 
     #[test]

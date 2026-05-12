@@ -70,6 +70,7 @@ fn apply_event(session: &mut AgentSession, value: &Value) {
         Some("assistant") => apply_message(session, value, AgentBlockKind::Assistant, timestamp),
         Some(
             "permission-mode"
+            | "ai-title"
             | "file-history-snapshot"
             | "attachment"
             | "last-prompt"
@@ -374,6 +375,28 @@ mod tests {
         assert_eq!(session.blocks[2].kind, AgentBlockKind::ToolCall);
         assert_eq!(session.blocks[3].kind, AgentBlockKind::ToolOutput);
         assert_eq!(session.blocks[4].kind, AgentBlockKind::Assistant);
+    }
+
+    #[test]
+    fn ignores_claude_ai_title_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"type":"user","sessionId":"abc","cwd":"C:\\repo","message":{"role":"user","content":"hello"}}
+{"type":"ai-title","sessionId":"abc","cwd":"C:\\repo","title":"Short title"}
+{"type":"assistant","sessionId":"abc","cwd":"C:\\repo","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}
+"#,
+        )
+        .unwrap();
+
+        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+
+        assert_eq!(session.blocks.len(), 2);
+        assert_eq!(
+            format_blocks(&session.blocks),
+            "## User\nhello\n\n## Assistant\ndone"
+        );
     }
 
     #[test]
