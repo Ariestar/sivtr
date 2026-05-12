@@ -51,7 +51,14 @@ Quick one-line fallback outside VS Code:
 ```bash
 sivtr init macos-shortcut && ~/.local/bin/sivtr-pick-codex
 ```
+Quick macOS smoke test for quoting-sensitive workspace paths:
 
+```bash
+mkdir -p "$HOME/Code/Sivtr Demo" && code "$HOME/Code/Sivtr Demo"
+```
+
+Then press `Cmd+Alt+Y` or run `Sivtr: Pick Codex Turn`. The picker should open
+without breaking on the space in `Sivtr Demo`.
 ## Settings
 
 | Setting | Default | Purpose |

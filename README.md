@@ -43,7 +43,7 @@ It is not a terminal emulator and not a multiplexer. It is a companion tool for 
 - Pipe any command into a searchable, selectable output viewer.
 - Record shell command blocks and copy recent inputs, outputs, or bare commands.
 - Read Codex session JSONL files and copy useful user, assistant, or tool blocks.
-- Open an AI session picker from VS Code with one shortcut.
+- Open a Codex picker from VS Code with one shortcut.
 - Filter copied text with regex and line ranges.
 - Keep a local SQLite history for later search.
 - Compare recent command outputs while iterating on tests and builds.
@@ -70,7 +70,7 @@ Install the VS Code bridge from the Marketplace:
 ariestar.sivtr-vscode
 ```
 
-The extension launches the AI session picker from the current workspace. If the `sivtr` CLI is missing, it offers to run `cargo install sivtr` in a visible terminal.
+The extension launches the Codex picker from the current workspace. If the `sivtr` CLI is missing, it offers to run `cargo install sivtr` in a visible terminal.
 
 ## Quick Start
 
@@ -252,6 +252,14 @@ the editor has focus. The extension resolves the workspace path before launch
 and quotes it for the active shell. This keeps the default shortcut reliable
 even when the workspace lives under a path with spaces, such as
 `/Users/me/Code/My Project`.
+
+Quick macOS smoke test:
+
+```bash
+mkdir -p "$HOME/Code/Sivtr Demo" && code "$HOME/Code/Sivtr Demo"
+```
+
+Then press `Cmd+Alt+Y`.
 
 ### Linux Shortcut Setup
 

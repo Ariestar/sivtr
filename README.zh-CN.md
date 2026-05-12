@@ -43,7 +43,7 @@
 - 把任意命令输出通过管道送入可搜索、可选择的浏览器。
 - 记录 shell 命令块，之后复制最近的输入、输出或纯命令。
 - 读取 Codex 的 JSONL 会话文件，复制用户消息、助手回复或工具输出。
-- 在 VS Code 中用一个快捷键打开 AI session picker。
+- 在 VS Code 中用一个快捷键打开 Codex picker。
 - 支持用正则和行号范围过滤复制内容。
 - 用本地 SQLite 保存历史，之后可以检索。
 - 迭代测试和构建时，对比最近几次命令输出。
@@ -70,7 +70,7 @@ VS Code 插件：
 ariestar.sivtr-vscode
 ```
 
-插件会从当前 workspace 启动 AI session picker。如果没有安装 `sivtr` CLI，它会提示你是否在可见终端里运行 `cargo install sivtr`。
+插件会从当前 workspace 启动 Codex picker。如果没有安装 `sivtr` CLI，它会提示你是否在可见终端里运行 `cargo install sivtr`。
 
 ## 快速开始
 
@@ -245,6 +245,14 @@ sivtr hotkey-pick-agent --cwd . --provider all
 picker 快捷键。插件会先把 workspace 路径解析成实际路径，再按当前 shell
 的规则做参数引用。因此即使项目路径里有空格（例如
 `/Users/me/Code/My Project`），默认快捷键也能稳定工作。
+
+可直接复制的一行 macOS 验证命令：
+
+```bash
+mkdir -p "$HOME/Code/Sivtr Demo" && code "$HOME/Code/Sivtr Demo"
+```
+
+然后按 `Cmd+Alt+Y` 即可。
 
 ### Linux 快捷键设置
 
