@@ -125,3 +125,9 @@ macOS entry points are:
 ```bash
 sivtr copy codex --pick
 ```
+
+Quick one-line terminal check on macOS:
+
+```bash
+cd "$HOME" && sivtr copy codex --pick
+```

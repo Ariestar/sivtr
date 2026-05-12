@@ -159,6 +159,11 @@ sivtr copy codex tool   # 最近工具输出
 sivtr copy codex all    # 整个解析后的会话
 ```
 
+可直接复制的一行验证命令：
+
+- 会话 / dialogue picker 流程：`sivtr copy codex --pick`
+- Linux 剪贴板保活回退（先确保至少录过一个 shell 命令块）：`SIVTR_LINUX_CLIPBOARD_HOLD_MS=500 sivtr copy out --print`
+
 默认会过滤过程性 commentary，所以 `sivtr copy codex out` 更倾向返回最终助手回复，而不是中间状态更新。
 
 ### VS Code 快捷键
@@ -222,6 +227,12 @@ chmod +x ~/.local/bin/sivtr-pick-codex
 - Terminal / iTerm / WezTerm：给某个按键绑定
   `cd <project-path> && sivtr copy codex --pick`。
 - 任意终端一次性执行：`sivtr copy codex --pick`
+
+可直接复制的一行 macOS 终端验证命令：
+
+```bash
+cd "$HOME" && sivtr copy codex --pick
+```
 
 ### Windows 全局热键
 

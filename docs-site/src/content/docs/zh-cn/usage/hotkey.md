@@ -119,3 +119,9 @@ sivtr copy codex --pick
 ```bash
 sivtr copy codex --pick
 ```
+
+可直接复制的一行 macOS 终端验证命令：
+
+```bash
+cd "$HOME" && sivtr copy codex --pick
+```

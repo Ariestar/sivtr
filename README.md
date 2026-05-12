@@ -163,6 +163,11 @@ sivtr copy codex tool   # latest tool output
 sivtr copy codex all    # parsed session
 ```
 
+Quick one-line checks:
+
+- dialogue/session picker flow: `sivtr copy codex --pick`
+- Linux clipboard hold fallback (after recording at least one shell command block): `SIVTR_LINUX_CLIPBOARD_HOLD_MS=500 sivtr copy out --print`
+
 Progress commentary is filtered by default, so `sivtr copy codex out` returns the final assistant reply instead of intermediate status updates.
 
 ### VS Code Shortcut
@@ -228,6 +233,12 @@ macOS entry points are:
 - Terminal / iTerm / WezTerm: bind a key to run
   `cd <project-path> && sivtr copy codex --pick`.
 - one-off in any terminal: `sivtr copy codex --pick`
+
+Quick one-line terminal check on macOS:
+
+```bash
+cd "$HOME" && sivtr copy codex --pick
+```
 
 ### Windows Global Hotkey
 
