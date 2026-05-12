@@ -149,9 +149,11 @@ sivtr copy out --lines 10:40
 
 ### Reuse Codex Sessions
 
-`sivtr copy codex` reads Codex rollout JSONL files from `~/.codex/sessions` and chooses the newest session whose `cwd` matches your current directory.
+`sivtr copy codex` reads Codex rollout JSONL files from `~/.codex/sessions`. When an active Codex shell exports `CODEX_THREAD_ID`, `sivtr` prefers that exact local session first. Otherwise it chooses the newest local session whose `cwd` matches your current directory.
 
-Use `--session N` to open the Nth newest recorded session, or `--session ID` to match a session id / id prefix explicitly.
+For shared read-only access to another account's Codex sessions, mirror them into a separate directory and add that directory to `[codex].session_dirs` instead of running `sivtr` with elevated privileges. Shared/mirrored trees only participate in explicit browsing through `--pick`.
+
+Use `--session N` to open the Nth newest selectable session (the same numbering shown in `--pick`), or `--session ID` to match a session id / id prefix explicitly.
 
 ```bash
 sivtr copy codex        # latest completed user + assistant turn
@@ -164,6 +166,11 @@ sivtr copy codex tool   # latest tool output
 sivtr copy codex all    # parsed session
 sivtr copy codex --session 2 --pick
 ```
+
+Quick one-line checks:
+
+- dialogue/session picker flow: `sivtr copy codex --pick`
+- Linux clipboard hold fallback (after recording at least one shell command block): `SIVTR_LINUX_CLIPBOARD_HOLD_MS=500 sivtr copy out --print`
 
 Progress commentary is filtered by default, so `sivtr copy codex out` returns the final assistant reply instead of intermediate status updates.
 
@@ -178,7 +185,8 @@ Sivtr: Pick AI Session
 Default keybinding:
 
 ```text
-Alt+Y
+Alt+Y (Linux / Windows)
+Cmd+Alt+Y (macOS)
 ```
 
 You can rebind it to `Ctrl+Y`, but that usually overrides the editor Redo shortcut.
