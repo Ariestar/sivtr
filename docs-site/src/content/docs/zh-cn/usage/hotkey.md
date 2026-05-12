@@ -90,3 +90,17 @@ sivtr init linux-shortcut
 
 它会写入 `~/.local/bin/sivtr-pick-codex`，以及
 `~/.local/share/applications/sivtr-pick-codex.desktop`。你可以把桌面快捷键绑定到这个脚本，或者直接在终端里运行它。
+
+- macOS：生成 Terminal launcher 和 LaunchAgent 包装：
+
+```bash
+sivtr init macos-shortcut
+```
+
+它会写入 `~/.local/bin/sivtr-pick-codex` 和
+`~/Library/LaunchAgents/dev.sivtr.pick-codex.plist`。你可以直接运行这个脚本，
+或者通过下面的命令加载 LaunchAgent：
+
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sivtr.pick-codex.plist
+```

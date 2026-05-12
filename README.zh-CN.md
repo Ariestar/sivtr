@@ -195,6 +195,9 @@ sivtr hotkey-pick-agent --cwd . --provider all
 如果当前终端正运行在活动中的 `codex` 或 `codex resume` 会话里，
 `sivtr` 会优先使用这个精确会话。
 
+在 macOS 上，当焦点位于 VS Code 编辑器时，这个快捷键同样是默认的
+picker 快捷键。
+
 ### Linux 快捷键设置
 
 Linux 目前没有提供 VS Code 之外的默认全局 `sivtr` 热键。
@@ -217,6 +220,27 @@ bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex --pick"
 
 - 终端或桌面环境：手动创建一个自定义快捷键，在终端中执行
   `cd <project-path> && sivtr copy codex --pick`。
+
+### macOS 快捷键设置
+
+macOS 目前没有内置的 `sivtr` 全局热键守护进程。推荐默认使用上面的 VS Code 快捷键。
+
+如果你想在 VS Code 之外通过 Terminal 启动项目级 picker，可以在 macOS 上生成 launcher 和 LaunchAgent 包装：
+
+```bash
+sivtr init macos-shortcut
+```
+
+它会写入：
+
+- `~/.local/bin/sivtr-pick-codex`
+- `~/Library/LaunchAgents/dev.sivtr.pick-codex.plist`
+
+你可以：
+
+- 直接运行 `~/.local/bin/sivtr-pick-codex`；
+- 用 `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sivtr.pick-codex.plist` 加载 LaunchAgent；
+- 继续使用 VS Code 命令，作为最稳定的快捷键驱动入口。
 
 ### Windows 全局热键
 
