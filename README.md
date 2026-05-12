@@ -153,7 +153,7 @@ sivtr copy out --lines 10:40
 
 For shared read-only access to another account's Codex sessions, mirror them into a separate directory and add that directory to `[codex].session_dirs` instead of running `sivtr` with elevated privileges. Shared/mirrored trees only participate in explicit browsing through `--pick`.
 
-Use `--session N` to open the Nth newest recorded session, or `--session ID` to match a session id / id prefix explicitly.
+Use `--session N` to open the Nth newest selectable session (the same numbering shown in `--pick`), or `--session ID` to match a session id / id prefix explicitly.
 
 ```bash
 sivtr copy codex        # latest completed user + assistant turn
@@ -166,9 +166,18 @@ sivtr copy codex tool   # latest tool output
 sivtr copy codex all    # parsed session
 sivtr copy codex --session 2 --pick
 sivtr copy codex --pick # browse local and mirrored sessions
+sivtr copy codex all --max-blocks 0
+sivtr copy codex all --max-blocks 10000
 ```
 
+Quick one-line checks:
+
+- dialogue/session picker flow: `sivtr copy codex --pick`
+- Linux clipboard hold fallback (after recording at least one shell command block): `SIVTR_LINUX_CLIPBOARD_HOLD_MS=500 sivtr copy out --print`
+
 Progress commentary is filtered by default, so `sivtr copy codex out` returns the final assistant reply instead of intermediate status updates.
+
+Large Codex transcripts are capped to the latest `10000` parsed blocks by default for robustness. Set `[codex].max_blocks = 0` in config or pass `--max-blocks 0` for a full import.
 
 Mirror the current account's sessions into a shared tree:
 
@@ -221,7 +230,8 @@ Sivtr: Pick AI Session
 Default keybinding:
 
 ```text
-Alt+Y
+Alt+Y (Linux / Windows)
+Cmd+Alt+Y (macOS)
 ```
 
 You can rebind it to `Ctrl+Y`, but that usually overrides the editor Redo shortcut.
@@ -230,11 +240,14 @@ On Linux, this VS Code shortcut works as the default picker shortcut when the
 editor has focus. The extension runs:
 
 ```bash
-sivtr hotkey-pick-codex --cwd .
+sivtr hotkey-pick-agent --cwd . --provider all
 ```
 
 and `sivtr` prefers the active `codex` / `codex resume` session when one is
 available.
+
+On macOS, the same VS Code shortcut works as the default picker shortcut when
+the editor has focus.
 
 ### Linux Shortcut Setup
 
@@ -252,42 +265,44 @@ Reasons:
 Recommended Linux setups:
 
 - VS Code: use the built-in `Alt+Y` command binding.
-- tmux: install a helper that binds `prefix + y` to the current pane's working
-  directory:
-
-```bash
-sivtr init tmux
-tmux source-file ~/.tmux.conf
-```
-
-The generated block is:
+- tmux: bind a key to the current pane's working directory:
 
 ```tmux
-bind-key y new-window -c "#{pane_current_path}" "sivtr hotkey-pick-codex --cwd '#{pane_current_path}'"
+bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex --pick"
 ```
 
-- Terminal / desktop environment: generate a launcher for the current project:
+- Terminal / desktop environment: create a custom shortcut that launches
+  `cd <project-path> && sivtr copy codex --pick` in a terminal for the project
+  you want to inspect.
+
+### macOS Shortcut Setup
+
+macOS does not currently ship a built-in `sivtr` global hotkey daemon. The
+recommended default is the VS Code shortcut above.
+
+For a project-local Terminal launcher plus a LaunchAgent wrapper, generate the
+helper files on macOS:
 
 ```bash
-sivtr init linux-shortcut
+sivtr init macos-shortcut
 ```
 
 This writes:
 
 - `~/.local/bin/sivtr-pick-codex`
-- `~/.local/share/applications/sivtr-pick-codex.desktop`
+- `~/Library/LaunchAgents/dev.sivtr.pick-codex.plist`
 
-The launcher opens a terminal and runs:
+You can:
 
-```bash
-sivtr hotkey-pick-codex --cwd "<project-path>"
-```
+- run `~/.local/bin/sivtr-pick-codex` directly;
+- load the LaunchAgent with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sivtr.pick-codex.plist`;
+- keep using the VS Code command for the most reliable shortcut-driven flow.
 
-Typical Linux usage examples:
+Quick one-line checks:
 
-- GNOME / KDE: bind your desktop shortcut to `~/.local/bin/sivtr-pick-codex`.
-- Plain terminal launcher: run `~/.local/bin/sivtr-pick-codex`.
-- Manual one-off command: `sivtr hotkey-pick-codex --cwd /path/to/project`.
+- generate and open the picker once: `sivtr init macos-shortcut && ~/.local/bin/sivtr-pick-codex`
+- generate and load the LaunchAgent wrapper: `sivtr init macos-shortcut && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sivtr.pick-codex.plist`
+
 ### Windows Global Hotkey
 
 On Windows, the hotkey daemon can open the AI session picker from anywhere:
@@ -312,7 +327,7 @@ The default shortcut is `alt+y`.
 | `sivtr diff <left> <right>` | Compare recent command blocks. |
 | `sivtr history` | List, search, and show captured output history. |
 | `sivtr config` | Manage the TOML config file. |
-| `sivtr init <target>` | Generate shell integration or Linux shortcut helpers. |
+| `sivtr init <shell>` | Generate shell integration for command-block capture. |
 | `sivtr import` | Open the current session log. |
 | `sivtr hotkey` | Manage the Windows AI session picker hotkey. |
 | `sivtr clear` | Clear session logs. |

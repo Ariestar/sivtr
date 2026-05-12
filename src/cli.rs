@@ -100,7 +100,8 @@ Defaults:
 Session Resolution:
   By default, sivtr reads the newest Codex rollout whose `cwd`
   matches the current working directory.
-  `--session N` picks the Nth newest recorded Codex session.
+  `--session N` picks the Nth newest selectable Codex session
+  (the same session numbering shown in `--pick`).
   `--session ID` matches a session id or id prefix.
 
 Selector Semantics:
@@ -139,7 +140,8 @@ Defaults:
 Session Resolution:
   By default, sivtr reads the newest Claude Code transcript whose `cwd`
   matches the current working directory.
-  `--session N` picks the Nth newest recorded Claude session.
+  `--session N` picks the Nth newest selectable Claude session
+  (the same session numbering shown in `--pick`).
   `--session ID` matches a session id or id prefix.
 
 Selector Semantics:
@@ -363,7 +365,7 @@ pub struct AgentCopyArgs {
     #[command(flatten)]
     pub common: CopySimpleArgs,
 
-    /// Which recorded session to read; `1` means the newest session, or pass an id / id prefix
+    /// Which session to read; `1` means the newest selectable session from `--pick`, or pass an id / id prefix
     #[arg(long, value_name = "N|ID")]
     pub session: Option<String>,
 }

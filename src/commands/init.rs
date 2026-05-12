@@ -64,7 +64,10 @@ if [[ -n "${APPDATA:-}" ]]; then
 else
   export SIVTR_SESSION_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/sivtr/session_$$.log"
 fi
+export SIVTR_CAPTURE_FILE="${SIVTR_SESSION_LOG%.log}.capture"
+mkdir -p "${SIVTR_SESSION_LOG%/*}"
 __sivtr_precmd() {
+  local exit_status=$?
   local hist_entry
   hist_entry="$(HISTTIMEFORMAT= history 1)"
   if [[ $hist_entry =~ ^[[:space:]]*([0-9]+)[[:space:]]+(.*)$ ]]; then
@@ -73,6 +76,7 @@ __sivtr_precmd() {
   fi
   export SIVTR_LAST_PROMPT="${PS1@P}"
   sivtr flush >/dev/null 2>&1 || true
+  return $exit_status
 }
 if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then
   if [[ " ${PROMPT_COMMAND[*]} " != *" __sivtr_precmd "* ]]; then
@@ -97,13 +101,17 @@ if [[ -n "${APPDATA:-}" ]]; then
 else
   export SIVTR_SESSION_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/sivtr/session_$$.log"
 fi
+export SIVTR_CAPTURE_FILE="${SIVTR_SESSION_LOG%.log}.capture"
+mkdir -p "${SIVTR_SESSION_LOG%/*}"
 _sivtr_precmd() {
+  local exit_status=$?
   export SIVTR_LAST_COMMAND="$(fc -ln -1)"
   export SIVTR_LAST_COMMAND_ID="$HISTCMD"
   export SIVTR_LAST_PROMPT="$(print -P "$PROMPT")"
   sivtr flush >/dev/null 2>&1 || true
+  return $exit_status
 }
-if (( ${precmd_functions[(I)_sivtr_precmd]} == 0 )); then
+if [[ " ${precmd_functions[*]:-} " != *" _sivtr_precmd "* ]]; then
   precmd_functions=(_sivtr_precmd $precmd_functions)
 fi
 # <<< sivtr shell integration <<<
@@ -135,7 +143,7 @@ const TMUX_MARKER_START: &str = "# >>> sivtr tmux shortcut >>>";
 const TMUX_MARKER_END: &str = "# <<< sivtr tmux shortcut <<<";
 #[cfg(unix)]
 const TMUX_HOOK: &str = r##"# >>> sivtr tmux shortcut >>>
-bind-key y new-window -c "#{pane_current_path}" "sivtr hotkey-pick-codex --cwd '#{pane_current_path}'"
+bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex --pick"
 # <<< sivtr tmux shortcut <<<
 "##;
 
@@ -185,6 +193,9 @@ const TMUX_SPEC: HookSpec = HookSpec {
     legacy_hook: None,
 };
 
+#[cfg_attr(not(unix), allow(dead_code))]
+const MACOS_SHORTCUT_LABEL: &str = "dev.sivtr.pick-codex";
+
 enum InstallStatus {
     Installed,
     Updated,
@@ -200,11 +211,14 @@ pub fn execute(shell: &str) -> Result<()> {
         "nu" | "nushell" => install_single_shell_hook(&nushell_config_path()?, &NUSHELL_SPEC),
         "tmux" => install_tmux_shortcut(),
         "linux-shortcut" => install_linux_shortcut(),
+        "macos-shortcut" => install_macos_shortcut(),
         _ => {
             eprintln!(
-                "sivtr: supported targets are powershell, bash, zsh, nushell, tmux, linux-shortcut"
+                "sivtr: supported targets are powershell, bash, zsh, nushell, tmux, linux-shortcut, macos-shortcut"
             );
-            eprintln!("  usage: sivtr init <powershell|bash|zsh|nushell|tmux|linux-shortcut>");
+            eprintln!(
+                "  usage: sivtr init <powershell|bash|zsh|nushell|tmux|linux-shortcut|macos-shortcut>"
+            );
             std::process::exit(1);
         }
     }?;
@@ -319,6 +333,46 @@ fn install_linux_shortcut() -> Result<()> {
     anyhow::bail!("`sivtr init linux-shortcut` is only supported on Unix-like systems");
 }
 
+#[cfg(unix)]
+fn install_macos_shortcut() -> Result<()> {
+    if !cfg!(target_os = "macos") {
+        return Err(anyhow::anyhow!(
+            "`sivtr init macos-shortcut` must be run on macOS"
+        ));
+    }
+
+    let home = dirs::home_dir().context("Failed to resolve home directory")?;
+    let bin_dir = home.join(".local").join("bin");
+    let launch_agents_dir = home.join("Library").join("LaunchAgents");
+    fs::create_dir_all(&bin_dir)?;
+    fs::create_dir_all(&launch_agents_dir)?;
+
+    let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
+    let script_path = bin_dir.join("sivtr-pick-codex");
+    let plist_path = launch_agents_dir.join(format!("{MACOS_SHORTCUT_LABEL}.plist"));
+
+    write_macos_shortcut_script(&script_path, &cwd)?;
+    write_macos_shortcut_plist(&plist_path, &script_path)?;
+
+    eprintln!("sivtr: installed macOS shortcut launcher");
+    eprintln!("  script: {}", script_path.display());
+    eprintln!("  agent:  {}", plist_path.display());
+    eprintln!(
+        "  load with: launchctl bootstrap gui/$(id -u) {}",
+        plist_path.display()
+    );
+    eprintln!(
+        "  run manually: osascript -e 'tell application \"Terminal\" to do script \"{}\"'",
+        shell_double_quote(&script_path.to_string_lossy())
+    );
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn install_macos_shortcut() -> Result<()> {
+    anyhow::bail!("`sivtr init macos-shortcut` is only supported on macOS");
+}
+
 fn print_install_summary(installed: &[String], updated: &[String]) {
     if installed.is_empty() && updated.is_empty() {
         eprintln!("sivtr: no new installation needed (already set up)");
@@ -338,7 +392,7 @@ fn maybe_start_hotkey() -> Result<()> {
     #[cfg(windows)]
     {
         if !atty::is(atty::Stream::Stdin) {
-            eprintln!("sivtr: start the AI session hotkey later with `sivtr hotkey start`");
+            eprintln!("sivtr: start the Codex hotkey later with `sivtr hotkey start`");
             return Ok(());
         }
 
@@ -350,7 +404,7 @@ fn maybe_start_hotkey() -> Result<()> {
                 })),
             })?;
         } else {
-            eprintln!("sivtr: start the AI session hotkey later with `sivtr hotkey start`");
+            eprintln!("sivtr: start the Codex hotkey later with `sivtr hotkey start`");
         }
     }
 
@@ -359,7 +413,7 @@ fn maybe_start_hotkey() -> Result<()> {
 
 #[cfg(windows)]
 fn prompt_start_hotkey() -> Result<bool> {
-    eprint!("sivtr: start the Windows AI session hotkey now? [Y/n] ");
+    eprint!("sivtr: start the Windows Codex hotkey now? [Y/n] ");
     io::stderr().flush()?;
 
     let mut input = String::new();
@@ -536,7 +590,7 @@ fn render_linux_shortcut_script(cwd: &Path, terminal: Option<&str>) -> String {
 
 #[cfg(unix)]
 fn build_terminal_launch_command(terminal: &str) -> String {
-    let picker = "sivtr hotkey-pick-codex --cwd \"$PROJECT_CWD\"";
+    let picker = "cd \"$PROJECT_CWD\"; exec sivtr copy codex --pick";
     match terminal {
         "gnome-terminal" => format!("exec gnome-terminal -- bash -lc '{picker}'"),
         "konsole" => format!("exec konsole --noclose -e bash -lc '{picker}'"),
@@ -549,19 +603,87 @@ fn build_terminal_launch_command(terminal: &str) -> String {
     }
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
+fn write_macos_shortcut_script(path: &Path, cwd: &Path) -> Result<()> {
+    let script = render_macos_shortcut_script(cwd);
+    fs::write(path, script)?;
+    #[cfg(unix)]
+    {
+        let mut perms = fs::metadata(path)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms)?;
+    }
+    Ok(())
+}
+
+#[cfg_attr(not(unix), allow(dead_code))]
+fn render_macos_shortcut_script(cwd: &Path) -> String {
+    let cwd = shell_single_quote(&cwd.to_string_lossy());
+    format!(
+        "#!/usr/bin/env bash\nset -euo pipefail\nexport PROJECT_CWD='{cwd}'\ncd \"$PROJECT_CWD\"\nexec sivtr copy codex --pick\n"
+    )
+}
+
+#[cfg_attr(not(unix), allow(dead_code))]
+fn write_macos_shortcut_plist(path: &Path, script_path: &Path) -> Result<()> {
+    let plist = render_macos_shortcut_plist(script_path);
+    fs::write(path, plist)?;
+    Ok(())
+}
+
+#[cfg_attr(not(unix), allow(dead_code))]
+fn render_macos_shortcut_plist(script_path: &Path) -> String {
+    let script = xml_escape(&script_path.to_string_lossy());
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>{MACOS_SHORTCUT_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/osascript</string>
+    <string>-e</string>
+    <string>tell application "Terminal" to do script "{script}"</string>
+  </array>
+</dict>
+</plist>
+"#
+    )
+}
+
 #[cfg(unix)]
 fn write_linux_shortcut_desktop_entry(path: &Path, script_path: &Path) -> Result<()> {
     let desktop = format!(
         "[Desktop Entry]\nType=Application\nName=Sivtr Pick Codex\nExec={}\nTerminal=false\nCategories=Development;\n",
-        script_path.display()
+        desktop_exec_quote(&script_path.to_string_lossy())
     );
     fs::write(path, desktop)?;
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg_attr(not(unix), allow(dead_code))]
 fn shell_single_quote(value: &str) -> String {
     value.replace('\'', "'\"'\"'")
+}
+
+#[cfg_attr(not(unix), allow(dead_code))]
+fn desktop_exec_quote(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+#[cfg_attr(not(unix), allow(dead_code))]
+fn shell_double_quote(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+#[cfg_attr(not(unix), allow(dead_code))]
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn find_marked_block(
@@ -583,10 +705,11 @@ mod tests {
         shell_single_quote, TMUX_HOOK, TMUX_SPEC,
     };
     use super::{
-        update_existing_hook, BASH_HOOK, BASH_SPEC, LEGACY_POWERSHELL_HOOK, NUSHELL_HOOK,
-        NUSHELL_SPEC, POWERSHELL_HOOK, POWERSHELL_SPEC, ZSH_HOOK, ZSH_SPEC,
+        desktop_exec_quote, render_macos_shortcut_plist, render_macos_shortcut_script,
+        update_existing_hook, xml_escape, BASH_HOOK, BASH_SPEC, LEGACY_POWERSHELL_HOOK,
+        MACOS_SHORTCUT_LABEL, NUSHELL_HOOK, NUSHELL_SPEC, POWERSHELL_HOOK, POWERSHELL_SPEC,
+        ZSH_HOOK, ZSH_SPEC,
     };
-    #[cfg(unix)]
     use std::path::Path;
 
     #[cfg(windows)]
@@ -629,12 +752,26 @@ mod tests {
     }
 
     #[test]
+    fn bash_hook_keeps_capture_path_without_tty_redirection() {
+        assert!(BASH_HOOK.contains("export SIVTR_CAPTURE_FILE="));
+        assert!(!BASH_HOOK.contains("trap '__sivtr_preexec' DEBUG"));
+        assert!(!BASH_HOOK.contains("exec > >(tee \"$SIVTR_CAPTURE_FILE\""));
+    }
+
+    #[test]
     fn replaces_existing_zsh_block() {
         let profile = format!("before\n{ZSH_HOOK}\nafter\n");
         let updated =
             update_existing_hook(&profile, &ZSH_SPEC).expect("zsh hook should be detected");
 
         assert_eq!(updated, profile);
+    }
+
+    #[test]
+    fn zsh_hook_keeps_capture_path_without_tty_redirection() {
+        assert!(ZSH_HOOK.contains("export SIVTR_CAPTURE_FILE="));
+        assert!(!ZSH_HOOK.contains("preexec_functions=(_sivtr_preexec"));
+        assert!(!ZSH_HOOK.contains("exec > >(tee \"$SIVTR_CAPTURE_FILE\""));
     }
 
     #[test]
@@ -662,7 +799,7 @@ mod tests {
         let command = build_terminal_launch_command("gnome-terminal");
 
         assert!(command.contains("gnome-terminal"));
-        assert!(command.contains("sivtr hotkey-pick-codex --cwd \"$PROJECT_CWD\""));
+        assert!(command.contains("cd \"$PROJECT_CWD\"; exec sivtr copy codex --pick"));
     }
 
     #[cfg(unix)]
@@ -677,7 +814,46 @@ mod tests {
         let script = render_linux_shortcut_script(Path::new("/tmp/project"), Some("xterm"));
 
         assert!(script.contains("export PROJECT_CWD='/tmp/project'"));
-        assert!(script.contains("sivtr hotkey-pick-codex --cwd \"$PROJECT_CWD\""));
+        assert!(script.contains("cd \"$PROJECT_CWD\"; exec sivtr copy codex --pick"));
+    }
+
+    #[test]
+    fn desktop_exec_quote_wraps_paths_with_spaces() {
+        assert_eq!(
+            desktop_exec_quote("/tmp/sivtr desktop/sivtr-pick-codex"),
+            "\"/tmp/sivtr desktop/sivtr-pick-codex\""
+        );
+    }
+
+    #[test]
+    fn desktop_exec_quote_escapes_embedded_quotes_and_backslashes() {
+        assert_eq!(
+            desktop_exec_quote("/tmp/dir \\\"quoted\\\"/sivtr"),
+            "\"/tmp/dir \\\\\\\"quoted\\\\\\\"/sivtr\""
+        );
+    }
+
+    #[test]
+    fn macos_shortcut_script_runs_picker_in_project_cwd() {
+        let script = render_macos_shortcut_script(Path::new("/tmp/project"));
+
+        assert!(script.contains("export PROJECT_CWD='/tmp/project'"));
+        assert!(script.contains("exec sivtr copy codex --pick"));
+    }
+
+    #[test]
+    fn macos_shortcut_plist_uses_terminal_osascript_launcher() {
+        let plist = render_macos_shortcut_plist(Path::new("/tmp/sivtr-pick-codex"));
+
+        assert!(plist.contains(MACOS_SHORTCUT_LABEL));
+        assert!(plist.contains("/usr/bin/osascript"));
+        assert!(plist.contains("tell application \"Terminal\" to do script"));
+        assert!(plist.contains("/tmp/sivtr-pick-codex"));
+    }
+
+    #[test]
+    fn xml_escape_escapes_special_characters() {
+        assert_eq!(xml_escape("a&b<c>d"), "a&amp;b&lt;c&gt;d");
     }
 
     #[cfg(unix)]

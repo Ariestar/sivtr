@@ -15,7 +15,7 @@ pub fn execute(cmd: ConfigCommand) -> Result<()> {
                 let content = std::fs::read_to_string(&path)?;
                 println!("{content}");
             } else {
-                println!("(file does not exist 鈥?using defaults)");
+                println!("(file does not exist - using defaults)");
                 println!();
                 let config = SivtrConfig::default();
                 let content = sivtr_core::config::to_toml_string(&config)?;

@@ -166,9 +166,13 @@ sivtr copy codex tool   # 最近工具输出
 sivtr copy codex all    # 整个解析后的会话
 sivtr copy codex --session 2 --pick
 sivtr copy codex --pick # 浏览本地和共享镜像会话
+sivtr copy codex all --max-blocks 0
+sivtr copy codex all --max-blocks 10000
 ```
 
 默认会过滤过程性 commentary，所以 `sivtr copy codex out` 更倾向返回最终助手回复，而不是中间状态更新。
+
+为避免超大 Codex transcript 让导入或 picker 变慢，默认只保留最近 `10000` 个解析后的 block。若要全量导入，可在配置里设置 `[codex].max_blocks = 0`，或在命令行传 `--max-blocks 0`。
 
 先把当前账号的会话持续镜像成共享树：
 
@@ -226,14 +230,17 @@ Alt+Y
 你可以改成 `Ctrl+Y`，但它通常会覆盖编辑器的 Redo。
 
 在 Linux 上，当焦点位于 VS Code 编辑器时，这个快捷键就是默认的
-Codex picker 快捷键。插件实际执行的是：
+AI session picker 快捷键。插件实际执行的是：
 
 ```bash
-sivtr hotkey-pick-codex --cwd .
+sivtr hotkey-pick-agent --cwd . --provider all
 ```
 
 如果当前终端正运行在活动中的 `codex` 或 `codex resume` 会话里，
 `sivtr` 会优先使用这个精确会话。
+
+在 macOS 上，当焦点位于 VS Code 编辑器时，这个快捷键同样是默认的
+picker 快捷键。
 
 ### Linux 快捷键设置
 
@@ -249,41 +256,41 @@ Linux 目前没有提供 VS Code 之外的默认全局 `sivtr` 热键。
 推荐的 Linux 设置方式：
 
 - VS Code：直接使用内置的 `Alt+Y`。
-- tmux：安装一个把 `prefix + y` 绑定到当前 pane 目录的 helper：
-
-```bash
-sivtr init tmux
-tmux source-file ~/.tmux.conf
-```
-
-生成的配置块是：
+- tmux：给当前 pane 目录绑定一个快捷键：
 
 ```tmux
-bind-key y new-window -c "#{pane_current_path}" "sivtr hotkey-pick-codex --cwd '#{pane_current_path}'"
+bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex --pick"
 ```
 
-- 终端或桌面环境：为当前项目生成一个 launcher：
+- 终端或桌面环境：手动创建一个自定义快捷键，在终端中执行
+  `cd <project-path> && sivtr copy codex --pick`。
+
+### macOS 快捷键设置
+
+macOS 目前没有内置的 `sivtr` 全局热键守护进程。推荐默认使用上面的 VS Code 快捷键。
+
+如果你想在 VS Code 之外通过 Terminal 启动项目级 picker，可以在 macOS 上生成 launcher 和 LaunchAgent 包装：
 
 ```bash
-sivtr init linux-shortcut
+sivtr init macos-shortcut
 ```
 
 它会写入：
 
 - `~/.local/bin/sivtr-pick-codex`
-- `~/.local/share/applications/sivtr-pick-codex.desktop`
+- `~/Library/LaunchAgents/dev.sivtr.pick-codex.plist`
 
-这个 launcher 会打开一个终端，并执行：
+你可以：
 
-```bash
-sivtr hotkey-pick-codex --cwd "<project-path>"
-```
+- 直接运行 `~/.local/bin/sivtr-pick-codex`；
+- 用 `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sivtr.pick-codex.plist` 加载 LaunchAgent；
+- 继续使用 VS Code 命令，作为最稳定的快捷键驱动入口。
 
-常见 Linux 使用示例：
+可直接复制的一行验证命令：
 
-- GNOME / KDE：把 `~/.local/bin/sivtr-pick-codex` 绑定到你的桌面快捷键。
-- 纯终端启动：直接运行 `~/.local/bin/sivtr-pick-codex`。
-- 一次性手动执行：`sivtr hotkey-pick-codex --cwd /path/to/project`。
+- 生成并立即打开 picker：`sivtr init macos-shortcut && ~/.local/bin/sivtr-pick-codex`
+- 生成并加载 LaunchAgent 包装：`sivtr init macos-shortcut && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sivtr.pick-codex.plist`
+
 ### Windows 全局热键
 
 Windows 上可以启动全局热键守护进程：
@@ -308,7 +315,7 @@ sivtr hotkey stop
 | `sivtr diff <left> <right>` | 对比最近命令输出。 |
 | `sivtr history` | 列出、搜索、查看输出历史。 |
 | `sivtr config` | 管理 TOML 配置。 |
-| `sivtr init <target>` | 生成 shell 集成或 Linux 快捷键 helper。 |
+| `sivtr init <shell>` | 生成命令块捕获所需的 shell 集成。 |
 | `sivtr import` | 打开当前 session log。 |
 | `sivtr hotkey` | 管理 Windows AI session picker 热键。 |
 | `sivtr clear` | 清空 session logs。 |
