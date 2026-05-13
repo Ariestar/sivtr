@@ -946,7 +946,9 @@ fn can_copy_agent_user_excerpt(focus: AgentHierarchyFocus, dialogue_count: usize
     dialogue_count > 0
         && matches!(
             focus,
-            AgentHierarchyFocus::Dialogues | AgentHierarchyFocus::Content
+            AgentHierarchyFocus::Sessions
+                | AgentHierarchyFocus::Dialogues
+                | AgentHierarchyFocus::Content
         )
 }
 
@@ -1136,7 +1138,7 @@ fn render_agent_hierarchy_picker(title: &str, frame: &mut Frame, view: AgentHier
     let controls = match view.focus {
         AgentHierarchyFocus::Agents => "j/k move  l/Right/Enter open sessions  q/Esc cancel",
         AgentHierarchyFocus::Sessions => {
-            "j/k move  l/Right/Enter open dialogues  t open-vim  q/Esc cancel"
+            "j/k move  l/Right/Enter open dialogues  t open-vim  m copy-user  2:8m copy-user-lines  q/Esc cancel"
         }
         AgentHierarchyFocus::Dialogues => {
             "j/k move  Space toggle  a toggle-all  t open-vim  m copy-user  2:8m copy-user-lines  h/Left/Esc back  Enter copy  q cancel"
@@ -2523,13 +2525,13 @@ mod tests {
     use super::picker::{apply_range_toggle, selection_from_entries, PickEntry};
     use super::{
         agent_dialogue_vim_view, agent_session_preview, build_agent_units, build_agent_vim_view,
-        build_current_agent_session_choices, build_output_preview, can_open_dialogue_vim,
-        extract_markdown_section, filter_lines_by_regex, filter_lines_by_spec, format_block,
-        format_content_with_line_numbers, is_vim_command, parse_user_copy_line_spec,
-        resolve_agent_session_selector, slice_text_by_line_spec, vim_single_quote, AgentBlock,
-        AgentBlockKind, AgentHierarchyFocus, AgentProvider, AgentSelection, AgentSession,
-        AgentSessionChoice, AgentSessionInfo, AgentSessionProvider, CommandBlock, CommandSelection,
-        CopyMode, TextPair,
+        build_current_agent_session_choices, build_output_preview, can_copy_agent_user_excerpt,
+        can_open_dialogue_vim, extract_markdown_section, filter_lines_by_regex,
+        filter_lines_by_spec, format_block, format_content_with_line_numbers, is_vim_command,
+        parse_user_copy_line_spec, resolve_agent_session_selector, slice_text_by_line_spec,
+        vim_single_quote, AgentBlock, AgentBlockKind, AgentHierarchyFocus, AgentProvider,
+        AgentSelection, AgentSession, AgentSessionChoice, AgentSessionInfo, AgentSessionProvider,
+        CommandBlock, CommandSelection, CopyMode, TextPair,
     };
     use anyhow::Result;
     use std::collections::HashMap;
@@ -2963,6 +2965,24 @@ mod tests {
         assert!(can_open_dialogue_vim(AgentHierarchyFocus::Dialogues, 1));
         assert!(can_open_dialogue_vim(AgentHierarchyFocus::Content, 1));
         assert!(!can_open_dialogue_vim(AgentHierarchyFocus::Sessions, 0));
+    }
+
+    #[test]
+    fn can_copy_user_excerpt_accepts_session_focus_when_dialogues_exist() {
+        assert!(!can_copy_agent_user_excerpt(AgentHierarchyFocus::Agents, 1));
+        assert!(can_copy_agent_user_excerpt(
+            AgentHierarchyFocus::Sessions,
+            1
+        ));
+        assert!(can_copy_agent_user_excerpt(
+            AgentHierarchyFocus::Dialogues,
+            1
+        ));
+        assert!(can_copy_agent_user_excerpt(AgentHierarchyFocus::Content, 1));
+        assert!(!can_copy_agent_user_excerpt(
+            AgentHierarchyFocus::Sessions,
+            0
+        ));
     }
 
     #[test]

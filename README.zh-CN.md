@@ -104,9 +104,9 @@ sivtr copy codex out
 sivtr copy codex --pick
 ```
 
-在 Codex 对话选择器里，按 `m` 只复制当前对话 `## User` 的正文。输入
-`2:8m` 这样的 1-based 行范围，可以只复制该 `## User` 正文里的第 2 到第
-8 行。复制结果不会包含 `## User` 和 `## Assistant` 这两行标题。
+在 Codex 选择器里，按 `m` 只复制当前高亮对话 `## User` 的正文。输入 `2:8m`
+这样的 1-based 行范围，可以只复制该 `## User` 正文里的第 2 到第 8 行。
+复制结果不会包含 `## User` 和 `## Assistant` 这两行标题。
 
 对比最近两次命令输出：
 
