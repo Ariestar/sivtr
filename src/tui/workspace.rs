@@ -1,10 +1,13 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::{Color, Frame, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Clear, ListItem, ListState, Paragraph};
 use std::time::SystemTime;
 
 use crate::commands::command_block_selector::CommandSelection;
+use crate::tui::pane::{
+    active_item_style, panel_block, render_list_panel, selected_item_style, Panel,
+};
 use sivtr_core::ai::AgentProvider;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,6 +57,13 @@ pub(crate) struct WorkspaceSession {
     pub(crate) title: String,
     pub(crate) units: Vec<TextPair>,
     pub(crate) dialogue_titles: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct WorkspaceDialogue {
+    pub(crate) source: WorkspaceSource,
+    pub(crate) title: String,
+    pub(crate) unit: TextPair,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,7 +158,9 @@ pub(crate) struct WorkspaceView<'a> {
     pub(crate) selected_sources: &'a [bool],
     pub(crate) source_state: &'a ListState,
     pub(crate) sessions: &'a [WorkspaceSession],
+    pub(crate) selected_sessions: &'a [bool],
     pub(crate) session_state: &'a ListState,
+    pub(crate) dialogues: &'a [WorkspaceDialogue],
     pub(crate) dialogue_state: &'a ListState,
     pub(crate) selected_dialogues: &'a [bool],
     pub(crate) range_anchor: Option<usize>,
@@ -165,23 +177,6 @@ pub(crate) struct WorkspaceLayout {
     pub(crate) sessions: Rect,
     pub(crate) dialogues: Rect,
     pub(crate) content: Rect,
-}
-
-#[derive(Clone, Copy)]
-struct Panel {
-    key: &'static str,
-    name: &'static str,
-    active: bool,
-}
-
-impl Panel {
-    fn title(self) -> String {
-        if self.active {
-            format!("[{}] {} *", self.key, self.name)
-        } else {
-            format!("[{}] {}", self.key, self.name)
-        }
-    }
 }
 
 pub(crate) fn selected_index(state: &ListState) -> usize {
@@ -294,14 +289,6 @@ fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
         && row < area.y.saturating_add(area.height)
 }
 
-pub(crate) fn current_agent_dialogue_text(choice: &WorkspaceSession, dialogue_idx: usize) -> &str {
-    choice
-        .units
-        .get(dialogue_idx)
-        .map(|unit| unit.plain.as_str())
-        .unwrap_or("<empty>")
-}
-
 pub(crate) fn format_content_with_line_numbers(text: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let line_count = lines.len().max(1);
@@ -363,7 +350,7 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
         },
         WorkspaceHelpEntry {
             key: "Space",
-            description: "toggle current source/dialogue",
+            description: "toggle current source/session/dialogue",
             action: WorkspaceHelpAction::ToggleSelection,
         },
         WorkspaceHelpEntry {
@@ -429,24 +416,6 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
     ]
 }
 
-pub(crate) fn agent_dialogue_selection(
-    selected_dialogues: &[bool],
-    highlighted_idx: usize,
-) -> CommandSelection {
-    let total = selected_dialogues.len();
-    let mut selected: Vec<usize> = selected_dialogues
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, selected)| selected.then_some(total - idx))
-        .collect();
-
-    if selected.is_empty() {
-        selected.push(total - highlighted_idx);
-    }
-
-    CommandSelection::RecentExplicit(selected)
-}
-
 pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
     let area = frame.area();
     frame.render_widget(Clear, area);
@@ -457,14 +426,8 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         .split(area);
     let layout = workspace_layout(area, view.focus, view.fullscreen);
 
-    let session = view
-        .sessions
-        .get(selected_index(view.session_state).min(view.sessions.len().saturating_sub(1)));
-    let dialogue_idx = session
-        .map(|session| {
-            selected_index(view.dialogue_state).min(session.dialogue_titles.len().saturating_sub(1))
-        })
-        .unwrap_or(0);
+    let dialogue_idx =
+        selected_index(view.dialogue_state).min(view.dialogues.len().saturating_sub(1));
 
     render_source_list(
         frame,
@@ -478,14 +441,17 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         frame,
         layout.sessions,
         view.sessions,
+        view.selected_sources,
+        view.selected_sessions,
         view.session_state,
         view.focus == WorkspaceFocus::Sessions,
     );
     render_dialogue_list(
         frame,
         layout.dialogues,
-        session,
+        view.dialogues,
         view.dialogue_state,
+        view.selected_sessions,
         view.selected_dialogues,
         view.range_anchor,
         view.focus == WorkspaceFocus::Dialogues,
@@ -494,12 +460,12 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
     render_content_panel(
         frame,
         layout.content,
-        Panel {
-            key: WorkspaceFocus::Content.key(),
-            name: "Content",
-            active: view.focus == WorkspaceFocus::Content,
-        },
-        content_preview_text(session, view.selected_dialogues, dialogue_idx),
+        Panel::new(
+            WorkspaceFocus::Content.key(),
+            selected_parent_title("Content", view.selected_dialogues, "dialogue", "dialogues"),
+            view.focus == WorkspaceFocus::Content,
+        ),
+        content_preview_text(view.dialogues, view.selected_dialogues, dialogue_idx),
         view.content_scroll,
     );
 
@@ -529,7 +495,7 @@ fn render_footer(
         match focus {
             WorkspaceFocus::Source => "j/k move  Space toggle  a all  g agents  t terminal  Enter sessions  z fullscreen  q/Esc cancel  ? help",
             WorkspaceFocus::Sessions => {
-                "j/k move  0 source  l/Right/Enter dialogues  t vim  z fullscreen  q/Esc cancel  ? help"
+                "j/k move  Space toggle  0 source  l/Right/Enter dialogues  t vim  z fullscreen  q/Esc cancel  ? help"
             }
             WorkspaceFocus::Dialogues => {
                 "j/k move  Space toggle  v range  a all  l/Right content  t vim  Enter copy  z fullscreen  h/Esc back  ? help"
@@ -562,17 +528,7 @@ fn render_help_panel(frame: &mut Frame, area: Rect, state: &ListState) {
             ]))
         })
         .collect::<Vec<_>>();
-    render_list_panel(
-        frame,
-        area,
-        Panel {
-            key: "?",
-            name: "Help",
-            active: true,
-        },
-        items,
-        state,
-    );
+    render_list_panel(frame, area, Panel::new("?", "Help", true), items, state);
 }
 
 fn render_source_list(
@@ -583,11 +539,7 @@ fn render_source_list(
     state: &ListState,
     active: bool,
 ) {
-    let panel = Panel {
-        key: WorkspaceFocus::Source.key(),
-        name: "Source",
-        active,
-    };
+    let panel = Panel::new(WorkspaceFocus::Source.key(), "Source", active);
     let current = selected_index(state).min(sources.len().saturating_sub(1));
     let mut spans = Vec::new();
     for (idx, source) in sources.iter().enumerate() {
@@ -603,9 +555,7 @@ fn render_source_list(
             format!("{marker} {}", source.label())
         };
         let style = if idx == current && active {
-            Style::default().bg(Color::Blue).fg(Color::White)
-        } else if idx == current {
-            Style::default().bg(Color::DarkGray)
+            active_item_style()
         } else {
             Style::default()
         };
@@ -614,7 +564,7 @@ fn render_source_list(
     if spans.is_empty() {
         spans.push(Span::raw("<empty>"));
     }
-    let paragraph = Paragraph::new(Line::from(spans)).block(panel_block(panel));
+    let paragraph = Paragraph::new(Line::from(spans)).block(panel_block(&panel));
     frame.render_widget(paragraph, area);
 }
 
@@ -622,14 +572,31 @@ fn render_session_list(
     frame: &mut Frame,
     area: Rect,
     choices: &[WorkspaceSession],
+    selected_sources: &[bool],
+    selected_sessions: &[bool],
     state: &ListState,
     active: bool,
 ) {
     let mut items: Vec<ListItem> = choices
         .iter()
         .enumerate()
-        .map(|(_, choice)| {
-            ListItem::new(format!("[{:<8}] {}", choice.source.label(), choice.title))
+        .map(|(idx, choice)| {
+            let selected = selected_sessions.get(idx).copied().unwrap_or(false);
+            let marker = if active {
+                if selected {
+                    "[x] "
+                } else {
+                    "[ ] "
+                }
+            } else {
+                ""
+            };
+            let line = format!("{marker}[{:<8}] {}", choice.source.label(), choice.title);
+            if selected {
+                ListItem::new(Line::from(Span::styled(line, selected_item_style())))
+            } else {
+                ListItem::new(line)
+            }
         })
         .collect();
     if items.is_empty() {
@@ -638,11 +605,11 @@ fn render_session_list(
     render_list_panel(
         frame,
         area,
-        Panel {
-            key: WorkspaceFocus::Sessions.key(),
-            name: "Sessions",
+        Panel::new(
+            WorkspaceFocus::Sessions.key(),
+            selected_parent_title("Sessions", selected_sources, "source", "sources"),
             active,
-        },
+        ),
         items,
         state,
     );
@@ -651,55 +618,48 @@ fn render_session_list(
 fn render_dialogue_list(
     frame: &mut Frame,
     area: Rect,
-    choice: Option<&WorkspaceSession>,
+    dialogues: &[WorkspaceDialogue],
     state: &ListState,
+    selected_sessions: &[bool],
     selected_dialogues: &[bool],
     range_anchor: Option<usize>,
     active: bool,
 ) {
     let highlighted_idx = selected_index(state);
-    let mut items: Vec<ListItem> = choice
-        .map(|choice| {
-            choice
-                .dialogue_titles
-                .iter()
-                .enumerate()
-                .map(|(idx, title)| {
-                    let in_range = range_anchor
-                        .map(|anchor| {
-                            idx >= anchor.min(highlighted_idx) && idx <= anchor.max(highlighted_idx)
-                        })
-                        .unwrap_or(false);
-                    let selected = selected_dialogues.get(idx).copied().unwrap_or(false);
-                    let marker = if active {
-                        if selected {
-                            "[x] "
-                        } else {
-                            "[ ] "
-                        }
-                    } else {
-                        ""
-                    };
-                    let line = format!("{marker}{title}");
-                    if in_range {
-                        ListItem::new(Line::from(Span::styled(
-                            line,
-                            Style::default()
-                                .fg(Color::Yellow)
-                                .add_modifier(Modifier::BOLD),
-                        )))
-                    } else if selected {
-                        ListItem::new(Line::from(Span::styled(
-                            line,
-                            Style::default().bg(Color::DarkGray).fg(Color::White),
-                        )))
-                    } else {
-                        ListItem::new(line)
-                    }
+    let mut items: Vec<ListItem> = dialogues
+        .iter()
+        .enumerate()
+        .map(|(idx, dialogue)| {
+            let in_range = range_anchor
+                .map(|anchor| {
+                    idx >= anchor.min(highlighted_idx) && idx <= anchor.max(highlighted_idx)
                 })
-                .collect()
+                .unwrap_or(false);
+            let selected = selected_dialogues.get(idx).copied().unwrap_or(false);
+            let marker = if active {
+                if selected {
+                    "[x] "
+                } else {
+                    "[ ] "
+                }
+            } else {
+                ""
+            };
+            let line = format!("{marker}{}", dialogue.title);
+            if in_range {
+                ListItem::new(Line::from(Span::styled(
+                    line,
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )))
+            } else if selected {
+                ListItem::new(Line::from(Span::styled(line, selected_item_style())))
+            } else {
+                ListItem::new(line)
+            }
         })
-        .unwrap_or_default();
+        .collect();
 
     if items.is_empty() {
         items.push(ListItem::new("<empty>"));
@@ -708,51 +668,51 @@ fn render_dialogue_list(
     render_list_panel(
         frame,
         area,
-        Panel {
-            key: WorkspaceFocus::Dialogues.key(),
-            name: "Dialogues",
+        Panel::new(
+            WorkspaceFocus::Dialogues.key(),
+            selected_parent_title("Dialogues", selected_sessions, "session", "sessions"),
             active,
-        },
+        ),
         items,
         state,
     );
-}
-
-fn render_list_panel(
-    frame: &mut Frame,
-    area: Rect,
-    panel: Panel,
-    items: Vec<ListItem>,
-    state: &ListState,
-) {
-    let list = List::new(items)
-        .block(panel_block(panel))
-        .highlight_style(if panel.active {
-            Style::default().bg(Color::Blue).fg(Color::White)
-        } else {
-            Style::default().bg(Color::DarkGray)
-        })
-        .highlight_symbol(if panel.active { ">> " } else { "   " });
-    let mut local_state = state.clone();
-    frame.render_stateful_widget(list, area, &mut local_state);
 }
 
 fn render_content_panel(frame: &mut Frame, area: Rect, panel: Panel, text: String, scroll: usize) {
     let paragraph = Paragraph::new(highlighted_content_text(&text))
         .scroll((scroll as u16, 0))
         .wrap(ratatui::widgets::Wrap { trim: false })
-        .block(panel_block(panel));
+        .block(panel_block(&panel));
     frame.render_widget(paragraph, area);
 }
 
+fn selected_parent_title(
+    title: &str,
+    selected_parent_items: &[bool],
+    singular: &str,
+    plural: &str,
+) -> String {
+    let count = selected_parent_items
+        .iter()
+        .filter(|selected| **selected)
+        .count();
+    if count == 0 {
+        title.to_string()
+    } else if count == 1 {
+        format!("{title}: 1 {singular} selected")
+    } else {
+        format!("{title}: {count} {plural} selected")
+    }
+}
+
 fn content_preview_text(
-    session: Option<&WorkspaceSession>,
+    dialogues: &[WorkspaceDialogue],
     selected_dialogues: &[bool],
     highlighted_idx: usize,
 ) -> String {
-    let Some(session) = session else {
+    if dialogues.is_empty() {
         return "<empty>".to_string();
-    };
+    }
 
     let selected = selected_dialogues
         .iter()
@@ -761,20 +721,17 @@ fn content_preview_text(
         .collect::<Vec<_>>();
 
     if selected.is_empty() {
-        return format_content_with_line_numbers(current_agent_dialogue_text(
-            session,
-            highlighted_idx,
-        ));
+        let text = dialogues
+            .get(highlighted_idx)
+            .map(|dialogue| dialogue.unit.plain.as_str())
+            .unwrap_or("<empty>");
+        return format_content_with_line_numbers(text);
     }
 
     let text = selected
         .into_iter()
-        .filter_map(|dialogue_idx| {
-            session
-                .units
-                .get(dialogue_idx)
-                .map(|unit| unit.plain.as_str())
-        })
+        .filter_map(|dialogue_idx| dialogues.get(dialogue_idx))
+        .map(|dialogue| dialogue.unit.plain.as_str())
         .collect::<Vec<_>>()
         .join("\n\n");
     format_content_with_line_numbers(&text)
@@ -802,13 +759,4 @@ fn highlighted_content_text(text: &str) -> Text<'static> {
         })
         .collect::<Vec<_>>();
     Text::from(lines)
-}
-
-fn panel_block(panel: Panel) -> Block<'static> {
-    let block = Block::default().borders(Borders::ALL).title(panel.title());
-    if panel.active {
-        block.border_style(Style::default().fg(Color::Cyan))
-    } else {
-        block
-    }
 }

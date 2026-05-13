@@ -12,7 +12,7 @@ use cli::{
     CopySubcommand, DiffArgs, HotkeyPickAgentArgs, HotkeyServeArgs,
 };
 use command_blocks::CommandBlockTextMode;
-use commands::copy::{AgentCopyRequest, CopyMode, CopyRequest};
+use commands::copy::{AgentCopyRequest, AgentPickerRequest, CopyMode, CopyRequest};
 use commands::diff::DiffRequest;
 use sivtr_core::ai::{AgentProvider, AgentSelection};
 
@@ -91,13 +91,27 @@ fn run() -> Result<()> {
                 // Piped input: read stdin
                 commands::pipe::execute()?;
             } else {
-                // No pipe: open the current session log
-                commands::import::execute()?;
+                run_workspace()?;
             }
         }
     }
 
     Ok(())
+}
+
+fn run_workspace() -> Result<()> {
+    let providers = AgentProvider::all()
+        .iter()
+        .map(|spec| spec.provider)
+        .collect::<Vec<_>>();
+    commands::copy::execute_agent_picker(AgentPickerRequest {
+        providers: &providers,
+        pick_current_session: false,
+        selection_mode: AgentSelection::LastTurn,
+        print_full: false,
+        regex: None,
+        lines: None,
+    })
 }
 
 fn run_copy(args: &CopyArgs, mode: CopyMode, include_prompt: bool) -> Result<()> {
