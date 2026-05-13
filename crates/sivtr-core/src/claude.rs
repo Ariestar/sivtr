@@ -198,13 +198,23 @@ fn push_assistant_text_blocks(session: &mut AgentSession, timestamp: Option<Stri
         );
 
         let parsed = parse_embedded_tool_span(&rest[start..], tool_kind);
-        push_block(
-            session,
-            tool_kind.block_kind(),
-            timestamp.clone(),
-            parsed.name,
-            tool_child_body(parsed.inner, tool_kind),
-        );
+        if let Some(body) = tool_child_body(parsed.inner, tool_kind) {
+            push_block(
+                session,
+                tool_kind.block_kind(),
+                timestamp.clone(),
+                parsed.name,
+                body,
+            );
+        } else {
+            push_block(
+                session,
+                AgentBlockKind::Assistant,
+                timestamp.clone(),
+                None,
+                &rest[start..start + parsed.consumed],
+            );
+        }
 
         rest = &rest[start + parsed.consumed..];
         rest = skip_completed_tool_close_tags(rest);
@@ -324,16 +334,12 @@ fn tool_name_attr(opening: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_string())
 }
 
-fn tool_child_body(inner: &str, tool_kind: EmbeddedToolKind) -> String {
+fn tool_child_body(inner: &str, tool_kind: EmbeddedToolKind) -> Option<String> {
     let child = tool_kind.child_tag();
-    let open_start = match inner.find(&format!("<{child}")) {
-        Some(index) => index,
-        None => panic!("Claude embedded tool missing <{child}>"),
-    };
-    let open_end = match inner[open_start..].find('>') {
-        Some(offset) => open_start + offset,
-        None => panic!("Claude embedded tool <{child}> must have a delimiter"),
-    };
+    let open_start = inner.find(&format!("<{child}"))?;
+    let open_end = inner[open_start..]
+        .find('>')
+        .map(|offset| open_start + offset)?;
     let close = format!("</{child}>");
     let body_start = open_end + 1;
     let close_start = match inner[body_start..].find(&close) {
@@ -341,7 +347,7 @@ fn tool_child_body(inner: &str, tool_kind: EmbeddedToolKind) -> String {
         None => inner.len(),
     };
 
-    inner[body_start..close_start].trim().to_string()
+    Some(inner[body_start..close_start].trim().to_string())
 }
 
 #[cfg(test)]
@@ -492,6 +498,32 @@ mod tests {
         assert_eq!(session.blocks[1].text, "{\"command\":\"rtk test\"}");
         assert_eq!(session.blocks[2].kind, AgentBlockKind::Assistant);
         assert_eq!(session.blocks[2].text, "after");
+    }
+
+    #[test]
+    fn keeps_embedded_tool_without_required_child_as_assistant_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"type":"user","message":{"role":"user","content":"review"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"before<tool_use name=\"Bash\">plain command</tool_use>after"}]}}
+"#,
+        )
+        .unwrap();
+
+        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+
+        assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
+        assert_eq!(session.blocks[1].kind, AgentBlockKind::Assistant);
+        assert_eq!(session.blocks[1].text, "before");
+        assert_eq!(session.blocks[2].kind, AgentBlockKind::Assistant);
+        assert_eq!(
+            session.blocks[2].text,
+            "<tool_use name=\"Bash\">plain command</tool_use>"
+        );
+        assert_eq!(session.blocks[3].kind, AgentBlockKind::Assistant);
+        assert_eq!(session.blocks[3].text, "after");
     }
 
     #[test]
