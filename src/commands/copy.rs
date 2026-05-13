@@ -831,8 +831,22 @@ fn run_agent_hierarchy_picker_on_terminal(
                     user_copy_status = None;
                 }
                 KeyCode::Char('m') if can_copy_agent_user_excerpt(focus, dialogue_count) => {
-                    let spec = (!user_copy_spec.is_empty()).then_some(user_copy_spec.as_str());
-                    match build_agent_user_excerpt_pick(&choices[session_idx], dialogue_idx, spec) {
+                    let result = if user_copy_spec.is_empty() {
+                        build_agent_user_excerpt_pick(&choices[session_idx], dialogue_idx)
+                    } else {
+                        build_agent_dialogue_line_slice_pick(
+                            &choices[session_idx],
+                            dialogue_idx,
+                            user_copy_spec.as_str(),
+                        )
+                    };
+                    match result {
+                        Ok(picked) => return Ok(picked),
+                        Err(err) => user_copy_status = Some(err.to_string()),
+                    }
+                }
+                KeyCode::Char('n') if can_copy_agent_user_excerpt(focus, dialogue_count) => {
+                    match build_agent_assistant_excerpt_pick(&choices[session_idx], dialogue_idx) {
                         Ok(picked) => return Ok(picked),
                         Err(err) => user_copy_status = Some(err.to_string()),
                     }
@@ -985,29 +999,54 @@ fn format_content_with_line_numbers(text: &str) -> String {
 fn build_agent_user_excerpt_pick(
     choice: &AgentSessionChoice,
     dialogue_idx: usize,
-    spec: Option<&str>,
 ) -> Result<AgentPickedContent> {
     let user_text = extract_markdown_section(
         current_agent_dialogue_text(choice, dialogue_idx),
         "User",
-        "Assistant",
+        Some("Assistant"),
     )?;
-    let user_text = match spec {
-        Some(spec) => slice_text_by_line_spec(&user_text, spec)?,
-        None => user_text,
-    };
-    let pair = TextPair {
-        plain: user_text.clone(),
-        ansi: user_text,
-    };
-    Ok(AgentPickedContent {
-        provider: choice.provider,
-        units: vec![pair],
-        selection: CommandSelection::RecentExplicit(vec![1]),
-    })
+    Ok(build_agent_text_pick(choice.provider, user_text))
 }
 
-fn extract_markdown_section(text: &str, heading: &str, next_heading: &str) -> Result<String> {
+fn build_agent_dialogue_line_slice_pick(
+    choice: &AgentSessionChoice,
+    dialogue_idx: usize,
+    spec: &str,
+) -> Result<AgentPickedContent> {
+    let dialogue_text = current_agent_dialogue_text(choice, dialogue_idx);
+    let sliced = slice_text_by_line_spec(dialogue_text, spec)?;
+    Ok(build_agent_text_pick(choice.provider, sliced))
+}
+
+fn build_agent_assistant_excerpt_pick(
+    choice: &AgentSessionChoice,
+    dialogue_idx: usize,
+) -> Result<AgentPickedContent> {
+    let assistant_text = extract_markdown_section(
+        current_agent_dialogue_text(choice, dialogue_idx),
+        "Assistant",
+        None,
+    )?;
+    Ok(build_agent_text_pick(choice.provider, assistant_text))
+}
+
+fn build_agent_text_pick(provider: AgentProvider, text: String) -> AgentPickedContent {
+    let pair = TextPair {
+        plain: text.clone(),
+        ansi: text,
+    };
+    AgentPickedContent {
+        provider,
+        units: vec![pair],
+        selection: CommandSelection::RecentExplicit(vec![1]),
+    }
+}
+
+fn extract_markdown_section(
+    text: &str,
+    heading: &str,
+    next_heading: Option<&str>,
+) -> Result<String> {
     let mut in_section = false;
     let mut collected = Vec::new();
     for line in text.lines() {
@@ -1017,7 +1056,7 @@ fn extract_markdown_section(text: &str, heading: &str, next_heading: &str) -> Re
             }
             continue;
         }
-        if is_markdown_heading(line, next_heading) {
+        if next_heading.is_some_and(|next| is_markdown_heading(line, next)) {
             break;
         }
         collected.push(line);
@@ -1048,9 +1087,9 @@ fn is_markdown_heading(line: &str, heading: &str) -> bool {
 fn slice_text_by_line_spec(text: &str, spec: &str) -> Result<String> {
     let lines: Vec<&str> = text.lines().collect();
     if lines.is_empty() {
-        anyhow::bail!("Selected ## User section is empty");
+        anyhow::bail!("Selected dialogue content is empty");
     }
-    let range = parse_user_copy_line_spec(spec, lines.len())?;
+    let range = parse_dialogue_copy_line_spec(spec, lines.len())?;
     Ok(lines
         .iter()
         .enumerate()
@@ -1062,13 +1101,13 @@ fn slice_text_by_line_spec(text: &str, spec: &str) -> Result<String> {
         .join("\n"))
 }
 
-fn parse_user_copy_line_spec(
+fn parse_dialogue_copy_line_spec(
     spec: &str,
     total_lines: usize,
 ) -> Result<std::ops::RangeInclusive<usize>> {
     let spec = spec.trim();
     if spec.is_empty() {
-        anyhow::bail!("User line range is empty");
+        anyhow::bail!("Content line range is empty");
     }
     let (start, end) = match spec.split_once(':') {
         Some((start, end)) => (
@@ -1081,12 +1120,14 @@ fn parse_user_copy_line_spec(
         }
     };
     if start > end {
-        anyhow::bail!("User line range start must be less than or equal to end");
+        anyhow::bail!("Content line range start must be less than or equal to end");
     }
-    if end > total_lines {
-        anyhow::bail!("User line range {start}:{end} exceeds {total_lines} available line(s)");
+    if start > total_lines {
+        anyhow::bail!(
+            "Content line range {start}:{end} starts after {total_lines} available line(s)"
+        );
     }
-    Ok(start..=end)
+    Ok(start..=end.min(total_lines))
 }
 
 fn parse_positive_line_number(raw: &str, label: &str) -> Result<usize> {
@@ -1138,13 +1179,13 @@ fn render_agent_hierarchy_picker(title: &str, frame: &mut Frame, view: AgentHier
     let controls = match view.focus {
         AgentHierarchyFocus::Agents => "j/k move  l/Right/Enter open sessions  q/Esc cancel",
         AgentHierarchyFocus::Sessions => {
-            "j/k move  l/Right/Enter open dialogues  t open-vim  m copy-user  2:8m copy-user-lines  q/Esc cancel"
+            "j/k move  l/Right/Enter open dialogues  t open-vim  m copy-user  2:8m copy-lines  n copy-assistant  q/Esc cancel"
         }
         AgentHierarchyFocus::Dialogues => {
-            "j/k move  Space toggle  a toggle-all  t open-vim  m copy-user  2:8m copy-user-lines  h/Left/Esc back  Enter copy  q cancel"
+            "j/k move  Space toggle  a toggle-all  t open-vim  m copy-user  2:8m copy-lines  n copy-assistant  h/Left/Esc back  Enter copy  q cancel"
         }
         AgentHierarchyFocus::Content => {
-            "j/k scroll  Ctrl-d/PageDown down  Ctrl-u/PageUp up  t open-vim  m copy-user  2:8m copy-user-lines  h/Left/Esc back  Enter copy  q cancel"
+            "j/k scroll  Ctrl-d/PageDown down  Ctrl-u/PageUp up  t open-vim  m copy-user  2:8m copy-lines  n copy-assistant  h/Left/Esc back  Enter copy  q cancel"
         }
     };
     let user_copy_state = if view.user_copy_spec.is_empty() && view.user_copy_status.is_none() {
@@ -1153,7 +1194,7 @@ fn render_agent_hierarchy_picker(title: &str, frame: &mut Frame, view: AgentHier
         let mut lines = Vec::new();
         if !view.user_copy_spec.is_empty() {
             lines.push(format!(
-                "user-copy pending: {}m  (range applies to ## User lines only)",
+                "copy pending: {}m  (range applies to content line numbers)",
                 view.user_copy_spec
             ));
         }
@@ -2528,7 +2569,7 @@ mod tests {
         build_current_agent_session_choices, build_output_preview, can_copy_agent_user_excerpt,
         can_open_dialogue_vim, extract_markdown_section, filter_lines_by_regex,
         filter_lines_by_spec, format_block, format_content_with_line_numbers, is_vim_command,
-        parse_user_copy_line_spec, resolve_agent_session_selector, slice_text_by_line_spec,
+        parse_dialogue_copy_line_spec, resolve_agent_session_selector, slice_text_by_line_spec,
         vim_single_quote, AgentBlock, AgentBlockKind, AgentHierarchyFocus, AgentProvider,
         AgentSelection, AgentSession, AgentSessionChoice, AgentSessionInfo, AgentSessionProvider,
         CommandBlock, CommandSelection, CopyMode, TextPair,
@@ -3041,26 +3082,38 @@ mod tests {
     #[test]
     fn extracts_user_section_without_heading_lines() {
         let text = "## User\nline 1\nline 2\n## Assistant\nanswer";
-        let actual = extract_markdown_section(text, "User", "Assistant").unwrap();
+        let actual = extract_markdown_section(text, "User", Some("Assistant")).unwrap();
         assert_eq!(actual, "line 1\nline 2");
         assert!(!actual.contains("## User"));
         assert!(!actual.contains("## Assistant"));
     }
 
     #[test]
-    fn slices_only_user_section_lines_for_inline_copy() {
+    fn slices_dialogue_lines_for_inline_copy() {
         let text = "alpha\nbeta\ngamma\ndelta";
         assert_eq!(slice_text_by_line_spec(text, "2:3").unwrap(), "beta\ngamma");
         assert_eq!(slice_text_by_line_spec(text, "4").unwrap(), "delta");
+        assert_eq!(
+            slice_text_by_line_spec(text, "2:8").unwrap(),
+            "beta\ngamma\ndelta"
+        );
     }
 
     #[test]
-    fn rejects_invalid_inline_user_copy_ranges() {
-        let err = parse_user_copy_line_spec("4:2", 5).unwrap_err();
+    fn extracts_assistant_section_until_end_without_heading_line() {
+        let text = "## User\nquestion\n## Assistant\nanswer line 1\nanswer line 2";
+        let actual = extract_markdown_section(text, "Assistant", None).unwrap();
+        assert_eq!(actual, "answer line 1\nanswer line 2");
+        assert!(!actual.contains("## Assistant"));
+    }
+
+    #[test]
+    fn rejects_invalid_inline_copy_ranges() {
+        let err = parse_dialogue_copy_line_spec("4:2", 5).unwrap_err();
         assert!(err.to_string().contains("less than or equal"));
 
-        let err = parse_user_copy_line_spec("2:8", 4).unwrap_err();
-        assert!(err.to_string().contains("exceeds 4 available line(s)"));
+        let err = parse_dialogue_copy_line_spec("8:9", 4).unwrap_err();
+        assert!(err.to_string().contains("starts after 4 available line(s)"));
     }
 
     #[test]
