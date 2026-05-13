@@ -534,6 +534,8 @@ struct AgentHierarchyView<'a> {
     selected_dialogues: &'a [bool],
     focus: AgentHierarchyFocus,
     content_scroll: usize,
+    user_copy_spec: &'a str,
+    user_copy_status: Option<&'a str>,
 }
 
 fn build_agent_session_choices(
@@ -625,6 +627,8 @@ fn run_agent_hierarchy_picker_on_terminal(
     let has_agent_layer = initial_focus == AgentHierarchyFocus::Agents;
     let mut selected_dialogues = vec![false; groups[0].choices[0].dialogue_titles.len()];
     let mut content_scroll = 0usize;
+    let mut user_copy_spec = String::new();
+    let mut user_copy_status: Option<String> = None;
 
     loop {
         let agent_idx = selected_index(&agent_state).min(groups.len().saturating_sub(1));
@@ -652,6 +656,8 @@ fn run_agent_hierarchy_picker_on_terminal(
                     selected_dialogues: &selected_dialogues,
                     focus,
                     content_scroll,
+                    user_copy_spec: &user_copy_spec,
+                    user_copy_status: user_copy_status.as_deref(),
                 },
             )
         })?;
@@ -662,6 +668,13 @@ fn run_agent_hierarchy_picker_on_terminal(
             }
 
             match key.code {
+                KeyCode::Esc
+                    if can_copy_agent_user_excerpt(focus, dialogue_count)
+                        && (!user_copy_spec.is_empty() || user_copy_status.is_some()) =>
+                {
+                    user_copy_spec.clear();
+                    user_copy_status = None;
+                }
                 KeyCode::Char('q') => anyhow::bail!(PICK_CANCELLED_MESSAGE),
                 KeyCode::Esc => match focus {
                     AgentHierarchyFocus::Agents => anyhow::bail!(PICK_CANCELLED_MESSAGE),
@@ -706,6 +719,8 @@ fn run_agent_hierarchy_picker_on_terminal(
                                 &mut selected_dialogues,
                             );
                             content_scroll = 0;
+                            user_copy_spec.clear();
+                            user_copy_status = None;
                         }
                     }
                     AgentHierarchyFocus::Sessions => {
@@ -719,12 +734,16 @@ fn run_agent_hierarchy_picker_on_terminal(
                                 &mut selected_dialogues,
                             );
                             content_scroll = 0;
+                            user_copy_spec.clear();
+                            user_copy_status = None;
                         }
                     }
                     AgentHierarchyFocus::Dialogues => {
                         let next = selected_index(&dialogue_state).saturating_sub(1);
                         dialogue_state.select(Some(next));
                         content_scroll = 0;
+                        user_copy_spec.clear();
+                        user_copy_status = None;
                     }
                     AgentHierarchyFocus::Content => {
                         content_scroll = content_scroll.saturating_sub(1);
@@ -744,6 +763,8 @@ fn run_agent_hierarchy_picker_on_terminal(
                                 &mut selected_dialogues,
                             );
                             content_scroll = 0;
+                            user_copy_spec.clear();
+                            user_copy_status = None;
                         }
                     }
                     AgentHierarchyFocus::Sessions => {
@@ -758,6 +779,8 @@ fn run_agent_hierarchy_picker_on_terminal(
                                 &mut selected_dialogues,
                             );
                             content_scroll = 0;
+                            user_copy_spec.clear();
+                            user_copy_status = None;
                         }
                     }
                     AgentHierarchyFocus::Dialogues => {
@@ -765,6 +788,8 @@ fn run_agent_hierarchy_picker_on_terminal(
                         let next = (current + 1).min(dialogue_count.saturating_sub(1));
                         dialogue_state.select(Some(next));
                         content_scroll = 0;
+                        user_copy_spec.clear();
+                        user_copy_status = None;
                     }
                     AgentHierarchyFocus::Content => {
                         content_scroll = content_scroll.saturating_add(1);
@@ -783,6 +808,34 @@ fn run_agent_hierarchy_picker_on_terminal(
                             || key.modifiers.contains(KeyModifiers::CONTROL)) =>
                 {
                     content_scroll = content_scroll.saturating_sub(10);
+                }
+                KeyCode::Backspace
+                    if can_copy_agent_user_excerpt(focus, dialogue_count)
+                        && !user_copy_spec.is_empty() =>
+                {
+                    user_copy_spec.pop();
+                    user_copy_status = None;
+                }
+                KeyCode::Char(c @ '0'..='9')
+                    if can_copy_agent_user_excerpt(focus, dialogue_count) =>
+                {
+                    user_copy_spec.push(c);
+                    user_copy_status = None;
+                }
+                KeyCode::Char(':')
+                    if can_copy_agent_user_excerpt(focus, dialogue_count)
+                        && !user_copy_spec.is_empty()
+                        && !user_copy_spec.contains(':') =>
+                {
+                    user_copy_spec.push(':');
+                    user_copy_status = None;
+                }
+                KeyCode::Char('m') if can_copy_agent_user_excerpt(focus, dialogue_count) => {
+                    let spec = (!user_copy_spec.is_empty()).then_some(user_copy_spec.as_str());
+                    match build_agent_user_excerpt_pick(&choices[session_idx], dialogue_idx, spec) {
+                        Ok(picked) => return Ok(picked),
+                        Err(err) => user_copy_status = Some(err.to_string()),
+                    }
                 }
                 KeyCode::Char(' ') if focus == AgentHierarchyFocus::Dialogues => {
                     if let Some(selected) = selected_dialogues.get_mut(dialogue_idx) {
@@ -889,6 +942,14 @@ fn can_open_dialogue_vim(focus: AgentHierarchyFocus, dialogue_count: usize) -> b
         )
 }
 
+fn can_copy_agent_user_excerpt(focus: AgentHierarchyFocus, dialogue_count: usize) -> bool {
+    dialogue_count > 0
+        && matches!(
+            focus,
+            AgentHierarchyFocus::Dialogues | AgentHierarchyFocus::Content
+        )
+}
+
 fn current_agent_dialogue_text(choice: &AgentSessionChoice, dialogue_idx: usize) -> &str {
     let total = choice.units.len();
     if total == 0 {
@@ -919,6 +980,124 @@ fn format_content_with_line_numbers(text: &str) -> String {
         .join("\n")
 }
 
+fn build_agent_user_excerpt_pick(
+    choice: &AgentSessionChoice,
+    dialogue_idx: usize,
+    spec: Option<&str>,
+) -> Result<AgentPickedContent> {
+    let user_text = extract_markdown_section(
+        current_agent_dialogue_text(choice, dialogue_idx),
+        "User",
+        "Assistant",
+    )?;
+    let user_text = match spec {
+        Some(spec) => slice_text_by_line_spec(&user_text, spec)?,
+        None => user_text,
+    };
+    let pair = TextPair {
+        plain: user_text.clone(),
+        ansi: user_text,
+    };
+    Ok(AgentPickedContent {
+        provider: choice.provider,
+        units: vec![pair],
+        selection: CommandSelection::RecentExplicit(vec![1]),
+    })
+}
+
+fn extract_markdown_section(text: &str, heading: &str, next_heading: &str) -> Result<String> {
+    let mut in_section = false;
+    let mut collected = Vec::new();
+    for line in text.lines() {
+        if !in_section {
+            if is_markdown_heading(line, heading) {
+                in_section = true;
+            }
+            continue;
+        }
+        if is_markdown_heading(line, next_heading) {
+            break;
+        }
+        collected.push(line);
+    }
+    if !in_section {
+        anyhow::bail!("Selected dialogue has no ## {heading} section");
+    }
+    let section = collected.join("\n").trim().to_string();
+    if section.is_empty() {
+        anyhow::bail!("Selected dialogue has an empty ## {heading} section");
+    }
+    Ok(section)
+}
+
+fn is_markdown_heading(line: &str, heading: &str) -> bool {
+    let trimmed = line.trim();
+    if !trimmed.starts_with("##") {
+        return false;
+    }
+    let normalized = trimmed
+        .trim_start_matches('#')
+        .trim()
+        .trim_end_matches(':')
+        .trim();
+    normalized.eq_ignore_ascii_case(heading)
+}
+
+fn slice_text_by_line_spec(text: &str, spec: &str) -> Result<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        anyhow::bail!("Selected ## User section is empty");
+    }
+    let range = parse_user_copy_line_spec(spec, lines.len())?;
+    Ok(lines
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, line)| {
+            let line_number = idx + 1;
+            range.contains(&line_number).then_some(*line)
+        })
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+fn parse_user_copy_line_spec(
+    spec: &str,
+    total_lines: usize,
+) -> Result<std::ops::RangeInclusive<usize>> {
+    let spec = spec.trim();
+    if spec.is_empty() {
+        anyhow::bail!("User line range is empty");
+    }
+    let (start, end) = match spec.split_once(':') {
+        Some((start, end)) => (
+            parse_positive_line_number(start, "start line")?,
+            parse_positive_line_number(end, "end line")?,
+        ),
+        None => {
+            let line = parse_positive_line_number(spec, "line")?;
+            (line, line)
+        }
+    };
+    if start > end {
+        anyhow::bail!("User line range start must be less than or equal to end");
+    }
+    if end > total_lines {
+        anyhow::bail!("User line range {start}:{end} exceeds {total_lines} available line(s)");
+    }
+    Ok(start..=end)
+}
+
+fn parse_positive_line_number(raw: &str, label: &str) -> Result<usize> {
+    let value: usize = raw
+        .trim()
+        .parse()
+        .with_context(|| format!("Invalid {label}: {raw}"))?;
+    if value == 0 {
+        anyhow::bail!("{label} must be greater than 0");
+    }
+    Ok(value)
+}
+
 fn agent_dialogue_vim_view(choice: &AgentSessionChoice, dialogue_idx: usize) -> VimView {
     let text = current_agent_dialogue_text(choice, dialogue_idx).to_string();
     let end = line_count(&text).max(1);
@@ -943,10 +1122,15 @@ fn agent_dialogue_vim_view(choice: &AgentSessionChoice, dialogue_idx: usize) -> 
 fn render_agent_hierarchy_picker(title: &str, frame: &mut Frame, view: AgentHierarchyView<'_>) {
     let area = frame.area();
     frame.render_widget(Clear, area);
+    let header_height = if view.user_copy_spec.is_empty() && view.user_copy_status.is_none() {
+        3
+    } else {
+        5
+    };
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(1)])
+        .constraints([Constraint::Length(header_height), Constraint::Min(1)])
         .split(area);
 
     let controls = match view.focus {
@@ -955,11 +1139,26 @@ fn render_agent_hierarchy_picker(title: &str, frame: &mut Frame, view: AgentHier
             "j/k move  l/Right/Enter open dialogues  t open-vim  q/Esc cancel"
         }
         AgentHierarchyFocus::Dialogues => {
-            "j/k move  Space toggle  a toggle-all  t open-vim  h/Left/Esc back  Enter copy  q cancel"
+            "j/k move  Space toggle  a toggle-all  t open-vim  m copy-user  2:8m copy-user-lines  h/Left/Esc back  Enter copy  q cancel"
         }
         AgentHierarchyFocus::Content => {
-            "j/k scroll  Ctrl-d/PageDown down  Ctrl-u/PageUp up  t open-vim  h/Left/Esc back  Enter copy  q cancel"
+            "j/k scroll  Ctrl-d/PageDown down  Ctrl-u/PageUp up  t open-vim  m copy-user  2:8m copy-user-lines  h/Left/Esc back  Enter copy  q cancel"
         }
+    };
+    let user_copy_state = if view.user_copy_spec.is_empty() && view.user_copy_status.is_none() {
+        String::new()
+    } else {
+        let mut lines = Vec::new();
+        if !view.user_copy_spec.is_empty() {
+            lines.push(format!(
+                "user-copy pending: {}m  (range applies to ## User lines only)",
+                view.user_copy_spec
+            ));
+        }
+        if let Some(status) = view.user_copy_status {
+            lines.push(status.to_string());
+        }
+        format!("\n{}", lines.join("\n"))
     };
     let agent_idx = selected_index(view.agent_state).min(view.groups.len().saturating_sub(1));
     let choices = &view.groups[agent_idx].choices;
@@ -970,7 +1169,7 @@ fn render_agent_hierarchy_picker(title: &str, frame: &mut Frame, view: AgentHier
         .filter(|selected| **selected)
         .count();
     let title = Paragraph::new(format!(
-        "{controls}\nshowing {} agent(s), {} session(s), {} dialogue(s){}",
+        "{controls}{user_copy_state}\nshowing {} agent(s), {} session(s), {} dialogue(s){}",
         view.groups.len(),
         choices.len(),
         choices[session_idx].dialogue_titles.len(),
@@ -2325,11 +2524,12 @@ mod tests {
     use super::{
         agent_dialogue_vim_view, agent_session_preview, build_agent_units, build_agent_vim_view,
         build_current_agent_session_choices, build_output_preview, can_open_dialogue_vim,
-        filter_lines_by_regex, filter_lines_by_spec, format_block,
-        format_content_with_line_numbers, is_vim_command, resolve_agent_session_selector,
-        vim_single_quote, AgentBlock, AgentBlockKind, AgentHierarchyFocus, AgentProvider,
-        AgentSelection, AgentSession, AgentSessionChoice, AgentSessionInfo, AgentSessionProvider,
-        CommandBlock, CommandSelection, CopyMode, TextPair,
+        extract_markdown_section, filter_lines_by_regex, filter_lines_by_spec, format_block,
+        format_content_with_line_numbers, is_vim_command, parse_user_copy_line_spec,
+        resolve_agent_session_selector, slice_text_by_line_spec, vim_single_quote, AgentBlock,
+        AgentBlockKind, AgentHierarchyFocus, AgentProvider, AgentSelection, AgentSession,
+        AgentSessionChoice, AgentSessionInfo, AgentSessionProvider, CommandBlock, CommandSelection,
+        CopyMode, TextPair,
     };
     use anyhow::Result;
     use std::collections::HashMap;
@@ -2816,6 +3016,31 @@ mod tests {
     fn format_content_with_line_numbers_preserves_blank_lines() {
         let formatted = format_content_with_line_numbers("alpha\n\nomega");
         assert_eq!(formatted, "1 | alpha\n2 | \n3 | omega");
+    }
+
+    #[test]
+    fn extracts_user_section_without_heading_lines() {
+        let text = "## User\nline 1\nline 2\n## Assistant\nanswer";
+        let actual = extract_markdown_section(text, "User", "Assistant").unwrap();
+        assert_eq!(actual, "line 1\nline 2");
+        assert!(!actual.contains("## User"));
+        assert!(!actual.contains("## Assistant"));
+    }
+
+    #[test]
+    fn slices_only_user_section_lines_for_inline_copy() {
+        let text = "alpha\nbeta\ngamma\ndelta";
+        assert_eq!(slice_text_by_line_spec(text, "2:3").unwrap(), "beta\ngamma");
+        assert_eq!(slice_text_by_line_spec(text, "4").unwrap(), "delta");
+    }
+
+    #[test]
+    fn rejects_invalid_inline_user_copy_ranges() {
+        let err = parse_user_copy_line_spec("4:2", 5).unwrap_err();
+        assert!(err.to_string().contains("less than or equal"));
+
+        let err = parse_user_copy_line_spec("2:8", 4).unwrap_err();
+        assert!(err.to_string().contains("exceeds 4 available line(s)"));
     }
 
     #[test]

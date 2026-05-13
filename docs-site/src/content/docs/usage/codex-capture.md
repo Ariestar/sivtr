@@ -74,6 +74,11 @@ sivtr copy codex --pick  # includes mirrored session trees from [codex].session_
 
 The plain CLI picker starts with the session list, then lets you choose one or more units from that session. Press `t` to open the Vim-style view. In Codex views, `T` toggles tool content when an alternate full view is available.
 
+Inside the Codex dialogue picker, press `m` to copy only the current dialogue's
+`## User` body. Type a 1-based range such as `2:8m` to copy only lines 2
+through 8 from that `## User` body. The `## User` and `## Assistant` heading
+lines are excluded from the copied text.
+
 Context-aware launchers such as the Windows hotkey and VS Code extension first open the newest non-empty session for the current workspace. If that session is missing or empty, they fall back to the session list.
 
 Shared/mirrored session trees only participate in explicit `--pick` browsing. Implicit current-session lookup stays local so another account's exported history does not override the current user's active Codex workflow.
