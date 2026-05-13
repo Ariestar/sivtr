@@ -104,6 +104,13 @@ Open an interactive picker for Codex conversation blocks:
 sivtr copy codex --pick
 ```
 
+Inside the Codex picker, press `m` to copy only the highlighted dialogue's
+`## User` body. Type a 1-based range such as `2:8m` to copy content lines 2
+through 8 from the full dialogue, using the line numbers shown in the Content
+pane. Press `n` to copy everything below the first `## Assistant` heading. The
+`## User` and `## Assistant` heading lines are excluded from the `m` and `n`
+body-only copies.
+
 Compare two recent command outputs:
 
 ```bash
