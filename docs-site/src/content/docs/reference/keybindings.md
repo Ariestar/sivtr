@@ -66,6 +66,18 @@ Only available when the buffer has parsed command blocks.
 | `Enter` | Confirm |
 | `Esc` | Cancel |
 
+### Codex picker additions
+
+These keys apply when the picker is browsing Codex / AI dialogues.
+
+| Key | Action |
+| --- | --- |
+| `m` | Copy the highlighted dialogue's `## User` body without the heading lines |
+| `2:8m` | Copy a 1-based content line range from the highlighted full dialogue |
+| `n` | Copy everything below the first `## Assistant` heading without the heading line |
+| `Backspace` | Delete the pending numeric range before pressing `m` |
+| `Esc` | Clear the pending numeric range or error status before using normal back navigation |
+
 ## Vim-style full view
 
 This view is opened from the picker with `t`.
