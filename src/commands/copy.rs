@@ -1090,15 +1090,9 @@ fn slice_text_by_line_spec(text: &str, spec: &str) -> Result<String> {
         anyhow::bail!("Selected dialogue content is empty");
     }
     let range = parse_dialogue_copy_line_spec(spec, lines.len())?;
-    Ok(lines
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, line)| {
-            let line_number = idx + 1;
-            range.contains(&line_number).then_some(*line)
-        })
-        .collect::<Vec<_>>()
-        .join("\n"))
+    let start = *range.start();
+    let end = *range.end();
+    Ok(lines[start - 1..end].join("\n"))
 }
 
 fn parse_dialogue_copy_line_spec(
