@@ -4,7 +4,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 use regex::Regex;
 
-use crate::tui::content_markdown::render_markdown_window;
+use crate::tui::content_markdown::{render_markdown_window, MarkdownLineKind};
 use crate::tui::pane::{panel_block, Panel};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,6 +36,12 @@ pub(crate) struct ContentView<'a> {
     pub(crate) mode: ContentViewMode,
 }
 
+#[derive(Clone)]
+struct ContentLine {
+    line: Line<'static>,
+    kind: MarkdownLineKind,
+}
+
 pub(crate) fn render_content_view(
     frame: &mut Frame,
     area: Rect,
@@ -63,40 +69,53 @@ pub(crate) fn render_content_view(
 
     let visible_height = inner.height as usize;
     let scroll = view.scroll.min(total_lines.saturating_sub(1));
+    let visible = visible_content_lines(view.text, scroll, visible_height, view.mode);
     frame.render_widget(
-        Paragraph::new(line_number_lines(total_lines, scroll, visible_height))
+        Paragraph::new(line_number_lines(total_lines, scroll, &visible))
             .alignment(Alignment::Right),
         chunks[0],
     );
-    frame.render_widget(Paragraph::new(separator_lines(visible_height)), chunks[1]);
     frame.render_widget(
-        Paragraph::new(content_lines(
-            view.text,
-            scroll,
-            visible_height,
-            view.search_regex,
-            view.mode,
-        )),
+        Paragraph::new(separator_lines(visible_height, &visible)),
+        chunks[1],
+    );
+    frame.render_widget(
+        Paragraph::new(content_lines(visible, view.search_regex)),
         chunks[2],
     );
 }
 
-fn content_lines(
+fn visible_content_lines(
     text: &str,
     scroll: usize,
     height: usize,
-    search_regex: Option<&Regex>,
     mode: ContentViewMode,
-) -> Text<'static> {
+) -> Vec<ContentLine> {
     let lines = raw_lines(text);
-    let visible = match mode {
-        ContentViewMode::Raw => raw_content_window(&lines, scroll, height),
-        ContentViewMode::Reading => render_markdown_window(&lines, scroll, height),
+    match mode {
+        ContentViewMode::Raw => raw_content_window(&lines, scroll, height)
+            .into_iter()
+            .map(|line| ContentLine {
+                line,
+                kind: MarkdownLineKind::Normal,
+            })
+            .collect(),
+        ContentViewMode::Reading => render_markdown_window(&lines, scroll, height)
+            .into_iter()
+            .map(|line| ContentLine {
+                line: line.line,
+                kind: line.kind,
+            })
+            .collect(),
     }
-    .into_iter()
-    .map(|line| styled_content_line(line, search_regex))
-    .collect::<Vec<_>>();
-    Text::from(visible)
+}
+
+fn content_lines(visible: Vec<ContentLine>, search_regex: Option<&Regex>) -> Text<'static> {
+    let lines = visible
+        .into_iter()
+        .map(|line| styled_content_line(line.line, search_regex))
+        .collect::<Vec<_>>();
+    Text::from(lines)
 }
 
 fn raw_content_window(lines: &[&str], scroll: usize, height: usize) -> Vec<Line<'static>> {
@@ -108,21 +127,39 @@ fn raw_content_window(lines: &[&str], scroll: usize, height: usize) -> Vec<Line<
         .collect()
 }
 
-fn line_number_lines(total_lines: usize, scroll: usize, height: usize) -> Text<'static> {
-    let style = Style::default().fg(Color::DarkGray);
-    let lines = (scroll..total_lines.min(scroll.saturating_add(height)))
-        .map(|idx| Line::from(Span::styled((idx + 1).to_string(), style)))
+fn line_number_lines(total_lines: usize, scroll: usize, visible: &[ContentLine]) -> Text<'static> {
+    let lines = (scroll..total_lines.min(scroll.saturating_add(visible.len())))
+        .enumerate()
+        .map(|(visible_idx, idx)| {
+            Line::from(Span::styled(
+                (idx + 1).to_string(),
+                gutter_style(visible.get(visible_idx).map(|line| line.kind)),
+            ))
+        })
         .collect::<Vec<_>>();
     Text::from(lines)
 }
 
-fn separator_lines(height: usize) -> Text<'static> {
-    let style = Style::default().fg(Color::DarkGray);
+fn separator_lines(height: usize, visible: &[ContentLine]) -> Text<'static> {
     Text::from(
         (0..height)
-            .map(|_| Line::from(Span::styled("|", style)))
+            .map(|idx| {
+                Line::from(Span::styled(
+                    "|",
+                    gutter_style(visible.get(idx).map(|line| line.kind)),
+                ))
+            })
             .collect::<Vec<_>>(),
     )
+}
+
+fn gutter_style(kind: Option<MarkdownLineKind>) -> Style {
+    match kind {
+        Some(MarkdownLineKind::CodeBlock | MarkdownLineKind::CodeFence) => {
+            Style::default().fg(Color::Blue)
+        }
+        _ => Style::default().fg(Color::DarkGray),
+    }
 }
 
 fn styled_content_line(line: Line<'static>, search_regex: Option<&Regex>) -> Line<'static> {
@@ -276,9 +313,25 @@ fn raw_lines(text: &str) -> Vec<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{content_lines, line_count, line_number_width, ContentViewMode};
+    use super::{
+        content_lines, line_count, line_number_width, visible_content_lines, ContentViewMode,
+    };
     use ratatui::prelude::{Color, Modifier};
+    use ratatui::text::Text;
     use regex::Regex;
+
+    fn render_content_lines(
+        text: &str,
+        scroll: usize,
+        height: usize,
+        search_regex: Option<&Regex>,
+        mode: ContentViewMode,
+    ) -> Text<'static> {
+        content_lines(
+            visible_content_lines(text, scroll, height, mode),
+            search_regex,
+        )
+    }
 
     #[test]
     fn counts_empty_content_as_one_display_line() {
@@ -294,7 +347,7 @@ mod tests {
 
     #[test]
     fn content_lines_preserve_blank_lines_without_number_prefixes() {
-        let rendered = content_lines("alpha\n\nomega", 0, 3, None, ContentViewMode::Reading);
+        let rendered = render_content_lines("alpha\n\nomega", 0, 3, None, ContentViewMode::Reading);
 
         assert_eq!(rendered.lines.len(), 3);
         assert_eq!(rendered.lines[0].spans[0].content.as_ref(), "alpha");
@@ -304,7 +357,7 @@ mod tests {
 
     #[test]
     fn content_lines_render_markdown_without_changing_line_count() {
-        let rendered = content_lines(
+        let rendered = render_content_lines(
             "## User\n**bold** and `code`",
             0,
             2,
@@ -321,17 +374,15 @@ mod tests {
             .add_modifier
             .contains(Modifier::BOLD));
         assert_eq!(rendered.lines[1].spans[2].content.as_ref(), "code");
-        assert_eq!(
-            rendered.lines[1].spans[2].style.fg,
-            Some(Color::LightYellow)
-        );
+        assert_eq!(rendered.lines[1].spans[2].style.fg, Some(Color::Gray));
+        assert_eq!(rendered.lines[1].spans[2].style.bg, None);
         assert_eq!(line_count("## User\n**bold** and `code`"), 2);
     }
 
     #[test]
     fn content_search_highlight_overrides_markdown_spans() {
         let regex = Regex::new("bold").unwrap();
-        let rendered = content_lines(
+        let rendered = render_content_lines(
             "**bold** text",
             0,
             1,
@@ -349,7 +400,8 @@ mod tests {
 
     #[test]
     fn raw_content_lines_preserve_markdown_syntax() {
-        let rendered = content_lines("```text\n**bold**\n```", 0, 3, None, ContentViewMode::Raw);
+        let rendered =
+            render_content_lines("```text\n**bold**\n```", 0, 3, None, ContentViewMode::Raw);
 
         assert_eq!(rendered.lines[0].spans[0].content.as_ref(), "```text");
         assert_eq!(rendered.lines[1].spans[0].content.as_ref(), "**bold**");

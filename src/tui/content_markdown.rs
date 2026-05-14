@@ -2,11 +2,26 @@ use pulldown_cmark::{Event, Options as MarkdownOptions, Parser, Tag, TagEnd};
 use ratatui::prelude::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
+const CODE_INDENT: &str = "  ";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MarkdownLineKind {
+    Normal,
+    CodeFence,
+    CodeBlock,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct MarkdownLine {
+    pub(crate) line: Line<'static>,
+    pub(crate) kind: MarkdownLineKind,
+}
+
 pub(crate) fn render_markdown_window(
     lines: &[&str],
     scroll: usize,
     height: usize,
-) -> Vec<Line<'static>> {
+) -> Vec<MarkdownLine> {
     let mut in_code_block = false;
     let end = scroll.saturating_add(height).min(lines.len());
     let mut rendered = Vec::with_capacity(height);
@@ -21,14 +36,24 @@ pub(crate) fn render_markdown_window(
     rendered
 }
 
-fn render_markdown_line(line: &str, in_code_block: &mut bool) -> Line<'static> {
-    if is_code_fence(line) {
+fn render_markdown_line(line: &str, in_code_block: &mut bool) -> MarkdownLine {
+    if let Some(language) = code_fence_language(line) {
+        let opening = !*in_code_block;
         *in_code_block = !*in_code_block;
-        return Line::default();
+        return MarkdownLine {
+            line: code_fence_line(opening.then_some(language).flatten()),
+            kind: MarkdownLineKind::CodeFence,
+        };
     }
 
     if *in_code_block {
-        return Line::from(Span::styled(line.to_string(), code_block_style()));
+        return MarkdownLine {
+            line: Line::from(vec![
+                Span::styled(CODE_INDENT, code_block_margin_style()),
+                Span::styled(line.to_string(), code_block_style()),
+            ]),
+            kind: MarkdownLineKind::CodeBlock,
+        };
     }
 
     let (prefix, content, line_style) = markdown_line_parts(line);
@@ -37,16 +62,35 @@ fn render_markdown_line(line: &str, in_code_block: &mut bool) -> Line<'static> {
         spans.push(Span::styled(prefix, line_style));
     }
     spans.extend(markdown_inline_spans(content, line_style));
-    Line {
-        spans,
-        style: line_style,
-        alignment: None,
+    MarkdownLine {
+        line: Line {
+            spans,
+            style: line_style,
+            alignment: None,
+        },
+        kind: MarkdownLineKind::Normal,
     }
 }
 
-fn is_code_fence(line: &str) -> bool {
+fn code_fence_language(line: &str) -> Option<Option<String>> {
     let trimmed = line.trim_start();
-    trimmed.starts_with("```") || trimmed.starts_with("~~~")
+    let rest = trimmed
+        .strip_prefix("```")
+        .or_else(|| trimmed.strip_prefix("~~~"))?;
+    let language = rest.split_whitespace().next().filter(|lang| {
+        !lang.is_empty() && !matches!(*lang, "text" | "txt" | "plain" | "plaintext")
+    });
+    Some(language.map(str::to_string))
+}
+
+fn code_fence_line(language: Option<String>) -> Line<'static> {
+    match language {
+        Some(language) => Line::from(Span::styled(
+            format!("{CODE_INDENT}{language}"),
+            code_fence_style(),
+        )),
+        None => Line::default(),
+    }
 }
 
 fn markdown_line_parts(line: &str) -> (String, &str, Style) {
@@ -213,11 +257,21 @@ fn heading_style(level: usize) -> Style {
 }
 
 fn code_style() -> Style {
-    Style::default().fg(Color::LightYellow)
+    Style::default().fg(Color::Gray)
 }
 
 fn code_block_style() -> Style {
     Style::default().fg(Color::Gray)
+}
+
+fn code_block_margin_style() -> Style {
+    Style::default().fg(Color::DarkGray)
+}
+
+fn code_fence_style() -> Style {
+    Style::default()
+        .fg(Color::DarkGray)
+        .add_modifier(Modifier::ITALIC)
 }
 
 fn link_style() -> Style {
@@ -232,14 +286,14 @@ fn blockquote_style() -> Style {
 
 #[cfg(test)]
 mod tests {
-    use super::render_markdown_window;
+    use super::{render_markdown_window, MarkdownLineKind, CODE_INDENT};
     use ratatui::prelude::{Color, Modifier};
 
     #[test]
     fn renders_agent_headings_with_provider_roles() {
         let lines = render_markdown_window(&["## User", "## Assistant"], 0, 2);
-        let user = &lines[0];
-        let assistant = &lines[1];
+        let user = &lines[0].line;
+        let assistant = &lines[1].line;
 
         assert_eq!(user.spans[0].content.as_ref(), "## ");
         assert_eq!(user.spans[1].content.as_ref(), "User");
@@ -250,31 +304,45 @@ mod tests {
     #[test]
     fn renders_inline_markdown_without_removing_structural_prefixes() {
         let lines = render_markdown_window(&["- **bold** and `code`"], 0, 1);
-        let line = &lines[0];
+        let line = &lines[0].line;
 
         assert_eq!(line.spans[0].content.as_ref(), "- ");
         assert_eq!(line.spans[1].content.as_ref(), "bold");
         assert!(line.spans[1].style.add_modifier.contains(Modifier::BOLD));
         assert_eq!(line.spans[3].content.as_ref(), "code");
-        assert_eq!(line.spans[3].style.fg, Some(Color::LightYellow));
+        assert_eq!(line.spans[3].style.fg, Some(Color::Gray));
+        assert_eq!(line.spans[3].style.bg, None);
     }
 
     #[test]
-    fn renders_fenced_code_blocks_without_visible_fences() {
+    fn renders_fenced_code_blocks_as_indented_code() {
         let lines = render_markdown_window(&["```text", "-> value", "```"], 0, 3);
 
         assert_eq!(lines.len(), 3);
-        assert!(lines[0].spans.is_empty());
-        assert_eq!(lines[1].spans[0].content.as_ref(), "-> value");
-        assert_eq!(lines[1].spans[0].style.fg, Some(Color::Gray));
-        assert!(lines[2].spans.is_empty());
+        assert_eq!(lines[0].kind, MarkdownLineKind::CodeFence);
+        assert!(lines[0].line.spans.is_empty());
+        assert_eq!(lines[1].kind, MarkdownLineKind::CodeBlock);
+        assert_eq!(lines[1].line.spans[0].content.as_ref(), CODE_INDENT);
+        assert_eq!(lines[1].line.spans[1].content.as_ref(), "-> value");
+        assert_eq!(lines[1].line.spans[1].style.fg, Some(Color::Gray));
+        assert_eq!(lines[2].kind, MarkdownLineKind::CodeFence);
+        assert!(lines[2].line.spans.is_empty());
     }
 
     #[test]
     fn keeps_code_block_state_when_window_starts_inside_block() {
         let lines = render_markdown_window(&["```text", "alpha", "beta", "```"], 2, 1);
 
-        assert_eq!(lines[0].spans[0].content.as_ref(), "beta");
-        assert_eq!(lines[0].spans[0].style.fg, Some(Color::Gray));
+        assert_eq!(lines[0].kind, MarkdownLineKind::CodeBlock);
+        assert_eq!(lines[0].line.spans[1].content.as_ref(), "beta");
+        assert_eq!(lines[0].line.spans[1].style.fg, Some(Color::Gray));
+    }
+
+    #[test]
+    fn renders_useful_code_language_as_a_subtle_label() {
+        let lines = render_markdown_window(&["```sql", "select 1", "```"], 0, 1);
+
+        assert_eq!(lines[0].kind, MarkdownLineKind::CodeFence);
+        assert_eq!(lines[0].line.spans[0].content.as_ref(), "  sql");
     }
 }

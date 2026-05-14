@@ -1177,7 +1177,7 @@ mod tests {
         agent_session_preview, build_agent_units, build_current_agent_session_choices,
         filter_lines_by_regex, filter_lines_by_spec, format_block, resolve_agent_session_selector,
         AgentBlock, AgentBlockKind, AgentProvider, AgentSelection, AgentSession, AgentSessionInfo,
-        AgentSessionProvider, CommandBlock, CopyMode, TextPair, WorkspaceSession,
+        AgentSessionProvider, CommandBlock, CopyMode, TextPair,
     };
     use anyhow::Result;
     use std::collections::HashMap;
