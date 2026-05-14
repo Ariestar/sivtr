@@ -22,6 +22,10 @@ context-aware AI session picker:
 sivtr hotkey-pick-agent --cwd . --provider all
 ```
 
+Before launching, the extension resolves the workspace path and quotes the
+command line for the active shell, so paths with spaces or quotes work across
+PowerShell, cmd.exe, fish, and POSIX shells.
+
 If the terminal was opened from a live `codex resume` session, `sivtr` prefers
 that exact session id first. Otherwise it falls back to the newest non-empty
 session whose `cwd` matches the workspace.

@@ -79,6 +79,7 @@
   },
   "scripts": {
     "compile": "tsc -p ./",
+    "test": "pnpm run compile && node --test out/commandLine.test.js",
     "watch": "tsc -watch -p ./",
     "package": "pnpm run compile && node node_modules/@vscode/vsce/vsce package --no-dependencies --no-yarn --allow-missing-repository"
   },
