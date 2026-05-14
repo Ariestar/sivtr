@@ -5,7 +5,7 @@ use ratatui::widgets::Paragraph;
 use regex::Regex;
 
 use crate::tui::content_markdown::{render_markdown_window, MarkdownLineKind};
-use crate::tui::pane::{panel_block, Panel};
+use crate::tui::pane::{panel_block, render_panel_scrollbar, Panel, PanelScroll};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ContentViewMode {
@@ -82,6 +82,12 @@ pub(crate) fn render_content_view(
     frame.render_widget(
         Paragraph::new(content_lines(visible, view.search_regex)),
         chunks[2],
+    );
+    render_panel_scrollbar(
+        frame,
+        area,
+        PanelScroll::new(scroll, total_lines, visible_height),
+        panel.active(),
     );
 }
 

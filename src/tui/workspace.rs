@@ -10,7 +10,8 @@ use crate::tui::content_view::{
     highlight_spans, render_content_view, ContentView, ContentViewMode,
 };
 use crate::tui::pane::{
-    active_item_style, panel_block, render_list_panel, selected_item_style, Panel,
+    active_item_style, panel_block, render_list_panel, render_panel_scrollbar, selected_item_style,
+    Panel, PanelScroll,
 };
 use crate::tui::workspace_search::{workspace_search_regex_for_query, WorkspaceSearchScope};
 use sivtr_core::ai::AgentProvider;
@@ -624,6 +625,13 @@ fn render_help_panel(frame: &mut Frame, area: Rect, state: &ListState) {
         })
         .collect::<Vec<_>>();
     render_list_panel(frame, area, Panel::new("?", "Help", true), items, state);
+    render_list_scrollbar(
+        frame,
+        area,
+        selected_index(state),
+        workspace_help_entries().len(),
+        true,
+    );
 }
 
 fn render_source_list(
@@ -726,6 +734,7 @@ fn render_session_list(
         items,
         state,
     );
+    render_list_scrollbar(frame, area, cursor_idx, choices.len(), active);
 }
 
 fn render_dialogue_list(
@@ -809,6 +818,26 @@ fn render_dialogue_list(
         items,
         state,
     );
+    render_list_scrollbar(frame, area, highlighted_idx, dialogues.len(), active);
+}
+
+fn render_list_scrollbar(
+    frame: &mut Frame,
+    area: Rect,
+    selected_idx: usize,
+    total: usize,
+    active: bool,
+) {
+    render_panel_scrollbar(
+        frame,
+        area,
+        PanelScroll::new(selected_idx, total, panel_viewport_height(area)),
+        active,
+    );
+}
+
+fn panel_viewport_height(area: Rect) -> usize {
+    area.height.saturating_sub(2) as usize
 }
 
 fn render_content_panel(

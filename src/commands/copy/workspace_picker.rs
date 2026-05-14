@@ -21,6 +21,8 @@ use crate::tui::workspace_search::{
 use super::vim::{open_vim_view, VimBlock, VimView};
 use super::PICK_CANCELLED_MESSAGE;
 
+const MOUSE_SCROLL_LINES: usize = 3;
+
 pub(super) fn run_workspace_picker_on_terminal(
     terminal: &mut crate::tui::terminal::Tui,
     all_sessions: Vec<WorkspaceSession>,
@@ -603,58 +605,150 @@ pub(super) fn run_workspace_picker_on_terminal(
                     _ => {}
                 }
             }
+            Event::Mouse(mouse) if show_help && !show_search => match mouse.kind {
+                MouseEventKind::ScrollUp => scroll_list_state_up(&mut help_state),
+                MouseEventKind::ScrollDown => {
+                    scroll_list_state_down(&mut help_state, workspace_help_entries().len())
+                }
+                _ => {}
+            },
             Event::Mouse(mouse) if !show_help && !show_search => {
-                if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-                    let size = terminal.size()?;
-                    let layout = workspace_layout(
-                        ratatui::layout::Rect::new(0, 0, size.width, size.height),
-                        focus,
-                        fullscreen,
-                    );
-                    if let Some(clicked_focus) = workspace_hit_test(layout, mouse.column, mouse.row)
-                    {
-                        set_focus(&mut focus, &mut fullscreen, clicked_focus);
-                        match clicked_focus {
-                            WorkspaceFocus::Source => {
-                                if let Some(idx) = source_inline_index(
-                                    layout.source,
-                                    mouse.column,
-                                    mouse.row,
-                                    &sources,
-                                ) {
-                                    source_state.select(Some(idx));
-                                }
-                            }
-                            WorkspaceFocus::Sessions => {
-                                if let Some(idx) =
-                                    row_list_index(layout.sessions, mouse.row, sessions.len())
-                                {
-                                    session_state.select(Some(idx));
-                                    if !has_selected_sessions(&selected_sessions) {
-                                        reset_workspace_dialogue_state(
-                                            0,
-                                            &mut dialogue_state,
-                                            &mut selected_dialogues,
-                                            &mut range_anchor,
-                                        );
-                                    }
-                                    content_scroll = 0;
-                                }
-                            }
-                            WorkspaceFocus::Dialogues => {
-                                if let Some(idx) =
-                                    row_list_index(layout.dialogues, mouse.row, dialogue_count)
-                                {
-                                    dialogue_state.select(Some(idx));
-                                    content_scroll = 0;
-                                }
-                            }
-                            WorkspaceFocus::Content => {}
+                let size = terminal.size()?;
+                let layout = workspace_layout(
+                    ratatui::layout::Rect::new(0, 0, size.width, size.height),
+                    focus,
+                    fullscreen,
+                );
+                match mouse.kind {
+                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                        if let Some(scroll_focus) =
+                            workspace_hit_test(layout, mouse.column, mouse.row)
+                        {
+                            apply_workspace_mouse_scroll(
+                                scroll_focus,
+                                matches!(mouse.kind, MouseEventKind::ScrollUp),
+                                &sources,
+                                &sessions,
+                                dialogue_count,
+                                &selected_sessions,
+                                &mut source_state,
+                                &mut session_state,
+                                &mut dialogue_state,
+                                &mut selected_dialogues,
+                                &mut range_anchor,
+                                &mut content_scroll,
+                            );
                         }
                     }
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        if let Some(clicked_focus) =
+                            workspace_hit_test(layout, mouse.column, mouse.row)
+                        {
+                            set_focus(&mut focus, &mut fullscreen, clicked_focus);
+                            match clicked_focus {
+                                WorkspaceFocus::Source => {
+                                    if let Some(idx) = source_inline_index(
+                                        layout.source,
+                                        mouse.column,
+                                        mouse.row,
+                                        &sources,
+                                    ) {
+                                        source_state.select(Some(idx));
+                                    }
+                                }
+                                WorkspaceFocus::Sessions => {
+                                    if let Some(idx) =
+                                        row_list_index(layout.sessions, mouse.row, sessions.len())
+                                    {
+                                        session_state.select(Some(idx));
+                                        if !has_selected_sessions(&selected_sessions) {
+                                            reset_workspace_dialogue_state(
+                                                0,
+                                                &mut dialogue_state,
+                                                &mut selected_dialogues,
+                                                &mut range_anchor,
+                                            );
+                                        }
+                                        content_scroll = 0;
+                                    }
+                                }
+                                WorkspaceFocus::Dialogues => {
+                                    if let Some(idx) =
+                                        row_list_index(layout.dialogues, mouse.row, dialogue_count)
+                                    {
+                                        dialogue_state.select(Some(idx));
+                                        content_scroll = 0;
+                                    }
+                                }
+                                WorkspaceFocus::Content => {}
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             _ => {}
+        }
+    }
+}
+
+fn scroll_list_state_up(state: &mut ListState) {
+    for _ in 0..MOUSE_SCROLL_LINES {
+        state.select(Some(selected_index(state).saturating_sub(1)));
+    }
+}
+
+fn scroll_list_state_down(state: &mut ListState, len: usize) {
+    for _ in 0..MOUSE_SCROLL_LINES {
+        let next = (selected_index(state) + 1).min(len.saturating_sub(1));
+        state.select((len > 0).then_some(next));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_workspace_mouse_scroll(
+    focus: WorkspaceFocus,
+    scroll_up: bool,
+    sources: &[WorkspaceSource],
+    sessions: &[WorkspaceSession],
+    dialogue_count: usize,
+    selected_sessions: &[bool],
+    source_state: &mut ListState,
+    session_state: &mut ListState,
+    dialogue_state: &mut ListState,
+    selected_dialogues: &mut Vec<bool>,
+    range_anchor: &mut Option<usize>,
+    content_scroll: &mut usize,
+) {
+    for _ in 0..MOUSE_SCROLL_LINES {
+        if scroll_up {
+            move_workspace_cursor_up(
+                focus,
+                sources,
+                sessions,
+                dialogue_count,
+                selected_sessions,
+                source_state,
+                session_state,
+                dialogue_state,
+                selected_dialogues,
+                range_anchor,
+                content_scroll,
+            );
+        } else {
+            move_workspace_cursor_down(
+                focus,
+                sources,
+                sessions,
+                dialogue_count,
+                selected_sessions,
+                source_state,
+                session_state,
+                dialogue_state,
+                selected_dialogues,
+                range_anchor,
+                content_scroll,
+            );
         }
     }
 }
