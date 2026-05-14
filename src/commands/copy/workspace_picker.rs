@@ -6,6 +6,7 @@ use ratatui::widgets::ListState;
 use regex::Regex;
 
 use crate::commands::command_block_selector::CommandSelection;
+use crate::tui::content_view::line_count;
 use crate::tui::terminal::{init as init_tui, restore as restore_tui};
 use crate::tui::workspace::{
     can_open_dialogue_vim, render_workspace, selected_index, workspace_help_entries,
@@ -17,7 +18,7 @@ use crate::tui::workspace_search::{
     workspace_search_scope, WorkspaceSearchScope,
 };
 
-use super::vim::{line_count, open_vim_view, VimBlock, VimView};
+use super::vim::{open_vim_view, VimBlock, VimView};
 use super::PICK_CANCELLED_MESSAGE;
 
 pub(super) fn run_workspace_picker_on_terminal(
@@ -109,16 +110,16 @@ pub(super) fn run_workspace_picker_on_terminal(
             if let Some(dialogue) = dialogues.get(dialogue_idx) {
                 content_scroll = matched
                     .line_index
-                    .min(dialogue.unit.plain.lines().count().saturating_sub(1));
+                    .min(line_count(&dialogue.unit.plain).saturating_sub(1));
             } else {
                 content_scroll = 0;
             }
             search_apply_pending = false;
-        } else if let Some(dialogue) = dialogues.get(dialogue_idx) {
-            content_scroll =
-                content_scroll.min(dialogue.unit.plain.lines().count().saturating_sub(1));
         } else {
-            content_scroll = 0;
+            content_scroll = content_scroll.min(
+                workspace_content_line_count(&dialogues, &selected_dialogues, dialogue_idx)
+                    .saturating_sub(1),
+            );
         }
 
         terminal.draw(|frame| {
@@ -504,6 +505,17 @@ pub(super) fn run_workspace_picker_on_terminal(
                                 || key.modifiers.contains(KeyModifiers::CONTROL)) =>
                     {
                         content_scroll = content_scroll.saturating_sub(10);
+                    }
+                    KeyCode::Char('g') if focus == WorkspaceFocus::Content => {
+                        content_scroll = 0;
+                    }
+                    KeyCode::Char('G') if focus == WorkspaceFocus::Content => {
+                        content_scroll = workspace_content_line_count(
+                            &dialogues,
+                            &selected_dialogues,
+                            dialogue_idx,
+                        )
+                        .saturating_sub(1);
                     }
                     KeyCode::Char(' ') => match focus {
                         WorkspaceFocus::Source => {
@@ -1150,6 +1162,33 @@ pub(super) fn workspace_picked_content(
         units,
         selection,
     }
+}
+
+fn workspace_content_line_count(
+    dialogues: &[WorkspaceDialogue],
+    selected_dialogues: &[bool],
+    highlighted_idx: usize,
+) -> usize {
+    let selected = selected_dialogues
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, selected)| selected.then_some(idx))
+        .collect::<Vec<_>>();
+
+    if selected.is_empty() {
+        return dialogues
+            .get(highlighted_idx)
+            .map(|dialogue| line_count(&dialogue.unit.plain))
+            .unwrap_or(1);
+    }
+
+    let text = selected
+        .into_iter()
+        .filter_map(|dialogue_idx| dialogues.get(dialogue_idx))
+        .map(|dialogue| dialogue.unit.plain.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    line_count(&text)
 }
 
 fn apply_dialogue_range_selection(

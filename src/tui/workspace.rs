@@ -1,11 +1,12 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::{Color, Frame, Modifier, Style};
-use ratatui::text::{Line, Span, Text};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, ListItem, ListState, Paragraph};
 use regex::Regex;
 use std::time::SystemTime;
 
 use crate::commands::command_block_selector::CommandSelection;
+use crate::tui::content_view::{highlight_spans, render_content_view, ContentView};
 use crate::tui::pane::{
     active_item_style, panel_block, render_list_panel, selected_item_style, Panel,
 };
@@ -300,23 +301,6 @@ fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
         && column < area.x.saturating_add(area.width)
         && row >= area.y
         && row < area.y.saturating_add(area.height)
-}
-
-pub(crate) fn format_content_with_line_numbers(text: &str) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    let line_count = lines.len().max(1);
-    let width = line_count.to_string().len();
-
-    if lines.is_empty() {
-        return format!("{:>width$} | ", 1, width = width);
-    }
-
-    lines
-        .iter()
-        .enumerate()
-        .map(|(idx, line)| format!("{:>width$} | {line}", idx + 1, width = width))
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
@@ -822,11 +806,16 @@ fn render_content_panel(
     let content_search = search
         .filter(|search| search.scope == WorkspaceSearchScope::Content)
         .and(search_regex);
-    let paragraph = Paragraph::new(highlighted_content_text(&text, content_search))
-        .scroll((scroll as u16, 0))
-        .wrap(ratatui::widgets::Wrap { trim: false })
-        .block(panel_block(&panel));
-    frame.render_widget(paragraph, area);
+    render_content_view(
+        frame,
+        area,
+        panel,
+        ContentView {
+            text: &text,
+            scroll,
+            search_regex: content_search,
+        },
+    );
 }
 
 fn selected_parent_title(
@@ -868,7 +857,7 @@ fn content_preview_text(
             .get(highlighted_idx)
             .map(|dialogue| dialogue.unit.plain.as_str())
             .unwrap_or("<empty>");
-        return format_content_with_line_numbers(text);
+        return text.to_string();
     }
 
     let text = selected
@@ -877,78 +866,13 @@ fn content_preview_text(
         .map(|dialogue| dialogue.unit.plain.as_str())
         .collect::<Vec<_>>()
         .join("\n\n");
-    format_content_with_line_numbers(&text)
-}
-
-fn highlighted_content_text(text: &str, search_regex: Option<&Regex>) -> Text<'static> {
-    let lines = text
-        .lines()
-        .map(|line| {
-            if search_regex.is_some() {
-                if let Some((prefix, rest)) = line.split_once(" | ") {
-                    let mut spans = vec![Span::raw(format!("{prefix} | "))];
-                    spans.extend(highlight_spans(rest, search_regex, Style::default()));
-                    Line::from(spans)
-                } else {
-                    Line::from(highlight_spans(line, search_regex, Style::default()))
-                }
-            } else if let Some((prefix, rest)) = line.split_once("## User") {
-                Line::from(vec![
-                    Span::raw(prefix.to_string()),
-                    Span::styled("## User", Style::default().fg(Color::Cyan)),
-                    Span::raw(rest.to_string()),
-                ])
-            } else if let Some((prefix, rest)) = line.split_once("## Assistant") {
-                Line::from(vec![
-                    Span::raw(prefix.to_string()),
-                    Span::styled("## Assistant", Style::default().fg(Color::Green)),
-                    Span::raw(rest.to_string()),
-                ])
-            } else {
-                Line::from(line.to_string())
-            }
-        })
-        .collect::<Vec<_>>();
-    Text::from(lines)
-}
-
-fn highlight_spans(text: &str, regex: Option<&Regex>, base_style: Style) -> Vec<Span<'static>> {
-    let Some(regex) = regex else {
-        return vec![Span::styled(text.to_string(), base_style)];
-    };
-
-    let mut spans = Vec::new();
-    let mut cursor = 0;
-    for matched in regex.find_iter(text) {
-        if matched.start() == matched.end() {
-            continue;
-        }
-        if matched.start() > cursor {
-            spans.push(Span::styled(
-                text[cursor..matched.start()].to_string(),
-                base_style,
-            ));
-        }
-        spans.push(Span::styled(
-            text[matched.start()..matched.end()].to_string(),
-            base_style.fg(Color::Yellow).add_modifier(Modifier::BOLD),
-        ));
-        cursor = matched.end();
-    }
-
-    if cursor < text.len() {
-        spans.push(Span::styled(text[cursor..].to_string(), base_style));
-    }
-
-    if spans.is_empty() {
-        spans.push(Span::styled(text.to_string(), base_style));
-    }
-    spans
+    text
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{can_open_dialogue_vim, format_content_with_line_numbers, WorkspaceFocus};
+    use super::WorkspaceFocus;
+    use super::{can_open_dialogue_vim, content_preview_text};
 
     #[test]
     fn can_open_dialogue_vim_accepts_sessions_when_dialogues_exist() {
@@ -959,25 +883,19 @@ mod tests {
     }
 
     #[test]
-    fn format_content_with_line_numbers_adds_aligned_prefixes() {
-        let text = (1..=12)
-            .map(|idx| format!("line {idx}"))
-            .collect::<Vec<_>>()
-            .join("\n");
+    fn content_preview_text_preserves_raw_text_without_line_number_prefixes() {
+        let dialogue = crate::tui::workspace::WorkspaceDialogue {
+            source: crate::tui::workspace::WorkspaceSource::Terminal,
+            title: "cmd".to_string(),
+            unit: crate::tui::workspace::TextPair {
+                plain: "alpha\n\nomega".to_string(),
+                ansi: String::new(),
+            },
+        };
 
-        let formatted = format_content_with_line_numbers(&text);
-        let lines: Vec<&str> = formatted.lines().collect();
-
-        assert_eq!(lines.len(), 12);
-        assert_eq!(lines[0], " 1 | line 1");
-        assert_eq!(lines[8], " 9 | line 9");
-        assert_eq!(lines[9], "10 | line 10");
-        assert_eq!(lines[11], "12 | line 12");
-    }
-
-    #[test]
-    fn format_content_with_line_numbers_preserves_blank_lines() {
-        let formatted = format_content_with_line_numbers("alpha\n\nomega");
-        assert_eq!(formatted, "1 | alpha\n2 | \n3 | omega");
+        assert_eq!(
+            content_preview_text(&[dialogue], &[false], 0),
+            "alpha\n\nomega"
+        );
     }
 }

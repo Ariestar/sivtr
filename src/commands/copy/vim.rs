@@ -24,14 +24,6 @@ pub(super) struct VimBlock {
     pub(super) command_text: String,
 }
 
-pub(super) fn line_count(text: &str) -> usize {
-    if text.is_empty() {
-        0
-    } else {
-        text.lines().count()
-    }
-}
-
 pub(super) fn open_vim_view(view: &VimView) -> Result<()> {
     let editor = resolve_vim_editor()?;
     let dir = std::env::temp_dir();
