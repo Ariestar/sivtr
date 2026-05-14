@@ -1,3 +1,4 @@
+pub mod content_markdown;
 pub mod content_view;
 pub mod event;
 pub mod pane;

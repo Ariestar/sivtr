@@ -6,7 +6,7 @@ use ratatui::widgets::ListState;
 use regex::Regex;
 
 use crate::commands::command_block_selector::CommandSelection;
-use crate::tui::content_view::line_count;
+use crate::tui::content_view::{line_count, ContentViewMode};
 use crate::tui::terminal::{init as init_tui, restore as restore_tui};
 use crate::tui::workspace::{
     can_open_dialogue_vim, render_workspace, selected_index, workspace_help_entries,
@@ -47,6 +47,7 @@ pub(super) fn run_workspace_picker_on_terminal(
     let mut selected_dialogues = Vec::new();
     let mut range_anchor = None;
     let mut content_scroll = 0usize;
+    let mut content_mode = ContentViewMode::Reading;
     let mut show_help = false;
     let search_index = WorkspaceSearchIndex::new(&all_sessions);
     let mut show_search = false;
@@ -138,6 +139,7 @@ pub(super) fn run_workspace_picker_on_terminal(
                     range_anchor,
                     focus,
                     content_scroll,
+                    content_mode,
                     show_help,
                     help_state: &help_state,
                     search: (show_search || search_has_query).then_some(WorkspaceSearchView {
@@ -288,6 +290,7 @@ pub(super) fn run_workspace_picker_on_terminal(
                                 &mut selected_dialogues,
                                 &mut range_anchor,
                                 &mut content_scroll,
+                                &mut content_mode,
                                 &mut show_search,
                                 &mut search_query,
                                 &mut search_dirty,
@@ -516,6 +519,9 @@ pub(super) fn run_workspace_picker_on_terminal(
                             dialogue_idx,
                         )
                         .saturating_sub(1);
+                    }
+                    KeyCode::Char('r') if focus == WorkspaceFocus::Content => {
+                        content_mode = content_mode.toggle();
                     }
                     KeyCode::Char(' ') => match focus {
                         WorkspaceFocus::Source => {
@@ -902,6 +908,7 @@ fn apply_workspace_help_action(
     selected_dialogues: &mut Vec<bool>,
     range_anchor: &mut Option<usize>,
     content_scroll: &mut usize,
+    content_mode: &mut ContentViewMode,
     show_search: &mut bool,
     search_query: &mut String,
     search_dirty: &mut bool,
@@ -1074,6 +1081,9 @@ fn apply_workspace_help_action(
         }
         WorkspaceHelpAction::ScrollUp if *focus == WorkspaceFocus::Content => {
             *content_scroll = (*content_scroll).saturating_sub(10);
+        }
+        WorkspaceHelpAction::ToggleContentMode if *focus == WorkspaceFocus::Content => {
+            *content_mode = content_mode.toggle();
         }
         WorkspaceHelpAction::Copy => match *focus {
             WorkspaceFocus::Source => set_focus(focus, fullscreen, WorkspaceFocus::Sessions),

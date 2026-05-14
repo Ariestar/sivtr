@@ -6,7 +6,9 @@ use regex::Regex;
 use std::time::SystemTime;
 
 use crate::commands::command_block_selector::CommandSelection;
-use crate::tui::content_view::{highlight_spans, render_content_view, ContentView};
+use crate::tui::content_view::{
+    highlight_spans, render_content_view, ContentView, ContentViewMode,
+};
 use crate::tui::pane::{
     active_item_style, panel_block, render_list_panel, selected_item_style, Panel,
 };
@@ -143,6 +145,7 @@ pub(crate) enum WorkspaceHelpAction {
     OpenVim,
     ScrollDown,
     ScrollUp,
+    ToggleContentMode,
     Copy,
     ToggleFullscreen,
     CloseHelp,
@@ -170,6 +173,7 @@ pub(crate) struct WorkspaceView<'a> {
     pub(crate) range_anchor: Option<usize>,
     pub(crate) focus: WorkspaceFocus,
     pub(crate) content_scroll: usize,
+    pub(crate) content_mode: ContentViewMode,
     pub(crate) show_help: bool,
     pub(crate) help_state: &'a ListState,
     pub(crate) search: Option<WorkspaceSearchView<'a>>,
@@ -391,6 +395,11 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
             action: WorkspaceHelpAction::ScrollUp,
         },
         WorkspaceHelpEntry {
+            key: "r (Content)",
+            description: "toggle raw/read content mode",
+            action: WorkspaceHelpAction::ToggleContentMode,
+        },
+        WorkspaceHelpEntry {
             key: "Enter",
             description: "enter pane or copy selection",
             action: WorkspaceHelpAction::Copy,
@@ -472,11 +481,12 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         layout.content,
         Panel::new(
             WorkspaceFocus::Content.key(),
-            selected_parent_title("Content", view.selected_dialogues, "dialogue", "dialogues"),
+            content_title(view.content_mode, view.selected_dialogues),
             view.focus == WorkspaceFocus::Content,
         ),
         content_preview_text(view.dialogues, view.selected_dialogues, dialogue_idx),
         view.content_scroll,
+        view.content_mode,
         view.search.as_ref(),
         search_regex.as_ref(),
     );
@@ -488,6 +498,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         view.show_help,
         view.search.as_ref(),
         view.fullscreen,
+        view.content_mode,
     );
 
     if let Some(search) = view.search.filter(|search| search.input_open) {
@@ -504,6 +515,7 @@ fn render_footer(
     show_help: bool,
     search: Option<&WorkspaceSearchView<'_>>,
     fullscreen: Option<WorkspaceFocus>,
+    content_mode: ContentViewMode,
 ) {
     let controls = if search.is_some() {
         let suffix = search.and_then(search_position_label).unwrap_or_default();
@@ -533,7 +545,7 @@ fn render_footer(
                 "j/k move  Space toggle  v range  a all  l/Right content  t vim  Enter copy  z fullscreen  / search  h/Esc back  ? help"
             }
             WorkspaceFocus::Content => {
-                "j/k scroll  Ctrl-d/PageDown down  Ctrl-u/PageUp up  t vim  Enter copy  z fullscreen  / search  h/Esc back  ? help"
+                "j/k scroll  Ctrl-d/PageDown down  Ctrl-u/PageUp up  r mode  t vim  Enter copy  z fullscreen  / search  h/Esc back  ? help"
             }
         }
     };
@@ -542,7 +554,12 @@ fn render_footer(
     } else {
         ""
     };
-    let footer = Paragraph::new(format!("{controls}{suffix}"));
+    let mode = if focus == WorkspaceFocus::Content {
+        format!("  [{}]", content_mode.label())
+    } else {
+        String::new()
+    };
+    let footer = Paragraph::new(format!("{controls}{suffix}{mode}"));
     frame.render_widget(footer, area);
 }
 
@@ -800,6 +817,7 @@ fn render_content_panel(
     panel: Panel,
     text: String,
     scroll: usize,
+    mode: ContentViewMode,
     search: Option<&WorkspaceSearchView<'_>>,
     search_regex: Option<&Regex>,
 ) {
@@ -814,6 +832,7 @@ fn render_content_panel(
             text: &text,
             scroll,
             search_regex: content_search,
+            mode,
         },
     );
 }
@@ -835,6 +854,15 @@ fn selected_parent_title(
     } else {
         format!("{title}: {count} {plural} selected")
     }
+}
+
+fn content_title(mode: ContentViewMode, selected_dialogues: &[bool]) -> String {
+    selected_parent_title(
+        &format!("Content ({})", mode.label()),
+        selected_dialogues,
+        "dialogue",
+        "dialogues",
+    )
 }
 
 fn content_preview_text(
@@ -872,7 +900,8 @@ fn content_preview_text(
 #[cfg(test)]
 mod tests {
     use super::WorkspaceFocus;
-    use super::{can_open_dialogue_vim, content_preview_text};
+    use super::{can_open_dialogue_vim, content_preview_text, content_title};
+    use crate::tui::content_view::ContentViewMode;
 
     #[test]
     fn can_open_dialogue_vim_accepts_sessions_when_dialogues_exist() {
@@ -896,6 +925,18 @@ mod tests {
         assert_eq!(
             content_preview_text(&[dialogue], &[false], 0),
             "alpha\n\nomega"
+        );
+    }
+
+    #[test]
+    fn content_title_includes_view_mode() {
+        assert_eq!(
+            content_title(ContentViewMode::Reading, &[false, false]),
+            "Content (read)"
+        );
+        assert_eq!(
+            content_title(ContentViewMode::Raw, &[true, false]),
+            "Content (raw): 1 dialogue selected"
         );
     }
 }
