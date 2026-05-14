@@ -2,13 +2,14 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::{Color, Frame, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Clear, ListItem, ListState, Paragraph};
-use regex::{Regex, RegexBuilder};
+use regex::Regex;
 use std::time::SystemTime;
 
 use crate::commands::command_block_selector::CommandSelection;
 use crate::tui::pane::{
     active_item_style, panel_block, render_list_panel, selected_item_style, Panel,
 };
+use crate::tui::workspace_search::{workspace_search_regex_for_query, WorkspaceSearchScope};
 use sivtr_core::ai::AgentProvider;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,23 +66,6 @@ pub(crate) struct WorkspaceDialogue {
     pub(crate) source: WorkspaceSource,
     pub(crate) title: String,
     pub(crate) unit: TextPair,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum WorkspaceSearchScope {
-    Content,
-    Session,
-    Dialogue,
-}
-
-impl WorkspaceSearchScope {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Content => "",
-            Self::Session => "session",
-            Self::Dialogue => "dialogue",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -465,7 +449,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
     let search_regex = view
         .search
         .as_ref()
-        .and_then(|search| search_regex(search.query));
+        .and_then(|search| workspace_search_regex_for_query(search.query));
 
     render_source_list(
         frame,
@@ -928,26 +912,6 @@ fn highlighted_content_text(text: &str, search_regex: Option<&Regex>) -> Text<'s
     Text::from(lines)
 }
 
-fn search_regex(query: &str) -> Option<Regex> {
-    let (_, term) = search_query(query);
-    let term = term.trim();
-    if term.is_empty() {
-        return None;
-    }
-    RegexBuilder::new(term).case_insensitive(true).build().ok()
-}
-
-fn search_query(query: &str) -> (WorkspaceSearchScope, &str) {
-    let query = query.trim_start();
-    if let Some(term) = query.strip_prefix('>') {
-        (WorkspaceSearchScope::Session, term.trim_start())
-    } else if let Some(term) = query.strip_prefix('#') {
-        (WorkspaceSearchScope::Dialogue, term.trim_start())
-    } else {
-        (WorkspaceSearchScope::Content, query)
-    }
-}
-
 fn highlight_spans(text: &str, regex: Option<&Regex>, base_style: Style) -> Vec<Span<'static>> {
     let Some(regex) = regex else {
         return vec![Span::styled(text.to_string(), base_style)];
@@ -980,4 +944,40 @@ fn highlight_spans(text: &str, regex: Option<&Regex>, base_style: Style) -> Vec<
         spans.push(Span::styled(text.to_string(), base_style));
     }
     spans
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{can_open_dialogue_vim, format_content_with_line_numbers, WorkspaceFocus};
+
+    #[test]
+    fn can_open_dialogue_vim_accepts_sessions_when_dialogues_exist() {
+        assert!(can_open_dialogue_vim(WorkspaceFocus::Sessions, 1));
+        assert!(can_open_dialogue_vim(WorkspaceFocus::Dialogues, 1));
+        assert!(can_open_dialogue_vim(WorkspaceFocus::Content, 1));
+        assert!(!can_open_dialogue_vim(WorkspaceFocus::Sessions, 0));
+    }
+
+    #[test]
+    fn format_content_with_line_numbers_adds_aligned_prefixes() {
+        let text = (1..=12)
+            .map(|idx| format!("line {idx}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let formatted = format_content_with_line_numbers(&text);
+        let lines: Vec<&str> = formatted.lines().collect();
+
+        assert_eq!(lines.len(), 12);
+        assert_eq!(lines[0], " 1 | line 1");
+        assert_eq!(lines[8], " 9 | line 9");
+        assert_eq!(lines[9], "10 | line 10");
+        assert_eq!(lines[11], "12 | line 12");
+    }
+
+    #[test]
+    fn format_content_with_line_numbers_preserves_blank_lines() {
+        let formatted = format_content_with_line_numbers("alpha\n\nomega");
+        assert_eq!(formatted, "1 | alpha\n2 | \n3 | omega");
+    }
 }
