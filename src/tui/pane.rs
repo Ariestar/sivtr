@@ -18,6 +18,9 @@ impl Panel {
     }
 
     fn title(&self) -> String {
+        if self.key.is_empty() {
+            return self.name.clone();
+        }
         if self.active {
             format!("[{}] {} *", self.key, self.name)
         } else {

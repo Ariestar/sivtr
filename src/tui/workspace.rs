@@ -2,6 +2,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::{Color, Frame, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Clear, ListItem, ListState, Paragraph};
+use regex::{Regex, RegexBuilder};
 use std::time::SystemTime;
 
 use crate::commands::command_block_selector::CommandSelection;
@@ -64,6 +65,23 @@ pub(crate) struct WorkspaceDialogue {
     pub(crate) source: WorkspaceSource,
     pub(crate) title: String,
     pub(crate) unit: TextPair,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WorkspaceSearchScope {
+    Content,
+    Session,
+    Dialogue,
+}
+
+impl WorkspaceSearchScope {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Content => "",
+            Self::Session => "session",
+            Self::Dialogue => "dialogue",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,6 +161,7 @@ pub(crate) enum WorkspaceHelpAction {
     Copy,
     ToggleFullscreen,
     CloseHelp,
+    OpenSearch,
     Cancel,
 }
 
@@ -168,7 +187,17 @@ pub(crate) struct WorkspaceView<'a> {
     pub(crate) content_scroll: usize,
     pub(crate) show_help: bool,
     pub(crate) help_state: &'a ListState,
+    pub(crate) search: Option<WorkspaceSearchView<'a>>,
     pub(crate) fullscreen: Option<WorkspaceFocus>,
+}
+
+pub(crate) struct WorkspaceSearchView<'a> {
+    pub(crate) query: &'a str,
+    pub(crate) scope: WorkspaceSearchScope,
+    pub(crate) result_count: usize,
+    pub(crate) current_match: Option<usize>,
+    pub(crate) match_count: usize,
+    pub(crate) input_open: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -409,6 +438,11 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
             action: WorkspaceHelpAction::CloseHelp,
         },
         WorkspaceHelpEntry {
+            key: "/",
+            description: "search all sessions",
+            action: WorkspaceHelpAction::OpenSearch,
+        },
+        WorkspaceHelpEntry {
             key: "q",
             description: "cancel picker",
             action: WorkspaceHelpAction::Cancel,
@@ -428,6 +462,10 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
 
     let dialogue_idx =
         selected_index(view.dialogue_state).min(view.dialogues.len().saturating_sub(1));
+    let search_regex = view
+        .search
+        .as_ref()
+        .and_then(|search| search_regex(search.query));
 
     render_source_list(
         frame,
@@ -444,6 +482,8 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         view.selected_sources,
         view.selected_sessions,
         view.session_state,
+        view.search.as_ref(),
+        search_regex.as_ref(),
         view.focus == WorkspaceFocus::Sessions,
     );
     render_dialogue_list(
@@ -454,6 +494,8 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         view.selected_sessions,
         view.selected_dialogues,
         view.range_anchor,
+        view.search.as_ref(),
+        search_regex.as_ref(),
         view.focus == WorkspaceFocus::Dialogues,
     );
 
@@ -467,6 +509,8 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         ),
         content_preview_text(view.dialogues, view.selected_dialogues, dialogue_idx),
         view.content_scroll,
+        view.search.as_ref(),
+        search_regex.as_ref(),
     );
 
     render_footer(
@@ -474,10 +518,13 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         chunks[1],
         view.focus,
         view.show_help,
+        view.search.as_ref(),
         view.fullscreen,
     );
 
-    if view.show_help {
+    if let Some(search) = view.search.filter(|search| search.input_open) {
+        render_search_box(frame, centered_rect(chunks[0], 60, 12), search);
+    } else if view.show_help {
         render_help_panel(frame, chunks[0], view.help_state);
     }
 }
@@ -487,21 +534,38 @@ fn render_footer(
     area: Rect,
     focus: WorkspaceFocus,
     show_help: bool,
+    search: Option<&WorkspaceSearchView<'_>>,
     fullscreen: Option<WorkspaceFocus>,
 ) {
-    let controls = if show_help {
+    let controls = if search.is_some() {
+        let suffix = search.and_then(search_position_label).unwrap_or_default();
+        if search.map(|search| search.input_open).unwrap_or(false) {
+            return frame.render_widget(
+                Paragraph::new(format!(
+                    "type search  > session  # dialogue  Enter accept  Esc clear  {suffix}"
+                )),
+                area,
+            );
+        }
+        return frame.render_widget(
+            Paragraph::new(format!(
+                "n next  N previous  Esc clear search  / edit  {suffix}"
+            )),
+            area,
+        );
+    } else if show_help {
         "j/k move  Enter execute  Esc/? close help  q cancel"
     } else {
         match focus {
-            WorkspaceFocus::Source => "j/k move  Space toggle  a all  g agents  t terminal  Enter sessions  z fullscreen  q/Esc cancel  ? help",
+            WorkspaceFocus::Source => "j/k move  Space toggle  a all  g agents  t terminal  Enter sessions  z fullscreen  / search  q/Esc cancel  ? help",
             WorkspaceFocus::Sessions => {
-                "j/k move  Space toggle  0 source  l/Right/Enter dialogues  t vim  z fullscreen  q/Esc cancel  ? help"
+                "j/k move  Space toggle  0 source  l/Right/Enter dialogues  t vim  z fullscreen  / search  q/Esc cancel  ? help"
             }
             WorkspaceFocus::Dialogues => {
-                "j/k move  Space toggle  v range  a all  l/Right content  t vim  Enter copy  z fullscreen  h/Esc back  ? help"
+                "j/k move  Space toggle  v range  a all  l/Right content  t vim  Enter copy  z fullscreen  / search  h/Esc back  ? help"
             }
             WorkspaceFocus::Content => {
-                "j/k scroll  Ctrl-d/PageDown down  Ctrl-u/PageUp up  t vim  Enter copy  z fullscreen  h/Esc back  ? help"
+                "j/k scroll  Ctrl-d/PageDown down  Ctrl-u/PageUp up  t vim  Enter copy  z fullscreen  / search  h/Esc back  ? help"
             }
         }
     };
@@ -512,6 +576,52 @@ fn render_footer(
     };
     let footer = Paragraph::new(format!("{controls}{suffix}"));
     frame.render_widget(footer, area);
+}
+
+fn search_position_label(search: &WorkspaceSearchView<'_>) -> Option<String> {
+    let current = search.current_match?;
+    Some(format!("[{}/{}]", current + 1, search.match_count))
+}
+
+fn centered_rect(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+    let horizontal = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(vertical[1]);
+    horizontal[1]
+}
+
+fn render_search_box(frame: &mut Frame, area: Rect, search: WorkspaceSearchView<'_>) {
+    frame.render_widget(Clear, area);
+    let result_label = if search.query.trim().is_empty() {
+        "ready".to_string()
+    } else if let Some(position) = search_position_label(&search) {
+        position
+    } else if search.result_count == 1 {
+        "1 result".to_string()
+    } else {
+        format!("{} results", search.result_count)
+    };
+    let title = if search.scope == WorkspaceSearchScope::Content {
+        format!("Search  ({result_label})")
+    } else {
+        format!("Search {}  ({})", search.scope.label(), result_label)
+    };
+    let paragraph =
+        Paragraph::new(search.query.to_string()).block(panel_block(&Panel::new("", title, true)));
+    frame.render_widget(paragraph, area);
 }
 
 fn render_help_panel(frame: &mut Frame, area: Rect, state: &ListState) {
@@ -575,8 +685,12 @@ fn render_session_list(
     selected_sources: &[bool],
     selected_sessions: &[bool],
     state: &ListState,
+    search: Option<&WorkspaceSearchView<'_>>,
+    search_regex: Option<&Regex>,
     active: bool,
 ) {
+    let cursor_idx = selected_index(state);
+    let has_selection = selected_sessions.iter().any(|selected| *selected);
     let mut items: Vec<ListItem> = choices
         .iter()
         .enumerate()
@@ -592,10 +706,24 @@ fn render_session_list(
                 ""
             };
             let line = format!("{marker}[{:<8}] {}", choice.source.label(), choice.title);
-            if selected {
-                ListItem::new(Line::from(Span::styled(line, selected_item_style())))
+            let highlight = search
+                .filter(|search| search.scope == WorkspaceSearchScope::Session)
+                .and(search_regex);
+            let base_style = if selected {
+                selected_item_style()
+            } else if !has_selection && idx == cursor_idx {
+                active_item_style()
             } else {
-                ListItem::new(line)
+                Style::default()
+            };
+            if selected || (!has_selection && idx == cursor_idx) {
+                ListItem::new(Line::from(highlight_spans(&line, highlight, base_style)))
+            } else {
+                ListItem::new(Line::from(highlight_spans(
+                    &line,
+                    highlight,
+                    Style::default(),
+                )))
             }
         })
         .collect();
@@ -623,9 +751,12 @@ fn render_dialogue_list(
     selected_sessions: &[bool],
     selected_dialogues: &[bool],
     range_anchor: Option<usize>,
+    search: Option<&WorkspaceSearchView<'_>>,
+    search_regex: Option<&Regex>,
     active: bool,
 ) {
     let highlighted_idx = selected_index(state);
+    let has_selection = selected_dialogues.iter().any(|selected| *selected);
     let mut items: Vec<ListItem> = dialogues
         .iter()
         .enumerate()
@@ -646,6 +777,9 @@ fn render_dialogue_list(
                 ""
             };
             let line = format!("{marker}{}", dialogue.title);
+            let highlight = search
+                .filter(|search| search.scope == WorkspaceSearchScope::Dialogue)
+                .and(search_regex);
             if in_range {
                 ListItem::new(Line::from(Span::styled(
                     line,
@@ -654,9 +788,23 @@ fn render_dialogue_list(
                         .add_modifier(Modifier::BOLD),
                 )))
             } else if selected {
-                ListItem::new(Line::from(Span::styled(line, selected_item_style())))
+                ListItem::new(Line::from(highlight_spans(
+                    &line,
+                    highlight,
+                    selected_item_style(),
+                )))
+            } else if !has_selection && idx == highlighted_idx {
+                ListItem::new(Line::from(highlight_spans(
+                    &line,
+                    highlight,
+                    active_item_style(),
+                )))
             } else {
-                ListItem::new(line)
+                ListItem::new(Line::from(highlight_spans(
+                    &line,
+                    highlight,
+                    Style::default(),
+                )))
             }
         })
         .collect();
@@ -678,8 +826,19 @@ fn render_dialogue_list(
     );
 }
 
-fn render_content_panel(frame: &mut Frame, area: Rect, panel: Panel, text: String, scroll: usize) {
-    let paragraph = Paragraph::new(highlighted_content_text(&text))
+fn render_content_panel(
+    frame: &mut Frame,
+    area: Rect,
+    panel: Panel,
+    text: String,
+    scroll: usize,
+    search: Option<&WorkspaceSearchView<'_>>,
+    search_regex: Option<&Regex>,
+) {
+    let content_search = search
+        .filter(|search| search.scope == WorkspaceSearchScope::Content)
+        .and(search_regex);
+    let paragraph = Paragraph::new(highlighted_content_text(&text, content_search))
         .scroll((scroll as u16, 0))
         .wrap(ratatui::widgets::Wrap { trim: false })
         .block(panel_block(&panel));
@@ -737,11 +896,19 @@ fn content_preview_text(
     format_content_with_line_numbers(&text)
 }
 
-fn highlighted_content_text(text: &str) -> Text<'static> {
+fn highlighted_content_text(text: &str, search_regex: Option<&Regex>) -> Text<'static> {
     let lines = text
         .lines()
         .map(|line| {
-            if let Some((prefix, rest)) = line.split_once("## User") {
+            if search_regex.is_some() {
+                if let Some((prefix, rest)) = line.split_once(" | ") {
+                    let mut spans = vec![Span::raw(format!("{prefix} | "))];
+                    spans.extend(highlight_spans(rest, search_regex, Style::default()));
+                    Line::from(spans)
+                } else {
+                    Line::from(highlight_spans(line, search_regex, Style::default()))
+                }
+            } else if let Some((prefix, rest)) = line.split_once("## User") {
                 Line::from(vec![
                     Span::raw(prefix.to_string()),
                     Span::styled("## User", Style::default().fg(Color::Cyan)),
@@ -759,4 +926,58 @@ fn highlighted_content_text(text: &str) -> Text<'static> {
         })
         .collect::<Vec<_>>();
     Text::from(lines)
+}
+
+fn search_regex(query: &str) -> Option<Regex> {
+    let (_, term) = search_query(query);
+    let term = term.trim();
+    if term.is_empty() {
+        return None;
+    }
+    RegexBuilder::new(term).case_insensitive(true).build().ok()
+}
+
+fn search_query(query: &str) -> (WorkspaceSearchScope, &str) {
+    let query = query.trim_start();
+    if let Some(term) = query.strip_prefix('>') {
+        (WorkspaceSearchScope::Session, term.trim_start())
+    } else if let Some(term) = query.strip_prefix('#') {
+        (WorkspaceSearchScope::Dialogue, term.trim_start())
+    } else {
+        (WorkspaceSearchScope::Content, query)
+    }
+}
+
+fn highlight_spans(text: &str, regex: Option<&Regex>, base_style: Style) -> Vec<Span<'static>> {
+    let Some(regex) = regex else {
+        return vec![Span::styled(text.to_string(), base_style)];
+    };
+
+    let mut spans = Vec::new();
+    let mut cursor = 0;
+    for matched in regex.find_iter(text) {
+        if matched.start() == matched.end() {
+            continue;
+        }
+        if matched.start() > cursor {
+            spans.push(Span::styled(
+                text[cursor..matched.start()].to_string(),
+                base_style,
+            ));
+        }
+        spans.push(Span::styled(
+            text[matched.start()..matched.end()].to_string(),
+            base_style.fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ));
+        cursor = matched.end();
+    }
+
+    if cursor < text.len() {
+        spans.push(Span::styled(text[cursor..].to_string(), base_style));
+    }
+
+    if spans.is_empty() {
+        spans.push(Span::styled(text.to_string(), base_style));
+    }
+    spans
 }
