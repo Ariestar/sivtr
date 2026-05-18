@@ -36,12 +36,7 @@ pub(super) fn run_workspace_picker_on_terminal(
     dialogue_state.select(Some(0));
     let mut help_state = ListState::default();
     help_state.select(Some(0));
-    let mut focus = match initial_focus {
-        WorkspaceFocus::Source => WorkspaceFocus::Source,
-        WorkspaceFocus::Dialogues => WorkspaceFocus::Dialogues,
-        WorkspaceFocus::Content => WorkspaceFocus::Content,
-        WorkspaceFocus::Sessions => WorkspaceFocus::Sessions,
-    };
+    let mut focus = initial_focus;
     let sources = workspace_sources(&all_sessions);
     let mut selected_sources = vec![true; sources.len()];
     let mut sessions = workspace_sessions_for_sources(&all_sessions, &sources, &selected_sources);
@@ -1031,7 +1026,7 @@ fn apply_workspace_help_action(
     fullscreen: &mut Option<WorkspaceFocus>,
     sources: &[WorkspaceSource],
     source_state: &mut ListState,
-    selected_sources: &mut Vec<bool>,
+    selected_sources: &mut [bool],
     selected_sessions: &mut Vec<bool>,
     session_state: &mut ListState,
     dialogue_state: &mut ListState,

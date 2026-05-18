@@ -658,6 +658,7 @@ fn terminal_workspace_copy_parts(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish_selected_units_copy(
     units: &[TextPair],
     selection: CommandSelection,

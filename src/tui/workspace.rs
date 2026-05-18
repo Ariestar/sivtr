@@ -716,6 +716,7 @@ fn render_source_list(
     frame.render_widget(paragraph, area);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_session_list(
     frame: &mut Frame,
     area: Rect,
@@ -782,6 +783,7 @@ fn render_session_list(
     render_list_scrollbar(frame, area, cursor_idx, choices.len(), active);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_dialogue_list(
     frame: &mut Frame,
     area: Rect,
@@ -885,6 +887,7 @@ fn panel_viewport_height(area: Rect) -> usize {
     area.height.saturating_sub(2) as usize
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_content_panel(
     frame: &mut Frame,
     area: Rect,
