@@ -312,28 +312,17 @@ pub(super) fn run_workspace_picker_on_terminal(
                     continue;
                 }
 
+                if handle_line_filter_key(
+                    key.code,
+                    dialogue_count,
+                    &mut line_filter_input_open,
+                    &mut line_filter,
+                    &mut line_filter_error,
+                ) {
+                    continue;
+                }
+
                 match key.code {
-                    KeyCode::Char(':') if dialogue_count > 0 => {
-                        line_filter_input_open = true;
-                        line_filter_error = None;
-                    }
-                    KeyCode::Backspace if line_filter_input_open => {
-                        line_filter_error = None;
-                        if line_filter.pop().is_none() {
-                            line_filter_input_open = false;
-                        }
-                    }
-                    KeyCode::Esc if line_filter_input_open || line_filter_error.is_some() => {
-                        line_filter_input_open = false;
-                        line_filter.clear();
-                        line_filter_error = None;
-                    }
-                    KeyCode::Char(ch)
-                        if line_filter_input_open && matches!(ch, '0'..='9' | ':' | ',') =>
-                    {
-                        line_filter.push(ch);
-                        line_filter_error = None;
-                    }
                     KeyCode::Char('/') => {
                         show_help = false;
                         show_search = true;
@@ -1476,6 +1465,51 @@ fn apply_workspace_line_filter(
         .collect()
 }
 
+fn handle_line_filter_key(
+    key: KeyCode,
+    dialogue_count: usize,
+    line_filter_input_open: &mut bool,
+    line_filter: &mut String,
+    line_filter_error: &mut Option<String>,
+) -> bool {
+    if *line_filter_input_open {
+        match key {
+            KeyCode::Char(ch) if matches!(ch, '0'..='9' | ':' | ',') => {
+                line_filter.push(ch);
+                *line_filter_error = None;
+                return true;
+            }
+            KeyCode::Backspace => {
+                *line_filter_error = None;
+                if line_filter.pop().is_none() {
+                    *line_filter_input_open = false;
+                }
+                return true;
+            }
+            KeyCode::Esc => {
+                *line_filter_input_open = false;
+                line_filter.clear();
+                *line_filter_error = None;
+                return true;
+            }
+            _ => {}
+        }
+    }
+
+    match key {
+        KeyCode::Char(':') if dialogue_count > 0 => {
+            *line_filter_input_open = true;
+            *line_filter_error = None;
+            true
+        }
+        KeyCode::Esc if line_filter_error.is_some() => {
+            *line_filter_error = None;
+            true
+        }
+        _ => false,
+    }
+}
+
 fn workspace_content_line_count(
     dialogues: &[WorkspaceDialogue],
     selected_dialogues: &[bool],
@@ -1820,8 +1854,9 @@ fn dialogue_text_vim_view(text: String) -> VimView {
 #[cfg(test)]
 mod tests {
     use super::{
-        workspace_dialogue_vim_view, workspace_dialogues_for_sessions, workspace_picked_content,
-        workspace_picked_content_for_copy, workspace_picked_content_for_copy_with_line_filter,
+        handle_line_filter_key, workspace_dialogue_vim_view, workspace_dialogues_for_sessions,
+        workspace_picked_content, workspace_picked_content_for_copy,
+        workspace_picked_content_for_copy_with_line_filter,
         workspace_picked_content_with_line_filter, WorkspaceCopyShortcut, WorkspaceSearchIndex,
         WorkspaceSearchMatch,
     };
@@ -1832,6 +1867,7 @@ mod tests {
     use crate::tui::workspace_search::{
         workspace_search_query, workspace_search_regex, WorkspaceSearchScope,
     };
+    use crossterm::event::KeyCode;
     use sivtr_core::ai::AgentProvider;
     use std::time::SystemTime;
 
@@ -2180,6 +2216,48 @@ mod tests {
             err.to_string().contains("Invalid line number"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn line_filter_key_handler_keeps_colon_inside_active_input() {
+        let mut open = false;
+        let mut filter = String::new();
+        let mut error = None;
+
+        assert!(handle_line_filter_key(
+            KeyCode::Char(':'),
+            1,
+            &mut open,
+            &mut filter,
+            &mut error,
+        ));
+        assert!(open);
+        assert_eq!(filter, "");
+
+        assert!(handle_line_filter_key(
+            KeyCode::Char('2'),
+            1,
+            &mut open,
+            &mut filter,
+            &mut error,
+        ));
+        assert!(handle_line_filter_key(
+            KeyCode::Char(':'),
+            1,
+            &mut open,
+            &mut filter,
+            &mut error,
+        ));
+        assert!(handle_line_filter_key(
+            KeyCode::Char('3'),
+            1,
+            &mut open,
+            &mut filter,
+            &mut error,
+        ));
+
+        assert_eq!(filter, "2:3");
+        assert!(open);
     }
 
     #[test]
