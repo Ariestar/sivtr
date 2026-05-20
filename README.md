@@ -171,6 +171,12 @@ sivtr copy codex all --max-blocks 0
 sivtr copy codex all --max-blocks 10000
 ```
 
+In the workspace picker, `i`, `o`, `y`, and `c` copy the current
+input/question, output/answer, block, or bare command. To copy only specific
+content lines, press `:` to start a temporary line filter, type a 1-based spec
+such as `2:8` or `1,3,8:12`, then use `Enter`, `i`, `o`, `y`, or `c`. Press
+`Backspace` to edit the pending filter and `Esc` to clear it.
+
 Quick one-line checks:
 
 - dialogue/session picker flow: `sivtr copy codex --pick`

@@ -203,6 +203,9 @@ pub(crate) struct WorkspaceView<'a> {
     pub(crate) show_help: bool,
     pub(crate) help_state: &'a ListState,
     pub(crate) search: Option<WorkspaceSearchView<'a>>,
+    pub(crate) line_filter_input_open: bool,
+    pub(crate) line_filter: Option<&'a str>,
+    pub(crate) line_filter_error: Option<&'a str>,
     pub(crate) fullscreen: Option<WorkspaceFocus>,
 }
 
@@ -213,6 +216,17 @@ pub(crate) struct WorkspaceSearchView<'a> {
     pub(crate) current_match: Option<usize>,
     pub(crate) match_count: usize,
     pub(crate) input_open: bool,
+}
+
+struct WorkspaceFooterView<'a> {
+    focus: WorkspaceFocus,
+    show_help: bool,
+    search: Option<&'a WorkspaceSearchView<'a>>,
+    line_filter_input_open: bool,
+    line_filter: Option<&'a str>,
+    line_filter_error: Option<&'a str>,
+    fullscreen: Option<WorkspaceFocus>,
+    content_mode: ContentViewMode,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -426,6 +440,11 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
             action: WorkspaceHelpAction::ToggleContentMode,
         },
         WorkspaceHelpEntry {
+            key: ":",
+            description: "start line filter for next copy",
+            action: WorkspaceHelpAction::CloseHelp,
+        },
+        WorkspaceHelpEntry {
             key: "i",
             description: "copy current input/question",
             action: WorkspaceHelpAction::CopyInput,
@@ -540,11 +559,16 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
     render_footer(
         frame,
         chunks[1],
-        view.focus,
-        view.show_help,
-        view.search.as_ref(),
-        view.fullscreen,
-        view.content_mode,
+        WorkspaceFooterView {
+            focus: view.focus,
+            show_help: view.show_help,
+            search: view.search.as_ref(),
+            line_filter_input_open: view.line_filter_input_open,
+            line_filter: view.line_filter,
+            line_filter_error: view.line_filter_error,
+            fullscreen: view.fullscreen,
+            content_mode: view.content_mode,
+        },
     );
 
     if let Some(search) = view.search.filter(|search| search.input_open) {
@@ -554,15 +578,17 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
     }
 }
 
-fn render_footer(
-    frame: &mut Frame,
-    area: Rect,
-    focus: WorkspaceFocus,
-    show_help: bool,
-    search: Option<&WorkspaceSearchView<'_>>,
-    fullscreen: Option<WorkspaceFocus>,
-    content_mode: ContentViewMode,
-) {
+fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>) {
+    let WorkspaceFooterView {
+        focus,
+        show_help,
+        search,
+        line_filter_input_open,
+        line_filter,
+        line_filter_error,
+        fullscreen,
+        content_mode,
+    } = footer;
     let controls = if search.is_some() {
         let suffix = search.and_then(search_position_label).unwrap_or_default();
         if search.map(|search| search.input_open).unwrap_or(false) {
@@ -588,10 +614,10 @@ fn render_footer(
                 "j/k move  Space toggle  0 source  l/Right/Enter dialogues  t vim  z fullscreen  / search  q/Esc cancel  ? help"
             }
             WorkspaceFocus::Dialogues => {
-                "j/k move  Space toggle  v range  a all  i/o/y copy parts  c command  l/Right content  t vim  Enter copy  z fullscreen  / search  h/Esc back  ? help"
+                "j/k move  Space toggle  v range  a all  : lines  i/o/y copy parts  c command  l/Right content  t vim  Enter copy  z fullscreen  / search  h/Esc back  ? help"
             }
             WorkspaceFocus::Content => {
-                "j/k scroll  i/o/y copy parts  c command  Ctrl-d/PageDown down  Ctrl-u/PageUp up  r mode  t vim  Enter copy  z fullscreen  / search  h/Esc back  ? help"
+                "j/k scroll  : lines  i/o/y copy parts  c command  Ctrl-d/PageDown down  Ctrl-u/PageUp up  r mode  t vim  Enter copy  z fullscreen  / search  h/Esc back  ? help"
             }
         }
     };
@@ -600,12 +626,21 @@ fn render_footer(
     } else {
         ""
     };
+    let line_filter_status = if let Some(error) = line_filter_error {
+        format!("  [lines invalid: {error}]")
+    } else if line_filter_input_open {
+        format!("  [lines: {}]", line_filter.unwrap_or_default())
+    } else if let Some(spec) = line_filter.filter(|spec| !spec.is_empty()) {
+        format!("  [lines {spec}]")
+    } else {
+        String::new()
+    };
     let mode = if focus == WorkspaceFocus::Content {
         format!("  [{}]", content_mode.label())
     } else {
         String::new()
     };
-    let footer = Paragraph::new(format!("{controls}{suffix}{mode}"));
+    let footer = Paragraph::new(format!("{controls}{suffix}{line_filter_status}{mode}"));
     frame.render_widget(footer, area);
 }
 

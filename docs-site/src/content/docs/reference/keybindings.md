@@ -61,9 +61,11 @@ Only available when the buffer has parsed command blocks.
 | `Space` | Toggle current entry |
 | `v` | Mark range anchor |
 | `a` | Toggle all |
+| `:` | Start a temporary line filter for the next copy |
 | `p` | Toggle preview |
 | `t` | Open Vim-style full view |
 | `Enter` | Confirm |
+| `Backspace` | Edit the pending line filter |
 | `Esc` | Cancel |
 
 ## Vim-style full view

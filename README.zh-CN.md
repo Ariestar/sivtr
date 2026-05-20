@@ -171,6 +171,12 @@ sivtr copy codex all --max-blocks 0
 sivtr copy codex all --max-blocks 10000
 ```
 
+在 workspace picker 里，`i`、`o`、`y`、`c` 分别复制当前
+input/question、output/answer、整段 block 和裸命令。如果只想复制部分内容行，
+先按 `:` 启动临时行过滤，再输入 `2:8` 或 `1,3,8:12` 这种 1-based 规格，
+然后再按 `Enter`、`i`、`o`、`y` 或 `c` 执行复制。`Backspace` 用于编辑待应用的
+过滤器，`Esc` 用于清除它。
+
 默认会过滤过程性 commentary，所以 `sivtr copy codex out` 更倾向返回最终助手回复，而不是中间状态更新。
 
 为避免超大 Codex transcript 让导入或 picker 变慢，默认只保留最近 `10000` 个解析后的 block。若要全量导入，可在配置里设置 `[codex].max_blocks = 0`，或在命令行传 `--max-blocks 0`。
