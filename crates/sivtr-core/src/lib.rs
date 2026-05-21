@@ -7,6 +7,7 @@ pub mod config;
 pub mod export;
 pub mod history;
 pub mod parse;
+pub mod pi;
 pub mod search;
 pub mod selection;
 pub mod session;

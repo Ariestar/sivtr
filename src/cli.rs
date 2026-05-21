@@ -198,6 +198,34 @@ Examples:
   sivtr copy claude all --lines 1:20
 ";
 
+const COPY_PI_AFTER_HELP: &str = "\
+Defaults:
+  `sivtr copy pi` copies the last completed user + assistant turn
+  from the current Pi session.
+
+Session Resolution:
+  By default, sivtr reads the newest Pi transcript whose `cwd`
+  matches the current working directory.
+  `--session N` picks the Nth newest selectable Pi session
+  (the same session numbering shown in `--pick`).
+  `--session ID` matches a session id or id prefix.
+
+Modes:
+  sivtr copy pi       Copy the last user + assistant turn
+  sivtr copy pi out   Copy the last assistant reply
+  sivtr copy pi in    Copy the last user message
+  sivtr copy pi tool  Copy the last tool output
+  sivtr copy pi all   Copy the whole parsed session
+
+Examples:
+  sivtr copy pi
+  sivtr copy pi --session 2
+  sivtr copy pi --session 019e4a3d
+  sivtr copy pi out --print
+  sivtr copy pi --pick
+  sivtr copy pi all --lines 1:20
+";
+
 const DIFF_AFTER_HELP: &str = "\
 Defaults:
   `sivtr diff <left> <right>` compares two command blocks from the current session.
@@ -369,6 +397,10 @@ pub enum CopySubcommand {
     /// Copy content from the current Claude Code conversation session
     #[command(after_help = COPY_CLAUDE_AFTER_HELP)]
     Claude(AgentCopyCommand),
+
+    /// Copy content from the current Pi conversation session
+    #[command(after_help = COPY_PI_AFTER_HELP)]
+    Pi(AgentCopyCommand),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -857,6 +889,37 @@ mod tests {
                 _ => panic!("expected copy claude mode"),
             },
             _ => panic!("expected copy command"),
+        }
+    }
+
+    #[test]
+    fn pi_copy_accepts_nested_mode() {
+        let cli = Cli::try_parse_from(["sivtr", "copy", "pi", "out", "--print"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Copy(cmd)) => match cmd.mode {
+                Some(CopySubcommand::Pi(pi)) => match pi.mode {
+                    Some(AgentCopyMode::Out(args)) => assert!(args.common.common.print),
+                    _ => panic!("expected copy pi out mode"),
+                },
+                _ => panic!("expected copy pi mode"),
+            },
+            _ => panic!("expected copy command"),
+        }
+    }
+
+    #[test]
+    fn pi_provider_selection_is_supported() {
+        let cli = Cli::try_parse_from(["sivtr", "search", "needle", "--provider", "pi"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Search(args)) => {
+                assert_eq!(
+                    args.provider,
+                    HotkeyProviderSelection::provider(AgentProvider::Pi)
+                );
+            }
+            _ => panic!("expected search command"),
         }
     }
 
