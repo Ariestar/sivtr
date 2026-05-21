@@ -6,6 +6,7 @@ pub mod codex;
 pub mod config;
 pub mod export;
 pub mod history;
+pub mod opencode;
 pub mod parse;
 pub mod pi;
 pub mod search;

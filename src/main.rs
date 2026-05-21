@@ -69,6 +69,9 @@ fn run() -> Result<()> {
             Some(CopySubcommand::Codex(sub_args)) => {
                 run_agent_copy(AgentProvider::Codex, sub_args)?
             }
+            Some(CopySubcommand::OpenCode(sub_args)) => {
+                run_agent_copy(AgentProvider::OpenCode, sub_args)?
+            }
             Some(CopySubcommand::Pi(sub_args)) => run_agent_copy(AgentProvider::Pi, sub_args)?,
             None => run_copy(&args.args, CopyMode::Both, true)?,
         },

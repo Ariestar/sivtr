@@ -226,6 +226,34 @@ Examples:
   sivtr copy pi all --lines 1:20
 ";
 
+const COPY_OPENCODE_AFTER_HELP: &str = "\
+Defaults:
+  `sivtr copy opencode` copies the last completed user + assistant turn
+  from the current OpenCode session.
+
+Session Resolution:
+  By default, sivtr reads the newest OpenCode session whose `directory`
+  matches the current working directory.
+  `--session N` picks the Nth newest selectable OpenCode session
+  (the same session numbering shown in `--pick`).
+  `--session ID` matches a session id or id prefix.
+
+Modes:
+  sivtr copy opencode       Copy the last user + assistant turn
+  sivtr copy opencode out   Copy the last assistant reply
+  sivtr copy opencode in    Copy the last user message
+  sivtr copy opencode tool  Copy the last tool output
+  sivtr copy opencode all   Copy the whole parsed session
+
+Examples:
+  sivtr copy opencode
+  sivtr copy opencode --session 2
+  sivtr copy opencode --session ses_abc123
+  sivtr copy opencode out --print
+  sivtr copy opencode --pick
+  sivtr copy opencode all --lines 1:20
+";
+
 const DIFF_AFTER_HELP: &str = "\
 Defaults:
   `sivtr diff <left> <right>` compares two command blocks from the current session.
@@ -397,6 +425,10 @@ pub enum CopySubcommand {
     /// Copy content from the current Claude Code conversation session
     #[command(after_help = COPY_CLAUDE_AFTER_HELP)]
     Claude(AgentCopyCommand),
+
+    /// Copy content from the current OpenCode conversation session
+    #[command(name = "opencode", after_help = COPY_OPENCODE_AFTER_HELP)]
+    OpenCode(AgentCopyCommand),
 
     /// Copy content from the current Pi conversation session
     #[command(after_help = COPY_PI_AFTER_HELP)]
@@ -889,6 +921,38 @@ mod tests {
                 _ => panic!("expected copy claude mode"),
             },
             _ => panic!("expected copy command"),
+        }
+    }
+
+    #[test]
+    fn opencode_copy_accepts_nested_mode() {
+        let cli = Cli::try_parse_from(["sivtr", "copy", "opencode", "out", "--print"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Copy(cmd)) => match cmd.mode {
+                Some(CopySubcommand::OpenCode(opencode)) => match opencode.mode {
+                    Some(AgentCopyMode::Out(args)) => assert!(args.common.common.print),
+                    _ => panic!("expected copy opencode out mode"),
+                },
+                _ => panic!("expected copy opencode mode"),
+            },
+            _ => panic!("expected copy command"),
+        }
+    }
+
+    #[test]
+    fn opencode_provider_selection_is_supported() {
+        let cli =
+            Cli::try_parse_from(["sivtr", "search", "needle", "--provider", "opencode"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Search(args)) => {
+                assert_eq!(
+                    args.provider,
+                    HotkeyProviderSelection::provider(AgentProvider::OpenCode)
+                );
+            }
+            _ => panic!("expected search command"),
         }
     }
 

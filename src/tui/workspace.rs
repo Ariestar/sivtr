@@ -30,6 +30,7 @@ impl WorkspaceSource {
             Self::Agent(provider) => match provider.command_name() {
                 "claude" => "claude",
                 "codex" => "codex",
+                "opencode" => "opencode",
                 _ => provider.command_name(),
             },
         }
