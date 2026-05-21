@@ -13,3 +13,4 @@ pub mod import;
 pub mod init;
 pub mod pipe;
 pub mod run;
+pub mod search;

@@ -4,6 +4,39 @@ use sivtr_core::ai::AgentProvider;
 use std::path::PathBuf;
 use std::str::FromStr;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SearchScopeArg {
+    #[default]
+    Content,
+    Dialogue,
+    Session,
+}
+
+impl FromStr for SearchScopeArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "content" => Ok(Self::Content),
+            "dialogue" | "dialog" | "title" => Ok(Self::Dialogue),
+            "session" => Ok(Self::Session),
+            _ => Err(format!(
+                "unknown search scope `{value}`; expected content, dialogue, or session"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for SearchScopeArg {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Content => "content",
+            Self::Dialogue => "dialogue",
+            Self::Session => "session",
+        })
+    }
+}
+
 const COPY_AFTER_HELP: &str = "\
 Defaults:
   `sivtr copy` copies the last command block.
@@ -191,6 +224,23 @@ Examples:
   sivtr diff 2 1 --side-by-side
 ";
 
+const SEARCH_AFTER_HELP: &str = r##"
+Scopes:
+  --scope content    Search dialogue/content text (default)
+  --scope dialogue   Search dialogue titles
+  --scope session    Search session titles
+
+Defaults:
+  `sivtr search` searches current-workspace AI sessions plus current terminal capture.
+  Queries are case-insensitive regexes, matching the workspace picker search behavior.
+
+Examples:
+  sivtr search panic
+  sivtr search "workspace picker" --scope dialogue
+  sivtr search sivtr --scope session --provider codex
+  sivtr search "build error" --json --limit 20
+"##;
+
 const HOTKEY_AFTER_HELP: &str = "\
 Examples:
   sivtr hotkey start
@@ -232,6 +282,10 @@ pub enum Commands {
 
     /// Manage output history
     History(HistoryCommand),
+
+    /// Search captured terminal and AI workspace sessions
+    #[command(after_help = SEARCH_AFTER_HELP)]
+    Search(SearchArgs),
 
     /// Manage configuration
     Config(ConfigCommand),
@@ -404,6 +458,32 @@ pub struct DiffArgs {
     /// Show side-by-side text output instead of unified diff
     #[arg(long = "side-by-side")]
     pub side_by_side: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct SearchArgs {
+    /// Case-insensitive regex query.
+    pub query: String,
+
+    /// Search target: content, dialogue, or session
+    #[arg(long, default_value_t = SearchScopeArg::default(), value_name = "SCOPE")]
+    pub scope: SearchScopeArg,
+
+    /// AI provider sessions to search
+    #[arg(long, default_value_t = HotkeyProviderSelection::default(), value_name = "PROVIDER")]
+    pub provider: HotkeyProviderSelection,
+
+    /// Workspace directory used to resolve current AI sessions
+    #[arg(long, value_name = "PATH")]
+    pub cwd: Option<PathBuf>,
+
+    /// Maximum number of results to print
+    #[arg(short = 'l', long, default_value_t = 20)]
+    pub limit: usize,
+
+    /// Print machine-readable JSON
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args, Debug, Clone, Default)]
@@ -778,6 +858,44 @@ mod tests {
             },
             _ => panic!("expected copy command"),
         }
+    }
+
+    #[test]
+    fn search_accepts_scope_and_json() {
+        let cli = Cli::try_parse_from([
+            "sivtr",
+            "search",
+            "workspace picker",
+            "--scope",
+            "dialogue",
+            "--provider",
+            "codex",
+            "--json",
+            "--limit",
+            "5",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Commands::Search(args)) => {
+                assert_eq!(args.query, "workspace picker");
+                assert_eq!(args.scope, SearchScopeArg::Dialogue);
+                assert_eq!(
+                    args.provider,
+                    HotkeyProviderSelection::provider(AgentProvider::Codex)
+                );
+                assert!(args.json);
+                assert_eq!(args.limit, 5);
+            }
+            _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn search_rejects_unknown_scope() {
+        let result = Cli::try_parse_from(["sivtr", "search", "needle", "--scope", "unknown"]);
+
+        assert!(result.is_err());
     }
 
     #[test]

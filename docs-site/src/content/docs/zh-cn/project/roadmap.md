@@ -33,6 +33,7 @@ description: sivtr 以及个人 AI 工作区方向的产品路线图。
 - [x] 提供 TOML 配置核心行为。
 - [ ] 统一 `copy`、`history`、`codex`、`hotkey` 和 workspace 等流程的命令命名与参数风格。
 - [ ] 让 selector 和 filter 更容易在 shell 脚本里组合。
+- [ ] 扩展搜索能力，从基础匹配走向明确 scope、literal/keyword/fuzzy/semantic 等方法、来源过滤、排序和带上下文的结构化结果。
 - [ ] 强化大规模本地历史的导入、导出和搜索能力。
 - [ ] 保持配置明确、可迁移，并适合安全共享。
 

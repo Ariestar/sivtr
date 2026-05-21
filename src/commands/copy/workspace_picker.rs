@@ -3,7 +3,6 @@ use crossterm::event::{
     self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
 use ratatui::widgets::ListState;
-use regex::Regex;
 use std::process::Command;
 
 use crate::commands::command_block_selector::CommandSelection;
@@ -19,8 +18,7 @@ use crate::tui::workspace::{
     WorkspacePickedContent, WorkspaceSearchView, WorkspaceSession, WorkspaceSource, WorkspaceView,
 };
 use crate::tui::workspace_search::{
-    workspace_search_has_query, workspace_search_query, workspace_search_regex,
-    workspace_search_scope, WorkspaceSearchScope,
+    workspace_search_has_query, workspace_search_scope, WorkspaceSearchIndex, WorkspaceSearchOutput,
 };
 
 use super::vim::{open_vim_view, VimBlock, VimView};
@@ -1245,235 +1243,6 @@ fn workspace_sources(sessions: &[WorkspaceSession]) -> Vec<WorkspaceSource> {
     sources
 }
 
-#[derive(Clone)]
-struct WorkspaceSearchSessionEntry {
-    session_index: usize,
-    session_title: String,
-}
-
-#[derive(Clone)]
-struct WorkspaceSearchDialogueEntry {
-    session_index: usize,
-    dialogue_index: usize,
-    dialogue_title: String,
-    content: String,
-}
-
-pub(super) struct WorkspaceSearchIndex {
-    sessions: Vec<WorkspaceSearchSessionEntry>,
-    dialogues: Vec<WorkspaceSearchDialogueEntry>,
-}
-
-#[derive(Default)]
-pub(super) struct WorkspaceSearchOutput {
-    pub(super) sessions: Vec<WorkspaceSession>,
-    pub(super) matches: Vec<WorkspaceSearchMatch>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct WorkspaceSearchMatch {
-    pub(super) session_index: usize,
-    pub(super) dialogue_index: usize,
-    pub(super) line_index: usize,
-}
-
-impl WorkspaceSearchIndex {
-    pub(super) fn new(sessions: &[WorkspaceSession]) -> Self {
-        let mut session_entries = Vec::with_capacity(sessions.len());
-        let dialogue_count = sessions
-            .iter()
-            .map(|session| session.dialogue_titles.len())
-            .sum();
-        let mut dialogue_entries = Vec::with_capacity(dialogue_count);
-
-        for (session_index, session) in sessions.iter().enumerate() {
-            session_entries.push(WorkspaceSearchSessionEntry {
-                session_index,
-                session_title: session.title.clone(),
-            });
-
-            for (dialogue_index, (dialogue_title, unit)) in session
-                .dialogue_titles
-                .iter()
-                .zip(session.units.iter())
-                .enumerate()
-            {
-                dialogue_entries.push(WorkspaceSearchDialogueEntry {
-                    session_index,
-                    dialogue_index,
-                    dialogue_title: dialogue_title.clone(),
-                    content: unit.plain.clone(),
-                });
-            }
-        }
-
-        Self {
-            sessions: session_entries,
-            dialogues: dialogue_entries,
-        }
-    }
-
-    pub(super) fn search(
-        &self,
-        all_sessions: &[WorkspaceSession],
-        query: &str,
-    ) -> WorkspaceSearchOutput {
-        let (scope, term) = workspace_search_query(query);
-        let Some(regex) = workspace_search_regex(term) else {
-            return WorkspaceSearchOutput::default();
-        };
-        match scope {
-            WorkspaceSearchScope::Session => {
-                let mut sessions = Vec::new();
-                let mut matches = Vec::new();
-                for entry in self
-                    .sessions
-                    .iter()
-                    .filter(|entry| regex.is_match(&entry.session_title))
-                {
-                    let filtered_session_index = sessions.len();
-                    if let Some(session) = all_sessions.get(entry.session_index).cloned() {
-                        sessions.push(session);
-                        matches.push(WorkspaceSearchMatch {
-                            session_index: filtered_session_index,
-                            dialogue_index: 0,
-                            line_index: 0,
-                        });
-                    }
-                }
-                WorkspaceSearchOutput { sessions, matches }
-            }
-            WorkspaceSearchScope::Dialogue => self.search_dialogue_titles(all_sessions, &regex),
-            WorkspaceSearchScope::Content => self.search_dialogue_content(all_sessions, &regex),
-        }
-    }
-
-    fn search_dialogue_titles(
-        &self,
-        all_sessions: &[WorkspaceSession],
-        regex: &Regex,
-    ) -> WorkspaceSearchOutput {
-        let mut grouped: Vec<(usize, Vec<usize>)> = Vec::new();
-        for entry in self
-            .dialogues
-            .iter()
-            .filter(|entry| regex.is_match(&entry.dialogue_title))
-        {
-            if let Some((_, dialogue_indices)) = grouped
-                .iter_mut()
-                .find(|(session_index, _)| *session_index == entry.session_index)
-            {
-                dialogue_indices.push(entry.dialogue_index);
-            } else {
-                grouped.push((entry.session_index, vec![entry.dialogue_index]));
-            }
-        }
-
-        let sessions = grouped
-            .into_iter()
-            .filter_map(|(session_index, dialogue_indices)| {
-                let session = all_sessions.get(session_index)?;
-                Some(filter_workspace_session_dialogues(
-                    session,
-                    &dialogue_indices,
-                ))
-            })
-            .collect::<Vec<_>>();
-        let matches = sessions
-            .iter()
-            .enumerate()
-            .flat_map(|(session_index, session)| {
-                session
-                    .dialogue_titles
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, title)| regex.is_match(title))
-                    .map(move |(dialogue_index, _)| WorkspaceSearchMatch {
-                        session_index,
-                        dialogue_index,
-                        line_index: 0,
-                    })
-            })
-            .collect();
-        WorkspaceSearchOutput { sessions, matches }
-    }
-
-    fn search_dialogue_content(
-        &self,
-        all_sessions: &[WorkspaceSession],
-        regex: &Regex,
-    ) -> WorkspaceSearchOutput {
-        let mut grouped: Vec<(usize, Vec<usize>)> = Vec::new();
-        for entry in self
-            .dialogues
-            .iter()
-            .filter(|entry| regex.is_match(&entry.content))
-        {
-            if let Some((_, dialogue_indices)) = grouped
-                .iter_mut()
-                .find(|(session_index, _)| *session_index == entry.session_index)
-            {
-                dialogue_indices.push(entry.dialogue_index);
-            } else {
-                grouped.push((entry.session_index, vec![entry.dialogue_index]));
-            }
-        }
-
-        let sessions = grouped
-            .into_iter()
-            .filter_map(|(session_index, dialogue_indices)| {
-                let session = all_sessions.get(session_index)?;
-                Some(filter_workspace_session_dialogues(
-                    session,
-                    &dialogue_indices,
-                ))
-            })
-            .collect::<Vec<_>>();
-        let matches = sessions
-            .iter()
-            .enumerate()
-            .flat_map(|(session_index, session)| {
-                session
-                    .units
-                    .iter()
-                    .enumerate()
-                    .flat_map(move |(dialogue_index, unit)| {
-                        unit.plain
-                            .lines()
-                            .enumerate()
-                            .filter(|(_, line)| regex.is_match(line))
-                            .map(move |(line_index, _)| WorkspaceSearchMatch {
-                                session_index,
-                                dialogue_index,
-                                line_index,
-                            })
-                    })
-            })
-            .collect();
-        WorkspaceSearchOutput { sessions, matches }
-    }
-}
-
-fn filter_workspace_session_dialogues(
-    session: &WorkspaceSession,
-    dialogue_indices: &[usize],
-) -> WorkspaceSession {
-    let mut filtered = session.clone();
-    filtered.dialogue_titles = dialogue_indices
-        .iter()
-        .filter_map(|idx| session.dialogue_titles.get(*idx).cloned())
-        .collect();
-    filtered.units = dialogue_indices
-        .iter()
-        .filter_map(|idx| session.units.get(*idx).cloned())
-        .collect();
-    filtered.copy_units = dialogue_indices
-        .iter()
-        .filter_map(|idx| session.copy_units.get(*idx).cloned())
-        .collect();
-    filtered
-}
-
 #[allow(clippy::too_many_arguments)]
 fn apply_workspace_help_action(
     action: WorkspaceHelpAction,
@@ -2272,15 +2041,15 @@ mod tests {
         handle_line_filter_key, workspace_dialogue_vim_view, workspace_dialogues_for_sessions,
         workspace_picked_content, workspace_picked_content_for_copy,
         workspace_picked_content_for_copy_with_line_filter,
-        workspace_picked_content_with_line_filter, WorkspaceCopyShortcut, WorkspaceSearchIndex,
-        WorkspaceSearchMatch,
+        workspace_picked_content_with_line_filter, WorkspaceCopyShortcut,
     };
     use crate::commands::command_block_selector::CommandSelection;
     use crate::tui::workspace::{
         TextPair, WorkspaceCopyParts, WorkspaceDialogue, WorkspaceSession, WorkspaceSource,
     };
     use crate::tui::workspace_search::{
-        workspace_search_query, workspace_search_regex, WorkspaceSearchScope,
+        workspace_search_query, workspace_search_regex, WorkspaceSearchIndex, WorkspaceSearchMatch,
+        WorkspaceSearchScope,
     };
     use crossterm::event::KeyCode;
     use sivtr_core::ai::AgentProvider;

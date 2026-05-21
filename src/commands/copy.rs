@@ -79,6 +79,16 @@ fn agent_session_providers(providers: &[AgentProvider]) -> Vec<Box<dyn AgentSess
         .collect()
 }
 
+pub(crate) fn current_workspace_sessions(
+    providers: &[AgentProvider],
+    cwd: &std::path::Path,
+    selection_mode: AgentSelection,
+) -> Result<Vec<WorkspaceSession>> {
+    let sources = agent_session_providers(providers);
+    let choices = build_current_agent_session_choices(&sources, cwd, selection_mode)?;
+    workspace_sessions_from_agent_choices(choices)
+}
+
 #[derive(Clone, Debug)]
 struct IndexedCommandBlock {
     plain: CommandBlock,

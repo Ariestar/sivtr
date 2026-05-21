@@ -40,6 +40,9 @@ fn run() -> Result<()> {
         Some(Commands::History(hist_cmd)) => {
             commands::history::execute(hist_cmd)?;
         }
+        Some(Commands::Search(args)) => {
+            commands::search::execute(&args)?;
+        }
         Some(Commands::Hotkey(cmd)) => {
             commands::hotkey::execute(cmd)?;
         }

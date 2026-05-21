@@ -33,6 +33,7 @@ The near-term priority is to make the command-line surface complete, predictable
 - [x] Provide TOML configuration for core behavior.
 - [ ] Tighten command naming and option consistency across `copy`, `history`, `codex`, `hotkey`, and workspace flows.
 - [ ] Make selectors and filters easier to compose in shell scripts.
+- [ ] Expand search beyond basic matching toward explicit scopes, literal/keyword/fuzzy/semantic methods, source filters, ranking, and context-rich machine-readable results.
 - [ ] Strengthen import, export, and search behavior for larger local archives.
 - [ ] Keep configuration explicit, portable, and safe to share.
 
