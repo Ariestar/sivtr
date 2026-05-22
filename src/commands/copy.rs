@@ -17,7 +17,7 @@ mod workspace_picker;
 use crate::tui::terminal::{init as init_tui, restore as restore_tui};
 use crate::tui::workspace::{
     TextPair, WorkspaceCopyParts, WorkspaceFocus, WorkspacePickedContent, WorkspaceSession,
-    WorkspaceSource,
+    WorkspaceSessionLoad, WorkspaceSource,
 };
 use workspace_picker::run_workspace_picker_on_terminal;
 
@@ -410,20 +410,19 @@ fn pick_agent_sessions_content_on_terminal(
     terminal: &mut crate::tui::terminal::Tui,
     selection_mode: AgentSelection,
 ) -> Result<WorkspacePickedContent> {
-    let mut choices = Vec::new();
+    let mut sessions = Vec::new();
     for source in sources {
-        let sessions = source.list_recent_sessions(None)?;
-        choices.extend(build_agent_session_choices(
+        sessions.extend(build_lazy_agent_session_choices(
             source.as_ref(),
-            &sessions,
+            source.list_recent_sessions(None)?,
             selection_mode,
-        )?);
+        ));
     }
-    choices.sort_by(|a, b| b.modified.cmp(&a.modified));
+    sessions.sort_by(|a, b| b.modified.cmp(&a.modified));
 
-    let sessions = workspace_sessions_from_agent_choices(choices)?;
+    let sessions = workspace_sessions_from_agent_choices(sessions)?;
     if sessions.is_empty() {
-        anyhow::bail!("No terminal or AI sessions with selectable content found");
+        anyhow::bail!("No terminal or AI sessions found");
     }
 
     run_workspace_picker_on_terminal(terminal, sessions, WorkspaceFocus::Sessions)
@@ -435,13 +434,32 @@ fn pick_current_agent_sessions_content_on_terminal(
     cwd: &std::path::Path,
     selection_mode: AgentSelection,
 ) -> Result<WorkspacePickedContent> {
-    let choices = build_current_agent_session_choices(sources, cwd, selection_mode)?;
-    let sessions = workspace_sessions_from_agent_choices(choices)?;
+    let sessions = build_current_lazy_agent_session_choices(sources, cwd, selection_mode)?;
+    let sessions = workspace_sessions_from_agent_choices(sessions)?;
     if sessions.is_empty() {
-        anyhow::bail!("No current terminal or AI sessions with selectable content found");
+        anyhow::bail!("No current terminal or AI sessions found");
     }
 
     run_workspace_picker_on_terminal(terminal, sessions, WorkspaceFocus::Sessions)
+}
+
+fn build_current_lazy_agent_session_choices(
+    sources: &[Box<dyn AgentSessionProvider>],
+    cwd: &std::path::Path,
+    selection_mode: AgentSelection,
+) -> Result<Vec<WorkspaceSession>> {
+    let mut choices = Vec::new();
+
+    for source in sources {
+        choices.extend(build_lazy_agent_session_choices(
+            source.as_ref(),
+            source.list_recent_sessions(Some(cwd))?,
+            selection_mode,
+        ));
+    }
+
+    choices.sort_by(|a, b| b.modified.cmp(&a.modified));
+    Ok(choices)
 }
 
 fn build_current_agent_session_choices(
@@ -505,6 +523,101 @@ fn build_agent_session_choices(
     Ok(choices)
 }
 
+fn build_lazy_agent_session_choices(
+    source: &dyn AgentSessionProvider,
+    sessions: Vec<AgentSessionInfo>,
+    selection_mode: AgentSelection,
+) -> Vec<WorkspaceSession> {
+    sessions
+        .into_iter()
+        .map(|info| build_lazy_agent_session_choice(source.provider(), info, selection_mode))
+        .collect()
+}
+
+fn build_lazy_agent_session_choice(
+    provider: AgentProvider,
+    info: AgentSessionInfo,
+    selection_mode: AgentSelection,
+) -> WorkspaceSession {
+    let title = agent_session_info_display_title(&info);
+    let search_title = info
+        .title
+        .clone()
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or_else(|| agent_session_info_fallback_title(&info));
+
+    WorkspaceSession {
+        source: WorkspaceSource::Agent(provider),
+        modified: info.modified,
+        title,
+        search_title,
+        units: Vec::new(),
+        copy_units: Vec::new(),
+        dialogue_titles: vec!["<loading: press Enter or select a session>".to_string()],
+        load: Some(WorkspaceSessionLoad {
+            provider,
+            path: info.path,
+            id: info.id,
+            cwd: info.cwd,
+            title: info.title,
+            modified: info.modified,
+            selection_mode,
+        }),
+    }
+}
+
+fn load_workspace_session(session: &WorkspaceSession) -> Result<WorkspaceSession> {
+    let Some(load) = &session.load else {
+        return Ok(session.clone());
+    };
+
+    let source = load.provider.session_provider();
+    let info = AgentSessionInfo {
+        path: load.path.clone(),
+        id: load.id.clone(),
+        cwd: load.cwd.clone(),
+        title: load.title.clone(),
+        modified: load.modified,
+    };
+    let parsed = source.parse_session_file(&load.path)?;
+    build_agent_session_choice(source.as_ref(), &info, parsed, load.selection_mode).with_context(
+        || {
+            format!(
+                "{} session has no selectable content: {}",
+                load.provider.name(),
+                load.path.display()
+            )
+        },
+    )
+}
+
+pub(super) fn load_workspace_session_at(
+    sessions: &mut [WorkspaceSession],
+    idx: usize,
+) -> Result<()> {
+    let Some(session) = sessions.get(idx) else {
+        return Ok(());
+    };
+    if session.load.is_none() {
+        return Ok(());
+    }
+    let loaded = load_workspace_session(session)?;
+    if let Some(slot) = sessions.get_mut(idx) {
+        *slot = loaded;
+    }
+    Ok(())
+}
+
+pub(super) fn load_workspace_sessions_for_indices(
+    sessions: &mut [WorkspaceSession],
+    indices: &[usize],
+) -> Result<()> {
+    for idx in indices {
+        load_workspace_session_at(sessions, *idx)?;
+    }
+    Ok(())
+}
+
 fn build_agent_session_choice(
     source: &dyn AgentSessionProvider,
     info: &AgentSessionInfo,
@@ -532,6 +645,7 @@ fn build_agent_session_choice(
         units,
         copy_units,
         dialogue_titles,
+        load: None,
     })
 }
 
@@ -658,6 +772,7 @@ fn build_terminal_workspace_session(
         units,
         copy_units,
         dialogue_titles,
+        load: None,
     })
 }
 
@@ -1082,16 +1197,34 @@ fn agent_session_display_title(info: &AgentSessionInfo, session: &AgentSession) 
         .clone()
         .or_else(|| info.title.clone())
         .unwrap_or_else(|| agent_session_fallback_title(info, session));
-    let id = session
-        .id
-        .as_deref()
-        .or(info.id.as_deref())
-        .map(short_agent_id);
+    agent_session_title_with_id(title, session.id.as_deref().or(info.id.as_deref()))
+}
+
+fn agent_session_info_display_title(info: &AgentSessionInfo) -> String {
+    agent_session_title_with_id(agent_session_info_fallback_title(info), info.id.as_deref())
+}
+
+fn agent_session_title_with_id(title: String, id: Option<&str>) -> String {
+    let id = id.map(short_agent_id);
 
     match id {
         Some(id) if !id.is_empty() => format!("{title}  [{id}]"),
         _ => title,
     }
+}
+
+fn agent_session_info_fallback_title(info: &AgentSessionInfo) -> String {
+    info.title
+        .clone()
+        .filter(|title| !title.trim().is_empty())
+        .or_else(|| info.id.clone())
+        .or_else(|| {
+            info.path
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "<AI session>".to_string())
 }
 
 fn agent_session_fallback_title(info: &AgentSessionInfo, session: &AgentSession) -> String {

@@ -3,6 +3,7 @@ use ratatui::prelude::{Color, Frame, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, ListItem, ListState, Paragraph};
 use regex::Regex;
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 use crate::commands::command_block_selector::CommandSelection;
@@ -15,7 +16,7 @@ use crate::tui::pane::{
     Panel, PanelScroll,
 };
 use crate::tui::workspace_search::{workspace_search_regex_for_query, WorkspaceSearchScope};
-use sivtr_core::ai::AgentProvider;
+use sivtr_core::ai::{AgentProvider, AgentSelection};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WorkspaceSource {
@@ -78,6 +79,17 @@ pub(crate) struct WorkspacePickedContent {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) struct WorkspaceSessionLoad {
+    pub(crate) provider: AgentProvider,
+    pub(crate) path: PathBuf,
+    pub(crate) id: Option<String>,
+    pub(crate) cwd: Option<String>,
+    pub(crate) title: Option<String>,
+    pub(crate) modified: SystemTime,
+    pub(crate) selection_mode: AgentSelection,
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct WorkspaceSession {
     pub(crate) source: WorkspaceSource,
     pub(crate) modified: SystemTime,
@@ -86,6 +98,7 @@ pub(crate) struct WorkspaceSession {
     pub(crate) units: Vec<TextPair>,
     pub(crate) copy_units: Vec<WorkspaceCopyParts>,
     pub(crate) dialogue_titles: Vec<String>,
+    pub(crate) load: Option<WorkspaceSessionLoad>,
 }
 
 #[derive(Clone, Debug)]

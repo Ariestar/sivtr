@@ -85,14 +85,19 @@ pub(crate) struct WorkspaceSearchMatch {
 
 impl WorkspaceSearchIndex {
     pub(crate) fn new(sessions: &[WorkspaceSession]) -> Self {
-        let mut session_entries = Vec::with_capacity(sessions.len());
-        let dialogue_count = sessions
+        let loaded_sessions = sessions
             .iter()
-            .map(|session| session.dialogue_titles.len())
+            .enumerate()
+            .filter(|(_, session)| session.load.is_none())
+            .collect::<Vec<_>>();
+        let mut session_entries = Vec::with_capacity(loaded_sessions.len());
+        let dialogue_count = loaded_sessions
+            .iter()
+            .map(|(_, session)| session.dialogue_titles.len())
             .sum();
         let mut dialogue_entries = Vec::with_capacity(dialogue_count);
 
-        for (session_index, session) in sessions.iter().enumerate() {
+        for (session_index, session) in loaded_sessions {
             session_entries.push(WorkspaceSearchSessionEntry {
                 session_index,
                 session_title: session.search_title.clone(),

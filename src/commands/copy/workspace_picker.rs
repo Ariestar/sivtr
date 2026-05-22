@@ -14,15 +14,19 @@ use crate::tui::content_view::{
 use crate::tui::terminal::{init as init_tui, restore as restore_tui};
 use crate::tui::workspace::{
     can_open_dialogue_vim, render_workspace, selected_index, workspace_help_entries,
-    workspace_hit_test, workspace_layout, WorkspaceDialogue, WorkspaceFocus, WorkspaceHelpAction,
-    WorkspacePickedContent, WorkspaceSearchView, WorkspaceSession, WorkspaceSource, WorkspaceView,
+    workspace_hit_test, workspace_layout, TextPair, WorkspaceDialogue, WorkspaceFocus,
+    WorkspaceHelpAction, WorkspacePickedContent, WorkspaceSearchView, WorkspaceSession,
+    WorkspaceSource, WorkspaceView,
 };
 use crate::tui::workspace_search::{
     workspace_search_has_query, workspace_search_scope, WorkspaceSearchIndex, WorkspaceSearchOutput,
 };
 
 use super::vim::{open_vim_view, VimBlock, VimView};
-use super::{filter_lines_by_spec, PICK_CANCELLED_MESSAGE};
+use super::{
+    filter_lines_by_spec, load_workspace_session_at, load_workspace_sessions_for_indices,
+    PICK_CANCELLED_MESSAGE,
+};
 
 const MOUSE_SCROLL_LINES: usize = 3;
 
@@ -53,6 +57,7 @@ pub(super) fn run_workspace_picker_on_terminal(
     let mut help_state = ListState::default();
     help_state.select(Some(0));
     let mut focus = initial_focus;
+    let mut all_sessions = all_sessions;
     let sources = workspace_sources(&all_sessions);
     let mut selected_sources = vec![true; sources.len()];
     let mut sessions = workspace_sessions_for_sources(&all_sessions, &sources, &selected_sources);
@@ -62,7 +67,6 @@ pub(super) fn run_workspace_picker_on_terminal(
     let mut content_scroll = 0usize;
     let mut content_mode = ContentViewMode::Reading;
     let mut show_help = false;
-    let search_index = WorkspaceSearchIndex::new(&all_sessions);
     let mut show_search = false;
     let mut search_query = String::new();
     let mut search_output = WorkspaceSearchOutput::default();
@@ -74,6 +78,7 @@ pub(super) fn run_workspace_picker_on_terminal(
     let mut line_filter_error: Option<String> = None;
     let mut fullscreen = None;
     let mut visual_select_mode = None;
+    let mut search_index = WorkspaceSearchIndex::new(&all_sessions);
 
     loop {
         if search_dirty {
@@ -90,6 +95,15 @@ pub(super) fn run_workspace_picker_on_terminal(
         } else {
             workspace_sessions_for_sources(&all_sessions, &sources, &selected_sources)
         };
+        if !search_has_query {
+            let session_idx = selected_index(&session_state).min(sessions.len().saturating_sub(1));
+            load_workspace_dialogue_sessions_with_cache(
+                &mut all_sessions,
+                &mut sessions,
+                session_idx,
+                &selected_sessions,
+            )?;
+        }
         if selected_sessions.len() != sessions.len() {
             selected_sessions.clear();
             selected_sessions.resize(sessions.len(), false);
@@ -344,6 +358,29 @@ pub(super) fn run_workspace_picker_on_terminal(
                                 .min(workspace_help_entries().len().saturating_sub(1));
                             let action = workspace_help_entries()[idx].action;
                             show_help = false;
+                            if matches!(
+                                action,
+                                WorkspaceHelpAction::OpenVim
+                                    | WorkspaceHelpAction::Copy
+                                    | WorkspaceHelpAction::CopyInput
+                                    | WorkspaceHelpAction::CopyOutput
+                                    | WorkspaceHelpAction::CopyBlock
+                                    | WorkspaceHelpAction::CopyCommand
+                            ) {
+                                load_workspace_dialogue_sessions_with_cache(
+                                    &mut all_sessions,
+                                    &mut sessions,
+                                    session_idx,
+                                    &selected_sessions,
+                                )?;
+                            }
+                            let dialogues = workspace_dialogues_for_sessions(
+                                &sessions,
+                                session_idx,
+                                &selected_sessions,
+                            );
+                            let dialogue_count = dialogues.len();
+                            let dialogue_idx = dialogue_idx.min(dialogue_count.saturating_sub(1));
                             if let Some(picked) = apply_workspace_help_action(
                                 action,
                                 &mut focus,
@@ -389,6 +426,22 @@ pub(super) fn run_workspace_picker_on_terminal(
 
                 match key.code {
                     KeyCode::Char('/') => {
+                        if sessions.iter().any(|session| session.load.is_some()) {
+                            let indexed_sessions = workspace_sessions_for_sources(
+                                &all_sessions,
+                                &sources,
+                                &selected_sources,
+                            )
+                            .into_iter()
+                            .enumerate()
+                            .collect::<Vec<_>>();
+                            let indices = indexed_sessions
+                                .iter()
+                                .map(|(idx, _)| *idx)
+                                .collect::<Vec<_>>();
+                            load_workspace_sessions_for_indices(&mut all_sessions, &indices)?;
+                            search_index = WorkspaceSearchIndex::new(&all_sessions);
+                        }
                         show_help = false;
                         show_search = true;
                         search_query.clear();
@@ -422,6 +475,18 @@ pub(super) fn run_workspace_picker_on_terminal(
                         );
                     }
                     KeyCode::Char('i') if dialogue_count > 0 => {
+                        load_workspace_dialogue_sessions_with_cache(
+                            &mut all_sessions,
+                            &mut sessions,
+                            session_idx,
+                            &selected_sessions,
+                        )?;
+                        let dialogues = workspace_dialogues_for_sessions(
+                            &sessions,
+                            session_idx,
+                            &selected_sessions,
+                        );
+                        let dialogue_idx = dialogue_idx.min(dialogues.len().saturating_sub(1));
                         match workspace_picked_content_for_copy_with_line_filter(
                             &dialogues,
                             &selected_dialogues,
@@ -437,6 +502,18 @@ pub(super) fn run_workspace_picker_on_terminal(
                         }
                     }
                     KeyCode::Char('o') if dialogue_count > 0 => {
+                        load_workspace_dialogue_sessions_with_cache(
+                            &mut all_sessions,
+                            &mut sessions,
+                            session_idx,
+                            &selected_sessions,
+                        )?;
+                        let dialogues = workspace_dialogues_for_sessions(
+                            &sessions,
+                            session_idx,
+                            &selected_sessions,
+                        );
+                        let dialogue_idx = dialogue_idx.min(dialogues.len().saturating_sub(1));
                         match workspace_picked_content_for_copy_with_line_filter(
                             &dialogues,
                             &selected_dialogues,
@@ -452,6 +529,18 @@ pub(super) fn run_workspace_picker_on_terminal(
                         }
                     }
                     KeyCode::Char('y') if dialogue_count > 0 => {
+                        load_workspace_dialogue_sessions_with_cache(
+                            &mut all_sessions,
+                            &mut sessions,
+                            session_idx,
+                            &selected_sessions,
+                        )?;
+                        let dialogues = workspace_dialogues_for_sessions(
+                            &sessions,
+                            session_idx,
+                            &selected_sessions,
+                        );
+                        let dialogue_idx = dialogue_idx.min(dialogues.len().saturating_sub(1));
                         match workspace_picked_content_for_copy_with_line_filter(
                             &dialogues,
                             &selected_dialogues,
@@ -467,6 +556,18 @@ pub(super) fn run_workspace_picker_on_terminal(
                         }
                     }
                     KeyCode::Char('c') if dialogue_count > 0 => {
+                        load_workspace_dialogue_sessions_with_cache(
+                            &mut all_sessions,
+                            &mut sessions,
+                            session_idx,
+                            &selected_sessions,
+                        )?;
+                        let dialogues = workspace_dialogues_for_sessions(
+                            &sessions,
+                            session_idx,
+                            &selected_sessions,
+                        );
+                        let dialogue_idx = dialogue_idx.min(dialogues.len().saturating_sub(1));
                         match workspace_picked_content_for_copy_with_line_filter(
                             &dialogues,
                             &selected_dialogues,
@@ -732,6 +833,18 @@ pub(super) fn run_workspace_picker_on_terminal(
                         range_anchor = None;
                     }
                     KeyCode::Char('t') if can_open_dialogue_vim(focus, dialogue_count) => {
+                        load_workspace_dialogue_sessions_with_cache(
+                            &mut all_sessions,
+                            &mut sessions,
+                            session_idx,
+                            &selected_sessions,
+                        )?;
+                        let dialogues = workspace_dialogues_for_sessions(
+                            &sessions,
+                            session_idx,
+                            &selected_sessions,
+                        );
+                        let dialogue_idx = dialogue_idx.min(dialogues.len().saturating_sub(1));
                         let view = workspace_dialogue_vim_view(&dialogues[dialogue_idx]);
                         restore_tui(terminal)?;
                         open_vim_view(&view)?;
@@ -742,11 +855,33 @@ pub(super) fn run_workspace_picker_on_terminal(
                             set_focus(&mut focus, &mut fullscreen, WorkspaceFocus::Sessions);
                         }
                         WorkspaceFocus::Sessions => {
-                            if dialogue_count > 0 {
+                            load_workspace_session_at_with_cache(
+                                &mut all_sessions,
+                                &mut sessions,
+                                session_idx,
+                            )?;
+                            let dialogues = workspace_dialogues_for_sessions(
+                                &sessions,
+                                session_idx,
+                                &selected_sessions,
+                            );
+                            if !dialogues.is_empty() {
                                 set_focus(&mut focus, &mut fullscreen, WorkspaceFocus::Dialogues);
                             }
                         }
                         WorkspaceFocus::Dialogues => {
+                            load_workspace_dialogue_sessions_with_cache(
+                                &mut all_sessions,
+                                &mut sessions,
+                                session_idx,
+                                &selected_sessions,
+                            )?;
+                            let dialogues = workspace_dialogues_for_sessions(
+                                &sessions,
+                                session_idx,
+                                &selected_sessions,
+                            );
+                            let dialogue_idx = dialogue_idx.min(dialogues.len().saturating_sub(1));
                             match workspace_picked_content_with_line_filter(
                                 &dialogues,
                                 &selected_dialogues,
@@ -761,6 +896,18 @@ pub(super) fn run_workspace_picker_on_terminal(
                             }
                         }
                         WorkspaceFocus::Content => {
+                            load_workspace_dialogue_sessions_with_cache(
+                                &mut all_sessions,
+                                &mut sessions,
+                                session_idx,
+                                &selected_sessions,
+                            )?;
+                            let dialogues = workspace_dialogues_for_sessions(
+                                &sessions,
+                                session_idx,
+                                &selected_sessions,
+                            );
+                            let dialogue_idx = dialogue_idx.min(dialogues.len().saturating_sub(1));
                             match workspace_picked_content_with_line_filter(
                                 &dialogues,
                                 &selected_dialogues,
@@ -840,6 +987,16 @@ pub(super) fn run_workspace_picker_on_terminal(
                             workspace_hit_test(layout, mouse.column, mouse.row)
                         {
                             set_focus(&mut focus, &mut fullscreen, clicked_focus);
+                            if clicked_focus == WorkspaceFocus::Dialogues {
+                                let session_idx = selected_index(&session_state)
+                                    .min(sessions.len().saturating_sub(1));
+                                load_workspace_dialogue_sessions_with_cache(
+                                    &mut all_sessions,
+                                    &mut sessions,
+                                    session_idx,
+                                    &selected_sessions,
+                                )?;
+                            }
                             match clicked_focus {
                                 WorkspaceFocus::Source => {
                                     if let Some(idx) = source_inline_index(
@@ -1201,11 +1358,63 @@ fn apply_workspace_mouse_scroll(
     }
 }
 
+fn load_workspace_session_at_with_cache(
+    all_sessions: &mut [WorkspaceSession],
+    sessions: &mut [WorkspaceSession],
+    idx: usize,
+) -> Result<()> {
+    let load_path = sessions
+        .get(idx)
+        .and_then(|session| session.load.as_ref())
+        .map(|load| load.path.clone());
+    load_workspace_session_at(sessions, idx)?;
+    if let (Some(load_path), Some(loaded)) = (
+        load_path,
+        sessions.get(idx).filter(|session| session.load.is_none()),
+    ) {
+        if let Some(cached) = all_sessions.iter_mut().find(|session| {
+            session
+                .load
+                .as_ref()
+                .is_some_and(|load| load.path == load_path)
+        }) {
+            *cached = loaded.clone();
+        }
+    }
+    Ok(())
+}
+
+fn load_workspace_dialogue_sessions_with_cache(
+    all_sessions: &mut [WorkspaceSession],
+    sessions: &mut [WorkspaceSession],
+    session_idx: usize,
+    selected_sessions: &[bool],
+) -> Result<()> {
+    let selected = selected_sessions
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, selected)| selected.then_some(idx))
+        .collect::<Vec<_>>();
+    let indices = if selected.is_empty() {
+        vec![session_idx]
+    } else {
+        selected
+    };
+    for idx in indices {
+        load_workspace_session_at_with_cache(all_sessions, sessions, idx)?;
+    }
+    Ok(())
+}
+
 fn workspace_display_text(
     dialogues: &[WorkspaceDialogue],
     selected_dialogues: &[bool],
     dialogue_idx: usize,
 ) -> String {
+    if dialogues.is_empty() {
+        return "<empty>".to_string();
+    }
+
     workspace_picked_content(dialogues, selected_dialogues, dialogue_idx)
         .units
         .into_iter()
@@ -1807,6 +2016,26 @@ pub(super) fn workspace_dialogues_for_sessions(
         selected_indices
     };
 
+    if session_indices
+        .iter()
+        .filter_map(|idx| sessions.get(*idx))
+        .any(|session| session.load.is_some())
+    {
+        return session_indices
+            .into_iter()
+            .filter_map(|idx| sessions.get(idx))
+            .map(|session| WorkspaceDialogue {
+                source: session.source,
+                title: "<loading: press Enter to load dialogue>".to_string(),
+                unit: TextPair {
+                    plain: "<loading: press Enter to load dialogue>".to_string(),
+                    ansi: String::new(),
+                },
+                copy: crate::tui::workspace::WorkspaceCopyParts::default(),
+            })
+            .collect();
+    }
+
     session_indices
         .into_iter()
         .filter_map(|idx| sessions.get(idx))
@@ -2239,6 +2468,7 @@ mod tests {
                 ansi: String::new(),
             })],
             dialogue_titles: vec!["dialogue".to_string()],
+            load: None,
         }];
 
         let output = WorkspaceSearchIndex::new(&sessions).search(&sessions, "needle");
@@ -2539,6 +2769,7 @@ mod tests {
                 .iter()
                 .map(|dialogue_title| dialogue_title.to_string())
                 .collect(),
+            load: None,
         }
     }
 
