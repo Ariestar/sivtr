@@ -5,17 +5,15 @@ description: Use when the agent needs shared local work memory: terminal command
 
 # Sivtr Memory
 
-Sivtr gives you searchable access to the shared local work memory of this machine: terminal commands, terminal output, and AI conversation history from humans and other agents.
+Sivtr is the shared local work memory for this machine.
 
-Use it as your memory interface before asking the user to paste logs, repeat prior decisions, or explain what happened earlier.
-
-This memory is evidence, not omniscience. It may be incomplete, stale, or wrong. Search it, quote it narrowly, and verify current code or command state before making claims.
+Use it before asking the user to paste logs, repeat decisions, or restate earlier work.
 
 Core rule:
 
 > Search for evidence first. Expand only the smallest relevant context. Ask when memory is missing, ambiguous, stale, or permission is required.
 
-This rule applies to evidence retrieval, not to product clarification or safety approval. If the missing information is user intent or permission, ask immediately.
+Memory is evidence, not truth. Verify current files or commands before claiming current state.
 
 ## When to Use
 
@@ -63,10 +61,8 @@ If that fails, the skill cannot retrieve shared memory. Continue with normal she
 
 References are relative to this skill directory.
 
-- `references/memory-model.md` — product mental model, use cases, and boundaries.
-- `references/commands.md` — search and expansion command cookbook.
-- `references/workflows.md` — debugging, continuation, handoff, and recap workflows.
-- `references/output-discipline.md` — how to report evidence and avoid anti-patterns.
-- `examples/agent-usage.md` — concrete examples that map user requests to sivtr commands and response shapes.
+- `references/commands.md` — command syntax, JSON handling, and token budget.
+- `references/patterns.md` — common user intents mapped to retrieval steps.
+- `references/evidence.md` — what counts as evidence and how to report it.
 
-Read only the file needed for the current task. For example, debugging a recent failure usually needs `references/commands.md` and `references/workflows.md`; answering "what is sivtr memory?" usually needs `references/memory-model.md`; learning how to respond to vague user requests usually needs `examples/agent-usage.md`.
+Read only the file needed for the current task.

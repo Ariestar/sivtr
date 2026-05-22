@@ -1,6 +1,7 @@
 # Command Cookbook
 
-Use these commands as starting points. Prefer small, targeted queries over dumping large histories.
+Use these commands as starting points. This file is the single source for `sivtr` command syntax.
+Prefer small, targeted queries over dumping large histories.
 
 ## Search Commands
 
@@ -54,6 +55,33 @@ sivtr search "<query>" --provider codex --json --limit 20
 sivtr search "<query>" --provider claude --json --limit 20
 ```
 
+## JSON Handling
+
+Treat `--json` output as structured evidence, not as a free-form transcript.
+
+Inspect these fields first when present:
+
+- `source` or `provider`: where the evidence came from
+- `session`: which thread or run produced it
+- `kind`: command, output, or dialogue
+- `timestamp`: how recent it is
+- `snippet`: the shortest useful excerpt
+
+Normalize the result into this internal shape before reasoning about it:
+
+```json
+{
+  "source": "terminal|ai",
+  "provider": "codex|claude|pi|opencode",
+  "session": "...",
+  "kind": "command|output|dialogue",
+  "timestamp": "...",
+  "snippet": "..."
+}
+```
+
+If the real output schema differs, keep the same inspection order and map the available fields into the same mental model.
+
 ## Expansion Commands
 
 Use expansion after search identifies a target. Prefer small, precise expansions.
@@ -90,3 +118,12 @@ Do not copy large ranges unless the task explicitly requires a full transcript.
 - Include high-signal error tokens: `panic`, `Traceback`, `TS2307`, `error[E`, `exit code`.
 - Search for decision words when reconstructing context: `decision`, `defer`, `blocked`, `next step`, `TODO`.
 - Start with `--limit 20`; increase only if the result set is clearly incomplete.
+
+## Token Budget
+
+- Start with `--limit 20` for normal searches.
+- Use `--limit 30` only for handoff or recap work.
+- Narrow the query before increasing the limit.
+- Prefer `sivtr copy out 1 --print` for the latest output.
+- Prefer `sivtr copy 1..3 --print` for a small range.
+- Avoid ranges larger than `1..10` unless the task needs a transcript.
