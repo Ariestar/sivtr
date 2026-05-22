@@ -1,9 +1,10 @@
 use anyhow::{bail, Context, Result};
-use serde::Serialize;
 
 use crate::cli::ShowArgs;
 use crate::commands::copy::current_workspace_sessions;
-use crate::tui::workspace::WorkspaceSource;
+use crate::commands::workspace_json::{
+    dialogue_ref, line_ref, workspace_item, workspace_ref, workspace_source,
+};
 use sivtr_core::ai::{AgentProvider, AgentSelection};
 
 #[derive(Debug)]
@@ -12,21 +13,6 @@ struct ParsedRef {
     session: String,
     dialogue: Option<usize>,
     line: Option<usize>,
-}
-
-#[derive(Serialize)]
-struct ShowJsonOutput {
-    #[serde(rename = "ref")]
-    ref_: String,
-    kind: String,
-    source: String,
-    session_id: String,
-    session: String,
-    dialogue_index: Option<usize>,
-    dialogue: Option<String>,
-    line: Option<usize>,
-    timestamp: Option<String>,
-    content: String,
 }
 
 pub fn execute(args: &ShowArgs) -> Result<()> {
@@ -47,11 +33,11 @@ pub fn execute(args: &ShowArgs) -> Result<()> {
     let session = sessions
         .iter()
         .find(|session| {
-            source_name(session.source) == parsed.source && session.ref_id == parsed.session
+            workspace_source(session.source) == parsed.source && session.ref_id == parsed.session
         })
         .with_context(|| format!("No workspace session found for ref `{}`", args.reference))?;
 
-    let (dialogue_index, dialogue_title, timestamp, content) = match parsed.dialogue {
+    let (dialogue_title, timestamp, content) = match parsed.dialogue {
         Some(dialogue) => {
             if dialogue == 0 {
                 bail!("Dialogue index in ref must be 1-based");
@@ -76,7 +62,7 @@ pub fn execute(args: &ShowArgs) -> Result<()> {
                 }
                 None => unit.plain.clone(),
             };
-            (Some(dialogue), title, timestamp, content)
+            (title, timestamp, content)
         }
         None => {
             let content = session
@@ -85,23 +71,18 @@ pub fn execute(args: &ShowArgs) -> Result<()> {
                 .map(|unit| unit.plain.as_str())
                 .collect::<Vec<_>>()
                 .join("\n\n");
-            (None, None, None, content)
+            (None, None, content)
         }
     };
 
     if args.json {
-        let output = ShowJsonOutput {
-            ref_: args.reference.clone(),
-            kind: kind_name(session.source).to_string(),
-            source: source_name(session.source).to_string(),
-            session_id: session.ref_id.clone(),
-            session: session.title.clone(),
-            dialogue_index,
-            dialogue: dialogue_title,
-            line: parsed.line,
-            timestamp,
-            content,
+        let ref_ = match (parsed.dialogue, parsed.line) {
+            (Some(dialogue), Some(line)) => line_ref(session, dialogue - 1, line - 1),
+            (Some(dialogue), None) => dialogue_ref(session, dialogue - 1),
+            (None, None) => workspace_ref(session),
+            (None, Some(_)) => unreachable!("line ref cannot exist without dialogue ref"),
         };
+        let output = workspace_item(session, ref_, dialogue_title, timestamp, content);
         println!("{}", serde_json::to_string_pretty(&output)?);
         return Ok(());
     }
@@ -131,6 +112,10 @@ fn parse_ref(reference: &str) -> Result<ParsedRef> {
         .map(|value| parse_one_based_index(value, "line"))
         .transpose()?;
 
+    if parts.len() == 4 && dialogue.is_none() {
+        bail!("Line ref requires a dialogue segment");
+    }
+
     Ok(ParsedRef {
         source: parts[0].to_string(),
         session: parts[1].to_string(),
@@ -151,18 +136,4 @@ fn parse_one_based_index(value: &str, name: &str) -> Result<usize> {
 
 fn provider_for_source(source: &str) -> Option<AgentProvider> {
     AgentProvider::from_command_name(source)
-}
-
-fn source_name(source: WorkspaceSource) -> &'static str {
-    match source {
-        WorkspaceSource::Terminal => "terminal",
-        WorkspaceSource::Agent(provider) => provider.command_name(),
-    }
-}
-
-fn kind_name(source: WorkspaceSource) -> &'static str {
-    match source {
-        WorkspaceSource::Terminal => "shell",
-        WorkspaceSource::Agent(_) => "ai",
-    }
 }

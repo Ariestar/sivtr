@@ -15,3 +15,4 @@ pub mod pipe;
 pub mod run;
 pub mod search;
 pub mod show;
+pub(crate) mod workspace_json;
