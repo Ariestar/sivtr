@@ -2457,7 +2457,6 @@ mod tests {
         let sessions = vec![WorkspaceSession {
             source: WorkspaceSource::Agent(AgentProvider::Codex),
             modified: SystemTime::UNIX_EPOCH,
-            ref_id: "session".to_string(),
             title: "session".to_string(),
             search_title: "session".to_string(),
             units: vec![TextPair {
@@ -2750,7 +2749,6 @@ mod tests {
         WorkspaceSession {
             source,
             modified: SystemTime::UNIX_EPOCH,
-            ref_id: title.to_string(),
             title: title.to_string(),
             search_title: title.to_string(),
             units: dialogue_titles

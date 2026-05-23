@@ -8,6 +8,10 @@ pub(crate) struct TimeRange {
 }
 
 impl TimeRange {
+    pub(crate) fn contains_record_time(&self, timestamp: Option<&str>) -> bool {
+        self.contains_timestamp(timestamp)
+    }
+
     pub(crate) fn contains_timestamp(&self, timestamp: Option<&str>) -> bool {
         let Some(timestamp) = timestamp
             .and_then(parse_timestamp)

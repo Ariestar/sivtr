@@ -79,26 +79,6 @@ fn agent_session_providers(providers: &[AgentProvider]) -> Vec<Box<dyn AgentSess
         .collect()
 }
 
-pub(crate) fn current_workspace_sessions(
-    providers: &[AgentProvider],
-    cwd: &std::path::Path,
-    selection_mode: AgentSelection,
-) -> Result<Vec<WorkspaceSession>> {
-    current_workspace_sessions_with_recent(providers, cwd, selection_mode, None)
-}
-
-pub(crate) fn current_workspace_sessions_with_recent(
-    providers: &[AgentProvider],
-    cwd: &std::path::Path,
-    selection_mode: AgentSelection,
-    recent_sessions: Option<usize>,
-) -> Result<Vec<WorkspaceSession>> {
-    let sources = agent_session_providers(providers);
-    let choices =
-        build_current_agent_session_choices(&sources, cwd, selection_mode, recent_sessions)?;
-    workspace_sessions_from_agent_choices(choices)
-}
-
 #[derive(Clone, Debug)]
 struct IndexedCommandBlock {
     plain: CommandBlock,
@@ -477,30 +457,6 @@ fn build_current_lazy_agent_session_choices(
     Ok(choices)
 }
 
-fn build_current_agent_session_choices(
-    sources: &[Box<dyn AgentSessionProvider>],
-    cwd: &std::path::Path,
-    selection_mode: AgentSelection,
-    recent_sessions: Option<usize>,
-) -> Result<Vec<WorkspaceSession>> {
-    let mut choices = Vec::new();
-
-    for source in sources {
-        let mut sessions = source.list_recent_sessions(Some(cwd))?;
-        if let Some(limit) = recent_sessions {
-            sessions.truncate(limit);
-        }
-        choices.extend(build_agent_session_choices(
-            source.as_ref(),
-            &sessions,
-            selection_mode,
-        )?);
-    }
-
-    choices.sort_by(|a, b| b.modified.cmp(&a.modified));
-    Ok(choices)
-}
-
 fn pick_current_agent_session_content_on_terminal(
     source: &dyn AgentSessionProvider,
     terminal: &mut crate::tui::terminal::Tui,
@@ -567,7 +523,6 @@ fn build_lazy_agent_session_choice(
 
     WorkspaceSession {
         source: WorkspaceSource::Agent(provider),
-        ref_id: agent_session_ref_id(info.id.as_deref(), &info.path),
         modified: info.modified,
         title,
         search_title,
@@ -663,7 +618,6 @@ fn build_agent_session_choice(
 
     Some(WorkspaceSession {
         source: WorkspaceSource::Agent(source.provider()),
-        ref_id: agent_session_ref_id(session.id.as_deref().or(info.id.as_deref()), &info.path),
         modified: info.modified,
         title,
         search_title,
@@ -800,7 +754,6 @@ fn build_terminal_workspace_session(
     let title = format!("current shell  [{block_count} blocks]");
     Some(WorkspaceSession {
         source: WorkspaceSource::Terminal,
-        ref_id: "current".to_string(),
         modified,
         search_title: title.clone(),
         title,
@@ -1283,18 +1236,6 @@ fn short_agent_id(id: &str) -> String {
     id.chars().take(8).collect()
 }
 
-fn agent_session_ref_id(id: Option<&str>, path: &std::path::Path) -> String {
-    id.map(short_agent_id)
-        .filter(|id| !id.is_empty())
-        .or_else(|| {
-            path.file_stem()
-                .and_then(|name| name.to_str())
-                .map(short_agent_id)
-                .filter(|id| !id.is_empty())
-        })
-        .unwrap_or_else(|| "unknown".to_string())
-}
-
 fn is_real_user_block(block: &AgentBlock) -> bool {
     if block.kind != AgentBlockKind::User {
         return false;
@@ -1549,11 +1490,10 @@ pub(super) fn build_text_preview(text: &str) -> String {
 mod tests {
     use super::vim::{is_vim_command, vim_single_quote};
     use super::{
-        agent_session_preview, build_agent_copy_units, build_agent_units,
-        build_current_agent_session_choices, filter_lines_by_regex, filter_lines_by_spec,
-        format_block, resolve_agent_session_selector, AgentBlock, AgentBlockKind, AgentProvider,
-        AgentSelection, AgentSession, AgentSessionInfo, AgentSessionProvider, CommandBlock,
-        CopyMode, TextPair,
+        agent_session_preview, build_agent_copy_units, build_agent_units, filter_lines_by_regex,
+        filter_lines_by_spec, format_block, resolve_agent_session_selector, AgentBlock,
+        AgentBlockKind, AgentProvider, AgentSelection, AgentSession, AgentSessionInfo,
+        AgentSessionProvider, CommandBlock, CopyMode, TextPair,
     };
     use anyhow::Result;
     use std::collections::HashMap;
@@ -1762,66 +1702,6 @@ mod tests {
         assert_eq!(copy_units[0].output.plain, "answer");
         assert_eq!(copy_units[0].block.plain, "question\n\nanswer");
         assert!(!copy_units[0].block.plain.contains("## Assistant"));
-    }
-
-    #[test]
-    fn current_agent_picker_lists_all_sessions_for_cwd() {
-        let cwd = PathBuf::from("d:\\repo");
-        let source = FakeAgentSource {
-            require_cwd: true,
-            infos: vec![
-                AgentSessionInfo {
-                    path: PathBuf::from("old.jsonl"),
-                    id: Some("old".to_string()),
-                    cwd: Some(cwd.display().to_string()),
-                    title: None,
-                    modified: SystemTime::UNIX_EPOCH + Duration::from_secs(1),
-                },
-                AgentSessionInfo {
-                    path: PathBuf::from("new.jsonl"),
-                    id: Some("new".to_string()),
-                    cwd: Some(cwd.display().to_string()),
-                    title: None,
-                    modified: SystemTime::UNIX_EPOCH + Duration::from_secs(2),
-                },
-            ],
-        };
-        let sources: Vec<Box<dyn AgentSessionProvider>> = vec![Box::new(source)];
-
-        let choices =
-            build_current_agent_session_choices(&sources, &cwd, AgentSelection::LastTurn, None)
-                .unwrap();
-
-        assert_eq!(choices.len(), 2);
-        assert_eq!(choices[0].title, "new task  [new]");
-        assert_eq!(choices[1].title, "old task  [old]");
-    }
-
-    #[test]
-    fn current_agent_picker_does_not_truncate_large_session_lists() {
-        let cwd = PathBuf::from("d:\\repo");
-        let infos = (0..60)
-            .map(|idx| AgentSessionInfo {
-                path: PathBuf::from(format!("session-{idx}.jsonl")),
-                id: Some(format!("s{idx}")),
-                cwd: Some(cwd.display().to_string()),
-                title: None,
-                modified: SystemTime::UNIX_EPOCH + Duration::from_secs((idx + 1) as u64),
-            })
-            .collect();
-        let source = FakeAgentSource {
-            require_cwd: true,
-            infos,
-        };
-        let sources: Vec<Box<dyn AgentSessionProvider>> = vec![Box::new(source)];
-
-        let choices =
-            build_current_agent_session_choices(&sources, &cwd, AgentSelection::LastTurn, None)
-                .unwrap();
-
-        assert_eq!(choices.len(), 60);
-        assert_eq!(choices[0].title, "session-59 task  [session-]");
-        assert_eq!(choices[59].title, "session-0 task  [session-]");
     }
 
     #[test]

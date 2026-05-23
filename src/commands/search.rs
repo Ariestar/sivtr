@@ -1,34 +1,41 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
+use regex::Regex;
 use serde::Serialize;
+use sivtr_core::record::WorkRecord;
 
 use crate::cli::{SearchArgs, SearchScopeArg};
-use crate::commands::copy::current_workspace_sessions_with_recent;
+use crate::commands::records::current_work_records;
 use crate::commands::time_filter::{build_time_range, TimeRange};
-use crate::commands::workspace_json::{
-    line_ref, workspace_item, workspace_source, WorkspaceJsonItem,
-};
-use crate::tui::workspace::WorkspaceSession;
-use crate::tui::workspace_search::{
-    WorkspaceSearchIndex, WorkspaceSearchMatch, WorkspaceSearchScope,
-};
-use sivtr_core::ai::AgentSelection;
 
 #[derive(Serialize)]
-struct SearchJsonOutput {
-    query: String,
-    scope: String,
+struct SearchJsonOutput<'a> {
+    query: &'a str,
+    scope: &'static str,
     cwd: String,
     match_count: usize,
-    results: Vec<WorkspaceJsonItem>,
+    results: Vec<SearchJsonItem>,
 }
 
-struct SearchResult<'a> {
-    session: &'a WorkspaceSession,
-    dialogue_title: &'a str,
-    dialogue_index: usize,
+#[derive(Serialize)]
+struct SearchJsonItem {
+    #[serde(rename = "ref")]
+    ref_: String,
+    kind: String,
+    timestamp: Option<String>,
+    title: SearchJsonTitle,
+    content: String,
+}
+
+#[derive(Serialize)]
+struct SearchJsonTitle {
+    session: String,
+    dialogue: Option<String>,
+}
+
+struct SearchHit<'a> {
+    record: &'a WorkRecord,
     line_index: usize,
-    timestamp: Option<&'a str>,
     content: String,
 }
 
@@ -45,139 +52,129 @@ pub fn execute(args: &SearchArgs) -> Result<()> {
         args.recent.as_deref(),
         now,
     )?;
-    let sessions = current_workspace_sessions_with_recent(
-        &providers,
-        &cwd,
-        AgentSelection::LastTurn,
-        recent_count,
-    )?;
-    let scope = search_scope(args.scope);
-    let output =
-        WorkspaceSearchIndex::new(&sessions).search_with_scope(&sessions, scope, &args.query);
+    let records = current_work_records(&providers, &cwd, recent_count)?;
+    let regex = Regex::new(&format!("(?i){}", args.query))?;
     let results = collect_results(
-        &output.sessions,
-        &output.matches,
+        &records,
+        &regex,
+        search_scope(args.scope),
         args.limit,
         time_range.as_ref(),
     );
 
     if args.json {
         let json = SearchJsonOutput {
-            query: args.query.clone(),
-            scope: search_scope_name(scope).to_string(),
+            query: &args.query,
+            scope: scope_name(args.scope),
             cwd: cwd.display().to_string(),
-            match_count: output.matches.len(),
-            results: results
-                .iter()
-                .map(|result| {
-                    workspace_item(
-                        result.session,
-                        line_ref(result.session, result.dialogue_index, result.line_index),
-                        Some(result.dialogue_title.to_string()),
-                        result.timestamp.map(str::to_string),
-                        result.content.clone(),
-                    )
-                })
-                .collect(),
+            match_count: results.len(),
+            results: results.into_iter().map(search_json_item).collect(),
         };
         println!("{}", serde_json::to_string_pretty(&json)?);
         return Ok(());
     }
 
-    println!(
-        "sivtr search: {} match(es) for {:?} in {}",
-        output.matches.len(),
-        args.query,
-        cwd.display()
-    );
-
     if results.is_empty() {
+        println!("No matches for `{}`", args.query);
         return Ok(());
     }
 
-    for (idx, result) in results.iter().enumerate() {
-        println!(
-            "\n{}. [{}] {}",
-            idx + 1,
-            workspace_source(result.session.source),
-            result.session.title
-        );
-        println!("   dialogue: {}", result.dialogue_title);
-        if let Some(timestamp) = result.timestamp {
-            println!("   timestamp: {timestamp}");
-        }
-        println!("   line {}: {}", result.line_index + 1, result.content);
-    }
-
-    if output.matches.len() > results.len() {
-        println!(
-            "\n... {} more match(es). Re-run with --limit {} or --json.",
-            output.matches.len() - results.len(),
-            output.matches.len()
-        );
+    for result in results {
+        println!("{}", line_ref(result.record, result.line_index));
+        println!("  {}", result.record.title);
+        println!("  {}", result.content.trim());
     }
 
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum RecordSearchScope {
+    Content,
+    Title,
+    Session,
+}
+
+fn search_scope(scope: SearchScopeArg) -> RecordSearchScope {
+    match scope {
+        SearchScopeArg::Content => RecordSearchScope::Content,
+        SearchScopeArg::Dialogue => RecordSearchScope::Title,
+        SearchScopeArg::Session => RecordSearchScope::Session,
+    }
+}
+
+fn scope_name(scope: SearchScopeArg) -> &'static str {
+    match scope {
+        SearchScopeArg::Content => "content",
+        SearchScopeArg::Dialogue => "dialogue",
+        SearchScopeArg::Session => "session",
+    }
+}
+
 fn collect_results<'a>(
-    sessions: &'a [WorkspaceSession],
-    matches: &[WorkspaceSearchMatch],
+    records: &'a [WorkRecord],
+    regex: &Regex,
+    scope: RecordSearchScope,
     limit: usize,
     time_range: Option<&TimeRange>,
-) -> Vec<SearchResult<'a>> {
-    matches
+) -> Vec<SearchHit<'a>> {
+    records
         .iter()
-        .filter_map(|matched| {
-            let session = sessions.get(matched.session_index)?;
-            let dialogue_title = session
-                .dialogue_titles
-                .get(matched.dialogue_index)
-                .map(String::as_str)
-                .unwrap_or("<unknown>");
-            let dialogue_index = session
-                .original_dialogue_indices
-                .get(matched.dialogue_index)
-                .copied()
-                .unwrap_or(matched.dialogue_index);
-            let content = session
-                .units
-                .get(matched.dialogue_index)
-                .and_then(|unit| unit.plain.lines().nth(matched.line_index))
-                .unwrap_or(dialogue_title)
-                .to_string();
-            let timestamp = session
-                .unit_timestamps
-                .get(matched.dialogue_index)
-                .and_then(|timestamp| timestamp.as_deref());
-            if time_range.is_some_and(|range| !range.contains_timestamp(timestamp)) {
-                return None;
-            }
-            Some(SearchResult {
-                session,
-                dialogue_title,
-                dialogue_index,
-                line_index: matched.line_index,
-                timestamp,
-                content,
-            })
+        .filter(|record| {
+            time_range
+                .is_none_or(|range| range.contains_record_time(record.time.occurred_at.as_deref()))
+        })
+        .filter_map(|record| match scope {
+            RecordSearchScope::Content => matching_line(record, regex),
+            RecordSearchScope::Title => regex.is_match(&record.title).then(|| SearchHit {
+                record,
+                line_index: 0,
+                content: record.title.clone(),
+            }),
+            RecordSearchScope::Session => regex.is_match(&record.session.id).then(|| SearchHit {
+                record,
+                line_index: 0,
+                content: record.session.id.clone(),
+            }),
         })
         .take(limit)
         .collect()
 }
 
-fn search_scope(scope: SearchScopeArg) -> WorkspaceSearchScope {
-    match scope {
-        SearchScopeArg::Content => WorkspaceSearchScope::Content,
-        SearchScopeArg::Dialogue => WorkspaceSearchScope::Dialogue,
-        SearchScopeArg::Session => WorkspaceSearchScope::Session,
+fn matching_line<'a>(record: &'a WorkRecord, regex: &Regex) -> Option<SearchHit<'a>> {
+    record
+        .text
+        .combined
+        .lines()
+        .enumerate()
+        .find(|(_, line)| regex.is_match(line))
+        .map(|(line_index, line)| SearchHit {
+            record,
+            line_index,
+            content: line.to_string(),
+        })
+}
+
+fn search_json_item(hit: SearchHit<'_>) -> SearchJsonItem {
+    SearchJsonItem {
+        ref_: line_ref(hit.record, hit.line_index),
+        kind: record_kind(hit.record).to_string(),
+        timestamp: hit.record.time.occurred_at.clone(),
+        title: SearchJsonTitle {
+            session: hit.record.session.id.clone(),
+            dialogue: Some(hit.record.title.clone()),
+        },
+        content: hit.content,
     }
 }
 
-fn search_scope_name(scope: WorkspaceSearchScope) -> &'static str {
-    match scope {
-        WorkspaceSearchScope::Content => "content",
-        WorkspaceSearchScope::Session => "session",
-        WorkspaceSearchScope::Dialogue => "dialogue",
+fn record_kind(record: &WorkRecord) -> &'static str {
+    match record.source.channel {
+        sivtr_core::record::WorkChannel::Terminal => "shell",
+        sivtr_core::record::WorkChannel::Chat => "ai",
     }
+}
+
+fn line_ref(record: &WorkRecord, line_index: usize) -> String {
+    format!("{}/{}", record.session.ref_id, line_index + 1)
 }

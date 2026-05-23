@@ -92,7 +92,6 @@ pub(crate) struct WorkspaceSessionLoad {
 #[derive(Clone, Debug)]
 pub(crate) struct WorkspaceSession {
     pub(crate) source: WorkspaceSource,
-    pub(crate) ref_id: String,
     pub(crate) modified: SystemTime,
     pub(crate) title: String,
     pub(crate) search_title: String,
