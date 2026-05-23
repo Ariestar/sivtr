@@ -137,8 +137,11 @@ impl HistoryStore {
         }
     }
 
-    /// Search input by FTS across content.
+    /// Search input by FTS across content (ASCII) or LIKE fallback (CJK/mixed).
     pub fn search_input(&self, query: &str, limit: usize) -> Result<Vec<InputEntry>> {
+        if query_needs_like_fallback(query) {
+            return self.search_input_like(query, limit);
+        }
         let fts_query = build_fts_query(query);
         let mut stmt = self.conn.prepare(
             "SELECT i.id, i.workspace, i.source, i.session_id, i.dialogue_id, i.content, i.content_type, i.timestamp
@@ -162,6 +165,9 @@ impl HistoryStore {
         query: &str,
         limit: usize,
     ) -> Result<Vec<InputEntry>> {
+        if query_needs_like_fallback(query) {
+            return self.search_input_scoped_like(workspace, source, query, limit);
+        }
         let fts_query = build_fts_query(query);
         let mut stmt = self.conn.prepare(
             "SELECT i.id, i.workspace, i.source, i.session_id, i.dialogue_id, i.content, i.content_type, i.timestamp
@@ -174,6 +180,41 @@ impl HistoryStore {
         let entries = stmt
             .query_map(
                 rusqlite::params![fts_query, workspace, source, limit],
+                map_input_row,
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(entries)
+    }
+
+    fn search_input_like(&self, query: &str, limit: usize) -> Result<Vec<InputEntry>> {
+        let pattern = format!("%{query}%");
+        let mut stmt = self.conn.prepare(
+            "SELECT id, workspace, source, session_id, dialogue_id, content, content_type, timestamp
+             FROM input WHERE content LIKE ?1
+             ORDER BY timestamp DESC LIMIT ?2",
+        )?;
+        let entries = stmt
+            .query_map(rusqlite::params![pattern, limit], map_input_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(entries)
+    }
+
+    fn search_input_scoped_like(
+        &self,
+        workspace: &str,
+        source: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<InputEntry>> {
+        let pattern = format!("%{query}%");
+        let mut stmt = self.conn.prepare(
+            "SELECT id, workspace, source, session_id, dialogue_id, content, content_type, timestamp
+             FROM input WHERE content LIKE ?1 AND workspace = ?2 AND source = ?3
+             ORDER BY timestamp DESC LIMIT ?4",
+        )?;
+        let entries = stmt
+            .query_map(
+                rusqlite::params![pattern, workspace, source, limit],
                 map_input_row,
             )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -237,8 +278,11 @@ impl HistoryStore {
         }
     }
 
-    /// Search output by FTS across content.
+    /// Search output by FTS across content (ASCII) or LIKE fallback (CJK/mixed).
     pub fn search_output(&self, query: &str, limit: usize) -> Result<Vec<OutputEntry>> {
+        if query_needs_like_fallback(query) {
+            return self.search_output_like(query, limit);
+        }
         let fts_query = build_fts_query(query);
         let mut stmt = self.conn.prepare(
             "SELECT o.id, o.workspace, o.source, o.session_id, o.dialogue_id, o.content, o.content_type, o.timestamp
@@ -262,6 +306,9 @@ impl HistoryStore {
         query: &str,
         limit: usize,
     ) -> Result<Vec<OutputEntry>> {
+        if query_needs_like_fallback(query) {
+            return self.search_output_scoped_like(workspace, source, query, limit);
+        }
         let fts_query = build_fts_query(query);
         let mut stmt = self.conn.prepare(
             "SELECT o.id, o.workspace, o.source, o.session_id, o.dialogue_id, o.content, o.content_type, o.timestamp
@@ -274,6 +321,41 @@ impl HistoryStore {
         let entries = stmt
             .query_map(
                 rusqlite::params![fts_query, workspace, source, limit],
+                map_output_row,
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(entries)
+    }
+
+    fn search_output_like(&self, query: &str, limit: usize) -> Result<Vec<OutputEntry>> {
+        let pattern = format!("%{query}%");
+        let mut stmt = self.conn.prepare(
+            "SELECT id, workspace, source, session_id, dialogue_id, content, content_type, timestamp
+             FROM output WHERE content LIKE ?1
+             ORDER BY timestamp DESC LIMIT ?2",
+        )?;
+        let entries = stmt
+            .query_map(rusqlite::params![pattern, limit], map_output_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(entries)
+    }
+
+    fn search_output_scoped_like(
+        &self,
+        workspace: &str,
+        source: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<OutputEntry>> {
+        let pattern = format!("%{query}%");
+        let mut stmt = self.conn.prepare(
+            "SELECT id, workspace, source, session_id, dialogue_id, content, content_type, timestamp
+             FROM output WHERE content LIKE ?1 AND workspace = ?2 AND source = ?3
+             ORDER BY timestamp DESC LIMIT ?4",
+        )?;
+        let entries = stmt
+            .query_map(
+                rusqlite::params![pattern, workspace, source, limit],
                 map_output_row,
             )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -491,11 +573,27 @@ fn map_output_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<OutputEntry> {
     })
 }
 
-fn build_fts_query(query: &str) -> String {
-    let terms: Vec<String> = query
+pub(crate) fn build_fts_query(query: &str) -> String {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return "\"\"".to_string();
+    }
+
+    let terms: Vec<String> = trimmed
         .split_whitespace()
         .filter(|term| !term.is_empty())
-        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+        .map(|term| {
+            // Only ASCII terms get phrase-quoted. CJK/mixed terms
+            // create false positives with FTS5 unicode61 bigrams,
+            // so we fall back to LIKE search for those.
+            if term.is_ascii() && !term.contains('"') {
+                format!("\"{}\"", term.replace('"', "\"\""))
+            } else {
+                // Return empty string — caller must use LIKE for this term
+                String::new()
+            }
+        })
+        .filter(|term| !term.is_empty())
         .collect();
 
     if terms.is_empty() {
@@ -503,4 +601,9 @@ fn build_fts_query(query: &str) -> String {
     } else {
         terms.join(" ")
     }
+}
+
+/// Check if a query contains only FTS-safe terms (ASCII, no CJK).
+pub(crate) fn query_needs_like_fallback(query: &str) -> bool {
+    query.trim().split_whitespace().any(|term| !term.is_ascii())
 }

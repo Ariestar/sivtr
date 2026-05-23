@@ -27,8 +27,32 @@ impl HistoryStore {
     }
 
     /// Full-text search across history content and commands.
+    /// Uses FTS for ASCII queries, LIKE fallback for CJK/mixed.
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<HistoryEntry>> {
-        let fts_query = build_fts_query(query);
+        if crate::history::store::query_needs_like_fallback(query) {
+            let pattern = format!("%{query}%");
+            let mut stmt = self.conn.prepare(
+                "SELECT id, content, command, timestamp, hostname, session_id, source
+                 FROM history WHERE content LIKE ?1 OR command LIKE ?1
+                 ORDER BY timestamp DESC LIMIT ?2",
+            )?;
+            let entries = stmt
+                .query_map(rusqlite::params![pattern, limit], |row| {
+                    Ok(HistoryEntry {
+                        id: row.get(0)?,
+                        content: row.get(1)?,
+                        command: row.get(2)?,
+                        timestamp: row.get(3)?,
+                        hostname: row.get(4)?,
+                        session_id: row.get(5)?,
+                        source: row.get(6)?,
+                    })
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            return Ok(entries);
+        }
+
+        let fts_query = crate::history::store::build_fts_query(query);
         let mut stmt = self.conn.prepare(
             "SELECT h.id, h.content, h.command, h.timestamp, h.hostname, h.session_id, h.source
              FROM history h
@@ -100,19 +124,6 @@ impl HistoryStore {
     }
 }
 
-fn build_fts_query(query: &str) -> String {
-    let terms: Vec<String> = query
-        .split_whitespace()
-        .filter(|term| !term.is_empty())
-        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
-        .collect();
-
-    if terms.is_empty() {
-        "\"\"".to_string()
-    } else {
-        terms.join(" ")
-    }
-}
 
 #[cfg(test)]
 mod tests {

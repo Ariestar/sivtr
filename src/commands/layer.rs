@@ -337,22 +337,28 @@ fn query_layer(
     limit: usize,
     flags: &LayerOutputFlags,
 ) -> Result<()> {
-    let workspace = resolve_workspace(None)?;
     let search_input = scope == "all" || scope == "input";
     let search_output = scope == "all" || scope == "output";
 
     let mut all_lines: Vec<Line> = Vec::new();
 
     if search_input {
-        let results = if let Some(source) = source_filter {
-            store.search_input_scoped(&workspace, source, keyword, limit)?
-        } else {
-            store.search_input(keyword, limit)?
-        };
+        // Search all workspaces, then filter by source in-memory.
+        // Scoped search requires exact workspace match which breaks
+        // when current_dir() differs from stored workspace paths.
+        let results = store.search_input(keyword, limit * 2)?;
         for entry in &results {
+            if let Some(src) = source_filter {
+                if entry.source != src {
+                    continue;
+                }
+            }
+            if all_lines.len() >= limit {
+                break;
+            }
             let preview: String = entry.content.lines().next().unwrap_or("").chars().take(80).collect();
             all_lines.push(Line {
-                seq: 0, // filled after merging
+                seq: 0,
                 ref_: format!(
                     "{}/{}/{}",
                     entry.source,
@@ -366,13 +372,17 @@ fn query_layer(
         }
     }
 
-    if search_output {
-        let results = if let Some(source) = source_filter {
-            store.search_output_scoped(&workspace, source, keyword, limit)?
-        } else {
-            store.search_output(keyword, limit)?
-        };
+    if search_output && all_lines.len() < limit {
+        let results = store.search_output(keyword, limit * 2)?;
         for entry in &results {
+            if let Some(src) = source_filter {
+                if entry.source != src {
+                    continue;
+                }
+            }
+            if all_lines.len() >= limit {
+                break;
+            }
             let preview: String = entry.content.lines().next().unwrap_or("").chars().take(80).collect();
             all_lines.push(Line {
                 seq: 0,
