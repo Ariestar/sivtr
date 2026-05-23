@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
+use chrono::Utc;
 use serde::Serialize;
 
 use crate::cli::{SearchArgs, SearchScopeArg};
-use crate::commands::copy::current_workspace_sessions;
+use crate::commands::copy::current_workspace_sessions_with_recent;
+use crate::commands::time_filter::{build_time_range, TimeRange};
 use crate::commands::workspace_json::{
     line_ref, workspace_item, workspace_source, WorkspaceJsonItem,
 };
@@ -36,11 +38,28 @@ pub fn execute(args: &SearchArgs) -> Result<()> {
         .clone()
         .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
     let providers = args.provider.providers();
-    let sessions = current_workspace_sessions(&providers, &cwd, AgentSelection::LastTurn)?;
+    let now = Utc::now();
+    let (time_range, recent_count) = build_time_range(
+        args.since.as_deref(),
+        args.until.as_deref(),
+        args.recent.as_deref(),
+        now,
+    )?;
+    let sessions = current_workspace_sessions_with_recent(
+        &providers,
+        &cwd,
+        AgentSelection::LastTurn,
+        recent_count,
+    )?;
     let scope = search_scope(args.scope);
     let output =
         WorkspaceSearchIndex::new(&sessions).search_with_scope(&sessions, scope, &args.query);
-    let results = collect_results(&output.sessions, &output.matches, args.limit);
+    let results = collect_results(
+        &output.sessions,
+        &output.matches,
+        args.limit,
+        time_range.as_ref(),
+    );
 
     if args.json {
         let json = SearchJsonOutput {
@@ -105,10 +124,10 @@ fn collect_results<'a>(
     sessions: &'a [WorkspaceSession],
     matches: &[WorkspaceSearchMatch],
     limit: usize,
+    time_range: Option<&TimeRange>,
 ) -> Vec<SearchResult<'a>> {
     matches
         .iter()
-        .take(limit)
         .filter_map(|matched| {
             let session = sessions.get(matched.session_index)?;
             let dialogue_title = session
@@ -131,6 +150,9 @@ fn collect_results<'a>(
                 .unit_timestamps
                 .get(matched.dialogue_index)
                 .and_then(|timestamp| timestamp.as_deref());
+            if time_range.is_some_and(|range| !range.contains_timestamp(timestamp)) {
+                return None;
+            }
             Some(SearchResult {
                 session,
                 dialogue_title,
@@ -140,6 +162,7 @@ fn collect_results<'a>(
                 content,
             })
         })
+        .take(limit)
         .collect()
 }
 

@@ -1,6 +1,6 @@
 ---
 name: sivtr-memory
-description: Use when the agent needs shared local work memory: terminal commands/output, AI conversation history, recent failures, prior decisions, handoff context, recap context, or validation evidence. Search sivtr before asking the user to paste logs or repeat what happened earlier.
+description: Use when an agent needs shared local work memory across terminal commands and output, AI conversation history, recent failures, prior decisions, handoff context, recap context, or validation evidence.
 ---
 
 # Sivtr Memory

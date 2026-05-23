@@ -84,8 +84,18 @@ pub(crate) fn current_workspace_sessions(
     cwd: &std::path::Path,
     selection_mode: AgentSelection,
 ) -> Result<Vec<WorkspaceSession>> {
+    current_workspace_sessions_with_recent(providers, cwd, selection_mode, None)
+}
+
+pub(crate) fn current_workspace_sessions_with_recent(
+    providers: &[AgentProvider],
+    cwd: &std::path::Path,
+    selection_mode: AgentSelection,
+    recent_sessions: Option<usize>,
+) -> Result<Vec<WorkspaceSession>> {
     let sources = agent_session_providers(providers);
-    let choices = build_current_agent_session_choices(&sources, cwd, selection_mode)?;
+    let choices =
+        build_current_agent_session_choices(&sources, cwd, selection_mode, recent_sessions)?;
     workspace_sessions_from_agent_choices(choices)
 }
 
@@ -93,6 +103,7 @@ pub(crate) fn current_workspace_sessions(
 struct IndexedCommandBlock {
     plain: CommandBlock,
     ansi: Option<CommandBlock>,
+    ended_at: Option<String>,
 }
 
 impl IndexedCommandBlock {
@@ -108,7 +119,11 @@ impl IndexedCommandBlock {
             command: plain.command.clone(),
         });
 
-        Self { plain, ansi }
+        Self {
+            plain,
+            ansi,
+            ended_at: entry.ended_at.clone(),
+        }
     }
 }
 
@@ -466,11 +481,15 @@ fn build_current_agent_session_choices(
     sources: &[Box<dyn AgentSessionProvider>],
     cwd: &std::path::Path,
     selection_mode: AgentSelection,
+    recent_sessions: Option<usize>,
 ) -> Result<Vec<WorkspaceSession>> {
     let mut choices = Vec::new();
 
     for source in sources {
-        let sessions = source.list_recent_sessions(Some(cwd))?;
+        let mut sessions = source.list_recent_sessions(Some(cwd))?;
+        if let Some(limit) = recent_sessions {
+            sessions.truncate(limit);
+        }
         choices.extend(build_agent_session_choices(
             source.as_ref(),
             &sessions,
@@ -757,7 +776,7 @@ fn build_terminal_workspace_session(
             } else {
                 build_text_preview(input)
             };
-            Some((unit, copy, title))
+            Some((unit, copy, title, block.ended_at.clone()))
         })
         .collect::<Vec<_>>();
 
@@ -770,11 +789,11 @@ fn build_terminal_workspace_session(
     let mut dialogue_titles = Vec::with_capacity(entries.len());
     let mut unit_timestamps = Vec::with_capacity(entries.len());
     let mut original_dialogue_indices = Vec::with_capacity(entries.len());
-    for (idx, (unit, copy, title)) in entries.into_iter().enumerate() {
+    for (idx, (unit, copy, title, timestamp)) in entries.into_iter().enumerate() {
         units.push(unit);
         copy_units.push(copy);
         dialogue_titles.push(title);
-        unit_timestamps.push(None);
+        unit_timestamps.push(timestamp);
         original_dialogue_indices.push(idx);
     }
     let block_count = dialogue_titles.len();
@@ -1770,7 +1789,8 @@ mod tests {
         let sources: Vec<Box<dyn AgentSessionProvider>> = vec![Box::new(source)];
 
         let choices =
-            build_current_agent_session_choices(&sources, &cwd, AgentSelection::LastTurn).unwrap();
+            build_current_agent_session_choices(&sources, &cwd, AgentSelection::LastTurn, None)
+                .unwrap();
 
         assert_eq!(choices.len(), 2);
         assert_eq!(choices[0].title, "new task  [new]");
@@ -1796,7 +1816,8 @@ mod tests {
         let sources: Vec<Box<dyn AgentSessionProvider>> = vec![Box::new(source)];
 
         let choices =
-            build_current_agent_session_choices(&sources, &cwd, AgentSelection::LastTurn).unwrap();
+            build_current_agent_session_choices(&sources, &cwd, AgentSelection::LastTurn, None)
+                .unwrap();
 
         assert_eq!(choices.len(), 60);
         assert_eq!(choices[0].title, "session-59 task  [session-]");

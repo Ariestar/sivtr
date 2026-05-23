@@ -4,6 +4,8 @@ use sivtr_core::ai::AgentProvider;
 use std::path::PathBuf;
 use std::str::FromStr;
 
+pub(crate) const TIME_FILTER_HELP: &str = "Accepts RFC3339 timestamps, Unix seconds/milliseconds, or relative durations like 30m, 2h, 7d.";
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SearchScopeArg {
     #[default]
@@ -294,7 +296,8 @@ Examples:
   sivtr search panic
   sivtr search "workspace picker" --scope dialogue
   sivtr search sivtr --scope session --provider codex
-  sivtr search "build error" --json --limit 20
+  sivtr search "build error" --recent 2h --json --limit 20
+  sivtr search "panic" --since 2026-05-23T00:00:00Z --until 2026-05-24
 "##;
 
 const HOTKEY_AFTER_HELP: &str = "\
@@ -543,6 +546,18 @@ pub struct SearchArgs {
     /// Workspace directory used to resolve current AI sessions
     #[arg(long, value_name = "PATH")]
     pub cwd: Option<PathBuf>,
+
+    /// Only search content at or after this time.
+    #[arg(long, value_name = "TIME", help = TIME_FILTER_HELP)]
+    pub since: Option<String>,
+
+    /// Only search content at or before this time.
+    #[arg(long, value_name = "TIME", help = TIME_FILTER_HELP)]
+    pub until: Option<String>,
+
+    /// Only search recent content. Accepts a count or duration, e.g. 20, 30m, 2h, 7d.
+    #[arg(long, value_name = "COUNT|DURATION")]
+    pub recent: Option<String>,
 
     /// Maximum number of results to print
     #[arg(short = 'l', long, default_value_t = 20)]
@@ -1030,6 +1045,34 @@ mod tests {
                 );
                 assert!(args.json);
                 assert_eq!(args.limit, 5);
+                assert_eq!(args.since, None);
+                assert_eq!(args.until, None);
+                assert_eq!(args.recent, None);
+            }
+            _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn search_accepts_time_filters() {
+        let cli = Cli::try_parse_from([
+            "sivtr",
+            "search",
+            "panic",
+            "--recent",
+            "2h",
+            "--since",
+            "2026-05-23T00:00:00Z",
+            "--until",
+            "2026-05-24",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Commands::Search(args)) => {
+                assert_eq!(args.recent.as_deref(), Some("2h"));
+                assert_eq!(args.since.as_deref(), Some("2026-05-23T00:00:00Z"));
+                assert_eq!(args.until.as_deref(), Some("2026-05-24"));
             }
             _ => panic!("expected search command"),
         }

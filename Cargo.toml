@@ -27,6 +27,7 @@ path = "src/main.rs"
 
 [dependencies]
 sivtr-core = { version = "0.1.3", path = "crates/sivtr-core" }
+chrono = { version = "0.4", features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
 ratatui = "0.29"
 crossterm = "0.28"

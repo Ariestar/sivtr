@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
@@ -13,6 +14,14 @@ pub struct SessionEntry {
     pub prompt_ansi: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_ansi: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
 }
 
 impl SessionEntry {
@@ -22,6 +31,20 @@ impl SessionEntry {
         output: impl Into<String>,
     ) -> Self {
         Self::from_raw(prompt.into(), command.into(), output.into())
+    }
+
+    pub fn with_metadata(
+        mut self,
+        cwd: Option<String>,
+        ended_at: Option<String>,
+        duration_ms: Option<u64>,
+        exit_code: Option<i32>,
+    ) -> Self {
+        self.cwd = non_empty(cwd);
+        self.ended_at = normalize_timestamp(ended_at);
+        self.duration_ms = duration_ms;
+        self.exit_code = exit_code;
+        self
     }
 
     pub fn render_input(&self) -> String {
@@ -60,6 +83,10 @@ impl SessionEntry {
             output: output_plain.clone(),
             prompt_ansi: preserve_ansi(prompt, &prompt_plain),
             output_ansi: preserve_ansi(output, &output_plain),
+            cwd: None,
+            ended_at: None,
+            duration_ms: None,
+            exit_code: None,
         }
     }
 
@@ -81,6 +108,10 @@ impl SessionEntry {
                 .output_ansi
                 .and_then(|output| preserve_ansi(output, &output_plain))
                 .or_else(|| preserve_ansi(raw_output, &output_plain)),
+            cwd: non_empty(self.cwd),
+            ended_at: normalize_timestamp(self.ended_at),
+            duration_ms: self.duration_ms,
+            exit_code: self.exit_code,
         }
     }
 }
@@ -143,6 +174,12 @@ pub fn append_entry(path: &Path, entry: &SessionEntry) -> Result<()> {
             .output_ansi
             .clone()
             .unwrap_or_else(|| entry.output.clone()),
+    )
+    .with_metadata(
+        entry.cwd.clone(),
+        entry.ended_at.clone(),
+        entry.duration_ms,
+        entry.exit_code,
     );
     let mut file = fs::OpenOptions::new()
         .create(true)
@@ -263,6 +300,25 @@ fn preserve_ansi(raw: String, plain: &str) -> Option<String> {
     } else {
         Some(normalized)
     }
+}
+
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let normalized = normalize_newlines(&value);
+        (!normalized.trim().is_empty()).then_some(normalized)
+    })
+}
+
+fn normalize_timestamp(value: Option<String>) -> Option<String> {
+    let value = non_empty(value)?;
+    if let Ok(timestamp) = DateTime::parse_from_rfc3339(&value) {
+        return Some(
+            timestamp
+                .with_timezone(&Utc)
+                .to_rfc3339_opts(SecondsFormat::Millis, true),
+        );
+    }
+    Some(value)
 }
 
 fn reset_invalid_log_if_needed(path: &Path) -> Result<()> {

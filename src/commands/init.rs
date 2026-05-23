@@ -42,12 +42,29 @@ if (-not $Global:_sivtr_prompt_wrapped) {
         }
         try {
             $last = Get-History -Count 1 -ErrorAction SilentlyContinue
+            if ($Global:_sivtr_next_command_cwd) {
+                $env:SIVTR_COMMAND_CWD = [string]$Global:_sivtr_next_command_cwd
+            } else {
+                Remove-Item Env:SIVTR_COMMAND_CWD -ErrorAction SilentlyContinue
+            }
             if ($last) {
                 $env:SIVTR_LAST_COMMAND = [string]$last.CommandLine
                 $env:SIVTR_LAST_COMMAND_ID = [string]$last.Id
+                $env:SIVTR_COMMAND_ENDED_AT = $last.EndExecutionTime.ToUniversalTime().ToString("o")
+                if ($last.Duration) {
+                    $env:SIVTR_COMMAND_DURATION_MS = [string][int64]$last.Duration.TotalMilliseconds
+                } else {
+                    Remove-Item Env:SIVTR_COMMAND_DURATION_MS -ErrorAction SilentlyContinue
+                }
+            }
+            if ($null -ne $LASTEXITCODE) {
+                $env:SIVTR_LAST_EXIT_CODE = [string]$LASTEXITCODE
+            } else {
+                Remove-Item Env:SIVTR_LAST_EXIT_CODE -ErrorAction SilentlyContinue
             }
             $env:SIVTR_LAST_PROMPT = [string]$rendered
             sivtr flush
+            $Global:_sivtr_next_command_cwd = [string](Get-Location)
         } catch {}
         $rendered
     }
@@ -74,8 +91,17 @@ __sivtr_precmd() {
     export SIVTR_LAST_COMMAND_ID="${BASH_REMATCH[1]}"
     export SIVTR_LAST_COMMAND="${BASH_REMATCH[2]}"
   fi
+  if [[ -n "${SIVTR_NEXT_COMMAND_CWD:-}" ]]; then
+    export SIVTR_COMMAND_CWD="$SIVTR_NEXT_COMMAND_CWD"
+  else
+    unset SIVTR_COMMAND_CWD
+  fi
+  export SIVTR_LAST_EXIT_CODE="$exit_status"
+  export SIVTR_COMMAND_ENDED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+  unset SIVTR_COMMAND_DURATION_MS
   export SIVTR_LAST_PROMPT="${PS1@P}"
   sivtr flush >/dev/null 2>&1 || true
+  export SIVTR_NEXT_COMMAND_CWD="$PWD"
   return $exit_status
 }
 if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then
@@ -107,8 +133,17 @@ _sivtr_precmd() {
   local exit_status=$?
   export SIVTR_LAST_COMMAND="$(fc -ln -1)"
   export SIVTR_LAST_COMMAND_ID="$HISTCMD"
+  if [[ -n "${SIVTR_NEXT_COMMAND_CWD:-}" ]]; then
+    export SIVTR_COMMAND_CWD="$SIVTR_NEXT_COMMAND_CWD"
+  else
+    unset SIVTR_COMMAND_CWD
+  fi
+  export SIVTR_LAST_EXIT_CODE="$exit_status"
+  export SIVTR_COMMAND_ENDED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
+  unset SIVTR_COMMAND_DURATION_MS
   export SIVTR_LAST_PROMPT="$(print -P "$PROMPT")"
   sivtr flush >/dev/null 2>&1 || true
+  export SIVTR_NEXT_COMMAND_CWD="$PWD"
   return $exit_status
 }
 if [[ " ${precmd_functions[*]:-} " != *" _sivtr_precmd "* ]]; then
@@ -124,12 +159,17 @@ $env.SIVTR_SESSION_LOG = (($env.APPDATA? | default $nu.default-config-dir) | pat
 if (($env.SIVTR_PROMPT_WRAPPED? | default false) != true) {
     def _sivtr_precmd [] {
         let last = (history | last 1 | get 0?)
+        $env.SIVTR_COMMAND_CWD = ($env.SIVTR_NEXT_COMMAND_CWD? | default "")
         if $last != null {
             $env.SIVTR_LAST_COMMAND = ($last.command? | default "")
             $env.SIVTR_LAST_COMMAND_ID = (($last.start_timestamp? | default (date now)) | into string)
+            $env.SIVTR_COMMAND_DURATION_MS = (($last.duration? | default "") | into string)
         }
+        $env.SIVTR_COMMAND_ENDED_AT = (date now | into string)
+        $env.SIVTR_LAST_EXIT_CODE = ($env.LAST_EXIT_CODE? | default "" | into string)
         $env.SIVTR_LAST_PROMPT = (do $env.PROMPT_COMMAND)
         try { ^sivtr flush } catch {}
+        $env.SIVTR_NEXT_COMMAND_CWD = (pwd)
     }
     $env.config.hooks.pre_prompt = ($env.config.hooks.pre_prompt? | default [] | append {|| _sivtr_precmd })
     $env.SIVTR_PROMPT_WRAPPED = true

@@ -174,20 +174,8 @@ mod tests {
     #[test]
     fn builds_line_ranges_from_structured_entries() {
         let entries = vec![
-            SessionEntry {
-                prompt: "PS C:\\repo> ".to_string(),
-                command: "git status".to_string(),
-                output: "clean".to_string(),
-                prompt_ansi: None,
-                output_ansi: None,
-            },
-            SessionEntry {
-                prompt: "repo on main\n❯  ".to_string(),
-                command: "cargo test".to_string(),
-                output: "ok".to_string(),
-                prompt_ansi: None,
-                output_ansi: None,
-            },
+            SessionEntry::new("PS C:\\repo> ", "git status", "clean"),
+            SessionEntry::new("repo on main\n❯  ", "cargo test", "ok"),
         ];
 
         let blocks = build_from_entries(&entries);
@@ -203,13 +191,11 @@ mod tests {
 
     #[test]
     fn preserves_output_only_blocks() {
-        let entries = vec![SessionEntry {
-            prompt: String::new(),
-            command: String::new(),
-            output: "warning: something happened\nwarning: still bad".to_string(),
-            prompt_ansi: None,
-            output_ansi: None,
-        }];
+        let entries = vec![SessionEntry::new(
+            "",
+            "",
+            "warning: something happened\nwarning: still bad",
+        )];
 
         let blocks = build_from_entries(&entries);
 

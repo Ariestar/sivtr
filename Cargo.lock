@@ -1288,6 +1288,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "atty",
+ "chrono",
  "clap",
  "crossterm",
  "dirs",

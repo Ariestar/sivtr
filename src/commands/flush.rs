@@ -41,6 +41,7 @@ fn do_flush() -> Result<()> {
             command,
             command_id,
             output,
+            TerminalCommandMetadata::from_env(),
         )?;
     }
 
@@ -70,10 +71,34 @@ fn do_flush() -> Result<()> {
             command,
             command_id,
             output,
+            TerminalCommandMetadata::from_env(),
         )?;
     }
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Default)]
+struct TerminalCommandMetadata {
+    cwd: Option<String>,
+    ended_at: Option<String>,
+    duration_ms: Option<u64>,
+    exit_code: Option<i32>,
+}
+
+impl TerminalCommandMetadata {
+    fn from_env() -> Self {
+        Self {
+            cwd: env::var("SIVTR_COMMAND_CWD").ok(),
+            ended_at: env::var("SIVTR_COMMAND_ENDED_AT").ok(),
+            duration_ms: env::var("SIVTR_COMMAND_DURATION_MS")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok()),
+            exit_code: env::var("SIVTR_LAST_EXIT_CODE")
+                .ok()
+                .and_then(|value| value.parse::<i32>().ok()),
+        }
+    }
 }
 
 fn load_state_lossy(path: &std::path::Path) -> SessionState {
@@ -102,11 +127,17 @@ fn append_entry_from_output(
     command: String,
     command_id: Option<String>,
     output: String,
+    metadata: TerminalCommandMetadata,
 ) -> Result<()> {
     let mut state = load_state_lossy(state_path);
 
     if should_append_entry(&state, command_id.as_deref(), &command) {
-        let entry = SessionEntry::new(prompt, command.clone(), output);
+        let entry = SessionEntry::new(prompt, command.clone(), output).with_metadata(
+            metadata.cwd,
+            metadata.ended_at,
+            metadata.duration_ms,
+            metadata.exit_code,
+        );
         session::append_entry(session_log_path, &entry)?;
         state.last_command_id = command_id;
         state.last_command = Some(command);
@@ -147,7 +178,10 @@ fn trim_trailing_prompt_artifact(output: String, prompt: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{append_entry_from_output, should_append_entry, trim_trailing_prompt_artifact};
+    use super::{
+        append_entry_from_output, should_append_entry, trim_trailing_prompt_artifact,
+        TerminalCommandMetadata,
+    };
     use sivtr_core::session::{self, SessionState};
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -175,6 +209,12 @@ mod tests {
             "cargo test".to_string(),
             Some("42".to_string()),
             "\u{1b}[32mok\u{1b}[0m\n".to_string(),
+            TerminalCommandMetadata {
+                cwd: Some("D:\\sivtr".to_string()),
+                ended_at: Some("2026-05-23T12:00:00Z".to_string()),
+                duration_ms: Some(1234),
+                exit_code: Some(0),
+            },
         )
         .unwrap();
 
@@ -187,6 +227,13 @@ mod tests {
             entries[0].output_ansi.as_deref(),
             Some("\u{1b}[32mok\u{1b}[0m")
         );
+        assert_eq!(entries[0].cwd.as_deref(), Some("D:\\sivtr"));
+        assert_eq!(
+            entries[0].ended_at.as_deref(),
+            Some("2026-05-23T12:00:00.000Z")
+        );
+        assert_eq!(entries[0].duration_ms, Some(1234));
+        assert_eq!(entries[0].exit_code, Some(0));
 
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -204,6 +251,7 @@ mod tests {
             "cargo test".to_string(),
             Some("99".to_string()),
             "ok".to_string(),
+            TerminalCommandMetadata::default(),
         )
         .unwrap();
         append_entry_from_output(
@@ -213,6 +261,7 @@ mod tests {
             "cargo test".to_string(),
             Some("99".to_string()),
             "still ok".to_string(),
+            TerminalCommandMetadata::default(),
         )
         .unwrap();
 
