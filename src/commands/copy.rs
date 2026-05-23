@@ -5,10 +5,11 @@ use std::time::SystemTime;
 use crate::command_blocks::ParsedCommandBlock as CommandBlock;
 use crate::commands::command_block_selector::{parse_selector, resolve_selector, CommandSelection};
 use sivtr_core::ai::{
-    format_blocks, select_blocks, AgentBlock, AgentBlockKind, AgentProvider, AgentSelection,
-    AgentSession, AgentSessionInfo, AgentSessionProvider,
+    AgentBlockKind, AgentProvider, AgentSelection, AgentSession, AgentSessionInfo,
+    AgentSessionProvider,
 };
 use sivtr_core::capture::scrollback;
+use sivtr_core::record::{is_real_user_block, WorkRecord};
 use sivtr_core::session::{self, SessionEntry};
 
 mod vim;
@@ -235,7 +236,9 @@ pub fn execute_agent(request: AgentCopyRequest<'_>) -> Result<()> {
         return Ok(());
     }
 
-    let units = build_agent_units(&session, request.selection_mode);
+    let records =
+        WorkRecord::selected_chat_records(source.provider(), &session, request.selection_mode);
+    let units = records_to_text_pairs(&records);
     if units.is_empty() {
         eprintln!("sivtr: selected {provider_name} content is empty");
         return Ok(());
@@ -601,8 +604,9 @@ fn build_agent_session_choice(
     session: AgentSession,
     selection_mode: AgentSelection,
 ) -> Option<WorkspaceSession> {
-    let units = build_agent_units(&session, selection_mode);
-    let copy_units = build_agent_copy_units(&session, selection_mode, &units);
+    let records = WorkRecord::selected_chat_records(source.provider(), &session, selection_mode);
+    let units = records_to_text_pairs(&records);
+    let copy_units = records_to_copy_parts(&records, selection_mode);
     if session.blocks.is_empty() || units.is_empty() {
         return None;
     }
@@ -613,7 +617,10 @@ fn build_agent_session_choice(
         .iter()
         .map(|unit| build_text_preview(&unit.plain))
         .collect();
-    let unit_timestamps = build_agent_unit_timestamps(&session, selection_mode);
+    let unit_timestamps = records
+        .iter()
+        .map(|record| record.time.occurred_at.clone())
+        .collect();
     let original_dialogue_indices = (0..units.len()).collect();
 
     Some(WorkspaceSession {
@@ -1074,7 +1081,10 @@ fn selectable_agent_sessions(
 
     for info in sessions {
         let session = source.parse_session_file(&info.path)?;
-        if session.blocks.is_empty() || build_agent_units(&session, selection_mode).is_empty() {
+        if session.blocks.is_empty()
+            || WorkRecord::selected_chat_records(source.provider(), &session, selection_mode)
+                .is_empty()
+        {
             continue;
         }
         selectable.push(info.clone());
@@ -1236,156 +1246,68 @@ fn short_agent_id(id: &str) -> String {
     id.chars().take(8).collect()
 }
 
-fn is_real_user_block(block: &AgentBlock) -> bool {
-    if block.kind != AgentBlockKind::User {
-        return false;
-    }
-
-    let text = block.text.trim_start();
-    !is_agent_startup_user_text(text)
-}
-
-fn is_agent_startup_user_text(text: &str) -> bool {
-    text.starts_with("# AGENTS.md instructions for")
-        || text.starts_with("<environment_context>")
-        || text.starts_with("<turn_aborted>")
-        || text.starts_with("<local-command-caveat>")
-        || text.starts_with("<local-command-stdout>")
-        || text.starts_with("<command-message>")
-        || text.starts_with("<command-name>")
-        || text.starts_with("<ide_opened_file>")
-        || text.starts_with("[Request interrupted by user]")
-}
-
 fn preview_line(text: &str, limit: usize) -> Option<String> {
     let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
     Some(line.chars().take(limit).collect())
 }
 
-fn build_agent_units(session: &AgentSession, selection_mode: AgentSelection) -> Vec<TextPair> {
-    match selection_mode {
-        AgentSelection::LastTurn => build_agent_turn_units(session),
-        AgentSelection::LastAssistant => build_agent_kind_units(session, AgentBlockKind::Assistant),
-        AgentSelection::LastUser => build_agent_kind_units(session, AgentBlockKind::User),
-        AgentSelection::LastTool => build_agent_kind_units(session, AgentBlockKind::ToolOutput),
-        AgentSelection::LastBlocks(count) => vec![TextPair {
-            plain: format_blocks(&select_blocks(session, AgentSelection::LastBlocks(count))),
-            ansi: String::new(),
-        }],
-        AgentSelection::All => vec![TextPair {
-            plain: format_blocks(&session.blocks),
-            ansi: String::new(),
-        }],
-    }
-}
-
-fn build_agent_turn_units(session: &AgentSession) -> Vec<TextPair> {
-    let mut turns = Vec::new();
-
-    for (start, end) in agent_turn_ranges(&session.blocks) {
-        let turn_blocks: Vec<AgentBlock> = session.blocks[start..end]
-            .iter()
-            .filter(|block| matches!(block.kind, AgentBlockKind::User | AgentBlockKind::Assistant))
-            .cloned()
-            .collect();
-
-        let text = format_blocks(&turn_blocks);
-        if !text.trim().is_empty() {
-            turns.push(TextPair {
-                plain: text,
-                ansi: String::new(),
-            });
-        }
-    }
-
-    turns
-}
-
-fn build_agent_copy_units(
-    session: &AgentSession,
-    selection_mode: AgentSelection,
-    units: &[TextPair],
-) -> Vec<WorkspaceCopyParts> {
-    match selection_mode {
-        AgentSelection::LastTurn => build_agent_turn_copy_units(session),
-        AgentSelection::LastAssistant => {
-            build_agent_kind_copy_units(session, AgentBlockKind::Assistant, AgentCopyKind::Output)
-        }
-        AgentSelection::LastUser => {
-            build_agent_kind_copy_units(session, AgentBlockKind::User, AgentCopyKind::Input)
-        }
-        AgentSelection::LastTool | AgentSelection::LastBlocks(_) | AgentSelection::All => units
-            .iter()
-            .cloned()
-            .map(WorkspaceCopyParts::from_block)
-            .collect(),
-    }
-}
-
-fn build_agent_turn_copy_units(session: &AgentSession) -> Vec<WorkspaceCopyParts> {
-    let mut units = Vec::new();
-
-    for (start, end) in agent_turn_ranges(&session.blocks) {
-        let input = join_agent_block_texts(
-            session.blocks[start..end]
-                .iter()
-                .filter(|block| block.kind == AgentBlockKind::User && is_real_user_block(block)),
-        );
-        let output = join_agent_block_texts(
-            session.blocks[start..end]
-                .iter()
-                .filter(|block| block.kind == AgentBlockKind::Assistant),
-        );
-        let block = join_nonempty_texts([input.as_str(), output.as_str()]);
-        units.push(WorkspaceCopyParts {
-            input: plain_text_pair(input),
-            output: plain_text_pair(output),
-            block: plain_text_pair(block),
-            command: TextPair::default(),
-        });
-    }
-
-    units
-}
-
-#[derive(Clone, Copy)]
-enum AgentCopyKind {
-    Input,
-    Output,
-}
-
-fn build_agent_kind_copy_units(
-    session: &AgentSession,
-    kind: AgentBlockKind,
-    copy_kind: AgentCopyKind,
-) -> Vec<WorkspaceCopyParts> {
-    session
-        .blocks
+fn records_to_text_pairs(records: &[WorkRecord]) -> Vec<TextPair> {
+    records
         .iter()
-        .filter(|block| block.kind == kind)
-        .map(|block| {
-            let text = block.text.trim().to_string();
-            let text_pair = plain_text_pair(text.clone());
-            let mut copy = WorkspaceCopyParts {
-                block: text_pair.clone(),
-                ..WorkspaceCopyParts::default()
-            };
-            match copy_kind {
-                AgentCopyKind::Input => copy.input = text_pair,
-                AgentCopyKind::Output => copy.output = text_pair,
-            }
-            copy
+        .map(|record| TextPair {
+            plain: record.text.combined.clone(),
+            ansi: String::new(),
         })
         .collect()
 }
 
-fn join_agent_block_texts<'a>(blocks: impl Iterator<Item = &'a AgentBlock>) -> String {
-    join_nonempty_texts(blocks.map(|block| block.text.trim()))
+fn records_to_copy_parts(
+    records: &[WorkRecord],
+    selection_mode: AgentSelection,
+) -> Vec<WorkspaceCopyParts> {
+    records
+        .iter()
+        .map(|record| record_to_copy_parts(record, selection_mode))
+        .collect()
 }
 
-fn join_nonempty_texts<'a>(texts: impl IntoIterator<Item = &'a str>) -> String {
-    texts
+fn record_to_copy_parts(record: &WorkRecord, selection_mode: AgentSelection) -> WorkspaceCopyParts {
+    match selection_mode {
+        AgentSelection::LastTurn => WorkspaceCopyParts {
+            input: plain_text_pair(record.text.input.clone().unwrap_or_default()),
+            output: plain_text_pair(record.text.output.clone().unwrap_or_default()),
+            block: plain_text_pair(join_record_io(record)),
+            command: TextPair::default(),
+        },
+        AgentSelection::LastUser => WorkspaceCopyParts {
+            input: plain_text_pair(record.text.input.clone().unwrap_or_default()),
+            block: plain_text_pair(record.text.combined.clone()),
+            ..WorkspaceCopyParts::default()
+        },
+        AgentSelection::LastAssistant | AgentSelection::LastTool => WorkspaceCopyParts {
+            output: plain_text_pair(
+                record
+                    .text
+                    .output
+                    .clone()
+                    .unwrap_or_else(|| record.text.combined.clone()),
+            ),
+            block: plain_text_pair(record.text.combined.clone()),
+            ..WorkspaceCopyParts::default()
+        },
+        AgentSelection::LastBlocks(_) | AgentSelection::All => {
+            WorkspaceCopyParts::from_block(TextPair {
+                plain: record.text.combined.clone(),
+                ansi: String::new(),
+            })
+        }
+    }
+}
+
+fn join_record_io(record: &WorkRecord) -> String {
+    [record.text.input.as_deref(), record.text.output.as_deref()]
         .into_iter()
+        .flatten()
         .filter(|text| !text.trim().is_empty())
         .collect::<Vec<_>>()
         .join("\n\n")
@@ -1396,84 +1318,6 @@ fn plain_text_pair(text: String) -> TextPair {
         plain: text,
         ansi: String::new(),
     }
-}
-
-fn agent_turn_ranges(blocks: &[AgentBlock]) -> Vec<(usize, usize)> {
-    let mut ranges = Vec::new();
-    let mut start = None;
-    let mut has_assistant = false;
-
-    for (idx, block) in blocks.iter().enumerate() {
-        if block.kind == AgentBlockKind::User && is_real_user_block(block) {
-            if let Some(start) = start {
-                if has_assistant {
-                    ranges.push((start, idx));
-                }
-            }
-            start = Some(idx);
-            has_assistant = false;
-        } else if start.is_some() && block.kind == AgentBlockKind::Assistant {
-            has_assistant = true;
-        }
-    }
-
-    if let Some(start) = start {
-        if has_assistant {
-            ranges.push((start, blocks.len()));
-        }
-    }
-
-    ranges
-}
-
-fn build_agent_kind_units(session: &AgentSession, kind: AgentBlockKind) -> Vec<TextPair> {
-    session
-        .blocks
-        .iter()
-        .filter(|block| block.kind == kind)
-        .map(|block| TextPair {
-            plain: block.text.clone(),
-            ansi: String::new(),
-        })
-        .collect()
-}
-
-fn build_agent_unit_timestamps(
-    session: &AgentSession,
-    selection_mode: AgentSelection,
-) -> Vec<Option<String>> {
-    match selection_mode {
-        AgentSelection::LastTurn => agent_turn_ranges(&session.blocks)
-            .into_iter()
-            .map(|(start, end)| first_block_timestamp(&session.blocks[start..end]))
-            .collect(),
-        AgentSelection::LastAssistant => {
-            build_agent_kind_timestamps(session, AgentBlockKind::Assistant)
-        }
-        AgentSelection::LastUser => build_agent_kind_timestamps(session, AgentBlockKind::User),
-        AgentSelection::LastTool => {
-            build_agent_kind_timestamps(session, AgentBlockKind::ToolOutput)
-        }
-        AgentSelection::LastBlocks(_) | AgentSelection::All => {
-            vec![first_block_timestamp(&session.blocks)]
-        }
-    }
-}
-
-fn build_agent_kind_timestamps(
-    session: &AgentSession,
-    kind: AgentBlockKind,
-) -> Vec<Option<String>> {
-    session
-        .blocks
-        .iter()
-        .filter(|block| block.kind == kind)
-        .map(|block| block.timestamp.clone())
-        .collect()
-}
-
-fn first_block_timestamp(blocks: &[AgentBlock]) -> Option<String> {
-    blocks.iter().find_map(|block| block.timestamp.clone())
 }
 
 pub(super) fn build_text_preview(text: &str) -> String {
@@ -1490,12 +1334,13 @@ pub(super) fn build_text_preview(text: &str) -> String {
 mod tests {
     use super::vim::{is_vim_command, vim_single_quote};
     use super::{
-        agent_session_preview, build_agent_copy_units, build_agent_units, filter_lines_by_regex,
-        filter_lines_by_spec, format_block, resolve_agent_session_selector, AgentBlock,
+        agent_session_preview, filter_lines_by_regex, filter_lines_by_spec, format_block,
+        record_to_copy_parts, records_to_text_pairs, resolve_agent_session_selector,
         AgentBlockKind, AgentProvider, AgentSelection, AgentSession, AgentSessionInfo,
         AgentSessionProvider, CommandBlock, CopyMode, TextPair,
     };
     use anyhow::Result;
+    use sivtr_core::ai::AgentBlock;
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime};
@@ -1662,7 +1507,12 @@ mod tests {
             ],
         };
 
-        let units = build_agent_units(&session, AgentSelection::LastTurn);
+        let records = sivtr_core::record::WorkRecord::selected_chat_records(
+            AgentProvider::Claude,
+            &session,
+            AgentSelection::LastTurn,
+        );
+        let units = records_to_text_pairs(&records);
 
         assert_eq!(units.len(), 1);
         assert!(units[0].plain.contains("review the project"));
@@ -1694,8 +1544,15 @@ mod tests {
             ],
         };
 
-        let units = build_agent_units(&session, AgentSelection::LastTurn);
-        let copy_units = build_agent_copy_units(&session, AgentSelection::LastTurn, &units);
+        let records = sivtr_core::record::WorkRecord::selected_chat_records(
+            AgentProvider::Codex,
+            &session,
+            AgentSelection::LastTurn,
+        );
+        let copy_units = records
+            .iter()
+            .map(|record| record_to_copy_parts(record, AgentSelection::LastTurn))
+            .collect::<Vec<_>>();
 
         assert_eq!(copy_units.len(), 1);
         assert_eq!(copy_units[0].input.plain, "question");

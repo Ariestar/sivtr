@@ -165,6 +165,19 @@ pub enum AgentSelection {
     All,
 }
 
+impl AgentSelection {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::LastTurn => "turn",
+            Self::LastAssistant => "assistant",
+            Self::LastUser => "user",
+            Self::LastTool => "tool",
+            Self::LastBlocks(_) => "blocks",
+            Self::All => "all",
+        }
+    }
+}
+
 pub trait AgentSessionProvider {
     fn provider(&self) -> AgentProvider;
 

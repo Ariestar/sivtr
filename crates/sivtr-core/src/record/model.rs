@@ -1,5 +1,8 @@
 use super::refs::WorkRef;
-use crate::ai::{format_blocks, AgentBlock, AgentBlockKind, AgentProvider, AgentSession};
+use crate::ai::{
+    format_blocks, select_blocks, AgentBlock, AgentBlockKind, AgentProvider, AgentSelection,
+    AgentSession,
+};
 use crate::session::SessionEntry;
 use serde::Serialize;
 use std::path::Path;
@@ -196,9 +199,13 @@ impl WorkRecord {
         index: usize,
         blocks: &[AgentBlock],
     ) -> Option<Self> {
-        let messages = blocks
+        let chat_blocks = blocks
             .iter()
             .filter(|block| matches!(block.kind, AgentBlockKind::User | AgentBlockKind::Assistant))
+            .cloned()
+            .collect::<Vec<_>>();
+        let messages = chat_blocks
+            .iter()
             .map(|block| ChatMessage {
                 role: block_role(block.kind).to_string(),
                 content: block.text.trim().to_string(),
@@ -229,7 +236,7 @@ impl WorkRecord {
         let session_ref = agent_session_ref_id(session.id.as_deref(), &session.path);
         let work_ref = WorkRef::agent_record(provider, session_ref.clone(), index + 1);
         let ref_id = work_ref.to_string();
-        let combined = format_blocks(blocks);
+        let combined = format_blocks(&chat_blocks);
         let title = if user.trim().is_empty() {
             preview(&assistant)
         } else {
@@ -274,9 +281,172 @@ impl WorkRecord {
             },
         })
     }
+
+    pub fn selected_chat_records(
+        provider: AgentProvider,
+        session: &AgentSession,
+        selection: AgentSelection,
+    ) -> Vec<Self> {
+        match selection {
+            AgentSelection::LastTurn => Self::chat_turns(provider, session),
+            AgentSelection::LastAssistant => {
+                selected_block_records(provider, session, selection, AgentBlockKind::Assistant)
+            }
+            AgentSelection::LastUser => {
+                selected_block_records(provider, session, selection, AgentBlockKind::User)
+            }
+            AgentSelection::LastTool => {
+                selected_block_records(provider, session, selection, AgentBlockKind::ToolOutput)
+            }
+            AgentSelection::LastBlocks(_) | AgentSelection::All => {
+                selected_group_record(provider, session, selection)
+            }
+        }
+    }
 }
 
-fn chat_turn_ranges(blocks: &[AgentBlock]) -> Vec<(usize, usize)> {
+fn selected_block_records(
+    provider: AgentProvider,
+    session: &AgentSession,
+    selection: AgentSelection,
+    kind: AgentBlockKind,
+) -> Vec<WorkRecord> {
+    select_blocks(session, selection)
+        .into_iter()
+        .enumerate()
+        .filter(|(_, block)| !block.text.trim().is_empty())
+        .map(|(index, block)| selected_block_record(provider, session, kind, index, block))
+        .collect()
+}
+
+fn selected_block_record(
+    provider: AgentProvider,
+    session: &AgentSession,
+    kind: AgentBlockKind,
+    index: usize,
+    block: AgentBlock,
+) -> WorkRecord {
+    let text = block.text.trim().to_string();
+    let title = preview(&text);
+    let session_ref = agent_session_ref_id(session.id.as_deref(), &session.path);
+    let work_ref = WorkRef::agent_record(provider, session_ref.clone(), index + 1);
+    let ref_id = work_ref.to_string();
+    let (input, output) = match kind {
+        AgentBlockKind::User => (Some(text.clone()), None),
+        AgentBlockKind::Assistant | AgentBlockKind::ToolOutput => (None, Some(text.clone())),
+        AgentBlockKind::ToolCall => (None, None),
+    };
+
+    WorkRecord {
+        schema_version: RECORD_SCHEMA_VERSION,
+        id: ref_id,
+        kind: WorkRecordKind::ChatTurn,
+        source: WorkSource {
+            channel: WorkChannel::Chat,
+            provider: Some(provider.command_name().to_string()),
+        },
+        session: WorkSessionRef {
+            id: session_ref,
+            path: Some(session.path.display().to_string()),
+            index,
+            work_ref,
+        },
+        cwd: non_empty(session.cwd.clone()),
+        time: WorkTime {
+            occurred_at: block.timestamp.clone(),
+            ended_at: block.timestamp.clone(),
+            duration_ms: None,
+        },
+        status: WorkStatus {
+            outcome: WorkOutcome::Unknown,
+            exit_code: None,
+        },
+        title,
+        text: WorkText {
+            input,
+            output,
+            combined: text.clone(),
+        },
+        payload: WorkPayload::ChatTurn {
+            user: match kind {
+                AgentBlockKind::User => text.clone(),
+                _ => String::new(),
+            },
+            assistant: match kind {
+                AgentBlockKind::User => String::new(),
+                _ => text,
+            },
+            messages: vec![ChatMessage {
+                role: block_role(block.kind).to_string(),
+                content: block.text.trim().to_string(),
+                timestamp: block.timestamp,
+            }],
+        },
+    }
+}
+
+fn selected_group_record(
+    provider: AgentProvider,
+    session: &AgentSession,
+    selection: AgentSelection,
+) -> Vec<WorkRecord> {
+    let blocks = select_blocks(session, selection);
+    let combined = format_blocks(&blocks);
+    if combined.trim().is_empty() {
+        return Vec::new();
+    }
+
+    let session_ref = agent_session_ref_id(session.id.as_deref(), &session.path);
+    let work_ref = WorkRef::agent_record(provider, session_ref.clone(), 1);
+    let ref_id = work_ref.to_string();
+    let timestamp = first_timestamp(&blocks);
+    vec![WorkRecord {
+        schema_version: RECORD_SCHEMA_VERSION,
+        id: ref_id,
+        kind: WorkRecordKind::ChatTurn,
+        source: WorkSource {
+            channel: WorkChannel::Chat,
+            provider: Some(provider.command_name().to_string()),
+        },
+        session: WorkSessionRef {
+            id: session_ref,
+            path: Some(session.path.display().to_string()),
+            index: 0,
+            work_ref,
+        },
+        cwd: non_empty(session.cwd.clone()),
+        time: WorkTime {
+            occurred_at: timestamp.clone(),
+            ended_at: timestamp,
+            duration_ms: None,
+        },
+        status: WorkStatus {
+            outcome: WorkOutcome::Unknown,
+            exit_code: None,
+        },
+        title: preview(&combined),
+        text: WorkText {
+            input: None,
+            output: Some(combined.clone()),
+            combined: combined.clone(),
+        },
+        payload: WorkPayload::ChatTurn {
+            user: String::new(),
+            assistant: combined,
+            messages: blocks
+                .into_iter()
+                .map(|block| ChatMessage {
+                    role: block_role(block.kind).to_string(),
+                    content: block.text.trim().to_string(),
+                    timestamp: block.timestamp,
+                })
+                .filter(|message| !message.content.is_empty())
+                .collect(),
+        },
+    }]
+}
+
+pub fn chat_turn_ranges(blocks: &[AgentBlock]) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
     let mut start = None;
     let mut has_assistant = false;
@@ -304,7 +474,7 @@ fn chat_turn_ranges(blocks: &[AgentBlock]) -> Vec<(usize, usize)> {
     ranges
 }
 
-fn is_real_user_block(block: &AgentBlock) -> bool {
+pub fn is_real_user_block(block: &AgentBlock) -> bool {
     if block.kind != AgentBlockKind::User {
         return false;
     }
