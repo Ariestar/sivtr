@@ -59,32 +59,52 @@ sivtr search "<query>" --provider claude --json --limit 20
 
 Treat `--json` output as structured evidence, not as a free-form transcript.
 
-Inspect these fields first when present:
+`sivtr search --json` returns a wrapper with `query`, `scope`, `cwd`,
+`match_count`, and `results`. Inspect these result fields first:
 
-- `source` or `provider`: where the evidence came from
-- `session`: which thread or run produced it
-- `kind`: command, output, or dialogue
+- `ref`: stable reference for follow-up expansion
+- `kind`: `shell` or `ai`
 - `timestamp`: how recent it is
-- `snippet`: the shortest useful excerpt
+- `title.session`: session title
+- `title.dialogue`: dialogue or command block title, when available
+- `content`: matched line or extracted content
 
-Normalize the result into this internal shape before reasoning about it:
+Expected result item shape:
 
 ```json
 {
-  "source": "terminal|ai",
-  "provider": "codex|claude|pi|opencode",
-  "session": "...",
-  "kind": "command|output|dialogue",
+  "ref": "terminal/current/12/8",
+  "kind": "shell",
   "timestamp": "...",
-  "snippet": "..."
+  "title": {
+    "session": "current shell",
+    "dialogue": "cargo test"
+  },
+  "content": "test result: FAILED"
 }
 ```
 
-If the real output schema differs, keep the same inspection order and map the available fields into the same mental model.
+Use `ref` for precise follow-up. Do not infer provider/session identity from
+display text when a `ref` is available.
 
 ## Expansion Commands
 
 Use expansion after search identifies a target. Prefer small, precise expansions.
+
+### Show a matched ref
+
+Use `show` when search returned a `ref` and you need exact content.
+
+```bash
+sivtr show "<ref>" --json
+sivtr show "terminal/current/12/8" --json
+```
+
+Refs have this shape:
+
+```text
+source/session[/dialogue[/line]]
+```
 
 ### Last command output
 
@@ -124,6 +144,7 @@ Do not copy large ranges unless the task explicitly requires a full transcript.
 - Start with `--limit 20` for normal searches.
 - Use `--limit 30` only for handoff or recap work.
 - Narrow the query before increasing the limit.
+- Prefer `sivtr show "<ref>" --json` when search returns a useful ref.
 - Prefer `sivtr copy out 1 --print` for the latest output.
 - Prefer `sivtr copy 1..3 --print` for a small range.
 - Avoid ranges larger than `1..10` unless the task needs a transcript.
