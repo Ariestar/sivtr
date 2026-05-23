@@ -43,6 +43,9 @@ fn run() -> Result<()> {
         Some(Commands::Search(args)) => {
             commands::search::execute(&args)?;
         }
+        Some(Commands::Show(args)) => {
+            commands::show::execute(&args)?;
+        }
         Some(Commands::Hotkey(cmd)) => {
             commands::hotkey::execute(cmd)?;
         }

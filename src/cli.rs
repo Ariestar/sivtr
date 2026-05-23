@@ -343,6 +343,9 @@ pub enum Commands {
     #[command(after_help = SEARCH_AFTER_HELP)]
     Search(SearchArgs),
 
+    /// Show a captured terminal or AI workspace ref
+    Show(ShowArgs),
+
     /// Manage configuration
     Config(ConfigCommand),
 
@@ -544,6 +547,20 @@ pub struct SearchArgs {
     /// Maximum number of results to print
     #[arg(short = 'l', long, default_value_t = 20)]
     pub limit: usize,
+
+    /// Print machine-readable JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ShowArgs {
+    /// Ref to show, for example `pi/019e4f40/3` or `terminal/current/12/8`.
+    pub reference: String,
+
+    /// Workspace directory used to resolve current AI sessions
+    #[arg(long, value_name = "PATH")]
+    pub cwd: Option<PathBuf>,
 
     /// Print machine-readable JSON
     #[arg(long)]

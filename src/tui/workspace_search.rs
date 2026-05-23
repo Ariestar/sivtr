@@ -291,5 +291,19 @@ fn filter_workspace_session_dialogues(
         .iter()
         .filter_map(|idx| session.copy_units.get(*idx).cloned())
         .collect();
+    filtered.unit_timestamps = dialogue_indices
+        .iter()
+        .filter_map(|idx| session.unit_timestamps.get(*idx).cloned())
+        .collect();
+    filtered.original_dialogue_indices = dialogue_indices
+        .iter()
+        .map(|idx| {
+            session
+                .original_dialogue_indices
+                .get(*idx)
+                .copied()
+                .unwrap_or(*idx)
+        })
+        .collect();
     filtered
 }

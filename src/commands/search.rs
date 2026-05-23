@@ -3,7 +3,10 @@ use serde::Serialize;
 
 use crate::cli::{SearchArgs, SearchScopeArg};
 use crate::commands::copy::current_workspace_sessions;
-use crate::tui::workspace::{WorkspaceSession, WorkspaceSource};
+use crate::commands::workspace_json::{
+    line_ref, workspace_item, workspace_source, WorkspaceJsonItem,
+};
+use crate::tui::workspace::WorkspaceSession;
 use crate::tui::workspace_search::{
     WorkspaceSearchIndex, WorkspaceSearchMatch, WorkspaceSearchScope,
 };
@@ -15,23 +18,16 @@ struct SearchJsonOutput {
     scope: String,
     cwd: String,
     match_count: usize,
-    results: Vec<SearchJsonResult>,
-}
-
-#[derive(Serialize)]
-struct SearchJsonResult {
-    source: String,
-    session: String,
-    dialogue: String,
-    line: usize,
-    snippet: String,
+    results: Vec<WorkspaceJsonItem>,
 }
 
 struct SearchResult<'a> {
     session: &'a WorkspaceSession,
     dialogue_title: &'a str,
+    dialogue_index: usize,
     line_index: usize,
-    snippet: String,
+    timestamp: Option<&'a str>,
+    content: String,
 }
 
 pub fn execute(args: &SearchArgs) -> Result<()> {
@@ -54,12 +50,14 @@ pub fn execute(args: &SearchArgs) -> Result<()> {
             match_count: output.matches.len(),
             results: results
                 .iter()
-                .map(|result| SearchJsonResult {
-                    source: source_name(result.session.source).to_string(),
-                    session: result.session.title.clone(),
-                    dialogue: result.dialogue_title.to_string(),
-                    line: result.line_index + 1,
-                    snippet: result.snippet.clone(),
+                .map(|result| {
+                    workspace_item(
+                        result.session,
+                        line_ref(result.session, result.dialogue_index, result.line_index),
+                        Some(result.dialogue_title.to_string()),
+                        result.timestamp.map(str::to_string),
+                        result.content.clone(),
+                    )
                 })
                 .collect(),
         };
@@ -82,11 +80,14 @@ pub fn execute(args: &SearchArgs) -> Result<()> {
         println!(
             "\n{}. [{}] {}",
             idx + 1,
-            source_name(result.session.source),
+            workspace_source(result.session.source),
             result.session.title
         );
         println!("   dialogue: {}", result.dialogue_title);
-        println!("   line {}: {}", result.line_index + 1, result.snippet);
+        if let Some(timestamp) = result.timestamp {
+            println!("   timestamp: {timestamp}");
+        }
+        println!("   line {}: {}", result.line_index + 1, result.content);
     }
 
     if output.matches.len() > results.len() {
@@ -115,28 +116,31 @@ fn collect_results<'a>(
                 .get(matched.dialogue_index)
                 .map(String::as_str)
                 .unwrap_or("<unknown>");
-            let snippet = session
+            let dialogue_index = session
+                .original_dialogue_indices
+                .get(matched.dialogue_index)
+                .copied()
+                .unwrap_or(matched.dialogue_index);
+            let content = session
                 .units
                 .get(matched.dialogue_index)
                 .and_then(|unit| unit.plain.lines().nth(matched.line_index))
                 .unwrap_or(dialogue_title)
-                .trim()
                 .to_string();
+            let timestamp = session
+                .unit_timestamps
+                .get(matched.dialogue_index)
+                .and_then(|timestamp| timestamp.as_deref());
             Some(SearchResult {
                 session,
                 dialogue_title,
+                dialogue_index,
                 line_index: matched.line_index,
-                snippet,
+                timestamp,
+                content,
             })
         })
         .collect()
-}
-
-fn source_name(source: WorkspaceSource) -> &'static str {
-    match source {
-        WorkspaceSource::Terminal => "terminal",
-        WorkspaceSource::Agent(provider) => provider.command_name(),
-    }
 }
 
 fn search_scope(scope: SearchScopeArg) -> WorkspaceSearchScope {

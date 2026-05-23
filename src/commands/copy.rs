@@ -548,12 +548,15 @@ fn build_lazy_agent_session_choice(
 
     WorkspaceSession {
         source: WorkspaceSource::Agent(provider),
+        ref_id: agent_session_ref_id(info.id.as_deref(), &info.path),
         modified: info.modified,
         title,
         search_title,
         units: Vec::new(),
         copy_units: Vec::new(),
         dialogue_titles: vec!["<loading: press Enter or select a session>".to_string()],
+        unit_timestamps: vec![None],
+        original_dialogue_indices: Vec::new(),
         load: Some(WorkspaceSessionLoad {
             provider,
             path: info.path,
@@ -636,15 +639,20 @@ fn build_agent_session_choice(
         .iter()
         .map(|unit| build_text_preview(&unit.plain))
         .collect();
+    let unit_timestamps = build_agent_unit_timestamps(&session, selection_mode);
+    let original_dialogue_indices = (0..units.len()).collect();
 
     Some(WorkspaceSession {
         source: WorkspaceSource::Agent(source.provider()),
+        ref_id: agent_session_ref_id(session.id.as_deref().or(info.id.as_deref()), &info.path),
         modified: info.modified,
         title,
         search_title,
         units,
         copy_units,
         dialogue_titles,
+        unit_timestamps,
+        original_dialogue_indices,
         load: None,
     })
 }
@@ -715,12 +723,15 @@ fn build_terminal_context_session() -> Result<Option<WorkspaceSession>> {
         .iter()
         .map(IndexedCommandBlock::from_session_entry)
         .collect::<Vec<_>>();
+    let modified = std::fs::metadata(&log_path)
+        .and_then(|metadata| metadata.modified())
+        .unwrap_or_else(|_| SystemTime::now());
     Ok(build_terminal_workspace_session(
         &blocks,
         CopyMode::Both,
         true,
         None,
-        SystemTime::now(),
+        modified,
     ))
 }
 
@@ -757,21 +768,28 @@ fn build_terminal_workspace_session(
     let mut units = Vec::with_capacity(entries.len());
     let mut copy_units = Vec::with_capacity(entries.len());
     let mut dialogue_titles = Vec::with_capacity(entries.len());
-    for (unit, copy, title) in entries {
+    let mut unit_timestamps = Vec::with_capacity(entries.len());
+    let mut original_dialogue_indices = Vec::with_capacity(entries.len());
+    for (idx, (unit, copy, title)) in entries.into_iter().enumerate() {
         units.push(unit);
         copy_units.push(copy);
         dialogue_titles.push(title);
+        unit_timestamps.push(None);
+        original_dialogue_indices.push(idx);
     }
     let block_count = dialogue_titles.len();
     let title = format!("current shell  [{block_count} blocks]");
     Some(WorkspaceSession {
         source: WorkspaceSource::Terminal,
+        ref_id: "current".to_string(),
         modified,
         search_title: title.clone(),
         title,
         units,
         copy_units,
         dialogue_titles,
+        unit_timestamps,
+        original_dialogue_indices,
         load: None,
     })
 }
@@ -1246,6 +1264,18 @@ fn short_agent_id(id: &str) -> String {
     id.chars().take(8).collect()
 }
 
+fn agent_session_ref_id(id: Option<&str>, path: &std::path::Path) -> String {
+    id.map(short_agent_id)
+        .filter(|id| !id.is_empty())
+        .or_else(|| {
+            path.file_stem()
+                .and_then(|name| name.to_str())
+                .map(short_agent_id)
+                .filter(|id| !id.is_empty())
+        })
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
 fn is_real_user_block(block: &AgentBlock) -> bool {
     if block.kind != AgentBlockKind::User {
         return false;
@@ -1446,6 +1476,44 @@ fn build_agent_kind_units(session: &AgentSession, kind: AgentBlockKind) -> Vec<T
             ansi: String::new(),
         })
         .collect()
+}
+
+fn build_agent_unit_timestamps(
+    session: &AgentSession,
+    selection_mode: AgentSelection,
+) -> Vec<Option<String>> {
+    match selection_mode {
+        AgentSelection::LastTurn => agent_turn_ranges(&session.blocks)
+            .into_iter()
+            .map(|(start, end)| first_block_timestamp(&session.blocks[start..end]))
+            .collect(),
+        AgentSelection::LastAssistant => {
+            build_agent_kind_timestamps(session, AgentBlockKind::Assistant)
+        }
+        AgentSelection::LastUser => build_agent_kind_timestamps(session, AgentBlockKind::User),
+        AgentSelection::LastTool => {
+            build_agent_kind_timestamps(session, AgentBlockKind::ToolOutput)
+        }
+        AgentSelection::LastBlocks(_) | AgentSelection::All => {
+            vec![first_block_timestamp(&session.blocks)]
+        }
+    }
+}
+
+fn build_agent_kind_timestamps(
+    session: &AgentSession,
+    kind: AgentBlockKind,
+) -> Vec<Option<String>> {
+    session
+        .blocks
+        .iter()
+        .filter(|block| block.kind == kind)
+        .map(|block| block.timestamp.clone())
+        .collect()
+}
+
+fn first_block_timestamp(blocks: &[AgentBlock]) -> Option<String> {
+    blocks.iter().find_map(|block| block.timestamp.clone())
 }
 
 pub(super) fn build_text_preview(text: &str) -> String {

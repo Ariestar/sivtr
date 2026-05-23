@@ -92,12 +92,15 @@ pub(crate) struct WorkspaceSessionLoad {
 #[derive(Clone, Debug)]
 pub(crate) struct WorkspaceSession {
     pub(crate) source: WorkspaceSource,
+    pub(crate) ref_id: String,
     pub(crate) modified: SystemTime,
     pub(crate) title: String,
     pub(crate) search_title: String,
     pub(crate) units: Vec<TextPair>,
     pub(crate) copy_units: Vec<WorkspaceCopyParts>,
     pub(crate) dialogue_titles: Vec<String>,
+    pub(crate) unit_timestamps: Vec<Option<String>>,
+    pub(crate) original_dialogue_indices: Vec<usize>,
     pub(crate) load: Option<WorkspaceSessionLoad>,
 }
 
