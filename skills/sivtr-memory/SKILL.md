@@ -35,13 +35,14 @@ verify current files or commands before making claims about current state.
 ## Default Retrieval Workflow
 
 1. Convert the user's vague reference into a query.
-2. Search with a small limit and JSON output. When the user means terminal
-   evidence, use `--shell`; when the user means AI/agent conversation evidence,
-   use `--agent`; when the user names a provider or time window, use
-   `--provider` and `--recent`/`--since` instead of putting those words into the
-   content query.
+2. Search with a small limit and JSON output. Put the source/layer in the
+   target selector (`terminal`, `agent`, `pi`, `codex`, `claude`, or
+   `opencode`) and put content terms in `--match`. Use `--last`/`--since` for
+   time windows and `--in` for field constraints.
    - For "latest terminal error" / "最新终端报错", start with:
-     `sivtr search "Error|error|failed|fatal|not found|External command failed" --shell --json --limit 20`.
+     `sivtr search terminal --status failure --json --latest 1`.
+   - If status is unknown or insufficient, broaden with:
+     `sivtr search terminal --match "Error|error|failed|fatal|not found|External command failed" --json --latest 20`.
 3. Inspect result source/session/dialogue/snippet.
 4. If the snippet is enough, answer with evidence.
 5. If more context is needed, expand the returned ref with `sivtr show ... --json` or run a narrower second search.

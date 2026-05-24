@@ -34,37 +34,21 @@ impl TimeRange {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum RecentFilter {
-    Count(usize),
-    Since(DateTime<Utc>),
-}
-
-pub(crate) fn parse_recent_filter(value: &str, now: DateTime<Utc>) -> Result<RecentFilter> {
+pub(crate) fn parse_duration_filter(value: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        bail!("--recent requires a count or duration");
-    }
-
-    if trimmed.chars().all(|ch| ch.is_ascii_digit()) {
-        let count = trimmed
-            .parse::<usize>()
-            .with_context(|| format!("Invalid --recent count: {trimmed}"))?;
-        if count == 0 {
-            bail!("--recent count must be greater than zero");
-        }
-        return Ok(RecentFilter::Count(count));
+        bail!("--last requires a duration");
     }
 
     let duration =
-        parse_duration(trimmed).with_context(|| format!("Invalid --recent duration: {trimmed}"))?;
-    Ok(RecentFilter::Since(now - duration))
+        parse_duration(trimmed).with_context(|| format!("Invalid --last duration: {trimmed}"))?;
+    Ok(now - duration)
 }
 
 pub(crate) fn build_time_range(
     since: Option<&str>,
     until: Option<&str>,
-    recent: Option<&str>,
+    last: Option<&str>,
     now: DateTime<Utc>,
 ) -> Result<(Option<TimeRange>, Option<usize>)> {
     let mut since_time = match since {
@@ -81,15 +65,10 @@ pub(crate) fn build_time_range(
         ),
         None => None,
     };
-    let mut recent_count = None;
 
-    if let Some(value) = recent {
-        match parse_recent_filter(value, now)? {
-            RecentFilter::Count(count) => recent_count = Some(count),
-            RecentFilter::Since(recent_since) => {
-                since_time = Some(since_time.map_or(recent_since, |since| since.max(recent_since)));
-            }
-        }
+    if let Some(value) = last {
+        let last_since = parse_duration_filter(value, now)?;
+        since_time = Some(since_time.map_or(last_since, |since| since.max(last_since)));
     }
 
     if let (Some(since), Some(until)) = (since_time, until_time) {
@@ -107,7 +86,7 @@ pub(crate) fn build_time_range(
         None
     };
 
-    Ok((range, recent_count))
+    Ok((range, None))
 }
 
 fn parse_time_object(value: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>> {
@@ -205,18 +184,12 @@ mod tests {
     }
 
     #[test]
-    fn parses_recent_count_or_duration() {
+    fn parses_last_duration() {
         assert_eq!(
-            parse_recent_filter("20", now()).unwrap(),
-            RecentFilter::Count(20)
-        );
-        assert_eq!(
-            parse_recent_filter("2h", now()).unwrap(),
-            RecentFilter::Since(
-                DateTime::parse_from_rfc3339("2026-05-23T10:00:00Z")
-                    .unwrap()
-                    .with_timezone(&Utc)
-            )
+            parse_duration_filter("2h", now()).unwrap(),
+            DateTime::parse_from_rfc3339("2026-05-23T10:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc)
         );
     }
 
@@ -237,7 +210,7 @@ mod tests {
     }
 
     #[test]
-    fn combines_since_with_recent_duration_using_newer_boundary() {
+    fn combines_since_with_last_duration_using_newer_boundary() {
         let (range, recent_count) =
             build_time_range(Some("2026-05-23T09:00:00Z"), None, Some("2h"), now()).unwrap();
 

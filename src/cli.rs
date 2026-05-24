@@ -7,34 +7,78 @@ use std::str::FromStr;
 pub(crate) const TIME_FILTER_HELP: &str = "Accepts RFC3339 timestamps, Unix seconds/milliseconds, or relative durations like 30m, 2h, 7d.";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SearchScopeArg {
+pub enum SearchFieldArg {
     #[default]
     Content,
-    Dialogue,
+    Title,
     Session,
+    Input,
+    Output,
+    Command,
+    All,
 }
 
-impl FromStr for SearchScopeArg {
+impl FromStr for SearchFieldArg {
     type Err = String;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value.to_ascii_lowercase().as_str() {
             "content" => Ok(Self::Content),
-            "dialogue" | "dialog" | "title" => Ok(Self::Dialogue),
+            "title" | "dialogue" | "dialog" => Ok(Self::Title),
             "session" => Ok(Self::Session),
+            "input" => Ok(Self::Input),
+            "output" => Ok(Self::Output),
+            "command" | "cmd" => Ok(Self::Command),
+            "all" => Ok(Self::All),
             _ => Err(format!(
-                "unknown search scope `{value}`; expected content, dialogue, or session"
+                "unknown search field `{value}`; expected content, title, session, input, output, command, or all"
             )),
         }
     }
 }
 
-impl std::fmt::Display for SearchScopeArg {
+impl std::fmt::Display for SearchFieldArg {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::Content => "content",
-            Self::Dialogue => "dialogue",
+            Self::Title => "title",
             Self::Session => "session",
+            Self::Input => "input",
+            Self::Output => "output",
+            Self::Command => "command",
+            Self::All => "all",
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SearchStatusArg {
+    Success,
+    Failure,
+    Unknown,
+}
+
+impl FromStr for SearchStatusArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "success" | "succeeded" | "ok" | "passed" => Ok(Self::Success),
+            "failure" | "failed" | "fail" | "error" => Ok(Self::Failure),
+            "unknown" => Ok(Self::Unknown),
+            _ => Err(format!(
+                "unknown search status `{value}`; expected success, failure, or unknown"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for SearchStatusArg {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Success => "success",
+            Self::Failure => "failure",
+            Self::Unknown => "unknown",
         })
     }
 }
@@ -283,27 +327,27 @@ Examples:
 ";
 
 const SEARCH_AFTER_HELP: &str = r##"
-Scopes:
-  --scope content    Search dialogue/content text (default)
-  --scope dialogue   Search dialogue titles
-  --scope session    Search session titles
+Target selectors:
+  terminal[/<session>[/<record>[/<line>]]]  Search terminal command records
+  agent[/<session>[/<turn>[/<line>]]]       Search all AI/agent records
+  <provider>[/<session>[/<turn>[/<line>]]] Search one provider: codex, claude, pi, opencode
+  Use * for wildcard path segments, e.g. terminal/*/3 or pi/*/*.
 
-Kind filters:
-  --shell            Search terminal command records only
-  --agent            Search AI/agent conversation records only
-
-Defaults:
-  `sivtr search` searches current-workspace AI sessions plus current terminal capture.
-  Queries are case-insensitive regexes, matching the workspace picker search behavior.
+Filters:
+  --match <regex>       Case-insensitive regex content filter
+  --in <field>          content, title, session, input, output, command, or all
+  --status <status>     success, failure, or unknown
+  --last <duration>     Time window, e.g. 30m, 2h, 7d
+  --since/--until       Absolute or relative time bounds
+  --latest <n>          Return the latest n matching records
 
 Examples:
-  sivtr search panic
-  sivtr search Error --shell --json --limit 20
-  sivtr search decision --agent --provider pi --json
-  sivtr search "workspace picker" --scope dialogue
-  sivtr search sivtr --scope session --provider codex
-  sivtr search "build error" --recent 2h --json --limit 20
-  sivtr search "panic" --since 2026-05-23T00:00:00Z --until 2026-05-24
+  sivtr search terminal --status failure --latest 1 --json
+  sivtr search terminal --match "panic|failed" --latest 20 --json
+  sivtr search pi --match "merge|conflict" --latest 20 --json
+  sivtr search pi/019e5941 --match "cargo test" --json
+  sivtr search pi/019e5941/7 --json
+  sivtr search terminal/session_13104/3/12 --json
 "##;
 
 const HOTKEY_AFTER_HELP: &str = "\
@@ -545,30 +589,21 @@ pub struct DiffArgs {
 }
 
 #[derive(Args, Debug, Clone)]
-#[command(group(
-    ArgGroup::new("search_kind")
-        .args(["shell", "agent"])
-        .multiple(false)
-))]
 pub struct SearchArgs {
-    /// Case-insensitive regex query.
-    pub query: String,
+    /// Search target, e.g. terminal, agent, pi, pi/<session>/<turn>, or terminal/<session>/<record>
+    pub target: String,
 
-    /// Search target: content, dialogue, or session
-    #[arg(long, default_value_t = SearchScopeArg::default(), value_name = "SCOPE")]
-    pub scope: SearchScopeArg,
+    /// Case-insensitive regex content filter
+    #[arg(long = "match", value_name = "REGEX")]
+    pub match_: Option<String>,
 
-    /// AI provider sessions to search
-    #[arg(long, default_value_t = HotkeyProviderSelection::default(), value_name = "PROVIDER")]
-    pub provider: HotkeyProviderSelection,
+    /// Field to match: content, title, session, input, output, command, or all
+    #[arg(long = "in", default_value_t = SearchFieldArg::default(), value_name = "FIELD")]
+    pub in_field: SearchFieldArg,
 
-    /// Search terminal command records only
-    #[arg(long, conflicts_with = "provider")]
-    pub shell: bool,
-
-    /// Search AI/agent conversation records only
-    #[arg(long)]
-    pub agent: bool,
+    /// Record status filter: success, failure, or unknown
+    #[arg(long, value_name = "STATUS")]
+    pub status: Option<SearchStatusArg>,
 
     /// Workspace directory used to resolve current AI sessions
     #[arg(long, value_name = "PATH")]
@@ -582,13 +617,17 @@ pub struct SearchArgs {
     #[arg(long, value_name = "TIME", help = TIME_FILTER_HELP)]
     pub until: Option<String>,
 
-    /// Only search recent content. Accepts a count or duration, e.g. 20, 30m, 2h, 7d.
-    #[arg(long, value_name = "COUNT|DURATION")]
-    pub recent: Option<String>,
+    /// Only search content within this recent duration, e.g. 30m, 2h, 7d.
+    #[arg(long, value_name = "DURATION")]
+    pub last: Option<String>,
+
+    /// Return the latest N matching records
+    #[arg(long, value_name = "N")]
+    pub latest: Option<usize>,
 
     /// Maximum number of results to print
-    #[arg(short = 'l', long, default_value_t = 20)]
-    pub limit: usize,
+    #[arg(short = 'l', long, value_name = "N")]
+    pub limit: Option<usize>,
 
     /// Print machine-readable JSON
     #[arg(long)]
@@ -1001,18 +1040,10 @@ mod tests {
 
     #[test]
     fn opencode_provider_selection_is_supported() {
-        let cli =
-            Cli::try_parse_from(["sivtr", "search", "needle", "--provider", "opencode"]).unwrap();
-
-        match cli.command {
-            Some(Commands::Search(args)) => {
-                assert_eq!(
-                    args.provider,
-                    HotkeyProviderSelection::provider(AgentProvider::OpenCode)
-                );
-            }
-            _ => panic!("expected search command"),
-        }
+        assert_eq!(
+            "opencode".parse::<HotkeyProviderSelection>().unwrap(),
+            HotkeyProviderSelection::provider(AgentProvider::OpenCode)
+        );
     }
 
     #[test]
@@ -1033,29 +1064,24 @@ mod tests {
 
     #[test]
     fn pi_provider_selection_is_supported() {
-        let cli = Cli::try_parse_from(["sivtr", "search", "needle", "--provider", "pi"]).unwrap();
-
-        match cli.command {
-            Some(Commands::Search(args)) => {
-                assert_eq!(
-                    args.provider,
-                    HotkeyProviderSelection::provider(AgentProvider::Pi)
-                );
-            }
-            _ => panic!("expected search command"),
-        }
+        assert_eq!(
+            "pi".parse::<HotkeyProviderSelection>().unwrap(),
+            HotkeyProviderSelection::provider(AgentProvider::Pi)
+        );
     }
 
     #[test]
-    fn search_accepts_scope_and_json() {
+    fn search_accepts_target_filters_and_json() {
         let cli = Cli::try_parse_from([
             "sivtr",
             "search",
+            "pi/019e5941",
+            "--match",
             "workspace picker",
-            "--scope",
-            "dialogue",
-            "--provider",
-            "codex",
+            "--in",
+            "title",
+            "--status",
+            "unknown",
             "--json",
             "--limit",
             "5",
@@ -1064,91 +1090,61 @@ mod tests {
 
         match cli.command {
             Some(Commands::Search(args)) => {
-                assert_eq!(args.query, "workspace picker");
-                assert_eq!(args.scope, SearchScopeArg::Dialogue);
-                assert_eq!(
-                    args.provider,
-                    HotkeyProviderSelection::provider(AgentProvider::Codex)
-                );
+                assert_eq!(args.target, "pi/019e5941");
+                assert_eq!(args.match_.as_deref(), Some("workspace picker"));
+                assert_eq!(args.in_field, SearchFieldArg::Title);
+                assert_eq!(args.status, Some(SearchStatusArg::Unknown));
                 assert!(args.json);
-                assert!(!args.shell);
-                assert!(!args.agent);
-                assert_eq!(args.limit, 5);
+                assert_eq!(args.limit, Some(5));
                 assert_eq!(args.since, None);
                 assert_eq!(args.until, None);
-                assert_eq!(args.recent, None);
+                assert_eq!(args.last, None);
+                assert_eq!(args.latest, None);
             }
             _ => panic!("expected search command"),
         }
     }
 
     #[test]
-    fn search_accepts_time_filters() {
+    fn search_accepts_time_and_latest_filters() {
         let cli = Cli::try_parse_from([
             "sivtr",
             "search",
-            "panic",
-            "--recent",
+            "terminal",
+            "--last",
             "2h",
             "--since",
             "2026-05-23T00:00:00Z",
             "--until",
             "2026-05-24",
+            "--latest",
+            "1",
         ])
         .unwrap();
 
         match cli.command {
             Some(Commands::Search(args)) => {
-                assert_eq!(args.recent.as_deref(), Some("2h"));
+                assert_eq!(args.last.as_deref(), Some("2h"));
                 assert_eq!(args.since.as_deref(), Some("2026-05-23T00:00:00Z"));
                 assert_eq!(args.until.as_deref(), Some("2026-05-24"));
+                assert_eq!(args.latest, Some(1));
             }
             _ => panic!("expected search command"),
         }
     }
 
     #[test]
-    fn search_accepts_shell_and_agent_alias_filters() {
-        let shell = Cli::try_parse_from(["sivtr", "search", "Error", "--shell", "--json"]).unwrap();
-
-        match shell.command {
-            Some(Commands::Search(args)) => {
-                assert!(args.shell);
-                assert!(!args.agent);
-                assert!(args.json);
-            }
-            _ => panic!("expected search command"),
-        }
-
-        let agent = Cli::try_parse_from(["sivtr", "search", "decision", "--agent"]).unwrap();
-
-        match agent.command {
-            Some(Commands::Search(args)) => {
-                assert!(args.agent);
-                assert!(!args.shell);
-            }
-            _ => panic!("expected search command"),
-        }
+    fn search_rejects_old_filter_flags() {
+        assert!(Cli::try_parse_from(["sivtr", "search", "needle", "--shell"]).is_err());
+        assert!(Cli::try_parse_from(["sivtr", "search", "needle", "--agent"]).is_err());
+        assert!(Cli::try_parse_from(["sivtr", "search", "needle", "--provider", "pi"]).is_err());
+        assert!(Cli::try_parse_from(["sivtr", "search", "needle", "--scope", "content"]).is_err());
+        assert!(Cli::try_parse_from(["sivtr", "search", "needle", "--recent", "2h"]).is_err());
     }
 
     #[test]
-    fn search_rejects_shell_and_agent_together() {
-        let result = Cli::try_parse_from(["sivtr", "search", "needle", "--shell", "--agent"]);
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn search_rejects_provider_with_shell_filter() {
-        let result =
-            Cli::try_parse_from(["sivtr", "search", "needle", "--shell", "--provider", "pi"]);
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn search_rejects_unknown_scope() {
-        let result = Cli::try_parse_from(["sivtr", "search", "needle", "--scope", "unknown"]);
+    fn search_rejects_unknown_field() {
+        let result = Cli::try_parse_from(["sivtr", "search", "needle", "--in", "unknown"]);
 
         assert!(result.is_err());
     }
