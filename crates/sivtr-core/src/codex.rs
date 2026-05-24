@@ -690,8 +690,16 @@ mod tests {
 
         let previous_codex_home = env::var_os("CODEX_HOME");
         let previous_dirs = env::var_os("SIVTR_CODEX_SESSION_DIRS");
+        let previous_xdg_config_home = env::var_os("XDG_CONFIG_HOME");
+        let previous_appdata = env::var_os("APPDATA");
+        let config_home = temp.path().join("config-home");
+        std::fs::create_dir_all(&config_home).unwrap();
         env::set_var("CODEX_HOME", &codex_home);
         env::set_var("SIVTR_CODEX_SESSION_DIRS", exported_root.join("sessions"));
+        env::set_var("XDG_CONFIG_HOME", &config_home);
+        if cfg!(windows) {
+            env::set_var("APPDATA", &config_home);
+        }
 
         let sessions = CodexProvider.list_recent_sessions(None).unwrap();
 
@@ -702,6 +710,14 @@ mod tests {
         match previous_dirs {
             Some(value) => env::set_var("SIVTR_CODEX_SESSION_DIRS", value),
             None => env::remove_var("SIVTR_CODEX_SESSION_DIRS"),
+        }
+        match previous_xdg_config_home {
+            Some(value) => env::set_var("XDG_CONFIG_HOME", value),
+            None => env::remove_var("XDG_CONFIG_HOME"),
+        }
+        match previous_appdata {
+            Some(value) => env::set_var("APPDATA", value),
+            None => env::remove_var("APPDATA"),
         }
 
         assert_eq!(sessions.len(), 2);
