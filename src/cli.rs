@@ -522,6 +522,9 @@ pub enum Commands {
     /// Export local Codex session files into a shared read-only tree
     Codex(CodexCommand),
 
+    /// Show version and build diagnostics
+    Version(VersionArgs),
+
     /// Clear session logs
     Clear(ClearArgs),
 
@@ -755,6 +758,13 @@ pub struct ShowArgs {
 }
 
 #[derive(Args, Debug, Clone, Default)]
+pub struct VersionArgs {
+    /// Print binary path, build metadata, and local repo diagnostics
+    #[arg(long)]
+    pub verbose: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
 pub struct ClearArgs {
     /// Clear all recorded session logs and state files
     #[arg(short = 'a', long = "all")]
@@ -982,6 +992,16 @@ mod tests {
         match cli.command {
             Some(Commands::Co(args)) => assert!(args.common.ansi),
             _ => panic!("expected co command"),
+        }
+    }
+
+    #[test]
+    fn version_accepts_verbose() {
+        let cli = Cli::try_parse_from(["sivtr", "version", "--verbose"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Version(args)) => assert!(args.verbose),
+            _ => panic!("expected version command"),
         }
     }
 

@@ -84,6 +84,9 @@ fn run() -> Result<()> {
         Some(Commands::Diff(args)) => {
             run_diff(&args)?;
         }
+        Some(Commands::Version(args)) => {
+            commands::version::execute(args.verbose)?;
+        }
         Some(Commands::Clear(args)) => {
             commands::clear::execute(args.all)?;
         }

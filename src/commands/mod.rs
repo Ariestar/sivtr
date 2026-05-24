@@ -17,3 +17,4 @@ pub mod run;
 pub mod search;
 pub mod show;
 pub mod time_filter;
+pub mod version;
