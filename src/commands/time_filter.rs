@@ -179,7 +179,7 @@ fn parse_unix_timestamp(value: &str) -> Option<DateTime<Utc>> {
         number
     };
     let nanos = if value.len() >= 13 {
-        ((number % 1000).abs() as u32) * 1_000_000
+        (number % 1000).unsigned_abs() as u32 * 1_000_000
     } else {
         0
     };
