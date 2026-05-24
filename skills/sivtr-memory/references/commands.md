@@ -1,150 +1,112 @@
 # Command Cookbook
 
-Use these commands as starting points. This file is the single source for `sivtr` command syntax.
-Prefer small, targeted queries over dumping large histories.
+Use this file as the single source for `sivtr` syntax. The recommended path is `search -> show -> copy`.
 
-## Search Commands
+Work records come in two kinds:
 
-### General search
+- `shell` for terminal records
+- `ai` for agent records
 
-```bash
-sivtr search "<case-insensitive-regex>" --json --limit 20
-```
+## Search
 
-### Search terminal + AI memory for common errors
+Start small and stay targeted.
 
 ```bash
-sivtr search "error|failed|panic|Traceback|Exception|exit code|could not compile|FAILED" --json --limit 20
+sivtr search "error|failed|panic|Traceback|Exception|exit code|FAILED" --json -l 20
+sivtr search "decision|TODO|next step|blocked" --scope dialogue --provider codex --json -l 20
+sivtr search "workspace picker" --scope session --json -l 20
+sivtr search "build error" --recent 2h --json -l 20
+sivtr search "panic" --since 2026-05-23T00:00:00Z --until 2026-05-24 --json
 ```
 
-### Rust failures
+Search defaults:
 
-```bash
-sivtr search "error\\[E[0-9]+\\]|panicked|test result: FAILED|could not compile|borrow|lifetime" --json --limit 20
-```
+- current workspace AI sessions
+- current terminal capture, when available
+- case-insensitive regex matching
 
-### JavaScript / TypeScript failures
+Useful flags:
 
-```bash
-sivtr search "TypeError|ReferenceError|TS[0-9]+|npm ERR|pnpm|vite|webpack|ELIFECYCLE|failed" --json --limit 20
-```
+- `--scope content|dialogue|session`
+- `--provider all|codex|claude|opencode|pi`
+- `--cwd PATH`
+- `--recent COUNT|DURATION` such as `20`, `30m`, `2h`, or `7d`
+- `--since TIME` and `--until TIME`
+- `-l, --limit N` with a default of `20`
+- `--json` for machine use
 
-### Python failures
+Time filters accept RFC3339, Unix seconds or milliseconds, `YYYY-MM-DD`, `YYYY-MM-DD HH:MM:SS`, `YYYY-MM-DDTHH:MM:SS`, or relative durations through `--recent`.
 
-```bash
-sivtr search "Traceback|ModuleNotFoundError|ImportError|AssertionError|pytest|FAILED|Exception" --json --limit 20
-```
+## JSON Output
 
-### Previous decisions or AI discussion
+`sivtr search --json` returns a wrapper with:
 
-```bash
-sivtr search "lazy load|workspace TUI|metadata scan|decision|TODO|next step" --json --limit 20
-```
+- `query`
+- `scope`
+- `cwd`
+- `match_count`
+- `results`
 
-### Search titles instead of content
+Each result has:
 
-```bash
-sivtr search "workspace picker" --scope session --json --limit 20
-sivtr search "cargo test" --scope dialogue --json --limit 20
-```
+- `ref`
+- `kind` (`shell` or `ai`)
+- `timestamp`
+- `title.session`
+- `title.dialogue`
+- `content`
 
-### Provider-specific search
-
-```bash
-sivtr search "<query>" --provider codex --json --limit 20
-sivtr search "<query>" --provider claude --json --limit 20
-```
-
-## JSON Handling
-
-Treat `--json` output as structured evidence, not as a free-form transcript.
-
-`sivtr search --json` returns a wrapper with `query`, `scope`, `cwd`,
-`match_count`, and `results`. Inspect these result fields first:
-
-- `ref`: stable reference for follow-up expansion
-- `kind`: `shell` or `ai`
-- `timestamp`: how recent it is
-- `title.session`: session title
-- `title.dialogue`: dialogue or command block title, when available
-- `content`: matched line or extracted content
-
-Expected result item shape:
+Example:
 
 ```json
 {
-  "ref": "terminal/current/12/8",
-  "kind": "shell",
-  "timestamp": "...",
-  "title": {
-    "session": "current shell",
-    "dialogue": "cargo test"
-  },
-  "content": "test result: FAILED"
+  "query": "panic",
+  "scope": "content",
+  "cwd": "/home/shiro/Projects/sivtr",
+  "match_count": 1,
+  "results": [
+    {
+      "ref": "terminal/current/12/8",
+      "kind": "shell",
+      "timestamp": "2026-05-24T10:11:12Z",
+      "title": {
+        "session": "current",
+        "dialogue": "cargo test"
+      },
+      "content": "test result: FAILED"
+    }
+  ]
 }
 ```
 
-Use `ref` for precise follow-up. Do not infer provider/session identity from
-display text when a `ref` is available.
+## Show
 
-## Expansion Commands
-
-Use expansion after search identifies a target. Prefer small, precise expansions.
-
-### Show a matched ref
-
-Use `show` when search returned a `ref` and you need exact content.
+Use `show` to expand an exact ref.
 
 ```bash
-sivtr show "<ref>" --json
-sivtr show "terminal/current/12/8" --json
+sivtr show "terminal/current/12"
+sivtr show "terminal/current/12/8"
+sivtr show "pi/019e4f40/3"
+sivtr show "claude/abcdef12/2/4"
 ```
 
-Refs have this shape:
+Ref shapes:
 
-```text
-source/session[/dialogue[/line]]
-```
+- `terminal/<session>/<record>[/line]`
+- `<provider>/<session>/<turn>[/line]`
 
-### Last command output
+`show --json` returns the same item shape as search results, with exact content for the selected ref or line.
+
+## Copy
+
+Use `copy` when you need the raw text behind recent terminal blocks or a provider session.
+
+Prefer `--print` for agents.
 
 ```bash
 sivtr copy out 1 --print
-```
-
-### Last command input + output
-
-```bash
 sivtr copy 1 --print
-```
-
-### Recent command list only
-
-```bash
 sivtr copy cmd 1..10 --print
 ```
 
-### A small recent range
-
-```bash
-sivtr copy 1..3 --print
-```
-
-Do not copy large ranges unless the task explicitly requires a full transcript.
-
-## Query Construction Tips
-
-- Use the exact tool name when known: `cargo test`, `pytest`, `npm ERR`, `wrangler deploy`.
-- Include high-signal error tokens: `panic`, `Traceback`, `TS2307`, `error[E`, `exit code`.
-- Search for decision words when reconstructing context: `decision`, `defer`, `blocked`, `next step`, `TODO`.
-- Start with `--limit 20`; increase only if the result set is clearly incomplete.
-
-## Token Budget
-
-- Start with `--limit 20` for normal searches.
-- Use `--limit 30` only for handoff or recap work.
-- Narrow the query before increasing the limit.
-- Prefer `sivtr show "<ref>" --json` when search returns a useful ref.
-- Prefer `sivtr copy out 1 --print` for the latest output.
-- Prefer `sivtr copy 1..3 --print` for a small range.
-- Avoid ranges larger than `1..10` unless the task needs a transcript.
+Use interactive picker flags only when the user wants interaction.

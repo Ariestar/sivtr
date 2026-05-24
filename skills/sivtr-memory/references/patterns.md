@@ -1,66 +1,64 @@
 # Patterns
 
-Use this file when you need to turn a vague user request into a retrieval plan.
-Command syntax itself lives in `references/commands.md`.
+Use this file when a user intent needs a retrieval plan. Command syntax lives in `references/commands.md`.
 
 ## Recent failure
 
-When the user says the last command failed, search for the likely error first.
+Search error terms first.
 
-- Start with the error search from `commands.md`
-- Narrow by tool or language if the project is obvious
-- If search returns a useful `ref`, expand it with `sivtr show "<ref>" --json`
-- If there is no useful ref and the latest terminal output matters, expand only the latest output
-- Then inspect the related files and verify locally
+1. Run the error search from `commands.md`.
+2. Narrow by tool or language if the project is obvious.
+3. `show` the strongest ref.
+4. Verify the related file or test before changing code.
 
 ## Continue work
 
-When the user says "continue", reconstruct the active thread before guessing.
+Reconstruct the active thread before guessing.
 
-- Search for `next step`, `TODO`, `blocked`, `decision`, `commit`, `test result`, `passed`, and `failed`
-- Use returned refs to expand only the most relevant dialogue or line
-- If one thread is obvious, summarize it and keep going
-- If more than one thread is plausible, ask the user which one to continue
+1. Search for `next step`, `TODO`, `blocked`, `decision`, `commit`, `test result`, `passed`, and `failed`.
+2. Expand only the most relevant ref.
+3. Summarize the active state, then continue.
+4. Ask which thread to continue only if more than one is plausible.
 
 ## Prior decision
 
-When the user asks why something was chosen earlier:
+Treat memory as intent history, not current code truth.
 
-- Search for the decision terms and related discussion
-- Use refs to expand the relevant prior dialogue when the matched line is too small
-- Treat the result as intent history, not current code truth
-- Verify the code or tests before making a claim about current state
+1. Search for decision terms and related discussion.
+2. Expand the exact prior ref when the snippet is too small.
+3. Verify code or tests before making a claim about current state.
 
 ## Handoff
 
-When another agent needs to continue the work:
+When another agent needs to continue:
 
-- Search for goal, next step, decisions, and validation evidence
-- Expand refs for the few strongest matches
-- Pull only a small command range when refs do not capture the needed terminal context
-- Report goal, current state, evidence, tests, risks, and next step
+1. Search for goal, next step, decisions, and validation evidence.
+2. Expand the few strongest refs.
+3. Report goal, current state, evidence, tests, risks, and next step.
 
 ## Recap
 
-When the user wants a summary of what happened:
+When the user wants a summary:
 
-- Search for successful and failed validation
-- Search for decisions and measurable changes
-- Expand only refs that anchor the timeline
-- Produce a compact timeline with evidence, not a transcript dump
+1. Search for successful and failed validation.
+2. Search for decisions and measurable changes.
+3. Expand only the refs that anchor the timeline.
+4. Return a compact timeline, not a transcript dump.
 
 ## Missing memory
 
-When no useful evidence is found:
+When nothing useful is found:
 
-- Say that sivtr did not find matching local memory
-- State the specific missing fact
-- Either reproduce the issue locally or ask the user for the missing source
+1. Say sivtr did not find matching local memory.
+2. State the specific missing fact.
+3. Reproduce the issue locally or ask for the missing source.
 
-## Permission required
+## Copy only when needed
 
-When the task involves deletion, reset, or config mutation:
+Use `copy` only when the raw block is the useful unit.
 
-- Search for context if helpful
-- Stop before the destructive step
-- Ask for explicit confirmation with the exact target
+- command text for prompts or another tool
+- a small terminal range for a handoff
+- a provider transcript when `show` is not enough
+
+Keep copied ranges small.
