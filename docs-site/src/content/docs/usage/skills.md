@@ -53,10 +53,11 @@ This is the agent-facing expression of `sivtr`'s product model: local evidence f
 
 ## How an agent should use sivtr memory
 
-For non-interactive agent workflows, prefer commands that print results instead of opening pickers or mutating the clipboard:
+For non-interactive agent workflows, prefer commands that print results instead of opening pickers or mutating the clipboard. Choose the search format for the job: `timeline`/`compact`/`md` are often easier to reason over, while `json` is best when a program will parse refs and fields.
 
 ```bash
-sivtr search "error|failed|panic|Traceback|Exception|exit code|FAILED" --json --limit 20
+sivtr search terminal --match "error|failed|panic|Traceback|Exception|exit code|FAILED" --format timeline --limit 20
+sivtr search terminal --status failure --latest 1 --format json
 sivtr copy out 1 --print
 sivtr copy cmd 1..10 --print
 sivtr show terminal/current/2 --json

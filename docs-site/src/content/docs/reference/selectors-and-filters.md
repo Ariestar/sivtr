@@ -106,7 +106,7 @@ Plain text remains the default because it is stable for search, issue reports, a
 
 ## Workspace refs
 
-`search --json` emits refs that `show` can print:
+`search --format json` emits refs that `show` can print:
 
 ```text
 source/session[/dialogue[/line]]

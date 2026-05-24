@@ -35,14 +35,16 @@ verify current files or commands before making claims about current state.
 ## Default Retrieval Workflow
 
 1. Convert the user's vague reference into a query.
-2. Search with a small limit and JSON output. Put the source/layer in the
+2. Search with a small limit and a format that fits the task. Put the source/layer in the
    target selector (`terminal`, `agent`, `pi`, `codex`, `claude`, or
    `opencode`) and put content terms in `--match`. Use `--last`/`--since` for
-   time windows and `--in` for field constraints.
+   time windows and `--in` for field constraints. Use `--format json` when you
+   need structured fields; use `timeline`, `compact`, or `md` when that is
+   easier to reason over.
    - For "latest terminal error" / "最新终端报错", start with:
-     `sivtr search terminal --status failure --json --latest 1`.
+     `sivtr search terminal --status failure --format json --latest 1`.
    - If status is unknown or insufficient, broaden with:
-     `sivtr search terminal --match "Error|error|failed|fatal|not found|External command failed" --json --latest 20`.
+     `sivtr search terminal --match "Error|error|failed|fatal|not found|External command failed" --format json --latest 20`.
 3. Inspect result source/session/dialogue/snippet.
 4. If the snippet is enough, answer with evidence.
 5. If more context is needed, expand the returned ref with `sivtr show ... --json` or run a narrower second search.
@@ -50,7 +52,7 @@ verify current files or commands before making claims about current state.
 
 ## Non-Interactive Safety Rules
 
-- Prefer non-interactive commands: `sivtr search ... --json`, `sivtr show ... --json`.
+- Prefer non-interactive commands: `sivtr search ... --format <timeline|compact|md|json>`, `sivtr show ... --json`.
 - Do not open TUI pickers (`--pick`, hotkey picker) unless the user explicitly wants interactive selection.
 - Do not run `sivtr clear`, hotkey start/stop, shell init, or config mutation unless the user explicitly asks.
 - Avoid clipboard-oriented workflows in agent retrieval. Use refs from `search` and expand them with `show`.

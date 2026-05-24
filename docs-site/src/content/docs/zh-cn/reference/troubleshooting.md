@@ -52,7 +52,7 @@ sivtr copy pi --pick
 从其他目录运行 search/show 时，使用 `--cwd`：
 
 ```bash
-sivtr search "panic" --cwd /path/to/project
+sivtr search agent --match "panic" --cwd /path/to/project --format timeline
 ```
 
 ## `sivtr copy codex` 选中了错误账号的 session
@@ -119,7 +119,7 @@ sivtr init linux-shortcut
 Ref 是基于当前 workspace session list 解析的。如果你运行 `show` 的目录不同于原始搜索目录，传入相同的 `--cwd`：
 
 ```bash
-sivtr search "panic" --cwd /path/to/project --json
+sivtr search agent --match "panic" --cwd /path/to/project --format json
 sivtr show <ref> --cwd /path/to/project
 ```
 
@@ -144,6 +144,7 @@ sivtr copy out --regex "error|failed" --print
 
 ```bash
 sivtr --help
+sivtr version --verbose
 sivtr copy --help
 sivtr copy claude --help
 ```

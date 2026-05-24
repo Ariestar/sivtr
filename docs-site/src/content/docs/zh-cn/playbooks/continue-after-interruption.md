@@ -18,7 +18,8 @@ description: Agent 先搜索本地记忆，再判断如何继续。
 Agent 搜索最近的目标、决策和验证标记：
 
 ```bash
-sivtr search "next step|TODO|blocked|decision|test result|passed|failed" --json --limit 20
+sivtr search agent --match "next step|TODO|blocked|decision|test result|passed|failed" --since today --format json --limit 20
+sivtr search terminal --since today --sort oldest --format timeline --limit 20
 ```
 
 如果只有一条明确主线，直接继续。如果有多个可能任务，先让你选择。

@@ -131,7 +131,8 @@ Fix the terminal error. Use sivtr first.
 The agent should search the same workspace memory:
 
 ```bash
-sivtr search "error|failed|panic|Traceback|Exception|exit code|FAILED" --json --limit 20
+sivtr search terminal --match "error|failed|panic|Traceback|Exception|exit code|FAILED" --format json --limit 20
+sivtr search terminal --status failure --latest 1 --format json
 sivtr copy out 1 --print
 sivtr copy cmd 1..10 --print
 ```
@@ -145,7 +146,7 @@ This is the core value: what you can see in the unified workspace, the agent can
 Search results include refs. A ref can point to a terminal command block, an agent session, a dialogue, or a specific content block.
 
 ```bash
-sivtr search "build error" --json --limit 20
+sivtr search terminal --match "build error" --format json --limit 20
 sivtr show terminal/current/2
 sivtr show claude/<session>/3
 sivtr show claude/<session>/3/2

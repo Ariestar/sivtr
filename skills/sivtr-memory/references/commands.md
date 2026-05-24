@@ -26,7 +26,7 @@ sivtr search <target> \
   --until <time> \
   --latest <n> \
   --limit <n> \
-  --json
+  --format json
 ```
 
 Targets:
@@ -53,13 +53,13 @@ Filters:
 - `--latest`: return the latest N matching records.
 - `--limit`: cap printed results; use when you want a display cap different
   from `--latest`.
-- `--json`: required for agent use unless the user explicitly wants raw text.
+- `--format`: output view (`timeline`, `compact`, `md`, or `json`). Prefer `json` when a program must parse fields; use the readable formats freely for agent reasoning, summaries, and handoffs.
 
 ### General search
 
 ```bash
-sivtr search agent --match "<case-insensitive-regex>" --json --latest 20
-sivtr search terminal --match "<case-insensitive-regex>" --json --latest 20
+sivtr search agent --match "<case-insensitive-regex>" --format json --latest 20
+sivtr search terminal --match "<case-insensitive-regex>" --format json --latest 20
 ```
 
 ### Search latest terminal errors
@@ -67,13 +67,13 @@ sivtr search terminal --match "<case-insensitive-regex>" --json --latest 20
 For "最新终端报错" / "刚才终端报错", search terminal records directly, then expand the newest shell ref.
 
 ```bash
-sivtr search terminal --status failure --json --latest 1
+sivtr search terminal --status failure --format json --latest 1
 ```
 
 If status metadata is unavailable or too sparse, broaden with an error regex:
 
 ```bash
-sivtr search terminal --match "Error|error|failed|fatal|panic|Traceback|Exception|exit code|not found|External command failed|No such file or directory|permission denied|is not recognized" --json --latest 20
+sivtr search terminal --match "Error|error|failed|fatal|panic|Traceback|Exception|exit code|not found|External command failed|No such file or directory|permission denied|is not recognized" --format json --latest 20
 ```
 
 If the returned ref ends with a line number, remove the trailing line segment and run `sivtr show "<block-ref>" --json` before answering.
@@ -81,56 +81,56 @@ If the returned ref ends with a line number, remove the trailing line segment an
 ### Terminal metadata filters
 
 ```bash
-sivtr search terminal --status failure --json --latest 5
-sivtr search terminal --exit-code 101 --json --latest 20
-sivtr search terminal --min-duration 2s --sort duration --json --latest 20
+sivtr search terminal --status failure --format json --latest 5
+sivtr search terminal --exit-code 101 --format json --latest 20
+sivtr search terminal --min-duration 2s --sort duration --format json --latest 20
 ```
 
 ### Search terminal + AI memory for common errors
 
 ```bash
-sivtr search terminal --match "error|failed|panic|Traceback|Exception|exit code|could not compile|FAILED" --json --latest 20
-sivtr search agent --match "error|failed|panic|Traceback|Exception|exit code|could not compile|FAILED" --json --latest 20
+sivtr search terminal --match "error|failed|panic|Traceback|Exception|exit code|could not compile|FAILED" --format json --latest 20
+sivtr search agent --match "error|failed|panic|Traceback|Exception|exit code|could not compile|FAILED" --format json --latest 20
 ```
 
 ### Rust failures
 
 ```bash
-sivtr search terminal --match "error\\[E[0-9]+\\]|panicked|test result: FAILED|could not compile|borrow|lifetime" --json --latest 20
+sivtr search terminal --match "error\\[E[0-9]+\\]|panicked|test result: FAILED|could not compile|borrow|lifetime" --format json --latest 20
 ```
 
 ### JavaScript / TypeScript failures
 
 ```bash
-sivtr search terminal --match "TypeError|ReferenceError|TS[0-9]+|npm ERR|pnpm|vite|webpack|ELIFECYCLE|failed" --json --latest 20
+sivtr search terminal --match "TypeError|ReferenceError|TS[0-9]+|npm ERR|pnpm|vite|webpack|ELIFECYCLE|failed" --format json --latest 20
 ```
 
 ### Python failures
 
 ```bash
-sivtr search terminal --match "Traceback|ModuleNotFoundError|ImportError|AssertionError|pytest|FAILED|Exception" --json --latest 20
+sivtr search terminal --match "Traceback|ModuleNotFoundError|ImportError|AssertionError|pytest|FAILED|Exception" --format json --latest 20
 ```
 
 ### Previous decisions or AI discussion
 
 ```bash
-sivtr search agent --match "lazy load|workspace TUI|metadata scan|decision|TODO|next step" --json --latest 20
+sivtr search agent --match "lazy load|workspace TUI|metadata scan|decision|TODO|next step" --format json --latest 20
 ```
 
 ### Search titles instead of content
 
 ```bash
-sivtr search agent --match "workspace picker" --in session --json --latest 20
-sivtr search terminal --match "cargo test" --in title --json --latest 20
+sivtr search agent --match "workspace picker" --in session --format json --latest 20
+sivtr search terminal --match "cargo test" --in title --format json --latest 20
 ```
 
 ### Provider-specific search
 
 ```bash
-sivtr search codex --match "<query>" --json --latest 20
-sivtr search claude --match "<query>" --json --latest 20
-sivtr search pi --match "<query>" --json --latest 20
-sivtr search opencode --match "<query>" --json --latest 20
+sivtr search codex --match "<query>" --format json --latest 20
+sivtr search claude --match "<query>" --format json --latest 20
+sivtr search pi --match "<query>" --format json --latest 20
+sivtr search opencode --match "<query>" --format json --latest 20
 ```
 
 ### Compose filters from the request
@@ -139,9 +139,9 @@ Map request constraints to target selectors and filters instead of hard-coding
 scenario-specific queries. Keep `--match` for the content/topic being searched.
 
 ```bash
-sivtr search <provider> --match "<topic>" --last <duration> --json --latest 20
-sivtr search <provider> --match "<topic>|<related-term>|<status-term>" --last <duration> --json --latest 30
-sivtr search agent --match "<topic>" --in <content|title|session> --cwd <path> --json --latest 20
+sivtr search <provider> --match "<topic>" --last <duration> --format json --latest 20
+sivtr search <provider> --match "<topic>|<related-term>|<status-term>" --last <duration> --format json --latest 30
+sivtr search agent --match "<topic>" --in <content|title|session> --cwd <path> --format json --latest 20
 ```
 
 Examples of the mapping:
@@ -151,11 +151,11 @@ Examples of the mapping:
 - "这个仓库上次的 CI 失败" -> target `terminal`, match `CI|failed`, option `--cwd <repo>`
 - "标题里有 workspace picker" -> target `agent`, match `workspace picker`, option `--in session` or `--in title`
 
-## JSON Handling
+## Format Handling
 
-Treat `--json` output as structured evidence, not as a free-form transcript.
+Search formats are interchangeable views over the same result set. Use `json` when you need structured fields; use `timeline`, `compact`, or `md` when the agent needs to reason over order, summarize work, or draft a handoff.
 
-`sivtr search --json` returns a wrapper with `target`, optional `match`,
+`sivtr search --format json` returns a wrapper with `target`, optional `match`,
 `field`, `cwd`, `count`, and `results`. Inspect these result fields first:
 
 - `ref`: stable reference for follow-up expansion

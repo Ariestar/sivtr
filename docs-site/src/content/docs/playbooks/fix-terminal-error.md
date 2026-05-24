@@ -20,7 +20,8 @@ Run this after a command fails:
 The agent searches recent workspace memory for failure signals:
 
 ```bash
-sivtr search "error|failed|panic|Traceback|Exception|exit code|could not compile|FAILED" --json --limit 20
+sivtr search terminal --match "error|failed|panic|Traceback|Exception|exit code|could not compile|FAILED" --format json --limit 20
+sivtr search terminal --status failure --latest 1 --format json
 ```
 
 If the search snippet is too short, it expands the latest command output:

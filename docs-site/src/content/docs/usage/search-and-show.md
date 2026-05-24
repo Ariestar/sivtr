@@ -3,142 +3,156 @@ title: Search and Show Results
 description: Search current workspace memory and print exact refs.
 ---
 
-`sivtr search` queries current-workspace agent sessions plus the current terminal session log when shell integration has data. `sivtr show` prints the content behind an exact ref.
+`sivtr search` queries captured terminal records and supported AI workspace sessions. `sivtr show` prints the content behind an exact ref.
 
 Use them together when an interactive picker is too much and you want scriptable memory for a human workflow, an agent prompt, or another tool. They are also the safest primitives for skills because they can run non-interactively and return exact refs.
 
 For example, a "fix the terminal error" skill can start with:
 
 ```bash
-sivtr search "error|failed|panic|Traceback|Exception|exit code|FAILED" --json --limit 20
-sivtr copy out 1 --print
+sivtr search terminal --status failure --latest 1 --format json
 ```
 
-and a "recent work timeline" skill can combine search results with recent command titles:
+and a "recent work timeline" skill can use a timeline renderer:
 
 ```bash
-sivtr search "TODO|next step|decision|test result|passed|failed|commit|build" --json --limit 50
-sivtr copy cmd 1..20 --print
+sivtr search agent --since today --sort oldest --format timeline
+sivtr search terminal --since today --sort oldest --format timeline
 ```
 
-## Search content
+## Search targets
+
+Search is target-first:
 
 ```bash
-sivtr search panic
-sivtr search "workspace picker"
-sivtr search "build error" --limit 20
+sivtr search terminal
+sivtr search agent
+sivtr search codex
+sivtr search claude
+sivtr search opencode
+sivtr search pi
 ```
 
-By default, search uses the current directory as the workspace and searches dialogue/content text across all supported agent providers. When a current shell session log exists, it is included as a `terminal/current` source.
-
-## Search scopes
+Targets can narrow to a session, record/turn, and line:
 
 ```bash
-sivtr search "panic" --scope content
-sivtr search "release notes" --scope dialogue
-sivtr search "sivtr" --scope session
+sivtr search pi/019e5941 --match "cargo test"
+sivtr search terminal/session_13104/3/12 --format json
 ```
 
-| Scope | Searches |
+Use `agent` for every supported AI provider, or a provider name for one provider.
+
+## Content filters
+
+```bash
+sivtr search terminal --match "panic|failed"
+sivtr search agent --match "TODO|next step|decision"
+sivtr search pi --match "workspace picker" --in title
+```
+
+`--match` is a case-insensitive regex. `--in` chooses the field:
+
+| Field | Searches |
 | --- | --- |
-| `content` | Dialogue/content lines. This is the default. |
-| `dialogue` | Dialogue titles |
-| `session` | Session titles |
+| `content` | Combined record content. This is the default. |
+| `title` | Record/dialogue title |
+| `session` | Session id/title |
+| `input` | User input / command input |
+| `output` | Assistant output / command output |
+| `command` | Terminal command text |
+| `all` | All searchable text |
 
-Search queries are case-insensitive regexes, matching the workspace picker search behavior.
-
-## Provider filters
-
-```bash
-sivtr search "panic" --provider all
-sivtr search "panic" --provider codex
-sivtr search "panic" --provider claude
-sivtr search "panic" --provider opencode
-sivtr search "panic" --provider pi
-```
-
-Use `all` to search every supported provider.
-
-## Workspace directory
-
-Override the workspace directory used for session resolution:
+## Time filters
 
 ```bash
-sivtr search "panic" --cwd /path/to/project
-sivtr show claude/<session>/<dialogue> --cwd /path/to/project
+sivtr search agent --since today --format timeline
+sivtr search terminal --since yesterday --until today --format md
+sivtr search pi --last 2h --format compact
 ```
 
-This is useful from scripts or editor integrations that run outside the target project directory.
+Time filters accept RFC3339 timestamps, Unix seconds/milliseconds, relative durations like `30m`, `2h`, `7d`, and aliases such as `today`, `yesterday`, `tomorrow`, `this morning`, `this afternoon`, `this evening`, `tonight`, and `now`.
 
-## JSON output
-
-Use JSON when another tool needs refs and content:
+## Status, duration, and sorting
 
 ```bash
-sivtr search "build error" --json --limit 20
+sivtr search terminal --status failure --latest 1 --format json
+sivtr search terminal --exit-code 101 --format timeline
+sivtr search terminal --min-duration 500ms --sort duration --format compact
 ```
 
-The JSON output includes:
+Useful sorts:
 
-- query;
-- scope;
-- cwd;
-- total match count;
-- result list with `ref`, kind, timestamp, title, and content.
+- `newest`
+- `oldest`
+- `duration`
+- `duration-asc`
+- `exit-code`
+- `exit-code-asc`
+
+`--latest <N>` first keeps the latest N matching records. `--sort` then controls final presentation order.
+
+## Output formats
+
+```bash
+sivtr search agent --since today --format timeline
+sivtr search agent --since today --format compact
+sivtr search agent --since today --format md
+sivtr search agent --since today --format json
+```
+
+Formats are views over the same search result set, not separate APIs for humans vs agents. Pick the format that best fits the next step:
+
+| Format | Good for |
+| --- | --- |
+| `timeline` | Chronological scanning, handoff reconstruction, spotting gaps. Easy for both humans and agents to read. |
+| `compact` | Short time/source/title lists when you want low-noise context. |
+| `md` | Markdown bullets for notes, reports, prompts, or handoff drafts. |
+| `json` | Structured refs and snippets when another program will parse the output. |
+
+The default is `json` so scripts get a stable shape when no format is specified. Agents can also read `timeline`, `compact`, or `md` when the task is interpretive rather than programmatic.
 
 ## Show a ref
 
 Refs have this shape:
 
 ```text
-source/session[/dialogue[/line]]
+source/session[/record-or-turn[/line]]
 ```
 
-Print the whole session content:
+Print a record or turn:
 
 ```bash
-sivtr show claude/<session>
+sivtr show pi/<session>/<turn>
+sivtr show terminal/<session>/<record>
 ```
 
-Print one dialogue:
+Print one 1-based line:
 
 ```bash
-sivtr show claude/<session>/<dialogue>
-```
-
-Print one 1-based line from one dialogue:
-
-```bash
-sivtr show claude/<session>/<dialogue>/<line>
-```
-
-Print terminal search results too:
-
-```bash
-sivtr show terminal/current
-sivtr show terminal/current/<block>
-sivtr show terminal/current/<block>/<line>
+sivtr show claude/<session>/<turn>/<line>
+sivtr show terminal/<session>/<record>/<line>
 ```
 
 Use JSON for machine-readable output:
 
 ```bash
-sivtr show pi/<session>/<dialogue>/<line> --json
+sivtr show pi/<session>/<turn>/<line> --json
 ```
 
 ## Practical loop
 
-1. Search broadly:
+1. Search narrowly enough to get evidence:
 
    ```bash
-   sivtr search "panic" --provider all --json --limit 50
+   sivtr search terminal --status failure --latest 1 --format json
+   sivtr search agent --match "current task|failed|TODO" --since today --format timeline
    ```
 
 2. Pick the result ref you care about.
-3. Print the surrounding dialogue:
+3. Print the surrounding record:
 
    ```bash
-   sivtr show <source/session/dialogue>
+   sivtr show <source/session/record-or-turn>
    ```
 
-4. Use the exact line ref when you need a compact citation, script input, or context handle for another agent.
+4. Use exact line refs when you need compact citations, script input, or context handles for another agent.

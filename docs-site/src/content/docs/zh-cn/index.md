@@ -46,7 +46,7 @@ sivtr copy opencode out
 sivtr copy pi out
 
 # 搜索当前 workspace memory。
-sivtr search "panic"
+sivtr search agent --match "panic" --format timeline
 ```
 
 ## 文档地图

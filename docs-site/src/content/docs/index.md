@@ -46,7 +46,7 @@ sivtr copy opencode out
 sivtr copy pi out
 
 # Search current workspace memory.
-sivtr search "panic"
+sivtr search agent --match "panic" --format timeline
 ```
 
 ## Common workflows

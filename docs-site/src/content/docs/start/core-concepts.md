@@ -108,7 +108,7 @@ This is the human-facing path: browse, search, select, copy.
 Agents usually should not open an interactive TUI. They retrieve the same memory with non-interactive commands:
 
 ```bash
-sivtr search "error|failed|panic" --json --limit 20
+sivtr search terminal --match "error|failed|panic" --format json --limit 20
 sivtr copy out 1 --print
 sivtr show terminal/current/2 --json
 ```
@@ -154,7 +154,7 @@ sivtr show claude/<session-id>/3
 sivtr show claude/<session-id>/3/2
 ```
 
-`search --json` returns refs, so humans and agents can search first and then expand the same evidence.
+`search --format json` returns refs, so humans and agents can search first and then expand the same evidence.
 
 ## Commands
 
@@ -177,7 +177,7 @@ Skills and playbooks are use-layer procedures. They tell agents how to retrieve,
 For example, "fix the latest terminal error" can use this retrieval pattern:
 
 ```bash
-sivtr search "error|failed|panic|Traceback|Exception|exit code|FAILED" --json --limit 20
+sivtr search terminal --match "error|failed|panic|Traceback|Exception|exit code|FAILED" --format json --limit 20
 sivtr copy out 1 --print
 sivtr copy cmd 1..10 --print
 ```

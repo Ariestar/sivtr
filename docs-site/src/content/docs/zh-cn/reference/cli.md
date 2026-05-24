@@ -193,28 +193,55 @@ sivtr diff 2 1 --side-by-side
 ## search
 
 ```bash
-sivtr search <QUERY> [OPTIONS]
+sivtr search <TARGET> [OPTIONS]
 ```
 
-搜索当前 workspace 的 Agent session，并在 shell 集成有数据时包含当前终端 session log。
+搜索捕获到的终端记录和受支持的 AI workspace sessions。Target 决定在哪里搜；filter 决定哪些记录匹配。
+
+Targets：
+
+| Target | 含义 |
+| --- | --- |
+| `terminal[/<session>[/<record>[/<line>]]]` | 终端命令记录 |
+| `agent[/<session>[/<turn>[/<line>]]]` | 所有受支持 AI / Agent 记录 |
+| `codex[/<session>[/<turn>[/<line>]]]` | Codex 记录 |
+| `claude[/<session>[/<turn>[/<line>]]]` | Claude Code 记录 |
+| `opencode[/<session>[/<turn>[/<line>]]]` | OpenCode 记录 |
+| `pi[/<session>[/<turn>[/<line>]]]` | Pi 记录 |
+
+可以用 `*` 作为 path segment 通配符，例如 `terminal/*/3` 或 `pi/*/*`。
 
 选项：
 
 | 选项 | 含义 |
 | --- | --- |
-| `--scope <SCOPE>` | `content`、`dialogue` 或 `session`；默认是 `content` |
-| `--provider <PROVIDER>` | `all`、`codex`、`claude`、`opencode` 或 `pi`；默认是 `all` |
-| `--cwd <PATH>` | 用于解析 session 的工作区目录 |
-| `-l, --limit <N>` | 最大打印结果数；默认是 `20` |
-| `--json` | 打印机器可读 JSON |
+| `--match <REGEX>` | 大小写不敏感内容过滤 |
+| `--in <FIELD>` | `content`、`title`、`session`、`input`、`output`、`command` 或 `all`；默认是 `content` |
+| `--status <STATUS>` | `success`、`failure` 或 `unknown` |
+| `--exit-code <CODE>` | 精确终端进程退出码 |
+| `--min-duration <DURATION>` | 最小命令持续时间，例如 `500ms`、`2s`、`1m` |
+| `--max-duration <DURATION>` | 最大命令持续时间 |
+| `--sort <SORT>` | `newest`、`oldest`、`duration`、`duration-asc`、`exit-code` 或 `exit-code-asc` |
+| `--cwd <PATH>` | 用于解析记录的 workspace 目录 |
+| `--since <TIME>` | 只包含此时间之后或等于此时间的记录 |
+| `--until <TIME>` | 只包含此时间之前或等于此时间的记录 |
+| `--last <DURATION>` | 最近时间窗口，例如 `30m`、`2h`、`7d` |
+| `--latest <N>` | 在最终排序前取最新 N 条匹配记录 |
+| `-l, --limit <N>` | 最大打印结果组数 |
+| `--exclude-current`、`--other` | Agent 搜索时排除当前 agent session |
+| `--format <FORMAT>` | `timeline`、`compact`、`md` 或 `json`；默认是 `json` |
+
+时间过滤支持 RFC3339 时间戳、Unix 秒/毫秒、`30m`、`2h`、`7d` 这样的相对时间，以及 `today`、`yesterday`、`tomorrow`、`this morning`、`this afternoon`、`this evening`、`tonight`、`now` 等别名。
 
 示例：
 
 ```bash
-sivtr search panic
-sivtr search "workspace picker" --scope dialogue
-sivtr search sivtr --scope session --provider codex
-sivtr search "build error" --json --limit 20
+sivtr search terminal --status failure --latest 1 --format json
+sivtr search terminal --match "panic|failed" --since today --format timeline
+sivtr search agent --match "TODO|failed|next step" --since yesterday --format md
+sivtr search pi --since today --sort oldest --format timeline
+sivtr search pi/019e5941 --match "cargo test" --format compact
+sivtr search terminal/session_13104/3/12 --format json
 ```
 
 ## show
@@ -246,6 +273,30 @@ sivtr show claude/<session-id>/3
 sivtr show claude/<session-id>/3/7 --json
 sivtr show terminal/current/2
 ```
+
+## version
+
+```bash
+sivtr version [--verbose]
+```
+
+打印 Sivtr 版本。使用 `--verbose` 诊断当前运行的是哪个 binary，以及它是否和当前仓库里的本地 debug build 不同。
+
+```bash
+sivtr version
+sivtr version --verbose
+```
+
+Verbose 输出包含：
+
+- package version；
+- binary 路径；
+- 当前工作目录；
+- debug/release profile；
+- 可用时的 git commit 和 build time；
+- 检测到的 repo root；
+- 本地 `target/debug/sivtr` binary 状态；
+- 在 repo 内运行不同的全局 binary 时给出 warning。
 
 ## history
 

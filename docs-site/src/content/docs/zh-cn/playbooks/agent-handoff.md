@@ -18,7 +18,8 @@ description: 为下一个人或 Agent 准备简洁、有证据的交接文档。
 Agent 收集最近的决策和验证证据：
 
 ```bash
-sivtr search "current goal|next step|TODO|blocked|decision|test result|commit|passed|failed" --json --limit 30
+sivtr search agent --match "current goal|next step|TODO|blocked|decision|test result|commit|passed|failed" --since today --format json --limit 30
+sivtr search terminal --since today --sort oldest --format timeline --limit 20
 sivtr copy cmd 1..10 --print
 ```
 

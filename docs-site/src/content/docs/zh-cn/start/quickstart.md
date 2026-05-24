@@ -131,7 +131,8 @@ sivtr copy pi out --print
 Agent 应该搜索同一份 workspace memory：
 
 ```bash
-sivtr search "error|failed|panic|Traceback|Exception|exit code|FAILED" --json --limit 20
+sivtr search terminal --match "error|failed|panic|Traceback|Exception|exit code|FAILED" --format json --limit 20
+sivtr search terminal --status failure --latest 1 --format json
 sivtr copy out 1 --print
 sivtr copy cmd 1..10 --print
 ```
@@ -145,7 +146,7 @@ sivtr copy cmd 1..10 --print
 搜索结果会包含 ref。ref 可以指向终端命令块、Agent session、某轮 dialogue，或其中一段内容。
 
 ```bash
-sivtr search "build error" --json --limit 20
+sivtr search terminal --match "build error" --format json --limit 20
 sivtr show terminal/current/2
 sivtr show claude/<session>/3
 sivtr show claude/<session>/3/2

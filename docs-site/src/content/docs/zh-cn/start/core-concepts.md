@@ -108,7 +108,7 @@ sivtr
 Agent 通常不需要打开 TUI。它应该使用非交互式命令读取同一份记忆：
 
 ```bash
-sivtr search "error|failed|panic" --json --limit 20
+sivtr search terminal --match "error|failed|panic" --format json --limit 20
 sivtr copy out 1 --print
 sivtr show terminal/current/2 --json
 ```
@@ -154,7 +154,7 @@ sivtr show claude/<session-id>/3
 sivtr show claude/<session-id>/3/2
 ```
 
-`search --json` 会输出 ref，所以人和 Agent 都可以先搜索，再用 ref 展开同一份证据。
+`search --format json` 会输出 ref，所以人和 Agent 都可以先搜索，再用 ref 展开同一份证据。
 
 ## Commands
 
@@ -177,7 +177,7 @@ Skill 和 playbook 是使用层上的流程。它们告诉 Agent 在某个场景
 例如，"修复最近的终端报错"可以使用这套检索方式：
 
 ```bash
-sivtr search "error|failed|panic|Traceback|Exception|exit code|FAILED" --json --limit 20
+sivtr search terminal --match "error|failed|panic|Traceback|Exception|exit code|FAILED" --format json --limit 20
 sivtr copy out 1 --print
 sivtr copy cmd 1..10 --print
 ```

@@ -53,10 +53,11 @@ skills/sivtr-memory/
 
 ## Agent 怎么用 sivtr 记忆
 
-在非交互式 Agent 流程中，优先使用打印结果的命令，而不是打开选择器或修改剪贴板：
+在非交互式 Agent 流程中，优先使用打印结果的命令，而不是打开选择器或修改剪贴板。Search format 按任务选择：`timeline` / `compact` / `md` 往往更适合理解和总结；`json` 更适合另一个程序解析 ref 和字段。
 
 ```bash
-sivtr search "error|failed|panic|Traceback|Exception|exit code|FAILED" --json --limit 20
+sivtr search terminal --match "error|failed|panic|Traceback|Exception|exit code|FAILED" --format timeline --limit 20
+sivtr search terminal --status failure --latest 1 --format json
 sivtr copy out 1 --print
 sivtr copy cmd 1..10 --print
 sivtr show terminal/current/2 --json

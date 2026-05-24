@@ -7,7 +7,7 @@ Command syntax itself lives in `references/commands.md`.
 
 When the user says the last command failed, search for the likely error first.
 
-- For terminal failures, search terminal records first (`sivtr search terminal --status failure --json --latest 1`) so AI discussion does not outrank terminal evidence.
+- For terminal failures, search terminal records first (`sivtr search terminal --status failure --format json --latest 1`) so AI discussion does not outrank terminal evidence.
 - Search `agent` or a provider target (`pi`, `codex`, `claude`, `opencode`) only when the user asks for AI/agent conversation history or prior discussion.
 - Narrow by tool or language if the project is obvious
 - If search returns a useful `ref`, expand it with `sivtr show "<ref>" --json`

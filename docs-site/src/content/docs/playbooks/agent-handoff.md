@@ -18,7 +18,8 @@ Give the next agent a handoff.
 The agent collects recent decisions and validation evidence:
 
 ```bash
-sivtr search "current goal|next step|TODO|blocked|decision|test result|commit|passed|failed" --json --limit 30
+sivtr search agent --match "current goal|next step|TODO|blocked|decision|test result|commit|passed|failed" --since today --format json --limit 30
+sivtr search terminal --since today --sort oldest --format timeline --limit 20
 sivtr copy cmd 1..10 --print
 ```
 

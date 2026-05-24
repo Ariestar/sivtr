@@ -66,4 +66,4 @@ Set `auto_save = false` if captures should not be written automatically. Set `ma
 - Review copied text before pasting it into public chats, issues, hosted agents, or external AI tools.
 - Use line and regex filters to copy only the necessary evidence.
 - Keep shared Codex mirrors separate from the source account's live config.
-- Prefer `--json` search output for tooling, but remember JSON content can still include sensitive text.
+- Prefer `--format json` search output for tooling, but remember JSON content can still include sensitive text.

@@ -18,7 +18,8 @@ Continue.
 The agent searches for recent goals, decisions, and validation markers:
 
 ```bash
-sivtr search "next step|TODO|blocked|decision|test result|passed|failed" --json --limit 20
+sivtr search agent --match "next step|TODO|blocked|decision|test result|passed|failed" --since today --format json --limit 20
+sivtr search terminal --since today --sort oldest --format timeline --limit 20
 ```
 
 If one clear thread emerges, it continues. If multiple threads are plausible, it asks you to choose.

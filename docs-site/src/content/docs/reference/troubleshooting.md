@@ -52,7 +52,7 @@ If one provider is empty but another works, the issue is provider discovery or m
 Use `--cwd` with search/show flows when running from another directory:
 
 ```bash
-sivtr search "panic" --cwd /path/to/project
+sivtr search agent --match "panic" --cwd /path/to/project --format timeline
 ```
 
 ## `sivtr copy codex` selects the wrong account's session
@@ -119,7 +119,7 @@ Or use the VS Code extension shortcut.
 Refs are resolved against the current workspace session list. If you run `show` from a different directory than the original search, pass the same `--cwd`:
 
 ```bash
-sivtr search "panic" --cwd /path/to/project --json
+sivtr search agent --match "panic" --cwd /path/to/project --format json
 sivtr show <ref> --cwd /path/to/project
 ```
 
@@ -144,6 +144,7 @@ The CLI is the source of truth for the installed binary:
 
 ```bash
 sivtr --help
+sivtr version --verbose
 sivtr copy --help
 sivtr copy claude --help
 ```

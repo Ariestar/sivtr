@@ -20,7 +20,8 @@ description: Agent 自己找到并修复终端报错。
 Agent 在最近的 workspace 记忆中搜索失败信号：
 
 ```bash
-sivtr search "error|failed|panic|Traceback|Exception|exit code|could not compile|FAILED" --json --limit 20
+sivtr search terminal --match "error|failed|panic|Traceback|Exception|exit code|could not compile|FAILED" --format json --limit 20
+sivtr search terminal --status failure --latest 1 --format json
 ```
 
 如果搜索片段不够，再展开最近一条命令输出：

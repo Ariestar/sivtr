@@ -193,28 +193,55 @@ sivtr diff 2 1 --side-by-side
 ## search
 
 ```bash
-sivtr search <QUERY> [OPTIONS]
+sivtr search <TARGET> [OPTIONS]
 ```
 
-Searches current-workspace agent sessions and the current terminal session log when shell integration has data.
+Searches captured terminal records and supported AI workspace sessions. The target chooses where to search; filters choose which records match.
+
+Targets:
+
+| Target | Meaning |
+| --- | --- |
+| `terminal[/<session>[/<record>[/<line>]]]` | Terminal command records |
+| `agent[/<session>[/<turn>[/<line>]]]` | All supported AI/agent records |
+| `codex[/<session>[/<turn>[/<line>]]]` | Codex records |
+| `claude[/<session>[/<turn>[/<line>]]]` | Claude Code records |
+| `opencode[/<session>[/<turn>[/<line>]]]` | OpenCode records |
+| `pi[/<session>[/<turn>[/<line>]]]` | Pi records |
+
+Use `*` for wildcard path segments, for example `terminal/*/3` or `pi/*/*`.
 
 Options:
 
 | Option | Meaning |
 | --- | --- |
-| `--scope <SCOPE>` | `content`, `dialogue`, or `session`; default is `content` |
-| `--provider <PROVIDER>` | `all`, `codex`, `claude`, `opencode`, or `pi`; default is `all` |
-| `--cwd <PATH>` | Workspace directory used to resolve sessions |
-| `-l, --limit <N>` | Maximum results to print; default is `20` |
-| `--json` | Print machine-readable JSON |
+| `--match <REGEX>` | Case-insensitive content filter |
+| `--in <FIELD>` | `content`, `title`, `session`, `input`, `output`, `command`, or `all`; default is `content` |
+| `--status <STATUS>` | `success`, `failure`, or `unknown` |
+| `--exit-code <CODE>` | Exact terminal process exit code |
+| `--min-duration <DURATION>` | Minimum command duration, e.g. `500ms`, `2s`, `1m` |
+| `--max-duration <DURATION>` | Maximum command duration |
+| `--sort <SORT>` | `newest`, `oldest`, `duration`, `duration-asc`, `exit-code`, or `exit-code-asc` |
+| `--cwd <PATH>` | Workspace directory used to resolve records |
+| `--since <TIME>` | Only include records at or after this time |
+| `--until <TIME>` | Only include records at or before this time |
+| `--last <DURATION>` | Recent time window, e.g. `30m`, `2h`, `7d` |
+| `--latest <N>` | Return the latest N matching records before final sort |
+| `-l, --limit <N>` | Maximum result groups to print |
+| `--exclude-current`, `--other` | Exclude the current agent session from agent searches |
+| `--format <FORMAT>` | `timeline`, `compact`, `md`, or `json`; default is `json` |
+
+Time filters accept RFC3339 timestamps, Unix seconds/milliseconds, relative durations like `30m`, `2h`, `7d`, and aliases such as `today`, `yesterday`, `tomorrow`, `this morning`, `this afternoon`, `this evening`, `tonight`, and `now`.
 
 Examples:
 
 ```bash
-sivtr search panic
-sivtr search "workspace picker" --scope dialogue
-sivtr search sivtr --scope session --provider codex
-sivtr search "build error" --json --limit 20
+sivtr search terminal --status failure --latest 1 --format json
+sivtr search terminal --match "panic|failed" --since today --format timeline
+sivtr search agent --match "TODO|failed|next step" --since yesterday --format md
+sivtr search pi --since today --sort oldest --format timeline
+sivtr search pi/019e5941 --match "cargo test" --format compact
+sivtr search terminal/session_13104/3/12 --format json
 ```
 
 ## show
@@ -246,6 +273,30 @@ sivtr show claude/<session-id>/3
 sivtr show claude/<session-id>/3/7 --json
 sivtr show terminal/current/2
 ```
+
+## version
+
+```bash
+sivtr version [--verbose]
+```
+
+Prints the Sivtr version. Use `--verbose` to diagnose which binary is running and whether it differs from the local debug build in the current repository.
+
+```bash
+sivtr version
+sivtr version --verbose
+```
+
+Verbose output includes:
+
+- package version;
+- binary path;
+- current working directory;
+- debug/release profile;
+- git commit and build time when available;
+- detected repo root;
+- local `target/debug/sivtr` binary status;
+- a warning when a different global binary is being used inside the repo.
 
 ## history
 

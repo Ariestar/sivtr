@@ -66,4 +66,4 @@ max_entries = 0
 - 把内容粘贴到公开聊天、issue、托管 Agent 或外部 AI 工具前，先检查复制文本。
 - 用 line 和 regex filter 只复制必要证据。
 - 共享 Codex mirror 与源账号 live config 分开。
-- 工具链使用 `--json` search 输出时，也要记住 JSON content 可能包含敏感文本。
+- 工具链使用 `--format json` search 输出时，也要记住 JSON content 可能包含敏感文本。

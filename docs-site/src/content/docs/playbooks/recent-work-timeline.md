@@ -15,10 +15,17 @@ Make a timeline of what I worked on recently.
 
 ## How it works
 
-The agent searches for planning, change, and validation markers:
+The agent can first render timeline views directly:
 
 ```bash
-sivtr search "TODO|next step|decision|changed|fixed|test result|passed|failed|commit|build" --json --limit 50
+sivtr search agent --since today --sort oldest --format timeline
+sivtr search terminal --since today --sort oldest --format timeline
+```
+
+For narrower evidence, it searches for planning, change, and validation markers:
+
+```bash
+sivtr search agent --match "TODO|next step|decision|changed|fixed|test result|passed|failed|commit|build" --since today --format json --limit 50
 ```
 
 It also inspects recent command titles:

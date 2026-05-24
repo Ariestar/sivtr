@@ -15,10 +15,17 @@ description: 把终端和 Agent 记忆变成有证据支撑的工作时间线。
 
 ## 处理过程
 
-Agent 搜索计划、变更和验证标记：
+Agent 可以先直接渲染 timeline 视图：
 
 ```bash
-sivtr search "TODO|next step|decision|changed|fixed|test result|passed|failed|commit|build" --json --limit 50
+sivtr search agent --since today --sort oldest --format timeline
+sivtr search terminal --since today --sort oldest --format timeline
+```
+
+如果需要更窄的证据，再搜索计划、变更和验证标记：
+
+```bash
+sivtr search agent --match "TODO|next step|decision|changed|fixed|test result|passed|failed|commit|build" --since today --format json --limit 50
 ```
 
 再查看最近命令标题：

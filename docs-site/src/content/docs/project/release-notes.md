@@ -5,6 +5,37 @@ description: User-facing release notes for sivtr.
 
 `sivtr` is in early `0.1.x` development. The CLI and configuration format may still change during this series. This page summarizes user-facing changes; the repository `CHANGELOG.md` remains the detailed changelog source.
 
+## 0.1.3 - 2026-05-24/25
+
+### Added
+
+- Added git-root workspace scoping for terminal records so terminals opened below the same repository resolve to the same workspace.
+- Added `sivtr init all` / `sivtr init -all` for installing all supported shell hooks at once.
+- Added target-first search syntax: `sivtr search terminal|agent|codex|claude|opencode|pi ...`.
+- Added target path narrowing down to session, record/turn, and line refs, for example `terminal/session_13104/3/12`.
+- Added search filters for field (`--in`), status, exit code, min/max duration, cwd, time ranges, latest records, limit, current-session exclusion, and sorting.
+- Added natural local time aliases for search ranges, including `today`, `yesterday`, `tomorrow`, `this morning`, `this afternoon`, `this evening`, `tonight`, and `now`.
+- Added `--format timeline|compact|md|json` for search output. `json` remains the machine-readable default.
+- Added stable search JSON snippets without the redundant `line` field in matches.
+- Added OpenCode and Pi agent search/copy coverage alongside Codex and Claude Code.
+- Added `WorkTime` with `started_at`, `ended_at`, and `duration_ms`, deriving the third component when two are available.
+- Added `sivtr version --verbose` to print binary path, profile, git/build metadata, repo root, and local debug-binary diagnostics.
+
+### Changed
+
+- Search now treats target selection and filtering as separate concerns. Old `--scope`, `--provider`, `--recent`, and `--json` search flags were removed in favor of target-first syntax, `--latest`, and `--format json`.
+- Search/show timestamps are normalized to local RFC3339 with offset.
+- Agent record titles skip `[skill:...]` marker lines and prefer the real user request.
+- Skill injection content is compacted in records so prompts do not dominate titles and search snippets.
+- WorkRecord was simplified around a stable top-level `work_ref`, less duplicated source/id data, and structured text/payload fields.
+- Search results are grouped by record/dialogue with snippets to reduce duplicate line noise.
+
+### Fixed
+
+- Fixed terminal search returning empty results when shell history timestamps used local PowerShell-style strings such as `Mon May 25 00:35:02 2026`.
+- Fixed interrupted agent turns so they stay searchable.
+- Fixed clippy warnings after the record/time/search refactors.
+
 ## 0.1.3 - 2026-05-20
 
 ### Added

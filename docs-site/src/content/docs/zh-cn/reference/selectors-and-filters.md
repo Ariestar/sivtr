@@ -106,7 +106,7 @@ sivtr copy out --ansi
 
 ## Workspace ref
 
-`search --json` 会输出 `show` 可以打印的 ref：
+`search --format json` 会输出 `show` 可以打印的 ref：
 
 ```text
 source/session[/dialogue[/line]]

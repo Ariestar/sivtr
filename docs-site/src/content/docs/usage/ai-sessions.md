@@ -16,7 +16,11 @@ Skills are how later agents learn to use this memory. A `sivtr` memory skill can
 | OpenCode | `sivtr copy opencode ...` | OpenCode local database |
 | Pi | `sivtr copy pi ...` | Pi session JSONL files under the Pi agent directory |
 
-Use `--provider all` in search and hotkey commands when you want all supported providers.
+Use `agent` in search commands when you want all supported providers:
+
+```bash
+sivtr search agent --match "panic" --format timeline
+```
 
 ## Copy the latest useful text
 
@@ -113,13 +117,13 @@ Context-aware launchers such as the Windows hotkey and VS Code extension can ope
 
 ## Search agent memory and terminal context
 
-Search current-workspace agent sessions plus the current terminal session log when shell integration has data:
+Search current-workspace agent sessions and terminal context with target-first search:
 
 ```bash
-sivtr search "panic"
-sivtr search "workspace picker" --scope dialogue
-sivtr search sivtr --scope session --provider codex
-sivtr search "build error" --provider all --json --limit 20
+sivtr search agent --match "panic" --format timeline
+sivtr search agent --match "workspace picker" --in title --format compact
+sivtr search codex --match "sivtr" --in session --format md
+sivtr search terminal --match "build error" --format json --limit 20
 ```
 
 Use JSON refs with `sivtr show`. These exact refs are the unit you can hand back to yourself, another terminal workflow, or an agent prompt:
