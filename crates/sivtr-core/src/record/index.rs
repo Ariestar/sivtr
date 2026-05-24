@@ -161,6 +161,7 @@ mod tests {
                 output: None,
                 combined: combined.to_string(),
             },
+            parts: Vec::new(),
             payload: WorkPayload::ChatTurn {
                 user: String::new(),
                 assistant: combined.to_string(),

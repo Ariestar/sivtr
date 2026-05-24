@@ -2804,6 +2804,7 @@ mod tests {
                 output: None,
                 combined: plain.to_string(),
             },
+            parts: Vec::new(),
             payload: WorkPayload::ChatTurn {
                 user: plain.to_string(),
                 assistant: String::new(),

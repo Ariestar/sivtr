@@ -139,6 +139,40 @@ pub struct WorkText {
     pub combined: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkPartIo {
+    Input,
+    Output,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkPartKind {
+    Prompt,
+    Command,
+    UserMessage,
+    AssistantMessage,
+    ToolCall,
+    ToolOutput,
+    Text,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorkPart {
+    pub io: WorkPartIo,
+    pub kind: WorkPartKind,
+    pub index_in_record: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub occurred_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ansi: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WorkPayload {
@@ -179,6 +213,8 @@ pub struct WorkRecord {
     pub status: WorkStatus,
     pub title: String,
     pub text: WorkText,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<WorkPart>,
     pub payload: WorkPayload,
 }
 
@@ -207,6 +243,7 @@ impl WorkRecord {
             Some(_) => WorkOutcome::Failure,
             None => WorkOutcome::Unknown,
         };
+        let parts = terminal_parts(entry, &command, &output);
         let combined = join_nonempty([command.as_str(), output.as_str()]);
 
         Some(Self {
@@ -239,6 +276,7 @@ impl WorkRecord {
                 output: non_empty(Some(output.clone())),
                 combined,
             },
+            parts,
             payload: WorkPayload::TerminalCommand {
                 prompt: entry.prompt.clone(),
                 command,
@@ -265,6 +303,7 @@ impl WorkRecord {
         index: usize,
         blocks: &[AgentBlock],
     ) -> Option<Self> {
+        let parts = agent_parts(blocks);
         let chat_blocks = blocks
             .iter()
             .filter(|block| matches!(block.kind, AgentBlockKind::User | AgentBlockKind::Assistant))
@@ -340,6 +379,7 @@ impl WorkRecord {
                 output: non_empty(Some(assistant.clone())),
                 combined,
             },
+            parts,
             payload: WorkPayload::ChatTurn {
                 user,
                 assistant,
@@ -449,6 +489,7 @@ impl WorkRecord {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn terminal_record_text(
     mode: RecordTextMode,
     prompt: &str,
@@ -625,6 +666,7 @@ fn selected_block_record(
             output,
             combined: text.clone(),
         },
+        parts: agent_parts(std::slice::from_ref(&block)),
         payload: WorkPayload::ChatTurn {
             user: match kind {
                 AgentBlockKind::User => text.clone(),
@@ -688,6 +730,7 @@ fn selected_group_record(
             output: Some(combined.clone()),
             combined: combined.clone(),
         },
+        parts: agent_parts(&blocks),
         payload: WorkPayload::ChatTurn {
             user: String::new(),
             assistant: combined,
@@ -792,6 +835,75 @@ fn preview(text: &str) -> String {
         .collect()
 }
 
+fn terminal_parts(entry: &SessionEntry, command: &str, output: &str) -> Vec<WorkPart> {
+    let mut parts = Vec::new();
+    let prompt = entry.prompt.trim_end_matches(['\r', '\n']);
+    if !prompt.trim().is_empty() {
+        parts.push(WorkPart {
+            io: WorkPartIo::Input,
+            kind: WorkPartKind::Prompt,
+            index_in_record: next_part_index(&parts, WorkPartIo::Input),
+            occurred_at: entry.ended_at.clone(),
+            label: None,
+            text: prompt.to_string(),
+            ansi: entry.prompt_ansi.clone(),
+        });
+    }
+    if !command.is_empty() {
+        parts.push(WorkPart {
+            io: WorkPartIo::Input,
+            kind: WorkPartKind::Command,
+            index_in_record: next_part_index(&parts, WorkPartIo::Input),
+            occurred_at: entry.ended_at.clone(),
+            label: None,
+            text: command.to_string(),
+            ansi: None,
+        });
+    }
+    if !output.is_empty() {
+        parts.push(WorkPart {
+            io: WorkPartIo::Output,
+            kind: WorkPartKind::Text,
+            index_in_record: next_part_index(&parts, WorkPartIo::Output),
+            occurred_at: entry.ended_at.clone(),
+            label: None,
+            text: output.to_string(),
+            ansi: entry.output_ansi.clone(),
+        });
+    }
+    parts
+}
+
+fn agent_parts(blocks: &[AgentBlock]) -> Vec<WorkPart> {
+    let mut parts = Vec::new();
+    for block in blocks {
+        let text = block.text.trim().to_string();
+        if text.is_empty() {
+            continue;
+        }
+        let (io, kind) = match block.kind {
+            AgentBlockKind::User => (WorkPartIo::Input, WorkPartKind::UserMessage),
+            AgentBlockKind::Assistant => (WorkPartIo::Output, WorkPartKind::AssistantMessage),
+            AgentBlockKind::ToolCall => (WorkPartIo::Input, WorkPartKind::ToolCall),
+            AgentBlockKind::ToolOutput => (WorkPartIo::Output, WorkPartKind::ToolOutput),
+        };
+        parts.push(WorkPart {
+            io,
+            kind,
+            index_in_record: next_part_index(&parts, io),
+            occurred_at: block.timestamp.clone(),
+            label: block.label.clone(),
+            text,
+            ansi: None,
+        });
+    }
+    parts
+}
+
+fn next_part_index(parts: &[WorkPart], io: WorkPartIo) -> usize {
+    parts.iter().filter(|part| part.io == io).count() + 1
+}
+
 fn join_nonempty<'a>(texts: impl IntoIterator<Item = &'a str>) -> String {
     texts
         .into_iter()
@@ -832,6 +944,13 @@ mod tests {
         assert_eq!(record.status.exit_code, Some(101));
         assert_eq!(record.text.input.as_deref(), Some("cargo test"));
         assert_eq!(record.text.output.as_deref(), Some("failed"));
+        assert_eq!(record.parts.len(), 3);
+        assert_eq!(record.parts[0].kind, WorkPartKind::Prompt);
+        assert_eq!(record.parts[0].io, WorkPartIo::Input);
+        assert_eq!(record.parts[1].kind, WorkPartKind::Command);
+        assert_eq!(record.parts[1].index_in_record, 2);
+        assert_eq!(record.parts[2].kind, WorkPartKind::Text);
+        assert_eq!(record.parts[2].io, WorkPartIo::Output);
     }
 
     #[test]
@@ -874,6 +993,62 @@ mod tests {
         assert_eq!(
             records[0].time.occurred_at.as_deref(),
             Some("2026-05-23T12:01:00Z")
+        );
+        assert_eq!(records[0].parts.len(), 2);
+        assert_eq!(records[0].parts[0].kind, WorkPartKind::UserMessage);
+        assert_eq!(records[0].parts[1].kind, WorkPartKind::AssistantMessage);
+    }
+
+    #[test]
+    fn chat_turn_records_preserve_tool_parts_without_changing_visible_turn_text() {
+        let session = AgentSession {
+            path: PathBuf::from("codex-session.jsonl"),
+            id: Some("abcdef123456".to_string()),
+            cwd: None,
+            title: None,
+            blocks: vec![
+                AgentBlock {
+                    kind: AgentBlockKind::User,
+                    timestamp: Some("2026-05-23T12:01:00Z".to_string()),
+                    label: None,
+                    text: "implement this".to_string(),
+                },
+                AgentBlock {
+                    kind: AgentBlockKind::ToolCall,
+                    timestamp: Some("2026-05-23T12:01:30Z".to_string()),
+                    label: Some("Bash".to_string()),
+                    text: "{\"command\":\"cargo test\"}".to_string(),
+                },
+                AgentBlock {
+                    kind: AgentBlockKind::ToolOutput,
+                    timestamp: Some("2026-05-23T12:01:45Z".to_string()),
+                    label: None,
+                    text: "ok".to_string(),
+                },
+                AgentBlock {
+                    kind: AgentBlockKind::Assistant,
+                    timestamp: Some("2026-05-23T12:02:00Z".to_string()),
+                    label: None,
+                    text: "done".to_string(),
+                },
+            ],
+        };
+
+        let records = WorkRecord::chat_turns(AgentProvider::Codex, &session);
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].text.input.as_deref(), Some("implement this"));
+        assert_eq!(records[0].text.output.as_deref(), Some("done"));
+        assert_eq!(records[0].parts.len(), 4);
+        assert_eq!(records[0].parts[1].kind, WorkPartKind::ToolCall);
+        assert_eq!(records[0].parts[1].label.as_deref(), Some("Bash"));
+        assert_eq!(records[0].parts[1].io, WorkPartIo::Input);
+        assert_eq!(records[0].parts[2].kind, WorkPartKind::ToolOutput);
+        assert_eq!(records[0].parts[2].io, WorkPartIo::Output);
+        assert_eq!(records[0].parts[3].kind, WorkPartKind::AssistantMessage);
+        assert_eq!(
+            records[0].text.combined,
+            "## User\nimplement this\n\n## Assistant\ndone"
         );
     }
 }
