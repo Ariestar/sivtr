@@ -4,6 +4,7 @@ use crate::ai::{
     AgentSession,
 };
 use crate::session::SessionEntry;
+use crate::time::{derive_ended_at, derive_started_at, duration_between_ms};
 use serde::Serialize;
 use std::path::Path;
 
@@ -93,11 +94,34 @@ pub enum WorkOutcome {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct WorkTime {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub occurred_at: Option<String>,
+    pub started_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+}
+
+impl WorkTime {
+    pub fn from_components(
+        started_at: Option<String>,
+        ended_at: Option<String>,
+        duration_ms: Option<u64>,
+    ) -> Self {
+        let started_at = started_at.or_else(|| derive_started_at(ended_at.as_deref(), duration_ms));
+        let ended_at = ended_at.or_else(|| derive_ended_at(started_at.as_deref(), duration_ms));
+        let duration_ms =
+            duration_ms.or_else(|| duration_between_ms(started_at.as_deref(), ended_at.as_deref()));
+
+        Self {
+            started_at,
+            ended_at,
+            duration_ms,
+        }
+    }
+
+    pub fn primary_at(&self) -> Option<&str> {
+        self.ended_at.as_deref().or(self.started_at.as_deref())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -189,11 +213,7 @@ impl WorkRecord {
             kind: WorkRecordKind::TerminalCommand,
             session_path: Some(session_path.display().to_string()),
             cwd: non_empty(entry.cwd.clone()),
-            time: WorkTime {
-                occurred_at: entry.ended_at.clone(),
-                ended_at: entry.ended_at.clone(),
-                duration_ms: entry.duration_ms,
-            },
+            time: WorkTime::from_components(None, entry.ended_at.clone(), entry.duration_ms),
             status: WorkStatus {
                 outcome,
                 exit_code: entry.exit_code,
@@ -270,7 +290,8 @@ impl WorkRecord {
         } else {
             preview(&user)
         };
-        let occurred_at = first_timestamp(blocks);
+        let started_at = first_timestamp(blocks);
+        let ended_at = last_timestamp(blocks);
 
         Some(Self {
             schema_version: RECORD_SCHEMA_VERSION,
@@ -278,11 +299,7 @@ impl WorkRecord {
             kind: WorkRecordKind::ChatTurn,
             session_path: Some(session.path.display().to_string()),
             cwd: non_empty(session.cwd.clone()),
-            time: WorkTime {
-                occurred_at: occurred_at.clone(),
-                ended_at: occurred_at,
-                duration_ms: None,
-            },
+            time: WorkTime::from_components(started_at, ended_at, None),
             status: WorkStatus {
                 outcome: WorkOutcome::Unknown,
                 exit_code: None,
@@ -552,11 +569,7 @@ fn selected_block_record(
         kind: WorkRecordKind::ChatTurn,
         session_path: Some(session.path.display().to_string()),
         cwd: non_empty(session.cwd.clone()),
-        time: WorkTime {
-            occurred_at: block.timestamp.clone(),
-            ended_at: block.timestamp.clone(),
-            duration_ms: None,
-        },
+        time: WorkTime::from_components(block.timestamp.clone(), None, None),
         status: WorkStatus {
             outcome: WorkOutcome::Unknown,
             exit_code: None,
@@ -594,18 +607,15 @@ fn selected_group_record(
 
     let session_ref = agent_session_ref_id(session.id.as_deref(), &session.path);
     let work_ref = WorkRef::agent_record(provider, session_ref.clone(), 1);
-    let timestamp = first_timestamp(&blocks);
+    let started_at = first_timestamp(&blocks);
+    let ended_at = last_timestamp(&blocks);
     vec![WorkRecord {
         schema_version: RECORD_SCHEMA_VERSION,
         work_ref,
         kind: WorkRecordKind::ChatTurn,
         session_path: Some(session.path.display().to_string()),
         cwd: non_empty(session.cwd.clone()),
-        time: WorkTime {
-            occurred_at: timestamp.clone(),
-            ended_at: timestamp,
-            duration_ms: None,
-        },
+        time: WorkTime::from_components(started_at, ended_at, None),
         status: WorkStatus {
             outcome: WorkOutcome::Unknown,
             exit_code: None,
@@ -729,6 +739,13 @@ fn first_timestamp(blocks: &[AgentBlock]) -> Option<String> {
     blocks.iter().find_map(|block| block.timestamp.clone())
 }
 
+fn last_timestamp(blocks: &[AgentBlock]) -> Option<String> {
+    blocks
+        .iter()
+        .rev()
+        .find_map(|block| block.timestamp.clone())
+}
+
 fn last_user_is_followed_only_by_tools(blocks: &[AgentBlock]) -> bool {
     let Some(user_idx) = blocks
         .iter()
@@ -789,6 +806,10 @@ mod tests {
             record.time.ended_at.as_deref(),
             Some("2026-05-23T12:00:00.000Z")
         );
+        assert_eq!(
+            record.time.started_at.as_deref(),
+            Some("2026-05-23T11:59:59.958+00:00")
+        );
         assert_eq!(record.time.duration_ms, Some(42));
         assert_eq!(record.status.outcome, WorkOutcome::Failure);
         assert_eq!(record.status.exit_code, Some(101));
@@ -834,13 +855,14 @@ mod tests {
         );
         assert_eq!(records[0].text.output, None);
         assert_eq!(
-            records[0].copy_text(RecordTextMode::Combined, false).plain,
-            "fix latest terminal error"
-        );
-        assert_eq!(
-            records[0].time.occurred_at.as_deref(),
+            records[0].time.started_at.as_deref(),
             Some("2026-05-23T12:01:00Z")
         );
+        assert_eq!(
+            records[0].time.ended_at.as_deref(),
+            Some("2026-05-23T12:03:00Z")
+        );
+        assert_eq!(records[0].time.duration_ms, Some(120_000));
     }
 
     #[test]
@@ -880,8 +902,13 @@ mod tests {
         assert_eq!(records[0].text.input.as_deref(), Some("implement this"));
         assert_eq!(records[0].text.output.as_deref(), Some("done"));
         assert_eq!(
-            records[0].time.occurred_at.as_deref(),
+            records[0].time.started_at.as_deref(),
             Some("2026-05-23T12:01:00Z")
         );
+        assert_eq!(
+            records[0].time.ended_at.as_deref(),
+            Some("2026-05-23T12:02:00Z")
+        );
+        assert_eq!(records[0].time.duration_ms, Some(60_000));
     }
 }

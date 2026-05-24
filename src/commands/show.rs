@@ -58,7 +58,7 @@ pub fn execute(args: &ShowArgs) -> Result<()> {
         let output = ShowJsonItem {
             ref_,
             kind: record.kind_label().to_string(),
-            timestamp: record.time.occurred_at.clone(),
+            timestamp: record.time.primary_at().map(str::to_string),
             title: ShowJsonTitle {
                 session: record.work_ref.session().to_string(),
                 dialogue: Some(record.title.clone()),

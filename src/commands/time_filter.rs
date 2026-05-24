@@ -1,5 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::{DateTime, Duration, Local, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, Duration, Utc};
+use sivtr_core::time::parse_timestamp;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TimeRange {
@@ -13,10 +14,7 @@ impl TimeRange {
     }
 
     pub(crate) fn contains_timestamp(&self, timestamp: Option<&str>) -> bool {
-        let Some(timestamp) = timestamp
-            .and_then(parse_timestamp)
-            .or_else(|| timestamp.and_then(|value| parse_unix_timestamp(value.trim())))
-        else {
+        let Some(timestamp) = timestamp.and_then(parse_timestamp) else {
             return false;
         };
 
@@ -121,55 +119,6 @@ fn parse_duration(value: &str) -> Option<Duration> {
         "d" | "day" | "days" => Some(Duration::days(amount)),
         "w" | "week" | "weeks" => Some(Duration::weeks(amount)),
         _ => None,
-    }
-}
-
-pub(crate) fn parse_timestamp(value: &str) -> Option<DateTime<Utc>> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    if let Ok(timestamp) = DateTime::parse_from_rfc3339(trimmed) {
-        return Some(timestamp.with_timezone(&Utc));
-    }
-    if let Some(timestamp) = parse_unix_timestamp(trimmed) {
-        return Some(timestamp);
-    }
-    if let Ok(date) = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d") {
-        let local = date.and_hms_opt(0, 0, 0)?;
-        return local_to_utc(local);
-    }
-    if let Ok(datetime) = NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S") {
-        return local_to_utc(datetime);
-    }
-    if let Ok(datetime) = NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%dT%H:%M:%S") {
-        return local_to_utc(datetime);
-    }
-
-    None
-}
-
-fn parse_unix_timestamp(value: &str) -> Option<DateTime<Utc>> {
-    let number = value.parse::<i64>().ok()?;
-    let seconds = if value.len() >= 13 {
-        number / 1000
-    } else {
-        number
-    };
-    let nanos = if value.len() >= 13 {
-        ((number % 1000).abs() as u32) * 1_000_000
-    } else {
-        0
-    };
-    Utc.timestamp_opt(seconds, nanos).single()
-}
-
-fn local_to_utc(datetime: NaiveDateTime) -> Option<DateTime<Utc>> {
-    match Local.from_local_datetime(&datetime) {
-        LocalResult::Single(value) => Some(value.with_timezone(&Utc)),
-        LocalResult::Ambiguous(earliest, _) => Some(earliest.with_timezone(&Utc)),
-        LocalResult::None => None,
     }
 }
 

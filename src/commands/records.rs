@@ -20,7 +20,7 @@ fn current_work_records(
     let mut records = Vec::new();
     records.extend(terminal_records(cwd)?);
     records.extend(agent_records(providers, cwd, recent_sessions)?);
-    records.sort_by(|a, b| b.time.occurred_at.cmp(&a.time.occurred_at));
+    records.sort_by(|a, b| b.time.primary_at().cmp(&a.time.primary_at()));
     Ok(records)
 }
 

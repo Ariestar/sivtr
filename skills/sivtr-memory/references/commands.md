@@ -16,6 +16,10 @@ sivtr search <target> \
   --match <case-insensitive-regex> \
   --in <content|title|session|input|output|command|all> \
   --status <success|failure|unknown> \
+  --exit-code <code> \
+  --min-duration <duration> \
+  --max-duration <duration> \
+  --sort <newest|oldest|duration|duration-asc|exit-code|exit-code-asc> \
   --cwd <path> \
   --last <duration> \
   --since <time> \
@@ -38,6 +42,9 @@ Filters:
 - `--match`: case-insensitive regex content filter.
 - `--in`: field for `--match`; default is `content`.
 - `--status`: filter by command/record outcome.
+- `--exit-code`: filter terminal records by exact process exit code.
+- `--min-duration` / `--max-duration`: filter by duration (`500ms`, `2s`, `1m`, `1h`).
+- `--sort`: sort results (`newest`, `oldest`, `duration`, `duration-asc`, `exit-code`, `exit-code-asc`).
 - `--cwd`: choose the workspace used to resolve current AI sessions. Omit it
   when already running in the target repo.
 - `--last`: relative time window (`30m`, `2h`, `7d`).
@@ -70,6 +77,14 @@ sivtr search terminal --match "Error|error|failed|fatal|panic|Traceback|Exceptio
 ```
 
 If the returned ref ends with a line number, remove the trailing line segment and run `sivtr show "<block-ref>" --json` before answering.
+
+### Terminal metadata filters
+
+```bash
+sivtr search terminal --status failure --json --latest 5
+sivtr search terminal --exit-code 101 --json --latest 20
+sivtr search terminal --min-duration 2s --sort duration --json --latest 20
+```
 
 ### Search terminal + AI memory for common errors
 
@@ -146,6 +161,9 @@ Treat `--json` output as structured evidence, not as a free-form transcript.
 - `ref`: stable reference for follow-up expansion
 - `timestamp`: how recent it is
 - `dialogue`: dialogue or command block title
+- `status`: `success`, `failure`, or `unknown`
+- `exit_code`: terminal process exit code when available
+- `duration_ms`: command/turn elapsed time when available
 
 Expected result item shape:
 

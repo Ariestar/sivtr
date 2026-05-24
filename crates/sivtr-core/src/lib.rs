@@ -13,4 +13,5 @@ pub mod record;
 pub mod search;
 pub mod selection;
 pub mod session;
+pub mod time;
 pub mod workspace;
