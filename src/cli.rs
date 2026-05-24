@@ -288,12 +288,18 @@ Scopes:
   --scope dialogue   Search dialogue titles
   --scope session    Search session titles
 
+Kind filters:
+  --shell            Search terminal command records only
+  --agent            Search AI/agent conversation records only
+
 Defaults:
   `sivtr search` searches current-workspace AI sessions plus current terminal capture.
   Queries are case-insensitive regexes, matching the workspace picker search behavior.
 
 Examples:
   sivtr search panic
+  sivtr search Error --shell --json --limit 20
+  sivtr search decision --agent --provider pi --json
   sivtr search "workspace picker" --scope dialogue
   sivtr search sivtr --scope session --provider codex
   sivtr search "build error" --recent 2h --json --limit 20
@@ -539,6 +545,11 @@ pub struct DiffArgs {
 }
 
 #[derive(Args, Debug, Clone)]
+#[command(group(
+    ArgGroup::new("search_kind")
+        .args(["shell", "agent"])
+        .multiple(false)
+))]
 pub struct SearchArgs {
     /// Case-insensitive regex query.
     pub query: String,
@@ -550,6 +561,14 @@ pub struct SearchArgs {
     /// AI provider sessions to search
     #[arg(long, default_value_t = HotkeyProviderSelection::default(), value_name = "PROVIDER")]
     pub provider: HotkeyProviderSelection,
+
+    /// Search terminal command records only
+    #[arg(long, conflicts_with = "provider")]
+    pub shell: bool,
+
+    /// Search AI/agent conversation records only
+    #[arg(long)]
+    pub agent: bool,
 
     /// Workspace directory used to resolve current AI sessions
     #[arg(long, value_name = "PATH")]
@@ -1052,6 +1071,8 @@ mod tests {
                     HotkeyProviderSelection::provider(AgentProvider::Codex)
                 );
                 assert!(args.json);
+                assert!(!args.shell);
+                assert!(!args.agent);
                 assert_eq!(args.limit, 5);
                 assert_eq!(args.since, None);
                 assert_eq!(args.until, None);
@@ -1084,6 +1105,45 @@ mod tests {
             }
             _ => panic!("expected search command"),
         }
+    }
+
+    #[test]
+    fn search_accepts_shell_and_agent_alias_filters() {
+        let shell = Cli::try_parse_from(["sivtr", "search", "Error", "--shell", "--json"]).unwrap();
+
+        match shell.command {
+            Some(Commands::Search(args)) => {
+                assert!(args.shell);
+                assert!(!args.agent);
+                assert!(args.json);
+            }
+            _ => panic!("expected search command"),
+        }
+
+        let agent = Cli::try_parse_from(["sivtr", "search", "decision", "--agent"]).unwrap();
+
+        match agent.command {
+            Some(Commands::Search(args)) => {
+                assert!(args.agent);
+                assert!(!args.shell);
+            }
+            _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn search_rejects_shell_and_agent_together() {
+        let result = Cli::try_parse_from(["sivtr", "search", "needle", "--shell", "--agent"]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn search_rejects_provider_with_shell_filter() {
+        let result =
+            Cli::try_parse_from(["sivtr", "search", "needle", "--shell", "--provider", "pi"]);
+
+        assert!(result.is_err());
     }
 
     #[test]

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use regex::Regex;
 use serde::Serialize;
-use sivtr_core::record::{WorkRecordMatch, WorkRecordSearchScope};
+use sivtr_core::record::{WorkChannel, WorkRecordMatch, WorkRecordSearchScope};
 
 use crate::cli::{SearchArgs, SearchScopeArg};
 use crate::commands::records::current_work_record_index;
@@ -38,7 +38,11 @@ pub fn execute(args: &SearchArgs) -> Result<()> {
         .cwd
         .clone()
         .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
-    let providers = args.provider.providers();
+    let providers = if args.shell {
+        Vec::new()
+    } else {
+        args.provider.providers()
+    };
     let now = Utc::now();
     let (time_range, recent_count) = build_time_range(
         args.since.as_deref(),
@@ -49,9 +53,10 @@ pub fn execute(args: &SearchArgs) -> Result<()> {
     let records = current_work_record_index(&providers, &cwd, recent_count)?;
     let regex = Regex::new(&format!("(?i){}", args.query))?;
     let results = records.search(&regex, search_scope(args.scope), args.limit, |record| {
-        time_range
-            .as_ref()
-            .is_none_or(|range| range.contains_record_time(record.time.occurred_at.as_deref()))
+        source_matches(args, record.source.channel)
+            && time_range
+                .as_ref()
+                .is_none_or(|range| range.contains_record_time(record.time.occurred_at.as_deref()))
     });
 
     if args.json {
@@ -86,6 +91,18 @@ fn search_scope(scope: SearchScopeArg) -> WorkRecordSearchScope {
         SearchScopeArg::Dialogue => WorkRecordSearchScope::Title,
         SearchScopeArg::Session => WorkRecordSearchScope::Session,
     }
+}
+
+fn source_matches(args: &SearchArgs, channel: WorkChannel) -> bool {
+    if args.shell {
+        return channel == WorkChannel::Terminal;
+    }
+
+    if args.agent {
+        return channel == WorkChannel::Chat;
+    }
+
+    true
 }
 
 fn scope_name(scope: SearchScopeArg) -> &'static str {
