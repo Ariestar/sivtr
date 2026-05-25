@@ -230,6 +230,7 @@ Options:
 | `--latest <N>` | Return the latest N matching records before final sort |
 | `-l, --limit <N>` | Maximum result groups to print |
 | `--exclude-current`, `--other` | Exclude the current agent session from agent searches |
+| `--json` | Alias for `--format json` |
 | `--format <FORMAT>` | `timeline`, `compact`, `md`, or `json`; default is `json` |
 
 Time filters accept RFC3339 timestamps, Unix seconds/milliseconds, relative durations like `30m`, `2h`, `7d`, and aliases such as `today`, `yesterday`, `tomorrow`, `this morning`, `this afternoon`, `this evening`, `tonight`, and `now`.
@@ -237,7 +238,7 @@ Time filters accept RFC3339 timestamps, Unix seconds/milliseconds, relative dura
 Examples:
 
 ```bash
-sivtr search terminal --status failure --latest 1 --format json
+sivtr search terminal --status failure --latest 1 --json
 sivtr search terminal --match "panic|failed" --exclude "example|sample" --since today --format timeline
 sivtr search agent --match "TODO|failed|next step" --since yesterday --format md
 sivtr search pi --since today --sort oldest --format timeline

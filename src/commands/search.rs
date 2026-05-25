@@ -144,7 +144,7 @@ pub fn execute(args: &SearchArgs) -> Result<()> {
         results.truncate(limit);
     }
 
-    match args.format {
+    match search_format(args) {
         SearchOutputFormatArg::Json => {
             let json = SearchJsonOutput {
                 target: &args.target,
@@ -163,6 +163,14 @@ pub fn execute(args: &SearchArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn search_format(args: &SearchArgs) -> SearchOutputFormatArg {
+    if args.json {
+        SearchOutputFormatArg::Json
+    } else {
+        args.format
+    }
 }
 
 impl SearchTarget {

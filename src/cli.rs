@@ -413,6 +413,7 @@ Target selectors:
 
 Filters:
   --match <regex>       Case-insensitive regex content filter
+  --exclude <regex>     Case-insensitive regex exclusion filter
   --in <field>          content, title, session, input, output, command, or all
   --status <status>     success, failure, or unknown
   --exit-code <code>    Exact terminal process exit code
@@ -425,11 +426,12 @@ Filters:
   --latest <n>          Return the latest n matching records
   --exclude-current     Exclude the current agent session from agent searches
   --other               Alias for --exclude-current
+  --json                Alias for --format json
   --format <format>    Output format: timeline, compact, md, or json
 
 Examples:
-  sivtr search terminal --status failure --latest 1 --format json
-  sivtr search terminal --match "panic|failed" --latest 20 --format compact
+  sivtr search terminal --status failure --latest 1 --json
+  sivtr search terminal --match "panic|failed" --exclude "example|sample" --latest 20 --format compact
   sivtr search pi --match "merge|conflict" --latest 20 --format timeline
   sivtr search pi/019e5941 --match "cargo test" --format md
   sivtr search pi/019e5941/7 --format json
@@ -745,6 +747,10 @@ pub struct SearchArgs {
     /// Output format: timeline, compact, md, or json
     #[arg(long, default_value_t = SearchOutputFormatArg::default(), value_name = "FORMAT")]
     pub format: SearchOutputFormatArg,
+
+    /// Alias for --format json
+    #[arg(long, conflicts_with = "format")]
+    pub json: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -1238,6 +1244,7 @@ mod tests {
                 assert_eq!(args.last, None);
                 assert_eq!(args.latest, None);
                 assert!(!args.exclude_current);
+                assert!(!args.json);
             }
             _ => panic!("expected search command"),
         }
@@ -1324,8 +1331,24 @@ mod tests {
     }
 
     #[test]
-    fn search_rejects_old_json_flag() {
-        assert!(Cli::try_parse_from(["sivtr", "search", "agent", "--json"]).is_err());
+    fn search_accepts_json_alias() {
+        let cli = Cli::try_parse_from(["sivtr", "search", "agent", "--json"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Search(args)) => {
+                assert!(args.json);
+                assert_eq!(args.format, SearchOutputFormatArg::Json);
+            }
+            _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn search_rejects_json_alias_with_format() {
+        assert!(Cli::try_parse_from([
+            "sivtr", "search", "agent", "--json", "--format", "timeline",
+        ])
+        .is_err());
     }
 
     #[test]
