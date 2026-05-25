@@ -130,6 +130,7 @@ pub enum SearchOutputFormatArg {
     Compact,
     Timeline,
     Md,
+    Refs,
     #[default]
     Json,
 }
@@ -142,9 +143,10 @@ impl FromStr for SearchOutputFormatArg {
             "compact" => Ok(Self::Compact),
             "timeline" => Ok(Self::Timeline),
             "md" | "markdown" => Ok(Self::Md),
+            "refs" => Ok(Self::Refs),
             "json" => Ok(Self::Json),
             _ => Err(format!(
-                "unknown search format `{value}`; expected timeline, compact, md, or json"
+                "unknown search format `{value}`; expected timeline, compact, md, refs, or json"
             )),
         }
     }
@@ -156,6 +158,7 @@ impl std::fmt::Display for SearchOutputFormatArg {
             Self::Compact => "compact",
             Self::Timeline => "timeline",
             Self::Md => "md",
+            Self::Refs => "refs",
             Self::Json => "json",
         })
     }
@@ -427,11 +430,12 @@ Filters:
   --exclude-current     Exclude the current agent session from agent searches
   --other               Alias for --exclude-current
   --json                Alias for --format json
-  --format <format>    Output format: timeline, compact, md, or json
+  --refs                Alias for --format refs
+  --format <format>    Output format: timeline, compact, md, refs, or json
 
 Examples:
   sivtr search terminal --status failure --latest 1 --json
-  sivtr search terminal --match "panic|failed" --exclude "example|sample" --latest 20 --format compact
+  sivtr search terminal --match "panic|failed" --exclude "example|sample" --latest 20 --refs
   sivtr search pi --match "merge|conflict" --latest 20 --format timeline
   sivtr search pi/019e5941 --match "cargo test" --format md
   sivtr search pi/019e5941/7 --format json
@@ -744,13 +748,17 @@ pub struct SearchArgs {
     #[arg(long = "exclude-current", alias = "other")]
     pub exclude_current: bool,
 
-    /// Output format: timeline, compact, md, or json
+    /// Output format: timeline, compact, md, refs, or json
     #[arg(long, default_value_t = SearchOutputFormatArg::default(), value_name = "FORMAT")]
     pub format: SearchOutputFormatArg,
 
     /// Alias for --format json
     #[arg(long, conflicts_with = "format")]
     pub json: bool,
+
+    /// Alias for --format refs
+    #[arg(long, conflicts_with_all = ["format", "json"])]
+    pub refs: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -1245,6 +1253,7 @@ mod tests {
                 assert_eq!(args.latest, None);
                 assert!(!args.exclude_current);
                 assert!(!args.json);
+                assert!(!args.refs);
             }
             _ => panic!("expected search command"),
         }
@@ -1349,6 +1358,28 @@ mod tests {
             "sivtr", "search", "agent", "--json", "--format", "timeline",
         ])
         .is_err());
+    }
+
+    #[test]
+    fn search_accepts_refs_alias() {
+        let cli = Cli::try_parse_from(["sivtr", "search", "agent", "--refs"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Search(args)) => {
+                assert!(args.refs);
+                assert_eq!(args.format, SearchOutputFormatArg::Json);
+            }
+            _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn search_rejects_refs_alias_with_format_or_json() {
+        assert!(Cli::try_parse_from([
+            "sivtr", "search", "agent", "--refs", "--format", "timeline",
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from(["sivtr", "search", "agent", "--refs", "--json"]).is_err());
     }
 
     #[test]

@@ -160,13 +160,16 @@ pub fn execute(args: &SearchArgs) -> Result<()> {
         SearchOutputFormatArg::Compact => print_compact_results(&results),
         SearchOutputFormatArg::Timeline => print_timeline_results(&results),
         SearchOutputFormatArg::Md => print_markdown_results(&results),
+        SearchOutputFormatArg::Refs => print_ref_results(&results),
     }
 
     Ok(())
 }
 
 fn search_format(args: &SearchArgs) -> SearchOutputFormatArg {
-    if args.json {
+    if args.refs {
+        SearchOutputFormatArg::Refs
+    } else if args.json {
         SearchOutputFormatArg::Json
     } else {
         args.format
@@ -828,6 +831,12 @@ fn print_markdown_results(results: &[SearchResultGroup<'_>]) {
     }
 }
 
+fn print_ref_results(results: &[SearchResultGroup<'_>]) {
+    for result in results {
+        println!("{}", result.ref_);
+    }
+}
+
 fn short_time(record: &WorkRecord) -> String {
     record
         .time
@@ -929,6 +938,23 @@ mod tests {
 
         assert!(value["matches"][0].get("line").is_none());
         assert_eq!(value["matches"][0]["ref"], "terminal/session_1/3/2");
+    }
+
+    #[test]
+    fn print_ref_results_uses_record_refs() {
+        let record = test_terminal_record("terminal/session_1/3", "alpha\nneedle");
+        let target = parse_target("terminal/session_1/3").unwrap();
+        let regex = Regex::new("needle").unwrap();
+        let group = group_results(matching_refs(
+            &record,
+            &target,
+            SearchFieldArg::Content,
+            Some(&regex),
+        ))
+        .remove(0);
+
+        assert_eq!(group.ref_, "terminal/session_1/3");
+        assert_eq!(group.matches[0].ref_, "terminal/session_1/3/2");
     }
 
     #[test]

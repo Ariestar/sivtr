@@ -231,7 +231,8 @@ Targets：
 | `-l, --limit <N>` | 最大打印结果组数 |
 | `--exclude-current`、`--other` | Agent 搜索时排除当前 agent session |
 | `--json` | `--format json` 的别名 |
-| `--format <FORMAT>` | `timeline`、`compact`、`md` 或 `json`；默认是 `json` |
+| `--refs` | `--format refs` 的别名；逐行打印 record refs |
+| `--format <FORMAT>` | `timeline`、`compact`、`md`、`refs` 或 `json`；默认是 `json` |
 
 时间过滤支持 RFC3339 时间戳、Unix 秒/毫秒、`30m`、`2h`、`7d` 这样的相对时间，以及 `today`、`yesterday`、`tomorrow`、`this morning`、`this afternoon`、`this evening`、`tonight`、`now` 等别名。
 
@@ -239,7 +240,7 @@ Targets：
 
 ```bash
 sivtr search terminal --status failure --latest 1 --json
-sivtr search terminal --match "panic|failed" --exclude "example|sample" --since today --format timeline
+sivtr search terminal --match "panic|failed" --exclude "example|sample" --since today --refs
 sivtr search agent --match "TODO|failed|next step" --since yesterday --format md
 sivtr search pi --since today --sort oldest --format timeline
 sivtr search pi/019e5941 --match "cargo test" --format compact

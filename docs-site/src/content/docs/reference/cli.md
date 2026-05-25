@@ -231,7 +231,8 @@ Options:
 | `-l, --limit <N>` | Maximum result groups to print |
 | `--exclude-current`, `--other` | Exclude the current agent session from agent searches |
 | `--json` | Alias for `--format json` |
-| `--format <FORMAT>` | `timeline`, `compact`, `md`, or `json`; default is `json` |
+| `--refs` | Alias for `--format refs`; prints record refs, one per line |
+| `--format <FORMAT>` | `timeline`, `compact`, `md`, `refs`, or `json`; default is `json` |
 
 Time filters accept RFC3339 timestamps, Unix seconds/milliseconds, relative durations like `30m`, `2h`, `7d`, and aliases such as `today`, `yesterday`, `tomorrow`, `this morning`, `this afternoon`, `this evening`, `tonight`, and `now`.
 
@@ -239,7 +240,7 @@ Examples:
 
 ```bash
 sivtr search terminal --status failure --latest 1 --json
-sivtr search terminal --match "panic|failed" --exclude "example|sample" --since today --format timeline
+sivtr search terminal --match "panic|failed" --exclude "example|sample" --since today --refs
 sivtr search agent --match "TODO|failed|next step" --since yesterday --format md
 sivtr search pi --since today --sort oldest --format timeline
 sivtr search pi/019e5941 --match "cargo test" --format compact
