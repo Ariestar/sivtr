@@ -7,7 +7,7 @@ Command syntax itself lives in `references/commands.md`.
 
 When the user says the last command failed, search for the likely error first.
 
-- For terminal failures, search terminal records first (`sivtr search terminal --status failure --format json --latest 1`) so AI discussion does not outrank terminal evidence.
+- For terminal failures, search terminal records first (`sivtr s terminal --status fail --json --latest 1`) so AI discussion does not outrank terminal evidence.
 - Search `agent` or a provider target (`pi`, `codex`, `claude`, `opencode`) only when the user asks for AI/agent conversation history or prior discussion.
 - Narrow by tool or language if the project is obvious
 - If search returns a useful `ref`, expand it with `sivtr show "<ref>" --json`
@@ -23,7 +23,7 @@ When the user says "continue", reconstruct the active thread before guessing.
   the search: provider/source, cwd/workspace, time window, content topic, and
   whether they mean content, dialogue title, or session title.
 - Express structured constraints with target selectors and filters (`terminal`,
-  `agent`, provider targets, `--cwd`, `--last`, `--since`, `--until`, `--in`)
+  `agent`, provider targets, `--cwd`, `--last`, `--since`, `--until`, `-i`/`--in`)
   instead of embedding them in the regex query.
 - Start with a broad content topic. If sparse, expand the query with related
   terms while keeping the same structured filters.
