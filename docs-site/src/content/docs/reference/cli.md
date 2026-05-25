@@ -216,6 +216,7 @@ Options:
 | Option | Meaning |
 | --- | --- |
 | `--match <REGEX>` | Case-insensitive content filter |
+| `--exclude <REGEX>` | Case-insensitive exclusion filter applied after matches are found |
 | `--in <FIELD>` | `content`, `title`, `session`, `input`, `output`, `command`, or `all`; default is `content` |
 | `--status <STATUS>` | `success`, `failure`, or `unknown` |
 | `--exit-code <CODE>` | Exact terminal process exit code |
@@ -237,7 +238,7 @@ Examples:
 
 ```bash
 sivtr search terminal --status failure --latest 1 --format json
-sivtr search terminal --match "panic|failed" --since today --format timeline
+sivtr search terminal --match "panic|failed" --exclude "example|sample" --since today --format timeline
 sivtr search agent --match "TODO|failed|next step" --since yesterday --format md
 sivtr search pi --since today --sort oldest --format timeline
 sivtr search pi/019e5941 --match "cargo test" --format compact

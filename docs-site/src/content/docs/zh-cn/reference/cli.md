@@ -216,6 +216,7 @@ Targets：
 | 选项 | 含义 |
 | --- | --- |
 | `--match <REGEX>` | 大小写不敏感内容过滤 |
+| `--exclude <REGEX>` | 大小写不敏感排除过滤，在找到匹配后应用 |
 | `--in <FIELD>` | `content`、`title`、`session`、`input`、`output`、`command` 或 `all`；默认是 `content` |
 | `--status <STATUS>` | `success`、`failure` 或 `unknown` |
 | `--exit-code <CODE>` | 精确终端进程退出码 |
@@ -237,7 +238,7 @@ Targets：
 
 ```bash
 sivtr search terminal --status failure --latest 1 --format json
-sivtr search terminal --match "panic|failed" --since today --format timeline
+sivtr search terminal --match "panic|failed" --exclude "example|sample" --since today --format timeline
 sivtr search agent --match "TODO|failed|next step" --since yesterday --format md
 sivtr search pi --since today --sort oldest --format timeline
 sivtr search pi/019e5941 --match "cargo test" --format compact

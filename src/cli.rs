@@ -686,6 +686,10 @@ pub struct SearchArgs {
     #[arg(long = "match", value_name = "REGEX")]
     pub match_: Option<String>,
 
+    /// Case-insensitive regex exclusion filter
+    #[arg(long, value_name = "REGEX")]
+    pub exclude: Option<String>,
+
     /// Field to match: content, title, session, input, output, command, or all
     #[arg(long = "in", default_value_t = SearchFieldArg::default(), value_name = "FIELD")]
     pub in_field: SearchFieldArg,
@@ -1220,6 +1224,7 @@ mod tests {
             Some(Commands::Search(args)) => {
                 assert_eq!(args.target, "pi/019e5941");
                 assert_eq!(args.match_.as_deref(), Some("workspace picker"));
+                assert_eq!(args.exclude.as_deref(), None);
                 assert_eq!(args.in_field, SearchFieldArg::Title);
                 assert_eq!(args.status, Some(SearchStatusArg::Unknown));
                 assert_eq!(args.exit_code, None);
@@ -1336,6 +1341,28 @@ mod tests {
 
         match cli.command {
             Some(Commands::Search(args)) => assert!(args.exclude_current),
+            _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn search_accepts_exclude_filter() {
+        let cli = Cli::try_parse_from([
+            "sivtr",
+            "search",
+            "agent",
+            "--match",
+            "TODO|pending",
+            "--exclude",
+            "example|示例",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Commands::Search(args)) => {
+                assert_eq!(args.match_.as_deref(), Some("TODO|pending"));
+                assert_eq!(args.exclude.as_deref(), Some("example|示例"));
+            }
             _ => panic!("expected search command"),
         }
     }

@@ -106,6 +106,11 @@ pub fn execute(args: &SearchArgs) -> Result<()> {
         .as_deref()
         .map(|query| Regex::new(&format!("(?i){query}")))
         .transpose()?;
+    let exclude_regex = args
+        .exclude
+        .as_deref()
+        .map(|query| Regex::new(&format!("(?i){query}")))
+        .transpose()?;
     let min_duration_ms = parse_duration_ms_filter(args.min_duration.as_deref(), "--min-duration")?;
     let max_duration_ms = parse_duration_ms_filter(args.max_duration.as_deref(), "--max-duration")?;
     if let (Some(min), Some(max)) = (min_duration_ms, max_duration_ms) {
@@ -127,6 +132,7 @@ pub fn execute(args: &SearchArgs) -> Result<()> {
                     .is_none_or(|range| range.contains_record_time(record.time.primary_at()))
         })
         .flat_map(|record| matching_refs(record, &target, args.in_field, regex.as_ref()))
+        .filter(|matched| !match_excluded(matched, args.in_field, exclude_regex.as_ref()))
         .collect::<Vec<_>>();
     sort_results(&mut matches, SearchSortArg::Newest);
     let mut results = group_results(matches);
@@ -368,6 +374,32 @@ fn field_matches(record: &WorkRecord, field: SearchFieldArg, regex: &Regex) -> b
                 || regex.is_match(record.work_ref.session())
         }
     }
+}
+
+fn match_excluded(matched: &SearchMatch<'_>, field: SearchFieldArg, regex: Option<&Regex>) -> bool {
+    let Some(regex) = regex else {
+        return false;
+    };
+
+    if regex.is_match(&matched.snippet) {
+        return true;
+    }
+
+    if line_search_field(field) {
+        return matched
+            .ref_
+            .rsplit_once('/')
+            .and_then(|(_, line)| line.parse::<usize>().ok())
+            .and_then(|line| {
+                combined_text(matched.record)
+                    .lines()
+                    .nth(line - 1)
+                    .map(str::to_string)
+            })
+            .is_some_and(|line| regex.is_match(&line));
+    }
+
+    field_matches(matched.record, field, regex)
 }
 
 fn field_name(field: SearchFieldArg) -> &'static str {
@@ -901,6 +933,23 @@ mod tests {
 
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].ref_, "terminal/session_1/3/2");
+    }
+
+    #[test]
+    fn match_excluded_filters_matching_snippets() {
+        let record =
+            test_terminal_record("terminal/session_1/3", "alpha\nneedle example\nneedle real");
+        let target = parse_target("terminal/session_1/3").unwrap();
+        let regex = Regex::new("needle").unwrap();
+        let exclude = Regex::new("example").unwrap();
+        let matches = matching_refs(&record, &target, SearchFieldArg::Content, Some(&regex))
+            .into_iter()
+            .filter(|matched| !match_excluded(matched, SearchFieldArg::Content, Some(&exclude)))
+            .collect::<Vec<_>>();
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].ref_, "terminal/session_1/3/3");
+        assert_eq!(matches[0].snippet, "needle real");
     }
 
     #[test]
