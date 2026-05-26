@@ -8,7 +8,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sivtr_core::ai::{AgentProvider, AgentSessionProvider};
 use sivtr_core::record::{
-    RecordTextMode, WorkOutcome, WorkRecord, WorkRecordKind, WorkRef, WorkRefSelector,
+    RecordTextMode, WorkOutcome, WorkRecord, WorkRecordKind, WorkRefSelector,
 };
 
 use crate::cli::{
@@ -797,7 +797,7 @@ fn escape_markdown_title(title: &str) -> String {
 mod tests {
     use super::*;
     use sivtr_core::record::{
-        WorkPayload, WorkRecordKind, WorkRefSelector, WorkStatus, WorkText, WorkTime,
+        WorkPayload, WorkRecordKind, WorkRef, WorkRefSelector, WorkStatus, WorkText, WorkTime,
     };
 
     #[test]

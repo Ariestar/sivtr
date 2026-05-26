@@ -499,6 +499,9 @@ pub enum Commands {
     /// Manage configuration
     Config(ConfigCommand),
 
+    /// Diagnose installation and environment
+    Doctor,
+
     /// Generate shell integration or desktop shortcut helpers
     Init {
         /// Integration target: powershell, bash, zsh, nushell, all, tmux, linux-shortcut, macos-shortcut, show, uninstall
