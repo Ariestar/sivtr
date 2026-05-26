@@ -26,14 +26,22 @@ pub fn execute() -> Result<()> {
     // Session log directory
     checks += 1;
     eprintln!("[check] session log directory");
-    let state_dir = dirs::state_dir()
-        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".local").join("state"));
+    let state_dir = dirs::state_dir().unwrap_or_else(|| {
+        dirs::home_dir()
+            .unwrap_or_default()
+            .join(".local")
+            .join("state")
+    });
     let session_dir = state_dir.join("sivtr");
     if session_dir.exists() {
         let count = std::fs::read_dir(&session_dir)
             .map(|d| d.count())
             .unwrap_or(0);
-        eprintln!("  found: {} ({} session logs)", session_dir.display(), count);
+        eprintln!(
+            "  found: {} ({} session logs)",
+            session_dir.display(),
+            count
+        );
         passed += 1;
     } else {
         eprintln!("  missing (will be created on first `sivtr init` + terminal restart)");

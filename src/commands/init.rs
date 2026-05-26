@@ -510,14 +510,20 @@ fn show_status() -> Result<()> {
             Ok(path) => {
                 if path.exists() {
                     let content = fs::read_to_string(&path).unwrap_or_default();
-                    if content.contains(spec_ref.spec.marker_start) || content.contains(spec_ref.spec.hook) {
+                    if content.contains(spec_ref.spec.marker_start)
+                        || content.contains(spec_ref.spec.hook)
+                    {
                         eprintln!("  {}: installed in {}", spec_ref.name, path.display());
                         any_installed = true;
                     } else {
                         eprintln!("  {}: not installed ({})", spec_ref.name, path.display());
                     }
                 } else {
-                    eprintln!("  {}: not installed (no profile at {})", spec_ref.name, path.display());
+                    eprintln!(
+                        "  {}: not installed (no profile at {})",
+                        spec_ref.name,
+                        path.display()
+                    );
                 }
             }
             Err(e) => {
@@ -579,7 +585,11 @@ fn uninstall_all() -> Result<()> {
                 if let Some(updated) = remove_hook_block(&content, spec_ref.spec) {
                     fs::write(&path, updated)
                         .with_context(|| format!("Failed to write {}", path.display()))?;
-                    eprintln!("sivtr: removed {} hook from {}", spec_ref.name, path.display());
+                    eprintln!(
+                        "sivtr: removed {} hook from {}",
+                        spec_ref.name,
+                        path.display()
+                    );
                     removed += 1;
                 }
             }
@@ -616,24 +626,41 @@ struct ShellSpecRef<'a> {
 
 fn shell_specs() -> Vec<ShellSpecRef<'static>> {
     vec![
-        ShellSpecRef { name: "bash", spec: &BASH_SPEC, path_fn: bash_profile_path },
-        ShellSpecRef { name: "zsh", spec: &ZSH_SPEC, path_fn: zsh_profile_path },
-        ShellSpecRef { name: "nushell", spec: &NUSHELL_SPEC, path_fn: nushell_config_path },
+        ShellSpecRef {
+            name: "bash",
+            spec: &BASH_SPEC,
+            path_fn: bash_profile_path,
+        },
+        ShellSpecRef {
+            name: "zsh",
+            spec: &ZSH_SPEC,
+            path_fn: zsh_profile_path,
+        },
+        ShellSpecRef {
+            name: "nushell",
+            spec: &NUSHELL_SPEC,
+            path_fn: nushell_config_path,
+        },
     ]
     // PowerShell detected dynamically — handled inline in show_status/uninstall if needed
 }
 
 fn session_log_dir() -> PathBuf {
-    dirs::state_dir().unwrap_or_else(|| {
-        dirs::home_dir().unwrap_or_default().join(".local").join("state")
-    }).join("sivtr")
+    dirs::state_dir()
+        .unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_default()
+                .join(".local")
+                .join("state")
+        })
+        .join("sivtr")
 }
 
 fn remove_hook_block(content: &str, spec: &HookSpec) -> Option<String> {
     if let Some((start, end)) = find_marked_block(content, spec.marker_start, spec.marker_end) {
         let mut updated = String::with_capacity(content.len() - (end - start));
         updated.push_str(&content[..start]);
-        updated.push_str(&content[end..].trim_start_matches('\n'));
+        updated.push_str(content[end..].trim_start_matches('\n'));
         Some(updated)
     } else if content.contains(spec.hook) {
         Some(content.replacen(spec.hook, "", 1))

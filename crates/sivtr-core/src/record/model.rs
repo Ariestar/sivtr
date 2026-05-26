@@ -259,10 +259,7 @@ impl WorkRecord {
             .map(|block| ChatMessage {
                 role: block_role(block.kind).to_string(),
                 content: compact_skill_blocks(block.text.trim()),
-                timestamp: block
-                    .timestamp
-                    .as_deref()
-                    .and_then(normalize_timestamp),
+                timestamp: block.timestamp.as_deref().and_then(normalize_timestamp),
             })
             .filter(|message| !message.content.is_empty())
             .collect::<Vec<_>>();
@@ -293,7 +290,8 @@ impl WorkRecord {
         } else {
             title_preview(&user)
         };
-        let started_at = first_timestamp(blocks).and_then(|timestamp| normalize_timestamp(&timestamp));
+        let started_at =
+            first_timestamp(blocks).and_then(|timestamp| normalize_timestamp(&timestamp));
         let ended_at = last_timestamp(blocks).and_then(|timestamp| normalize_timestamp(&timestamp));
 
         Some(Self {
@@ -565,10 +563,7 @@ fn selected_block_record(
     let title = title_preview(&text);
     let session_ref = agent_session_ref_id(session.id.as_deref(), &session.path);
     let work_ref = WorkRef::agent_record(provider, session_ref.clone(), index + 1);
-    let block_timestamp = block
-        .timestamp
-        .as_deref()
-        .and_then(normalize_timestamp);
+    let block_timestamp = block.timestamp.as_deref().and_then(normalize_timestamp);
     let (input, output) = match kind {
         AgentBlockKind::User => (Some(text.clone()), None),
         AgentBlockKind::Assistant | AgentBlockKind::ToolOutput => (None, Some(text.clone())),
@@ -645,10 +640,7 @@ fn selected_group_record(
                 .map(|block| ChatMessage {
                     role: block_role(block.kind).to_string(),
                     content: compact_skill_blocks(block.text.trim()),
-                    timestamp: block
-                        .timestamp
-                        .as_deref()
-                        .and_then(normalize_timestamp),
+                    timestamp: block.timestamp.as_deref().and_then(normalize_timestamp),
                 })
                 .filter(|message| !message.content.is_empty())
                 .collect(),
@@ -824,7 +816,10 @@ fn trim_preserving_inner_whitespace(text: &str) -> String {
 }
 
 fn title_preview(text: &str) -> String {
-    preview_from_lines(text.lines().filter(|line| !is_skill_marker_line(line.trim())))
+    preview_from_lines(
+        text.lines()
+            .filter(|line| !is_skill_marker_line(line.trim())),
+    )
 }
 
 fn preview(text: &str) -> String {
@@ -877,7 +872,10 @@ mod tests {
 
         assert_eq!(record.kind, WorkRecordKind::TerminalCommand);
         assert_eq!(record.cwd.as_deref(), Some("D:\\sivtr"));
-        assert_eq!(record.time.ended_at.as_deref().and_then(parse_timestamp), parse_timestamp("2026-05-23T12:00:00Z"));
+        assert_eq!(
+            record.time.ended_at.as_deref().and_then(parse_timestamp),
+            parse_timestamp("2026-05-23T12:00:00Z")
+        );
         assert_eq!(
             record.time.started_at.as_deref().and_then(parse_timestamp),
             parse_timestamp("2026-05-23T11:59:59.958Z")
@@ -927,11 +925,19 @@ mod tests {
         );
         assert_eq!(records[0].text.output, None);
         assert_eq!(
-            records[0].time.started_at.as_deref().and_then(parse_timestamp),
+            records[0]
+                .time
+                .started_at
+                .as_deref()
+                .and_then(parse_timestamp),
             parse_timestamp("2026-05-23T12:01:00Z")
         );
         assert_eq!(
-            records[0].time.ended_at.as_deref().and_then(parse_timestamp),
+            records[0]
+                .time
+                .ended_at
+                .as_deref()
+                .and_then(parse_timestamp),
             parse_timestamp("2026-05-23T12:03:00Z")
         );
         assert_eq!(records[0].time.duration_ms, Some(120_000));
@@ -974,11 +980,19 @@ mod tests {
         assert_eq!(records[0].text.input.as_deref(), Some("implement this"));
         assert_eq!(records[0].text.output.as_deref(), Some("done"));
         assert_eq!(
-            records[0].time.started_at.as_deref().and_then(parse_timestamp),
+            records[0]
+                .time
+                .started_at
+                .as_deref()
+                .and_then(parse_timestamp),
             parse_timestamp("2026-05-23T12:01:00Z")
         );
         assert_eq!(
-            records[0].time.ended_at.as_deref().and_then(parse_timestamp),
+            records[0]
+                .time
+                .ended_at
+                .as_deref()
+                .and_then(parse_timestamp),
             parse_timestamp("2026-05-23T12:02:00Z")
         );
         assert_eq!(records[0].time.duration_ms, Some(60_000));
