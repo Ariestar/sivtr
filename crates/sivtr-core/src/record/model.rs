@@ -334,15 +334,9 @@ impl WorkRecord {
     ) -> Vec<Self> {
         match selection {
             AgentSelection::LastTurn => Self::chat_turns(provider, session),
-            AgentSelection::LastAssistant => {
-                selected_block_records(provider, session, selection, AgentBlockKind::Assistant)
-            }
-            AgentSelection::LastUser => {
-                selected_block_records(provider, session, selection, AgentBlockKind::User)
-            }
-            AgentSelection::LastTool => {
-                selected_block_records(provider, session, selection, AgentBlockKind::ToolOutput)
-            }
+            AgentSelection::LastAssistant => selected_block_records(provider, session, selection),
+            AgentSelection::LastUser => selected_block_records(provider, session, selection),
+            AgentSelection::LastTool => selected_block_records(provider, session, selection),
             AgentSelection::LastBlocks(_) | AgentSelection::All => {
                 selected_group_record(provider, session, selection)
             }
@@ -604,10 +598,7 @@ fn render_prompt_override(prompt: &str, command: &str) -> String {
 
 fn chat_record_text(record: &WorkRecord, mode: RecordTextMode) -> RecordText {
     let text = match mode {
-        RecordTextMode::Combined => join_nonempty([
-            record.input_text().as_deref().unwrap_or(""),
-            record.output_text().as_deref().unwrap_or(""),
-        ]),
+        RecordTextMode::Combined => record.combined_text(),
         RecordTextMode::Input => record.input_text().unwrap_or_default(),
         RecordTextMode::Output => record.output_text().unwrap_or_default(),
         RecordTextMode::Command => String::new(),
@@ -619,20 +610,18 @@ fn selected_block_records(
     provider: AgentProvider,
     session: &AgentSession,
     selection: AgentSelection,
-    kind: AgentBlockKind,
 ) -> Vec<WorkRecord> {
     select_blocks(session, selection)
         .into_iter()
         .enumerate()
         .filter(|(_, block)| !block.text.trim().is_empty())
-        .map(|(index, block)| selected_block_record(provider, session, kind, index, block))
+        .map(|(index, block)| selected_block_record(provider, session, index, block))
         .collect()
 }
 
 fn selected_block_record(
     provider: AgentProvider,
     session: &AgentSession,
-    _kind: AgentBlockKind,
     index: usize,
     block: AgentBlock,
 ) -> WorkRecord {
@@ -894,14 +883,6 @@ fn preview_from_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> String {
 
 fn is_skill_marker_line(line: &str) -> bool {
     line.starts_with("[skill:") && line.ends_with(']')
-}
-
-fn join_nonempty<'a>(texts: impl IntoIterator<Item = &'a str>) -> String {
-    let mut output = String::new();
-    for text in texts {
-        append_text_segment(&mut output, text);
-    }
-    output
 }
 
 fn append_text_segment(output: &mut String, text: &str) {

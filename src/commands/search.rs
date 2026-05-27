@@ -7,9 +7,7 @@ use chrono::Utc;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sivtr_core::ai::{AgentProvider, AgentSessionProvider};
-use sivtr_core::record::{
-    RecordTextMode, WorkOutcome, WorkRecord, WorkRecordKind, WorkRefSelector,
-};
+use sivtr_core::record::{WorkOutcome, WorkRecord, WorkRecordKind, WorkRefSelector};
 
 use crate::cli::{
     SearchArgs, SearchFieldArg, SearchOutputFormatArg, SearchSortArg, SearchStatusArg,
@@ -515,7 +513,7 @@ fn sort_results(results: &mut [SearchMatch<'_>], sort: SearchSortArg) {
 }
 
 fn combined_text(record: &WorkRecord) -> String {
-    record.copy_text(RecordTextMode::Combined, false).plain
+    record.combined_text()
 }
 
 fn group_results(matches: Vec<SearchMatch<'_>>) -> Vec<SearchResultGroup<'_>> {
