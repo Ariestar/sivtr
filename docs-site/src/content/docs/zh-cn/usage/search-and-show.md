@@ -121,9 +121,10 @@ Ref/selector 形状如下：
 
 ```text
 source/session[/record-or-turn[/line]]
+source/session/record/<i|o>/<part>
 ```
 
-具体 ref 指向单个 record 或单行。作为命令输入时，record/turn 和 line segment 也可以是 `3-5,7` 这样的 selector；输出 ref 仍然是具体锚点。
+具体 ref 指向单个 record、单行或单个 part。作为命令输入时，record/turn 和 line segment 也可以是 `3-5,7` 这样的 selector；输出 ref 仍然是具体锚点。Part ref 使用 `i`（输入）或 `o`（输出）加上 1-based part 索引。
 
 打印一个 record 或 turn：
 
@@ -137,6 +138,13 @@ sivtr show terminal/<session>/<record>
 ```bash
 sivtr show claude/<session>/<turn>/<line>
 sivtr show terminal/<session>/<record>/<line>
+```
+
+打印特定的 input 或 output part：
+
+```bash
+sivtr show codex/<session>/<turn>/o/1
+sivtr show terminal/<session>/<record>/i/2
 ```
 
 用 selector 语法打印多个 record 或 line：

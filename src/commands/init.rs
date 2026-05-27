@@ -197,7 +197,7 @@ const TMUX_MARKER_START: &str = "# >>> sivtr tmux shortcut >>>";
 const TMUX_MARKER_END: &str = "# <<< sivtr tmux shortcut <<<";
 #[cfg(unix)]
 const TMUX_HOOK: &str = r##"# >>> sivtr tmux shortcut >>>
-bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex --pick"
+bind-key y new-window -c "#{pane_current_path}" "sivtr hotkey-pick-agent --cwd . --provider all"
 # <<< sivtr tmux shortcut <<<
 "##;
 

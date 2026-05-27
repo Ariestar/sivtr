@@ -121,9 +121,10 @@ Refs/selectors have this shape:
 
 ```text
 source/session[/record-or-turn[/line]]
+source/session/record/<i|o>/<part>
 ```
 
-A concrete ref points at one record or one line. As command input, the record/turn and line segments can also be selectors such as `3-5,7`; output refs remain concrete anchors.
+A concrete ref points at one record, one line, or one part. As command input, the record/turn and line segments can also be selectors such as `3-5,7`; output refs remain concrete anchors. Part refs use `i` (input) or `o` (output) followed by a 1-based part index.
 
 Print a record or turn:
 
@@ -137,6 +138,13 @@ Print one 1-based line:
 ```bash
 sivtr show claude/<session>/<turn>/<line>
 sivtr show terminal/<session>/<record>/<line>
+```
+
+Print a specific input or output part:
+
+```bash
+sivtr show codex/<session>/<turn>/o/1
+sivtr show terminal/<session>/<record>/i/2
 ```
 
 Print multiple records or lines with selector syntax:

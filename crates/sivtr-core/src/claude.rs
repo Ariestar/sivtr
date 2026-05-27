@@ -51,6 +51,9 @@ fn update_meta(meta: &mut AgentSessionMeta, value: &Value) {
     if meta.cwd.is_none() {
         meta.cwd = value.get("cwd").and_then(Value::as_str).map(str::to_string);
     }
+    if meta.title.is_none() {
+        meta.title = event_title(value);
+    }
 }
 
 fn apply_event(session: &mut AgentSession, value: &Value) {
@@ -68,21 +71,7 @@ fn apply_event(session: &mut AgentSession, value: &Value) {
     match value.get("type").and_then(Value::as_str) {
         Some("user") => apply_message(session, value, AgentBlockKind::User, timestamp),
         Some("assistant") => apply_message(session, value, AgentBlockKind::Assistant, timestamp),
-        Some(
-            "permission-mode"
-            | "ai-title"
-            | "file-history-snapshot"
-            | "attachment"
-            | "last-prompt"
-            | "system"
-            | "queue-operation",
-        ) => {}
-        Some(event_type) => {
-            panic!("Unexpected Claude event type: {event_type}");
-        }
-        None => {
-            panic!("Claude event must include type");
-        }
+        _ => {}
     }
 }
 
@@ -96,6 +85,19 @@ fn update_session_meta(session: &mut AgentSession, value: &Value) {
     if session.cwd.is_none() {
         session.cwd = value.get("cwd").and_then(Value::as_str).map(str::to_string);
     }
+    if let Some(title) = event_title(value) {
+        session.title = Some(title);
+    }
+}
+
+fn event_title(value: &Value) -> Option<String> {
+    value
+        .get("customTitle")
+        .or_else(|| value.get("title"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .map(str::to_string)
 }
 
 fn apply_message(
@@ -104,10 +106,12 @@ fn apply_message(
     kind: AgentBlockKind,
     timestamp: Option<String>,
 ) {
-    let content = value
+    let Some(content) = value
         .get("message")
         .and_then(|message| message.get("content"))
-        .expect("Claude user/assistant event must include message.content");
+    else {
+        return;
+    };
     push_content_blocks(session, kind, timestamp, content);
 }
 
@@ -130,45 +134,36 @@ fn push_content_blocks(
                     Some("thinking") => {}
                     Some("tool_use") => push_tool_use(session, timestamp.clone(), item),
                     Some("tool_result") => {
-                        let content = item
-                            .get("content")
-                            .expect("Claude structured tool_result must include content");
-                        push_block(
-                            session,
-                            AgentBlockKind::ToolOutput,
-                            timestamp.clone(),
-                            None,
-                            extract_content_text(content),
-                        );
+                        if let Some(content) = item.get("content") {
+                            push_block(
+                                session,
+                                AgentBlockKind::ToolOutput,
+                                timestamp.clone(),
+                                None,
+                                extract_content_text(content),
+                            );
+                        }
                     }
                     Some("image") => {}
-                    None => {
-                        panic!("Claude content item must include type");
-                    }
-                    Some(item_type) => {
-                        panic!("Unexpected Claude content item type: {item_type}");
-                    }
+                    _ => {}
                 }
             }
         }
         Value::String(text) => push_text_content_blocks(session, kind, timestamp, text.clone()),
-        other => {
-            panic!("Unexpected Claude message.content shape: {other:?}");
-        }
+        _ => {}
     }
 }
 
 fn push_tool_use(session: &mut AgentSession, timestamp: Option<String>, item: &Value) {
-    let input = item
-        .get("input")
-        .expect("Claude structured tool_use must include input");
-    push_block(
-        session,
-        AgentBlockKind::ToolCall,
-        timestamp,
-        item.get("name").and_then(Value::as_str).map(str::to_string),
-        pretty_json_value(input),
-    );
+    if let Some(input) = item.get("input") {
+        push_block(
+            session,
+            AgentBlockKind::ToolCall,
+            timestamp,
+            item.get("name").and_then(Value::as_str).map(str::to_string),
+            pretty_json_value(input),
+        );
+    }
 }
 
 fn push_text_content_blocks(
@@ -403,6 +398,53 @@ mod tests {
             format_blocks(&session.blocks),
             "## User\nhello\n\n## Assistant\ndone"
         );
+    }
+
+    #[test]
+    fn ignores_claude_non_dialogue_events_and_keeps_custom_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"type":"custom-title","sessionId":"abc","customTitle":"Named session"}
+{"type":"permission-mode","sessionId":"abc","permissionMode":"default"}
+{"type":"user","sessionId":"abc","cwd":"C:\\repo","message":{"role":"user","content":"hello"}}
+{"type":"pr-link","sessionId":"abc","prNumber":19,"prUrl":"https://github.com/Ariestar/sivtr/pull/19","prRepository":"Ariestar/sivtr","timestamp":"2026-05-23T03:25:11.176Z"}
+{"type":"assistant","sessionId":"abc","cwd":"C:\\repo","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}
+"#,
+        )
+        .unwrap();
+
+        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+
+        assert_eq!(session.id.as_deref(), Some("abc"));
+        assert_eq!(session.cwd.as_deref(), Some("C:\\repo"));
+        assert_eq!(session.title.as_deref(), Some("Named session"));
+        assert_eq!(session.blocks.len(), 2);
+        assert_eq!(
+            format_blocks(&session.blocks),
+            "## User\nhello\n\n## Assistant\ndone"
+        );
+    }
+
+    #[test]
+    fn ignores_unknown_claude_content_items() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"type":"user","sessionId":"abc","cwd":"C:\\repo","message":{"role":"user","content":"hello"}}
+{"type":"assistant","sessionId":"abc","cwd":"C:\\repo","message":{"role":"assistant","content":[{"type":"citation","text":"ignored"},{"type":"text","text":"done"}]}}
+"#,
+        )
+        .unwrap();
+
+        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+
+        assert_eq!(session.blocks.len(), 2);
+        assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
+        assert_eq!(session.blocks[1].kind, AgentBlockKind::Assistant);
+        assert_eq!(session.blocks[1].text, "done");
     }
 
     #[test]

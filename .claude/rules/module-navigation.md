@@ -22,7 +22,8 @@ src/
 │   ├── search.rs              ← Search command with pipeline
 │   ├── show.rs                ← Show ref content
 │   ├── diff.rs                ← Diff two blocks
-│   ├── work.rs                ← Workspace traversal
+│   ├── work.rs                ← Workspace traversal (sessions/records/parts)
+│   ├── work_json.rs           ← JSON metadata helpers for work command
 │   ├── config.rs              ← Config init/show/edit
 │   ├── doctor.rs              ← Environment diagnostics
 │   ├── hotkey.rs              ← Global hotkey (Windows)

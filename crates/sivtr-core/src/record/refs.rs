@@ -4,11 +4,13 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::ai::AgentProvider;
+use crate::record::model::WorkPartIo;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkRefTarget {
     Record,
     Line(usize),
+    Part { io: WorkPartIo, index: usize },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,6 +132,14 @@ impl WorkRef {
     }
 
     pub fn with_line(&self, line: usize) -> Self {
+        self.with_target(WorkRefTarget::Line(line))
+    }
+
+    pub fn with_part(&self, io: WorkPartIo, index: usize) -> Self {
+        self.with_target(WorkRefTarget::Part { io, index })
+    }
+
+    pub fn with_target(&self, target: WorkRefTarget) -> Self {
         match self {
             Self::Terminal {
                 session,
@@ -138,7 +148,7 @@ impl WorkRef {
             } => Self::Terminal {
                 session: session.clone(),
                 record_index: *record_index,
-                target: WorkRefTarget::Line(line),
+                target,
             },
             Self::Agent {
                 provider,
@@ -149,7 +159,7 @@ impl WorkRef {
                 provider: *provider,
                 session: session.clone(),
                 turn_index: *turn_index,
-                target: WorkRefTarget::Line(line),
+                target,
             },
         }
     }
@@ -174,6 +184,14 @@ impl WorkRef {
         match self.target() {
             WorkRefTarget::Record => None,
             WorkRefTarget::Line(line) => Some(line),
+            WorkRefTarget::Part { .. } => None,
+        }
+    }
+
+    pub fn part(&self) -> Option<(WorkPartIo, usize)> {
+        match self.target() {
+            WorkRefTarget::Part { io, index } => Some((io, index)),
+            WorkRefTarget::Record | WorkRefTarget::Line(_) => None,
         }
     }
 
@@ -232,8 +250,12 @@ impl fmt::Display for WorkRef {
 
 fn write_parts(f: &mut fmt::Formatter<'_>, parts: &[&str], target: WorkRefTarget) -> fmt::Result {
     write!(f, "{}", parts.join("/"))?;
-    if let WorkRefTarget::Line(line) = target {
-        write!(f, "/{line}")?;
+    match target {
+        WorkRefTarget::Record => {}
+        WorkRefTarget::Line(line) => write!(f, "/{line}")?,
+        WorkRefTarget::Part { io, index } => {
+            write!(f, "/{}/{index}", part_segment(io))?;
+        }
     }
     Ok(())
 }
@@ -309,57 +331,72 @@ impl FromStr for WorkRef {
     type Err = anyhow::Error;
 
     fn from_str(value: &str) -> Result<Self> {
-        let selector: WorkRefSelector = value.parse()?;
-        match selector {
-            WorkRefSelector::Terminal {
-                session,
-                records,
-                lines,
-            } => Ok(Self::Terminal {
-                session: required_session(session, value)?,
-                record_index: single_index(records.as_deref(), "record", value)?,
-                target: target_from_lines(lines.as_deref(), value)?,
-            }),
-            WorkRefSelector::Agent {
-                provider: Some(provider),
-                session,
-                records,
-                lines,
-            } => Ok(Self::Agent {
-                provider,
-                session: required_session(session, value)?,
-                turn_index: single_index(records.as_deref(), "record", value)?,
-                target: target_from_lines(lines.as_deref(), value)?,
-            }),
-            WorkRefSelector::Agent { provider: None, .. } => {
-                bail!("Invalid work ref `{value}`; provider-specific source is required")
-            }
+        let parts = value
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>();
+        if !(3..=5).contains(&parts.len()) {
+            bail!(
+                "Invalid work ref `{value}`; expected terminal/<session>/<record>[/line|/i/<part>|/o/<part>] or <provider>/<session>/<turn>[/line|/i/<part>|/o/<part>]"
+            );
         }
+
+        let target = match parts.len() {
+            3 => WorkRefTarget::Record,
+            4 => WorkRefTarget::Line(parse_one_based(parts[3], "line", value)?),
+            5 => WorkRefTarget::Part {
+                io: parse_part_io(parts[3], value)?,
+                index: parse_one_based(parts[4], "part", value)?,
+            },
+            _ => unreachable!("length already validated"),
+        };
+        let item_index = parse_one_based(parts[2], "record", value)?;
+
+        if parts[0].eq_ignore_ascii_case("terminal") {
+            return Ok(Self::Terminal {
+                session: parts[1].to_string(),
+                record_index: item_index,
+                target,
+            });
+        }
+
+        let provider = AgentProvider::from_command_name(parts[0]).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Invalid work ref `{value}`; unknown provider `{}`",
+                parts[0]
+            )
+        })?;
+        Ok(Self::Agent {
+            provider,
+            session: parts[1].to_string(),
+            turn_index: item_index,
+            target,
+        })
     }
 }
 
-fn required_session(session: Option<String>, reference: &str) -> Result<String> {
-    session.ok_or_else(|| anyhow::anyhow!("Invalid work ref `{reference}`; session is required"))
+fn parse_one_based(part: &str, label: &str, reference: &str) -> Result<usize> {
+    let value = part.parse::<usize>().with_context(|| {
+        format!("Invalid work ref `{reference}`; {label} index must be a positive integer")
+    })?;
+    if value == 0 {
+        bail!("Invalid work ref `{reference}`; {label} index must be 1-based");
+    }
+    Ok(value)
 }
 
-fn target_from_lines(lines: Option<&[usize]>, reference: &str) -> Result<WorkRefTarget> {
-    match lines {
-        Some(lines) => Ok(WorkRefTarget::Line(single_index(
-            Some(lines),
-            "line",
-            reference,
-        )?)),
-        None => Ok(WorkRefTarget::Record),
+fn parse_part_io(part: &str, reference: &str) -> Result<WorkPartIo> {
+    match part {
+        "i" => Ok(WorkPartIo::Input),
+        "o" => Ok(WorkPartIo::Output),
+        _ => bail!("Invalid work ref `{reference}`; expected `i` or `o` part selector"),
     }
 }
 
-fn single_index(indices: Option<&[usize]>, label: &str, reference: &str) -> Result<usize> {
-    match indices {
-        Some([index]) => Ok(*index),
-        Some(_) => {
-            bail!("Invalid work ref `{reference}`; {label} selector must resolve to one index")
-        }
-        None => bail!("Invalid work ref `{reference}`; {label} index is required"),
+fn part_segment(io: WorkPartIo) -> &'static str {
+    match io {
+        WorkPartIo::Input => "i",
+        WorkPartIo::Output => "o",
     }
 }
 
@@ -390,16 +427,6 @@ fn parse_index_selector(part: &str, label: &str, reference: &str) -> Result<Vec<
     Ok(indices)
 }
 
-fn parse_one_based(part: &str, label: &str, reference: &str) -> Result<usize> {
-    let value = part.parse::<usize>().with_context(|| {
-        format!("Invalid work ref selector `{reference}`; {label} index must be a positive integer")
-    })?;
-    if value == 0 {
-        bail!("Invalid work ref selector `{reference}`; {label} index must be 1-based");
-    }
-    Ok(value)
-}
-
 fn segment_matches(expected: &str, actual: &str) -> bool {
     actual == expected || actual.starts_with(expected)
 }
@@ -424,6 +451,25 @@ mod tests {
     }
 
     #[test]
+    fn parses_and_renders_terminal_part_refs() {
+        let reference: WorkRef = "terminal/current/3/o/2".parse().unwrap();
+        assert_eq!(
+            reference,
+            WorkRef::Terminal {
+                session: "current".to_string(),
+                record_index: 3,
+                target: WorkRefTarget::Part {
+                    io: WorkPartIo::Output,
+                    index: 2,
+                },
+            }
+        );
+        assert_eq!(reference.part(), Some((WorkPartIo::Output, 2)));
+        assert_eq!(reference.to_string(), "terminal/current/3/o/2");
+        assert_eq!(reference.record_ref().to_string(), "terminal/current/3");
+    }
+
+    #[test]
     fn parses_and_renders_agent_refs() {
         let reference: WorkRef = "pi/abcdef12/2".parse().unwrap();
         assert_eq!(
@@ -436,12 +482,22 @@ mod tests {
             }
         );
         assert_eq!(reference.with_line(7).to_string(), "pi/abcdef12/2/7");
+        assert_eq!(
+            reference.with_part(WorkPartIo::Input, 3).to_string(),
+            "pi/abcdef12/2/i/3"
+        );
     }
 
     #[test]
     fn rejects_zero_indices() {
         assert!("pi/session/0".parse::<WorkRef>().is_err());
         assert!("pi/session/1/0".parse::<WorkRef>().is_err());
+        assert!("pi/session/1/i/0".parse::<WorkRef>().is_err());
+    }
+
+    #[test]
+    fn rejects_unknown_part_selector() {
+        assert!("pi/session/1/x/1".parse::<WorkRef>().is_err());
     }
 
     #[test]

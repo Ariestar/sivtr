@@ -1,4 +1,5 @@
 use regex::{Regex, RegexBuilder};
+use sivtr_core::record::{work_record_content_matches, WorkRefTarget};
 
 use crate::tui::workspace::WorkspaceSession;
 
@@ -62,7 +63,6 @@ struct WorkspaceSearchDialogueEntry {
     session_index: usize,
     dialogue_index: usize,
     dialogue_title: String,
-    content: String,
 }
 
 pub(crate) struct WorkspaceSearchIndex {
@@ -80,7 +80,14 @@ pub(crate) struct WorkspaceSearchOutput {
 pub(crate) struct WorkspaceSearchMatch {
     pub(crate) session_index: usize,
     pub(crate) dialogue_index: usize,
-    pub(crate) line_index: usize,
+    pub(crate) target: WorkRefTarget,
+    pub(crate) matched_line: usize,
+}
+
+impl WorkspaceSearchMatch {
+    pub(crate) fn content_scroll_index(&self) -> usize {
+        self.matched_line.saturating_sub(1)
+    }
 }
 
 impl WorkspaceSearchIndex {
@@ -108,9 +115,6 @@ impl WorkspaceSearchIndex {
                     session_index,
                     dialogue_index,
                     dialogue_title: record.title.clone(),
-                    content: record
-                        .copy_text(sivtr_core::record::RecordTextMode::Combined, false)
-                        .plain,
                 });
             }
         }
@@ -154,7 +158,8 @@ impl WorkspaceSearchIndex {
                         matches.push(WorkspaceSearchMatch {
                             session_index: filtered_session_index,
                             dialogue_index: 0,
-                            line_index: 0,
+                            target: WorkRefTarget::Record,
+                            matched_line: 1,
                         });
                     }
                 }
@@ -208,7 +213,8 @@ impl WorkspaceSearchIndex {
                     .map(move |(dialogue_index, _)| WorkspaceSearchMatch {
                         session_index,
                         dialogue_index,
-                        line_index: 0,
+                        target: WorkRefTarget::Record,
+                        matched_line: 1,
                     })
             })
             .collect();
@@ -221,11 +227,16 @@ impl WorkspaceSearchIndex {
         regex: &Regex,
     ) -> WorkspaceSearchOutput {
         let mut grouped: Vec<(usize, Vec<usize>)> = Vec::new();
-        for entry in self
-            .dialogues
-            .iter()
-            .filter(|entry| regex.is_match(&entry.content))
-        {
+        for entry in &self.dialogues {
+            let Some(record) = all_sessions
+                .get(entry.session_index)
+                .and_then(|session| session.records.get(entry.dialogue_index))
+            else {
+                continue;
+            };
+            if work_record_content_matches(record, regex).is_empty() {
+                continue;
+            }
             if let Some((_, dialogue_indices)) = grouped
                 .iter_mut()
                 .find(|(session_index, _)| *session_index == entry.session_index)
@@ -255,16 +266,13 @@ impl WorkspaceSearchIndex {
                     .iter()
                     .enumerate()
                     .flat_map(move |(dialogue_index, record)| {
-                        record
-                            .copy_text(sivtr_core::record::RecordTextMode::Combined, false)
-                            .plain
-                            .lines()
-                            .enumerate()
-                            .filter(|(_, line)| regex.is_match(line))
-                            .map(move |(line_index, _)| WorkspaceSearchMatch {
+                        work_record_content_matches(record, regex)
+                            .into_iter()
+                            .map(move |matched| WorkspaceSearchMatch {
                                 session_index,
                                 dialogue_index,
-                                line_index,
+                                target: matched.target,
+                                matched_line: matched.matched_line,
                             })
                             .collect::<Vec<_>>()
                     })

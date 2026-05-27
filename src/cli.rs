@@ -126,6 +126,61 @@ impl std::fmt::Display for SearchSortArg {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WorkPartFilterArg {
+    Input,
+    Output,
+    #[default]
+    All,
+}
+
+impl WorkPartFilterArg {
+    pub fn matches(self, io: sivtr_core::record::WorkPartIo) -> bool {
+        match self {
+            Self::All => true,
+            Self::Input => io == sivtr_core::record::WorkPartIo::Input,
+            Self::Output => io == sivtr_core::record::WorkPartIo::Output,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Input => "input",
+            Self::Output => "output",
+            Self::All => "all",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Input => "input",
+            Self::Output => "output",
+            Self::All => "any",
+        }
+    }
+}
+
+impl FromStr for WorkPartFilterArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "input" | "in" | "i" => Ok(Self::Input),
+            "output" | "out" | "o" => Ok(Self::Output),
+            "all" => Ok(Self::All),
+            _ => Err(format!(
+                "unknown part filter `{value}`; expected all, input, or output"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for WorkPartFilterArg {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SearchOutputFormatArg {
     Compact,
     Timeline,
@@ -250,6 +305,27 @@ Examples:
   sivtr copy cmd 3 --print
   sivtr copy cmd --pick
   sivtr copy cmd 2..5
+";
+
+const COPY_REF_AFTER_HELP: &str = "\
+Defaults:
+  `sivtr copy ref <ref>` copies the exact content addressed by a
+  terminal or AI workspace ref.
+
+Supported Refs:
+  terminal/current/12
+  terminal/current/12/8
+  codex/SESSION/3
+  codex/SESSION/3/i/2
+  codex/SESSION/3/o/1
+
+Filters:
+  `--regex` and `--lines` run after the ref content is resolved.
+
+Examples:
+  sivtr copy ref codex/019df7fb/3/o/1
+  sivtr copy ref terminal/current/12/8 --print
+  sivtr copy ref claude/abc123/4 --cwd /path/to/project
 ";
 
 const COPY_CODEX_AFTER_HELP: &str = "\
@@ -437,6 +513,10 @@ Pipelines:
   If stdin is piped into `sivtr search`, it must be JSON output from a previous search.
   Leave intermediate searches on the default JSON format, then choose the display format on the final search.
 
+Notes:
+  Content hits may return structured refs such as `.../i/<n>` or `.../o/<n>`
+  when the match belongs to a canonical input/output part.
+
 Examples:
   sivtr search terminal --status failure --latest 1 --json
   sivtr s terminal --status fail -m "panic|failed" -v "example|sample" --latest 20 --refs
@@ -446,6 +526,52 @@ Examples:
   sivtr search pi/019e5941/7 --format json
   sivtr search terminal/session_13104/3/12 --format json
 "##;
+
+const WORK_SESSIONS_AFTER_HELP: &str = "\
+Defaults:
+  `sivtr work sessions` lists session markers for the current workspace.
+  Output stays at marker level and does not print full session content.
+
+Scope:
+  Terminal sessions from the current git workspace are always included.
+  `--provider` limits which AI providers are scanned.
+
+Examples:
+  sivtr work sessions
+  sivtr work sessions --provider codex
+  sivtr work sessions --json
+";
+
+const WORK_RECORDS_AFTER_HELP: &str = "\
+Defaults:
+  `sivtr work records <session-ref>` lists record markers within one session.
+  Output stays at marker level and does not print full record content.
+
+Session Refs:
+  terminal/<session>
+  codex/<session>
+  claude/<session>
+
+Examples:
+  sivtr work records terminal/session_123
+  sivtr work records codex/019df7fb --json
+";
+
+const WORK_PARTS_AFTER_HELP: &str = "\
+Defaults:
+  `sivtr work parts <record-ref>` lists leaf part markers within one record.
+  Use `sivtr show <part-ref>` to print the full leaf content.
+
+Filters:
+  `--io all` lists every part.
+  `--io input` lists only input-side parts.
+  `--io output` lists only output-side parts.
+
+Examples:
+  sivtr work parts codex/019df7fb/3
+  sivtr work parts codex/019df7fb/3 --io output
+  sivtr show codex/019df7fb/3/o/1
+";
 
 const HOTKEY_AFTER_HELP: &str = "\
 Examples:
@@ -492,6 +618,9 @@ pub enum Commands {
     /// Search captured terminal and AI workspace sessions
     #[command(visible_alias = "s", after_help = SEARCH_AFTER_HELP)]
     Search(SearchArgs),
+
+    /// Traverse workspace sessions, records, and parts without printing full content
+    Work(WorkCommand),
 
     /// Show a captured terminal or AI workspace ref
     Show(ShowArgs),
@@ -585,6 +714,10 @@ pub enum CopySubcommand {
     #[command(after_help = COPY_COMMAND_AFTER_HELP)]
     Cmd(CopySimpleArgs),
 
+    /// Copy the exact content addressed by a work ref
+    #[command(after_help = COPY_REF_AFTER_HELP)]
+    Ref(CopyRefArgs),
+
     /// Copy content from the current Codex conversation session
     #[command(after_help = COPY_CODEX_AFTER_HELP)]
     Codex(AgentCopyCommand),
@@ -643,6 +776,28 @@ pub struct CopyArgs {
 pub struct CopySimpleArgs {
     #[command(flatten)]
     pub common: CopyCommonArgs,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct CopyRefArgs {
+    /// Ref to copy, for example `codex/019e4f40/3/o/1`
+    pub reference: String,
+
+    /// Workspace directory used to resolve current AI sessions
+    #[arg(long, value_name = "PATH")]
+    pub cwd: Option<PathBuf>,
+
+    /// Print the copied text after copying
+    #[arg(long)]
+    pub print: bool,
+
+    /// Keep only lines matching this regex
+    #[arg(long, value_name = "PATTERN")]
+    pub regex: Option<String>,
+
+    /// Keep only selected 1-based lines, for example `10:20` or `1,3,8:12`
+    #[arg(long, value_name = "SPEC")]
+    pub lines: Option<String>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -771,8 +926,76 @@ pub struct SearchArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct ShowArgs {
-    /// Ref to show, for example `pi/019e4f40/3` or `terminal/current/12/8`.
+    /// Ref to show, for example `pi/019e4f40/3`, `pi/019e4f40/3/o/1`, or `terminal/current/12/8`.
     pub reference: String,
+
+    /// Workspace directory used to resolve current AI sessions
+    #[arg(long, value_name = "PATH")]
+    pub cwd: Option<PathBuf>,
+
+    /// Print machine-readable JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct WorkCommand {
+    #[command(subcommand)]
+    pub action: WorkSubcommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum WorkSubcommand {
+    /// List session markers for the current workspace
+    #[command(after_help = WORK_SESSIONS_AFTER_HELP)]
+    Sessions(WorkSessionsArgs),
+
+    /// List record markers for one session marker
+    #[command(after_help = WORK_RECORDS_AFTER_HELP)]
+    Records(WorkRecordsArgs),
+
+    /// List part markers for one record ref
+    #[command(after_help = WORK_PARTS_AFTER_HELP)]
+    Parts(WorkPartsArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct WorkSessionsArgs {
+    /// AI provider sessions to include; terminal workspace records are always included
+    #[arg(long, default_value_t = HotkeyProviderSelection::default(), value_name = "PROVIDER")]
+    pub provider: HotkeyProviderSelection,
+
+    /// Workspace directory used to resolve current AI sessions
+    #[arg(long, value_name = "PATH")]
+    pub cwd: Option<PathBuf>,
+
+    /// Print machine-readable JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct WorkRecordsArgs {
+    /// Session marker from `sivtr work sessions`, for example `codex/019df7fb`
+    pub session: String,
+
+    /// Workspace directory used to resolve current AI sessions
+    #[arg(long, value_name = "PATH")]
+    pub cwd: Option<PathBuf>,
+
+    /// Print machine-readable JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct WorkPartsArgs {
+    /// Record ref, for example `codex/019df7fb/3` or `terminal/session_123/12`
+    pub record: String,
+
+    /// Which leaf parts to list: all, input, or output
+    #[arg(long, default_value_t = WorkPartFilterArg::default(), value_name = "IO")]
+    pub io: WorkPartFilterArg,
 
     /// Workspace directory used to resolve current AI sessions
     #[arg(long, value_name = "PATH")]
@@ -1083,6 +1306,32 @@ mod tests {
     }
 
     #[test]
+    fn copy_ref_accepts_workspace_ref_and_filters() {
+        let cli = Cli::try_parse_from([
+            "sivtr",
+            "copy",
+            "ref",
+            "codex/session/3/o/1",
+            "--print",
+            "--regex",
+            "error",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Commands::Copy(cmd)) => match cmd.mode {
+                Some(CopySubcommand::Ref(args)) => {
+                    assert_eq!(args.reference, "codex/session/3/o/1");
+                    assert!(args.print);
+                    assert_eq!(args.regex.as_deref(), Some("error"));
+                }
+                _ => panic!("expected copy ref mode"),
+            },
+            _ => panic!("expected copy command"),
+        }
+    }
+
+    #[test]
     fn codex_copy_defaults_to_last_turn() {
         let cli = Cli::try_parse_from(["sivtr", "copy", "codex"]).unwrap();
 
@@ -1264,6 +1513,69 @@ mod tests {
                 assert!(!args.refs);
             }
             _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn work_sessions_accepts_provider_and_json() {
+        let cli =
+            Cli::try_parse_from(["sivtr", "work", "sessions", "--provider", "codex", "--json"])
+                .unwrap();
+
+        match cli.command {
+            Some(Commands::Work(cmd)) => match cmd.action {
+                WorkSubcommand::Sessions(args) => {
+                    assert_eq!(
+                        args.provider,
+                        HotkeyProviderSelection::provider(AgentProvider::Codex)
+                    );
+                    assert!(args.json);
+                }
+                _ => panic!("expected work sessions command"),
+            },
+            _ => panic!("expected work command"),
+        }
+    }
+
+    #[test]
+    fn work_records_accepts_session_marker() {
+        let cli = Cli::try_parse_from(["sivtr", "work", "records", "codex/019df7fb"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Work(cmd)) => match cmd.action {
+                WorkSubcommand::Records(args) => {
+                    assert_eq!(args.session, "codex/019df7fb");
+                    assert!(!args.json);
+                }
+                _ => panic!("expected work records command"),
+            },
+            _ => panic!("expected work command"),
+        }
+    }
+
+    #[test]
+    fn work_parts_accepts_output_filter() {
+        let cli = Cli::try_parse_from([
+            "sivtr",
+            "work",
+            "parts",
+            "codex/019df7fb/3",
+            "--io",
+            "output",
+            "--json",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Commands::Work(cmd)) => match cmd.action {
+                WorkSubcommand::Parts(args) => {
+                    assert_eq!(args.record, "codex/019df7fb/3");
+                    assert_eq!(args.io, WorkPartFilterArg::Output);
+                    assert!(args.json);
+                }
+                _ => panic!("expected work parts command"),
+            },
+            _ => panic!("expected work command"),
         }
     }
 

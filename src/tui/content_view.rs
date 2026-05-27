@@ -1131,12 +1131,16 @@ fn raw_lines(text: &str) -> Vec<&str> {
 mod tests {
     use super::{
         content_lines, content_link_at, content_position_at, content_position_in_text_row,
-        line_count, line_number_width, selected_content_text, visible_content_lines,
-        ContentPosition, ContentSelection, ContentSelectionKind, ContentViewMode,
+        line_count, line_number_width, render_content_view, selected_content_text,
+        visible_content_lines, ContentPosition, ContentSelection, ContentSelectionKind,
+        ContentView, ContentViewMode,
     };
+    use crate::tui::pane::Panel;
+    use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
     use ratatui::prelude::{Color, Modifier};
     use ratatui::text::Text;
+    use ratatui::Terminal;
     use regex::Regex;
     use unicode_width::UnicodeWidthStr;
 
@@ -1160,6 +1164,12 @@ mod tests {
             .spans
             .iter()
             .map(|span| span.content.as_ref())
+            .collect::<String>()
+    }
+
+    fn backend_row(backend: &TestBackend, y: u16) -> String {
+        (0..backend.buffer().area.width)
+            .filter_map(|x| backend.buffer().cell((x, y)).map(|cell| cell.symbol()))
             .collect::<String>()
     }
 
@@ -1443,5 +1453,32 @@ mod tests {
         assert_eq!(rendered_line_text(&rendered, 0), "alpha");
         assert_eq!(rendered.lines[0].spans[1].content.as_ref(), "lph");
         assert_eq!(rendered.lines[0].spans[1].style.bg, Some(Color::DarkGray));
+    }
+
+    #[test]
+    fn render_content_view_shows_line_numbers_in_the_visible_gutter() {
+        let backend = TestBackend::new(24, 6);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                render_content_view(
+                    frame,
+                    Rect::new(0, 0, 24, 6),
+                    Panel::new("3", "Content (read)", true),
+                    ContentView {
+                        text: "alpha\nbeta",
+                        scroll: 0,
+                        search_regex: None,
+                        mode: ContentViewMode::Reading,
+                        selection: None,
+                    },
+                );
+            })
+            .unwrap();
+
+        let backend = terminal.backend();
+        assert!(backend_row(backend, 1).contains("1|alpha"));
+        assert!(backend_row(backend, 2).contains("2|beta"));
     }
 }

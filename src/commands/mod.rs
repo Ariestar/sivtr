@@ -19,3 +19,5 @@ pub mod search;
 pub mod show;
 pub mod time_filter;
 pub mod version;
+pub mod work;
+pub mod work_json;

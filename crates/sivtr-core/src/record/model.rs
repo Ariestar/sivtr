@@ -1,4 +1,4 @@
-use super::refs::WorkRef;
+use super::refs::{WorkRef, WorkRefTarget};
 use crate::ai::{
     format_blocks_with_text, select_blocks, AgentBlock, AgentBlockKind, AgentProvider,
     AgentSelection, AgentSession,
@@ -91,6 +91,82 @@ pub enum WorkOutcome {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkChannel {
+    Terminal,
+    Chat,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorkSource {
+    pub channel: WorkChannel,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorkSessionRef {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub canonical_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    pub index: usize,
+    pub work_ref: WorkRef,
+}
+
+impl WorkSessionRef {
+    pub fn marker_ref(&self) -> String {
+        match &self.work_ref {
+            WorkRef::Terminal { session, .. } => format!("terminal/{session}"),
+            WorkRef::Agent {
+                provider, session, ..
+            } => format!("{}/{session}", provider.command_name()),
+        }
+    }
+
+    pub fn provider(&self) -> Option<AgentProvider> {
+        self.work_ref.provider()
+    }
+
+    pub fn matches_id(&self, value: &str) -> bool {
+        self.id == value || self.canonical_id.as_deref() == Some(value)
+    }
+
+    pub fn matches_record_ref(&self, reference: &WorkRef) -> bool {
+        let reference = reference.record_ref();
+        match (&self.work_ref, &reference) {
+            (
+                WorkRef::Terminal { record_index, .. },
+                WorkRef::Terminal {
+                    session,
+                    record_index: wanted_index,
+                    ..
+                },
+            ) => record_index == wanted_index && self.matches_id(session),
+            (
+                WorkRef::Agent {
+                    provider,
+                    turn_index,
+                    ..
+                },
+                WorkRef::Agent {
+                    provider: wanted_provider,
+                    session,
+                    turn_index: wanted_index,
+                    ..
+                },
+            ) => {
+                provider == wanted_provider
+                    && turn_index == wanted_index
+                    && self.matches_id(session)
+            }
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct WorkTime {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -131,12 +207,48 @@ pub struct WorkStatus {
     pub exit_code: Option<i32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkPartIo {
+    Input,
+    Output,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkPartKind {
+    Prompt,
+    Command,
+    UserMessage,
+    AssistantMessage,
+    ToolCall,
+    ToolOutput,
+    Text,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorkPart {
+    pub io: WorkPartIo,
+    pub kind: WorkPartKind,
+    pub index_in_record: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub occurred_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ansi: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct WorkText {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
+    #[serde(default)]
+    pub combined: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -169,16 +281,19 @@ pub struct ChatMessage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WorkRecord {
     pub schema_version: u32,
+    pub id: String,
     pub work_ref: WorkRef,
     pub kind: WorkRecordKind,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_path: Option<String>,
+    pub source: WorkSource,
+    pub session: WorkSessionRef,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     pub time: WorkTime,
     pub status: WorkStatus,
     pub title: String,
     pub text: WorkText,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<WorkPart>,
     pub payload: WorkPayload,
 }
 
@@ -209,9 +324,20 @@ impl WorkRecord {
 
         Some(Self {
             schema_version: RECORD_SCHEMA_VERSION,
+            id: work_ref.to_string(),
             work_ref,
             kind: WorkRecordKind::TerminalCommand,
-            session_path: Some(session_path.display().to_string()),
+            source: WorkSource {
+                channel: WorkChannel::Terminal,
+                provider: None,
+            },
+            session: WorkSessionRef {
+                id: session_id.clone(),
+                canonical_id: Some(session_id.clone()),
+                path: Some(session_path.display().to_string()),
+                index,
+                work_ref: WorkRef::terminal_record(session_id, index + 1),
+            },
             cwd: non_empty(entry.cwd.clone()),
             time: WorkTime::from_components(None, entry.ended_at.clone(), entry.duration_ms),
             status: WorkStatus {
@@ -222,7 +348,9 @@ impl WorkRecord {
             text: WorkText {
                 input: non_empty(Some(command.clone())),
                 output: non_empty(Some(output.clone())),
+                combined: join_nonempty([command.as_str(), output.as_str()]),
             },
+            parts: terminal_parts(entry, &command, &output),
             payload: WorkPayload::TerminalCommand {
                 prompt: entry.prompt.clone(),
                 command,
@@ -283,8 +411,9 @@ impl WorkRecord {
             return None;
         }
 
-        let session_ref = agent_session_ref_id(session.id.as_deref(), &session.path);
-        let work_ref = WorkRef::agent_record(provider, session_ref.clone(), index + 1);
+        let session_ref_id = agent_session_ref_id(session.id.as_deref(), &session.path);
+        let canonical_id = agent_session_canonical_id(session.id.as_deref(), &session.path);
+        let work_ref = WorkRef::agent_record(provider, session_ref_id.clone(), index + 1);
         let title = if user.trim().is_empty() {
             title_preview(&assistant)
         } else {
@@ -296,9 +425,24 @@ impl WorkRecord {
 
         Some(Self {
             schema_version: RECORD_SCHEMA_VERSION,
+            id: work_ref.to_string(),
             work_ref,
             kind: WorkRecordKind::ChatTurn,
-            session_path: Some(session.path.display().to_string()),
+            source: WorkSource {
+                channel: WorkChannel::Chat,
+                provider: Some(provider.command_name().to_string()),
+            },
+            session: WorkSessionRef {
+                id: session_ref_id,
+                canonical_id,
+                path: Some(session.path.display().to_string()),
+                index,
+                work_ref: WorkRef::agent_record(
+                    provider,
+                    agent_session_ref_id(session.id.as_deref(), &session.path),
+                    index + 1,
+                ),
+            },
             cwd: non_empty(session.cwd.clone()),
             time: WorkTime::from_components(started_at, ended_at, None),
             status: WorkStatus {
@@ -309,7 +453,9 @@ impl WorkRecord {
             text: WorkText {
                 input: non_empty(Some(user.clone())),
                 output: non_empty(Some(assistant.clone())),
+                combined: format_blocks_with_compacted_skills(&chat_blocks),
             },
+            parts: agent_parts(blocks),
             payload: WorkPayload::ChatTurn {
                 user,
                 assistant,
@@ -420,6 +566,28 @@ impl WorkRecord {
             ),
             command: self.copy_text_with_prompt(RecordTextMode::Command, false, None),
         }
+    }
+
+    pub fn content_for_target(&self, target: WorkRefTarget) -> Option<&str> {
+        match target {
+            WorkRefTarget::Record => Some(self.text.combined.as_str()),
+            WorkRefTarget::Line(line) => line
+                .checked_sub(1)
+                .and_then(|index| self.text.combined.lines().nth(index)),
+            WorkRefTarget::Part { .. } => {
+                self.part_for_target(target).map(|part| part.text.as_str())
+            }
+        }
+    }
+
+    pub fn part_for_target(&self, target: WorkRefTarget) -> Option<&WorkPart> {
+        let (io, index) = match target {
+            WorkRefTarget::Part { io, index } => (io, index),
+            WorkRefTarget::Record | WorkRefTarget::Line(_) => return None,
+        };
+        self.parts
+            .iter()
+            .find(|part| part.io == io && part.index_in_record == index)
     }
 }
 
@@ -561,8 +729,9 @@ fn selected_block_record(
 ) -> WorkRecord {
     let text = compact_skill_blocks(block.text.trim());
     let title = title_preview(&text);
-    let session_ref = agent_session_ref_id(session.id.as_deref(), &session.path);
-    let work_ref = WorkRef::agent_record(provider, session_ref.clone(), index + 1);
+    let session_ref_id = agent_session_ref_id(session.id.as_deref(), &session.path);
+    let canonical_id = agent_session_canonical_id(session.id.as_deref(), &session.path);
+    let work_ref = WorkRef::agent_record(provider, session_ref_id.clone(), index + 1);
     let block_timestamp = block.timestamp.as_deref().and_then(normalize_timestamp);
     let (input, output) = match kind {
         AgentBlockKind::User => (Some(text.clone()), None),
@@ -572,9 +741,24 @@ fn selected_block_record(
 
     WorkRecord {
         schema_version: RECORD_SCHEMA_VERSION,
+        id: work_ref.to_string(),
         work_ref,
         kind: WorkRecordKind::ChatTurn,
-        session_path: Some(session.path.display().to_string()),
+        source: WorkSource {
+            channel: WorkChannel::Chat,
+            provider: Some(provider.command_name().to_string()),
+        },
+        session: WorkSessionRef {
+            id: session_ref_id,
+            canonical_id,
+            path: Some(session.path.display().to_string()),
+            index,
+            work_ref: WorkRef::agent_record(
+                provider,
+                agent_session_ref_id(session.id.as_deref(), &session.path),
+                index + 1,
+            ),
+        },
         cwd: non_empty(session.cwd.clone()),
         time: WorkTime::from_components(block_timestamp.clone(), None, None),
         status: WorkStatus {
@@ -582,7 +766,12 @@ fn selected_block_record(
             exit_code: None,
         },
         title,
-        text: WorkText { input, output },
+        text: WorkText {
+            input: input.clone(),
+            output: output.clone(),
+            combined: text.clone(),
+        },
+        parts: agent_parts(std::slice::from_ref(&block)),
         payload: WorkPayload::ChatTurn {
             user: match kind {
                 AgentBlockKind::User => text.clone(),
@@ -612,15 +801,32 @@ fn selected_group_record(
         return Vec::new();
     }
 
-    let session_ref = agent_session_ref_id(session.id.as_deref(), &session.path);
-    let work_ref = WorkRef::agent_record(provider, session_ref.clone(), 1);
+    let session_ref_id = agent_session_ref_id(session.id.as_deref(), &session.path);
+    let canonical_id = agent_session_canonical_id(session.id.as_deref(), &session.path);
+    let work_ref = WorkRef::agent_record(provider, session_ref_id.clone(), 1);
     let started_at = first_timestamp(&blocks).and_then(|timestamp| normalize_timestamp(&timestamp));
     let ended_at = last_timestamp(&blocks).and_then(|timestamp| normalize_timestamp(&timestamp));
+    let parts = agent_parts(&blocks);
     vec![WorkRecord {
         schema_version: RECORD_SCHEMA_VERSION,
+        id: work_ref.to_string(),
         work_ref,
         kind: WorkRecordKind::ChatTurn,
-        session_path: Some(session.path.display().to_string()),
+        source: WorkSource {
+            channel: WorkChannel::Chat,
+            provider: Some(provider.command_name().to_string()),
+        },
+        session: WorkSessionRef {
+            id: session_ref_id,
+            canonical_id,
+            path: Some(session.path.display().to_string()),
+            index: 0,
+            work_ref: WorkRef::agent_record(
+                provider,
+                agent_session_ref_id(session.id.as_deref(), &session.path),
+                1,
+            ),
+        },
         cwd: non_empty(session.cwd.clone()),
         time: WorkTime::from_components(started_at, ended_at, None),
         status: WorkStatus {
@@ -631,7 +837,9 @@ fn selected_group_record(
         text: WorkText {
             input: None,
             output: Some(combined.clone()),
+            combined: combined.clone(),
         },
+        parts,
         payload: WorkPayload::ChatTurn {
             user: String::new(),
             assistant: combined,
@@ -727,6 +935,17 @@ fn agent_session_ref_id(id: Option<&str>, path: &Path) -> String {
                 .filter(|id| !id.is_empty())
         })
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn agent_session_canonical_id(id: Option<&str>, path: &Path) -> Option<String> {
+    id.filter(|id| !id.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            path.file_stem()
+                .and_then(|name| name.to_str())
+                .map(str::to_string)
+                .filter(|id| !id.trim().is_empty())
+        })
 }
 
 fn short_id(id: &str) -> String {
@@ -851,6 +1070,88 @@ fn join_nonempty<'a>(texts: impl IntoIterator<Item = &'a str>) -> String {
 
 fn non_empty(value: Option<String>) -> Option<String> {
     value.and_then(|value| (!value.trim().is_empty()).then_some(value))
+}
+
+fn terminal_parts(entry: &SessionEntry, command: &str, output: &str) -> Vec<WorkPart> {
+    let mut parts = Vec::new();
+    let mut input_count = 0;
+    let mut output_count = 0;
+    let prompt = entry.prompt.trim_end_matches(['\r', '\n']);
+    if !prompt.trim().is_empty() {
+        input_count += 1;
+        parts.push(WorkPart {
+            io: WorkPartIo::Input,
+            kind: WorkPartKind::Prompt,
+            index_in_record: input_count,
+            occurred_at: entry.ended_at.clone(),
+            label: None,
+            text: prompt.to_string(),
+            ansi: entry.prompt_ansi.clone(),
+        });
+    }
+    if !command.is_empty() {
+        input_count += 1;
+        parts.push(WorkPart {
+            io: WorkPartIo::Input,
+            kind: WorkPartKind::Command,
+            index_in_record: input_count,
+            occurred_at: entry.ended_at.clone(),
+            label: None,
+            text: command.to_string(),
+            ansi: None,
+        });
+    }
+    if !output.is_empty() {
+        output_count += 1;
+        parts.push(WorkPart {
+            io: WorkPartIo::Output,
+            kind: WorkPartKind::Text,
+            index_in_record: output_count,
+            occurred_at: entry.ended_at.clone(),
+            label: None,
+            text: output.to_string(),
+            ansi: entry.output_ansi.clone(),
+        });
+    }
+    parts
+}
+
+fn agent_parts(blocks: &[AgentBlock]) -> Vec<WorkPart> {
+    let mut parts = Vec::new();
+    let mut input_count = 0;
+    let mut output_count = 0;
+    for block in blocks {
+        let text = block.text.trim().to_string();
+        if text.is_empty() {
+            continue;
+        }
+        let (io, kind) = match block.kind {
+            AgentBlockKind::User => (WorkPartIo::Input, WorkPartKind::UserMessage),
+            AgentBlockKind::Assistant => (WorkPartIo::Output, WorkPartKind::AssistantMessage),
+            AgentBlockKind::ToolCall => (WorkPartIo::Input, WorkPartKind::ToolCall),
+            AgentBlockKind::ToolOutput => (WorkPartIo::Output, WorkPartKind::ToolOutput),
+        };
+        let index_in_record = match io {
+            WorkPartIo::Input => {
+                input_count += 1;
+                input_count
+            }
+            WorkPartIo::Output => {
+                output_count += 1;
+                output_count
+            }
+        };
+        parts.push(WorkPart {
+            io,
+            kind,
+            index_in_record,
+            occurred_at: block.timestamp.clone(),
+            label: block.label.clone(),
+            text,
+            ansi: None,
+        });
+    }
+    parts
 }
 
 #[cfg(test)]

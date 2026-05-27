@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **sivtr** is a terminal output workspace that captures, browses, searches, and reuses terminal command output and AI coding assistant sessions. Four AI providers (Codex, Claude Code, OpenCode, Pi) and four shells (Bash, Zsh, PowerShell, Nushell).
 
-Architecture: CLI binary (`src/`) wrapping a core library (`crates/sivtr-core/`). Clap-based subcommands for copy, search, show, work, init, diff, hotkey, doctor. TUI mode for browse/search views.
+Architecture: CLI binary (`src/`) wrapping a core library (`crates/sivtr-core/`). Clap-based subcommands for copy, copy ref, search, show, work (sessions/records/parts), init, diff, hotkey, doctor. TUI mode for browse/search views.
 
 ## Development Commands
 
@@ -57,8 +57,8 @@ src/                       ← CLI binary
 ## Key Data Types
 
 - `WorkRecord` — single command execution or AI turn
-- `WorkPart` / `WorkPartIo` — leaf content chunk (Input | Output | Turn)
-- `WorkRef` — typed reference: `terminal/session_42/3/o/1`, `codex/abc123/5`
+- `WorkPart` / `WorkPartIo` — leaf content chunk; `WorkPartIo` is Input | Output, `WorkPartKind` is Prompt/Command/UserMessage/AssistantMessage/ToolCall/ToolOutput/Text/Error
+- `WorkRef` — typed reference: `terminal/session_42/3/o/1`, `codex/abc123/5/i/2`, `pi/session/3/12`
 - `WorkTime::from_components(started_at, ended_at, duration_ms)` — time construction
 - `AgentProvider::Codex | Claude | OpenCode | Pi`
 
@@ -88,7 +88,7 @@ pwd && git branch
 sivtr search terminal --status failure --json | sivtr search terminal --exclude "example" -f timeline
 ```
 
-Target selectors: `terminal/<session>/<record>/<line>`, `agent/<session>/<turn>`, `<provider>/<session>/<turn>`. Use `*` for wildcards.
+Target selectors: `terminal/<session>/<record>/<line>`, `agent/<session>/<turn>`, `<provider>/<session>/<turn>`. Part refs: `<provider>/<session>/<turn>/<i|o>/<part>`. Use `*` for wildcards.
 
 ## Diagnostics
 

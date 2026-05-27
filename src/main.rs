@@ -8,8 +8,8 @@ use anyhow::Result;
 use clap::Parser;
 
 use cli::{
-    AgentCopyArgs, AgentCopyCommand, AgentCopyMode, Cli, Commands, CopyArgs, CopySimpleArgs,
-    CopySubcommand, DiffArgs, HotkeyPickAgentArgs, HotkeyServeArgs,
+    AgentCopyArgs, AgentCopyCommand, AgentCopyMode, Cli, Commands, CopyArgs, CopyRefArgs,
+    CopySimpleArgs, CopySubcommand, DiffArgs, HotkeyPickAgentArgs, HotkeyServeArgs,
 };
 use command_blocks::CommandBlockTextMode;
 use commands::copy::{AgentCopyRequest, AgentPickerRequest, CopyMode, CopyRequest};
@@ -43,6 +43,9 @@ fn run() -> Result<()> {
         Some(Commands::Search(args)) => {
             commands::search::execute(&args)?;
         }
+        Some(Commands::Work(cmd)) => {
+            commands::work::execute(&cmd)?;
+        }
         Some(Commands::Show(args)) => {
             commands::show::execute(&args)?;
         }
@@ -69,6 +72,7 @@ fn run() -> Result<()> {
             Some(CopySubcommand::Cmd(sub_args)) => {
                 run_copy_simple(&sub_args, CopyMode::CommandOnly, false)?
             }
+            Some(CopySubcommand::Ref(sub_args)) => run_copy_ref(&sub_args)?,
             Some(CopySubcommand::Claude(sub_args)) => {
                 run_agent_copy(AgentProvider::Claude, sub_args)?
             }
@@ -162,6 +166,16 @@ fn run_copy_simple(args: &CopySimpleArgs, mode: CopyMode, include_prompt: bool) 
         regex: args.common.regex.as_deref(),
         lines: args.common.lines.as_deref(),
     })
+}
+
+fn run_copy_ref(args: &CopyRefArgs) -> Result<()> {
+    commands::copy::execute_ref(
+        &args.reference,
+        args.cwd.as_deref(),
+        args.print,
+        args.regex.as_deref(),
+        args.lines.as_deref(),
+    )
 }
 
 fn run_agent_copy(provider: AgentProvider, cmd: AgentCopyCommand) -> Result<()> {

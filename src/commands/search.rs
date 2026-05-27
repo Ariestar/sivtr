@@ -645,7 +645,8 @@ fn excluded_session_matches(record: &WorkRecord, excluded_sessions: &HashSet<Pat
     }
 
     record
-        .session_path
+        .session
+        .path
         .as_deref()
         .map(Path::new)
         .map(comparable_path)
@@ -972,11 +973,24 @@ mod tests {
     }
 
     fn test_terminal_record(_ref_id: &str, combined: &str) -> WorkRecord {
+        use sivtr_core::record::{WorkChannel, WorkSessionRef, WorkSource};
+        let work_ref = WorkRef::terminal_record("session_1", 3);
         WorkRecord {
             schema_version: 1,
-            work_ref: WorkRef::terminal_record("session_1", 3),
+            id: work_ref.to_string(),
+            work_ref,
             kind: WorkRecordKind::TerminalCommand,
-            session_path: None,
+            source: WorkSource {
+                channel: WorkChannel::Terminal,
+                provider: None,
+            },
+            session: WorkSessionRef {
+                id: "session_1".to_string(),
+                canonical_id: Some("session_1".to_string()),
+                path: None,
+                index: 2,
+                work_ref: WorkRef::terminal_record("session_1", 3),
+            },
             cwd: None,
             time: WorkTime::from_components(
                 Some("2026-05-24T00:00:00Z".to_string()),
@@ -991,7 +1005,9 @@ mod tests {
             text: WorkText {
                 input: Some("cargo test".to_string()),
                 output: Some(combined.to_string()),
+                combined: combined.to_string(),
             },
+            parts: Vec::new(),
             payload: WorkPayload::TerminalCommand {
                 prompt: String::new(),
                 command: String::new(),

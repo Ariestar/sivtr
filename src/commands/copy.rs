@@ -1,14 +1,16 @@
 use anyhow::{Context, Result};
 use regex::Regex;
+use std::path::Path;
 use std::time::SystemTime;
 
 use crate::commands::command_block_selector::{parse_selector, resolve_selector, CommandSelection};
+use crate::commands::records::current_work_record_index;
 use sivtr_core::ai::{
     AgentBlockKind, AgentProvider, AgentSelection, AgentSession, AgentSessionInfo,
     AgentSessionProvider,
 };
 use sivtr_core::capture::scrollback;
-use sivtr_core::record::{is_real_user_block, RecordTextMode, WorkRecord};
+use sivtr_core::record::{is_real_user_block, RecordTextMode, WorkRecord, WorkRef};
 use sivtr_core::session::{self, SessionEntry};
 
 mod vim;
@@ -244,7 +246,7 @@ pub fn execute_agent(request: AgentCopyRequest<'_>) -> Result<()> {
                 .unwrap_or(SystemTime::UNIX_EPOCH),
         };
         let choice =
-            build_agent_session_choice(source.as_ref(), &info, session, request.selection_mode)
+            build_agent_session_choice(request.provider, &info, session, request.selection_mode)
                 .with_context(|| format!("{provider_name} session has no selectable content"))?;
         let mut terminal = init_tui()?;
         let result = run_workspace_picker_on_terminal(
@@ -277,6 +279,58 @@ pub fn execute_agent(request: AgentCopyRequest<'_>) -> Result<()> {
         format!("selected {provider_name} content is empty"),
         format!("sivtr: copied {provider_name} content to clipboard"),
     )
+}
+
+pub fn execute_ref(
+    reference: &str,
+    cwd: Option<&Path>,
+    print_full: bool,
+    regex: Option<&str>,
+    lines: Option<&str>,
+) -> Result<()> {
+    let work_ref: WorkRef = reference.parse()?;
+    let cwd = cwd
+        .map(Path::to_path_buf)
+        .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
+    let providers = work_ref
+        .provider()
+        .map(|provider| vec![provider])
+        .unwrap_or_else(|| {
+            AgentProvider::all()
+                .iter()
+                .map(|spec| spec.provider)
+                .collect()
+        });
+    let records = current_work_record_index(&providers, &cwd, None)?;
+    let record = records
+        .resolve(&work_ref)
+        .with_context(|| format!("No record found for ref `{reference}`"))?;
+    let mut text = ref_text_pair(record, &work_ref, reference)?;
+
+    if let Some(pattern) = regex {
+        text = filter_lines_by_regex(&text, pattern)?;
+    }
+
+    if let Some(spec) = lines {
+        text = filter_lines_by_spec(&text, spec)?;
+    }
+
+    finish_copy(
+        text.plain.trim().to_string(),
+        print_full,
+        "sivtr: copied ref content to clipboard".to_string(),
+    )
+}
+
+fn ref_text_pair(record: &WorkRecord, work_ref: &WorkRef, input_ref: &str) -> Result<TextPair> {
+    let plain = record
+        .content_for_target(work_ref.target())
+        .map(str::to_string)
+        .with_context(|| missing_ref_content_message(work_ref, input_ref))?;
+    Ok(TextPair {
+        ansi: plain.clone(),
+        plain,
+    })
 }
 
 pub fn execute_agent_picker(request: AgentPickerRequest<'_>) -> Result<()> {
@@ -463,8 +517,8 @@ fn pick_current_agent_session_content_on_terminal(
         title: session.title.clone(),
         modified: SystemTime::UNIX_EPOCH,
     };
-    let choice =
-        build_agent_session_choice(source, &info, session, selection_mode).with_context(|| {
+    let choice = build_agent_session_choice(source.provider(), &info, session, selection_mode)
+        .with_context(|| {
             format!(
                 "Current {} session has no selectable content",
                 source.provider().name()
@@ -482,7 +536,9 @@ fn build_agent_session_choices(
 
     for info in sessions {
         let session = source.parse_session_file(&info.path)?;
-        if let Some(choice) = build_agent_session_choice(source, info, session, selection_mode) {
+        if let Some(choice) =
+            build_agent_session_choice(source.provider(), info, session, selection_mode)
+        {
             choices.push(choice);
         }
     }
@@ -518,6 +574,7 @@ fn build_lazy_agent_session_choice(
         modified: info.modified,
         title,
         search_title,
+        notice: None,
         records: Vec::new(),
         load: Some(WorkspaceSessionLoad {
             provider,
@@ -536,37 +593,31 @@ fn load_workspace_session(session: &WorkspaceSession) -> Result<WorkspaceSession
         return Ok(session.clone());
     };
 
+    let info = AgentSessionInfo {
+        path: load.path.clone(),
+        id: load.id.clone(),
+        cwd: load.cwd.clone(),
+        title: load.title.clone(),
+        modified: load.modified,
+    };
     let source = load.provider.session_provider();
-    let info = AgentSessionInfo {
-        path: load.path.clone(),
-        id: load.id.clone(),
-        cwd: load.cwd.clone(),
-        title: load.title.clone(),
-        modified: load.modified,
+    let parsed = match source.parse_session_file(&load.path) {
+        Ok(parsed) => parsed,
+        Err(_) => {
+            return Ok(unavailable_workspace_session(
+                load.provider,
+                info,
+                format!("Failed to load {} session.", load.provider.name()),
+            ));
+        }
     };
-    let parsed = source.parse_session_file(&load.path)?;
-    match build_agent_session_choice(source.as_ref(), &info, parsed, load.selection_mode) {
-        Some(session) => Ok(session),
-        None => Ok(empty_loaded_agent_session(load)),
-    }
-}
 
-fn empty_loaded_agent_session(load: &WorkspaceSessionLoad) -> WorkspaceSession {
-    let info = AgentSessionInfo {
-        path: load.path.clone(),
-        id: load.id.clone(),
-        cwd: load.cwd.clone(),
-        title: load.title.clone(),
-        modified: load.modified,
-    };
-    WorkspaceSession {
-        source: WorkspaceSource::Agent(load.provider),
-        modified: load.modified,
-        title: agent_session_info_display_title(&info),
-        search_title: agent_session_info_fallback_title(&info),
-        records: Vec::new(),
-        load: None,
-    }
+    Ok(resolved_workspace_session(
+        load.provider,
+        &info,
+        parsed,
+        load.selection_mode,
+    ))
 }
 
 pub(super) fn load_workspace_session_at(
@@ -597,12 +648,12 @@ pub(super) fn load_workspace_sessions_for_indices(
 }
 
 fn build_agent_session_choice(
-    source: &dyn AgentSessionProvider,
+    provider: AgentProvider,
     info: &AgentSessionInfo,
     session: AgentSession,
     selection_mode: AgentSelection,
 ) -> Option<WorkspaceSession> {
-    let records = WorkRecord::selected_chat_records(source.provider(), &session, selection_mode);
+    let records = WorkRecord::selected_chat_records(provider, &session, selection_mode);
     if session.blocks.is_empty() || records.is_empty() {
         return None;
     }
@@ -611,13 +662,49 @@ fn build_agent_session_choice(
     let search_title = agent_session_search_title(info, &session);
 
     Some(WorkspaceSession {
-        source: WorkspaceSource::Agent(source.provider()),
+        source: WorkspaceSource::Agent(provider),
         modified: info.modified,
         title,
         search_title,
+        notice: None,
         records,
         load: None,
     })
+}
+
+fn resolved_workspace_session(
+    provider: AgentProvider,
+    info: &AgentSessionInfo,
+    session: AgentSession,
+    selection_mode: AgentSelection,
+) -> WorkspaceSession {
+    build_agent_session_choice(provider, info, session, selection_mode).unwrap_or_else(|| {
+        unavailable_workspace_session(
+            provider,
+            info.clone(),
+            format!("{} session has no selectable content.", provider.name()),
+        )
+    })
+}
+
+fn unavailable_workspace_session(
+    provider: AgentProvider,
+    info: AgentSessionInfo,
+    notice: String,
+) -> WorkspaceSession {
+    WorkspaceSession {
+        source: WorkspaceSource::Agent(provider),
+        modified: info.modified,
+        title: agent_session_info_display_title(&info),
+        search_title: info
+            .title
+            .clone()
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or_else(|| agent_session_info_fallback_title(&info)),
+        notice: Some(notice),
+        records: Vec::new(),
+        load: None,
+    }
 }
 
 fn workspace_sessions_from_agent_choices(
@@ -746,6 +833,7 @@ fn build_terminal_workspace_session(
         modified,
         search_title: title.clone(),
         title,
+        notice: None,
         records,
         load: None,
     })
@@ -910,6 +998,20 @@ fn finish_copy(text: String, print_full: bool, success_message: String) -> Resul
 
     eprintln!("{success_message}");
     Ok(())
+}
+
+fn missing_ref_content_message(work_ref: &WorkRef, input_ref: &str) -> String {
+    if let Some((io, index)) = work_ref.part() {
+        let label = match io {
+            sivtr_core::record::WorkPartIo::Input => "input",
+            sivtr_core::record::WorkPartIo::Output => "output",
+        };
+        format!("No {label} part {index} in ref `{input_ref}`")
+    } else if let Some(line) = work_ref.line() {
+        format!("No line {line} in ref `{input_ref}`")
+    } else {
+        format!("No record found for ref `{input_ref}`")
+    }
 }
 
 fn resolve_agent_session_path(
@@ -1211,13 +1313,17 @@ mod tests {
     use super::vim::{is_vim_command, vim_single_quote};
     use super::{
         agent_session_preview, filter_lines_by_regex, filter_lines_by_spec, load_workspace_session,
-        record_to_copy_parts, records_to_text_pairs, resolve_agent_session_selector,
-        AgentBlockKind, AgentProvider, AgentSelection, AgentSession, AgentSessionInfo,
-        AgentSessionProvider, TextPair,
+        record_to_copy_parts, records_to_text_pairs, ref_text_pair, resolve_agent_session_selector,
+        resolved_workspace_session, AgentBlockKind, AgentProvider, AgentSelection, AgentSession,
+        AgentSessionInfo, AgentSessionProvider, TextPair,
     };
     use anyhow::Result;
     use sivtr_core::ai::AgentBlock;
-    use sivtr_core::record::{RecordTextMode, WorkRecord};
+    use sivtr_core::record::{
+        RecordTextMode, WorkChannel, WorkOutcome, WorkPart, WorkPartIo, WorkPartKind, WorkPayload,
+        WorkRecord, WorkRecordKind, WorkRef, WorkSessionRef, WorkSource, WorkStatus, WorkText,
+        WorkTime,
+    };
     use sivtr_core::session::SessionEntry;
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -1281,6 +1387,48 @@ mod tests {
     }
 
     #[test]
+    fn resolves_ref_text_for_part_targets() {
+        let record = WorkRecord::terminal(
+            &SessionEntry::new("PS C:\\repo>", "cargo test", "ok"),
+            Path::new("current"),
+            0,
+        )
+        .unwrap();
+        let reference = WorkRef::terminal_record("current", 1)
+            .with_part(sivtr_core::record::WorkPartIo::Output, 1);
+
+        let text = ref_text_pair(&record, &reference, "terminal/current/1/o/1").unwrap();
+
+        assert_eq!(text.plain, "ok");
+    }
+
+    #[test]
+    fn resolves_ref_text_for_part_refs_emitted_by_work_parts() {
+        let record = test_record();
+        let reference_text = record
+            .session
+            .work_ref
+            .with_part(WorkPartIo::Output, 1)
+            .to_string();
+        let reference: WorkRef = reference_text.parse().unwrap();
+
+        let text = ref_text_pair(&record, &reference, &reference_text).unwrap();
+
+        assert_eq!(reference_text, "codex/session/1/o/1");
+        assert_eq!(text.plain, "ok");
+    }
+
+    #[test]
+    fn resolves_ref_text_for_line_targets() {
+        let record = test_record();
+        let reference = WorkRef::agent_record(AgentProvider::Codex, "session", 1).with_line(2);
+
+        let text = ref_text_pair(&record, &reference, "codex/session/1/2").unwrap();
+
+        assert_eq!(text.plain, "ok");
+    }
+
+    #[test]
     fn filters_by_regex() {
         let filtered = filter_lines_by_regex(
             &TextPair {
@@ -1338,6 +1486,63 @@ mod tests {
         assert!(is_vim_command("C:\\Tools\\gVim\\gvim.exe"));
         assert!(!is_vim_command("code --wait"));
         assert!(!is_vim_command("hx"));
+    }
+
+    fn test_record() -> WorkRecord {
+        WorkRecord {
+            schema_version: 1,
+            id: "codex/session/1".to_string(),
+            work_ref: WorkRef::agent_record(AgentProvider::Codex, "session", 1),
+            kind: WorkRecordKind::ChatTurn,
+            source: WorkSource {
+                channel: WorkChannel::Chat,
+                provider: Some("codex".to_string()),
+            },
+            session: WorkSessionRef {
+                id: "session".to_string(),
+                canonical_id: Some("session-0123456789abcdef".to_string()),
+                path: None,
+                index: 1,
+                work_ref: WorkRef::agent_record(AgentProvider::Codex, "session", 1),
+            },
+            cwd: None,
+            time: WorkTime::default(),
+            status: WorkStatus {
+                outcome: WorkOutcome::Unknown,
+                exit_code: None,
+            },
+            title: "title".to_string(),
+            text: WorkText {
+                input: Some("user".to_string()),
+                output: Some("ok".to_string()),
+                combined: "user\nok".to_string(),
+            },
+            parts: vec![
+                WorkPart {
+                    io: WorkPartIo::Input,
+                    kind: WorkPartKind::UserMessage,
+                    index_in_record: 1,
+                    occurred_at: None,
+                    label: Some("user".to_string()),
+                    text: "user".to_string(),
+                    ansi: None,
+                },
+                WorkPart {
+                    io: WorkPartIo::Output,
+                    kind: WorkPartKind::AssistantMessage,
+                    index_in_record: 1,
+                    occurred_at: None,
+                    label: Some("assistant".to_string()),
+                    text: "ok".to_string(),
+                    ansi: None,
+                },
+            ],
+            payload: WorkPayload::ChatTurn {
+                user: "user".to_string(),
+                assistant: "ok".to_string(),
+                messages: Vec::new(),
+            },
+        }
     }
 
     #[test]
@@ -1441,6 +1646,44 @@ mod tests {
         assert_eq!(copy_units[0].output.plain, "answer");
         assert_eq!(copy_units[0].block.plain, "question\n\nanswer");
         assert!(!copy_units[0].block.plain.contains("## Assistant"));
+    }
+
+    #[test]
+    fn resolved_workspace_session_downgrades_tool_only_sessions_to_notice() {
+        let info = AgentSessionInfo {
+            path: PathBuf::from("tool-only.jsonl"),
+            id: Some("tool-only".to_string()),
+            cwd: Some("d:\\repo".to_string()),
+            title: Some("tool only".to_string()),
+            modified: SystemTime::UNIX_EPOCH,
+        };
+        let session = AgentSession {
+            path: PathBuf::from("tool-only.jsonl"),
+            id: Some("tool-only".to_string()),
+            cwd: Some("d:\\repo".to_string()),
+            title: Some("tool only".to_string()),
+            blocks: vec![AgentBlock {
+                kind: AgentBlockKind::ToolOutput,
+                timestamp: None,
+                label: Some("Bash".to_string()),
+                text: "tool-only entry".to_string(),
+            }],
+        };
+
+        let resolved = resolved_workspace_session(
+            AgentProvider::Claude,
+            &info,
+            session,
+            AgentSelection::LastTurn,
+        );
+
+        assert_eq!(resolved.title, "tool only  [tool-onl]");
+        assert_eq!(
+            resolved.notice.as_deref(),
+            Some("Claude session has no selectable content.")
+        );
+        assert!(resolved.records.is_empty());
+        assert!(resolved.load.is_none());
     }
 
     #[test]

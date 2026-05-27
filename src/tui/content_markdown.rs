@@ -711,6 +711,26 @@ fn agent_heading_style(text: &str) -> Option<Style> {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )
+    } else if text.starts_with("Tool Call") || text.starts_with("Command") {
+        Some(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else if text.starts_with("Tool Output") || text.starts_with("Output") {
+        Some(
+            Style::default()
+                .fg(Color::Blue)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else if text.starts_with("Error") {
+        Some(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+    } else if text.starts_with("Prompt") {
+        Some(
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
     } else {
         None
     }
@@ -776,6 +796,26 @@ mod tests {
         assert_eq!(user.spans[1].content.as_ref(), "User");
         assert_eq!(user.spans[1].style.fg, Some(Color::Cyan));
         assert_eq!(assistant.spans[1].style.fg, Some(Color::Green));
+    }
+
+    #[test]
+    fn renders_work_part_headings_with_distinct_styles() {
+        let lines = render_markdown_window(
+            &[
+                "## Command",
+                "## Tool Call (Bash)",
+                "## Tool Output (Bash)",
+                "## Error",
+            ],
+            0,
+            4,
+            80,
+        );
+
+        assert_eq!(lines[0].line.spans[1].style.fg, Some(Color::Yellow));
+        assert_eq!(lines[1].line.spans[1].style.fg, Some(Color::Yellow));
+        assert_eq!(lines[2].line.spans[1].style.fg, Some(Color::Blue));
+        assert_eq!(lines[3].line.spans[1].style.fg, Some(Color::Red));
     }
 
     #[test]

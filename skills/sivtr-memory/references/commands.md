@@ -216,11 +216,13 @@ Refs/selectors have this shape:
 ```text
 terminal/session/dialogue[/line]
 provider/session/dialogue[/line]
+provider/session/dialogue/<i|o>/<part>
 ```
 
 The `dialogue`/`line` segments may be concrete numbers or selector lists/ranges
 when used as command input, for example `3-5,7` or `5-7,10`. Output refs remain
-concrete anchors.
+concrete anchors. Part refs use `i` (input) or `o` (output) followed by a 1-based
+part index.
 
 Examples:
 
@@ -229,6 +231,7 @@ sivtr show "terminal/current/12" --json
 sivtr show "pi/019e4f40/3" --json
 sivtr show "pi/019e4f40/3-5,7" --json
 sivtr show "pi/019e4f40/3/5-7,10" --json
+sivtr show "codex/abc123/2/o/1" --json
 ```
 
 ## Token Budget
@@ -237,6 +240,32 @@ sivtr show "pi/019e4f40/3/5-7,10" --json
 - Expand at most 1-3 refs before answering unless the task requires a timeline.
 - Prefer exact refs over broad repeated searches.
 - If context is still missing after targeted search and expansion, ask the user.
+
+## Copy by Ref
+
+Copy content behind an exact ref to clipboard:
+
+```bash
+sivtr copy ref "codex/019e4f40/3/o/1"
+sivtr copy ref "terminal/session_42/5" --print
+sivtr copy ref "pi/abc123/2/i/1" --lines "1:10"
+```
+
+Supports `--print`, `--regex`, `--lines`, and `--cwd` options.
+
+## Work Traversal
+
+Explore workspace records at session, record, and part granularity:
+
+```bash
+sivtr work sessions --json              # List all sessions
+sivtr work records codex/019e4f40 --json # List records in a session
+sivtr work parts codex/019e4f40/3 --json # List parts in a record
+sivtr work parts codex/019e4f40/3 --io output --json  # Output parts only
+```
+
+The `work` command provides canonical refs for every level. Use `--io all|input|output`
+to filter part listing.
 
 ## Diagnostics
 
