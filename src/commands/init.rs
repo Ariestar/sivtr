@@ -256,7 +256,7 @@ enum InstallStatus {
     Unchanged,
 }
 
-/// Install shell hook into the shell's profile file (one-time setup).
+/// Install shell hook, show status, or uninstall hooks.
 pub fn execute(shell: &str) -> Result<()> {
     match shell.to_lowercase().as_str() {
         "powershell" | "pwsh" => install_powershell_hook(),
@@ -267,12 +267,20 @@ pub fn execute(shell: &str) -> Result<()> {
         "tmux" => install_tmux_shortcut(),
         "linux-shortcut" => install_linux_shortcut(),
         "macos-shortcut" => install_macos_shortcut(),
+        "show" | "status" => {
+            show_status()?;
+            return Ok(());
+        }
+        "uninstall" => {
+            uninstall_all()?;
+            return Ok(());
+        }
         _ => {
             eprintln!(
-                "sivtr: supported targets are powershell, bash, zsh, nushell, all, tmux, linux-shortcut, macos-shortcut"
+                "sivtr: supported targets are powershell, bash, zsh, nushell, all, tmux, linux-shortcut, macos-shortcut, show, uninstall"
             );
             eprintln!(
-                "  usage: sivtr init <powershell|bash|zsh|nushell|all|tmux|linux-shortcut|macos-shortcut>"
+                "  usage: sivtr init <powershell|bash|zsh|nushell|all|tmux|linux-shortcut|macos-shortcut|show|uninstall>"
             );
             std::process::exit(1);
         }
@@ -474,6 +482,223 @@ fn maybe_start_hotkey() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn show_status() -> Result<()> {
+    let mut any_installed = false;
+
+    // PowerShell (dynamic discovery — try both pwsh and powershell)
+    for cmd in &["pwsh", "powershell"] {
+        if let Ok(profile) = get_ps_profile(cmd) {
+            let path = Path::new(&profile);
+            if path.exists() {
+                let content = fs::read_to_string(path).unwrap_or_default();
+                if content.contains(POWERSHELL_MARKER_START) || content.contains(POWERSHELL_HOOK) {
+                    eprintln!("  powershell ({cmd}): installed in {profile}");
+                    any_installed = true;
+                } else if content.contains(LEGACY_MARKER_START)
+                    || content.contains(LEGACY_POWERSHELL_HOOK)
+                {
+                    eprintln!("  powershell ({cmd}): legacy integration in {profile} (run `sivtr init powershell` to update)");
+                    any_installed = true;
+                } else {
+                    eprintln!("  powershell ({cmd}): not installed ({profile})");
+                }
+            } else {
+                eprintln!("  powershell ({cmd}): not installed (no profile at {profile})");
+            }
+        }
+    }
+
+    for spec_ref in shell_specs() {
+        match (spec_ref.path_fn)() {
+            Ok(path) => {
+                if path.exists() {
+                    let content = fs::read_to_string(&path).unwrap_or_default();
+                    if content.contains(spec_ref.spec.marker_start)
+                        || content.contains(spec_ref.spec.hook)
+                    {
+                        eprintln!("  {}: installed in {}", spec_ref.name, path.display());
+                        any_installed = true;
+                    } else if content.contains(spec_ref.spec.legacy_marker_start)
+                        || spec_ref
+                            .spec
+                            .legacy_hook
+                            .map(|h| content.contains(h))
+                            .unwrap_or(false)
+                    {
+                        eprintln!(
+                            "  {}: legacy integration in {} (run `sivtr init {}` to update)",
+                            spec_ref.name,
+                            path.display(),
+                            spec_ref.name
+                        );
+                        any_installed = true;
+                    } else {
+                        eprintln!("  {}: not installed ({})", spec_ref.name, path.display());
+                    }
+                } else {
+                    eprintln!(
+                        "  {}: not installed (no profile at {})",
+                        spec_ref.name,
+                        path.display()
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!("  {}: unavailable ({e})", spec_ref.name);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        let tmux_path = tmux_config_path()?;
+        if tmux_path.exists() {
+            let content = fs::read_to_string(&tmux_path).unwrap_or_default();
+            if content.contains(TMUX_MARKER_START) {
+                eprintln!("  tmux: shortcut installed ({})", tmux_path.display());
+                any_installed = true;
+            } else {
+                eprintln!("  tmux: not installed");
+            }
+        } else {
+            eprintln!("  tmux: not installed (no config)");
+        }
+    }
+
+    if any_installed {
+        eprintln!("  session log dir: {}", session_log_dir().display());
+    } else {
+        eprintln!("  no shell hooks installed");
+        eprintln!("  run `sivtr init bash` (or zsh/pwsh/nushell) to install");
+    }
+
+    Ok(())
+}
+
+fn uninstall_all() -> Result<()> {
+    let mut removed = 0usize;
+
+    // PowerShell profiles
+    for cmd in &["pwsh", "powershell"] {
+        if let Ok(profile) = get_ps_profile(cmd) {
+            let path = Path::new(&profile);
+            if path.exists() {
+                if let Ok(content) = fs::read_to_string(path) {
+                    if let Some(updated) = remove_hook_block(&content, &POWERSHELL_SPEC) {
+                        fs::write(path, updated)?;
+                        eprintln!("sivtr: removed powershell ({cmd}) hook from {profile}");
+                        removed += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    for spec_ref in shell_specs() {
+        if let Ok(path) = (spec_ref.path_fn)() {
+            if path.exists() {
+                let content = fs::read_to_string(&path)
+                    .with_context(|| format!("Failed to read {}", path.display()))?;
+                if let Some(updated) = remove_hook_block(&content, spec_ref.spec) {
+                    fs::write(&path, updated)
+                        .with_context(|| format!("Failed to write {}", path.display()))?;
+                    eprintln!(
+                        "sivtr: removed {} hook from {}",
+                        spec_ref.name,
+                        path.display()
+                    );
+                    removed += 1;
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        let tmux_path = tmux_config_path()?;
+        if tmux_path.exists() {
+            let content = fs::read_to_string(&tmux_path).unwrap_or_default();
+            if let Some(updated) = remove_hook_block(&content, &TMUX_SPEC) {
+                fs::write(&tmux_path, updated)?;
+                eprintln!("sivtr: removed tmux shortcut from {}", tmux_path.display());
+                removed += 1;
+            }
+        }
+    }
+
+    if removed == 0 {
+        eprintln!("sivtr: no hooks found to remove");
+    } else {
+        eprintln!("sivtr: removed {removed} hook(s). Restart your terminal to deactivate.");
+    }
+
+    Ok(())
+}
+
+struct ShellSpecRef<'a> {
+    name: &'static str,
+    spec: &'a HookSpec,
+    path_fn: fn() -> Result<PathBuf>,
+}
+
+fn shell_specs() -> Vec<ShellSpecRef<'static>> {
+    vec![
+        ShellSpecRef {
+            name: "bash",
+            spec: &BASH_SPEC,
+            path_fn: bash_profile_path,
+        },
+        ShellSpecRef {
+            name: "zsh",
+            spec: &ZSH_SPEC,
+            path_fn: zsh_profile_path,
+        },
+        ShellSpecRef {
+            name: "nushell",
+            spec: &NUSHELL_SPEC,
+            path_fn: nushell_config_path,
+        },
+    ]
+    // PowerShell detected dynamically — handled inline in show_status/uninstall if needed
+}
+
+fn session_log_dir() -> PathBuf {
+    dirs::state_dir()
+        .unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_default()
+                .join(".local")
+                .join("state")
+        })
+        .join("sivtr")
+}
+
+fn remove_hook_block(content: &str, spec: &HookSpec) -> Option<String> {
+    if let Some((start, end)) = find_marked_block(content, spec.marker_start, spec.marker_end) {
+        let mut updated = String::with_capacity(content.len() - (end - start));
+        updated.push_str(&content[..start]);
+        updated.push_str(content[end..].trim_start_matches('\n'));
+        Some(updated)
+    } else if let Some((start, end)) =
+        find_marked_block(content, spec.legacy_marker_start, spec.legacy_marker_end)
+    {
+        let mut updated = String::with_capacity(content.len() - (end - start));
+        updated.push_str(&content[..start]);
+        updated.push_str(content[end..].trim_start_matches('\n'));
+        Some(updated)
+    } else if content.contains(spec.hook) {
+        Some(content.replacen(spec.hook, "", 1))
+    } else if let Some(legacy_hook) = spec.legacy_hook {
+        if content.contains(legacy_hook) {
+            Some(content.replacen(legacy_hook, "", 1))
+        } else {
+            None
+        }
+    } else {
+        None
+    }
 }
 
 #[cfg(windows)]

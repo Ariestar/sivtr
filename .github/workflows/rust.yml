@@ -10,7 +10,14 @@ env:
 
 jobs:
   ci:
-    runs-on: windows-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+          - os: ubuntu-latest
+          - os: macos-latest
 
     steps:
       - name: Checkout

@@ -12,6 +12,64 @@ description: 安装 sivtr CLI、内置 memory skill，并设置 shell 集成。
 
 只给人浏览时，单独安装 CLI 也可以；要让 Agent 复用本地上下文，建议两个都装。
 
+## AI 助手快速安装
+
+如果你是 AI 编码助手（Claude Code、Codex 等）替用户安装 sivtr：
+
+### 安装前检查
+
+```bash
+sivtr --version    # 是否已安装？
+sivtr doctor       # 完整环境检查
+```
+
+如果 `sivtr --version` 成功，**不要重新安装**。运行 `sivtr doctor` 检查环境，然后跳到下面的 skill 安装。
+
+### 安装步骤
+
+```bash
+# 1. 安装二进制（选一个）
+cargo install sivtr          # 从源码编译（需要 Rust）
+curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh  # 预编译二进制
+
+# 2. 验证
+sivtr --version
+
+# 3. Shell hook（选一个）
+sivtr init bash       # Linux 默认
+sivtr init zsh        # macOS 默认
+sivtr init powershell # Windows
+sivtr init nushell
+
+# 4. 配置
+sivtr config init
+
+# 5. Skill（用于 Agent 工作流）
+npx skills add Ariestar/sivtr --skill sivtr-memory -g
+```
+
+### 安装后验证
+
+```bash
+sivtr doctor
+```
+
+预期：所有检查通过。若 `shell hooks` 显示 "not installed"，运行对应的 `sivtr init` 命令。若 `session log directory` 显示 "missing"，用户需在 `sivtr init` 后重启终端。
+
+### 查看当前状态
+
+```bash
+sivtr init show       # 查看已安装的 shell hook
+sivtr doctor          # 完整诊断
+```
+
+### 卸载
+
+```bash
+sivtr init uninstall  # 移除所有 shell hook
+cargo uninstall sivtr # 移除二进制
+```
+
 ## 要求
 
 - Rust 和 Cargo
@@ -37,6 +95,22 @@ cargo install sivtr
 sivtr --version
 sivtr --help
 ```
+
+## 快速安装（Linux/macOS）
+
+下载预编译二进制，无需编译：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh
+```
+
+指定版本：
+
+```bash
+SIVTR_VERSION=v0.1.3 curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh
+```
+
+安装到 `~/.local/bin/sivtr`（或 `$SIVTR_INSTALL_DIR`）。无需 Rust 工具链。
 
 ## 从源码安装
 
@@ -97,7 +171,19 @@ sivtr init zsh
 sivtr init nushell
 ```
 
-安装后重启终端。
+查看已安装的 hook：
+
+```bash
+sivtr init show
+```
+
+卸载所有 hook：
+
+```bash
+sivtr init uninstall
+```
+
+安装或卸载后重启终端。
 
 Hook 会写入按进程区分的 session log：
 

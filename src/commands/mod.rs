@@ -6,6 +6,7 @@ pub mod command_block_selector;
 pub mod config;
 pub mod copy;
 pub mod diff;
+pub mod doctor;
 pub mod flush;
 pub mod history;
 pub mod hotkey;

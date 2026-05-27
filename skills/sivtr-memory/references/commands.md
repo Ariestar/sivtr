@@ -237,3 +237,17 @@ sivtr show "pi/019e4f40/3/5-7,10" --json
 - Expand at most 1-3 refs before answering unless the task requires a timeline.
 - Prefer exact refs over broad repeated searches.
 - If context is still missing after targeted search and expansion, ask the user.
+
+## Diagnostics
+
+When `sivtr` commands fail or return no results, check the environment:
+
+```bash
+sivtr doctor        # Check binary, config, session logs, hooks, providers, clipboard
+sivtr init show     # Show which shell hooks are installed
+```
+
+Common issues:
+- No terminal results → `sivtr init show` to verify hooks, then restart terminal
+- No provider results → `sivtr doctor` to check session discovery
+- Clipboard not working → `sivtr doctor` reports clipboard availability

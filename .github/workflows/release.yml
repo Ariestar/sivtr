@@ -27,6 +27,12 @@ jobs:
             os: ubuntu-latest
             archive: tar.gz
             binary: sivtr
+          - name: linux-x64-musl
+            os: ubuntu-latest
+            archive: tar.gz
+            binary: sivtr
+            musl: true
+            target: x86_64-unknown-linux-musl
           - name: macos
             os: macos-latest
             archive: tar.gz
@@ -41,11 +47,25 @@ jobs:
         with:
           toolchain: 1.88.0
 
+      - name: Install musl target
+        if: matrix.musl
+        run: rustup target add x86_64-unknown-linux-musl
+
+      - name: Install musl tools
+        if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --release --locked
+        run: |
+          if [ -n "${{ matrix.target }}" ]; then
+            cargo build --release --locked --target ${{ matrix.target }}
+          else
+            cargo build --release --locked
+          fi
+        shell: bash
 
       - name: Package Windows
         if: matrix.archive == 'zip'
@@ -53,7 +73,11 @@ jobs:
         run: |
           $name = "sivtr-${{ github.ref_name }}-${{ matrix.name }}"
           New-Item -ItemType Directory -Path $name | Out-Null
-          Copy-Item "target/release/${{ matrix.binary }}" $name
+          if ("${{ matrix.target }}") {
+            Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" $name
+          } else {
+            Copy-Item "target/release/${{ matrix.binary }}" $name
+          }
           Copy-Item README.md $name
           Copy-Item LICENSE $name
           Compress-Archive -Path $name -DestinationPath "$name.zip"
@@ -64,7 +88,11 @@ jobs:
         run: |
           name="sivtr-${GITHUB_REF_NAME}-${{ matrix.name }}"
           mkdir "$name"
-          cp "target/release/${{ matrix.binary }}" "$name/"
+          if [ -n "${{ matrix.target }}" ]; then
+            cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$name/"
+          else
+            cp "target/release/${{ matrix.binary }}" "$name/"
+          fi
           cp README.md LICENSE "$name/"
           tar -czf "$name.tar.gz" "$name"
 
@@ -93,4 +121,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           body_path: CHANGELOG.md
-          files: artifacts/**/*
+          files: |
+            artifacts/**/*
+            install.sh

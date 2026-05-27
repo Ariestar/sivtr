@@ -55,6 +55,9 @@ fn run() -> Result<()> {
         Some(Commands::Config(cfg_cmd)) => {
             commands::config::execute(cfg_cmd)?;
         }
+        Some(Commands::Doctor) => {
+            commands::doctor::execute()?;
+        }
         Some(Commands::Init { target }) => {
             commands::init::execute(&target)?;
         }
