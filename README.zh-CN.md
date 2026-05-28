@@ -8,6 +8,8 @@
   面向终端输出和 AI Coding Sessions 的本地工作记忆层。
   <br>
   捕获发生过的事，之后搜索复用，让 Agent 使用精确的本地证据。
+  <br>
+  <strong>你的 Agent 记忆，不必是一套笨重的知识系统。</strong>
 </p>
 
 <p align="center">
@@ -30,35 +32,42 @@
 </p>
 
 <p align="center">
-  <a href="https://sivtr.pages.dev/zh-cn/playbooks/fix-terminal-error/">
-    <img src="docs-site/public/demo/1.gif" alt="sivtr demo：查找并复用最近终端输出" width="820">
+  <a href="https://sivtr.pages.dev/zh-cn/playbooks/">
+    <img src="docs-site/public/demo/4.gif" alt="sivtr demo：把搜索结果保存成变量并继续缩小范围" width="820">
   </a>
+  <br>
+  <sub>
+    把命中结果保存成记忆变量，再继续缩小范围 ·
+    <a href="https://sivtr.pages.dev/zh-cn/playbooks/fix-terminal-error/">修复终端报错</a> ·
+    <a href="https://sivtr.pages.dev/zh-cn/playbooks/recent-work-timeline/">生成时间线</a> ·
+    <a href="https://sivtr.pages.dev/zh-cn/playbooks/agent-handoff/">带证据交接</a>
+  </sub>
 </p>
 
 ---
 
 ## 为什么需要 sivtr？
 
-开发者和 Agent 经常浪费时间重建已经存在的上下文：终端报错、测试输出、工具日志、之前的 AI 会话。`sivtr` 把这些本地工作变成可搜索的记忆。
+开发者和 Agent 经常浪费时间重建已经存在的上下文：终端报错、测试输出、工具日志、之前的 AI 会话。`sivtr` 把这些本地工作变成可搜索的记忆，但不要求你引入一套很重的知识系统。
 
 有了 `sivtr`，你可以：
 
-- 不再手动把日志粘贴给 Agent；
-- 从当前 workspace 同时搜索终端和 AI sessions；
-- 复制或打印精确的 records、lines、input/output parts；
-- 保存结果集，并在命令链里继续传递。
+- 让 Agent 修复最近一次失败，而不用自己粘贴日志；
+- 几秒钟找回昨天的测试输出、构建报错或关键决策；
+- 从摘要跳回当时那条命令输出或 Agent 回复；
+- 把一组有用结果保存成 `@failures` 这样的变量，在下一条命令里继续用。
 
 > [!IMPORTANT]
 > Agent 工作流建议同时安装 `sivtr` CLI 和内置 `sivtr-memory` skill。CLI 负责存取本地记忆；skill 负责教 Agent 何时、如何使用它。
 
 ## 特性
 
-- **终端捕获**：支持 Bash、Zsh、PowerShell、Nushell。
-- **快速 TUI**：浏览长命令输出。
-- **统一搜索**：跨 terminal records、Codex、Claude Code、OpenCode、Pi sessions。
-- **稳定 refs**：精确定位 records、lines 和 input/output parts。
-- **WorkSets**：可复用结果集，支持 `@last`、保存的 `@name` 和 stdin `@`。
-- **链式命令**：搜索、缩小、扩展、展示证据，不需要手动复制中间 refs。
+- **带输出的 shell history**：记录 Bash、Zsh、PowerShell、Nushell 里的命令、stdout/stderr、退出码、目录和耗时。
+- **长输出浏览器**：把 `cargo test`、构建日志、stack trace 管进一个键盘优先的快速 TUI。
+- **一个搜索入口找本地工作**：在当前 repo 里同时搜索终端输出和 Codex、Claude Code、OpenCode、Pi 会话。
+- **能跳回原文的证据**：每个命中都可以展示、复制、展开上下文，或交给 Agent 继续处理。
+- **命名记忆变量**：把任意结果保存为 `@failures`，复用 `@last`，用 stdin `@` 接上一条命令，也能写 `@failures[1,3..5]` 取子集。
+- **可组合 CLI 工作流**：搜索 → 缩小范围 → 扩展上下文 → 展示内容，中间不用手动复制 ID。
 - **Agent-ready memory**：通过内置 `sivtr-memory` skill 让 Agent 主动检索本地证据。
 - **诊断工具**：`sivtr doctor`、`sivtr init show`、`sivtr init uninstall`。
 
@@ -110,66 +119,38 @@ npx skills add Ariestar/sivtr --skill sivtr-memory -g
 修复最近的终端报错。先用 sivtr。
 ```
 
-Agent 可以先搜索本地证据、查看精确 refs、修改代码并验证结果，而不是先要求你粘贴日志。
+Agent 可以先搜索本地证据、打开命中的原始输出、修改代码并验证结果，而不是先要求你粘贴日志。
 
 ## 示例
 
-### 复制最近终端输出
+更多完整玩法见 [Playbooks / 玩法实例](https://sivtr.pages.dev/zh-cn/playbooks/)。
 
-```bash
-sivtr copy out --print
-sivtr copy cmd --pick
-```
-
-### 搜索、保存并展示精确证据
-
-```bash
-sivtr s terminal -m "panic|failed" --save failures --refs
-sivtr work parts @failures --io output --refs
-sivtr show @last --full
-```
-
-### 链式调用 memory 命令
-
-```bash
-sivtr s terminal -m "panic|failed" \
-  | sivtr work parts @ --io output \
-  | sivtr s @ -m "error|stack|caused by" \
-  | sivtr show @ --full
-```
-
-### 生成最近工作时间线
-
-```bash
-sivtr s agent --since today --sort oldest -f timeline
-sivtr s terminal --since today --sort oldest -f timeline
-```
-
-### 扩展搜索命中的上下文
-
-```bash
-sivtr s agent -m "release|validation" --save release_context --refs
-sivtr zoom @release_context -C 2 --save expanded_context
-sivtr show @expanded_context --full
-```
+| 场景 | 你怎么用 | 演示 |
+| --- | --- | --- |
+| 修复最近的终端报错 | 直接对 Agent 说：<br><code>修复最近的终端报错。先用 sivtr。</code> | <img src="docs-site/public/demo/1.gif" alt="用 sivtr 修复最近终端报错" width="320"> |
+| 浏览并复制最近终端输出 | <code>cargo test 2&gt;&amp;1 &#124; sivtr</code><br><code>sivtr copy out --print</code> | <img src="docs-site/public/demo/2.gif" alt="浏览并复制最近终端输出" width="320"> |
+| 生成最近工作时间线 | <code>sivtr s agent --since today --sort oldest -f timeline</code><br><code>sivtr s terminal --since today --sort oldest -f timeline</code> | <img src="docs-site/public/demo/3.gif" alt="生成最近工作时间线" width="320"> |
+| 把结果保存成变量并继续处理 | <code>sivtr s terminal -m "panic" --save failures</code><br><code>sivtr work parts @failures --io output</code><br><code>sivtr show @last --full</code> | <img src="docs-site/public/demo/4.gif" alt="链式使用已保存的记忆变量" width="320"> |
+| 中断后继续 | 直接对 Agent 说：<br><code>继续。先用 sivtr memory。</code> | <img src="docs-site/public/demo/5.gif" alt="中断后用 sivtr 记忆继续" width="320"> |
+| 给下一个 Agent 写交接 | 直接对 Agent 说：<br><code>给下一个 Agent 写一份带证据的交接。</code> | <img src="docs-site/public/demo/6.gif" alt="生成有证据的 Agent 交接" width="320"> |
 
 ## 核心概念
 
 | 概念 | 含义 |
 | --- | --- |
 | WorkRecord | 一个有用的工作事件：终端命令、Agent turn、工具调用或捕获输出块。 |
-| WorkPart | Record 里的 typed input/output 片段，例如 command、assistant reply、tool output 或 error。 |
-| WorkRef | Record、line 或 part 的稳定地址，例如 `pi/<session>/3/o/1`。 |
-| WorkSet | 可以保存、选择、管道传递、扩展和展示的有序结果集。 |
+| WorkPart | Record 里的命令、输出、assistant 回复、tool output 或 error。只想拿有用片段而不是整个事件时用它。 |
+| WorkRef | 某段精确记忆的稳定地址，例如 `pi/<session>/3/o/1`。适合引用、复现和交接。 |
+| WorkSet | `@last`、`@failures` 这类记忆变量背后的数据：一组有顺序的 refs，可以保存、切片、管道传递、扩展和展示。 |
 
-常用句柄：
+记忆变量：
 
 | 句柄 | 用途 |
 | --- | --- |
-| `@last` | 最近一次生成的 WorkSet。 |
-| `@name` | 通过 `--save name` 保存的 WorkSet。 |
-| `@name[1,3..5]` | 从已保存 WorkSet 中按 1-based selector 取子集。 |
-| `@` | stdin 传入的 WorkSet JSON。 |
+| `@last` | 最近一次搜索或投影结果。 |
+| `@name` | 通过 `--save name` 创建的命名变量，例如 `@failures`。 |
+| `@name[1,3..5]` | 从已保存变量中只取几项。 |
+| `@` | 使用管道里上一条命令传来的结果。 |
 
 ## 命令概览
 
@@ -179,12 +160,12 @@ sivtr show @expanded_context --full
 | `sivtr run <command>` | 执行命令、捕获输出并浏览。 |
 | `sivtr copy` | 复制最近终端命令块。 |
 | `sivtr copy <provider>` | 从 Codex、Claude Code、OpenCode、Pi sessions 复制内容。 |
-| `sivtr search` / `sivtr s` | 搜索终端和 Agent memory；结果保存为 `@last`。 |
+| `sivtr search` / `sivtr s` | 搜索终端和 Agent memory；命中结果保存为 `@last`。 |
 | `sivtr work sessions` | 列出当前 workspace 的 terminal 和 Agent sessions。 |
-| `sivtr work records <source>` | 把 source 或 WorkSet 投影成 record refs。 |
-| `sivtr work parts <source>` | 把 records 投影成规范 input/output part refs。 |
-| `sivtr show <ref-or-workset>` | 打印精确 refs 或 WorkSets。 |
-| `sivtr zoom <source>` | 给 anchors 补上相邻 records。 |
+| `sivtr work records <source>` | 把 sessions 或已保存变量转成事件级 refs。 |
+| `sivtr work parts <source>` | 从匹配事件里抽出真正有用的输入/输出片段。 |
+| `sivtr show <ref-or-workset>` | 打印 refs、`@last`、`@name` 或管道结果背后的内容。 |
+| `sivtr zoom <source>` | 给搜索命中补上前后上下文。 |
 | `sivtr diff <left> <right>` | 对比最近命令块。 |
 | `sivtr doctor` | 诊断 binary、config、session logs、hooks、providers、clipboard。 |
 | `sivtr init <shell>` | 安装 shell integration；也支持 `show` 和 `uninstall`。 |

@@ -23,8 +23,8 @@ These short recordings show the core loop: capture local work, search it, narrow
     <figcaption>Turn recent work into a timeline.</figcaption>
   </figure>
   <figure>
-    <img src="/demo/4.gif" alt="Pass a saved WorkSet through a command chain" />
-    <figcaption>Chain saved evidence through commands.</figcaption>
+    <img src="/demo/4.gif" alt="Pass a named memory variable through a command chain" />
+    <figcaption>Save matches as variables and keep working.</figcaption>
   </figure>
 </div>
 

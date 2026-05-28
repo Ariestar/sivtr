@@ -20,13 +20,13 @@ For the full workflow, install both pieces: the `sivtr` CLI/TUI and the bundled 
 
 ## What sivtr helps with
 
-- **Capture working memory** from pipes, subprocesses, shell integration, and local agent transcripts.
-- **Browse and select text** in a keyboard-first Vim-style TUI.
-- **Copy recent command blocks** as input, output, bare command, or full block.
-- **Reuse agent dialogue** from Codex, Claude Code, OpenCode, or Pi as project memory.
-- **Teach agents to use the same memory** through skills and reusable procedures, so "fix the terminal error" can start from local evidence.
-- **Search and show workspace refs** across terminal context and agent-session records.
-- **Hand exact context to humans or agents** with stable refs, selectors, filters, and copy modes.
+- **Keep the output, not just the command** from pipes, subprocesses, shell integration, and local agent transcripts.
+- **Browse long logs comfortably** in a keyboard-first Vim-style TUI.
+- **Copy the last useful thing** as input, output, bare command, or full block.
+- **Search local agent conversations** from Codex, Claude Code, OpenCode, or Pi when you need an old decision or explanation.
+- **Let agents start from evidence** so "fix the terminal error" can begin with the latest captured failure instead of a paste request.
+- **Jump back to the source** behind a summary, search hit, or handoff note.
+- **Save search results as variables** like `@last` and `@failures`, then reuse them in follow-up commands.
 - **Launch memory pickers** from the terminal, tmux, VS Code, Windows hotkeys, or generated desktop shortcuts.
 
 ## First useful commands
@@ -73,10 +73,10 @@ sivtr search agent --match "panic" --format timeline
 
 | Layer | What it describes |
 | --- | --- |
-| Memory layer | Terminal records, agent conversations, sessions, dialogues, command blocks, and refs. |
-| Use layer | TUI browsing, search, copy, show, diff, skills, and playbooks. |
+| What happened | Terminal output, command blocks, agent conversations, tool results, and local history. |
+| How you reuse it | TUI browsing, search, copy, show, diff, skills, playbooks, and memory variables like `@last`. |
 
-Terminal sources produce command blocks. Agent providers produce dialogue blocks. Selectors like `1` and `2..4` pick recent memory for copy commands. Refs like `claude/<session>/3/2` identify exact search results for `sivtr show`.
+Terminal sources produce command blocks. Agent providers produce conversation blocks. Selectors like `1` and `2..4` pick recent items for copy commands. Search results can be saved as variables such as `@failures`, then shown, expanded, or piped into the next command.
 
 ## Local by default
 

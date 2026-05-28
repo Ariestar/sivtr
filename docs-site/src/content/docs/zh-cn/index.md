@@ -20,13 +20,13 @@ description: 面向人和 Agent 的 shared memory workspace。
 
 ## sivtr 解决什么问题
 
-- **捕获工作记忆**：来自管道、子进程、shell 集成和本地 Agent transcript。
-- **浏览和选择文本**：提供键盘优先的 Vim 风格 TUI。
-- **复制最近命令块**：可复制输入、输出、裸命令或完整块。
-- **复用 Agent 对话**：把 Codex、Claude Code、OpenCode 或 Pi 的对话变成项目记忆。
-- **让 Agent 学会使用同一份记忆**：通过 skill 和可复用流程，让"解决终端报错"从本地证据开始。
-- **搜索并展示 workspace ref**：覆盖终端上下文和 Agent session 记录。
-- **把精确上下文交给人或 Agent**：通过 ref、selector、filter 和 copy mode 复用内容。
+- **保留输出，而不只是命令**：来自管道、子进程、shell 集成和本地 Agent transcript。
+- **舒服地浏览长日志**：提供键盘优先的 Vim 风格 TUI。
+- **复制最近有用内容**：可复制输入、输出、裸命令或完整块。
+- **搜索本地 Agent 对话**：从 Codex、Claude Code、OpenCode 或 Pi 找回旧决策和解释。
+- **让 Agent 从证据开始**：让"解决终端报错"从最近捕获的失败输出开始，而不是先让你粘贴日志。
+- **从摘要跳回原文**：搜索命中、交接说明和时间线都能继续追到原始上下文。
+- **把搜索结果保存成变量**：例如 `@last`、`@failures`，后续命令可以继续复用。
 - **快速打开 memory picker**：支持 CLI、tmux、VS Code、Windows 热键和生成的桌面启动器。
 
 ## 最先要会的命令
@@ -73,10 +73,10 @@ sivtr search agent --match "panic" --format timeline
 
 | 层 | 说明 |
 | --- | --- |
-| 记忆层 | 终端记录、Agent 对话、session、dialogue、command block 和 ref。 |
-| 使用层 | TUI 浏览、search、copy、show、diff、skill 和 playbook。 |
+| 发生过什么 | 终端输出、命令块、Agent 对话、工具结果和本地 history。 |
+| 怎么复用 | TUI 浏览、search、copy、show、diff、skill、playbook，以及 `@last` 这类记忆变量。 |
 
-终端 source 产生命令块，Agent provider 产生对话块。`1`、`2..4` 这样的 selector 用来选择最近记忆；`claude/<session>/3/2` 这样的 ref 用来让 `sivtr show` 精确取回搜索结果。
+终端 source 产生命令块，Agent provider 产生对话块。`1`、`2..4` 这样的 selector 用来选择最近条目。搜索结果可以保存成 `@failures` 这样的变量，再展示、扩展或管道传给下一条命令。
 
 ## 默认本地优先
 

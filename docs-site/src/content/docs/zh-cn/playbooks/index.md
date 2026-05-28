@@ -23,8 +23,8 @@ description: 组合 sivtr 记忆、skill 和 Agent 的社区玩法。
     <figcaption>把最近工作变成时间线。</figcaption>
   </figure>
   <figure>
-    <img src="/demo/4.gif" alt="在命令链中传递已保存 WorkSet" />
-    <figcaption>把证据通过命令链传递。</figcaption>
+    <img src="/demo/4.gif" alt="在命令链中传递命名记忆变量" />
+    <figcaption>把命中结果保存成变量，再继续处理。</figcaption>
   </figure>
 </div>
 

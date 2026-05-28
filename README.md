@@ -8,6 +8,8 @@
   Local workspace memory for terminal output and AI coding sessions.
   <br>
   Capture what happened, search it later, and let agents reuse exact local evidence.
+  <br>
+  <strong>Your agent memory doesn’t need to be a heavyweight knowledge system.</strong>
 </p>
 
 <p align="center">
@@ -30,35 +32,42 @@
 </p>
 
 <p align="center">
-  <a href="https://sivtr.pages.dev/playbooks/fix-terminal-error/">
-    <img src="docs-site/public/demo/1.gif" alt="sivtr demo: find and reuse recent terminal output" width="820">
+  <a href="https://sivtr.pages.dev/playbooks/">
+    <img src="docs-site/public/demo/4.gif" alt="sivtr demo: save search results as variables and keep narrowing" width="820">
   </a>
+  <br>
+  <sub>
+    Save matches as memory variables and keep narrowing ·
+    <a href="https://sivtr.pages.dev/playbooks/fix-terminal-error/">Fix terminal errors</a> ·
+    <a href="https://sivtr.pages.dev/playbooks/recent-work-timeline/">Build timelines</a> ·
+    <a href="https://sivtr.pages.dev/playbooks/agent-handoff/">Handoff with evidence</a>
+  </sub>
 </p>
 
 ---
 
 ## Why sivtr?
 
-Developers and agents lose time reconstructing context that already exists locally: terminal failures, test output, tool logs, and previous AI sessions. `sivtr` turns that work into searchable memory.
+Developers and agents lose time reconstructing context that already exists locally: terminal failures, test output, tool logs, and previous AI sessions. `sivtr` turns that work into searchable memory without asking you to adopt a heavyweight knowledge system.
 
 With `sivtr`, you can:
 
-- stop pasting logs into agents by hand;
-- search terminal and AI sessions from the current workspace;
-- copy or print exact records, lines, and input/output parts;
-- save result sets and pass them through command chains.
+- ask an agent to fix the latest failure without pasting the log;
+- find yesterday's test output, build error, or decision in seconds;
+- reopen the exact command output or agent reply behind a summary;
+- save useful search results as named variables like `@failures` and reuse them in the next command.
 
 > [!IMPORTANT]
 > For agent workflows, install both the `sivtr` CLI and the bundled `sivtr-memory` skill. The CLI stores and retrieves local memory; the skill teaches your agent when and how to use it.
 
 ## Features
 
-- **Terminal capture** for Bash, Zsh, PowerShell, and Nushell.
-- **Fast TUI** for browsing long command output.
-- **Unified search** across terminal records, Codex, Claude Code, OpenCode, and Pi sessions.
-- **Stable refs** for exact records, lines, and input/output parts.
-- **WorkSets** for reusable result sets: `@last`, saved `@name`, and stdin `@`.
-- **Chainable commands**: search, narrow, expand, and show evidence without copying intermediate refs.
+- **Shell history that keeps the output**: capture commands from Bash, Zsh, PowerShell, and Nushell, including stdout, stderr, exit code, cwd, and timing.
+- **A viewer for long output**: pipe `cargo test`, build logs, or stack traces into a fast keyboard-first TUI.
+- **One search box for local work**: search terminal output and Codex, Claude Code, OpenCode, and Pi sessions from the current repo.
+- **Click-back / copy-back evidence**: every match can be shown, copied, expanded with nearby context, or handed to an agent.
+- **Named memory variables**: save any result set as `@failures`, reuse `@last`, pass stdin as `@`, and select slices like `@failures[1,3..5]`.
+- **Composable CLI workflows**: search → narrow → expand → show, without copying IDs between commands.
 - **Agent-ready memory** through the bundled `sivtr-memory` skill.
 - **Diagnostics** with `sivtr doctor`, `sivtr init show`, and `sivtr init uninstall`.
 
@@ -110,66 +119,38 @@ Then ask your coding agent to use local memory first:
 Fix the latest terminal error. Use sivtr first.
 ```
 
-Instead of asking you to paste logs, the agent can search local evidence, inspect exact refs, patch the code, and verify the fix.
+Instead of asking you to paste logs, the agent can search local evidence, open the exact matching output, patch the code, and verify the fix.
 
 ## Examples
 
-### Copy recent terminal output
+More end-to-end walkthroughs live in the [Playbooks](https://sivtr.pages.dev/playbooks/).
 
-```bash
-sivtr copy out --print
-sivtr copy cmd --pick
-```
-
-### Search, save, and show exact evidence
-
-```bash
-sivtr s terminal -m "panic|failed" --save failures --refs
-sivtr work parts @failures --io output --refs
-sivtr show @last --full
-```
-
-### Chain memory commands
-
-```bash
-sivtr s terminal -m "panic|failed" \
-  | sivtr work parts @ --io output \
-  | sivtr s @ -m "error|stack|caused by" \
-  | sivtr show @ --full
-```
-
-### Build a recent work timeline
-
-```bash
-sivtr s agent --since today --sort oldest -f timeline
-sivtr s terminal --since today --sort oldest -f timeline
-```
-
-### Expand context around search hits
-
-```bash
-sivtr s agent -m "release|validation" --save release_context --refs
-sivtr zoom @release_context -C 2 --save expanded_context
-sivtr show @expanded_context --full
-```
+| Workflow | What you do | Demo |
+| --- | --- | --- |
+| Fix the latest terminal error | Ask your agent: <br><code>Fix the latest terminal error. Use sivtr first.</code> | <img src="docs-site/public/demo/1.gif" alt="Fix the latest terminal error with sivtr" width="320"> |
+| Browse and copy recent terminal output | <code>cargo test 2&gt;&amp;1 &#124; sivtr</code><br><code>sivtr copy out --print</code> | <img src="docs-site/public/demo/2.gif" alt="Browse and copy recent terminal output" width="320"> |
+| Turn recent work into a timeline | <code>sivtr s agent --since today --sort oldest -f timeline</code><br><code>sivtr s terminal --since today --sort oldest -f timeline</code> | <img src="docs-site/public/demo/3.gif" alt="Build a recent work timeline" width="320"> |
+| Save results as variables and chain them | <code>sivtr s terminal -m "panic" --save failures</code><br><code>sivtr work parts @failures --io output</code><br><code>sivtr show @last --full</code> | <img src="docs-site/public/demo/4.gif" alt="Chain saved memory variables" width="320"> |
+| Continue after interruption | Ask your agent: <br><code>Continue. Use sivtr memory first.</code> | <img src="docs-site/public/demo/5.gif" alt="Continue after interruption with sivtr memory" width="320"> |
+| Prepare a handoff for the next agent | Ask your agent: <br><code>Give the next agent a handoff with evidence.</code> | <img src="docs-site/public/demo/6.gif" alt="Prepare an evidence-backed handoff" width="320"> |
 
 ## Core concepts
 
 | Concept | Meaning |
 | --- | --- |
 | WorkRecord | One useful work event: a terminal command, agent turn, tool call, or captured output block. |
-| WorkPart | A typed input/output piece inside a record, such as command, assistant reply, tool output, or error. |
-| WorkRef | A stable address for a record, line, or part, for example `pi/<session>/3/o/1`. |
-| WorkSet | An ordered result set that can be saved, selected, piped, expanded, and shown. |
+| WorkPart | The command, output, assistant reply, tool output, or error inside a record. Use this when you only need the useful part, not the whole event. |
+| WorkRef | A stable address for one exact piece of memory, for example `pi/<session>/3/o/1`. Good for citations and reproducible handoffs. |
+| WorkSet | The data behind memory variables such as `@last` and `@failures`: an ordered list of refs you can save, slice, pipe, expand, and show. |
 
-Common handles:
+Memory variables:
 
 | Handle | Use |
 | --- | --- |
-| `@last` | Most recent WorkSet. |
-| `@name` | WorkSet saved with `--save name`. |
-| `@name[1,3..5]` | 1-based selection from a saved WorkSet. |
-| `@` | WorkSet JSON received from stdin. |
+| `@last` | The latest search or projection result. |
+| `@name` | A named variable created with `--save name`, for example `@failures`. |
+| `@name[1,3..5]` | Pick only a few items from a saved variable. |
+| `@` | Use the result coming from the previous command in a pipeline. |
 
 ## Command overview
 
@@ -179,12 +160,12 @@ Common handles:
 | `sivtr run <command>` | Execute a command, capture output, then browse it. |
 | `sivtr copy` | Copy recent terminal command blocks. |
 | `sivtr copy <provider>` | Copy content from Codex, Claude Code, OpenCode, or Pi sessions. |
-| `sivtr search` / `sivtr s` | Search terminal and agent memory; saves results as `@last`. |
+| `sivtr search` / `sivtr s` | Search terminal and agent memory; saves matches as `@last`. |
 | `sivtr work sessions` | List terminal and agent sessions in the current workspace. |
-| `sivtr work records <source>` | Project a source or WorkSet to record refs. |
-| `sivtr work parts <source>` | Project records to canonical input/output part refs. |
-| `sivtr show <ref-or-workset>` | Print exact refs or WorkSets. |
-| `sivtr zoom <source>` | Add neighboring records around anchors. |
+| `sivtr work records <source>` | Turn sessions or saved variables into event-level refs. |
+| `sivtr work parts <source>` | Extract only useful inputs/outputs from matching events. |
+| `sivtr show <ref-or-workset>` | Print the content behind refs, `@last`, `@name`, or piped results. |
+| `sivtr zoom <source>` | Add surrounding context around search hits. |
 | `sivtr diff <left> <right>` | Compare recent command blocks. |
 | `sivtr doctor` | Diagnose binary, config, session logs, hooks, providers, and clipboard. |
 | `sivtr init <shell>` | Install shell integration; also supports `show` and `uninstall`. |
