@@ -1,5 +1,5 @@
 use serde::Serialize;
-use sivtr_core::record::{WorkChannel, WorkPartIo, WorkPartKind, WorkRecord, WorkRefTarget};
+use sivtr_core::record::{WorkChannel, WorkRecord};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WorkJsonSessionMeta {
@@ -13,30 +13,6 @@ pub struct WorkJsonSessionMeta {
     pub canonical_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct WorkJsonTargetMeta {
-    #[serde(rename = "type")]
-    pub type_: &'static str,
-    pub record_ref: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub line: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub part: Option<WorkJsonPartMeta>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct WorkJsonPartMeta {
-    #[serde(rename = "ref")]
-    pub ref_: String,
-    pub io: WorkPartIo,
-    pub kind: WorkPartKind,
-    pub index: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timestamp: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
 }
 
 fn session_ref(record: &WorkRecord) -> String {
@@ -64,36 +40,6 @@ pub fn session_meta(record: &WorkRecord) -> WorkJsonSessionMeta {
     }
 }
 
-pub fn target_meta(record: &WorkRecord, target: WorkRefTarget) -> WorkJsonTargetMeta {
-    match target {
-        WorkRefTarget::Record => WorkJsonTargetMeta {
-            type_: "record",
-            record_ref: record.work_ref.to_string(),
-            line: None,
-            part: None,
-        },
-        WorkRefTarget::Line(line) => WorkJsonTargetMeta {
-            type_: "line",
-            record_ref: record.work_ref.to_string(),
-            line: Some(line),
-            part: None,
-        },
-        WorkRefTarget::Part { io, index } => WorkJsonTargetMeta {
-            type_: "part",
-            record_ref: record.work_ref.to_string(),
-            line: None,
-            part: record.part_for_target(target).map(|part| WorkJsonPartMeta {
-                ref_: record.work_ref.with_part(io, index).to_string(),
-                io,
-                kind: part.kind,
-                index,
-                timestamp: part.occurred_at.clone(),
-                label: part.label.clone(),
-            }),
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,31 +62,13 @@ mod tests {
             metadata.canonical_id.as_deref(),
             Some("session-0123456789abcdef")
         );
-    }
-
-    #[test]
-    fn builds_part_target_metadata() {
-        let record = test_record();
-        let metadata = target_meta(
-            &record,
-            WorkRefTarget::Part {
-                io: WorkPartIo::Output,
-                index: 1,
-            },
-        );
-
-        assert_eq!(metadata.type_, "part");
-        assert_eq!(metadata.record_ref, "codex/shortid/1");
-        let part = metadata.part.expect("part metadata");
-        assert_eq!(part.ref_, "codex/shortid/1/o/1");
-        assert_eq!(part.kind, WorkPartKind::AssistantMessage);
-        assert_eq!(part.label.as_deref(), Some("assistant"));
+        assert_eq!(metadata.path.as_deref(), Some("/tmp/session.jsonl"));
     }
 
     fn test_record() -> WorkRecord {
         WorkRecord {
-            schema_version: 1,
-            work_ref: WorkRef::agent_record(AgentProvider::Codex, "shortid", 1),
+            schema_version: sivtr_core::record::RECORD_SCHEMA_VERSION,
+            work_ref: WorkRef::agent_record(AgentProvider::Codex, "shortid", 3),
             kind: WorkRecordKind::ChatTurn,
             source: WorkSource {
                 channel: WorkChannel::Chat,
@@ -155,26 +83,15 @@ mod tests {
             time: WorkTime::default(),
             status: None,
             title: "title".to_string(),
-            parts: vec![
-                WorkPart {
-                    io: WorkPartIo::Input,
-                    kind: WorkPartKind::UserMessage,
-                    index: 1,
-                    occurred_at: None,
-                    label: Some("user".to_string()),
-                    text: "user".to_string(),
-                    ansi: None,
-                },
-                WorkPart {
-                    io: WorkPartIo::Output,
-                    kind: WorkPartKind::AssistantMessage,
-                    index: 1,
-                    occurred_at: Some("2026-05-24T12:00:00Z".to_string()),
-                    label: Some("assistant".to_string()),
-                    text: "assistant".to_string(),
-                    ansi: None,
-                },
-            ],
+            parts: vec![WorkPart {
+                io: WorkPartIo::Output,
+                kind: WorkPartKind::AssistantMessage,
+                index: 1,
+                occurred_at: Some("2026-05-24T12:00:00Z".to_string()),
+                label: None,
+                text: "assistant reply".to_string(),
+                ansi: None,
+            }],
         }
     }
 }

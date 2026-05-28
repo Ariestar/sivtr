@@ -1,6 +1,7 @@
 use clap::{ArgGroup, Args, Parser, Subcommand};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sivtr_core::ai::AgentProvider;
+use sivtr_core::record::{WorkPartIo, WorkPartKind};
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -18,6 +19,93 @@ pub enum SearchFieldArg {
     Output,
     Command,
     All,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkPartKindArg {
+    Prompt,
+    Command,
+    UserMessage,
+    AssistantMessage,
+    ToolCall,
+    ToolOutput,
+    Text,
+    Error,
+}
+
+impl WorkPartKindArg {
+    pub fn matches(self, kind: WorkPartKind) -> bool {
+        WorkPartKind::from(self) == kind
+    }
+}
+
+impl From<WorkPartKindArg> for WorkPartKind {
+    fn from(value: WorkPartKindArg) -> Self {
+        match value {
+            WorkPartKindArg::Prompt => WorkPartKind::Prompt,
+            WorkPartKindArg::Command => WorkPartKind::Command,
+            WorkPartKindArg::UserMessage => WorkPartKind::UserMessage,
+            WorkPartKindArg::AssistantMessage => WorkPartKind::AssistantMessage,
+            WorkPartKindArg::ToolCall => WorkPartKind::ToolCall,
+            WorkPartKindArg::ToolOutput => WorkPartKind::ToolOutput,
+            WorkPartKindArg::Text => WorkPartKind::Text,
+            WorkPartKindArg::Error => WorkPartKind::Error,
+        }
+    }
+}
+
+impl FromStr for WorkPartKindArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().replace('-', "_").as_str() {
+            "prompt" => Ok(Self::Prompt),
+            "command" | "cmd" => Ok(Self::Command),
+            "user_message" | "user" => Ok(Self::UserMessage),
+            "assistant_message" | "assistant" => Ok(Self::AssistantMessage),
+            "tool_call" | "call" => Ok(Self::ToolCall),
+            "tool_output" | "tool" => Ok(Self::ToolOutput),
+            "text" => Ok(Self::Text),
+            "error" => Ok(Self::Error),
+            _ => Err(format!(
+                "unknown part kind `{value}`; expected prompt, command, user_message, assistant_message, tool_call, tool_output, text, or error"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for WorkPartKindArg {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Prompt => "prompt",
+            Self::Command => "command",
+            Self::UserMessage => "user_message",
+            Self::AssistantMessage => "assistant_message",
+            Self::ToolCall => "tool_call",
+            Self::ToolOutput => "tool_output",
+            Self::Text => "text",
+            Self::Error => "error",
+        })
+    }
+}
+
+impl Serialize for WorkPartKindArg {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for WorkPartKindArg {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        value.parse().map_err(serde::de::Error::custom)
+    }
 }
 
 impl FromStr for SearchFieldArg {
@@ -136,11 +224,11 @@ pub enum WorkPartFilterArg {
 }
 
 impl WorkPartFilterArg {
-    pub fn matches(self, io: sivtr_core::record::WorkPartIo) -> bool {
+    pub fn matches(self, io: WorkPartIo) -> bool {
         match self {
             Self::All => true,
-            Self::Input => io == sivtr_core::record::WorkPartIo::Input,
-            Self::Output => io == sivtr_core::record::WorkPartIo::Output,
+            Self::Input => io == WorkPartIo::Input,
+            Self::Output => io == WorkPartIo::Output,
         }
     }
 
@@ -149,14 +237,6 @@ impl WorkPartFilterArg {
             Self::Input => "input",
             Self::Output => "output",
             Self::All => "all",
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Input => "input",
-            Self::Output => "output",
-            Self::All => "any",
         }
     }
 }
@@ -470,6 +550,8 @@ Filters:
   --match <regex>       Case-insensitive regex content filter
   --exclude <regex>     Case-insensitive regex exclusion filter
   --in <field>          content, title, session, input, output, command, or all
+  --kind <kind>        Part kind: prompt, command, user_message, assistant_message,
+                        tool_call, tool_output, text, or error
   --status <status>     success, failure, or unknown
   --exit-code <code>    Exact terminal process exit code
   --min-duration <dur>  Minimum command duration, e.g. 500ms, 2s, 1m
@@ -478,12 +560,12 @@ Filters:
   --last <duration>     Time window, e.g. 30m, 2h, 7d
   --since/--until       Absolute time, relative duration, or aliases: today, yesterday, tomorrow,
                         this morning, this afternoon, this evening, tonight, now
-  --latest <n>          Return the latest n matching records
+  --latest <n>          Return the latest n matching anchors
   --exclude-current     Exclude the current agent session from agent searches
   --other               Alias for --exclude-current
   --json                Alias for --format workset
   --refs                Alias for --format refs
-  --format <format>    WorkSet output format: timeline, compact, md, refs, or workset
+  --format <format>    WorkSet output format: full, timeline, compact, md, refs, or workset
   --save <name>        Save the result WorkSet as @name
 
 WorkSets:
@@ -522,34 +604,37 @@ Examples:
 
 const WORK_RECORDS_AFTER_HELP: &str = "\
 Defaults:
-  `sivtr work records <session-ref>` lists record markers within one session.
-  Output stays at marker level and does not print full record content.
+  `sivtr work records <source>` projects a source to record anchors.
+  Piped stdout emits WorkSet JSON; terminal stdout defaults to full unless `--refs` or `-f` is used.
 
-Session Refs:
+Sources:
   terminal/<session>
-  codex/<session>
-  claude/<session>
+  <provider>/<session>
+  @last, @name, @name[1,3], @
 
 Examples:
-  sivtr work records terminal/session_123
-  sivtr work records codex/019df7fb --json
+  sivtr work records terminal/session_123 --refs
+  sivtr work records @last[1] -f timeline
+  sivtr work records @ --json
 ";
 
-const WORK_PARTS_AFTER_HELP: &str = "\
+const WORK_PARTS_AFTER_HELP: &str = r#"
 Defaults:
-  `sivtr work parts <record-ref>` lists leaf part markers within one record.
-  Use `sivtr show <part-ref>` to print the full leaf content.
+  `sivtr work parts <source>` projects source anchors to part anchors.
+  Piped stdout emits WorkSet JSON; terminal stdout defaults to full unless `--refs` or `-f` is used.
 
 Filters:
-  `--io all` lists every part.
-  `--io input` lists only input-side parts.
-  `--io output` lists only output-side parts.
+  `--io all` selects every part.
+  `--io input` selects input-side parts.
+  `--io output` selects output-side parts.
+  `--kind tool_call` selects one part kind.
+  `--match <regex>` filters part text.
 
 Examples:
-  sivtr work parts codex/019df7fb/3
-  sivtr work parts codex/019df7fb/3 --io output
-  sivtr show codex/019df7fb/3/o/1
-";
+  sivtr work parts @last[1] --io output --refs
+  sivtr work parts pi/019df7fb/3 --kind tool_output -m "error|failed" --refs
+  sivtr s agent -m "ssh.github.com" | sivtr work parts @ --io output | sivtr s @ -m "main -> main" | sivtr show @ --full
+"#;
 
 const HOTKEY_AFTER_HELP: &str = "\
 Examples:
@@ -846,6 +931,10 @@ pub struct SearchArgs {
     #[arg(short = 'i', long = "in", default_value_t = SearchFieldArg::default(), value_name = "FIELD")]
     pub in_field: SearchFieldArg,
 
+    /// Part kind filter: prompt, command, user_message, assistant_message, tool_call, tool_output, text, or error
+    #[arg(long, value_name = "KIND")]
+    pub kind: Option<WorkPartKindArg>,
+
     /// Record status filter: success, failure, or unknown
     #[arg(long, value_name = "STATUS")]
     pub status: Option<SearchStatusArg>,
@@ -882,11 +971,11 @@ pub struct SearchArgs {
     #[arg(long, value_name = "DURATION")]
     pub last: Option<String>,
 
-    /// Return the latest N matching records
+    /// Return the latest N matching anchors
     #[arg(long, value_name = "N")]
     pub latest: Option<usize>,
 
-    /// Maximum number of result groups to print
+    /// Maximum number of result anchors to print
     #[arg(short = 'l', long, value_name = "N")]
     pub limit: Option<usize>,
 
@@ -1017,34 +1106,66 @@ pub struct WorkSessionsArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct WorkRecordsArgs {
-    /// Session marker from `sivtr work sessions`, for example `codex/019df7fb`
-    pub session: String,
+    /// Source selector, WorkSet reference, or session marker.
+    pub source: String,
 
     /// Workspace directory used to resolve current AI sessions
     #[arg(long, value_name = "PATH")]
     pub cwd: Option<PathBuf>,
 
-    /// Print machine-readable JSON
-    #[arg(long)]
+    /// WorkSet output format: full, timeline, compact, md, refs, or workset.
+    #[arg(short = 'f', long, value_name = "FORMAT")]
+    pub format: Option<WorkSetOutputFormat>,
+
+    /// Alias for --format workset
+    #[arg(long, conflicts_with = "format")]
     pub json: bool,
+
+    /// Alias for --format refs
+    #[arg(long, conflicts_with_all = ["format", "json"])]
+    pub refs: bool,
+
+    /// Save the result WorkSet as @name
+    #[arg(long, value_name = "NAME")]
+    pub save: Option<String>,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct WorkPartsArgs {
-    /// Record ref, for example `codex/019df7fb/3` or `terminal/session_123/12`
-    pub record: String,
+    /// Source selector, WorkSet reference, or record ref.
+    pub source: String,
 
-    /// Which leaf parts to list: all, input, or output
+    /// Which leaf parts to select: all, input, or output
     #[arg(long, default_value_t = WorkPartFilterArg::default(), value_name = "IO")]
     pub io: WorkPartFilterArg,
+
+    /// Part kind filter: prompt, command, user_message, assistant_message, tool_call, tool_output, text, or error
+    #[arg(long, value_name = "KIND")]
+    pub kind: Option<WorkPartKindArg>,
+
+    /// Case-insensitive regex part text filter
+    #[arg(short = 'm', long = "match", value_name = "REGEX")]
+    pub match_: Option<String>,
 
     /// Workspace directory used to resolve current AI sessions
     #[arg(long, value_name = "PATH")]
     pub cwd: Option<PathBuf>,
 
-    /// Print machine-readable JSON
-    #[arg(long)]
+    /// WorkSet output format: full, timeline, compact, md, refs, or workset.
+    #[arg(short = 'f', long, value_name = "FORMAT")]
+    pub format: Option<WorkSetOutputFormat>,
+
+    /// Alias for --format workset
+    #[arg(long, conflicts_with = "format")]
     pub json: bool,
+
+    /// Alias for --format refs
+    #[arg(long, conflicts_with_all = ["format", "json"])]
+    pub refs: bool,
+
+    /// Save the result WorkSet as @name
+    #[arg(long, value_name = "NAME")]
+    pub save: Option<String>,
 }
 
 #[derive(Args, Debug, Clone, Default)]
@@ -1523,6 +1644,8 @@ mod tests {
             "workspace picker",
             "--in",
             "title",
+            "--kind",
+            "assistant",
             "--status",
             "unknown",
             "--format",
@@ -1538,6 +1661,7 @@ mod tests {
                 assert_eq!(args.match_.as_deref(), Some("workspace picker"));
                 assert_eq!(args.exclude.as_deref(), None);
                 assert_eq!(args.in_field, SearchFieldArg::Title);
+                assert_eq!(args.kind, Some(WorkPartKindArg::AssistantMessage));
                 assert_eq!(args.status, Some(SearchStatusArg::Unknown));
                 assert_eq!(args.exit_code, None);
                 assert_eq!(args.min_duration, None);
@@ -1708,8 +1832,9 @@ mod tests {
         match cli.command {
             Some(Commands::Work(cmd)) => match cmd.action {
                 WorkSubcommand::Records(args) => {
-                    assert_eq!(args.session, "codex/019df7fb");
+                    assert_eq!(args.source, "codex/019df7fb");
                     assert!(!args.json);
+                    assert!(!args.refs);
                 }
                 _ => panic!("expected work records command"),
             },
@@ -1733,8 +1858,9 @@ mod tests {
         match cli.command {
             Some(Commands::Work(cmd)) => match cmd.action {
                 WorkSubcommand::Parts(args) => {
-                    assert_eq!(args.record, "codex/019df7fb/3");
+                    assert_eq!(args.source, "codex/019df7fb/3");
                     assert_eq!(args.io, WorkPartFilterArg::Output);
+                    assert_eq!(args.kind, None);
                     assert!(args.json);
                 }
                 _ => panic!("expected work parts command"),

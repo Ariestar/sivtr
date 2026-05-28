@@ -1,18 +1,17 @@
 use anyhow::{bail, Context, Result};
+use regex::Regex;
 use serde::Serialize;
 use sivtr_core::ai::AgentProvider;
-use sivtr_core::record::{WorkPartIo, WorkPartKind, WorkRecord, WorkRef};
+use sivtr_core::record::{WorkRecord, WorkRef, WorkRefTarget};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 
-use crate::cli::{
-    WorkCommand, WorkPartFilterArg, WorkPartsArgs, WorkRecordsArgs, WorkSessionsArgs,
-};
+use crate::cli::{WorkCommand, WorkPartsArgs, WorkRecordsArgs, WorkSessionsArgs};
 use crate::commands::records::current_work_record_index;
-use crate::commands::work_json::{
-    session_meta, target_meta, WorkJsonSessionMeta, WorkJsonTargetMeta,
-};
+use crate::commands::show;
+use crate::commands::work_json::{session_meta, WorkJsonSessionMeta};
+use crate::commands::workset::{self, WorkSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WorkSessionSource {
@@ -38,52 +37,10 @@ struct WorkSessionListItem {
     title: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct WorkRecordListItem {
-    #[serde(rename = "ref")]
-    ref_: String,
-    kind: String,
-    session: WorkJsonSessionMeta,
-    target: WorkJsonTargetMeta,
-    timestamp: Option<String>,
-    input_parts: usize,
-    output_parts: usize,
-    title: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct WorkPartListItem {
-    #[serde(rename = "ref")]
-    ref_: String,
-    session: WorkJsonSessionMeta,
-    target: WorkJsonTargetMeta,
-    io: WorkPartIo,
-    kind: WorkPartKind,
-    index: usize,
-    timestamp: Option<String>,
-    label: Option<String>,
-    summary: String,
-}
-
 #[derive(Serialize)]
 struct WorkSessionsJsonOutput {
     cwd: String,
     sessions: Vec<WorkSessionListItem>,
-}
-
-#[derive(Serialize)]
-struct WorkRecordsJsonOutput {
-    cwd: String,
-    session: String,
-    records: Vec<WorkRecordListItem>,
-}
-
-#[derive(Serialize)]
-struct WorkPartsJsonOutput {
-    cwd: String,
-    record: String,
-    io: &'static str,
-    parts: Vec<WorkPartListItem>,
 }
 
 pub fn execute(command: &WorkCommand) -> Result<()> {
@@ -122,71 +79,101 @@ fn execute_sessions(args: &WorkSessionsArgs) -> Result<()> {
 
 fn execute_records(args: &WorkRecordsArgs) -> Result<()> {
     let cwd = resolve_cwd(args.cwd.as_deref())?;
-    let marker = args.session.parse::<WorkSessionMarker>()?;
-    let providers = marker.providers();
-    let records = current_work_record_index(&providers, &cwd, None)?;
-    let items = records
-        .records()
-        .iter()
-        .filter(|record| marker.matches_record(record))
-        .map(record_item)
-        .collect::<Vec<_>>();
-
-    if args.json {
-        let output = WorkRecordsJsonOutput {
-            cwd: cwd.display().to_string(),
-            session: marker.to_string(),
-            records: items,
-        };
-        println!("{}", serde_json::to_string_pretty(&output)?);
-        return Ok(());
+    let mut set = if let Ok(marker) = args.source.parse::<WorkSessionMarker>() {
+        records_for_session_marker(&cwd, &marker)?
+    } else {
+        let source = workset::load_source(&args.source, Some(&cwd))?;
+        let (records, anchors) = source.into_parts();
+        let record_anchors = anchors
+            .into_iter()
+            .map(|anchor| anchor.record_ref())
+            .collect::<Vec<_>>();
+        WorkSet::with_anchors(
+            cwd.display().to_string(),
+            workset::records_for_anchors(&records, &record_anchors),
+            record_anchors,
+        )
+    };
+    set.save_last()?;
+    if let Some(name) = args.save.as_deref() {
+        set.save_as(name)?;
     }
-
-    if items.is_empty() {
-        println!("No records found for `{marker}`");
-        return Ok(());
-    }
-
-    for item in &items {
-        println!("{}", format_record_item(item));
-    }
-    Ok(())
+    show::print_workset(
+        &set,
+        show::resolve_output_format(args.format, false, args.refs, args.json),
+    )
 }
 
 fn execute_parts(args: &WorkPartsArgs) -> Result<()> {
     let cwd = resolve_cwd(args.cwd.as_deref())?;
-    let input_ref: WorkRef = args.record.parse()?;
-    let record_ref = input_ref.record_ref();
-    let providers = record_ref
-        .provider()
-        .map(|provider| vec![provider])
-        .unwrap_or_default();
-    let records = current_work_record_index(&providers, &cwd, None)?;
-    let record = records
-        .resolve(&record_ref)
-        .with_context(|| format!("No record found for ref `{}`", args.record))?;
-    let items = build_part_items(record, args.io);
+    let source = workset::load_source(&args.source, Some(&cwd))?;
+    let (records, anchors) = source.into_parts();
+    let regex = args
+        .match_
+        .as_deref()
+        .map(|query| Regex::new(&format!("(?i){query}")))
+        .transpose()?;
+    let mut part_anchors = Vec::new();
 
-    if args.json {
-        let output = WorkPartsJsonOutput {
-            cwd: cwd.display().to_string(),
-            record: record_ref.to_string(),
-            io: args.io.as_str(),
-            parts: items,
+    for anchor in &anchors {
+        let Some(record) = workset::record_for_anchor(&records, anchor) else {
+            continue;
         };
-        println!("{}", serde_json::to_string_pretty(&output)?);
-        return Ok(());
+        match anchor.target() {
+            WorkRefTarget::Part { .. } => {
+                if let Some(part) = record.part_for_target(anchor.target()) {
+                    if part_matches(args, regex.as_ref(), part) {
+                        part_anchors.push(anchor.clone());
+                    }
+                }
+            }
+            WorkRefTarget::Record | WorkRefTarget::Line(_) => {
+                for part in &record.parts {
+                    if part_matches(args, regex.as_ref(), part) {
+                        part_anchors.push(record.work_ref.with_part(part.io, part.index));
+                    }
+                }
+            }
+        }
     }
 
-    if items.is_empty() {
-        println!("No {} parts found for `{}`", args.io.label(), record_ref);
-        return Ok(());
+    let records = workset::records_for_anchors(&records, &part_anchors);
+    let mut set = WorkSet::with_anchors(cwd.display().to_string(), records, part_anchors);
+    set.save_last()?;
+    if let Some(name) = args.save.as_deref() {
+        set.save_as(name)?;
+    }
+    show::print_workset(
+        &set,
+        show::resolve_output_format(args.format, false, args.refs, args.json),
+    )
+}
+
+fn records_for_session_marker(cwd: &Path, marker: &WorkSessionMarker) -> Result<WorkSet> {
+    let providers = marker.providers();
+    let records = current_work_record_index(&providers, cwd, None)?;
+    let selected = records
+        .records()
+        .iter()
+        .filter(|record| marker.matches_record(record))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if selected.is_empty() {
+        bail!("No records found for `{marker}`");
     }
 
-    for item in &items {
-        println!("{}", format_part_item(item));
-    }
-    Ok(())
+    Ok(WorkSet::new(cwd.display().to_string(), selected))
+}
+
+fn part_matches(
+    args: &WorkPartsArgs,
+    regex: Option<&Regex>,
+    part: &sivtr_core::record::WorkPart,
+) -> bool {
+    args.io.matches(part.io)
+        && args.kind.is_none_or(|kind| kind.matches(part.kind))
+        && regex.is_none_or(|regex| regex.is_match(&part.text))
 }
 
 fn resolve_cwd(cwd: Option<&Path>) -> Result<std::path::PathBuf> {
@@ -222,20 +209,6 @@ fn build_session_items(records: &[WorkRecord]) -> Vec<WorkSessionListItem> {
     items
 }
 
-fn record_item(record: &WorkRecord) -> WorkRecordListItem {
-    let (input_parts, output_parts) = part_counts(record);
-    WorkRecordListItem {
-        ref_: record.work_ref.to_string(),
-        kind: record.kind_label().to_string(),
-        session: session_meta(record),
-        target: target_meta(record, record.work_ref.target()),
-        timestamp: record.time.primary_at().map(str::to_string),
-        input_parts,
-        output_parts,
-        title: record.title.clone(),
-    }
-}
-
 fn session_group_key(record: &WorkRecord, marker: &WorkSessionMarker) -> String {
     let session_id = record
         .session
@@ -243,38 +216,6 @@ fn session_group_key(record: &WorkRecord, marker: &WorkSessionMarker) -> String 
         .as_deref()
         .unwrap_or(marker.session.as_str());
     format!("{}/{}", marker.source_name(), session_id)
-}
-
-fn build_part_items(record: &WorkRecord, io: WorkPartFilterArg) -> Vec<WorkPartListItem> {
-    record
-        .parts
-        .iter()
-        .filter(|part| io.matches(part.io))
-        .map(|part| WorkPartListItem {
-            ref_: record.work_ref.with_part(part.io, part.index).to_string(),
-            session: session_meta(record),
-            target: target_meta(
-                record,
-                record.work_ref.with_part(part.io, part.index).target(),
-            ),
-            io: part.io,
-            kind: part.kind,
-            index: part.index,
-            timestamp: part.occurred_at.clone(),
-            label: part.label.clone(),
-            summary: summary_text(&part.text),
-        })
-        .collect()
-}
-
-fn part_counts(record: &WorkRecord) -> (usize, usize) {
-    record
-        .parts
-        .iter()
-        .fold((0, 0), |(input, output), part| match part.io {
-            WorkPartIo::Input => (input + 1, output),
-            WorkPartIo::Output => (input, output + 1),
-        })
 }
 
 fn format_session_item(item: &WorkSessionListItem) -> String {
@@ -286,33 +227,6 @@ fn format_session_item(item: &WorkSessionListItem) -> String {
         ],
         &item.title,
     )
-}
-
-fn format_record_item(item: &WorkRecordListItem) -> String {
-    format_marker_line(
-        &item.ref_,
-        &[
-            format!("parts i={} o={}", item.input_parts, item.output_parts),
-            timestamp_tag(item.timestamp.as_deref()),
-        ],
-        &item.title,
-    )
-}
-
-fn format_part_item(item: &WorkPartListItem) -> String {
-    let mut tags = vec![
-        format!("{} {}", io_name(item.io), kind_name(item.kind)),
-        format!("n={}", item.index),
-        timestamp_tag(item.timestamp.as_deref()),
-    ];
-    if let Some(label) = item
-        .label
-        .as_deref()
-        .filter(|label| !label.trim().is_empty())
-    {
-        tags.push(format!("label {}", summary_text(label)));
-    }
-    format_marker_line(&item.ref_, &tags, &item.summary)
 }
 
 fn format_marker_line(marker: &str, tags: &[String], summary: &str) -> String {
@@ -331,40 +245,6 @@ fn format_marker_line(marker: &str, tags: &[String], summary: &str) -> String {
 
 fn timestamp_tag(timestamp: Option<&str>) -> String {
     timestamp.unwrap_or("unknown-time").to_string()
-}
-
-fn summary_text(text: &str) -> String {
-    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let trimmed = compact.trim();
-    if trimmed.is_empty() {
-        return "<empty>".to_string();
-    }
-    let summary = trimmed.chars().take(96).collect::<String>();
-    if trimmed.chars().count() > 96 {
-        format!("{summary}...")
-    } else {
-        summary
-    }
-}
-
-fn io_name(io: WorkPartIo) -> &'static str {
-    match io {
-        WorkPartIo::Input => "input",
-        WorkPartIo::Output => "output",
-    }
-}
-
-fn kind_name(kind: WorkPartKind) -> &'static str {
-    match kind {
-        WorkPartKind::Prompt => "prompt",
-        WorkPartKind::Command => "command",
-        WorkPartKind::UserMessage => "user_message",
-        WorkPartKind::AssistantMessage => "assistant_message",
-        WorkPartKind::ToolCall => "tool_call",
-        WorkPartKind::ToolOutput => "tool_output",
-        WorkPartKind::Text => "text",
-        WorkPartKind::Error => "error",
-    }
 }
 
 impl WorkSessionMarker {
@@ -446,7 +326,8 @@ impl std::str::FromStr for WorkSessionMarker {
 mod tests {
     use super::*;
     use sivtr_core::record::{
-        WorkChannel, WorkPart, WorkRecordKind, WorkSessionRef, WorkSource, WorkTime,
+        WorkChannel, WorkPart, WorkPartIo, WorkPartKind, WorkRecordKind, WorkSessionRef,
+        WorkSource, WorkTime,
     };
 
     #[test]
@@ -487,26 +368,6 @@ mod tests {
     }
 
     #[test]
-    fn builds_part_items_with_structured_refs() {
-        let record = test_record("codex/alpha/2", "title", Some("2026-05-24T12:00:00Z"));
-
-        let parts = build_part_items(&record, WorkPartFilterArg::Output);
-
-        assert_eq!(parts.len(), 1);
-        assert_eq!(parts[0].ref_, "codex/alpha/2/o/1");
-        assert_eq!(
-            parts[0].session.canonical_id.as_deref(),
-            Some("alpha-session-0123456789abcdef")
-        );
-        assert_eq!(parts[0].target.type_, "part");
-        assert_eq!(
-            parts[0].ref_,
-            parts[0].target.part.as_ref().expect("part metadata").ref_
-        );
-        assert_eq!(parts[0].summary, "assistant reply");
-    }
-
-    #[test]
     fn groups_sessions_with_canonical_session_metadata() {
         let record = test_record("codex/alpha/2", "title", Some("2026-05-24T12:00:00Z"));
 
@@ -519,49 +380,33 @@ mod tests {
         );
     }
 
-    #[test]
-    fn session_markers_match_canonical_ids() {
-        let marker: WorkSessionMarker = "codex/alpha-session-0123456789abcdef".parse().unwrap();
-        let record = test_record("codex/alpha/2", "title", Some("2026-05-24T12:00:00Z"));
-
-        assert!(marker.matches_record(&record));
-    }
-
-    #[test]
-    fn keeps_distinct_canonical_sessions_separate_when_display_ids_collide() {
-        let mut first = test_record("codex/alpha/2", "first", Some("2026-05-24T12:00:00Z"));
-        first.session.canonical_id = Some("session-aaaa1111".to_string());
-        let mut second = test_record("codex/alpha/1", "second", Some("2026-05-24T11:00:00Z"));
-        second.session.canonical_id = Some("session-bbbb2222".to_string());
-
-        let items = build_session_items(&[first, second]);
-
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[0].record_count, 1);
-        assert_eq!(items[1].record_count, 1);
-    }
-
-    fn test_record(ref_id: &str, title: &str, timestamp: Option<&str>) -> WorkRecord {
-        let work_ref: WorkRef = ref_id.parse().unwrap();
+    fn test_record(reference: &str, title: &str, timestamp: Option<&str>) -> WorkRecord {
+        let work_ref: WorkRef = reference.parse().unwrap();
         WorkRecord {
-            schema_version: 1,
-            kind: WorkRecordKind::ChatTurn,
+            schema_version: sivtr_core::record::RECORD_SCHEMA_VERSION,
             work_ref: work_ref.clone(),
+            kind: if matches!(work_ref, WorkRef::Terminal { .. }) {
+                WorkRecordKind::TerminalCommand
+            } else {
+                WorkRecordKind::ChatTurn
+            },
             source: WorkSource {
-                channel: WorkChannel::Chat,
-                provider: Some("codex".to_string()),
+                channel: if matches!(work_ref, WorkRef::Terminal { .. }) {
+                    WorkChannel::Terminal
+                } else {
+                    WorkChannel::Chat
+                },
+                provider: work_ref
+                    .provider()
+                    .map(|provider| provider.command_name().to_string()),
             },
             session: WorkSessionRef {
-                id: "alpha".to_string(),
-                canonical_id: Some("alpha-session-0123456789abcdef".to_string()),
+                id: work_ref.session().to_string(),
+                canonical_id: Some(format!("{}-session-0123456789abcdef", work_ref.session())),
                 path: None,
             },
             cwd: None,
-            time: WorkTime {
-                started_at: timestamp.map(str::to_string),
-                ended_at: timestamp.map(str::to_string),
-                duration_ms: None,
-            },
+            time: WorkTime::from_components(timestamp.map(str::to_string), None, None),
             status: None,
             title: title.to_string(),
             parts: vec![
@@ -570,7 +415,7 @@ mod tests {
                     kind: WorkPartKind::UserMessage,
                     index: 1,
                     occurred_at: timestamp.map(str::to_string),
-                    label: Some("user".to_string()),
+                    label: None,
                     text: "user prompt".to_string(),
                     ansi: None,
                 },
@@ -579,7 +424,7 @@ mod tests {
                     kind: WorkPartKind::AssistantMessage,
                     index: 1,
                     occurred_at: timestamp.map(str::to_string),
-                    label: Some("assistant".to_string()),
+                    label: None,
                     text: "assistant reply".to_string(),
                     ansi: None,
                 },

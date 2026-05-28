@@ -5,35 +5,27 @@ use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use regex::Regex;
 use sivtr_core::ai::{AgentProvider, AgentSessionProvider};
-use sivtr_core::record::{WorkOutcome, WorkRecord, WorkRecordKind, WorkRefSelector};
+use sivtr_core::record::{
+    WorkOutcome, WorkPart, WorkPartIo, WorkPartKind, WorkRecord, WorkRecordKind, WorkRef,
+    WorkRefTarget,
+};
 
 use crate::cli::{SearchArgs, SearchFieldArg, SearchSortArg, SearchStatusArg};
 use crate::commands::show;
 use crate::commands::time_filter::build_time_range;
 use crate::commands::workset::{self, WorkSet};
 
-struct SearchResultGroup<'a> {
-    record: &'a WorkRecord,
-}
-
 struct SearchMatch<'a> {
     record: &'a WorkRecord,
-    ref_: String,
-    snippet: String,
+    anchor: WorkRef,
+    sort_ref: String,
 }
 
 pub fn execute(args: &SearchArgs) -> Result<()> {
     let source = workset::load_source(&args.source, args.cwd.as_deref())?;
     let cwd = source.cwd();
-    let selector = if args.source.starts_with('@') {
-        None
-    } else {
-        Some(args.source.parse::<WorkRefSelector>()?)
-    };
-    let providers = selector
-        .as_ref()
-        .map(WorkRefSelector::providers)
-        .unwrap_or_default();
+    let (records, anchors) = source.into_parts();
+    let providers = providers_for_records(&records);
     let now = Utc::now();
     let (time_range, _) = build_time_range(
         args.since.as_deref(),
@@ -41,7 +33,6 @@ pub fn execute(args: &SearchArgs) -> Result<()> {
         args.last.as_deref(),
         now,
     )?;
-    let records = source.records();
     let excluded_sessions = if args.exclude_current {
         current_agent_session_paths(&providers, &cwd)?
     } else {
@@ -64,13 +55,15 @@ pub fn execute(args: &SearchArgs) -> Result<()> {
             bail!("--min-duration must be less than or equal to --max-duration");
         }
     }
-    let mut matches = records
+
+    let mut matches = anchors
         .iter()
-        .filter(|record| {
-            selector
-                .as_ref()
-                .is_none_or(|selector| selector_matches_record(selector, record))
-                && !excluded_session_matches(record, &excluded_sessions)
+        .filter_map(|anchor| {
+            let record = workset::record_for_anchor(&records, anchor)?;
+            Some((record, anchor))
+        })
+        .filter(|(record, _)| {
+            !excluded_session_matches(record, &excluded_sessions)
                 && status_matches(
                     args.status,
                     record
@@ -88,26 +81,22 @@ pub fn execute(args: &SearchArgs) -> Result<()> {
                     .as_ref()
                     .is_none_or(|range| range.contains_record_time(record.time.primary_at()))
         })
-        .flat_map(|record| matching_refs(record, selector.as_ref(), args.in_field, regex.as_ref()))
-        .filter(|matched| !match_excluded(matched, args.in_field, exclude_regex.as_ref()))
+        .flat_map(|(record, anchor)| matching_anchors(record, anchor, args, regex.as_ref()))
+        .filter(|matched| !match_excluded(matched, exclude_regex.as_ref()))
         .collect::<Vec<_>>();
+
     sort_results(&mut matches, SearchSortArg::Newest);
-    let mut results = group_results(matches);
+    let mut anchors = dedup_matches(matches);
     if let Some(latest) = args.latest {
-        results.truncate(latest);
+        anchors.truncate(latest);
     }
-    sort_group_results(&mut results, args.sort);
+    sort_anchor_results(&mut anchors, &records, args.sort);
     if let Some(limit) = args.limit.or_else(|| args.latest.is_none().then_some(20)) {
-        results.truncate(limit);
+        anchors.truncate(limit);
     }
 
-    let mut workset = WorkSet::new(
-        cwd.display().to_string(),
-        results
-            .into_iter()
-            .map(|result| result.record.clone())
-            .collect(),
-    );
+    let records = workset::records_for_anchors(&records, &anchors);
+    let mut workset = WorkSet::with_anchors(cwd.display().to_string(), records, anchors);
     workset.save_last()?;
     if let Some(name) = args.save.as_deref() {
         workset.save_as(name)?;
@@ -120,18 +109,16 @@ pub fn execute(args: &SearchArgs) -> Result<()> {
     Ok(())
 }
 
-fn selector_matches_record(selector: &WorkRefSelector, record: &WorkRecord) -> bool {
-    match selector {
-        WorkRefSelector::Terminal { .. } if record.kind != WorkRecordKind::TerminalCommand => {
-            return false;
+fn providers_for_records(records: &[WorkRecord]) -> Vec<AgentProvider> {
+    let mut providers = Vec::new();
+    for record in records {
+        if let Some(provider) = record.work_ref.provider() {
+            if !providers.contains(&provider) {
+                providers.push(provider);
+            }
         }
-        WorkRefSelector::Agent { .. } if record.kind != WorkRecordKind::ChatTurn => {
-            return false;
-        }
-        _ => {}
     }
-
-    selector.matches_work_ref(&record.work_ref)
+    providers
 }
 
 fn status_matches(status: Option<SearchStatusArg>, outcome: WorkOutcome) -> bool {
@@ -193,154 +180,154 @@ fn parse_duration_ms(value: &str) -> Result<u64> {
         .ok_or_else(|| anyhow::anyhow!("duration is too large"))
 }
 
-fn field_matches(record: &WorkRecord, field: SearchFieldArg, regex: &Regex) -> bool {
-    match field {
-        SearchFieldArg::Content => regex.is_match(&combined_text(record)),
-        SearchFieldArg::Title => regex.is_match(&record.title),
-        SearchFieldArg::Session => regex.is_match(record.work_ref.session()),
-        SearchFieldArg::Input => record
-            .input_text()
-            .is_some_and(|text| regex.is_match(&text)),
-        SearchFieldArg::Output => record
-            .output_text()
-            .is_some_and(|text| regex.is_match(&text)),
-        SearchFieldArg::Command => record
-            .input_text()
-            .is_some_and(|text| regex.is_match(&text)),
-        SearchFieldArg::All => {
-            regex.is_match(&combined_text(record))
-                || regex.is_match(&record.title)
-                || regex.is_match(record.work_ref.session())
-        }
+fn matching_anchors<'a>(
+    record: &'a WorkRecord,
+    anchor: &WorkRef,
+    args: &SearchArgs,
+    regex: Option<&Regex>,
+) -> Vec<SearchMatch<'a>> {
+    match anchor.target() {
+        WorkRefTarget::Record => record_matches(record, anchor, args, regex),
+        WorkRefTarget::Line(line) => line_matches(record, anchor, args, line, regex),
+        WorkRefTarget::Part { .. } => part_anchor_matches(record, anchor, args, regex),
     }
 }
 
-fn match_excluded(matched: &SearchMatch<'_>, field: SearchFieldArg, regex: Option<&Regex>) -> bool {
+fn record_matches<'a>(
+    record: &'a WorkRecord,
+    anchor: &WorkRef,
+    args: &SearchArgs,
+    regex: Option<&Regex>,
+) -> Vec<SearchMatch<'a>> {
+    if matches!(
+        args.in_field,
+        SearchFieldArg::Title | SearchFieldArg::Session
+    ) {
+        return (args.kind.is_none() && meta_matches(record, args.in_field, regex))
+            .then(|| SearchMatch {
+                record,
+                anchor: anchor.clone(),
+                sort_ref: anchor.to_string(),
+            })
+            .into_iter()
+            .collect();
+    }
+
+    let matched_meta = args.kind.is_none()
+        && args.in_field == SearchFieldArg::All
+        && meta_matches(record, SearchFieldArg::All, regex);
+    let matched_part = record.parts.iter().any(|part| {
+        part_matches_filters(part, args) && regex.is_none_or(|regex| regex.is_match(&part.text))
+    });
+    (matched_meta || matched_part)
+        .then(|| SearchMatch {
+            record,
+            anchor: anchor.clone(),
+            sort_ref: anchor.to_string(),
+        })
+        .into_iter()
+        .collect()
+}
+
+fn line_matches<'a>(
+    record: &'a WorkRecord,
+    anchor: &WorkRef,
+    args: &SearchArgs,
+    line: usize,
+    regex: Option<&Regex>,
+) -> Vec<SearchMatch<'a>> {
+    let Some(text) = record.content_for_target(WorkRefTarget::Line(line)) else {
+        return Vec::new();
+    };
+    if matches!(
+        args.in_field,
+        SearchFieldArg::Title | SearchFieldArg::Session
+    ) {
+        return (args.kind.is_none() && meta_matches(record, args.in_field, regex))
+            .then(|| SearchMatch {
+                record,
+                anchor: anchor.clone(),
+                sort_ref: anchor.to_string(),
+            })
+            .into_iter()
+            .collect();
+    }
+    regex
+        .is_none_or(|regex| regex.is_match(&text))
+        .then(|| SearchMatch {
+            record,
+            anchor: anchor.clone(),
+            sort_ref: anchor.to_string(),
+        })
+        .into_iter()
+        .collect()
+}
+
+fn part_anchor_matches<'a>(
+    record: &'a WorkRecord,
+    anchor: &WorkRef,
+    args: &SearchArgs,
+    regex: Option<&Regex>,
+) -> Vec<SearchMatch<'a>> {
+    let Some(part) = record.part_for_target(anchor.target()) else {
+        return Vec::new();
+    };
+    if !part_matches_filters(part, args) {
+        return Vec::new();
+    }
+    regex
+        .is_none_or(|regex| regex.is_match(&part.text))
+        .then(|| SearchMatch {
+            record,
+            anchor: anchor.clone(),
+            sort_ref: anchor.to_string(),
+        })
+        .into_iter()
+        .collect()
+}
+
+fn part_matches_filters(part: &WorkPart, args: &SearchArgs) -> bool {
+    if args.kind.is_some_and(|kind| !kind.matches(part.kind)) {
+        return false;
+    }
+
+    matches!(args.in_field, SearchFieldArg::Content | SearchFieldArg::All)
+        || matches!(args.in_field, SearchFieldArg::Input) && part.io == WorkPartIo::Input
+        || matches!(args.in_field, SearchFieldArg::Output) && part.io == WorkPartIo::Output
+        || matches!(args.in_field, SearchFieldArg::Command) && part.kind == WorkPartKind::Command
+}
+
+fn meta_matches(record: &WorkRecord, field: SearchFieldArg, regex: Option<&Regex>) -> bool {
+    match field {
+        SearchFieldArg::Title => regex.is_none_or(|regex| regex.is_match(&record.title)),
+        SearchFieldArg::Session => {
+            regex.is_none_or(|regex| regex.is_match(record.work_ref.session()))
+        }
+        SearchFieldArg::All => regex.is_none_or(|regex| {
+            regex.is_match(&record.title) || regex.is_match(record.work_ref.session())
+        }),
+        SearchFieldArg::Content
+        | SearchFieldArg::Input
+        | SearchFieldArg::Output
+        | SearchFieldArg::Command => false,
+    }
+}
+
+fn match_excluded(matched: &SearchMatch<'_>, regex: Option<&Regex>) -> bool {
     let Some(regex) = regex else {
         return false;
     };
 
-    if regex.is_match(&matched.snippet) {
-        return true;
-    }
-
-    if line_search_field(field) {
-        return matched
-            .ref_
-            .rsplit_once('/')
-            .and_then(|(_, line)| line.parse::<usize>().ok())
-            .and_then(|line| {
-                combined_text(matched.record)
-                    .lines()
-                    .nth(line - 1)
-                    .map(str::to_string)
-            })
-            .is_some_and(|line| regex.is_match(&line));
-    }
-
-    field_matches(matched.record, field, regex)
-}
-
-fn matching_refs<'a>(
-    record: &'a WorkRecord,
-    selector: Option<&WorkRefSelector>,
-    field: SearchFieldArg,
-    regex: Option<&Regex>,
-) -> Vec<SearchMatch<'a>> {
-    let text = combined_text(record);
-    let target_lines = selector.and_then(WorkRefSelector::selected_lines);
-    if let Some(lines) = target_lines {
-        let has_selected_line = lines
+    match matched.anchor.target() {
+        WorkRefTarget::Record => matched
+            .record
+            .parts
             .iter()
-            .any(|line| text.lines().nth(line - 1).is_some());
-        if !has_selected_line {
-            return Vec::new();
-        }
-    }
-
-    let Some(regex) = regex else {
-        return match target_lines {
-            Some(lines) => lines
-                .iter()
-                .filter_map(|line| {
-                    text.lines().nth(line - 1).map(|line_text| SearchMatch {
-                        record,
-                        ref_: record.work_ref.with_line(*line).to_string(),
-                        snippet: snippet(line_text),
-                    })
-                })
-                .collect(),
-            None => vec![SearchMatch {
-                record,
-                ref_: record.work_ref.to_string(),
-                snippet: record_snippet(record, field),
-            }],
-        };
-    };
-
-    if let Some(lines) = target_lines {
-        return lines
-            .iter()
-            .filter_map(|line| {
-                let line_text = text.lines().nth(line - 1).unwrap_or_default();
-                line_matches_field(record, field, *line, line_text, regex).then(|| SearchMatch {
-                    record,
-                    ref_: record.work_ref.with_line(*line).to_string(),
-                    snippet: snippet(line_text),
-                })
-            })
-            .collect();
-    }
-
-    if line_search_field(field) {
-        let matches = text
-            .lines()
-            .enumerate()
-            .filter(|(_, line)| regex.is_match(line))
-            .map(|(idx, line)| SearchMatch {
-                record,
-                ref_: record.work_ref.with_line(idx + 1).to_string(),
-                snippet: snippet(line),
-            })
-            .collect::<Vec<_>>();
-        if !matches.is_empty() {
-            return matches;
-        }
-    }
-
-    if field_matches(record, field, regex) {
-        return vec![SearchMatch {
-            record,
-            ref_: record.work_ref.to_string(),
-            snippet: record_snippet(record, field),
-        }];
-    }
-
-    Vec::new()
-}
-
-fn line_search_field(field: SearchFieldArg) -> bool {
-    matches!(
-        field,
-        SearchFieldArg::Content | SearchFieldArg::Output | SearchFieldArg::All
-    )
-}
-
-fn line_matches_field(
-    record: &WorkRecord,
-    field: SearchFieldArg,
-    line_index: usize,
-    line: &str,
-    regex: &Regex,
-) -> bool {
-    match field {
-        SearchFieldArg::Content | SearchFieldArg::Output | SearchFieldArg::All => {
-            regex.is_match(line)
-        }
-        _ => {
-            field_matches(record, field, regex)
-                && combined_text(record).lines().nth(line_index - 1).is_some()
-        }
+            .any(|part| regex.is_match(&part.text)),
+        WorkRefTarget::Line(_) | WorkRefTarget::Part { .. } => matched
+            .record
+            .content_for_target(matched.anchor.target())
+            .is_some_and(|text| regex.is_match(&text)),
     }
 }
 
@@ -351,14 +338,14 @@ fn sort_results(results: &mut [SearchMatch<'_>], sort: SearchSortArg) {
                 .time
                 .primary_at()
                 .cmp(&a.record.time.primary_at())
-                .then_with(|| a.ref_.cmp(&b.ref_))
+                .then_with(|| a.sort_ref.cmp(&b.sort_ref))
         }),
         SearchSortArg::Oldest => results.sort_by(|a, b| {
             a.record
                 .time
                 .primary_at()
                 .cmp(&b.record.time.primary_at())
-                .then_with(|| a.ref_.cmp(&b.ref_))
+                .then_with(|| a.sort_ref.cmp(&b.sort_ref))
         }),
         SearchSortArg::Duration => results.sort_by(|a, b| {
             b.record
@@ -366,7 +353,7 @@ fn sort_results(results: &mut [SearchMatch<'_>], sort: SearchSortArg) {
                 .duration_ms
                 .cmp(&a.record.time.duration_ms)
                 .then_with(|| b.record.time.primary_at().cmp(&a.record.time.primary_at()))
-                .then_with(|| a.ref_.cmp(&b.ref_))
+                .then_with(|| a.sort_ref.cmp(&b.sort_ref))
         }),
         SearchSortArg::DurationAsc => results.sort_by(|a, b| {
             a.record
@@ -374,7 +361,7 @@ fn sort_results(results: &mut [SearchMatch<'_>], sort: SearchSortArg) {
                 .duration_ms
                 .cmp(&b.record.time.duration_ms)
                 .then_with(|| b.record.time.primary_at().cmp(&a.record.time.primary_at()))
-                .then_with(|| a.ref_.cmp(&b.ref_))
+                .then_with(|| a.sort_ref.cmp(&b.sort_ref))
         }),
         SearchSortArg::ExitCode => results.sort_by(|a, b| {
             b.record
@@ -383,7 +370,7 @@ fn sort_results(results: &mut [SearchMatch<'_>], sort: SearchSortArg) {
                 .and_then(|status| status.exit_code)
                 .cmp(&a.record.status.as_ref().and_then(|status| status.exit_code))
                 .then_with(|| b.record.time.primary_at().cmp(&a.record.time.primary_at()))
-                .then_with(|| a.ref_.cmp(&b.ref_))
+                .then_with(|| a.sort_ref.cmp(&b.sort_ref))
         }),
         SearchSortArg::ExitCodeAsc => results.sort_by(|a, b| {
             a.record
@@ -392,88 +379,59 @@ fn sort_results(results: &mut [SearchMatch<'_>], sort: SearchSortArg) {
                 .and_then(|status| status.exit_code)
                 .cmp(&b.record.status.as_ref().and_then(|status| status.exit_code))
                 .then_with(|| b.record.time.primary_at().cmp(&a.record.time.primary_at()))
-                .then_with(|| a.ref_.cmp(&b.ref_))
+                .then_with(|| a.sort_ref.cmp(&b.sort_ref))
         }),
     }
 }
 
-fn combined_text(record: &WorkRecord) -> String {
-    record.combined_text()
-}
-
-fn group_results(matches: Vec<SearchMatch<'_>>) -> Vec<SearchResultGroup<'_>> {
-    let mut results: Vec<SearchResultGroup<'_>> = Vec::new();
-
+fn dedup_matches(matches: Vec<SearchMatch<'_>>) -> Vec<WorkRef> {
+    let mut anchors = Vec::new();
     for matched in matches {
-        let record_ref = matched.record.work_ref.record_ref();
-        if !results
-            .iter()
-            .any(|group| group.record.work_ref.record_ref() == record_ref)
-        {
-            results.push(SearchResultGroup {
-                record: matched.record,
-            });
+        if !anchors.contains(&matched.anchor) {
+            anchors.push(matched.anchor);
         }
     }
-
-    results
+    anchors
 }
 
-fn record_ref_string(result: &SearchResultGroup<'_>) -> String {
-    result.record.work_ref.record_ref().to_string()
-}
-
-fn sort_group_results(results: &mut [SearchResultGroup<'_>], sort: SearchSortArg) {
-    match sort {
-        SearchSortArg::Newest => results.sort_by(|a, b| {
-            b.record
-                .time
-                .primary_at()
-                .cmp(&a.record.time.primary_at())
-                .then_with(|| record_ref_string(a).cmp(&record_ref_string(b)))
-        }),
-        SearchSortArg::Oldest => results.sort_by(|a, b| {
-            a.record
-                .time
-                .primary_at()
-                .cmp(&b.record.time.primary_at())
-                .then_with(|| record_ref_string(a).cmp(&record_ref_string(b)))
-        }),
-        SearchSortArg::Duration => results.sort_by(|a, b| {
-            b.record
-                .time
-                .duration_ms
-                .cmp(&a.record.time.duration_ms)
-                .then_with(|| b.record.time.primary_at().cmp(&a.record.time.primary_at()))
-                .then_with(|| record_ref_string(a).cmp(&record_ref_string(b)))
-        }),
-        SearchSortArg::DurationAsc => results.sort_by(|a, b| {
-            a.record
-                .time
-                .duration_ms
-                .cmp(&b.record.time.duration_ms)
-                .then_with(|| b.record.time.primary_at().cmp(&a.record.time.primary_at()))
-                .then_with(|| record_ref_string(a).cmp(&record_ref_string(b)))
-        }),
-        SearchSortArg::ExitCode => results.sort_by(|a, b| {
-            b.record
-                .status
-                .as_ref()
-                .and_then(|status| status.exit_code)
-                .cmp(&a.record.status.as_ref().and_then(|status| status.exit_code))
-                .then_with(|| b.record.time.primary_at().cmp(&a.record.time.primary_at()))
-                .then_with(|| record_ref_string(a).cmp(&record_ref_string(b)))
-        }),
-        SearchSortArg::ExitCodeAsc => results.sort_by(|a, b| {
-            a.record
-                .status
-                .as_ref()
-                .and_then(|status| status.exit_code)
-                .cmp(&b.record.status.as_ref().and_then(|status| status.exit_code))
-                .then_with(|| b.record.time.primary_at().cmp(&a.record.time.primary_at()))
-                .then_with(|| record_ref_string(a).cmp(&record_ref_string(b)))
-        }),
-    }
+fn sort_anchor_results(anchors: &mut [WorkRef], records: &[WorkRecord], sort: SearchSortArg) {
+    anchors.sort_by(|a, b| {
+        let left = workset::record_for_anchor(records, a);
+        let right = workset::record_for_anchor(records, b);
+        match sort {
+            SearchSortArg::Newest => right
+                .and_then(|record| record.time.primary_at())
+                .cmp(&left.and_then(|record| record.time.primary_at()))
+                .then_with(|| a.to_string().cmp(&b.to_string())),
+            SearchSortArg::Oldest => left
+                .and_then(|record| record.time.primary_at())
+                .cmp(&right.and_then(|record| record.time.primary_at()))
+                .then_with(|| a.to_string().cmp(&b.to_string())),
+            SearchSortArg::Duration => right
+                .and_then(|record| record.time.duration_ms)
+                .cmp(&left.and_then(|record| record.time.duration_ms))
+                .then_with(|| a.to_string().cmp(&b.to_string())),
+            SearchSortArg::DurationAsc => left
+                .and_then(|record| record.time.duration_ms)
+                .cmp(&right.and_then(|record| record.time.duration_ms))
+                .then_with(|| a.to_string().cmp(&b.to_string())),
+            SearchSortArg::ExitCode => {
+                right
+                    .and_then(|record| record.status.as_ref().and_then(|status| status.exit_code))
+                    .cmp(&left.and_then(|record| {
+                        record.status.as_ref().and_then(|status| status.exit_code)
+                    }))
+                    .then_with(|| a.to_string().cmp(&b.to_string()))
+            }
+            SearchSortArg::ExitCodeAsc => {
+                left.and_then(|record| record.status.as_ref().and_then(|status| status.exit_code))
+                    .cmp(&right.and_then(|record| {
+                        record.status.as_ref().and_then(|status| status.exit_code)
+                    }))
+                    .then_with(|| a.to_string().cmp(&b.to_string()))
+            }
+        }
+    });
 }
 
 fn current_agent_session_paths(
@@ -545,215 +503,21 @@ fn comparable_path(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-fn record_snippet(record: &WorkRecord, field: SearchFieldArg) -> String {
-    let text = match field {
-        SearchFieldArg::Title => record.title.as_str(),
-        SearchFieldArg::Session => record.work_ref.session(),
-        SearchFieldArg::Input | SearchFieldArg::Command => {
-            return snippet(&record.input_text().unwrap_or_default());
-        }
-        SearchFieldArg::Output => return snippet(&record.output_text().unwrap_or_default()),
-        SearchFieldArg::Content | SearchFieldArg::All => return first_content_snippet(record),
-    };
-
-    snippet(text)
-}
-
-fn first_content_snippet(record: &WorkRecord) -> String {
-    combined_text(record)
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .map(snippet)
-        .unwrap_or_default()
-}
-
-fn snippet(text: &str) -> String {
-    const LIMIT: usize = 160;
-    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut shortened = collapsed.chars().take(LIMIT).collect::<String>();
-    if collapsed.chars().count() > LIMIT {
-        shortened.push('…');
-    }
-    shortened
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sivtr_core::record::{
-        WorkPart, WorkPartIo, WorkPartKind, WorkRecordKind, WorkRef, WorkRefSelector, WorkStatus,
-        WorkTime,
-    };
 
     #[test]
-    fn parses_search_targets() {
-        assert_eq!(
-            "terminal/session_1/3/2".parse::<WorkRefSelector>().unwrap(),
-            WorkRefSelector::Terminal {
-                session: Some("session_1".to_string()),
-                records: Some(vec![3]),
-                lines: Some(vec![2]),
-            }
-        );
-        assert_eq!(
-            "pi/*/*".parse::<WorkRefSelector>().unwrap(),
-            WorkRefSelector::Agent {
-                provider: Some(AgentProvider::Pi),
-                session: None,
-                records: None,
-                lines: None,
-            }
-        );
-        assert!(matches!(
-            "agent".parse::<WorkRefSelector>().unwrap(),
-            WorkRefSelector::Agent { provider: None, .. }
-        ));
+    fn parses_duration_ms() {
+        assert_eq!(parse_duration_ms("500ms").expect("parse"), 500);
+        assert_eq!(parse_duration_ms("2s").expect("parse"), 2_000);
+        assert_eq!(parse_duration_ms("3m").expect("parse"), 180_000);
+        assert_eq!(parse_duration_ms("1h").expect("parse"), 3_600_000);
     }
 
     #[test]
-    fn rejects_invalid_targets() {
-        assert!("unknown".parse::<WorkRefSelector>().is_err());
-        assert!("pi/session/0".parse::<WorkRefSelector>().is_err());
-        assert!("pi/session/one".parse::<WorkRefSelector>().is_err());
-    }
-
-    #[test]
-    fn matching_refs_returns_line_refs_for_content_matches() {
-        let record = test_terminal_record("terminal/session_1/3", "alpha\nneedle\nneedle again");
-        let target = "terminal/session_1/3".parse::<WorkRefSelector>().unwrap();
-        let regex = Regex::new("needle").unwrap();
-
-        let matches = matching_refs(
-            &record,
-            Some(&target),
-            SearchFieldArg::Content,
-            Some(&regex),
-        );
-
-        assert_eq!(
-            matches
-                .iter()
-                .map(|item| item.ref_.as_str())
-                .collect::<Vec<_>>(),
-            vec!["terminal/session_1/3/2", "terminal/session_1/3/3"]
-        );
-    }
-
-    #[test]
-    fn target_line_segment_filters_to_specific_line() {
-        let record = test_terminal_record("terminal/session_1/3", "alpha\nneedle");
-        let target = "terminal/session_1/3/2".parse::<WorkRefSelector>().unwrap();
-        let regex = Regex::new("needle").unwrap();
-
-        let matches = matching_refs(
-            &record,
-            Some(&target),
-            SearchFieldArg::Content,
-            Some(&regex),
-        );
-
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].ref_, "terminal/session_1/3/2");
-    }
-
-    #[test]
-    fn target_selectors_filter_to_multiple_records_and_lines() {
-        let record = test_terminal_record("terminal/session_1/3", "alpha\nneedle\nneedle again");
-        let target = "terminal/session_1/2-3/2-3"
-            .parse::<WorkRefSelector>()
-            .unwrap();
-        let regex = Regex::new("needle").unwrap();
-
-        let matches = matching_refs(
-            &record,
-            Some(&target),
-            SearchFieldArg::Content,
-            Some(&regex),
-        );
-
-        assert_eq!(
-            matches
-                .iter()
-                .map(|item| item.ref_.as_str())
-                .collect::<Vec<_>>(),
-            vec!["terminal/session_1/3/2", "terminal/session_1/3/3"]
-        );
-    }
-
-    #[test]
-    fn match_excluded_filters_matching_snippets() {
-        let record =
-            test_terminal_record("terminal/session_1/3", "alpha\nneedle example\nneedle real");
-        let target = "terminal/session_1/3".parse::<WorkRefSelector>().unwrap();
-        let regex = Regex::new("needle").unwrap();
-        let exclude = Regex::new("example").unwrap();
-        let matches = matching_refs(
-            &record,
-            Some(&target),
-            SearchFieldArg::Content,
-            Some(&regex),
-        )
-        .into_iter()
-        .filter(|matched| !match_excluded(matched, SearchFieldArg::Content, Some(&exclude)))
-        .collect::<Vec<_>>();
-
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].ref_, "terminal/session_1/3/3");
-        assert_eq!(matches[0].snippet, "needle real");
-    }
-
-    #[test]
-    fn parses_duration_filters_as_milliseconds() {
-        assert_eq!(parse_duration_ms("500").unwrap(), 500);
-        assert_eq!(parse_duration_ms("2s").unwrap(), 2_000);
-        assert_eq!(parse_duration_ms("3m").unwrap(), 180_000);
-    }
-
-    #[test]
-    fn filters_exit_code_and_duration() {
-        assert!(exit_code_matches(Some(101), Some(101)));
-        assert!(!exit_code_matches(Some(101), Some(0)));
-        assert!(duration_matches(Some(100), Some(200), Some(150)));
-        assert!(!duration_matches(Some(100), Some(200), Some(250)));
-        assert!(!duration_matches(Some(100), None, None));
-    }
-
-    fn test_terminal_record(_ref_id: &str, combined: &str) -> WorkRecord {
-        use sivtr_core::record::{WorkChannel, WorkSessionRef, WorkSource};
-        let work_ref = WorkRef::terminal_record("session_1", 3);
-        WorkRecord {
-            schema_version: 1,
-            work_ref,
-            kind: WorkRecordKind::TerminalCommand,
-            source: WorkSource {
-                channel: WorkChannel::Terminal,
-                provider: None,
-            },
-            session: WorkSessionRef {
-                id: "session_1".to_string(),
-                canonical_id: Some("session_1".to_string()),
-                path: None,
-            },
-            cwd: None,
-            time: WorkTime::from_components(
-                Some("2026-05-24T00:00:00Z".to_string()),
-                None,
-                Some(150),
-            ),
-            status: Some(WorkStatus {
-                outcome: WorkOutcome::Failure,
-                exit_code: Some(101),
-            }),
-            title: "cargo test".to_string(),
-            parts: vec![WorkPart {
-                io: WorkPartIo::Output,
-                kind: WorkPartKind::Text,
-                index: 1,
-                occurred_at: None,
-                label: None,
-                text: combined.to_string(),
-                ansi: None,
-            }],
-        }
+    fn rejects_bad_duration() {
+        assert!(parse_duration_ms("abc").is_err());
+        assert!(parse_duration_ms("1d").is_err());
     }
 }

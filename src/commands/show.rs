@@ -2,7 +2,7 @@ use std::io::IsTerminal;
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
-use sivtr_core::record::{WorkRecord, WorkRef, WorkRefTarget};
+use sivtr_core::record::{WorkPart, WorkRecord, WorkRef, WorkRefTarget};
 
 use crate::cli::ShowArgs;
 use crate::commands::workset;
@@ -46,6 +46,11 @@ impl std::fmt::Display for WorkSetOutputFormat {
             Self::WorkSet => "workset",
         })
     }
+}
+
+struct AnchorItem<'a> {
+    anchor: WorkRef,
+    record: &'a WorkRecord,
 }
 
 struct ShowItem {
@@ -96,25 +101,35 @@ pub fn print_workset(set: &workset::WorkSet, format: WorkSetOutputFormat) -> Res
         WorkSetOutputFormat::WorkSet => {
             println!("{}", serde_json::to_string_pretty(set)?);
         }
-        WorkSetOutputFormat::Compact => print_compact(set),
-        WorkSetOutputFormat::Timeline => print_timeline(set),
-        WorkSetOutputFormat::Md => print_markdown(set),
+        WorkSetOutputFormat::Compact => print_compact(set)?,
+        WorkSetOutputFormat::Timeline => print_timeline(set)?,
+        WorkSetOutputFormat::Md => print_markdown(set)?,
         WorkSetOutputFormat::Refs => print_refs(set),
     }
     Ok(())
 }
 
+fn anchor_items(set: &workset::WorkSet) -> Result<Vec<AnchorItem<'_>>> {
+    set.anchors()
+        .into_iter()
+        .map(|anchor| {
+            let record = workset::record_for_anchor(&set.records, &anchor)
+                .with_context(|| format!("No record found for anchor `{anchor}`"))?;
+            Ok(AnchorItem { anchor, record })
+        })
+        .collect()
+}
+
 fn print_full(set: &workset::WorkSet) -> Result<()> {
-    let items = set
-        .records
-        .iter()
-        .map(|record| {
-            let work_ref = record.work_ref.record_ref();
-            let content = record
-                .content_for_target(WorkRefTarget::Record)
-                .with_context(|| format!("No content found for ref `{work_ref}`"))?;
+    let items = anchor_items(set)?
+        .into_iter()
+        .map(|item| {
+            let content = item
+                .record
+                .content_for_target(item.anchor.target())
+                .with_context(|| format!("No content found for ref `{}`", item.anchor))?;
             Ok(ShowItem {
-                ref_: work_ref,
+                ref_: item.anchor,
                 content,
             })
         })
@@ -136,24 +151,23 @@ fn print_show_items(items: Vec<ShowItem>) {
     }
 }
 
-fn print_compact(set: &workset::WorkSet) {
-    for record in &set.records {
+fn print_compact(set: &workset::WorkSet) -> Result<()> {
+    for item in anchor_items(set)? {
         println!(
             "{}  {:<8}  {}",
-            short_time(record),
-            source_label(record),
-            record.title
+            short_time(item.record),
+            source_label(item.record),
+            anchor_summary(item.record, &item.anchor)
         );
     }
+    Ok(())
 }
 
-fn print_timeline(set: &workset::WorkSet) {
+fn print_timeline(set: &workset::WorkSet) -> Result<()> {
     let mut previous_timestamp: Option<chrono::DateTime<chrono::Utc>> = None;
-    for record in &set.records {
-        let timestamp = record
-            .time
-            .primary_at()
-            .and_then(sivtr_core::time::parse_timestamp);
+    for item in anchor_items(set)? {
+        let timestamp =
+            anchor_timestamp(item.record, &item.anchor).and_then(sivtr_core::time::parse_timestamp);
         if let (Some(previous), Some(current)) = (previous_timestamp, timestamp) {
             let gap_minutes = (current - previous).num_minutes();
             if gap_minutes >= 15 {
@@ -166,28 +180,78 @@ fn print_timeline(set: &workset::WorkSet) {
 
         println!(
             "{}  {:<8}  {:<28}  {}",
-            short_time(record),
-            source_label(record),
-            record.work_ref.record_ref(),
-            record.title
+            short_time(item.record),
+            source_label(item.record),
+            item.anchor,
+            anchor_summary(item.record, &item.anchor)
         );
     }
+    Ok(())
 }
 
-fn print_markdown(set: &workset::WorkSet) {
-    for record in &set.records {
+fn print_markdown(set: &workset::WorkSet) -> Result<()> {
+    for item in anchor_items(set)? {
         println!(
             "- **{}** `{}` {}",
-            short_time(record),
-            record.work_ref.record_ref(),
-            escape_markdown_title(&record.title)
+            short_time(item.record),
+            item.anchor,
+            escape_markdown_title(&anchor_summary(item.record, &item.anchor))
         );
     }
+    Ok(())
 }
 
 fn print_refs(set: &workset::WorkSet) {
-    for record in &set.records {
-        println!("{}", record.work_ref.record_ref());
+    for anchor in set.anchors() {
+        println!("{anchor}");
+    }
+}
+
+fn anchor_summary(record: &WorkRecord, anchor: &WorkRef) -> String {
+    match anchor.target() {
+        WorkRefTarget::Record => record.title.clone(),
+        WorkRefTarget::Line(_) => record
+            .content_for_target(anchor.target())
+            .map(|text| summary_text(&text))
+            .unwrap_or_else(|| record.title.clone()),
+        WorkRefTarget::Part { .. } => record
+            .part_for_target(anchor.target())
+            .map(part_summary)
+            .unwrap_or_else(|| record.title.clone()),
+    }
+}
+
+fn part_summary(part: &WorkPart) -> String {
+    let label = part
+        .label
+        .as_deref()
+        .filter(|label| !label.trim().is_empty())
+        .map(|label| format!("{} ", summary_text(label)))
+        .unwrap_or_default();
+    format!("{}{}", label, summary_text(&part.text))
+}
+
+fn anchor_timestamp<'a>(record: &'a WorkRecord, anchor: &WorkRef) -> Option<&'a str> {
+    match anchor.target() {
+        WorkRefTarget::Part { .. } => record
+            .part_for_target(anchor.target())
+            .and_then(|part| part.occurred_at.as_deref())
+            .or_else(|| record.time.primary_at()),
+        WorkRefTarget::Record | WorkRefTarget::Line(_) => record.time.primary_at(),
+    }
+}
+
+fn summary_text(text: &str) -> String {
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = compact.trim();
+    if trimmed.is_empty() {
+        return "<empty>".to_string();
+    }
+    let summary = trimmed.chars().take(96).collect::<String>();
+    if trimmed.chars().count() > 96 {
+        format!("{summary}...")
+    } else {
+        summary
     }
 }
 

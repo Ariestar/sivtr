@@ -15,6 +15,7 @@ pub enum WorkSetSource {
     Records {
         cwd: PathBuf,
         records: Vec<WorkRecord>,
+        anchors: Vec<WorkRef>,
     },
 }
 
@@ -26,17 +27,29 @@ impl WorkSetSource {
         }
     }
 
-    pub fn records(self) -> Vec<WorkRecord> {
+    pub fn into_parts(self) -> (Vec<WorkRecord>, Vec<WorkRef>) {
         match self {
-            Self::Reference(set) => set.records,
-            Self::Records { records, .. } => records,
+            Self::Reference(mut set) => {
+                set.ensure_anchors();
+                (set.records, set.anchors)
+            }
+            Self::Records {
+                records, anchors, ..
+            } => (records, anchors),
         }
     }
 
     pub fn into_workset(self) -> WorkSet {
         match self {
-            Self::Reference(set) => set,
-            Self::Records { cwd, records } => WorkSet::new(cwd.display().to_string(), records),
+            Self::Reference(mut set) => {
+                set.ensure_anchors();
+                set
+            }
+            Self::Records {
+                cwd,
+                records,
+                anchors,
+            } => WorkSet::with_anchors(cwd.display().to_string(), records, anchors),
         }
     }
 }
@@ -64,22 +77,26 @@ fn read_stdin() -> Result<WorkSet> {
     io::stdin()
         .read_to_string(&mut input)
         .context("Failed to read WorkSet from stdin")?;
-    serde_json::from_str(&input).context("Failed to parse WorkSet from stdin")
+    let mut set: WorkSet =
+        serde_json::from_str(&input).context("Failed to parse WorkSet from stdin")?;
+    set.ensure_anchors();
+    Ok(set)
 }
 
 fn resolve_ref_source(source: &str, cwd: &Path, work_ref: &WorkRef) -> Result<WorkSetSource> {
-    let work_ref = work_ref.record_ref();
-    let providers = work_ref
+    let record_ref = work_ref.record_ref();
+    let providers = record_ref
         .provider()
         .map(|provider| vec![provider])
         .unwrap_or_else(all_agent_providers);
     let index = current_work_record_index(&providers, cwd, None)?;
     let record = index
-        .resolve(&work_ref)
+        .resolve(&record_ref)
         .with_context(|| format!("No record found for ref `{source}`"))?;
     Ok(WorkSetSource::Records {
         cwd: cwd.to_path_buf(),
         records: vec![record.clone()],
+        anchors: vec![work_ref.clone()],
     })
 }
 
@@ -87,12 +104,23 @@ fn resolve_selector_source(source: &str, cwd: &Path) -> Result<WorkSetSource> {
     let selector: WorkRefSelector = source.parse()?;
     let providers = selector.providers();
     let index = current_work_record_index(&providers, cwd, None)?;
-    let records = index
-        .records()
-        .iter()
-        .filter(|record| selector.matches_work_ref(&record.work_ref))
-        .cloned()
-        .collect::<Vec<_>>();
+    let mut records = Vec::new();
+    let mut anchors = Vec::new();
+
+    for record in index.records() {
+        if !selector.matches_work_ref(&record.work_ref) {
+            continue;
+        }
+        let record_ref = record.work_ref.record_ref();
+        records.push(record.clone());
+        if let Some(lines) = selector.selected_lines() {
+            for line in lines {
+                anchors.push(record_ref.with_line(*line));
+            }
+        } else {
+            anchors.push(record_ref);
+        }
+    }
 
     if records.is_empty() {
         bail!("No record found for ref selector `{source}`");
@@ -101,6 +129,7 @@ fn resolve_selector_source(source: &str, cwd: &Path) -> Result<WorkSetSource> {
     Ok(WorkSetSource::Records {
         cwd: cwd.to_path_buf(),
         records,
+        anchors,
     })
 }
 

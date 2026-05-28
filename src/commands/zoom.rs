@@ -12,20 +12,26 @@ use crate::commands::workset::{self, WorkSet};
 pub fn execute(args: &ZoomArgs) -> Result<()> {
     let source = workset::load_source(&args.source, args.cwd.as_deref())?;
     let cwd = source.cwd();
-    let source_records = source.records();
+    let (source_records, source_anchors) = source.into_parts();
 
     let base_context = args.context.unwrap_or(3);
     let before = args.before.unwrap_or(base_context);
     let after = args.after.unwrap_or(base_context);
 
-    let expanded = if source_records.is_empty() {
+    let expanded = if source_records.is_empty() || source_anchors.is_empty() {
         Vec::new()
     } else {
         let providers = providers_for_records(&source_records);
         let all_records = current_work_record_index(&providers, &cwd, None)?
             .records()
             .to_vec();
-        expand_around(&source_records, &all_records, before, after)?
+        expand_around(
+            &source_records,
+            &source_anchors,
+            &all_records,
+            before,
+            after,
+        )?
     };
 
     let mut workset = WorkSet::new(cwd.display().to_string(), expanded);
@@ -55,6 +61,7 @@ fn providers_for_records(records: &[WorkRecord]) -> Vec<AgentProvider> {
 
 fn expand_around(
     source_records: &[WorkRecord],
+    source_anchors: &[WorkRef],
     all_records: &[WorkRecord],
     before: usize,
     after: usize,
@@ -62,8 +69,12 @@ fn expand_around(
     let mut expanded = Vec::new();
     let mut seen = HashSet::new();
 
-    for source in source_records {
-        let source_ref = source.work_ref.record_ref();
+    for anchor in source_anchors {
+        let source_ref = anchor.record_ref();
+        let source = source_records
+            .iter()
+            .find(|record| record.work_ref.record_ref() == source_ref)
+            .with_context(|| format!("No record found for ref `{source_ref}`"))?;
         let mut session_records = all_records
             .iter()
             .filter(|record| same_stream(source, record))
@@ -118,8 +129,13 @@ mod tests {
     fn expand_around_expands_each_record_and_dedups_overlaps() {
         let records = (1..=5).map(test_terminal_record).collect::<Vec<_>>();
         let sources = vec![records[1].clone(), records[2].clone()];
+        let anchors = sources
+            .iter()
+            .map(|record| record.work_ref.record_ref())
+            .collect::<Vec<_>>();
 
-        let expanded = expand_around(&sources, &records, 1, 1).expect("expands around records");
+        let expanded =
+            expand_around(&sources, &anchors, &records, 1, 1).expect("expands around records");
 
         assert_eq!(
             expanded
@@ -139,8 +155,12 @@ mod tests {
     fn expand_around_clamps_session_edges() {
         let records = (1..=3).map(test_terminal_record).collect::<Vec<_>>();
         let sources = vec![records[0].clone()];
+        let anchors = vec![sources[0]
+            .work_ref
+            .with_part(sivtr_core::record::WorkPartIo::Output, 1)];
 
-        let expanded = expand_around(&sources, &records, 5, 1).expect("expands around edge");
+        let expanded =
+            expand_around(&sources, &anchors, &records, 5, 1).expect("expands around edge");
 
         assert_eq!(
             expanded

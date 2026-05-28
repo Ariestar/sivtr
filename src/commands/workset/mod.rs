@@ -5,11 +5,12 @@ pub use source::load_source;
 use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
-use sivtr_core::record::WorkRecord;
+use sivtr_core::record::{WorkRecord, WorkRef};
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 
-pub const WORKSET_SCHEMA_VERSION: u32 = 1;
+pub const WORKSET_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkSet {
@@ -19,16 +20,23 @@ pub struct WorkSet {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub records: Vec<WorkRecord>,
+    #[serde(default)]
+    pub anchors: Vec<WorkRef>,
 }
 
 fn apply_selection(mut set: WorkSet, selection: WorkSetSelection) -> WorkSet {
+    set.ensure_anchors();
     let WorkSetSelection::Indices(indices) = selection else {
         return set;
     };
-    set.records = indices
+
+    let anchors = indices
         .into_iter()
-        .map(|index| set.records[index - 1].clone())
-        .collect();
+        .map(|index| set.anchors[index - 1].clone())
+        .collect::<Vec<_>>();
+    let records = records_for_anchors(&set.records, &anchors);
+    set.records = records;
+    set.anchors = anchors;
     set
 }
 
@@ -40,24 +48,89 @@ pub enum WorkSetSelection {
 
 impl WorkSet {
     pub fn new(cwd: impl Into<String>, records: Vec<WorkRecord>) -> Self {
+        let anchors = records
+            .iter()
+            .map(|record| record.work_ref.record_ref())
+            .collect();
+        Self::with_anchors(cwd, records, anchors)
+    }
+
+    pub fn with_anchors(
+        cwd: impl Into<String>,
+        records: Vec<WorkRecord>,
+        anchors: Vec<WorkRef>,
+    ) -> Self {
         Self {
             schema_version: WORKSET_SCHEMA_VERSION,
             created_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
             cwd: cwd.into(),
             name: None,
             records,
+            anchors,
+        }
+    }
+
+    pub fn ensure_anchors(&mut self) {
+        if self.anchors.is_empty() {
+            self.anchors = self
+                .records
+                .iter()
+                .map(|record| record.work_ref.record_ref())
+                .collect();
+        }
+    }
+
+    pub fn anchors(&self) -> Vec<WorkRef> {
+        if self.anchors.is_empty() {
+            self.records
+                .iter()
+                .map(|record| record.work_ref.record_ref())
+                .collect()
+        } else {
+            self.anchors.clone()
         }
     }
 
     pub fn save_as(&mut self, name: &str) -> Result<()> {
         validate_name(name)?;
+        self.ensure_anchors();
         self.name = Some(name.to_string());
         save_named(name, self)
     }
 
     pub fn save_last(&self) -> Result<()> {
-        save_named("last", self)
+        let mut set = self.clone();
+        set.ensure_anchors();
+        save_named("last", &set)
     }
+}
+
+pub fn records_for_anchors(records: &[WorkRecord], anchors: &[WorkRef]) -> Vec<WorkRecord> {
+    let mut selected = Vec::new();
+    let mut seen = HashSet::new();
+    for anchor in anchors {
+        let record_ref = anchor.record_ref();
+        if !seen.insert(record_ref.to_string()) {
+            continue;
+        }
+        if let Some(record) = records
+            .iter()
+            .find(|record| record.work_ref.record_ref() == record_ref)
+        {
+            selected.push(record.clone());
+        }
+    }
+    selected
+}
+
+pub fn record_for_anchor<'a>(
+    records: &'a [WorkRecord],
+    anchor: &WorkRef,
+) -> Option<&'a WorkRecord> {
+    let record_ref = anchor.record_ref();
+    records
+        .iter()
+        .find(|record| record.work_ref.record_ref() == record_ref)
 }
 
 pub fn load_reference(reference: &str) -> Result<WorkSet> {
@@ -70,13 +143,14 @@ pub fn load_reference(reference: &str) -> Result<WorkSet> {
             path.display()
         )
     })?;
-    let set: WorkSet = serde_json::from_str(&content).with_context(|| {
+    let mut set: WorkSet = serde_json::from_str(&content).with_context(|| {
         format!(
             "Failed to parse WorkSet @{} from {}",
             parsed.name,
             path.display()
         )
     })?;
+    set.ensure_anchors();
     validate_selection(reference, &set, &parsed.selection)?;
     Ok(apply_selection(set, parsed.selection))
 }
@@ -146,10 +220,10 @@ fn validate_selection(reference: &str, set: &WorkSet, selection: &WorkSetSelecti
         WorkSetSelection::All => Ok(()),
         WorkSetSelection::Indices(indices) => {
             for index in indices {
-                if *index > set.records.len() {
+                if *index > set.anchors.len() {
                     bail!(
                         "Invalid WorkSet reference `{reference}`; index {index} exceeds WorkSet length {}",
-                        set.records.len()
+                        set.anchors.len()
                     );
                 }
             }
@@ -245,9 +319,9 @@ mod tests {
         let selected = apply_selection(set, WorkSetSelection::Indices(vec![3, 1, 5]));
 
         let refs = selected
-            .records
+            .anchors()
             .iter()
-            .map(|record| record.work_ref.to_string())
+            .map(ToString::to_string)
             .collect::<Vec<_>>();
         assert_eq!(
             refs,
@@ -260,8 +334,29 @@ mod tests {
     }
 
     #[test]
+    fn selected_keeps_part_anchor_order() {
+        let records = vec![record(1), record(2)];
+        let anchors = vec![
+            records[1].work_ref.with_part(WorkPartIo::Output, 1),
+            records[0].work_ref.with_part(WorkPartIo::Output, 1),
+        ];
+        let set = WorkSet::with_anchors(".", records, anchors);
+        let selected = apply_selection(set, WorkSetSelection::Indices(vec![2, 1]));
+
+        let refs = selected
+            .anchors()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            refs,
+            vec!["terminal/session_1/1/o/1", "terminal/session_1/2/o/1"]
+        );
+    }
+
+    #[test]
     fn rejects_empty_discrete_selector_segment() {
-        let error = parse_selector("1,,3", "@hits[1,,3]").expect_err("selector rejected");
+        let error = parse_selector("1,,2", "@hits[1,,2]").expect_err("selector rejects empty");
         assert!(error.to_string().contains("empty selector segment"));
     }
 }
