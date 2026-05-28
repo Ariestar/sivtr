@@ -5,16 +5,16 @@
 <h1 align="center">sivtr</h1>
 
 <p align="center">
-  面向人和 AI Agent 的本地工作记忆层。
+  面向终端输出和 AI Coding Sessions 的本地工作记忆层。
   <br>
-  CLI 负责捕获终端输出和 Agent 会话，skill 负责教 Agent 主动检索这些记忆。
+  捕获发生过的事，之后搜索复用，让 Agent 使用精确的本地证据。
 </p>
 
 <p align="center">
   <a href="https://crates.io/crates/sivtr"><img alt="Crates.io" src="https://img.shields.io/crates/v/sivtr?style=flat-square"></a>
   <a href="https://marketplace.visualstudio.com/items?itemName=ariestar.sivtr-vscode"><img alt="VS Code Marketplace" src="https://vsmarketplacebadges.dev/version/ariestar.sivtr-vscode.svg?style=flat-square&label=VS%20Code&color=007ACC"></a>
   <a href="https://github.com/Ariestar/sivtr/actions/workflows/rust.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Ariestar/sivtr/rust.yml?branch=main&style=flat-square"></a>
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square"></a>
+  <a href="https://deepwiki.com/Ariestar/sivtr"><img alt="Ask DeepWiki" src="https://deepwiki.com/badge.svg?repo=Ariestar/sivtr"></a>
   <a href="rust-toolchain.toml"><img alt="Rust" src="https://img.shields.io/badge/rust-1.88%2B-orange?style=flat-square"></a>
   <a href="https://linux.do/"><img alt="linux.do" src="https://img.shields.io/badge/friend-linux.do-1f883d?style=flat-square"></a>
 </p>
@@ -29,352 +29,186 @@
   <a href="https://sivtr.pages.dev/zh-cn/">中文文档</a>
 </p>
 
+<p align="center">
+  <a href="https://sivtr.pages.dev/zh-cn/playbooks/fix-terminal-error/">
+    <img src="docs-site/public/demo/1.gif" alt="sivtr demo：查找并复用最近终端输出" width="820">
+  </a>
+</p>
+
 ---
 
-## sivtr 是什么？
+## 为什么需要 sivtr？
 
-`sivtr` 是一个本地优先的 shared memory workspace，服务于开发者和 AI Agent。它把命令输出、测试失败、构建日志、Agent 会话和工具调用结果变成可以搜索、选择、复制、复用的文本资产。
+开发者和 Agent 经常浪费时间重建已经存在的上下文：终端报错、测试输出、工具日志、之前的 AI 会话。`sivtr` 把这些本地工作变成可搜索的记忆。
 
-完整工作流由两个部分配合完成，建议一起安装：
+有了 `sivtr`，你可以：
 
-- **`sivtr` CLI/TUI**：负责捕获、浏览、搜索、复制和按 ref 取回本地工作记忆。
-- **`sivtr-memory` skill**：教你的 Agent 什么时候、怎么查询这些记忆，避免一上来就让你重新粘贴日志或复述上下文。
+- 不再手动把日志粘贴给 Agent；
+- 从当前 workspace 同时搜索终端和 AI sessions；
+- 复制或打印精确的 records、lines、input/output parts；
+- 保存结果集，并在命令链里继续传递。
 
-只给人浏览时，单独安装 CLI 也可以；想让 Agent 真正复用本地记忆时，CLI 和 skill 都需要安装。
-
-它不是终端模拟器，也不是 tmux 这类复用器。它是你现有终端和 Agent 工具旁边的一层“工作记忆”。
+> [!IMPORTANT]
+> Agent 工作流建议同时安装 `sivtr` CLI 和内置 `sivtr-memory` skill。CLI 负责存取本地记忆；skill 负责教 Agent 何时、如何使用它。
 
 ## 特性
 
-- 用键盘优先的 TUI 浏览命令输出。
-- 把任意命令输出通过管道送入可搜索、可选择的浏览器。
-- 记录 shell 命令块，之后复制最近的输入、输出或纯命令。
-- 读取本地 AI Agent 会话文件，复制用户消息、助手回复或工具输出。
-- 安装内置 `sivtr-memory` skill，让 Agent 先搜索本地证据再行动。
-- 在 VS Code 中用一个快捷键打开 AI session picker。
-- 支持用正则和行号范围过滤复制内容。
-- 用本地 SQLite 保存历史，之后可以检索。
-- 迭代测试和构建时，对比最近几次命令输出。
+- **终端捕获**：支持 Bash、Zsh、PowerShell、Nushell。
+- **快速 TUI**：浏览长命令输出。
+- **统一搜索**：跨 terminal records、Codex、Claude Code、OpenCode、Pi sessions。
+- **稳定 refs**：精确定位 records、lines 和 input/output parts。
+- **WorkSets**：可复用结果集，支持 `@last`、保存的 `@name` 和 stdin `@`。
+- **链式命令**：搜索、缩小、扩展、展示证据，不需要手动复制中间 refs。
+- **Agent-ready memory**：通过内置 `sivtr-memory` skill 让 Agent 主动检索本地证据。
+- **诊断工具**：`sivtr doctor`、`sivtr init show`、`sivtr init uninstall`。
 
-## 安装 CLI 和 skill
+## 快速开始
 
-完整工作流需要同时安装 `sivtr` CLI 和内置的 `sivtr-memory` skill。CLI 负责存取本地记忆；skill 负责告诉 Agent 怎么使用这些记忆。
-
-### 1. 安装 CLI
-
-从 crates.io 安装 CLI：
+安装 CLI：
 
 ```bash
 cargo install sivtr
 ```
 
-或从源码安装：
+Linux/macOS 也可以使用预编译安装脚本：
 
 ```bash
-git clone https://github.com/Ariestar/sivtr.git
-cd sivtr
-cargo install --path .
+curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh
 ```
 
-### 2. 安装内置 skill
-
-用 Skills CLI 全局安装 `sivtr-memory` skill：
+启用 shell capture：
 
 ```bash
-npx skills add Ariestar/sivtr --skill sivtr-memory -g
+sivtr init bash       # 或 zsh、powershell、nushell
+sivtr doctor
 ```
 
-### 3. 可选：安装 VS Code 插件
-
-VS Code 插件：
-
-```text
-ariestar.sivtr-vscode
-```
-
-插件会从当前 workspace 启动 AI session picker。如果没有安装 `sivtr` CLI，它会提示你是否在可见终端里运行 `cargo install sivtr`。
-
-## 快速开始
-
-浏览命令输出：
+捕获并浏览输出：
 
 ```bash
 cargo test 2>&1 | sivtr
 ```
 
-让 `sivtr` 执行命令并捕获输出：
+搜索最近 workspace memory：
 
 ```bash
-sivtr run cargo build
+sivtr s agent -m "TODO|decision|failed" --since today -f timeline
+sivtr s terminal --status failure --latest 1 --refs
 ```
 
-复制当前 shell 会话中最近的命令块：
+## Agent memory
+
+全局安装内置 skill：
 
 ```bash
-sivtr copy
+npx skills add Ariestar/sivtr --skill sivtr-memory -g
 ```
 
-复制当前 Codex 项目会话里的最新助手回复：
-
-```bash
-sivtr copy codex out
-```
-
-打开 Codex 会话块选择器：
-
-```bash
-sivtr copy codex --pick
-```
-
-对比最近两次命令输出：
-
-```bash
-sivtr diff 1 2
-```
-
-## 核心工作流
-
-### 浏览输出
-
-已有命令时用管道：
-
-```bash
-some-command --verbose 2>&1 | sivtr
-```
-
-希望 `sivtr` 负责执行和捕获时用 run 模式：
-
-```bash
-sivtr run cargo test
-```
-
-在 TUI 里可以用 Vim 风格按键移动，用 `/` 搜索，用 `v` 进入可视选择，用 `y` 复制。
-
-### 复制命令块
-
-开启 shell 集成后，`sivtr` 会记录命令块，之后可以复制最近输入和输出：
-
-```bash
-sivtr copy              # 最近输入 + 输出
-sivtr copy out          # 只复制最近输出
-sivtr copy in 2..4      # 复制最近第 2 到第 4 个命令的输入
-sivtr copy cmd --pick   # 选择并复制纯命令
-```
-
-选择器按新到旧编号：`1` 是最新命令块，`2` 是再前一个，`2..4` 代表多个块。
-
-复制后可以再过滤：
-
-```bash
-sivtr copy out --regex panic
-sivtr copy out --lines 10:40
-```
-
-### 复用 Codex 会话
-
-`sivtr copy codex` 会读取 `~/.codex/sessions` 下的 Codex rollout JSONL 文件。如果当前 Codex shell 暴露了 `CODEX_THREAD_ID`，`sivtr` 会优先匹配这个本地精确会话；否则会优先选择 `cwd` 与当前目录匹配的最新本地会话。
-
-如果要只读共享另一个账号的 Codex 会话，推荐先把它们镜像到独立目录，再通过 `[codex].session_dirs` 读取，而不是用提权方式运行 `sivtr`。共享/镜像目录只参与 `--pick` 这类显式浏览，不会抢占当前本地会话解析。
-
-用 `--session N` 可以显式选择第 N 新的已记录会话；用 `--session ID` 可以按会话 id 或 id 前缀匹配。
-
-```bash
-sivtr copy codex        # 最近一轮用户消息 + 助手回复
-sivtr copy codex --session 2
-sivtr copy codex --session 019df7fb
-sivtr copy codex out    # 最近助手回复
-sivtr copy codex out --session 2 --print
-sivtr copy codex in     # 最近用户消息
-sivtr copy codex tool   # 最近工具输出
-sivtr copy codex all    # 整个解析后的会话
-sivtr copy codex --session 2 --pick
-sivtr copy codex --pick # 浏览本地和共享镜像会话
-sivtr copy codex all --max-blocks 0
-sivtr copy codex all --max-blocks 10000
-```
-
-在 workspace picker 里，`i`、`o`、`y`、`c` 分别复制当前
-input/question、output/answer、整段 block 和裸命令。如果只想复制部分内容行，
-先按 `:` 启动临时行过滤，再输入 `2:8` 或 `1,3,8:12` 这种 1-based 规格，
-然后再按 `Enter`、`i`、`o`、`y` 或 `c` 执行复制。`Backspace` 用于编辑待应用的
-过滤器，`Esc` 用于清除它。
-
-默认会过滤过程性 commentary，所以 `sivtr copy codex out` 更倾向返回最终助手回复，而不是中间状态更新。
-
-为避免超大 Codex transcript 让导入或 picker 变慢，默认只保留最近 `10000` 个解析后的 block。若要全量导入，可在配置里设置 `[codex].max_blocks = 0`，或在命令行传 `--max-blocks 0`。
-
-先把当前账号的会话持续镜像成共享树：
-
-```bash
-sivtr codex export --dest /srv/sivtr/root-codex --watch
-```
-
-再让另一个账号在配置里引用镜像目录：
-
-```toml
-[codex]
-session_dirs = ["/srv/sivtr/root-codex/sessions"]
-```
-
-在 macOS 上，推荐把只读共享目录放在 `/Users/Shared` 下，便于不同本地账号读取：
-
-```bash
-sivtr codex export --dest /Users/Shared/sivtr/root-codex --watch
-```
-
-```toml
-[codex]
-session_dirs = ["/Users/Shared/sivtr/root-codex/sessions"]
-```
-
-可直接复制的一行验证命令：
-
-- 导出侧：`rm -rf /Users/Shared/sivtr/root-codex-smoke && sivtr codex export --dest /Users/Shared/sivtr/root-codex-smoke && find /Users/Shared/sivtr/root-codex-smoke -maxdepth 2 -type f | sed -n '1,5p'`
-- 读取侧（在 `[codex].session_dirs` 配好之后）：`sivtr copy codex --pick`
-
-如果你要把会话镜像给另一个本地账号做只读访问（例如 root 导出，jacob
-读取），可以在源账号启动持续导出：
-
-```bash
-sivtr codex export --dest /srv/sivtr/root-codex --watch --interval-ms 500
-```
-
-`--watch` 默认每 1 秒同步一次；需要更快可见性时可用 `--interval-ms`
-改成毫秒级同步。
-
-### VS Code 快捷键
-
-VS Code 插件提供命令：
+然后让 coding agent 先使用本地记忆：
 
 ```text
-Sivtr: Pick AI Session
+修复最近的终端报错。先用 sivtr。
 ```
 
-默认快捷键：
+Agent 可以先搜索本地证据、查看精确 refs、修改代码并验证结果，而不是先要求你粘贴日志。
 
-```text
-Alt+Y
-```
+## 示例
 
-你可以改成 `Ctrl+Y`，但它通常会覆盖编辑器的 Redo。
-
-在 Linux 上，当焦点位于 VS Code 编辑器时，这个快捷键就是默认的
-AI session picker 快捷键。插件实际执行的是：
+### 复制最近终端输出
 
 ```bash
-sivtr hotkey-pick-agent --cwd . --provider all
+sivtr copy out --print
+sivtr copy cmd --pick
 ```
 
-如果当前终端正运行在活动中的 `codex` 或 `codex resume` 会话里，
-`sivtr` 会优先使用这个精确会话。
-
-在 macOS 上，当焦点位于 VS Code 编辑器时，这个快捷键同样是默认的
-picker 快捷键。
-
-### Linux 快捷键设置
-
-Linux 目前没有提供 VS Code 之外的默认全局 `sivtr` 热键。
-
-原因：
-
-- Wayland 不给普通 CLI 工具提供统一的跨桌面全局热键接口。
-- 只做 X11 方案已经不够，因为很多 Linux 桌面环境默认是 Wayland。
-- 打开 picker 还需要一个交互式终端，而 GNOME、KDE、Sway、纯 SSH、
-  tmux 等环境并没有统一可移植的终端启动命令。
-
-推荐的 Linux 设置方式：
-
-- VS Code：直接使用内置的 `Alt+Y`。
-- tmux：给当前 pane 目录绑定一个快捷键：
-
-```tmux
-bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex --pick"
-```
-
-- 终端或桌面环境：手动创建一个自定义快捷键，在终端中执行
-  `cd <project-path> && sivtr copy codex --pick`。
-
-### macOS 快捷键设置
-
-macOS 目前没有内置的 `sivtr` 全局热键守护进程。推荐默认使用上面的 VS Code 快捷键。
-
-如果你想在 VS Code 之外通过 Terminal 启动项目级 picker，可以在 macOS 上生成 launcher 和 LaunchAgent 包装：
+### 搜索、保存并展示精确证据
 
 ```bash
-sivtr init macos-shortcut
+sivtr s terminal -m "panic|failed" --save failures --refs
+sivtr work parts @failures --io output --refs
+sivtr show @last --full
 ```
 
-它会写入：
-
-- `~/.local/bin/sivtr-pick-codex`
-- `~/Library/LaunchAgents/dev.sivtr.pick-codex.plist`
-
-历史文件名会为兼容性保留，但生成出来的脚本现在会使用生成它的那一个 `sivtr` 二进制，直接打开 provider-neutral 的 AI session picker。
-
-你可以：
-
-- 直接运行 `~/.local/bin/sivtr-pick-codex`；
-- 用 `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sivtr.pick-codex.plist` 加载 LaunchAgent；
-- 继续使用 VS Code 命令，作为最稳定的快捷键驱动入口。
-
-可直接复制的一行验证命令：
-
-- 生成并立即打开 picker：`sivtr init macos-shortcut && ~/.local/bin/sivtr-pick-codex`
-- 生成并加载 LaunchAgent 包装：`sivtr init macos-shortcut && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sivtr.pick-codex.plist`
-
-### Windows 全局热键
-
-Windows 上可以启动全局热键守护进程：
+### 链式调用 memory 命令
 
 ```bash
-sivtr hotkey start
-sivtr hotkey status
-sivtr hotkey stop
+sivtr s terminal -m "panic|failed" \
+  | sivtr work parts @ --io output \
+  | sivtr s @ -m "error|stack|caused by" \
+  | sivtr show @ --full
 ```
 
-默认快捷键是 `alt+y`。
+### 生成最近工作时间线
 
-## 命令速查
+```bash
+sivtr s agent --since today --sort oldest -f timeline
+sivtr s terminal --since today --sort oldest -f timeline
+```
+
+### 扩展搜索命中的上下文
+
+```bash
+sivtr s agent -m "release|validation" --save release_context --refs
+sivtr zoom @release_context -C 2 --save expanded_context
+sivtr show @expanded_context --full
+```
+
+## 核心概念
+
+| 概念 | 含义 |
+| --- | --- |
+| WorkRecord | 一个有用的工作事件：终端命令、Agent turn、工具调用或捕获输出块。 |
+| WorkPart | Record 里的 typed input/output 片段，例如 command、assistant reply、tool output 或 error。 |
+| WorkRef | Record、line 或 part 的稳定地址，例如 `pi/<session>/3/o/1`。 |
+| WorkSet | 可以保存、选择、管道传递、扩展和展示的有序结果集。 |
+
+常用句柄：
+
+| 句柄 | 用途 |
+| --- | --- |
+| `@last` | 最近一次生成的 WorkSet。 |
+| `@name` | 通过 `--save name` 保存的 WorkSet。 |
+| `@name[1,3..5]` | 从已保存 WorkSet 中按 1-based selector 取子集。 |
+| `@` | stdin 传入的 WorkSet JSON。 |
+
+## 命令概览
 
 | 命令 | 用途 |
 | --- | --- |
-| `sivtr` / `sivtr pipe` | 从 stdin 读取输出并打开 TUI 浏览器。 |
+| `sivtr` / `sivtr pipe` | 读取 stdin 并打开输出浏览器。 |
 | `sivtr run <command>` | 执行命令、捕获输出并浏览。 |
-| `sivtr copy` | 复制最近命令块。 |
-| `sivtr copy codex` | 复制当前 Codex 会话中的有用内容。 |
-| `sivtr codex export --dest <path>` | 把本地 Codex 会话镜像成共享只读目录树。 |
-| `sivtr diff <left> <right>` | 对比最近命令输出。 |
-| `sivtr history` | 列出、搜索、查看输出历史。 |
-| `sivtr config` | 管理 TOML 配置。 |
-| `sivtr init <shell>` | 生成命令块捕获所需的 shell 集成。 |
-| `sivtr import` | 打开当前 session log。 |
-| `sivtr hotkey` | 管理 Windows AI session picker 热键。 |
-| `sivtr clear` | 清空 session logs。 |
+| `sivtr copy` | 复制最近终端命令块。 |
+| `sivtr copy <provider>` | 从 Codex、Claude Code、OpenCode、Pi sessions 复制内容。 |
+| `sivtr search` / `sivtr s` | 搜索终端和 Agent memory；结果保存为 `@last`。 |
+| `sivtr work sessions` | 列出当前 workspace 的 terminal 和 Agent sessions。 |
+| `sivtr work records <source>` | 把 source 或 WorkSet 投影成 record refs。 |
+| `sivtr work parts <source>` | 把 records 投影成规范 input/output part refs。 |
+| `sivtr show <ref-or-workset>` | 打印精确 refs 或 WorkSets。 |
+| `sivtr zoom <source>` | 给 anchors 补上相邻 records。 |
+| `sivtr diff <left> <right>` | 对比最近命令块。 |
+| `sivtr doctor` | 诊断 binary、config、session logs、hooks、providers、clipboard。 |
+| `sivtr init <shell>` | 安装 shell integration；也支持 `show` 和 `uninstall`。 |
+| `sivtr config` | 管理 TOML 配置文件。 |
+| `sivtr history` | 列出、搜索、查看捕获输出历史。 |
+| `sivtr hotkey` | 管理 Windows AI session picker 全局热键守护进程。 |
 
-## TUI 按键
+## 支持来源
 
-| 按键 | 模式 | 动作 |
-| --- | --- | --- |
-| `j` / `Down` | Normal | 下移 |
-| `k` / `Up` | Normal | 上移 |
-| `h` / `Left` | Normal | 左移 |
-| `l` / `Right` | Normal | 右移 |
-| `Ctrl-D` | Normal | 下翻半页 |
-| `Ctrl-U` | Normal | 上翻半页 |
-| `g` | Normal | 到顶部 |
-| `G` | Normal | 到底部 |
-| `/` | Normal | 搜索 |
-| `n` / `N` | Normal | 下一个 / 上一个匹配 |
-| `v` / `V` / `Ctrl-V` | Normal | 可视、可视行、可视块 |
-| `y` | Visual | 复制选择内容 |
-| `Esc` | Visual/Search/Insert | 取消 |
-| `q` | Normal | 退出 |
+| Source | 支持内容 |
+| --- | --- |
+| Terminal | Bash、Zsh、PowerShell、Nushell shell hooks；pipe 和 run capture。 |
+| Codex | 本地 rollout/session JSONL files。 |
+| Claude Code | 本地 transcript/session files。 |
+| OpenCode | 本地 session data。 |
+| Pi | 本地 Pi agent session logs。 |
 
 ## 文档
 
-- 英文文档：[https://sivtr.pages.dev/](https://sivtr.pages.dev/)
+- 文档：[https://sivtr.pages.dev/](https://sivtr.pages.dev/)
 - 中文文档：[https://sivtr.pages.dev/zh-cn/](https://sivtr.pages.dev/zh-cn/)
-- VS Code 插件：[editors/vscode/README.md](editors/vscode/README.md)
+- Playbooks：[https://sivtr.pages.dev/zh-cn/playbooks/](https://sivtr.pages.dev/zh-cn/playbooks/)
+- CLI Reference：[docs-site/src/content/docs/reference/cli.md](docs-site/src/content/docs/reference/cli.md)
+- Memory skill：[skills/sivtr-memory](skills/sivtr-memory)
 
 ## 开发
 
@@ -384,34 +218,20 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-VS Code 插件：
+文档站：
 
 ```bash
-cd editors/vscode
-bun install
-bun run compile
-bun run package
+cd docs-site
+bun install --frozen-lockfile
+bun run build
 ```
 
 仓库结构：
 
 ```text
-sivtr/
-|- crates/sivtr-core/    # 捕获、解析、缓冲区、选择、搜索、历史、导出
-|- src/                  # CLI、TUI、命令、热键集成
-|- docs-site/            # Astro/Starlight 文档站
-|- editors/vscode/       # AI session picker 的 VS Code 插件桥接
-`- .github/workflows/    # CI 和发布自动化
+crates/sivtr-core/  core model、provider parsers、search、history、config
+src/                CLI commands、TUI、shell hooks、hotkey integration
+docs-site/          Astro/Starlight documentation site
+editors/vscode/     AI session picker 的 VS Code bridge
+skills/             bundled agent skills
 ```
-
-## 许可证
-
-sivtr 使用 [Apache License 2.0](LICENSE) 许可证。
-
-## 开发者交流群
-
-如果 sivtr 对你的工作流有帮助，欢迎点 Star 支持；遇到问题或有想法欢迎提交 Issue；也非常欢迎直接发 PR 一起改进。
-
-更推荐加入开发者 QQ 群，交流使用体验、反馈需求、分享工作流，一起把 sivtr 做得更好。
-
-QQ群：1098661254

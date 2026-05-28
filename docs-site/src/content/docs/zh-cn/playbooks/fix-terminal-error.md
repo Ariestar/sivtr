@@ -3,6 +3,10 @@ title: 修复最近的终端报错
 description: Agent 自己找到并修复终端报错。
 ---
 
+## 演示
+
+<img src="/demo/1.gif" alt="Agent 用 sivtr 记忆修复最近终端失败" class="demo-wide" />
+
 ## 场景
 
 你运行了一个命令，失败了，想让 Agent 修。有了 `sivtr`，Agent 可以搜索最近的终端输出、读取相关文件、修复问题，并验证结果。

@@ -3,6 +3,10 @@ title: 中断后继续
 description: Agent 先搜索本地记忆，再判断如何继续。
 ---
 
+## 演示
+
+<img src="/demo/5.gif" alt="中断后用 sivtr 记忆继续工作" class="demo-wide" />
+
 ## 场景
 
 你的会话被中断了——可能是上下文被压缩，可能是你切换了任务。你回来说"继续"，`sivtr` 可以帮助 Agent 从本地记忆中找到最近的工作线索。

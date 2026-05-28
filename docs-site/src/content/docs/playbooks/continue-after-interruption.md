@@ -3,6 +3,10 @@ title: Continue After Interruption
 description: Let the agent search local memory to continue the right thread.
 ---
 
+## Demo
+
+<img src="/demo/5.gif" alt="Continue work after interruption using sivtr memory" class="demo-wide" />
+
 ## The scenario
 
 Your session was interrupted, compacted, or you switched context. You come back and say "continue." With `sivtr`, the agent can search local memory for the most recent work thread.

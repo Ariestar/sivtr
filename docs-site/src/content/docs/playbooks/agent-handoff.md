@@ -3,6 +3,10 @@ title: Agent Handoff
 description: Prepare a concise evidence-backed handoff for the next human or agent.
 ---
 
+## Demo
+
+<img src="/demo/6.gif" alt="Prepare an evidence-backed agent handoff with sivtr" class="demo-wide" />
+
 ## The scenario
 
 You are done for the day, or switching to a different agent. You want the next person or agent to pick up exactly where you left off — with goals, decisions, validation results, and next steps all documented.

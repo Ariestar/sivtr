@@ -3,6 +3,10 @@ title: 生成最近工作时间线
 description: 把终端和 Agent 记忆变成有证据支撑的工作时间线。
 ---
 
+## 演示
+
+<img src="/demo/3.gif" alt="从 sivtr 记忆生成最近工作时间线" class="demo-wide" />
+
 ## 场景
 
 你想回顾最近做了什么，但不想要泛泛的总结——你要的是有时间戳、有命令输出、有 Agent 对话记录支撑的时间线。

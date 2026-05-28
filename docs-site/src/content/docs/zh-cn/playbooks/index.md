@@ -5,6 +5,29 @@ description: 组合 sivtr 记忆、skill 和 Agent 的社区玩法。
 
 玩法实例展示 `sivtr` 在实际场景中如何工作：Agent 使用本地 workspace memory 完成任务。
 
+## 演示
+
+这些短录屏展示核心循环：捕获本地工作、搜索记忆、缩小证据范围，再把精确上下文交给下一条命令或 Agent。
+
+<div class="demo-grid">
+  <figure>
+    <img src="/demo/1.gif" alt="用 sivtr 搜索最近终端输出" />
+    <figcaption>找到最近终端证据。</figcaption>
+  </figure>
+  <figure>
+    <img src="/demo/2.gif" alt="浏览并复用捕获的 workspace memory" />
+    <figcaption>浏览并复用已捕获上下文。</figcaption>
+  </figure>
+  <figure>
+    <img src="/demo/3.gif" alt="从本地 Agent 和终端记忆生成时间线" />
+    <figcaption>把最近工作变成时间线。</figcaption>
+  </figure>
+  <figure>
+    <img src="/demo/4.gif" alt="在命令链中传递已保存 WorkSet" />
+    <figcaption>把证据通过命令链传递。</figcaption>
+  </figure>
+</div>
+
 ## 玩法目录
 
 | 玩法 | 展示什么 |

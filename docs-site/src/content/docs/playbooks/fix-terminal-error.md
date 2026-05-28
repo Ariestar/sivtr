@@ -3,6 +3,10 @@ title: Fix the Latest Terminal Error
 description: Let the agent find and fix the latest terminal failure.
 ---
 
+## Demo
+
+<img src="/demo/1.gif" alt="Agent searches sivtr memory to fix the latest terminal failure" class="demo-wide" />
+
 ## The scenario
 
 You run a command, it fails, and you want the agent to fix it. With `sivtr`, the agent can search the latest terminal output, inspect the relevant files, patch the issue, and verify the result.

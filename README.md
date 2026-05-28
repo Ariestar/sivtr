@@ -5,16 +5,16 @@
 <h1 align="center">sivtr</h1>
 
 <p align="center">
-  Local workspace memory for humans and agents.
+  Local workspace memory for terminal output and AI coding sessions.
   <br>
-  Capture terminal output and AI sessions with the CLI, then let agents retrieve them through the bundled skill.
+  Capture what happened, search it later, and let agents reuse exact local evidence.
 </p>
 
 <p align="center">
   <a href="https://crates.io/crates/sivtr"><img alt="Crates.io" src="https://img.shields.io/crates/v/sivtr?style=flat-square"></a>
   <a href="https://marketplace.visualstudio.com/items?itemName=ariestar.sivtr-vscode"><img alt="VS Code Marketplace" src="https://vsmarketplacebadges.dev/version/ariestar.sivtr-vscode.svg?style=flat-square&label=VS%20Code&color=007ACC"></a>
   <a href="https://github.com/Ariestar/sivtr/actions/workflows/rust.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Ariestar/sivtr/rust.yml?branch=main&style=flat-square"></a>
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square"></a>
+  <a href="https://deepwiki.com/Ariestar/sivtr"><img alt="Ask DeepWiki" src="https://deepwiki.com/badge.svg?repo=Ariestar/sivtr"></a>
   <a href="rust-toolchain.toml"><img alt="Rust" src="https://img.shields.io/badge/rust-1.88%2B-orange?style=flat-square"></a>
   <a href="https://linux.do/"><img alt="linux.do" src="https://img.shields.io/badge/friend-linux.do-1f883d?style=flat-square"></a>
 </p>
@@ -29,366 +29,186 @@
   <a href="https://sivtr.pages.dev/zh-cn/">中文文档</a>
 </p>
 
+<p align="center">
+  <a href="https://sivtr.pages.dev/playbooks/fix-terminal-error/">
+    <img src="docs-site/public/demo/1.gif" alt="sivtr demo: find and reuse recent terminal output" width="820">
+  </a>
+</p>
+
 ---
 
-## What is sivtr?
+## Why sivtr?
 
-`sivtr` is a local-first shared memory workspace for developers and AI agents. It turns noisy terminal streams, build logs, test failures, tool output, and local agent sessions into reusable text assets.
+Developers and agents lose time reconstructing context that already exists locally: terminal failures, test output, tool logs, and previous AI sessions. `sivtr` turns that work into searchable memory.
 
-The full workflow has two cooperating parts that should be installed together:
+With `sivtr`, you can:
 
-- **`sivtr` CLI/TUI** captures, browses, searches, copies, and dereferences local workspace memory.
-- **`sivtr-memory` skill** teaches your agent when and how to query that memory before asking you to paste logs or repeat context.
+- stop pasting logs into agents by hand;
+- search terminal and AI sessions from the current workspace;
+- copy or print exact records, lines, and input/output parts;
+- save result sets and pass them through command chains.
 
-Human-only browsing works with just the CLI. Agent workflows work best when both the CLI and the skill are installed.
+> [!IMPORTANT]
+> For agent workflows, install both the `sivtr` CLI and the bundled `sivtr-memory` skill. The CLI stores and retrieves local memory; the skill teaches your agent when and how to use it.
 
-`sivtr` is not a terminal emulator and not a multiplexer. It is a memory layer beside the terminal and agent tools you already use.
+## Features
 
-## Highlights
+- **Terminal capture** for Bash, Zsh, PowerShell, and Nushell.
+- **Fast TUI** for browsing long command output.
+- **Unified search** across terminal records, Codex, Claude Code, OpenCode, and Pi sessions.
+- **Stable refs** for exact records, lines, and input/output parts.
+- **WorkSets** for reusable result sets: `@last`, saved `@name`, and stdin `@`.
+- **Chainable commands**: search, narrow, expand, and show evidence without copying intermediate refs.
+- **Agent-ready memory** through the bundled `sivtr-memory` skill.
+- **Diagnostics** with `sivtr doctor`, `sivtr init show`, and `sivtr init uninstall`.
 
-- Browse command output in a fast keyboard-first TUI.
-- Pipe any command into a searchable, selectable output viewer.
-- Record shell command blocks and copy recent inputs, outputs, or bare commands.
-- Read local AI-agent session files and copy useful user, assistant, or tool blocks.
-- Install the bundled `sivtr-memory` skill so agents can search local evidence first.
-- Open an AI session picker from VS Code with one shortcut.
-- Filter copied text with regex and line ranges.
-- Keep a local SQLite history for later search.
-- Compare recent command outputs while iterating on tests and builds.
+## Quick start
 
-## Install CLI and skill
-
-For the full workflow, install both the `sivtr` CLI and the bundled `sivtr-memory` skill. The CLI stores and retrieves local memory; the skill tells your agent how to use that memory.
-
-### 1. Install the CLI
-
-Install the CLI from crates.io:
+Install the CLI:
 
 ```bash
 cargo install sivtr
 ```
 
-Or install from source:
+Or use the prebuilt installer on Linux/macOS:
 
 ```bash
-git clone https://github.com/Ariestar/sivtr.git
-cd sivtr
-cargo install --path .
+curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh
 ```
 
-### 2. Install the bundled skill
-
-Install the `sivtr-memory` skill globally with the Skills CLI:
+Enable shell capture:
 
 ```bash
-npx skills add Ariestar/sivtr --skill sivtr-memory -g
+sivtr init bash       # or zsh, powershell, nushell
+sivtr doctor
 ```
 
-### 3. Optional: install the VS Code bridge
-
-Install the VS Code bridge from the Marketplace:
-
-```text
-ariestar.sivtr-vscode
-```
-
-The extension launches the AI session picker from the current workspace. If the `sivtr` CLI is missing, it offers to run `cargo install sivtr` in a visible terminal.
-
-## Quick Start
-
-Browse command output:
+Capture and browse output:
 
 ```bash
 cargo test 2>&1 | sivtr
 ```
 
-Run a command through `sivtr` and inspect the captured output:
+Search recent workspace memory:
 
 ```bash
-sivtr run cargo build
+sivtr s agent -m "TODO|decision|failed" --since today -f timeline
+sivtr s terminal --status failure --latest 1 --refs
 ```
 
-Copy the latest command block from the current shell session:
+## Agent memory
+
+Install the bundled skill globally:
 
 ```bash
-sivtr copy
+npx skills add Ariestar/sivtr --skill sivtr-memory -g
 ```
 
-Copy the latest assistant reply from the current Codex project session:
-
-```bash
-sivtr copy codex out
-```
-
-Open an interactive picker for Codex conversation blocks:
-
-```bash
-sivtr copy codex --pick
-```
-
-Compare two recent command outputs:
-
-```bash
-sivtr diff 1 2
-```
-
-## Core Workflows
-
-### Browse Output
-
-Use pipe mode when you already have a command:
-
-```bash
-some-command --verbose 2>&1 | sivtr
-```
-
-Use run mode when you want `sivtr` to execute, capture, and then open output:
-
-```bash
-sivtr run cargo test
-```
-
-Inside the TUI, move with Vim-style keys, search with `/`, enter visual selection with `v`, and copy with `y`.
-
-### Copy Command Blocks
-
-With shell integration enabled, `sivtr` records command blocks so you can copy recent inputs and outputs later:
-
-```bash
-sivtr copy              # latest input + output
-sivtr copy out          # latest output only
-sivtr copy in 2..4      # user input from recent blocks
-sivtr copy cmd --pick   # pick and copy bare commands
-```
-
-Selectors are newest-first: `1` is the latest block, `2` is the one before it, and `2..4` selects multiple blocks.
-
-Filters run after text is assembled:
-
-```bash
-sivtr copy out --regex panic
-sivtr copy out --lines 10:40
-```
-
-### Reuse Codex Sessions
-
-`sivtr copy codex` reads Codex rollout JSONL files from `~/.codex/sessions`. When an active Codex shell exports `CODEX_THREAD_ID`, `sivtr` prefers that exact local session first. Otherwise it chooses the newest local session whose `cwd` matches your current directory.
-
-For shared read-only access to another account's Codex sessions, mirror them into a separate directory and add that directory to `[codex].session_dirs` instead of running `sivtr` with elevated privileges. Shared/mirrored trees only participate in explicit browsing through `--pick`.
-
-Use `--session N` to open the Nth newest selectable session (the same numbering shown in `--pick`), or `--session ID` to match a session id / id prefix explicitly.
-
-```bash
-sivtr copy codex        # latest completed user + assistant turn
-sivtr copy codex --session 2
-sivtr copy codex --session 019df7fb
-sivtr copy codex out    # latest assistant reply
-sivtr copy codex out --session 2 --print
-sivtr copy codex in     # latest user message
-sivtr copy codex tool   # latest tool output
-sivtr copy codex all    # parsed session
-sivtr copy codex --session 2 --pick
-sivtr copy codex --pick # browse local and mirrored sessions
-sivtr copy codex all --max-blocks 0
-sivtr copy codex all --max-blocks 10000
-```
-
-In the workspace picker, `i`, `o`, `y`, and `c` copy the current
-input/question, output/answer, block, or bare command. To copy only specific
-content lines, press `:` to start a temporary line filter, type a 1-based spec
-such as `2:8` or `1,3,8:12`, then use `Enter`, `i`, `o`, `y`, or `c`. Press
-`Backspace` to edit the pending filter and `Esc` to clear it.
-
-Quick one-line checks:
-
-- dialogue/session picker flow: `sivtr copy codex --pick`
-- Linux clipboard hold fallback (after recording at least one shell command block): `SIVTR_LINUX_CLIPBOARD_HOLD_MS=500 sivtr copy out --print`
-
-Progress commentary is filtered by default, so `sivtr copy codex out` returns the final assistant reply instead of intermediate status updates.
-
-Large Codex transcripts are capped to the latest `10000` parsed blocks by default for robustness. Set `[codex].max_blocks = 0` in config or pass `--max-blocks 0` for a full import.
-
-Mirror the current account's sessions into a shared tree:
-
-```bash
-sivtr codex export --dest /srv/sivtr/root-codex --watch
-```
-
-Then point another account at that mirrored tree:
-
-```toml
-[codex]
-session_dirs = ["/srv/sivtr/root-codex/sessions"]
-```
-
-On macOS, a shared path under `/Users/Shared` works well for read-only access
-across local accounts:
-
-```bash
-sivtr codex export --dest /Users/Shared/sivtr/root-codex --watch
-```
-
-```toml
-[codex]
-session_dirs = ["/Users/Shared/sivtr/root-codex/sessions"]
-```
-
-Quick one-line checks:
-
-- export side: `rm -rf /Users/Shared/sivtr/root-codex-smoke && sivtr codex export --dest /Users/Shared/sivtr/root-codex-smoke && find /Users/Shared/sivtr/root-codex-smoke -maxdepth 2 -type f | sed -n '1,5p'`
-- read side after configuring `[codex].session_dirs`: `sivtr copy codex --pick`
-
-To mirror sessions for another local account (for example read-only sharing),
-run export watch mode from the source account:
-
-```bash
-sivtr codex export --dest /srv/sivtr/root-codex --watch --interval-ms 500
-```
-
-`--watch` defaults to a 1-second sync interval. Use `--interval-ms` for
-sub-second updates when you need faster session visibility.
-
-### VS Code Shortcut
-
-The VS Code extension contributes:
+Then ask your coding agent to use local memory first:
 
 ```text
-Sivtr: Pick AI Session
+Fix the latest terminal error. Use sivtr first.
 ```
 
-Default keybinding:
+Instead of asking you to paste logs, the agent can search local evidence, inspect exact refs, patch the code, and verify the fix.
 
-```text
-Alt+Y (Linux / Windows)
-Cmd+Alt+Y (macOS)
-```
+## Examples
 
-You can rebind it to `Ctrl+Y`, but that usually overrides the editor Redo shortcut.
-
-On Linux, this VS Code shortcut works as the default picker shortcut when the
-editor has focus. The extension runs:
+### Copy recent terminal output
 
 ```bash
-sivtr hotkey-pick-agent --cwd . --provider all
+sivtr copy out --print
+sivtr copy cmd --pick
 ```
 
-and `sivtr` prefers the active `codex` / `codex resume` session when one is
-available.
-
-On macOS, the same VS Code shortcut works as the default picker shortcut when
-the editor has focus.
-
-### Linux Shortcut Setup
-
-Linux does not currently ship a default global `sivtr` hotkey outside VS Code.
-
-Reasons:
-
-- Wayland does not provide a universal cross-desktop global hotkey API for
-  ordinary CLI apps.
-- X11-only approaches are legacy and do not cover common Wayland desktops.
-- Opening the picker also needs an interactive terminal, and Linux does not
-  have one portable terminal-launch command that works across GNOME, KDE,
-  Sway, headless SSH, and tmux-based Codex setups.
-
-Recommended Linux setups:
-
-- VS Code: use the built-in `Alt+Y` command binding.
-- tmux: bind a key to the current pane's working directory:
-
-```tmux
-bind-key y new-window -c "#{pane_current_path}" "sivtr copy codex --pick"
-```
-
-- Terminal / desktop environment: create a custom shortcut that launches
-  `cd <project-path> && sivtr copy codex --pick` in a terminal for the project
-  you want to inspect.
-
-### macOS Shortcut Setup
-
-macOS does not currently ship a built-in `sivtr` global hotkey daemon. The
-recommended default is the VS Code shortcut above.
-
-For a project-local Terminal launcher plus a LaunchAgent wrapper, generate the
-helper files on macOS:
+### Search, save, and show exact evidence
 
 ```bash
-sivtr init macos-shortcut
+sivtr s terminal -m "panic|failed" --save failures --refs
+sivtr work parts @failures --io output --refs
+sivtr show @last --full
 ```
 
-This writes:
-
-- `~/.local/bin/sivtr-pick-codex`
-- `~/Library/LaunchAgents/dev.sivtr.pick-codex.plist`
-
-The historical filename stays the same for compatibility, but the generated
-script now opens the provider-neutral AI session picker with the exact `sivtr`
-binary that created it.
-
-You can:
-
-- run `~/.local/bin/sivtr-pick-codex` directly;
-- load the LaunchAgent with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sivtr.pick-codex.plist`;
-- keep using the VS Code command for the most reliable shortcut-driven flow.
-
-Quick one-line checks:
-
-- generate and open the picker once: `sivtr init macos-shortcut && ~/.local/bin/sivtr-pick-codex`
-- generate and load the LaunchAgent wrapper: `sivtr init macos-shortcut && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sivtr.pick-codex.plist`
-
-### Windows Global Hotkey
-
-On Windows, the hotkey daemon can open the AI session picker from anywhere:
+### Chain memory commands
 
 ```bash
-sivtr hotkey start
-sivtr hotkey status
-sivtr hotkey stop
+sivtr s terminal -m "panic|failed" \
+  | sivtr work parts @ --io output \
+  | sivtr s @ -m "error|stack|caused by" \
+  | sivtr show @ --full
 ```
 
-The default shortcut is `alt+y`.
+### Build a recent work timeline
 
-## Command Reference
+```bash
+sivtr s agent --since today --sort oldest -f timeline
+sivtr s terminal --since today --sort oldest -f timeline
+```
+
+### Expand context around search hits
+
+```bash
+sivtr s agent -m "release|validation" --save release_context --refs
+sivtr zoom @release_context -C 2 --save expanded_context
+sivtr show @expanded_context --full
+```
+
+## Core concepts
+
+| Concept | Meaning |
+| --- | --- |
+| WorkRecord | One useful work event: a terminal command, agent turn, tool call, or captured output block. |
+| WorkPart | A typed input/output piece inside a record, such as command, assistant reply, tool output, or error. |
+| WorkRef | A stable address for a record, line, or part, for example `pi/<session>/3/o/1`. |
+| WorkSet | An ordered result set that can be saved, selected, piped, expanded, and shown. |
+
+Common handles:
+
+| Handle | Use |
+| --- | --- |
+| `@last` | Most recent WorkSet. |
+| `@name` | WorkSet saved with `--save name`. |
+| `@name[1,3..5]` | 1-based selection from a saved WorkSet. |
+| `@` | WorkSet JSON received from stdin. |
+
+## Command overview
 
 | Command | Purpose |
 | --- | --- |
-| `sivtr` / `sivtr pipe` | Read output from stdin and open the TUI browser. |
+| `sivtr` / `sivtr pipe` | Read stdin and open the output browser. |
 | `sivtr run <command>` | Execute a command, capture output, then browse it. |
-| `sivtr copy` | Copy recent command blocks. |
-| `sivtr copy codex` | Copy useful content from the current Codex session. |
-| `sivtr codex export --dest <path>` | Mirror local Codex sessions into a shared read-only tree. |
+| `sivtr copy` | Copy recent terminal command blocks. |
+| `sivtr copy <provider>` | Copy content from Codex, Claude Code, OpenCode, or Pi sessions. |
+| `sivtr search` / `sivtr s` | Search terminal and agent memory; saves results as `@last`. |
+| `sivtr work sessions` | List terminal and agent sessions in the current workspace. |
+| `sivtr work records <source>` | Project a source or WorkSet to record refs. |
+| `sivtr work parts <source>` | Project records to canonical input/output part refs. |
+| `sivtr show <ref-or-workset>` | Print exact refs or WorkSets. |
+| `sivtr zoom <source>` | Add neighboring records around anchors. |
 | `sivtr diff <left> <right>` | Compare recent command blocks. |
-| `sivtr history` | List, search, and show captured output history. |
+| `sivtr doctor` | Diagnose binary, config, session logs, hooks, providers, and clipboard. |
+| `sivtr init <shell>` | Install shell integration; also supports `show` and `uninstall`. |
 | `sivtr config` | Manage the TOML config file. |
-| `sivtr init <shell>` | Generate shell integration for command-block capture. |
-| `sivtr import` | Open the current session log. |
-| `sivtr hotkey` | Manage the Windows AI session picker hotkey. |
-| `sivtr clear` | Clear session logs. |
+| `sivtr history` | List, search, and show captured output history. |
+| `sivtr hotkey` | Manage the Windows AI session picker hotkey daemon. |
 
-## TUI Keys
+## Supported sources
 
-| Key | Mode | Action |
-| --- | --- | --- |
-| `j` / `Down` | Normal | Move down |
-| `k` / `Up` | Normal | Move up |
-| `h` / `Left` | Normal | Move left |
-| `l` / `Right` | Normal | Move right |
-| `Ctrl-D` | Normal | Half page down |
-| `Ctrl-U` | Normal | Half page up |
-| `g` | Normal | Go to top |
-| `G` | Normal | Go to bottom |
-| `/` | Normal | Start search |
-| `n` / `N` | Normal | Next / previous match |
-| `v` / `V` / `Ctrl-V` | Normal | Visual, visual line, visual block |
-| `y` | Visual | Copy selection to clipboard |
-| `Esc` | Visual/Search/Insert | Cancel |
-| `q` | Normal | Quit |
+| Source | Support |
+| --- | --- |
+| Terminal | Bash, Zsh, PowerShell, Nushell shell hooks; pipe and run capture. |
+| Codex | Local rollout/session JSONL files. |
+| Claude Code | Local transcript/session files. |
+| OpenCode | Local session data. |
+| Pi | Local Pi agent session logs. |
 
 ## Documentation
 
-- English docs: [https://sivtr.pages.dev/](https://sivtr.pages.dev/)
-- Chinese docs: [https://sivtr.pages.dev/zh-cn/](https://sivtr.pages.dev/zh-cn/)
-- VS Code extension: [editors/vscode/README.md](editors/vscode/README.md)
+- Documentation: [https://sivtr.pages.dev/](https://sivtr.pages.dev/)
+- 中文文档: [https://sivtr.pages.dev/zh-cn/](https://sivtr.pages.dev/zh-cn/)
+- Playbooks: [https://sivtr.pages.dev/playbooks/](https://sivtr.pages.dev/playbooks/)
+- CLI reference: [docs-site/src/content/docs/reference/cli.md](docs-site/src/content/docs/reference/cli.md)
+- Memory skill: [skills/sivtr-memory](skills/sivtr-memory)
 
 ## Development
 
@@ -398,34 +218,20 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-VS Code extension:
+Docs site:
 
 ```bash
-cd editors/vscode
-bun install
-bun run compile
-bun run package
+cd docs-site
+bun install --frozen-lockfile
+bun run build
 ```
 
-Workspace layout:
+Repository layout:
 
 ```text
-sivtr/
-|- crates/sivtr-core/    # Capture, parsing, buffers, selection, search, history, export
-|- src/                  # CLI, TUI, commands, hotkey integration
-|- docs-site/            # Astro/Starlight documentation site
-|- editors/vscode/       # VS Code extension bridge for the AI session picker
-`- .github/workflows/    # CI and release automation
+crates/sivtr-core/  core model, provider parsers, search, history, config
+src/                CLI commands, TUI, shell hooks, hotkey integration
+docs-site/          Astro/Starlight documentation site
+editors/vscode/     VS Code bridge for the AI session picker
+skills/             bundled agent skills
 ```
-
-## License
-
-sivtr is licensed under the [Apache License 2.0](LICENSE).
-
-## Developer Community
-
-If sivtr helps your workflow, please consider giving the repo a star. Issues for bugs, ideas, and feedback are welcome, and PRs are warmly encouraged.
-
-You're also very welcome to join the developer QQ group to discuss usage, share workflows, and help shape the project together.
-
-QQ group: 1098661254

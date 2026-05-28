@@ -3,6 +3,10 @@ title: Build a Recent Work Timeline
 description: Turn recent terminal and agent memory into an evidence-backed work timeline.
 ---
 
+## Demo
+
+<img src="/demo/3.gif" alt="Build a recent work timeline from sivtr memory" class="demo-wide" />
+
 ## The scenario
 
 You want a summary of what you worked on recently, grounded in real evidence. The agent can reconstruct a timeline from command timestamps, validation results, agent decisions, and workspace refs.

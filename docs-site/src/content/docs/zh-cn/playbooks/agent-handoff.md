@@ -3,6 +3,10 @@ title: Agent 交接
 description: 为下一个人或 Agent 准备简洁、有证据的交接文档。
 ---
 
+## 演示
+
+<img src="/demo/6.gif" alt="用 sivtr 准备带证据的 Agent 交接" class="demo-wide" />
+
 ## 场景
 
 你今天做完了，或者要换一个 Agent 继续。你希望下一个接手的人或 Agent 能精确地从你停下的地方继续——目标、决策、验证结果、下一步全部记录在案。
