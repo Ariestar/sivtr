@@ -226,7 +226,11 @@ fn infer_chat_follows_up(
     ))
 }
 
-fn infer_text_references(record: &WorkRecord, records: &[WorkRecord], index: usize) -> Vec<WorkLink> {
+fn infer_text_references(
+    record: &WorkRecord,
+    records: &[WorkRecord],
+    index: usize,
+) -> Vec<WorkLink> {
     let text = record.combined_text().to_lowercase();
     let mut links = Vec::new();
     for (j, earlier) in records.iter().enumerate() {

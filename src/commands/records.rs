@@ -316,7 +316,7 @@ mod tests {
                     occurred_at: None,
                     label: None,
                     text: "user".to_string(),
-                tags: Vec::new(),
+                    tags: Vec::new(),
                     ansi: None,
                 },
                 WorkPart {
@@ -325,7 +325,7 @@ mod tests {
                     index: 1,
                     occurred_at: None,
                     label: None,
-                tags: Vec::new(),
+                    tags: Vec::new(),
                     text: "assistant".to_string(),
                     ansi: None,
                 },
