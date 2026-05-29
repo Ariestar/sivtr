@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use sivtr_core::ai::AgentProvider;
-use sivtr_core::record::{WorkRefTarget, WorkRecord, WorkRef, WorkRefSelector};
+use sivtr_core::record::{WorkRecord, WorkRef, WorkRefSelector, WorkRefTarget};
 
 use crate::commands::records::current_work_record_index;
 

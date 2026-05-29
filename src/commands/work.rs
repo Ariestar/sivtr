@@ -299,16 +299,13 @@ fn execute_links(args: &WorkLinksArgs) -> Result<()> {
             "caused_by" => WorkLinkKind::CausedBy,
             "follows_up" => WorkLinkKind::FollowsUp,
             "references" => WorkLinkKind::References,
-            _ => bail!(
-                "Unknown link kind `{kind}`; expected caused_by, follows_up, or references"
-            ),
+            _ => bail!("Unknown link kind `{kind}`; expected caused_by, follows_up, or references"),
         };
         links.retain(|l| l.kind == wanted);
     }
     if let Some(ref_prefix) = &args.ref_ {
         links.retain(|l| {
-            l.from.to_string().starts_with(ref_prefix)
-                || l.to.to_string().starts_with(ref_prefix)
+            l.from.to_string().starts_with(ref_prefix) || l.to.to_string().starts_with(ref_prefix)
         });
     }
     if args.json {
