@@ -19,13 +19,21 @@ pub enum WorkRefSelector {
         session: Option<String>,
         records: Option<Vec<usize>>,
         lines: Option<Vec<usize>>,
+        parts: Option<PartRangeSelector>,
     },
     Agent {
         provider: Option<AgentProvider>,
         session: Option<String>,
         records: Option<Vec<usize>>,
         lines: Option<Vec<usize>>,
+        parts: Option<PartRangeSelector>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartRangeSelector {
+    pub io: WorkPartIo,
+    pub indices: Vec<usize>,
 }
 
 impl WorkRefSelector {
@@ -90,6 +98,12 @@ impl WorkRefSelector {
     pub fn selected_lines(&self) -> Option<&[usize]> {
         match self {
             Self::Terminal { lines, .. } | Self::Agent { lines, .. } => lines.as_deref(),
+        }
+    }
+
+    pub fn selected_parts(&self) -> Option<&PartRangeSelector> {
+        match self {
+            Self::Terminal { parts, .. } | Self::Agent { parts, .. } => parts.as_ref(),
         }
     }
 }
@@ -287,8 +301,8 @@ impl FromStr for WorkRefSelector {
             .split('/')
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>();
-        if parts.is_empty() || parts.len() > 4 {
-            bail!("Invalid work ref selector `{value}`; expected terminal[/<session>[/<record>[/line]]], agent[/<session>[/<turn>[/line]]], or <provider>[/<session>[/<turn>[/line]]]");
+        if parts.is_empty() || parts.len() > 5 {
+            bail!("Invalid work ref selector `{value}`; expected terminal[/<session>[/<record>[/line]]], <provider>[/<session>[/<turn>[/line]]], or <provider>/<session>/<turn>/<i|o>/<part-range>");
         }
 
         let session = parts
@@ -300,17 +314,26 @@ impl FromStr for WorkRefSelector {
             .filter(|part| **part != "*")
             .map(|part| parse_index_selector(part, "record", value))
             .transpose()?;
-        let lines = parts
-            .get(3)
-            .filter(|part| **part != "*")
-            .map(|part| parse_index_selector(part, "line", value))
-            .transpose()?;
+
+        let (lines, part_selector) = if parts.len() == 5 {
+            let io = parse_part_io(parts[3], value)?;
+            let indices = parse_index_selector(parts[4], "part", value)?;
+            (None, Some(PartRangeSelector { io, indices }))
+        } else {
+            let lines = parts
+                .get(3)
+                .filter(|part| **part != "*")
+                .map(|part| parse_index_selector(part, "line", value))
+                .transpose()?;
+            (lines, None)
+        };
 
         let selector = if parts[0].eq_ignore_ascii_case("terminal") {
             WorkRefSelector::Terminal {
                 session,
                 records,
                 lines,
+                parts: part_selector,
             }
         } else if parts[0].eq_ignore_ascii_case("agent") {
             WorkRefSelector::Agent {
@@ -318,6 +341,7 @@ impl FromStr for WorkRefSelector {
                 session,
                 records,
                 lines,
+                parts: part_selector,
             }
         } else if let Some(provider) = AgentProvider::from_command_name(parts[0]) {
             WorkRefSelector::Agent {
@@ -325,6 +349,7 @@ impl FromStr for WorkRefSelector {
                 session,
                 records,
                 lines,
+                parts: part_selector,
             }
         } else {
             bail!(
@@ -441,6 +466,27 @@ fn segment_matches(expected: &str, actual: &str) -> bool {
     actual == expected || actual.starts_with(expected)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkLinkKind {
+    CausedBy,
+    FollowsUp,
+    References,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorkLink {
+    pub from: WorkRef,
+    pub to: WorkRef,
+    pub kind: WorkLinkKind,
+}
+
+impl WorkLink {
+    pub fn new(from: WorkRef, to: WorkRef, kind: WorkLinkKind) -> Self {
+        Self { from, to, kind }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -519,8 +565,44 @@ mod tests {
                 session: Some("abcdef12".to_string()),
                 records: Some(vec![2, 3, 4, 7]),
                 lines: None,
+                parts: None,
             }
         );
+    }
+
+    #[test]
+    fn parses_part_range_selectors() {
+        assert_eq!(
+            "pi/abcdef12/3/o/1-3".parse::<WorkRefSelector>().unwrap(),
+            WorkRefSelector::Agent {
+                provider: Some(AgentProvider::Pi),
+                session: Some("abcdef12".to_string()),
+                records: Some(vec![3]),
+                parts: Some(PartRangeSelector {
+                    io: WorkPartIo::Output,
+                    indices: vec![1, 2, 3],
+                }),
+                lines: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_part_selector_with_comma_list() {
+        let selector: WorkRefSelector = "codex/session/1/i/2,5".parse().unwrap();
+        let parts = selector.selected_parts().unwrap();
+        assert_eq!(parts.io, WorkPartIo::Input);
+        assert_eq!(parts.indices, vec![2, 5]);
+    }
+
+    #[test]
+    fn rejects_unknown_io_in_part_selector() {
+        assert!("pi/session/1/x/1-3".parse::<WorkRefSelector>().is_err());
+    }
+
+    #[test]
+    fn rejects_zero_in_part_range() {
+        assert!("pi/session/1/o/0-2".parse::<WorkRefSelector>().is_err());
     }
 
     #[test]

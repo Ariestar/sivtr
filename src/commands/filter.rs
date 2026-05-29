@@ -37,6 +37,7 @@ pub(crate) struct FilterSpec {
     in_field: SearchFieldArg,
     io: WorkPartFilterArg,
     kind: Option<crate::cli::WorkPartKindArg>,
+    tags: Vec<String>,
     status: Option<SearchStatusArg>,
     exit_code: Option<i32>,
     min_duration_ms: Option<u64>,
@@ -69,6 +70,7 @@ impl FilterSpec {
             in_field: args.in_field,
             io: WorkPartFilterArg::All,
             kind: args.kind,
+            tags: Vec::new(),
             status: args.status,
             exit_code: args.exit_code,
             min_duration_ms,
@@ -105,6 +107,7 @@ impl FilterSpec {
             in_field: args.in_field,
             io: args.io,
             kind: args.kind,
+            tags: Vec::new(),
             status: args.status,
             exit_code: args.exit_code,
             min_duration_ms,
@@ -126,6 +129,7 @@ impl FilterSpec {
             in_field: SearchFieldArg::Content,
             io: args.io,
             kind: args.kind,
+            tags: args.tag.clone(),
             status: None,
             exit_code: None,
             min_duration_ms: None,
@@ -435,12 +439,21 @@ fn part_matches_filters(part: &WorkPart, spec: &FilterSpec) -> bool {
     if spec.kind.is_some_and(|kind| !kind.matches(part.kind)) {
         return false;
     }
+    if !tags_match(&spec.tags, &part.tags) {
+        return false;
+    }
     if !part_field_matches(part, spec.in_field) {
         return false;
     }
     spec.regex
         .as_ref()
         .is_none_or(|regex| regex.is_match(&part.text))
+}
+
+fn tags_match(filter: &[String], tags: &[String]) -> bool {
+    filter
+        .iter()
+        .all(|tag| tags.iter().any(|part_tag| part_tag == tag))
 }
 
 fn part_field_matches(part: &WorkPart, field: SearchFieldArg) -> bool {

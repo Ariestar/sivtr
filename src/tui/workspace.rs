@@ -1413,6 +1413,7 @@ mod tests {
                 label: Some("tool".to_string()),
                 text: "hidden tool call".to_string(),
                 ansi: None,
+                tags: Vec::new(),
             }],
         };
         let dialogue = WorkspaceDialogue {
@@ -1468,6 +1469,7 @@ mod tests {
                 occurred_at: None,
                 label: Some("tool".to_string()),
                 text: "hidden tool call".to_string(),
+                tags: Vec::new(),
                 ansi: None,
             }],
         };
@@ -1529,6 +1531,7 @@ mod tests {
                     index: 1,
                     occurred_at: None,
                     label: None,
+                tags: Vec::new(),
                     text: "question".to_string(),
                     ansi: None,
                 },
@@ -1537,6 +1540,7 @@ mod tests {
                     kind: sivtr_core::record::WorkPartKind::ToolCall,
                     index: 2,
                     occurred_at: None,
+                tags: Vec::new(),
                     label: Some("Bash".to_string()),
                     text: "cargo test".to_string(),
                     ansi: None,
@@ -1545,6 +1549,7 @@ mod tests {
                     io: sivtr_core::record::WorkPartIo::Output,
                     kind: sivtr_core::record::WorkPartKind::ToolOutput,
                     index: 1,
+                tags: Vec::new(),
                     occurred_at: None,
                     label: Some("Bash".to_string()),
                     text: "ok".to_string(),
@@ -1553,6 +1558,7 @@ mod tests {
                 sivtr_core::record::WorkPart {
                     io: sivtr_core::record::WorkPartIo::Output,
                     kind: sivtr_core::record::WorkPartKind::AssistantMessage,
+                tags: Vec::new(),
                     index: 2,
                     occurred_at: None,
                     label: None,

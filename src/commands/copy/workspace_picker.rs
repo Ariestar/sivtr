@@ -2610,6 +2610,7 @@ mod tests {
             label: Some("tool".to_string()),
             text: "hidden cargo test".to_string(),
             ansi: None,
+                tags: Vec::new(),
         }];
         let sessions = vec![WorkspaceSession {
             source: WorkspaceSource::Agent(AgentProvider::Codex),
@@ -2652,6 +2653,7 @@ mod tests {
             occurred_at: None,
             label: Some("tool".to_string()),
             text: "first line\nneedle one\nmiddle\nneedle two".to_string(),
+                tags: Vec::new(),
             ansi: None,
         }];
         let sessions = vec![WorkspaceSession {
@@ -2706,6 +2708,7 @@ mod tests {
             index: 1,
             occurred_at: None,
             label: Some("tool".to_string()),
+                tags: Vec::new(),
             text: "hidden cargo test".to_string(),
             ansi: None,
         }];
@@ -3042,6 +3045,7 @@ mod tests {
             kind: sivtr_core::record::WorkPartKind::ToolCall,
             index: 1,
             occurred_at: None,
+                tags: Vec::new(),
             label: Some("tool".to_string()),
             text: "hidden cargo test".to_string(),
             ansi: None,
@@ -3139,6 +3143,7 @@ mod tests {
                 io: WorkPartIo::Input,
                 kind: WorkPartKind::UserMessage,
                 index: 1,
+                tags: Vec::new(),
                 occurred_at: None,
                 label: None,
                 text: plain.to_string(),

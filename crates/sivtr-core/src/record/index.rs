@@ -1,7 +1,7 @@
 use regex::Regex;
 
-use super::model::{WorkPart, WorkPartIo, WorkRecord, WorkRecordKind};
-use super::refs::{WorkRef, WorkRefTarget};
+use super::model::{WorkOutcome, WorkPart, WorkPartIo, WorkRecord, WorkRecordKind};
+use super::refs::{WorkLink, WorkLinkKind, WorkRef, WorkRefTarget};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkRecordSearchScope {
@@ -69,6 +69,21 @@ impl WorkRecordIndex {
             })
             .take(limit)
             .collect()
+    }
+
+    pub fn infer_links(&self) -> Vec<WorkLink> {
+        let mut links = Vec::new();
+        let records = &self.records;
+        for (i, record) in records.iter().enumerate() {
+            if let Some(link) = infer_terminal_failure(record, records, i) {
+                links.push(link);
+            }
+            if let Some(link) = infer_chat_follows_up(record, records, i) {
+                links.push(link);
+            }
+            links.extend(infer_text_references(record, records, i));
+        }
+        links
     }
 }
 
@@ -157,6 +172,84 @@ fn find_part(record: &WorkRecord, io: WorkPartIo, index: usize) -> Option<&WorkP
         .find(|part| part.io == io && part.index == index)
 }
 
+fn infer_terminal_failure(
+    record: &WorkRecord,
+    records: &[WorkRecord],
+    index: usize,
+) -> Option<WorkLink> {
+    if record.kind != WorkRecordKind::TerminalCommand {
+        return None;
+    }
+    let status = record.status.as_ref()?;
+    if status.outcome != WorkOutcome::Failure {
+        return None;
+    }
+    if index + 1 >= records.len() {
+        return None;
+    }
+    let earlier = &records[index + 1];
+    if earlier.kind != WorkRecordKind::TerminalCommand {
+        return None;
+    }
+    if record.work_ref.session() != earlier.work_ref.session() {
+        return None;
+    }
+    Some(WorkLink::new(
+        record.work_ref.clone(),
+        earlier.work_ref.clone(),
+        WorkLinkKind::CausedBy,
+    ))
+}
+
+fn infer_chat_follows_up(
+    record: &WorkRecord,
+    records: &[WorkRecord],
+    index: usize,
+) -> Option<WorkLink> {
+    if record.kind != WorkRecordKind::ChatTurn {
+        return None;
+    }
+    if index + 1 >= records.len() {
+        return None;
+    }
+    let earlier = &records[index + 1];
+    if earlier.kind != WorkRecordKind::ChatTurn {
+        return None;
+    }
+    if record.work_ref.session() != earlier.work_ref.session() {
+        return None;
+    }
+    Some(WorkLink::new(
+        record.work_ref.clone(),
+        earlier.work_ref.clone(),
+        WorkLinkKind::FollowsUp,
+    ))
+}
+
+fn infer_text_references(record: &WorkRecord, records: &[WorkRecord], index: usize) -> Vec<WorkLink> {
+    let text = record.combined_text().to_lowercase();
+    let mut links = Vec::new();
+    for (j, earlier) in records.iter().enumerate() {
+        if j == index {
+            continue;
+        }
+        if let Some(cmd) = command_from_record(earlier) {
+            if text.contains(&cmd.to_lowercase()) {
+                links.push(WorkLink::new(
+                    record.work_ref.clone(),
+                    earlier.work_ref.clone(),
+                    WorkLinkKind::References,
+                ));
+            }
+        }
+    }
+    links
+}
+
+fn command_from_record(record: &WorkRecord) -> Option<String> {
+    record.input_text().filter(|s| !s.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,6 +325,7 @@ mod tests {
                 label: None,
                 text: combined.to_string(),
                 ansi: None,
+                tags: Vec::new(),
             }],
         }
     }
@@ -272,6 +366,7 @@ mod tests {
                 label: None,
                 text: text.to_string(),
                 ansi: None,
+                tags: Vec::new(),
             }],
         }
     }

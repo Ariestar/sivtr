@@ -241,7 +241,7 @@ fn anchor_timestamp<'a>(record: &'a WorkRecord, anchor: &WorkRef) -> Option<&'a 
     }
 }
 
-fn summary_text(text: &str) -> String {
+pub fn summary_text(text: &str) -> String {
     let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let trimmed = compact.trim();
     if trimmed.is_empty() {

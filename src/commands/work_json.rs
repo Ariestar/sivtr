@@ -91,6 +91,7 @@ mod tests {
                 label: None,
                 text: "assistant reply".to_string(),
                 ansi: None,
+                tags: Vec::new(),
             }],
         }
     }
