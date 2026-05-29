@@ -265,7 +265,7 @@ fn execute_semantic(args: &WorkSemanticArgs) -> Result<()> {
     }
     let anchors: Vec<WorkRef> = results.iter().map(|r| r.record_ref.clone()).collect();
     let matched = workset::records_for_anchors(records.records(), &anchors);
-    let mut set = WorkSet::with_anchors(cwd.display().to_string(), matched, anchors);
+    let set = WorkSet::with_anchors(cwd.display().to_string(), matched, anchors);
     set.save_last()?;
     for result in &results {
         let record = records
