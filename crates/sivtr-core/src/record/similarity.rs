@@ -130,8 +130,8 @@ fn tokenize(text: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::record::model::{
-        WorkChannel, WorkOutcome, WorkPartIo, WorkPartKind, WorkRecordKind, WorkSessionRef,
-        WorkSource, WorkStatus, WorkTime,
+        WorkChannel, WorkOutcome, WorkPart, WorkPartIo, WorkPartKind, WorkRecordKind,
+        WorkSessionRef, WorkSource, WorkStatus, WorkTime,
     };
 
     #[test]
