@@ -1520,8 +1520,8 @@ mod tests {
                     occurred_at: None,
                     label: Some("assistant".to_string()),
                     text: "ok".to_string(),
-                    tags: Vec::new(),
                     ansi: None,
+                    tags: Vec::new(),
                 },
             ],
         }

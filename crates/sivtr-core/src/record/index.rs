@@ -74,6 +74,7 @@ impl WorkRecordIndex {
     pub fn infer_links(&self) -> Vec<WorkLink> {
         let mut links = Vec::new();
         let records = &self.records;
+        let cmd_index = build_command_index(records);
         for (i, record) in records.iter().enumerate() {
             if let Some(link) = infer_terminal_failure(record, records, i) {
                 links.push(link);
@@ -81,7 +82,7 @@ impl WorkRecordIndex {
             if let Some(link) = infer_chat_follows_up(record, records, i) {
                 links.push(link);
             }
-            links.extend(infer_text_references(record, records, i));
+            links.extend(infer_text_references(record, records, &cmd_index));
         }
         links
     }
@@ -226,25 +227,29 @@ fn infer_chat_follows_up(
     ))
 }
 
+fn build_command_index(records: &[WorkRecord]) -> Vec<(String, usize)> {
+    records
+        .iter()
+        .enumerate()
+        .filter_map(|(i, r)| command_from_record(r).map(|cmd| (cmd.to_lowercase(), i)))
+        .collect()
+}
+
 fn infer_text_references(
     record: &WorkRecord,
     records: &[WorkRecord],
-    index: usize,
+    cmd_index: &[(String, usize)],
 ) -> Vec<WorkLink> {
     let text = record.combined_text().to_lowercase();
     let mut links = Vec::new();
-    for (j, earlier) in records.iter().enumerate() {
-        if j == index {
-            continue;
-        }
-        if let Some(cmd) = command_from_record(earlier) {
-            if text.contains(&cmd.to_lowercase()) {
-                links.push(WorkLink::new(
-                    record.work_ref.clone(),
-                    earlier.work_ref.clone(),
-                    WorkLinkKind::References,
-                ));
-            }
+    for (cmd_lower, idx) in cmd_index {
+        if text.contains(cmd_lower.as_str()) {
+            let earlier = &records[*idx];
+            links.push(WorkLink::new(
+                record.work_ref.clone(),
+                earlier.work_ref.clone(),
+                WorkLinkKind::References,
+            ));
         }
     }
     links

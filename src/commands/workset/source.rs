@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use sivtr_core::ai::AgentProvider;
-use sivtr_core::record::{WorkRecord, WorkRef, WorkRefSelector};
+use sivtr_core::record::{WorkRefTarget, WorkRecord, WorkRef, WorkRefSelector};
 
 use crate::commands::records::current_work_record_index;
 
@@ -113,7 +113,17 @@ fn resolve_selector_source(source: &str, cwd: &Path) -> Result<WorkSetSource> {
         }
         let record_ref = record.work_ref.record_ref();
         records.push(record.clone());
-        if let Some(lines) = selector.selected_lines() {
+        if let Some(part_range) = selector.selected_parts() {
+            for &part_index in &part_range.indices {
+                let target = WorkRefTarget::Part {
+                    io: part_range.io,
+                    index: part_index,
+                };
+                if record.part_for_target(target).is_some() {
+                    anchors.push(record_ref.with_target(target));
+                }
+            }
+        } else if let Some(lines) = selector.selected_lines() {
             for line in lines {
                 anchors.push(record_ref.with_line(*line));
             }
