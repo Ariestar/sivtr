@@ -230,11 +230,11 @@ Targets：
 | `--latest <N>` | 在最终排序前取最新 N 条匹配记录 |
 | `-l, --limit <N>` | 最大打印结果组数 |
 | `--exclude-current`、`--other` | Agent 搜索时排除当前 agent session |
-| `--json` | `--format json` 的别名 |
-| `--refs` | `--format refs` 的别名；逐行打印 record refs |
-| `--format <FORMAT>`、`-f <FORMAT>` | `timeline`、`compact`、`md`、`refs` 或 `json`；默认是 `json` |
+| `--json` | `--format workset` 的别名 |
+| `--refs` | `--format refs` 的别名；逐行打印 refs |
+| `--format <FORMAT>`、`-f <FORMAT>` | `full`、`timeline`、`compact`、`md`、`refs` 或 `workset`；terminal stdout 默认 `full`，piped stdout 默认 `workset` |
 
-当 stdin 管道输入到 `sivtr search` 时，它必须是前一个 search 输出的 JSON。中间 search 保持默认 JSON 格式，最后一个 search 再选择展示格式。
+当 stdout 被管道接走且没有显式选择格式时，WorkSet 命令会输出 WorkSet JSON 给下一条命令。`--refs` 或 `-f timeline` 适合放在最后展示步骤。
 
 时间过滤支持 RFC3339 时间戳、Unix 秒/毫秒、`30m`、`2h`、`7d` 这样的相对时间，以及 `today`、`yesterday`、`tomorrow`、`this morning`、`this afternoon`、`this evening`、`tonight`、`now` 等别名。
 
@@ -243,20 +243,128 @@ Targets：
 ```bash
 sivtr search terminal --status failure --latest 1 --json
 sivtr s terminal -m "panic|failed" -v "example|sample" --since today --refs
-sivtr s terminal -m "panic|failed" | sivtr s terminal -v "demo" -i title -f timeline
+sivtr s terminal -m "panic|failed" | sivtr filter @ -v "demo" -i title -f timeline
 sivtr search agent --match "TODO|failed|next step" --since yesterday --format md
 sivtr search pi --since today --sort oldest --format timeline
 sivtr search pi/019e5941 --match "cargo test" --format compact
-sivtr search terminal/session_13104/3/12 --format json
+sivtr search terminal/session_13104/3/12 --format workset
 ```
+
+## filter
+
+```bash
+sivtr filter [SOURCE] [OPTIONS]
+```
+
+用统一 WorkSet filter 表面对 source 或管道传入的 WorkSet 进行过滤。如果省略 `SOURCE`，默认是 `@`，也就是从 stdin 读取 WorkSet JSON。
+
+选项：
+
+| 选项 | 含义 |
+| --- | --- |
+| `--parts` | 选择匹配的 part anchors，而不是保留输入 anchor 粒度 |
+| `--match <REGEX>`、`-m <REGEX>` | 大小写不敏感内容过滤 |
+| `--exclude <REGEX>`、`-v <REGEX>` | 大小写不敏感排除过滤 |
+| `--in <FIELD>`、`-i <FIELD>` | `content`、`title`、`session`、`input`、`output`、`command` 或 `all` |
+| `--io <IO>` | 配合 `--parts` 使用，选择 `all`、`input` 或 `output` parts |
+| `--kind <KIND>` | part kind filter |
+| `--status <STATUS>` | `success`、`failure` 或 `unknown` |
+| `--exit-code <CODE>` | 精确 terminal process exit code |
+| `--min-duration <DURATION>` | 最小 command duration |
+| `--max-duration <DURATION>` | 最大 command duration |
+| `--sort <SORT>` | `newest`、`oldest`、`duration`、`duration-asc`、`exit-code` 或 `exit-code-asc` |
+| `--cwd <PATH>` | 用于解析 records 的 workspace 目录 |
+| `--since <TIME>` / `--until <TIME>` / `--last <DURATION>` | 时间过滤 |
+| `--latest <N>` | final sort 前返回最新 N 个匹配 anchors |
+| `-l, --limit <N>` | 最多打印的 result anchors 数 |
+| `--exclude-current`、`--other` | Agent 搜索中排除当前 session |
+| `--json` | `--format workset` 别名 |
+| `--refs` | `--format refs` 别名 |
+| `--format <FORMAT>`、`-f <FORMAT>` | `full`、`timeline`、`compact`、`md`、`refs` 或 `workset` |
+| `--save <NAME>` | 把结果 WorkSet 保存为 `@name` |
+
+示例：
+
+```bash
+sivtr search terminal --json | sivtr filter @ -m error --refs
+sivtr filter terminal --status failure --refs
+sivtr filter @last --parts --io output --kind tool_output --refs
+```
+
+## var
+
+```bash
+sivtr var <COMMAND>
+```
+
+管理命名 WorkSet 变量。
+
+| Command | 含义 |
+| --- | --- |
+| `set <name> [source]` | 把 source 或管道 WorkSet 保存为 `@name` |
+| `list` | 列出已保存变量、item 数和创建时间 |
+| `rm <name>` | 删除一个已保存变量 |
+| `merge <name> <source>...` | 把 sources 合并进已保存变量，并按 anchor 去重 |
+| `drop <name> <source>...` | 从已保存变量中移除 source anchors |
+| `cleanup` | 删除所有已保存变量 |
+
+示例：
+
+```bash
+sivtr var set ctx @last
+sivtr filter terminal -m panic --json | sivtr var set failures
+sivtr var list
+sivtr var merge ctx @failures @last[1]
+sivtr var drop ctx @noise
+```
+
+## nav
+
+```bash
+sivtr nav <SOURCE> <MOTION> [OPTIONS]
+```
+
+在 record / part / session 结构中确定性移动 WorkSet anchors。`nav` 不会默认展开 child；移动到 child 必须用 `>N` 明确指定 1-based index。
+
+Motion token 从左到右组合：
+
+| Token | 含义 |
+| --- | --- |
+| `<` | 父级。part/line 到 record；record 到所属 session records。 |
+| `>N` | 第 N 个 child，1-based。record 的 children 是 parts。 |
+| `+N` | 当前层级向后移动 N 个 sibling。 |
+| `-N` | 当前层级向前移动 N 个 sibling。 |
+| `[A..B]` | 当前层级相对 sibling window。 |
+| `~` | 所属 session records。 |
+
+选项：
+
+| 选项 | 含义 |
+| --- | --- |
+| `--cwd <PATH>` | 用于解析 records 的 workspace 目录 |
+| `--json` | `--format workset` 别名 |
+| `--refs` | `--format refs` 别名 |
+| `--format <FORMAT>`、`-f <FORMAT>` | `full`、`timeline`、`compact`、`md`、`refs` 或 `workset` |
+
+示例：
+
+```bash
+sivtr nav @hit '<' --refs
+sivtr nav @hit '>1' --refs
+sivtr nav @hit '<+1>1' --refs
+sivtr nav @hit '<[-2..+2]' --refs
+sivtr nav @hit '~' --refs
+```
+
+只想围绕命中补 record 上下文时用 `zoom`；需要精确移动路径时用 `nav`。
 
 ## show
 
 ```bash
-sivtr show <REF> [OPTIONS]
+sivtr show <SOURCE> [OPTIONS]
 ```
 
-打印 Agent provider 或当前终端 session 的 workspace ref。
+打印 workspace ref 或 WorkSet source，例如 `@last`、`@name` 或 `@`。
 
 Ref 语法：
 
@@ -269,7 +377,10 @@ source/session[/dialogue[/line]]
 | 选项 | 含义 |
 | --- | --- |
 | `--cwd <PATH>` | 用于解析 session 的工作区目录 |
-| `--json` | 打印机器可读 JSON |
+| `--json` | `--format workset` 别名 |
+| `--refs` | `--format refs` 别名 |
+| `--full` | `--format full` 别名 |
+| `--format <FORMAT>`、`-f <FORMAT>` | `full`、`timeline`、`compact`、`md`、`refs` 或 `workset` |
 
 示例：
 
@@ -278,6 +389,8 @@ sivtr show claude/<session-id>
 sivtr show claude/<session-id>/3
 sivtr show claude/<session-id>/3/7 --json
 sivtr show terminal/current/2
+sivtr show @last --full
+sivtr show @ctx -f timeline
 ```
 
 ## version

@@ -21,7 +21,7 @@ When the user says "continue", reconstruct the active thread before guessing.
 - Express structured constraints with source selectors and filters: `terminal`, `agent`, provider sources, `@last`, `@name`, WorkRef selectors, `--cwd`, `--last`, `--since`, `--until`, `-i` / `--in`.
 - Start with a broad topic search and save the WorkSet.
 - Search for `next step`, `TODO`, `blocked`, `decision`, `commit`, `test result`, `passed`, and `failed`.
-- Refine with `sivtr s @<name> -m "<topic>" --save <narrowed> --refs`.
+- Refine with `sivtr filter @<name> -m "<topic>" --save <narrowed> --refs`.
 - Expand the best records with `zoom`.
 - If one thread is obvious, summarize it and keep going.
 - If more than one thread is plausible, ask the user which one to continue.
@@ -30,7 +30,7 @@ Example:
 
 ```bash
 sivtr s agent -m "next step|TODO|blocked|decision|commit|test result|passed|failed" --latest 30 --save recent --refs
-sivtr s @recent -m "<topic>" --save thread --refs
+sivtr filter @recent -m "<topic>" --save thread --refs
 sivtr zoom @thread[1] -C 2 --save thread_ctx --refs
 sivtr show @thread_ctx --full
 ```
@@ -59,7 +59,7 @@ Example:
 
 ```bash
 sivtr s agent -m "goal|next step|decision|validation|cargo test|clippy|passed|failed" --latest 50 --save handoff_hits --refs
-sivtr s @handoff_hits -m "<project-or-feature>" --save handoff --refs
+sivtr filter @handoff_hits -m "<project-or-feature>" --save handoff --refs
 sivtr zoom @handoff[1..3] -C 1 --save handoff_ctx --refs
 sivtr show @handoff_ctx -f timeline
 ```

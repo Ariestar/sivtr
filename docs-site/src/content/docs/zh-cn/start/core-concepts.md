@@ -15,7 +15,7 @@ flowchart LR
   records["工作记录<br/>终端命令和输出<br/>Agent 对话<br/>单次捕获输出"]
   memory["sivtr shared memory workspace<br/>本地保存 · 可检索 · 可引用"]
   human["sivtr TUI<br/>浏览 · 搜索 · 复制"]
-  agent["sivtr CLI<br/>search · show · copy --print"]
+  agent["sivtr CLI<br/>search · filter · nav · var · show"]
 
   records -->|统一| memory
   memory -->|给人用| human
@@ -113,7 +113,7 @@ sivtr copy out 1 --print
 sivtr show terminal/current/2 --json
 ```
 
-这是一种面向 Agent 的记忆读取方式：先搜索，再展开精确内容，再根据当前文件和验证结果行动。
+这是一种面向 Agent 的记忆读取方式：先搜索，筛选或移动 anchors，再展开精确内容，最后根据当前文件和验证结果行动。
 
 ## 两种定位方式：Selector 和 Ref
 
@@ -156,6 +156,37 @@ sivtr show claude/<session-id>/3/2
 
 `search --format json` 会输出 ref，所以人和 Agent 都可以先搜索，再用 ref 展开同一份证据。
 
+## WorkSet：可管道传递的记忆选择
+
+WorkSet 是一组有顺序的 active anchors，加上渲染它们所需的 materialized records。它是 `@last`、命名变量和 `@` 管道背后的数据结构。
+
+| Handle | 含义 |
+| --- | --- |
+| `@last` | 最近一次 WorkSet 命令产生的 WorkSet。 |
+| `@name` | 通过 `--save name` 或 `sivtr var set name` 保存的命名 WorkSet。 |
+| `@name[1,3..5]` | 已保存 WorkSet 的 1-based 切片。 |
+| `@` | 从 stdin 读取的 WorkSet JSON。 |
+
+核心 pipeline 很小：
+
+```text
+search = 找证据
+filter = 缩小 WorkSet
+nav    = 确定性移动 anchors
+var    = 记住命名 WorkSet
+show   = 渲染精确内容
+```
+
+`nav` 使用确定性 motion，不会默认展开 child：
+
+```bash
+sivtr nav @hit '<' --refs          # parent
+sivtr nav @hit '>1' --refs         # first child
+sivtr nav @hit '<+1>1' --refs      # next record, first child
+sivtr nav @hit '<[-2..+2]' --refs  # parent record 周围 sibling window
+sivtr nav @hit '~' --refs          # 所属 session records
+```
+
 ## Commands
 
 可以用这些命令打开、搜索、复制、展开、比较或临时捕获 workspace memory：
@@ -166,7 +197,10 @@ sivtr show claude/<session-id>/3/2
 | `sivtr copy` | 按 selector 复制最近终端块 |
 | `sivtr copy <provider>` | 读取某个 Agent provider 的 session 内容 |
 | `sivtr search` | 跨 terminal 和 Agent sessions 搜索 workspace memory |
-| `sivtr show` | 用 ref 展开精确内容 |
+| `sivtr filter` | 用统一 filter 表面缩小 WorkSet |
+| `sivtr var` | 保存、列出、合并、移除或删除命名 WorkSet 变量 |
+| `sivtr nav` | 用确定性的 parent / child / sibling / session motion 移动 anchors |
+| `sivtr show` | 用 ref 或 WorkSet 展开精确内容 |
 | `sivtr diff` | 比较两个最近终端命令块 |
 | `sivtr run` / pipe | 临时捕获并浏览单次命令输出 |
 

@@ -5,6 +5,24 @@ description: User-facing release notes for sivtr.
 
 `sivtr` is in early `0.1.x` development. The CLI and configuration format may still change during this series. This page summarizes user-facing changes; the repository `CHANGELOG.md` remains the detailed changelog source.
 
+## Unreleased
+
+### Added
+
+- Added `sivtr filter` as a first-class WorkSet filtering command for saved variables, source selectors, and stdin `@` pipelines.
+- Added `sivtr var` for named WorkSet memory: `set`, `list`, `rm`, `merge`, `drop`, and `cleanup`.
+- Added `sivtr nav` for deterministic anchor motion with `<`, `>N`, `+N`, `-N`, `[A..B]`, and `~`. `nav` does not implicitly expand child anchors.
+- Added global `--color auto|always|never` for status and diagnostic output.
+
+### Changed
+
+- Standardized CLI status and diagnostic messages, keeping them on stderr so stdout remains safe for data pipelines.
+- `search` and `work parts` now share the same WorkSet filtering implementation.
+
+### Fixed
+
+- Fixed Nushell shell integration on Windows so captured command output is no longer empty when the prompt is visible but Nushell does not expose prompt-closure environment mutations to later hooks.
+
 ## 0.1.3 - 2026-05-24/25
 
 ### Added

@@ -83,6 +83,41 @@ Common forms:
 
 When both `--regex` and `--lines` are set, `--regex` runs first and `--lines` runs on the filtered result.
 
+## WorkSet references
+
+WorkSet commands (`search`, `filter`, `nav`, `zoom`, `show`, `work records`, and `work parts`) share source forms:
+
+| Source | Meaning |
+| --- | --- |
+| `@last` | Most recent WorkSet produced by a WorkSet command. |
+| `@name` | Named WorkSet saved by `--save name` or `sivtr var set name`. |
+| `@name[1,3..5]` | 1-based slice of a saved WorkSet. Discrete selectors keep the requested order. |
+| `@` | Read WorkSet JSON from stdin. Do not pipe `--refs` text into `@`. |
+
+WorkSets contain materialized `records` plus active `anchors`. `filter` narrows anchors, `nav` moves anchors, `var` remembers anchors, and `show` renders anchors.
+
+## Anchor motion
+
+`sivtr nav <source> <motion>` uses a small deterministic motion syntax. It does not default-expand children.
+
+| Motion | Meaning |
+| --- | --- |
+| `<` | Parent. Part/line to record; record to containing session records. |
+| `>N` | Nth child, 1-based. Record children are its parts. |
+| `+N` | Next sibling by N at the current level. |
+| `-N` | Previous sibling by N at the current level. |
+| `[A..B]` | Sibling window at the current level. |
+| `~` | Containing session records. |
+
+Examples:
+
+```bash
+sivtr nav @hit '<' --refs
+sivtr nav @hit '<+1>1' --refs
+sivtr nav @hit '<[-2..+2]' --refs
+sivtr nav @hit '~' --refs
+```
+
 ## Prompt rewriting
 
 Input-capable command-block modes can rewrite the copied prompt:

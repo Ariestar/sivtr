@@ -3,14 +3,14 @@ title: 搜索和展示结果
 description: 搜索当前 workspace memory，并打印精确 ref。
 ---
 
-`sivtr search` 查询捕获到的终端记录和受支持的 AI workspace sessions。`sivtr show` 打印精确 ref 背后的内容。
+`sivtr search` 查询捕获到的终端记录和受支持的 AI workspace sessions。`sivtr filter` 缩小已有 WorkSet。`sivtr nav` 在 parent / child / sibling / session 结构中移动 anchors。`sivtr show` 打印 ref 或 WorkSet 背后的内容。
 
-当交互式 picker 太重，而你需要给人类工作流、Agent prompt 或其他工具提供脚本友好的记忆时，把这两个命令组合使用。它们也是 skill 最安全的基础能力，因为可以非交互运行，并返回精确 ref。
+当交互式 picker 太重，而你需要给人类工作流、Agent prompt 或其他工具提供脚本友好的记忆时，把这些命令组合使用。它们也是 skill 最安全的基础能力，因为可以非交互运行，并返回精确 ref 或 WorkSet JSON。
 
 例如，“解决终端报错” skill 可以这样开始：
 
 ```bash
-sivtr search terminal --status failure --latest 1 --format json
+sivtr search terminal --status failure --latest 1 --json
 ```
 
 “最近工作 timeline” skill 可以直接使用 timeline renderer：
@@ -37,9 +37,9 @@ Target 可以继续缩小到 session、record/turn 和 line：
 
 ```bash
 sivtr search pi/019e5941 --match "cargo test"
-sivtr search terminal/session_13104/3/12 --format json
+sivtr search terminal/session_13104/3/12 --format workset
 sivtr search pi/019e5941/3-5,7 --match "cargo test"
-sivtr search pi/019e5941/3/5-7,10 --format json
+sivtr search pi/019e5941/3/5-7,10 --format workset
 ```
 
 record/turn 和 line segment 都是 1-based，支持 `3`、`3-5`、`3,7` 或 `3-5,7`。`*` 表示 wildcard segment。Search selector 只用于缩小输入范围；search 输出仍然返回具体 ref。
@@ -79,7 +79,7 @@ sivtr search pi --last 2h --format compact
 ## 状态、时长和排序
 
 ```bash
-sivtr search terminal --status failure --latest 1 --format json
+sivtr search terminal --status failure --latest 1 --json
 sivtr search terminal --exit-code 101 --format timeline
 sivtr search terminal --min-duration 500ms --sort duration --format compact
 ```
@@ -101,7 +101,7 @@ sivtr search terminal --min-duration 500ms --sort duration --format compact
 sivtr search agent --since today --format timeline
 sivtr search agent --since today --format compact
 sivtr search agent --since today --format md
-sivtr search agent --since today --format json
+sivtr search agent --since today --format workset
 ```
 
 格式只是同一组搜索结果的不同视图，不是“人类格式”和“Agent 格式”的硬切分。按下一步要做什么来选：
@@ -111,9 +111,64 @@ sivtr search agent --since today --format json
 | `timeline` | 按时间扫读、重建交接、发现 gap。人和 Agent 都容易读。 |
 | `compact` | 想要低噪声的 time/source/title 列表。 |
 | `md` | 复制进笔记、报告、prompt 或 handoff 草稿。 |
-| `json` | 需要让另一个程序解析结构化 ref 和 snippet。 |
+| `workset` | 需要让下一条命令或另一个程序解析 refs 和 materialized records。 |
+| `refs` | 逐行 plain refs，适合快速查看或复制。 |
 
-默认值是 `json`，这样脚本在未指定格式时能拿到稳定结构。但当任务是理解、回顾、总结时，Agent 也可以直接读 `timeline`、`compact` 或 `md`。
+Terminal stdout 默认 `full`；piped stdout 默认 `workset`。`--json` 是 `--format workset` 的便捷别名。当任务是理解、回顾、总结时，Agent 也可以直接读 `timeline`、`compact` 或 `md`。
+
+## 过滤 WorkSet
+
+已有 WorkSet 后，用 `filter` 继续缩小范围，避免重复跑宽泛搜索：
+
+```bash
+sivtr search terminal --status failure --latest 20 --save failures --refs
+sivtr filter @failures --match "panic|compile" --save focused --refs
+sivtr filter @focused --parts --io output --kind tool_output --refs
+```
+
+在 shell pipeline 里，`@` 从 stdin 读取 WorkSet JSON：
+
+```bash
+sivtr search terminal --json | sivtr filter @ -m error --refs
+```
+
+不要把 `--refs` 输出管给 `@`；`@` 需要 WorkSet JSON。
+
+## 导航 anchors
+
+当精确移动路径很重要时，用 `nav`。Motion 是确定性的，不会默认展开 child。
+
+| Motion | 含义 |
+| --- | --- |
+| `<` | 父级。part/line 到 record；record 到所属 session records。 |
+| `>N` | 第 N 个 child，1-based。record 的 children 是 parts。 |
+| `+N` | 当前层级向后移动 N 个 sibling。 |
+| `-N` | 当前层级向前移动 N 个 sibling。 |
+| `[A..B]` | 当前层级 sibling window。 |
+| `~` | 所属 session records。 |
+
+示例：
+
+```bash
+sivtr nav @focused[1] '<' --refs
+sivtr nav @focused[1] '<+1>1' --refs
+sivtr nav @focused[1] '<[-2..+2]' --refs
+sivtr nav @focused[1] '~' --refs
+```
+
+只想围绕命中补 record 上下文时用 `zoom`。
+
+## WorkSet 变量
+
+需要把 WorkSet 作为命名本地记忆保留下来时，用 `var`：
+
+```bash
+sivtr var set ctx @last
+sivtr var list
+sivtr var merge ctx @focused @last[1]
+sivtr var drop ctx @noise
+sivtr show @ctx --full
+```
 
 ## 展示 ref
 
@@ -154,10 +209,10 @@ sivtr show pi/<session>/3-5,7
 sivtr show pi/<session>/3/5-7,10
 ```
 
-机器可读输出使用 JSON：
+机器可读 WorkSet 输出：
 
 ```bash
-sivtr show pi/<session>/<turn>/<line> --json
+sivtr show @ctx --json
 ```
 
 ## 实用循环
@@ -165,15 +220,29 @@ sivtr show pi/<session>/<turn>/<line> --json
 1. 先用足够窄的搜索拿证据：
 
    ```bash
-   sivtr search terminal --status failure --latest 1 --format json
+   sivtr search terminal --status failure --latest 1 --refs
    sivtr search agent --match "current task|failed|TODO" --since today --format timeline
    ```
 
-2. 从结果中选择你关心的 ref。
-3. 打印周边 record：
+2. 保存并缩小可复用结果集：
 
    ```bash
+   sivtr search agent --match "decision|TODO" --latest 20 --save hits --refs
+   sivtr filter @hits --match "workspace|nav|filter" --save focused --refs
+   ```
+
+3. 需要时移动或扩展 anchors：
+
+   ```bash
+   sivtr nav @focused[1] '<[-1..+1]' --refs
+   sivtr zoom @focused[1] -C 2 --save ctx --refs
+   ```
+
+4. 打印精确内容：
+
+   ```bash
+   sivtr show @ctx --full
    sivtr show <source/session/record-or-turn>
    ```
 
-4. 需要紧凑引用、脚本输入或后续 Agent 的上下文句柄时，再使用精确 line ref。
+5. 需要紧凑引用、脚本输入或后续 Agent 的上下文句柄时，再使用精确 part/line ref。

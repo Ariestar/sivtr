@@ -2,6 +2,24 @@
 
 All notable user-facing changes to this project are documented here.
 
+## Unreleased
+
+### Added
+
+- Added `sivtr filter` as a first-class WorkSet filtering command, sharing search filters across sources, saved WorkSets, and stdin `@` pipelines.
+- Added `sivtr var` for named WorkSet memory: `set`, `list`, `rm`, `merge`, `drop`, and `cleanup`.
+- Added `sivtr nav` for deterministic anchor motion with `<`, `>N`, `+N`, `-N`, `[A..B]`, and `~`; child movement is explicit and never defaults to expansion.
+- Added global `--color auto|always|never` for status and diagnostic output.
+
+### Changed
+
+- Standardized user-facing status/diagnostic messages and kept status output on stderr so stdout remains usable for data pipelines.
+- Unified `search` and `work parts` filtering through the shared WorkSet filter implementation.
+
+### Fixed
+
+- Fixed Nushell shell integration on Windows by preserving the rendered prompt through a pid-scoped prompt cache before `flush`, avoiding empty captured output caused by non-leaking Nushell prompt-closure environment mutation.
+
 ## [0.2.3] - 2026-05-28
 
 ### Added

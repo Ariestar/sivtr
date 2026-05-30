@@ -3,14 +3,14 @@ title: Search and Show Results
 description: Search current workspace memory and print exact refs.
 ---
 
-`sivtr search` queries captured terminal records and supported AI workspace sessions. `sivtr show` prints the content behind an exact ref.
+`sivtr search` queries captured terminal records and supported AI workspace sessions. `sivtr filter` narrows existing WorkSets. `sivtr nav` moves anchors through parent/child/sibling/session structure. `sivtr show` prints the content behind refs or WorkSets.
 
-Use them together when an interactive picker is too much and you want scriptable memory for a human workflow, an agent prompt, or another tool. They are also the safest primitives for skills because they can run non-interactively and return exact refs.
+Use them together when an interactive picker is too much and you want scriptable memory for a human workflow, an agent prompt, or another tool. They are also the safest primitives for skills because they can run non-interactively and return exact refs or WorkSet JSON.
 
 For example, a "fix the terminal error" skill can start with:
 
 ```bash
-sivtr search terminal --status failure --latest 1 --format json
+sivtr search terminal --status failure --latest 1 --json
 ```
 
 and a "recent work timeline" skill can use a timeline renderer:
@@ -37,9 +37,9 @@ Targets can narrow to a session, record/turn, and line:
 
 ```bash
 sivtr search pi/019e5941 --match "cargo test"
-sivtr search terminal/session_13104/3/12 --format json
+sivtr search terminal/session_13104/3/12 --format workset
 sivtr search pi/019e5941/3-5,7 --match "cargo test"
-sivtr search pi/019e5941/3/5-7,10 --format json
+sivtr search pi/019e5941/3/5-7,10 --format workset
 ```
 
 Record/turn and line segments are 1-based and accept `3`, `3-5`, `3,7`, or `3-5,7`. Use `*` as a wildcard segment. Search selectors narrow the input scope; search output still returns concrete refs.
@@ -79,7 +79,7 @@ Time filters accept RFC3339 timestamps, Unix seconds/milliseconds, relative dura
 ## Status, duration, and sorting
 
 ```bash
-sivtr search terminal --status failure --latest 1 --format json
+sivtr search terminal --status failure --latest 1 --json
 sivtr search terminal --exit-code 101 --format timeline
 sivtr search terminal --min-duration 500ms --sort duration --format compact
 ```
@@ -101,7 +101,7 @@ Useful sorts:
 sivtr search agent --since today --format timeline
 sivtr search agent --since today --format compact
 sivtr search agent --since today --format md
-sivtr search agent --since today --format json
+sivtr search agent --since today --format workset
 ```
 
 Formats are views over the same search result set, not separate APIs for humans vs agents. Pick the format that best fits the next step:
@@ -111,9 +111,64 @@ Formats are views over the same search result set, not separate APIs for humans 
 | `timeline` | Chronological scanning, handoff reconstruction, spotting gaps. Easy for both humans and agents to read. |
 | `compact` | Short time/source/title lists when you want low-noise context. |
 | `md` | Markdown bullets for notes, reports, prompts, or handoff drafts. |
-| `json` | Structured refs and snippets when another program will parse the output. |
+| `workset` | Structured refs and materialized records when another command or program will parse the output. |
+| `refs` | Plain refs, one per line, for quick inspection or copy/paste. |
 
-The default is `json` so scripts get a stable shape when no format is specified. Agents can also read `timeline`, `compact`, or `md` when the task is interpretive rather than programmatic.
+Terminal stdout defaults to `full`; piped stdout defaults to `workset`. Use `--json` as a convenient alias for `--format workset`. Agents can also read `timeline`, `compact`, or `md` when the task is interpretive rather than programmatic.
+
+## Filter WorkSets
+
+Use `filter` when you already have a WorkSet and want to narrow it without re-running a broad search:
+
+```bash
+sivtr search terminal --status failure --latest 20 --save failures --refs
+sivtr filter @failures --match "panic|compile" --save focused --refs
+sivtr filter @focused --parts --io output --kind tool_output --refs
+```
+
+In a shell pipeline, `@` reads WorkSet JSON from stdin:
+
+```bash
+sivtr search terminal --json | sivtr filter @ -m error --refs
+```
+
+Do not pipe `--refs` output into `@`; `@` expects WorkSet JSON.
+
+## Navigate anchors
+
+Use `nav` when the movement path matters. Motion is deterministic and does not expand children by default.
+
+| Motion | Meaning |
+| --- | --- |
+| `<` | Parent. Part/line to record; record to containing session records. |
+| `>N` | Nth child, 1-based. Record children are its parts. |
+| `+N` | Next sibling by N at the current level. |
+| `-N` | Previous sibling by N at the current level. |
+| `[A..B]` | Sibling window at the current level. |
+| `~` | Containing session records. |
+
+Examples:
+
+```bash
+sivtr nav @focused[1] '<' --refs
+sivtr nav @focused[1] '<+1>1' --refs
+sivtr nav @focused[1] '<[-2..+2]' --refs
+sivtr nav @focused[1] '~' --refs
+```
+
+Use `zoom` for simple neighboring record context around hits.
+
+## WorkSet variables
+
+Use `var` when a WorkSet should survive as named local memory:
+
+```bash
+sivtr var set ctx @last
+sivtr var list
+sivtr var merge ctx @focused @last[1]
+sivtr var drop ctx @noise
+sivtr show @ctx --full
+```
 
 ## Show a ref
 
@@ -154,10 +209,10 @@ sivtr show pi/<session>/3-5,7
 sivtr show pi/<session>/3/5-7,10
 ```
 
-Use JSON for machine-readable output:
+Use WorkSet output for machine-readable piping:
 
 ```bash
-sivtr show pi/<session>/<turn>/<line> --json
+sivtr show @ctx --json
 ```
 
 ## Practical loop
@@ -165,15 +220,29 @@ sivtr show pi/<session>/<turn>/<line> --json
 1. Search narrowly enough to get evidence:
 
    ```bash
-   sivtr search terminal --status failure --latest 1 --format json
+   sivtr search terminal --status failure --latest 1 --refs
    sivtr search agent --match "current task|failed|TODO" --since today --format timeline
    ```
 
-2. Pick the result ref you care about.
-3. Print the surrounding record:
+2. Save and narrow reusable result sets:
 
    ```bash
+   sivtr search agent --match "decision|TODO" --latest 20 --save hits --refs
+   sivtr filter @hits --match "workspace|nav|filter" --save focused --refs
+   ```
+
+3. Move or expand anchors when needed:
+
+   ```bash
+   sivtr nav @focused[1] '<[-1..+1]' --refs
+   sivtr zoom @focused[1] -C 2 --save ctx --refs
+   ```
+
+4. Print exact content:
+
+   ```bash
+   sivtr show @ctx --full
    sivtr show <source/session/record-or-turn>
    ```
 
-4. Use exact line refs when you need compact citations, script input, or context handles for another agent.
+5. Use exact part/line refs when you need compact citations, script input, or context handles for another agent.

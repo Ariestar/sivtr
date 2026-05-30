@@ -83,6 +83,41 @@ sivtr copy codex all --lines 1:40
 
 同时设置 `--regex` 和 `--lines` 时，`--regex` 先运行，`--lines` 再作用于过滤后的结果。
 
+## WorkSet 引用
+
+WorkSet 命令（`search`、`filter`、`nav`、`zoom`、`show`、`work records` 和 `work parts`）共享 source 形式：
+
+| Source | 含义 |
+| --- | --- |
+| `@last` | 最近一次 WorkSet 命令产生的 WorkSet。 |
+| `@name` | 通过 `--save name` 或 `sivtr var set name` 保存的命名 WorkSet。 |
+| `@name[1,3..5]` | 已保存 WorkSet 的 1-based 切片。离散 selector 保留请求顺序。 |
+| `@` | 从 stdin 读取 WorkSet JSON。不要把 `--refs` 文本管给 `@`。 |
+
+WorkSet 包含 materialized `records` 和 active `anchors`。`filter` 缩小 anchors，`nav` 移动 anchors，`var` 记住 anchors，`show` 渲染 anchors。
+
+## Anchor motion
+
+`sivtr nav <source> <motion>` 使用一套小的确定性 motion 语法。它不会默认展开 child。
+
+| Motion | 含义 |
+| --- | --- |
+| `<` | 父级。part/line 到 record；record 到所属 session records。 |
+| `>N` | 第 N 个 child，1-based。record 的 children 是 parts。 |
+| `+N` | 当前层级向后移动 N 个 sibling。 |
+| `-N` | 当前层级向前移动 N 个 sibling。 |
+| `[A..B]` | 当前层级 sibling window。 |
+| `~` | 所属 session records。 |
+
+示例：
+
+```bash
+sivtr nav @hit '<' --refs
+sivtr nav @hit '<+1>1' --refs
+sivtr nav @hit '<[-2..+2]' --refs
+sivtr nav @hit '~' --refs
+```
+
 ## Prompt 重写
 
 能复制输入的命令块模式可以重写 prompt：

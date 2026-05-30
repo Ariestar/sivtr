@@ -15,7 +15,7 @@ flowchart LR
   records["Work records<br/>Terminal output<br/>Agent sessions<br/>Captured output"]
   memory["sivtr shared memory workspace<br/>local · searchable · referenceable"]
   human["sivtr TUI<br/>browse · search · copy"]
-  agent["sivtr CLI<br/>search · show · copy --print"]
+  agent["sivtr CLI<br/>search · filter · nav · var · show"]
 
   records -->|unify| memory
   memory -->|For humans| human
@@ -113,7 +113,7 @@ sivtr copy out 1 --print
 sivtr show terminal/current/2 --json
 ```
 
-This is the agent-facing path: search, expand exact content, then act using current files and validation results.
+This is the agent-facing path: search, filter or navigate anchors, expand exact content, then act using current files and validation results.
 
 ## Two addressing methods: Selector and Ref
 
@@ -156,6 +156,37 @@ sivtr show claude/<session-id>/3/2
 
 `search --format json` returns refs, so humans and agents can search first and then expand the same evidence.
 
+## WorkSet: pipeable memory selections
+
+A WorkSet is an ordered set of active anchors plus the materialized records needed to render them. It is what powers `@last`, named variables, and `@` pipelines.
+
+| Handle | Meaning |
+| --- | --- |
+| `@last` | Most recent WorkSet produced by a WorkSet command. |
+| `@name` | Named WorkSet saved by `--save name` or `sivtr var set name`. |
+| `@name[1,3..5]` | 1-based slice of a saved WorkSet. |
+| `@` | WorkSet JSON from stdin. |
+
+The core pipeline is small:
+
+```text
+search = find evidence
+filter = narrow a WorkSet
+nav    = move anchors deterministically
+var    = remember named WorkSets
+show   = render exact content
+```
+
+`nav` uses deterministic motion and does not default-expand children:
+
+```bash
+sivtr nav @hit '<' --refs          # parent
+sivtr nav @hit '>1' --refs         # first child
+sivtr nav @hit '<+1>1' --refs      # next record, first child
+sivtr nav @hit '<[-2..+2]' --refs  # sibling window around parent record
+sivtr nav @hit '~' --refs          # containing session records
+```
+
 ## Commands
 
 Shared workspace memory can be opened, searched, copied, expanded, compared, or temporarily captured with these commands:
@@ -166,7 +197,10 @@ Shared workspace memory can be opened, searched, copied, expanded, compared, or 
 | `sivtr copy` | Copy recent terminal blocks by selector |
 | `sivtr copy <provider>` | Read content from one agent provider |
 | `sivtr search` | Search shared workspace memory across terminal and agent sessions |
-| `sivtr show` | Expand exact content by ref |
+| `sivtr filter` | Narrow a WorkSet using the shared filter surface |
+| `sivtr var` | Save, list, merge, drop, or remove named WorkSet variables |
+| `sivtr nav` | Move anchors with deterministic parent/child/sibling/session motion |
+| `sivtr show` | Expand exact content by ref or WorkSet |
 | `sivtr diff` | Compare two recent terminal command blocks |
 | `sivtr run` / pipe | Temporarily capture and browse one command output |
 

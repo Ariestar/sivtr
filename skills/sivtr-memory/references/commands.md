@@ -4,7 +4,7 @@ Use these commands as starting points. Prefer small, targeted queries over dumpi
 
 ## Core Model
 
-`search`, `zoom`, `show`, `work records`, and `work parts` all take a source.
+`search`, `filter`, `nav`, `zoom`, `show`, `work records`, and `work parts` all take a source.
 
 Source forms:
 
@@ -16,7 +16,7 @@ Source forms:
 - `@last`, `@name`, `@name[1]`, `@name[1,3]`, `@name[1..5]`, `@name[1..3,8]`
 - `@` to read a WorkSet from stdin
 
-WorkSets contain materialized `records` plus active `anchors`. Pipes move anchors; records are the backing store. WorkSet selector indexes are 1-based. Discrete selectors keep the requested order.
+WorkSets contain materialized `records` plus active `anchors`. Pipes move anchors; records are the backing store. WorkSet selector indexes are 1-based. Discrete selectors keep the requested order. `filter` narrows anchors, `nav` moves anchors, `var` remembers anchors, and `show` renders anchors.
 
 ## Search
 
@@ -82,6 +82,92 @@ Default output:
 - Terminal stdout: `full`.
 - Piped stdout: `workset`.
 
+## Filter
+
+`filter` applies the shared WorkSet filters to any source or piped WorkSet. It is the preferred way to narrow an existing WorkSet without re-running a broad provider search.
+
+```bash
+sivtr filter <source> \
+  -m <case-insensitive-regex> \
+  -v <case-insensitive-regex> \
+  -i <content|title|session|input|output|command|all> \
+  --parts \
+  --io <all|input|output> \
+  --kind <prompt|command|user_message|assistant_message|tool_call|tool_output|text|error> \
+  --status <success|failure|unknown|fail> \
+  --exit-code <code> \
+  --last <duration> \
+  --since <time> \
+  --until <time> \
+  --latest <n> \
+  --limit <n> \
+  --save <name> \
+  -f <full|timeline|compact|md|refs|workset>
+```
+
+Examples:
+
+```bash
+sivtr s terminal --status fail --latest 20 --save failures --refs
+sivtr filter @failures -m "panic|compile" --save focused --refs
+sivtr filter @focused --parts --io output --kind tool_output --refs
+sivtr s terminal --json | sivtr filter @ -m "error" --refs
+```
+
+## Nav
+
+`nav` moves anchors through the structural workspace. It does not default-expand children: child movement must specify a 1-based index with `>N`.
+
+```text
+<          parent
+>N         Nth child, 1-based
++N         next sibling by N at the current level
+-N         previous sibling by N at the current level
+[A..B]     sibling window at the current level
+~          containing session records
+```
+
+Examples:
+
+```bash
+sivtr nav @hit '<' --refs          # part/line -> record; record -> session records
+sivtr nav @hit '>1' --refs         # record -> first child part
+sivtr nav @hit '<+1>1' --refs      # part -> record -> next record -> first child
+sivtr nav @hit '<[-2..+2]' --refs  # parent record context window
+sivtr nav @hit '~' --refs          # containing session records
+```
+
+Use `zoom` when you simply want neighboring record context around hits. Use `nav` when the movement path matters.
+
+## Var
+
+`var` manages named WorkSet variables.
+
+```bash
+sivtr var set <name> [source]
+sivtr var list
+sivtr var rm <name>
+sivtr var merge <name> <source>...
+sivtr var drop <name> <source>...
+sivtr var cleanup
+```
+
+Examples:
+
+```bash
+sivtr var set ctx @last
+sivtr filter terminal -m "panic" --json | sivtr var set failures
+sivtr var merge ctx @failures @last[1]
+sivtr var drop ctx @noise
+sivtr var list
+```
+
+`var merge` and `var drop` deduplicate by full anchor string and preserve first occurrence order.
+
+- `sivtr filter` is available for narrowing an existing WorkSet with the same filter surface as `search`.
+- `sivtr var` manages named WorkSet variables: `set`, `list`, `rm`, `merge`, `drop`, and `cleanup`.
+- `sivtr nav` moves anchors deterministically with `<`, `>N`, `+N`, `-N`, `[A..B]`, and `~`; there is no implicit child expansion.
+
 ## General Search
 
 ```bash
@@ -136,7 +222,7 @@ sivtr s terminal -m "Traceback|ModuleNotFoundError|ImportError|AssertionError|py
 
 ```bash
 sivtr s agent -m "decision|TODO|next step|blocked|test result|passed|failed" --latest 20 --save history --refs
-sivtr s @history -m "<topic>" --save topic_history --refs
+sivtr filter @history -m "<topic>" --save topic_history --refs
 sivtr zoom @topic_history[1] -C 2 --save topic_ctx --refs
 sivtr show @topic_ctx --full
 ```
@@ -180,7 +266,7 @@ Pipeline chaining uses `@` as stdin source. Intermediate commands can omit `-f`;
 
 ```bash
 sivtr s terminal --status fail -m "error|failed|拒绝访问" \
-  | sivtr s @ -v "example|sample|sttop" -i title \
+  | sivtr filter @ -v "example|sample|sttop" -i title \
   | sivtr zoom @ -C 1 \
   | sivtr show @ -f timeline
 ```
@@ -190,7 +276,7 @@ Show part-level output matches from the current WorkSet:
 ```bash
 sivtr s pi -m "git push|main -> main" --latest 10 \
   | sivtr work parts @ --io output --kind tool_output \
-  | sivtr s @ -m "main -> main" \
+  | sivtr filter @ -m "main -> main" \
   | sivtr show @ --full
 ```
 
@@ -200,7 +286,8 @@ Named WorkSets are useful for multi-step retrieval:
 
 ```bash
 sivtr s agent -m "decision|TODO|next step" --latest 20 --save hits --refs
-sivtr s @hits -m "<topic>" --save narrowed --refs
+sivtr filter @hits -m "<topic>" --save narrowed --refs
+sivtr nav @narrowed[1] '<[-1..+1]' --refs
 sivtr zoom @narrowed[1] -C 2 --save ctx --refs
 sivtr show @ctx --full
 ```
@@ -277,7 +364,7 @@ sivtr work parts codex/019e4f40/3 --io output --kind tool_output --refs
 sivtr work parts @ --io all --json
 ```
 
-`work records` projects any source anchors to parent record anchors. `work parts` projects source anchors to part anchors and supports `--io`, `--kind`, and `-m` / `--match` filtering.
+`work records` projects any source anchors to parent record anchors. `work parts` projects source anchors to part anchors and supports `--io`, `--kind`, and `-m` / `--match` filtering. For new pipelines, prefer `sivtr filter --parts ...` when you want the shared filter surface.
 
 ## Diagnostics
 

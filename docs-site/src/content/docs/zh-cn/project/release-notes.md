@@ -5,6 +5,24 @@ description: sivtr 面向用户的发布说明。
 
 `sivtr` 仍处在早期 `0.1.x` 开发阶段。本系列中 CLI 和配置格式仍可能变化。本页总结用户可见变更；仓库中的 `CHANGELOG.md` 仍是更详细的 changelog 来源。
 
+## Unreleased
+
+### Added
+
+- 新增 `sivtr filter`：作为一等 WorkSet 过滤命令，可用于已保存变量、source selector 和 stdin `@` 管道。
+- 新增 `sivtr var`：管理命名 WorkSet 记忆，包含 `set`、`list`、`rm`、`merge`、`drop` 和 `cleanup`。
+- 新增 `sivtr nav`：用 `<`、`>N`、`+N`、`-N`、`[A..B]` 和 `~` 做确定性 anchor 移动。`nav` 不会隐式展开 child anchors。
+- 新增全局 `--color auto|always|never`，控制状态和诊断输出颜色。
+
+### Changed
+
+- 统一 CLI 状态和诊断消息，并保持输出到 stderr，避免污染 stdout 数据管道。
+- `search` 和 `work parts` 现在共享同一套 WorkSet filtering 实现。
+
+### Fixed
+
+- 修复 Windows 上 Nushell shell integration：当 prompt 可见但 Nushell prompt closure 的环境变量修改不会泄漏到后续 hook 时，不再把命令输出捕获为空。
+
 ## 0.1.3 - 2026-05-24/25
 
 ### Added

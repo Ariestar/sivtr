@@ -66,8 +66,8 @@ With `sivtr`, you can:
 - **A viewer for long output**: pipe `cargo test`, build logs, or stack traces into a fast keyboard-first TUI.
 - **One search box for local work**: search terminal output and Codex, Claude Code, OpenCode, and Pi sessions from the current repo.
 - **Click-back / copy-back evidence**: every match can be shown, copied, expanded with nearby context, or handed to an agent.
-- **Named memory variables**: save any result set as `@failures`, reuse `@last`, pass stdin as `@`, and select slices like `@failures[1,3..5]`.
-- **Composable CLI workflows**: search → narrow → expand → show, without copying IDs between commands.
+- **Named memory variables**: save any result set as `@failures`, reuse `@last`, pass stdin as `@`, list vars with `sivtr var list`, and select slices like `@failures[1,3..5]`.
+- **Deterministic anchor navigation**: move refs through parent/child/sibling/session structure with `sivtr nav`, without implicit expansion.
 - **Agent-ready memory** through the bundled `sivtr-memory` skill.
 - **Diagnostics** with `sivtr doctor`, `sivtr init show`, and `sivtr init uninstall`.
 
@@ -130,7 +130,7 @@ More end-to-end walkthroughs live in the [Playbooks](https://sivtr.pages.dev/pla
 | Fix the latest terminal error | Ask your agent: <br><code>Fix the latest terminal error. Use sivtr first.</code> | <img src="docs-site/public/demo/1.gif" alt="Fix the latest terminal error with sivtr" width="320"> |
 | Browse and copy recent terminal output | <code>cargo test 2&gt;&amp;1 &#124; sivtr</code><br><code>sivtr copy out --print</code> | <img src="docs-site/public/demo/2.gif" alt="Browse and copy recent terminal output" width="320"> |
 | Turn recent work into a timeline | <code>sivtr s agent --since today --sort oldest -f timeline</code><br><code>sivtr s terminal --since today --sort oldest -f timeline</code> | <img src="docs-site/public/demo/3.gif" alt="Build a recent work timeline" width="320"> |
-| Save results as variables and chain them | <code>sivtr s terminal -m "panic" --save failures</code><br><code>sivtr work parts @failures --io output</code><br><code>sivtr show @last --full</code> | <img src="docs-site/public/demo/4.gif" alt="Chain saved memory variables" width="320"> |
+| Save results as variables and chain them | <code>sivtr s terminal -m "panic" --save failures</code><br><code>sivtr filter @failures --status failure --refs</code><br><code>sivtr var list</code> | <img src="docs-site/public/demo/4.gif" alt="Chain saved memory variables" width="320"> |
 | Continue after interruption | Ask your agent: <br><code>Continue. Use sivtr memory first.</code> | <img src="docs-site/public/demo/5.gif" alt="Continue after interruption with sivtr memory" width="320"> |
 | Prepare a handoff for the next agent | Ask your agent: <br><code>Give the next agent a handoff with evidence.</code> | <img src="docs-site/public/demo/6.gif" alt="Prepare an evidence-backed handoff" width="320"> |
 
@@ -141,14 +141,14 @@ More end-to-end walkthroughs live in the [Playbooks](https://sivtr.pages.dev/pla
 | WorkRecord | One useful work event: a terminal command, agent turn, tool call, or captured output block. |
 | WorkPart | The command, output, assistant reply, tool output, or error inside a record. Use this when you only need the useful part, not the whole event. |
 | WorkRef | A stable address for one exact piece of memory, for example `pi/<session>/3/o/1`. Good for citations and reproducible handoffs. |
-| WorkSet | The data behind memory variables such as `@last` and `@failures`: an ordered list of refs you can save, slice, pipe, expand, and show. |
+| WorkSet | The data behind memory variables such as `@last` and `@failures`: an ordered list of refs you can filter, save, slice, pipe, navigate, expand, and show. |
 
 Memory variables:
 
 | Handle | Use |
 | --- | --- |
 | `@last` | The latest search or projection result. |
-| `@name` | A named variable created with `--save name`, for example `@failures`. |
+| `@name` | A named variable created with `--save name` or `sivtr var set name`, for example `@failures`. |
 | `@name[1,3..5]` | Pick only a few items from a saved variable. |
 | `@` | Use the result coming from the previous command in a pipeline. |
 
@@ -161,11 +161,14 @@ Memory variables:
 | `sivtr copy` | Copy recent terminal command blocks. |
 | `sivtr copy <provider>` | Copy content from Codex, Claude Code, OpenCode, or Pi sessions. |
 | `sivtr search` / `sivtr s` | Search terminal and agent memory; saves matches as `@last`. |
+| `sivtr filter <source>` | Apply the shared WorkSet filters to a source or piped WorkSet. |
+| `sivtr var` | List, save, remove, merge, drop, or clean up named WorkSet variables. |
+| `sivtr nav <source> <motion>` | Move anchors deterministically with `<`, `>N`, `+N`, `-N`, `[A..B]`, and `~`. |
 | `sivtr work sessions` | List terminal and agent sessions in the current workspace. |
 | `sivtr work records <source>` | Turn sessions or saved variables into event-level refs. |
 | `sivtr work parts <source>` | Extract only useful inputs/outputs from matching events. |
 | `sivtr show <ref-or-workset>` | Print the content behind refs, `@last`, `@name`, or piped results. |
-| `sivtr zoom <source>` | Add surrounding context around search hits. |
+| `sivtr zoom <source>` | Add surrounding record context around search hits. |
 | `sivtr diff <left> <right>` | Compare recent command blocks. |
 | `sivtr doctor` | Diagnose binary, config, session logs, hooks, providers, and clipboard. |
 | `sivtr init <shell>` | Install shell integration; also supports `show` and `uninstall`. |
