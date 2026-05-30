@@ -11,6 +11,7 @@ use crate::output;
 pub fn execute(command: &VarCommand) -> Result<()> {
     match &command.action {
         VarSubcommand::Set(args) => set(&args.name, args.source.as_deref()),
+        VarSubcommand::List => list(),
         VarSubcommand::Rm(args) => rm(&args.name),
         VarSubcommand::Cleanup => cleanup(),
         VarSubcommand::Merge(args) => merge(&args.name, &args.sources),
@@ -38,6 +39,13 @@ fn set(name: &str, source: Option<&str>) -> Result<()> {
 fn rm(name: &str) -> Result<()> {
     workset::delete_saved(name)?;
     output::success(format!("removed @{name}"));
+    Ok(())
+}
+
+fn list() -> Result<()> {
+    for var in workset::list_saved()? {
+        println!("@{}\t{} items\t{}", var.name, var.items, var.created_at);
+    }
     Ok(())
 }
 

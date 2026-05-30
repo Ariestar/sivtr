@@ -57,6 +57,41 @@ pub fn cleanup_saved() -> Result<usize> {
     Ok(removed)
 }
 
+pub fn list_saved() -> Result<Vec<SavedWorkSetInfo>> {
+    let dir = sets_dir()?;
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut vars = Vec::new();
+    for entry in fs::read_dir(&dir)
+        .with_context(|| format!("Failed to read WorkSet directory {}", dir.display()))?
+    {
+        let entry = entry.with_context(|| format!("Failed to read entry in {}", dir.display()))?;
+        let path = entry.path();
+        if path.extension().is_none_or(|extension| extension != "json") {
+            continue;
+        }
+        let Some(name) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        let set = load_saved(name)?;
+        vars.push(SavedWorkSetInfo {
+            name: name.to_string(),
+            items: set.anchors().len(),
+            created_at: set.created_at,
+        });
+    }
+    vars.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(vars)
+}
+
+pub struct SavedWorkSetInfo {
+    pub name: String,
+    pub items: usize,
+    pub created_at: String,
+}
+
 fn set_path(name: &str) -> Result<PathBuf> {
     validate_name(name)?;
     Ok(sets_dir()?.join(format!("{name}.json")))

@@ -1130,6 +1130,9 @@ pub enum VarSubcommand {
     /// Save a source WorkSet as @name
     Set(VarSetArgs),
 
+    /// List saved vars
+    List,
+
     /// Remove a saved var
     Rm(VarNameArgs),
 
@@ -2246,6 +2249,14 @@ mod tests {
             },
             _ => panic!("expected var command"),
         }
+
+        let cli = Cli::try_parse_from(["sivtr", "var", "list"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Var(VarCommand {
+                action: VarSubcommand::List
+            }))
+        ));
 
         let cli = Cli::try_parse_from(["sivtr", "var", "rm", "ctx"]).unwrap();
         match cli.command {
