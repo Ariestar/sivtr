@@ -708,6 +708,9 @@ pub enum Commands {
     #[command(after_help = SEARCH_AFTER_HELP)]
     Filter(FilterArgs),
 
+    /// Manage named WorkSet vars
+    Var(VarCommand),
+
     /// Expand each target WorkRecord with neighboring records from the same session
     #[command(after_help = ZOOM_AFTER_HELP)]
     Zoom(ZoomArgs),
@@ -1114,6 +1117,55 @@ pub struct FilterArgs {
     /// Save the result WorkSet as @name
     #[arg(long, value_name = "NAME")]
     pub save: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct VarCommand {
+    #[command(subcommand)]
+    pub action: VarSubcommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum VarSubcommand {
+    /// Save a source WorkSet as @name
+    Set(VarSetArgs),
+
+    /// Remove a saved var
+    Rm(VarNameArgs),
+
+    /// Remove all saved vars
+    Cleanup,
+
+    /// Merge sources into a saved var, deduplicating by anchor
+    Merge(VarSourcesArgs),
+
+    /// Drop source anchors from a saved var
+    Drop(VarSourcesArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct VarSetArgs {
+    /// Var name, referenced later as @name
+    pub name: String,
+
+    /// Source selector or `@` for WorkSet JSON from stdin
+    pub source: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct VarNameArgs {
+    /// Var name without @
+    pub name: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct VarSourcesArgs {
+    /// Var name without @
+    pub name: String,
+
+    /// Source selectors to merge/drop
+    #[arg(required = true)]
+    pub sources: Vec<String>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -2179,6 +2231,69 @@ mod tests {
             }
             _ => panic!("expected search command"),
         }
+    }
+
+    #[test]
+    fn var_accepts_set_rm_cleanup_merge_drop() {
+        let cli = Cli::try_parse_from(["sivtr", "var", "set", "ctx", "@last"]).unwrap();
+        match cli.command {
+            Some(Commands::Var(cmd)) => match cmd.action {
+                VarSubcommand::Set(args) => {
+                    assert_eq!(args.name, "ctx");
+                    assert_eq!(args.source.as_deref(), Some("@last"));
+                }
+                _ => panic!("expected var set"),
+            },
+            _ => panic!("expected var command"),
+        }
+
+        let cli = Cli::try_parse_from(["sivtr", "var", "rm", "ctx"]).unwrap();
+        match cli.command {
+            Some(Commands::Var(cmd)) => match cmd.action {
+                VarSubcommand::Rm(args) => assert_eq!(args.name, "ctx"),
+                _ => panic!("expected var rm"),
+            },
+            _ => panic!("expected var command"),
+        }
+
+        assert!(matches!(
+            Cli::try_parse_from(["sivtr", "var", "cleanup"])
+                .unwrap()
+                .command,
+            Some(Commands::Var(VarCommand {
+                action: VarSubcommand::Cleanup
+            }))
+        ));
+
+        let cli = Cli::try_parse_from(["sivtr", "var", "merge", "ctx", "@a", "@b"]).unwrap();
+        match cli.command {
+            Some(Commands::Var(cmd)) => match cmd.action {
+                VarSubcommand::Merge(args) => {
+                    assert_eq!(args.name, "ctx");
+                    assert_eq!(args.sources, vec!["@a", "@b"]);
+                }
+                _ => panic!("expected var merge"),
+            },
+            _ => panic!("expected var command"),
+        }
+
+        let cli = Cli::try_parse_from(["sivtr", "var", "drop", "ctx", "@noise"]).unwrap();
+        match cli.command {
+            Some(Commands::Var(cmd)) => match cmd.action {
+                VarSubcommand::Drop(args) => {
+                    assert_eq!(args.name, "ctx");
+                    assert_eq!(args.sources, vec!["@noise"]);
+                }
+                _ => panic!("expected var drop"),
+            },
+            _ => panic!("expected var command"),
+        }
+    }
+
+    #[test]
+    fn var_merge_and_drop_require_sources() {
+        assert!(Cli::try_parse_from(["sivtr", "var", "merge", "ctx"]).is_err());
+        assert!(Cli::try_parse_from(["sivtr", "var", "drop", "ctx"]).is_err());
     }
 
     #[test]

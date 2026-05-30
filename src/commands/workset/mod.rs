@@ -1,14 +1,14 @@
 mod source;
+pub mod store;
 
 pub(crate) use source::{load_source, WorkSetSource};
+pub(crate) use store::{cleanup_saved, delete_saved, load_saved, save_named};
 
 use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use sivtr_core::record::{WorkRecord, WorkRef};
 use std::collections::HashSet;
-use std::fs;
-use std::path::PathBuf;
 
 pub const WORKSET_SCHEMA_VERSION: u32 = 2;
 
@@ -92,7 +92,7 @@ impl WorkSet {
     }
 
     pub fn save_as(&mut self, name: &str) -> Result<()> {
-        validate_name(name)?;
+        store::validate_name(name)?;
         self.ensure_anchors();
         self.name = Some(name.to_string());
         save_named(name, self)
@@ -135,22 +135,7 @@ pub fn record_for_anchor<'a>(
 
 pub fn load_reference(reference: &str) -> Result<WorkSet> {
     let parsed = parse_reference(reference)?;
-    let path = set_path(parsed.name)?;
-    let content = fs::read_to_string(&path).with_context(|| {
-        format!(
-            "Failed to read WorkSet @{} from {}",
-            parsed.name,
-            path.display()
-        )
-    })?;
-    let mut set: WorkSet = serde_json::from_str(&content).with_context(|| {
-        format!(
-            "Failed to parse WorkSet @{} from {}",
-            parsed.name,
-            path.display()
-        )
-    })?;
-    set.ensure_anchors();
+    let set = load_saved(parsed.name)?;
     validate_selection(reference, &set, &parsed.selection)?;
     Ok(apply_selection(set, parsed.selection))
 }
@@ -169,7 +154,7 @@ fn parse_reference(reference: &str) -> Result<ParsedWorkSetReference<'_>> {
             bail!("Invalid WorkSet reference `{reference}`; missing closing ]");
         }
         let name = &body[..open];
-        validate_name(name)?;
+        store::validate_name(name)?;
         let selector = &body[open + 1..body.len() - 1];
         if selector.is_empty() {
             bail!("Invalid WorkSet reference `{reference}`");
@@ -177,7 +162,7 @@ fn parse_reference(reference: &str) -> Result<ParsedWorkSetReference<'_>> {
         let selection = parse_selector(selector, reference)?;
         Ok(ParsedWorkSetReference { name, selection })
     } else {
-        validate_name(body)?;
+        store::validate_name(body)?;
         Ok(ParsedWorkSetReference {
             name: body,
             selection: WorkSetSelection::All,
@@ -230,41 +215,6 @@ fn validate_selection(reference: &str, set: &WorkSet, selection: &WorkSetSelecti
             Ok(())
         }
     }
-}
-
-fn save_named(name: &str, set: &WorkSet) -> Result<()> {
-    let path = set_path(name)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create WorkSet directory {}", parent.display()))?;
-    }
-    fs::write(&path, serde_json::to_string_pretty(set)?)
-        .with_context(|| format!("Failed to write WorkSet @{} to {}", name, path.display()))
-}
-
-fn set_path(name: &str) -> Result<PathBuf> {
-    Ok(sets_dir()?.join(format!("{name}.json")))
-}
-
-fn sets_dir() -> Result<PathBuf> {
-    let state_dir = dirs::state_dir()
-        .or_else(dirs::data_local_dir)
-        .or_else(dirs::config_dir)
-        .ok_or_else(|| anyhow::anyhow!("Cannot determine state directory"))?;
-    Ok(state_dir.join("sivtr").join("sets"))
-}
-
-fn validate_name(name: &str) -> Result<()> {
-    if name.is_empty() {
-        bail!("WorkSet name cannot be empty");
-    }
-    if !name
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
-    {
-        bail!("Invalid WorkSet name `{name}`; use letters, numbers, '-' or '_'");
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -352,6 +302,23 @@ mod tests {
             refs,
             vec!["terminal/session_1/1/o/1", "terminal/session_1/2/o/1"]
         );
+    }
+
+    #[test]
+    fn unique_anchors_preserves_first_occurrence() {
+        let records = vec![record(1), record(2)];
+        let anchors = vec![
+            records[0].work_ref.record_ref(),
+            records[1].work_ref.record_ref(),
+            records[0].work_ref.record_ref(),
+        ];
+
+        let unique = crate::commands::var::unique_anchors(anchors)
+            .into_iter()
+            .map(|anchor| anchor.to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(unique, vec!["terminal/session_1/1", "terminal/session_1/2"]);
     }
 
     #[test]

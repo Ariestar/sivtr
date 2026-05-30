@@ -19,6 +19,7 @@ pub mod run;
 pub mod search;
 pub mod show;
 pub mod time_filter;
+pub mod var;
 pub mod version;
 pub mod work;
 pub mod work_json;

@@ -53,6 +53,9 @@ fn run() -> Result<()> {
         Some(Commands::Filter(args)) => {
             commands::filter::execute(&args)?;
         }
+        Some(Commands::Var(command)) => {
+            commands::var::execute(&command)?;
+        }
         Some(Commands::Zoom(args)) => {
             commands::zoom::execute(&args)?;
         }
