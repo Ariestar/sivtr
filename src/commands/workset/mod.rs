@@ -1,6 +1,6 @@
 mod source;
 
-pub use source::load_source;
+pub(crate) use source::{load_source, WorkSetSource};
 
 use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};

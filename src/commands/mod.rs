@@ -7,6 +7,7 @@ pub mod config;
 pub mod copy;
 pub mod diff;
 pub mod doctor;
+pub mod filter;
 pub mod flush;
 pub mod history;
 pub mod hotkey;

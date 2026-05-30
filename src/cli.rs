@@ -704,6 +704,10 @@ pub enum Commands {
     #[command(visible_alias = "s", after_help = SEARCH_AFTER_HELP)]
     Search(SearchArgs),
 
+    /// Filter a WorkSet stream or selector
+    #[command(after_help = SEARCH_AFTER_HELP)]
+    Filter(FilterArgs),
+
     /// Expand each target WorkRecord with neighboring records from the same session
     #[command(after_help = ZOOM_AFTER_HELP)]
     Zoom(ZoomArgs),
@@ -987,6 +991,102 @@ pub struct SearchArgs {
     pub last: Option<String>,
 
     /// Return the latest N matching anchors
+    #[arg(long, value_name = "N")]
+    pub latest: Option<usize>,
+
+    /// Maximum number of result anchors to print
+    #[arg(short = 'l', long, value_name = "N")]
+    pub limit: Option<usize>,
+
+    /// Exclude the current agent session from agent searches
+    #[arg(long = "exclude-current", alias = "other")]
+    pub exclude_current: bool,
+
+    /// WorkSet output format: full, timeline, compact, md, refs, or workset.
+    /// Defaults to full when stdout is a terminal and workset when piped.
+    #[arg(short = 'f', long, value_name = "FORMAT")]
+    pub format: Option<WorkSetOutputFormat>,
+
+    /// Alias for --format workset
+    #[arg(long, conflicts_with = "format")]
+    pub json: bool,
+
+    /// Alias for --format refs
+    #[arg(long, conflicts_with_all = ["format", "json"])]
+    pub refs: bool,
+
+    /// Save the result WorkSet as @name
+    #[arg(long, value_name = "NAME")]
+    pub save: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FilterArgs {
+    /// Source selector, WorkSet reference, or `@` for WorkSet JSON from stdin.
+    #[arg(default_value = "@")]
+    pub source: String,
+
+    /// Select matching parts instead of preserving matching anchors
+    #[arg(long)]
+    pub parts: bool,
+
+    /// Case-insensitive regex content filter
+    #[arg(short = 'm', long = "match", value_name = "REGEX")]
+    pub match_: Option<String>,
+
+    /// Case-insensitive regex exclusion filter
+    #[arg(short = 'v', long, value_name = "REGEX")]
+    pub exclude: Option<String>,
+
+    /// Field to match: content, title, session, input, output, command, or all
+    #[arg(short = 'i', long = "in", default_value_t = SearchFieldArg::default(), value_name = "FIELD")]
+    pub in_field: SearchFieldArg,
+
+    /// Which leaf parts to select: all, input, or output
+    #[arg(long, default_value_t = WorkPartFilterArg::default(), value_name = "IO")]
+    pub io: WorkPartFilterArg,
+
+    /// Part kind filter: prompt, command, user_message, assistant_message, tool_call, tool_output, text, or error
+    #[arg(long, value_name = "KIND")]
+    pub kind: Option<WorkPartKindArg>,
+
+    /// Record status filter: success, failure, or unknown
+    #[arg(long, value_name = "STATUS")]
+    pub status: Option<SearchStatusArg>,
+
+    /// Exact terminal process exit code filter
+    #[arg(long, value_name = "CODE")]
+    pub exit_code: Option<i32>,
+
+    /// Minimum command duration filter, e.g. 500ms, 2s, 1m
+    #[arg(long, value_name = "DURATION")]
+    pub min_duration: Option<String>,
+
+    /// Maximum command duration filter, e.g. 500ms, 2s, 1m
+    #[arg(long, value_name = "DURATION")]
+    pub max_duration: Option<String>,
+
+    /// Result sort: newest, oldest, duration, duration-asc, exit-code, or exit-code-asc
+    #[arg(long, value_name = "SORT")]
+    pub sort: Option<SearchSortArg>,
+
+    /// Workspace directory used to resolve current AI sessions
+    #[arg(long, value_name = "PATH")]
+    pub cwd: Option<PathBuf>,
+
+    /// Only search content at or after this time.
+    #[arg(long, value_name = "TIME", help = TIME_FILTER_HELP)]
+    pub since: Option<String>,
+
+    /// Only search content at or before this time.
+    #[arg(long, value_name = "TIME", help = TIME_FILTER_HELP)]
+    pub until: Option<String>,
+
+    /// Only search content within this recent duration, e.g. 30m, 2h, 7d.
+    #[arg(long, value_name = "DURATION")]
+    pub last: Option<String>,
+
+    /// Return the latest N matching anchors before final sort
     #[arg(long, value_name = "N")]
     pub latest: Option<usize>,
 

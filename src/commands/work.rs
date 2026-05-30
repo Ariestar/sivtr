@@ -1,13 +1,13 @@
 use anyhow::{bail, Context, Result};
-use regex::Regex;
 use serde::Serialize;
 use sivtr_core::ai::AgentProvider;
-use sivtr_core::record::{WorkRecord, WorkRef, WorkRefTarget};
+use sivtr_core::record::{WorkRecord, WorkRef};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 
 use crate::cli::{WorkCommand, WorkPartsArgs, WorkRecordsArgs, WorkSessionsArgs};
+use crate::commands::filter;
 use crate::commands::records::current_work_record_index;
 use crate::commands::show;
 use crate::commands::work_json::{session_meta, WorkJsonSessionMeta};
@@ -108,37 +108,12 @@ fn execute_parts(args: &WorkPartsArgs) -> Result<()> {
     let cwd = resolve_cwd(args.cwd.as_deref())?;
     let source = workset::load_source(&args.source, Some(&cwd))?;
     let (records, anchors) = source.into_parts();
-    let regex = args
-        .match_
-        .as_deref()
-        .map(|query| Regex::new(&format!("(?i){query}")))
-        .transpose()?;
-    let mut part_anchors = Vec::new();
-
-    for anchor in &anchors {
-        let Some(record) = workset::record_for_anchor(&records, anchor) else {
-            continue;
-        };
-        match anchor.target() {
-            WorkRefTarget::Part { .. } => {
-                if let Some(part) = record.part_for_target(anchor.target()) {
-                    if part_matches(args, regex.as_ref(), part) {
-                        part_anchors.push(anchor.clone());
-                    }
-                }
-            }
-            WorkRefTarget::Record | WorkRefTarget::Line(_) => {
-                for part in &record.parts {
-                    if part_matches(args, regex.as_ref(), part) {
-                        part_anchors.push(record.work_ref.with_part(part.io, part.index));
-                    }
-                }
-            }
-        }
-    }
-
-    let records = workset::records_for_anchors(&records, &part_anchors);
-    let mut set = WorkSet::with_anchors(cwd.display().to_string(), records, part_anchors);
+    let mut set = filter::apply_parts(
+        cwd,
+        records,
+        anchors,
+        filter::FilterSpec::from_work_parts_args(args)?,
+    )?;
     set.save_last()?;
     if let Some(name) = args.save.as_deref() {
         set.save_as(name)?;
@@ -164,16 +139,6 @@ fn records_for_session_marker(cwd: &Path, marker: &WorkSessionMarker) -> Result<
     }
 
     Ok(WorkSet::new(cwd.display().to_string(), selected))
-}
-
-fn part_matches(
-    args: &WorkPartsArgs,
-    regex: Option<&Regex>,
-    part: &sivtr_core::record::WorkPart,
-) -> bool {
-    args.io.matches(part.io)
-        && args.kind.is_none_or(|kind| kind.matches(part.kind))
-        && regex.is_none_or(|regex| regex.is_match(&part.text))
 }
 
 fn resolve_cwd(cwd: Option<&Path>) -> Result<std::path::PathBuf> {
