@@ -2,6 +2,7 @@ mod app;
 mod cli;
 mod command_blocks;
 mod commands;
+mod output;
 mod tui;
 
 use anyhow::Result;
@@ -16,16 +17,22 @@ use commands::copy::{AgentCopyRequest, AgentPickerRequest, CopyMode, CopyRequest
 use commands::diff::DiffRequest;
 use sivtr_core::ai::{AgentProvider, AgentSelection};
 
-fn main() -> Result<()> {
+use std::process::ExitCode;
+
+fn main() -> ExitCode {
     match run() {
-        Ok(()) => Ok(()),
-        Err(error) if commands::copy::is_pick_cancelled(&error) => Ok(()),
-        Err(error) => Err(error),
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) if commands::copy::is_pick_cancelled(&error) => ExitCode::SUCCESS,
+        Err(error) => {
+            output::error(format!("{error:#}"));
+            ExitCode::FAILURE
+        }
     }
 }
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
+    output::set_color_choice(cli.color.into());
 
     match cli.command {
         Some(Commands::Run { command, args }) => {

@@ -3,20 +3,22 @@ use sivtr_core::capture::scrollback;
 use sivtr_core::workspace;
 use std::fs;
 
+use crate::output;
+
 /// Clear the current session's log and state files.
 pub fn execute(clear_all: bool) -> Result<()> {
     if clear_all {
         let removed = clear_all_sessions()?;
         if removed > 0 {
-            eprintln!("sivtr: cleared {removed} session file(s)");
+            output::success(format!("cleared {removed} workspace session tree(s)"));
         } else {
-            eprintln!("sivtr: no session files to clear");
+            output::info("no session files to clear");
         }
         return Ok(());
     }
 
     let Some(log) = scrollback::session_log_path()? else {
-        eprintln!("sivtr: no session to clear");
+        output::info("no current terminal session to clear");
         return Ok(());
     };
     let state = log.with_extension("state");
@@ -35,9 +37,10 @@ pub fn execute(clear_all: bool) -> Result<()> {
     }
 
     if cleared {
-        eprintln!("sivtr: session cleared ({})", log.display());
+        output::success("cleared current terminal session");
+        output::detail("path", log.display());
     } else {
-        eprintln!("sivtr: no session to clear");
+        output::info("no current terminal session to clear");
     }
 
     Ok(())

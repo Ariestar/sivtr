@@ -5,6 +5,7 @@ use std::time::SystemTime;
 
 use crate::commands::command_block_selector::{parse_selector, resolve_selector, CommandSelection};
 use crate::commands::records::current_work_record_index;
+use crate::output;
 use sivtr_core::ai::{
     AgentBlockKind, AgentProvider, AgentSelection, AgentSession, AgentSessionInfo,
     AgentSessionProvider,
@@ -111,20 +112,18 @@ pub fn execute(request: CopyRequest<'_>) -> Result<()> {
     } = request;
 
     let Some(log_path) = scrollback::session_log_path()? else {
-        eprintln!("sivtr: no session log found");
-        eprintln!("  hint: run `sivtr init <shell>`, restart the shell, then run some commands");
+        warn_no_session_log();
         return Ok(());
     };
     if !log_path.exists() {
-        eprintln!("sivtr: no session log found");
-        eprintln!("  hint: run `sivtr init <shell>`, restart the shell, then run some commands");
+        warn_no_session_log();
         return Ok(());
     }
 
     let entries = session::load_entries(&log_path).context("Failed to read session log")?;
     if entries.is_empty() {
-        eprintln!("sivtr: no commands recorded yet");
-        eprintln!("  hint: run a few commands first, then try `sivtr copy` again");
+        output::warning("no commands recorded yet");
+        output::hint("run a few commands first, then try `sivtr copy` again");
         return Ok(());
     }
 
@@ -138,8 +137,8 @@ pub fn execute(request: CopyRequest<'_>) -> Result<()> {
 
     let total = blocks.len();
     if total == 0 {
-        eprintln!("sivtr: no commands recorded yet");
-        eprintln!("  hint: run a command first, then try `sivtr copy` again");
+        output::warning("no commands recorded yet");
+        output::hint("run a command first, then try `sivtr copy` again");
         return Ok(());
     }
 
@@ -160,8 +159,8 @@ pub fn execute(request: CopyRequest<'_>) -> Result<()> {
 
     let indices = resolve_selector(selection, total)?;
     if indices.is_empty() {
-        eprintln!("sivtr: nothing selected");
-        eprintln!("  hint: choose at least one command block");
+        output::warning("nothing selected");
+        output::hint("choose at least one command block");
         return Ok(());
     }
 
@@ -173,8 +172,8 @@ pub fn execute(request: CopyRequest<'_>) -> Result<()> {
         .collect();
 
     if copied_blocks.is_empty() {
-        eprintln!("sivtr: selected commands are empty");
-        eprintln!("  hint: try `sivtr copy --out` or choose a different block");
+        output::warning("selected commands are empty");
+        output::hint("try `sivtr copy --out` or choose a different block");
         return Ok(());
     }
 
@@ -196,7 +195,7 @@ pub fn execute(request: CopyRequest<'_>) -> Result<()> {
     finish_copy(
         text,
         print_full,
-        format!("sivtr: copied {} command(s) to clipboard", indices.len()),
+        format!("copied {} command(s) to clipboard", indices.len()),
     )
 }
 
@@ -227,7 +226,9 @@ pub fn execute_agent(request: AgentCopyRequest<'_>) -> Result<()> {
     let provider_name = source.provider().name();
 
     if session.blocks.is_empty() {
-        eprintln!("sivtr: {provider_name} session has no parsed conversation blocks");
+        output::warning(format!(
+            "{provider_name} session has no parsed conversation blocks"
+        ));
         return Ok(());
     }
 
@@ -235,7 +236,7 @@ pub fn execute_agent(request: AgentCopyRequest<'_>) -> Result<()> {
         WorkRecord::selected_chat_records(source.provider(), &session, request.selection_mode);
     let units = records_to_text_pairs(&records);
     if units.is_empty() {
-        eprintln!("sivtr: selected {provider_name} content is empty");
+        output::warning(format!("selected {provider_name} content is empty"));
         return Ok(());
     }
 
@@ -268,7 +269,7 @@ pub fn execute_agent(request: AgentCopyRequest<'_>) -> Result<()> {
             request.lines,
             false,
             format!("selected {provider_name} content is empty"),
-            format!("sivtr: copied {provider_name} content to clipboard"),
+            format!("copied {provider_name} content to clipboard"),
         );
     }
 
@@ -281,7 +282,7 @@ pub fn execute_agent(request: AgentCopyRequest<'_>) -> Result<()> {
         request.lines,
         false,
         format!("selected {provider_name} content is empty"),
-        format!("sivtr: copied {provider_name} content to clipboard"),
+        format!("copied {provider_name} content to clipboard"),
     )
 }
 
@@ -322,7 +323,7 @@ pub fn execute_ref(
     finish_copy(
         text.plain.trim().to_string(),
         print_full,
-        "sivtr: copied ref content to clipboard".to_string(),
+        "copied ref content to clipboard".to_string(),
     )
 }
 
@@ -365,7 +366,7 @@ pub fn execute_agent_picker(request: AgentPickerRequest<'_>) -> Result<()> {
             request.lines,
             false,
             format!("selected {} content is empty", provider.name()),
-            format!("sivtr: copied {} content to clipboard", provider.name()),
+            format!("copied {} content to clipboard", provider.name()),
         ),
         WorkspaceSource::Terminal => finish_selected_units_copy(
             &picked.units,
@@ -375,7 +376,7 @@ pub fn execute_agent_picker(request: AgentPickerRequest<'_>) -> Result<()> {
             request.lines,
             false,
             "selected terminal content is empty".to_string(),
-            "sivtr: copied terminal content to clipboard".to_string(),
+            "copied terminal content to clipboard".to_string(),
         ),
     }
 }
@@ -397,10 +398,7 @@ fn execute_agent_session_pick(
         request.lines,
         false,
         format!("selected {} content is empty", request.provider.name()),
-        format!(
-            "sivtr: copied {} content to clipboard",
-            request.provider.name()
-        ),
+        format!("copied {} content to clipboard", request.provider.name()),
     )
 }
 
@@ -426,10 +424,7 @@ fn execute_current_agent_session_pick(
         request.lines,
         false,
         format!("selected {} content is empty", request.provider.name()),
-        format!(
-            "sivtr: copied {} content to clipboard",
-            request.provider.name()
-        ),
+        format!("copied {} content to clipboard", request.provider.name()),
     )
 }
 
@@ -739,8 +734,8 @@ fn execute_terminal_workspace_pick(
         SystemTime::now(),
         &sivtr_core::workspace::terminal_session_id_from_path(&session_title),
     ) else {
-        eprintln!("sivtr: selected commands are empty");
-        eprintln!("  hint: try `sivtr copy --out` or choose a different block");
+        output::warning("selected commands are empty");
+        output::hint("try `sivtr copy --out` or choose a different block");
         return Ok(());
     };
 
@@ -758,7 +753,7 @@ fn execute_terminal_workspace_pick(
         lines,
         ansi,
         "selected terminal content is empty".to_string(),
-        "sivtr: copied terminal content to clipboard".to_string(),
+        "copied terminal content to clipboard".to_string(),
     )
 }
 
@@ -858,7 +853,7 @@ fn finish_selected_units_copy(
         .filter(|unit| !unit.plain.trim().is_empty())
         .collect();
     if selected_units.is_empty() {
-        eprintln!("sivtr: {empty_message}");
+        output::warning(empty_message);
         return Ok(());
     }
 
@@ -984,8 +979,8 @@ fn parse_line_number(value: &str) -> Result<usize> {
 
 fn finish_copy(text: String, print_full: bool, success_message: String) -> Result<()> {
     if text.is_empty() {
-        eprintln!("sivtr: filters removed everything");
-        eprintln!("  hint: loosen `--regex` or `--lines`, or copy without filters");
+        output::warning("filters removed everything");
+        output::hint("loosen `--regex` or `--lines`, or copy without filters");
         return Ok(());
     }
 
@@ -993,12 +988,17 @@ fn finish_copy(text: String, print_full: bool, success_message: String) -> Resul
 
     if print_full {
         for line in text.lines() {
-            eprintln!("  {line}");
+            output::plain(format!("  {line}"));
         }
     }
 
-    eprintln!("{success_message}");
+    output::success(success_message);
     Ok(())
+}
+
+fn warn_no_session_log() {
+    output::warning("no session log found");
+    output::hint("run `sivtr init <shell>`, restart the shell, then run some commands");
 }
 
 fn missing_ref_content_message(work_ref: &WorkRef, input_ref: &str) -> String {

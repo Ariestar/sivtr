@@ -1,4 +1,4 @@
-use clap::{ArgGroup, Args, Parser, Subcommand};
+use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sivtr_core::ai::AgentProvider;
 use sivtr_core::record::{WorkPartIo, WorkPartKind};
@@ -654,8 +654,30 @@ Behavior:
 #[derive(Parser, Debug)]
 #[command(name = "sivtr", version, about, long_about = None)]
 pub struct Cli {
+    /// When to use color in status and diagnostic messages
+    #[arg(long, value_enum, default_value_t = ColorArg::Auto, global = true)]
+    pub color: ColorArg,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+pub enum ColorArg {
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+impl From<ColorArg> for crate::output::ColorChoice {
+    fn from(value: ColorArg) -> Self {
+        match value {
+            ColorArg::Auto => Self::Auto,
+            ColorArg::Always => Self::Always,
+            ColorArg::Never => Self::Never,
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -1365,6 +1387,13 @@ pub struct CodexExportArgs {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    #[test]
+    fn global_color_flag_accepts_never() {
+        let cli = Cli::try_parse_from(["sivtr", "--color", "never", "version"]).unwrap();
+
+        assert_eq!(cli.color, ColorArg::Never);
+    }
 
     #[test]
     fn copy_input_accepts_prompt_override() {
