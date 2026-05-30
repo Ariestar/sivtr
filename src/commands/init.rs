@@ -16,22 +16,12 @@ struct HookSpec {
     hook: &'static str,
     marker_start: &'static str,
     marker_end: &'static str,
-    legacy_marker_start: &'static str,
-    legacy_marker_end: &'static str,
-    legacy_hook: Option<&'static str>,
 }
 
-const LEGACY_MARKER_START: &str = "# >>> sift shell integration >>>";
-const LEGACY_MARKER_END: &str = "# <<< sift shell integration <<<";
 const POWERSHELL_MARKER_START: &str = "# >>> sivtr shell integration >>>";
 const POWERSHELL_MARKER_END: &str = "# <<< sivtr shell integration <<<";
-const LEGACY_POWERSHELL_HOOK: &str = r#"# sift shell integration
-$env:SIFT_SESSION_LOG = Join-Path $env:APPDATA "sift\session_$PID.log"
-$Global:_sift_orig_prompt = $function:prompt
-function Global:prompt { try { sift flush *>$null } catch {}; & $Global:_sift_orig_prompt }
-"#;
 const POWERSHELL_HOOK: &str = r#"# >>> sivtr shell integration >>>
-$env:SIVTR_TERMINAL_ID = "session_$PID"
+$env:SIVTR_TERMINAL_ID = "$PID"
 if (-not $Global:_sivtr_prompt_wrapped) {
     $Global:_sivtr_orig_prompt = $function:prompt
     function Global:prompt {
@@ -63,16 +53,6 @@ if (-not $Global:_sivtr_prompt_wrapped) {
                 Remove-Item Env:SIVTR_LAST_EXIT_CODE -ErrorAction SilentlyContinue
             }
             $env:SIVTR_LAST_PROMPT = [string]$rendered
-            try {
-                $root = git rev-parse --show-toplevel 2>$null
-                if ($LASTEXITCODE -eq 0 -and $root) {
-                    $env:SIVTR_SESSION_LOG = sivtr terminal-log $root 2>$null
-                } else {
-                    Remove-Item Env:SIVTR_SESSION_LOG -ErrorAction SilentlyContinue
-                }
-            } catch {
-                Remove-Item Env:SIVTR_SESSION_LOG -ErrorAction SilentlyContinue
-            }
             sivtr flush
             $Global:_sivtr_next_command_cwd = [string](Get-Location)
         } catch {}
@@ -86,7 +66,7 @@ if (-not $Global:_sivtr_prompt_wrapped) {
 const BASH_MARKER_START: &str = "# >>> sivtr shell integration >>>";
 const BASH_MARKER_END: &str = "# <<< sivtr shell integration <<<";
 const BASH_HOOK: &str = r#"# >>> sivtr shell integration >>>
-export SIVTR_TERMINAL_ID="session_$$"
+export SIVTR_TERMINAL_ID="$$"
 __sivtr_precmd() {
   local exit_status=$?
   local hist_entry
@@ -102,11 +82,6 @@ __sivtr_precmd() {
   fi
   export SIVTR_LAST_EXIT_CODE="$exit_status"
   export SIVTR_COMMAND_ENDED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
-  if root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-    export SIVTR_SESSION_LOG="$(sivtr terminal-log "$root" 2>/dev/null)"
-  else
-    unset SIVTR_SESSION_LOG
-  fi
   unset SIVTR_COMMAND_DURATION_MS
   export SIVTR_LAST_PROMPT="${PS1@P}"
   sivtr flush >/dev/null 2>&1 || true
@@ -131,7 +106,7 @@ fi
 const ZSH_MARKER_START: &str = "# >>> sivtr shell integration >>>";
 const ZSH_MARKER_END: &str = "# <<< sivtr shell integration <<<";
 const ZSH_HOOK: &str = r#"# >>> sivtr shell integration >>>
-export SIVTR_TERMINAL_ID="session_$$"
+export SIVTR_TERMINAL_ID="$$"
 _sivtr_precmd() {
   local exit_status=$?
   export SIVTR_LAST_COMMAND="$(fc -ln -1)"
@@ -143,11 +118,6 @@ _sivtr_precmd() {
   fi
   export SIVTR_LAST_EXIT_CODE="$exit_status"
   export SIVTR_COMMAND_ENDED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
-  if root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-    export SIVTR_SESSION_LOG="$(sivtr terminal-log "$root" 2>/dev/null)"
-  else
-    unset SIVTR_SESSION_LOG
-  fi
   unset SIVTR_COMMAND_DURATION_MS
   export SIVTR_LAST_PROMPT="$(print -P "$PROMPT")"
   sivtr flush >/dev/null 2>&1 || true
@@ -163,8 +133,15 @@ fi
 const NUSHELL_MARKER_START: &str = "# >>> sivtr shell integration >>>";
 const NUSHELL_MARKER_END: &str = "# <<< sivtr shell integration <<<";
 const NUSHELL_HOOK: &str = r#"# >>> sivtr shell integration >>>
-$env.SIVTR_TERMINAL_ID = $"session_($nu.pid)"
+$env.SIVTR_TERMINAL_ID = $"($nu.pid)"
 if (($env.SIVTR_PROMPT_WRAPPED? | default false) != true) {
+    let _sivtr_orig_prompt_command = ($env.PROMPT_COMMAND? | default {|| "" })
+    $env.PROMPT_COMMAND = {||
+        let rendered = (do $_sivtr_orig_prompt_command)
+        $env.SIVTR_RENDERED_PROMPT = ($rendered | into string)
+        $rendered
+    }
+
     def _sivtr_precmd [] {
         let last = (history | last 1 | get 0?)
         $env.SIVTR_COMMAND_CWD = ($env.SIVTR_NEXT_COMMAND_CWD? | default "")
@@ -174,14 +151,8 @@ if (($env.SIVTR_PROMPT_WRAPPED? | default false) != true) {
             $env.SIVTR_COMMAND_DURATION_MS = (($last.duration? | default "") | into string)
         }
         $env.SIVTR_COMMAND_ENDED_AT = (date now | into string)
-        let root = (do -i { ^git rev-parse --show-toplevel } | complete)
-        if $root.exit_code == 0 and (($root.stdout | str trim) != "") {
-            $env.SIVTR_SESSION_LOG = (^sivtr terminal-log ($root.stdout | str trim))
-        } else {
-            hide-env SIVTR_SESSION_LOG
-        }
         $env.SIVTR_LAST_EXIT_CODE = ($env.LAST_EXIT_CODE? | default "" | into string)
-        $env.SIVTR_LAST_PROMPT = (do $env.PROMPT_COMMAND)
+        $env.SIVTR_LAST_PROMPT = ($env.SIVTR_RENDERED_PROMPT? | default "")
         try { ^sivtr flush } catch {}
         $env.SIVTR_NEXT_COMMAND_CWD = (pwd)
     }
@@ -205,36 +176,24 @@ const POWERSHELL_SPEC: HookSpec = HookSpec {
     hook: POWERSHELL_HOOK,
     marker_start: POWERSHELL_MARKER_START,
     marker_end: POWERSHELL_MARKER_END,
-    legacy_marker_start: LEGACY_MARKER_START,
-    legacy_marker_end: LEGACY_MARKER_END,
-    legacy_hook: Some(LEGACY_POWERSHELL_HOOK),
 };
 
 const BASH_SPEC: HookSpec = HookSpec {
     hook: BASH_HOOK,
     marker_start: BASH_MARKER_START,
     marker_end: BASH_MARKER_END,
-    legacy_marker_start: LEGACY_MARKER_START,
-    legacy_marker_end: LEGACY_MARKER_END,
-    legacy_hook: None,
 };
 
 const ZSH_SPEC: HookSpec = HookSpec {
     hook: ZSH_HOOK,
     marker_start: ZSH_MARKER_START,
     marker_end: ZSH_MARKER_END,
-    legacy_marker_start: LEGACY_MARKER_START,
-    legacy_marker_end: LEGACY_MARKER_END,
-    legacy_hook: None,
 };
 
 const NUSHELL_SPEC: HookSpec = HookSpec {
     hook: NUSHELL_HOOK,
     marker_start: NUSHELL_MARKER_START,
     marker_end: NUSHELL_MARKER_END,
-    legacy_marker_start: LEGACY_MARKER_START,
-    legacy_marker_end: LEGACY_MARKER_END,
-    legacy_hook: None,
 };
 
 #[cfg(unix)]
@@ -242,9 +201,6 @@ const TMUX_SPEC: HookSpec = HookSpec {
     hook: TMUX_HOOK,
     marker_start: TMUX_MARKER_START,
     marker_end: TMUX_MARKER_END,
-    legacy_marker_start: TMUX_MARKER_START,
-    legacy_marker_end: TMUX_MARKER_END,
-    legacy_hook: None,
 };
 
 #[cfg_attr(not(unix), allow(dead_code))]
@@ -496,11 +452,6 @@ fn show_status() -> Result<()> {
                 if content.contains(POWERSHELL_MARKER_START) || content.contains(POWERSHELL_HOOK) {
                     eprintln!("  powershell ({cmd}): installed in {profile}");
                     any_installed = true;
-                } else if content.contains(LEGACY_MARKER_START)
-                    || content.contains(LEGACY_POWERSHELL_HOOK)
-                {
-                    eprintln!("  powershell ({cmd}): legacy integration in {profile} (run `sivtr init powershell` to update)");
-                    any_installed = true;
                 } else {
                     eprintln!("  powershell ({cmd}): not installed ({profile})");
                 }
@@ -519,20 +470,6 @@ fn show_status() -> Result<()> {
                         || content.contains(spec_ref.spec.hook)
                     {
                         eprintln!("  {}: installed in {}", spec_ref.name, path.display());
-                        any_installed = true;
-                    } else if content.contains(spec_ref.spec.legacy_marker_start)
-                        || spec_ref
-                            .spec
-                            .legacy_hook
-                            .map(|h| content.contains(h))
-                            .unwrap_or(false)
-                    {
-                        eprintln!(
-                            "  {}: legacy integration in {} (run `sivtr init {}` to update)",
-                            spec_ref.name,
-                            path.display(),
-                            spec_ref.name
-                        );
                         any_installed = true;
                     } else {
                         eprintln!("  {}: not installed ({})", spec_ref.name, path.display());
@@ -681,21 +618,8 @@ fn remove_hook_block(content: &str, spec: &HookSpec) -> Option<String> {
         updated.push_str(&content[..start]);
         updated.push_str(content[end..].trim_start_matches('\n'));
         Some(updated)
-    } else if let Some((start, end)) =
-        find_marked_block(content, spec.legacy_marker_start, spec.legacy_marker_end)
-    {
-        let mut updated = String::with_capacity(content.len() - (end - start));
-        updated.push_str(&content[..start]);
-        updated.push_str(content[end..].trim_start_matches('\n'));
-        Some(updated)
     } else if content.contains(spec.hook) {
         Some(content.replacen(spec.hook, "", 1))
-    } else if let Some(legacy_hook) = spec.legacy_hook {
-        if content.contains(legacy_hook) {
-            Some(content.replacen(legacy_hook, "", 1))
-        } else {
-            None
-        }
     } else {
         None
     }
@@ -800,22 +724,6 @@ fn update_existing_hook(content: &str, spec: &HookSpec) -> Option<String> {
         updated.push_str(spec.hook);
         updated.push_str(&content[end..]);
         return Some(updated);
-    }
-
-    if let Some((start, end)) =
-        find_marked_block(content, spec.legacy_marker_start, spec.legacy_marker_end)
-    {
-        let mut updated = String::with_capacity(content.len() - (end - start) + spec.hook.len());
-        updated.push_str(&content[..start]);
-        updated.push_str(spec.hook);
-        updated.push_str(&content[end..]);
-        return Some(updated);
-    }
-
-    if let Some(legacy_hook) = spec.legacy_hook {
-        if content.contains(legacy_hook) {
-            return Some(content.replacen(legacy_hook, spec.hook, 1));
-        }
     }
 
     None
@@ -1006,26 +914,13 @@ mod tests {
     };
     use super::{
         desktop_exec_quote, render_macos_shortcut_plist, render_macos_shortcut_script,
-        update_existing_hook, xml_escape, BASH_HOOK, BASH_SPEC, LEGACY_POWERSHELL_HOOK,
-        MACOS_SHORTCUT_LABEL, NUSHELL_HOOK, NUSHELL_SPEC, POWERSHELL_HOOK, POWERSHELL_SPEC,
-        ZSH_HOOK, ZSH_SPEC,
+        update_existing_hook, xml_escape, BASH_HOOK, BASH_SPEC, MACOS_SHORTCUT_LABEL, NUSHELL_HOOK,
+        NUSHELL_SPEC, POWERSHELL_HOOK, POWERSHELL_SPEC, ZSH_HOOK, ZSH_SPEC,
     };
     use std::path::Path;
 
     #[cfg(windows)]
     use super::parse_yes_no_default_yes;
-
-    #[test]
-    fn upgrades_legacy_powershell_hook_in_place() {
-        let profile = format!("before\n{LEGACY_POWERSHELL_HOOK}\nafter\n");
-        let updated = update_existing_hook(&profile, &POWERSHELL_SPEC)
-            .expect("legacy hook should be detected");
-
-        assert!(updated.contains(POWERSHELL_HOOK));
-        assert!(!updated.contains(LEGACY_POWERSHELL_HOOK));
-        assert!(updated.contains("before"));
-        assert!(updated.contains("after"));
-    }
 
     #[test]
     fn keeps_current_powershell_hook_unchanged() {
@@ -1040,6 +935,21 @@ mod tests {
     fn current_powershell_hook_does_not_redirect_flush_output_handle() {
         assert!(POWERSHELL_HOOK.contains("sivtr flush"));
         assert!(!POWERSHELL_HOOK.contains("*>$null"));
+    }
+
+    #[test]
+    fn shell_hooks_do_not_run_workspace_resolution() {
+        for hook in [POWERSHELL_HOOK, BASH_HOOK, ZSH_HOOK, NUSHELL_HOOK] {
+            assert!(!hook.contains("git rev-parse"));
+            assert!(!hook.contains("terminal-log"));
+            assert!(!hook.contains("SIVTR_SESSION_LOG"));
+        }
+    }
+
+    #[test]
+    fn nushell_hook_reuses_rendered_prompt() {
+        assert!(NUSHELL_HOOK.contains("SIVTR_RENDERED_PROMPT"));
+        assert!(!NUSHELL_HOOK.contains("do $env.PROMPT_COMMAND"));
     }
 
     #[test]

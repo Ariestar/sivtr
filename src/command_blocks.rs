@@ -104,7 +104,9 @@ impl CommandBlockSpan {
 }
 
 pub fn load_from_session_log() -> Result<Option<Vec<CommandBlockSpan>>> {
-    let log_path = scrollback::session_log_path();
+    let Some(log_path) = scrollback::session_log_path()? else {
+        return Ok(None);
+    };
     if !log_path.exists() {
         return Ok(None);
     }

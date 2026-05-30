@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::env;
 #[cfg(not(windows))]
 use std::fs;
+use std::path::PathBuf;
 
 use sivtr_core::capture::scrollback;
 use sivtr_core::session::{self, SessionEntry, SessionState};
@@ -17,10 +18,15 @@ pub fn execute() -> Result<()> {
 }
 
 fn do_flush() -> Result<()> {
-    let Some(session_log_path) = scrollback::workspace_session_log_path()? else {
+    let command = env::var("SIVTR_LAST_COMMAND").unwrap_or_default();
+    let command_id = env::var("SIVTR_LAST_COMMAND_ID").ok();
+    let Some(session_log_path) = scrollback::command_session_log_path()? else {
         return Ok(());
     };
-    let flush_state_path = session_log_path.with_extension("state");
+    let target = FlushTarget::new(session_log_path);
+    if !should_append_entry(&target.state, command_id.as_deref(), &command) {
+        return Ok(());
+    }
 
     #[cfg(windows)]
     {
@@ -31,8 +37,6 @@ fn do_flush() -> Result<()> {
 
         let current_lines: Vec<&str> = snapshot.content.lines().collect();
         let prompt = env::var("SIVTR_LAST_PROMPT").unwrap_or_default();
-        let command = env::var("SIVTR_LAST_COMMAND").unwrap_or_default();
-        let command_id = env::var("SIVTR_LAST_COMMAND_ID").ok();
         let output = session::extract_output_from_snapshot(
             &prompt,
             &command,
@@ -40,8 +44,7 @@ fn do_flush() -> Result<()> {
             snapshot.width,
         );
         append_entry_from_output(
-            &session_log_path,
-            &flush_state_path,
+            target,
             prompt,
             command,
             command_id,
@@ -52,7 +55,7 @@ fn do_flush() -> Result<()> {
 
     #[cfg(not(windows))]
     {
-        let capture_path = session_log_path.with_extension("capture");
+        let capture_path = target.session_log_path.with_extension("capture");
         if !capture_path.exists() {
             return Ok(());
         }
@@ -65,13 +68,10 @@ fn do_flush() -> Result<()> {
         }
 
         let prompt = env::var("SIVTR_LAST_PROMPT").unwrap_or_default();
-        let command = env::var("SIVTR_LAST_COMMAND").unwrap_or_default();
-        let command_id = env::var("SIVTR_LAST_COMMAND_ID").ok();
         let output = trim_trailing_prompt_artifact(output, &prompt);
 
         append_entry_from_output(
-            &session_log_path,
-            &flush_state_path,
+            target,
             prompt,
             command,
             command_id,
@@ -106,6 +106,24 @@ impl TerminalCommandMetadata {
     }
 }
 
+struct FlushTarget {
+    session_log_path: PathBuf,
+    state_path: PathBuf,
+    state: SessionState,
+}
+
+impl FlushTarget {
+    fn new(session_log_path: PathBuf) -> Self {
+        let state_path = session_log_path.with_extension("state");
+        let state = load_state_lossy(&state_path);
+        Self {
+            session_log_path,
+            state_path,
+            state,
+        }
+    }
+}
+
 fn load_state_lossy(path: &std::path::Path) -> SessionState {
     session::load_state(path).unwrap_or_default()
 }
@@ -126,29 +144,23 @@ fn should_append_entry(state: &SessionState, command_id: Option<&str>, command: 
 }
 
 fn append_entry_from_output(
-    session_log_path: &std::path::Path,
-    state_path: &std::path::Path,
+    mut target: FlushTarget,
     prompt: String,
     command: String,
     command_id: Option<String>,
     output: String,
     metadata: TerminalCommandMetadata,
 ) -> Result<()> {
-    let mut state = load_state_lossy(state_path);
-
-    if should_append_entry(&state, command_id.as_deref(), &command) {
-        let entry = SessionEntry::new(prompt, command.clone(), output).with_metadata(
-            metadata.cwd,
-            metadata.ended_at,
-            metadata.duration_ms,
-            metadata.exit_code,
-        );
-        session::append_entry(session_log_path, &entry)?;
-        state.last_command_id = command_id;
-        state.last_command = Some(command);
-    }
-
-    session::save_state(state_path, &state)
+    let entry = SessionEntry::new(prompt, command.clone(), output).with_metadata(
+        metadata.cwd,
+        metadata.ended_at,
+        metadata.duration_ms,
+        metadata.exit_code,
+    );
+    session::append_entry(&target.session_log_path, &entry)?;
+    target.state.last_command_id = command_id;
+    target.state.last_command = Some(command);
+    session::save_state(&target.state_path, &target.state)
 }
 
 #[cfg_attr(windows, allow(dead_code))]
@@ -184,7 +196,7 @@ fn trim_trailing_prompt_artifact(output: String, prompt: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_entry_from_output, should_append_entry, trim_trailing_prompt_artifact,
+        append_entry_from_output, should_append_entry, trim_trailing_prompt_artifact, FlushTarget,
         TerminalCommandMetadata,
     };
     use sivtr_core::session::{self, SessionState};
@@ -206,11 +218,9 @@ mod tests {
     fn appends_structured_entry_for_capture_output() {
         let dir = unique_test_dir("flush");
         let log_path = dir.join("session_1.log");
-        let state_path = dir.join("session_1.state");
 
         append_entry_from_output(
-            &log_path,
-            &state_path,
+            FlushTarget::new(log_path.clone()),
             "repo on main\n❯  ".to_string(),
             "cargo test".to_string(),
             Some("42".to_string()),
@@ -251,8 +261,7 @@ mod tests {
         let state_path = dir.join("session_1.state");
 
         append_entry_from_output(
-            &log_path,
-            &state_path,
+            FlushTarget::new(log_path.clone()),
             "repo> ".to_string(),
             "cargo test".to_string(),
             Some("99".to_string()),
@@ -260,17 +269,9 @@ mod tests {
             TerminalCommandMetadata::default(),
         )
         .unwrap();
-        append_entry_from_output(
-            &log_path,
-            &state_path,
-            "repo> ".to_string(),
-            "cargo test".to_string(),
-            Some("99".to_string()),
-            "still ok".to_string(),
-            TerminalCommandMetadata::default(),
-        )
-        .unwrap();
 
+        let state = session::load_state(&state_path).unwrap();
+        assert!(!should_append_entry(&state, Some("99"), "cargo test"));
         let entries = session::load_entries(&log_path).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].output, "ok");

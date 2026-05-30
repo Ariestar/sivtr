@@ -3,7 +3,6 @@ use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 const WORKSPACES_DIR: &str = "workspaces";
 
@@ -36,7 +35,12 @@ pub fn resolve_workspace_for_dir(cwd: &Path) -> Result<Option<WorkspacePaths>> {
 }
 
 pub fn ensure_current_workspace() -> Result<Option<WorkspacePaths>> {
-    let Some(paths) = resolve_current_workspace()? else {
+    let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
+    ensure_workspace_for_dir(&cwd)
+}
+
+pub fn ensure_workspace_for_dir(cwd: &Path) -> Result<Option<WorkspacePaths>> {
+    let Some(paths) = resolve_workspace_for_dir(cwd)? else {
         return Ok(None);
     };
     ensure_workspace_metadata(&paths)?;
@@ -50,10 +54,6 @@ pub fn data_dir() -> PathBuf {
         .join("sivtr")
 }
 
-pub fn legacy_session_dir() -> PathBuf {
-    data_dir()
-}
-
 pub fn terminal_id() -> String {
     std::env::var("SIVTR_TERMINAL_ID")
         .ok()
@@ -62,7 +62,21 @@ pub fn terminal_id() -> String {
 }
 
 pub fn current_terminal_log_path() -> Result<Option<PathBuf>> {
-    let Some(paths) = ensure_current_workspace()? else {
+    let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
+    terminal_log_path_for_dir(&cwd)
+}
+
+pub fn terminal_log_path_for_command_cwd() -> Result<Option<PathBuf>> {
+    let cwd = std::env::var("SIVTR_COMMAND_CWD")
+        .ok()
+        .filter(|cwd| !cwd.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
+    terminal_log_path_for_dir(&cwd)
+}
+
+pub fn terminal_log_path_for_dir(cwd: &Path) -> Result<Option<PathBuf>> {
+    let Some(paths) = ensure_workspace_for_dir(cwd)? else {
         return Ok(None);
     };
     Ok(Some(
@@ -105,11 +119,6 @@ pub fn terminal_session_id_from_path(path: &Path) -> String {
         .to_string()
 }
 
-pub fn terminal_log_path_for_root(root: &Path) -> Result<PathBuf> {
-    let paths = paths_for_root(root.to_path_buf())?;
-    Ok(paths.terminals_dir.join(format!("{}.jsonl", terminal_id())))
-}
-
 fn paths_for_root(root: PathBuf) -> Result<WorkspacePaths> {
     let root = canonicalize_lossy(&root);
     let root_text = root.to_string_lossy().to_string();
@@ -126,21 +135,15 @@ fn paths_for_root(root: PathBuf) -> Result<WorkspacePaths> {
 fn ensure_workspace_metadata(paths: &WorkspacePaths) -> Result<()> {
     fs::create_dir_all(&paths.dir)?;
     let path = paths.dir.join("workspace.json");
-    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-    let created_at = if path.exists() {
-        fs::read_to_string(&path)
-            .ok()
-            .and_then(|content| serde_json::from_str::<WorkspaceMetadata>(&content).ok())
-            .map(|meta| meta.created_at)
-            .unwrap_or_else(|| now.clone())
-    } else {
-        now.clone()
-    };
+    if path.exists() {
+        return Ok(());
+    }
 
+    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let metadata = WorkspaceMetadata {
         key: paths.key.clone(),
         root: paths.root.to_string_lossy().to_string(),
-        created_at,
+        created_at: now.clone(),
         last_seen_at: now,
     };
     fs::write(path, serde_json::to_string_pretty(&metadata)?)?;
@@ -148,25 +151,23 @@ fn ensure_workspace_metadata(paths: &WorkspacePaths) -> Result<()> {
 }
 
 fn git_root(cwd: &Path) -> Result<Option<PathBuf>> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .arg("rev-parse")
-        .arg("--show-toplevel")
-        .output();
-
-    let Ok(output) = output else {
-        return Ok(None);
+    let mut dir = if cwd.is_dir() {
+        cwd.to_path_buf()
+    } else {
+        cwd.parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| cwd.to_path_buf())
     };
-    if !output.status.success() {
-        return Ok(None);
-    }
 
-    let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if root.is_empty() {
-        return Ok(None);
+    loop {
+        if dir.join(".git").exists() {
+            return Ok(Some(dir));
+        }
+
+        if !dir.pop() {
+            return Ok(None);
+        }
     }
-    Ok(Some(PathBuf::from(root)))
 }
 
 fn canonicalize_lossy(path: &Path) -> PathBuf {
@@ -196,12 +197,52 @@ fn modified_time(path: &Path) -> std::time::SystemTime {
 
 #[cfg(test)]
 mod tests {
-    use super::{terminal_session_id_from_path, workspace_key};
-    use std::path::Path;
+    use super::{git_root, terminal_session_id_from_path, workspace_key};
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_test_dir(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("sivtr-{name}-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("test dir should be created");
+        dir
+    }
 
     #[test]
     fn workspace_key_normalizes_case_and_separators() {
         assert_eq!(workspace_key("D:\\sivtr"), workspace_key("d:/sivtr"));
+    }
+
+    #[test]
+    fn finds_git_root_by_walking_parents() {
+        let root = unique_test_dir("workspace-root");
+        std::fs::create_dir(root.join(".git")).expect(".git dir should be created");
+        let nested = root.join("crates").join("core");
+        std::fs::create_dir_all(&nested).expect("nested dir should be created");
+
+        assert_eq!(
+            git_root(&nested).expect("git root should resolve"),
+            Some(root.clone())
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn treats_git_file_as_workspace_root() {
+        let root = unique_test_dir("workspace-git-file");
+        std::fs::write(root.join(".git"), "gitdir: ../repo.git")
+            .expect(".git file should be written");
+
+        assert_eq!(
+            git_root(&root).expect("git root should resolve"),
+            Some(root.clone())
+        );
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

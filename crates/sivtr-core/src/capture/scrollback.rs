@@ -1,57 +1,42 @@
 use anyhow::Result;
-use std::env;
 use std::path::PathBuf;
 
 use crate::{session, workspace};
 
-/// Get the session log path used by the shell hook.
-pub fn session_log_path() -> std::path::PathBuf {
-    if let Ok(path) = env::var("SIVTR_SESSION_LOG") {
-        let path = PathBuf::from(path);
-        if path.exists() {
-            return path;
-        }
-    }
-
-    if let Ok(Some(path)) = workspace::current_terminal_log_path() {
-        return path;
-    }
-
-    workspace::legacy_session_dir().join("session.log")
-}
-
 /// Get the current workspace terminal session log path.
-pub fn workspace_session_log_path() -> Result<Option<std::path::PathBuf>> {
-    if let Ok(path) = env::var("SIVTR_SESSION_LOG") {
-        return Ok(Some(PathBuf::from(path)));
-    }
+pub fn session_log_path() -> Result<Option<PathBuf>> {
     workspace::current_terminal_log_path()
 }
 
+/// Get the terminal session log path for the command being flushed.
+pub fn command_session_log_path() -> Result<Option<PathBuf>> {
+    workspace::terminal_log_path_for_command_cwd()
+}
+
 /// Get the flush state file path (derived from session log path).
-pub fn flush_state_path() -> std::path::PathBuf {
-    session_log_path().with_extension("state")
+pub fn flush_state_path() -> Result<Option<PathBuf>> {
+    Ok(session_log_path()?.map(|path| path.with_extension("state")))
 }
 
 /// Get the per-command capture file path used by Unix shell hooks.
-pub fn capture_file_path() -> std::path::PathBuf {
-    if let Ok(path) = env::var("SIVTR_CAPTURE_FILE") {
-        return PathBuf::from(path);
-    }
-
-    session_log_path().with_extension("capture")
+pub fn capture_file_path() -> Result<Option<PathBuf>> {
+    Ok(session_log_path()?.map(|path| path.with_extension("capture")))
 }
 
 /// Read the current session log populated by the shell hook.
 pub fn read_session_log() -> Result<Option<String>> {
-    let log = session_log_path();
-    if log.exists() {
-        let entries = session::load_entries(&log)?;
-        if !entries.is_empty() {
-            return Ok(Some(session::render_entries_ansi(&entries)));
-        }
+    let Some(log) = session_log_path()? else {
+        return Ok(None);
+    };
+    if !log.exists() {
+        return Ok(None);
     }
-    Ok(None)
+
+    let entries = session::load_entries(&log)?;
+    if entries.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(session::render_entries_ansi(&entries)))
 }
 
 /// Read the current console buffer with ANSI color codes.

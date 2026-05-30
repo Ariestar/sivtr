@@ -742,13 +742,6 @@ pub enum Commands {
     #[command(hide = true)]
     Flush,
 
-    /// Internal: print the current terminal log path for a git root path
-    #[command(hide = true)]
-    TerminalLog {
-        /// Git workspace root path
-        root: PathBuf,
-    },
-
     /// Internal: run the Windows hotkey daemon loop
     #[command(hide = true)]
     HotkeyServe(HotkeyServeArgs),

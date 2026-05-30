@@ -110,7 +110,11 @@ pub fn execute(request: CopyRequest<'_>) -> Result<()> {
         lines,
     } = request;
 
-    let log_path = scrollback::session_log_path();
+    let Some(log_path) = scrollback::session_log_path()? else {
+        eprintln!("sivtr: no session log found");
+        eprintln!("  hint: run `sivtr init <shell>`, restart the shell, then run some commands");
+        return Ok(());
+    };
     if !log_path.exists() {
         eprintln!("sivtr: no session log found");
         eprintln!("  hint: run `sivtr init <shell>`, restart the shell, then run some commands");
@@ -726,10 +730,7 @@ fn execute_terminal_workspace_pick(
     regex: Option<&str>,
     lines: Option<&str>,
 ) -> Result<()> {
-    let session_title = scrollback::workspace_session_log_path()
-        .ok()
-        .flatten()
-        .unwrap_or_else(scrollback::session_log_path);
+    let session_title = scrollback::session_log_path()?.unwrap_or_default();
     let Some(session) = build_terminal_workspace_session(
         blocks,
         mode,
@@ -764,13 +765,14 @@ fn execute_terminal_workspace_pick(
 fn build_terminal_context_sessions(cwd: Option<&std::path::Path>) -> Result<Vec<WorkspaceSession>> {
     let paths = if let Some(cwd) = cwd {
         sivtr_core::workspace::terminal_log_paths_for_workspace(cwd)?
-    } else {
-        let path = scrollback::session_log_path();
+    } else if let Some(path) = scrollback::session_log_path()? {
         if path.exists() {
             vec![path]
         } else {
             Vec::new()
         }
+    } else {
+        Vec::new()
     };
 
     let mut sessions = Vec::new();

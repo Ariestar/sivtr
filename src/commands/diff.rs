@@ -25,7 +25,9 @@ pub fn execute(request: DiffRequest<'_>) -> Result<()> {
         anyhow::bail!("Selectors must not be empty.");
     }
 
-    let log_path = scrollback::session_log_path();
+    let Some(log_path) = scrollback::session_log_path()? else {
+        anyhow::bail!("No session log found. Run a command first, then try `sivtr diff` again.");
+    };
     if !log_path.exists() {
         anyhow::bail!("No session log found. Run a command first, then try `sivtr diff` again.");
     }

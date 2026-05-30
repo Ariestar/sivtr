@@ -103,12 +103,6 @@ fn run() -> Result<()> {
         Some(Commands::Flush) => {
             commands::flush::execute()?;
         }
-        Some(Commands::TerminalLog { root }) => {
-            println!(
-                "{}",
-                sivtr_core::workspace::terminal_log_path_for_root(&root)?.display()
-            );
-        }
         Some(Commands::HotkeyServe(args)) => {
             run_hotkey_serve(&args)?;
         }
