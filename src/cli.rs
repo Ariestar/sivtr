@@ -711,6 +711,9 @@ pub enum Commands {
     /// Manage named WorkSet vars
     Var(VarCommand),
 
+    /// Navigate WorkSet anchors with a motion expression
+    Nav(NavArgs),
+
     /// Expand each target WorkRecord with neighboring records from the same session
     #[command(after_help = ZOOM_AFTER_HELP)]
     Zoom(ZoomArgs),
@@ -1169,6 +1172,32 @@ pub struct VarSourcesArgs {
     /// Source selectors to merge/drop
     #[arg(required = true)]
     pub sources: Vec<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct NavArgs {
+    /// Source WorkSet reference or WorkRef.
+    pub source: String,
+
+    /// Motion expression: <, >N, +N, -N, [A..B], ~
+    pub motion: String,
+
+    /// Workspace directory used to resolve current AI sessions
+    #[arg(long, value_name = "PATH")]
+    pub cwd: Option<PathBuf>,
+
+    /// WorkSet output format: full, timeline, compact, md, refs, or workset.
+    /// Defaults to full when stdout is a terminal and workset when piped.
+    #[arg(short = 'f', long, value_name = "FORMAT")]
+    pub format: Option<WorkSetOutputFormat>,
+
+    /// Alias for --format workset
+    #[arg(long, conflicts_with = "format")]
+    pub json: bool,
+
+    /// Alias for --format refs
+    #[arg(long, conflicts_with_all = ["format", "json"])]
+    pub refs: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -2233,6 +2262,19 @@ mod tests {
                 assert_eq!(args.format, Some(WorkSetOutputFormat::Timeline));
             }
             _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn nav_accepts_motion_and_output_flags() {
+        let cli = Cli::try_parse_from(["sivtr", "nav", "@hit", "<+1>2", "--refs"]).unwrap();
+        match cli.command {
+            Some(Commands::Nav(args)) => {
+                assert_eq!(args.source, "@hit");
+                assert_eq!(args.motion, "<+1>2");
+                assert!(args.refs);
+            }
+            _ => panic!("expected nav command"),
         }
     }
 

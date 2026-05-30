@@ -13,6 +13,7 @@ pub mod history;
 pub mod hotkey;
 pub mod import;
 pub mod init;
+pub mod nav;
 pub mod pipe;
 pub mod records;
 pub mod run;
