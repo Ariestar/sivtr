@@ -136,13 +136,17 @@ const NUSHELL_HOOK: &str = r#"# >>> sivtr shell integration >>>
 $env.SIVTR_TERMINAL_ID = $"($nu.pid)"
 if (($env.SIVTR_PROMPT_WRAPPED? | default false) != true) {
     let _sivtr_orig_prompt_command = ($env.PROMPT_COMMAND? | default {|| "" })
+    $env.SIVTR_PROMPT_CACHE = ($nu.temp-dir | path join $"sivtr_prompt_($nu.pid).txt")
+    def _sivtr_render_prompt [] {
+        do --ignore-errors $_sivtr_orig_prompt_command | default ""
+    }
     $env.PROMPT_COMMAND = {||
-        let rendered = (do $_sivtr_orig_prompt_command)
-        $env.SIVTR_RENDERED_PROMPT = ($rendered | into string)
+        let rendered = (_sivtr_render_prompt | into string)
+        do --ignore-errors { $rendered | save --force $env.SIVTR_PROMPT_CACHE }
         $rendered
     }
 
-    def _sivtr_precmd [] {
+    def --env _sivtr_precmd [] {
         let last = (history | last 1 | get 0?)
         $env.SIVTR_COMMAND_CWD = ($env.SIVTR_NEXT_COMMAND_CWD? | default "")
         if $last != null {
@@ -152,7 +156,7 @@ if (($env.SIVTR_PROMPT_WRAPPED? | default false) != true) {
         }
         $env.SIVTR_COMMAND_ENDED_AT = (date now | into string)
         $env.SIVTR_LAST_EXIT_CODE = ($env.LAST_EXIT_CODE? | default "" | into string)
-        $env.SIVTR_LAST_PROMPT = ($env.SIVTR_RENDERED_PROMPT? | default "")
+        $env.SIVTR_LAST_PROMPT = (do --ignore-errors { open --raw $env.SIVTR_PROMPT_CACHE } | default "")
         try { ^sivtr flush } catch {}
         $env.SIVTR_NEXT_COMMAND_CWD = (pwd)
     }
@@ -947,9 +951,13 @@ mod tests {
     }
 
     #[test]
-    fn nushell_hook_reuses_rendered_prompt() {
-        assert!(NUSHELL_HOOK.contains("SIVTR_RENDERED_PROMPT"));
-        assert!(!NUSHELL_HOOK.contains("do $env.PROMPT_COMMAND"));
+    fn nushell_hook_reuses_rendered_prompt_for_flush() {
+        assert!(NUSHELL_HOOK.contains("SIVTR_PROMPT_CACHE"));
+        assert!(NUSHELL_HOOK.contains("save --force $env.SIVTR_PROMPT_CACHE"));
+        assert!(NUSHELL_HOOK.contains("open --raw $env.SIVTR_PROMPT_CACHE"));
+        assert!(NUSHELL_HOOK.contains("def --env _sivtr_precmd"));
+        assert!(!NUSHELL_HOOK.contains("SIVTR_RENDERED_PROMPT"));
+        assert!(!NUSHELL_HOOK.contains("SIVTR_LAST_PROMPT = (_sivtr_render_prompt"));
     }
 
     #[test]
