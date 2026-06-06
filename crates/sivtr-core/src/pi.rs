@@ -51,7 +51,9 @@ fn update_meta(meta: &mut AgentSessionMeta, value: &Value) {
     }
 
     meta.id = value.get("id").and_then(Value::as_str).map(str::to_string);
-    meta.cwd = value.get("cwd").and_then(Value::as_str).map(str::to_string);
+    if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
+        meta.add_cwd(cwd);
+    }
 }
 
 fn apply_event(session: &mut AgentSession, value: &Value) {

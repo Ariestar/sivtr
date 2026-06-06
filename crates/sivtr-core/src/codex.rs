@@ -207,10 +207,9 @@ fn parse_session_meta(path: &Path) -> Result<AgentSessionMeta> {
             .get("id")
             .and_then(Value::as_str)
             .map(str::to_string);
-        meta.cwd = payload
-            .get("cwd")
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        if let Some(cwd) = payload.get("cwd").and_then(Value::as_str) {
+            meta.add_cwd(cwd);
+        }
     })
 }
 
