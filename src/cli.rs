@@ -500,6 +500,33 @@ Examples:
   sivtr copy opencode all --lines 1:20
 ";
 
+const COPY_HERMES_AFTER_HELP: &str = "\
+Defaults:
+  `sivtr copy hermes` copies the last completed user + assistant turn
+  from the current Hermes session.
+
+Session Resolution:
+  By default, sivtr reads the newest Hermes session.
+  `--session N` picks the Nth newest selectable Hermes session
+  (the same session numbering shown in `--pick`).
+  `--session ID` matches a session id or id prefix.
+
+Modes:
+  sivtr copy hermes       Copy the last user + assistant turn
+  sivtr copy hermes out   Copy the last assistant reply
+  sivtr copy hermes in    Copy the last user message
+  sivtr copy hermes tool  Copy the last tool output
+  sivtr copy hermes all   Copy the whole parsed session
+
+Examples:
+  sivtr copy hermes
+  sivtr copy hermes --session 2
+  sivtr copy hermes --session 20260426_134409_4f3e2502
+  sivtr copy hermes out --print
+  sivtr copy hermes --pick
+  sivtr copy hermes all --lines 1:20
+";
+
 const DIFF_AFTER_HELP: &str = "\
 Defaults:
   `sivtr diff <left> <right>` compares two command blocks from the current session.
@@ -821,6 +848,10 @@ pub enum CopySubcommand {
     /// Copy content from the current OpenCode conversation session
     #[command(name = "opencode", after_help = COPY_OPENCODE_AFTER_HELP)]
     OpenCode(AgentCopyCommand),
+
+    /// Copy content from the current Hermes conversation session
+    #[command(after_help = COPY_HERMES_AFTER_HELP)]
+    Hermes(AgentCopyCommand),
 
     /// Copy content from the current Pi conversation session
     #[command(after_help = COPY_PI_AFTER_HELP)]
@@ -1837,6 +1868,30 @@ mod tests {
         assert_eq!(
             "pi".parse::<HotkeyProviderSelection>().unwrap(),
             HotkeyProviderSelection::provider(AgentProvider::Pi)
+        );
+    }
+
+    #[test]
+    fn hermes_copy_accepts_nested_mode() {
+        let cli = Cli::try_parse_from(["sivtr", "copy", "hermes", "out", "--print"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Copy(cmd)) => match cmd.mode {
+                Some(CopySubcommand::Hermes(hermes)) => match hermes.mode {
+                    Some(AgentCopyMode::Out(args)) => assert!(args.common.common.print),
+                    _ => panic!("expected copy hermes out mode"),
+                },
+                _ => panic!("expected copy hermes mode"),
+            },
+            _ => panic!("expected copy command"),
+        }
+    }
+
+    #[test]
+    fn hermes_provider_selection_is_supported() {
+        assert_eq!(
+            "hermes".parse::<HotkeyProviderSelection>().unwrap(),
+            HotkeyProviderSelection::provider(AgentProvider::Hermes)
         );
     }
 

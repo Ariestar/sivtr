@@ -5,6 +5,7 @@ pub mod claude;
 pub mod codex;
 pub mod config;
 pub mod export;
+pub mod hermes;
 pub mod history;
 pub mod opencode;
 pub mod parse;
