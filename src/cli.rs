@@ -371,28 +371,28 @@ Examples:
   sivtr copy ref claude/abc123/4 --cwd /path/to/project
 ";
 
-const COPY_CODEX_AFTER_HELP: &str = "\
+const COPY_AGENT_AFTER_HELP: &str = "\
 Defaults:
-  `sivtr copy codex` copies the last completed user + assistant turn
-  from the current Codex session.
+  `sivtr copy <provider>` copies the last completed user + assistant turn
+  from the selected agent session.
 
 Session Resolution:
-  By default, sivtr reads the newest Codex rollout whose `cwd`
-  matches the current working directory.
-  `--session N` picks the Nth newest selectable Codex session
+  By default, sivtr reads the newest selectable provider session, preferring
+  a session from the current working directory when the provider records cwd.
+  `--session N` picks the Nth newest selectable session
   (the same session numbering shown in `--pick`).
   `--session ID` matches a session id or id prefix.
 
 Selector Semantics:
-  Selection is relative to the newest matching Codex item.
+  Selection is relative to the newest matching provider item.
   `1` means the latest turn/message/tool output, `2` means the 2nd-latest.
 
 Modes:
-  sivtr copy codex       Copy the last user + assistant turn
-  sivtr copy codex out   Copy the last assistant reply
-  sivtr copy codex in    Copy the last user message
-  sivtr copy codex tool  Copy the last tool output
-  sivtr copy codex all   Copy the whole parsed session
+  sivtr copy <provider>       Copy the last user + assistant turn
+  sivtr copy <provider> out   Copy the last assistant reply
+  sivtr copy <provider> in    Copy the last user message
+  sivtr copy <provider> tool  Copy the last tool output
+  sivtr copy <provider> all   Copy the whole parsed session
 
 Filters:
   Filters run after the selected text is assembled.
@@ -400,130 +400,9 @@ Filters:
 
 Examples:
   sivtr copy codex
-  sivtr copy codex --session 2
-  sivtr copy codex --session 019df7fb
-  sivtr copy codex 2
-  sivtr copy codex 2..4
-  sivtr copy codex out --session 2 --print
-  sivtr copy codex --session 2 --pick
-  sivtr copy codex out --pick
-  sivtr copy codex tool --regex error
-  sivtr copy codex all --lines 1:20
-";
-
-const COPY_CLAUDE_AFTER_HELP: &str = "\
-Defaults:
-  `sivtr copy claude` copies the last completed user + assistant turn
-  from the current Claude Code session.
-
-Session Resolution:
-  By default, sivtr reads the newest Claude Code transcript whose `cwd`
-  matches the current working directory.
-  `--session N` picks the Nth newest selectable Claude session
-  (the same session numbering shown in `--pick`).
-  `--session ID` matches a session id or id prefix.
-
-Selector Semantics:
-  Selection is relative to the newest matching Claude Code item.
-  `1` means the latest turn/message/tool output, `2` means the 2nd-latest.
-
-Modes:
-  sivtr copy claude       Copy the last user + assistant turn
-  sivtr copy claude out   Copy the last assistant reply
-  sivtr copy claude in    Copy the last user message
-  sivtr copy claude tool  Copy the last tool output
-  sivtr copy claude all   Copy the whole parsed session
-
-Examples:
-  sivtr copy claude
-  sivtr copy claude --session 2
-  sivtr copy claude --session abc123
   sivtr copy claude out --print
-  sivtr copy claude --session 2 --pick
-  sivtr copy claude --pick
-  sivtr copy claude all --lines 1:20
-";
-
-const COPY_PI_AFTER_HELP: &str = "\
-Defaults:
-  `sivtr copy pi` copies the last completed user + assistant turn
-  from the current Pi session.
-
-Session Resolution:
-  By default, sivtr reads the newest Pi transcript whose `cwd`
-  matches the current working directory.
-  `--session N` picks the Nth newest selectable Pi session
-  (the same session numbering shown in `--pick`).
-  `--session ID` matches a session id or id prefix.
-
-Modes:
-  sivtr copy pi       Copy the last user + assistant turn
-  sivtr copy pi out   Copy the last assistant reply
-  sivtr copy pi in    Copy the last user message
-  sivtr copy pi tool  Copy the last tool output
-  sivtr copy pi all   Copy the whole parsed session
-
-Examples:
-  sivtr copy pi
   sivtr copy pi --session 2
-  sivtr copy pi --session 019e4a3d
-  sivtr copy pi out --print
-  sivtr copy pi --pick
-  sivtr copy pi all --lines 1:20
-";
-
-const COPY_OPENCODE_AFTER_HELP: &str = "\
-Defaults:
-  `sivtr copy opencode` copies the last completed user + assistant turn
-  from the current OpenCode session.
-
-Session Resolution:
-  By default, sivtr reads the newest OpenCode session whose `directory`
-  matches the current working directory.
-  `--session N` picks the Nth newest selectable OpenCode session
-  (the same session numbering shown in `--pick`).
-  `--session ID` matches a session id or id prefix.
-
-Modes:
-  sivtr copy opencode       Copy the last user + assistant turn
-  sivtr copy opencode out   Copy the last assistant reply
-  sivtr copy opencode in    Copy the last user message
-  sivtr copy opencode tool  Copy the last tool output
-  sivtr copy opencode all   Copy the whole parsed session
-
-Examples:
-  sivtr copy opencode
-  sivtr copy opencode --session 2
-  sivtr copy opencode --session ses_abc123
-  sivtr copy opencode out --print
   sivtr copy opencode --pick
-  sivtr copy opencode all --lines 1:20
-";
-
-const COPY_HERMES_AFTER_HELP: &str = "\
-Defaults:
-  `sivtr copy hermes` copies the last completed user + assistant turn
-  from the current Hermes session.
-
-Session Resolution:
-  By default, sivtr reads the newest Hermes session.
-  `--session N` picks the Nth newest selectable Hermes session
-  (the same session numbering shown in `--pick`).
-  `--session ID` matches a session id or id prefix.
-
-Modes:
-  sivtr copy hermes       Copy the last user + assistant turn
-  sivtr copy hermes out   Copy the last assistant reply
-  sivtr copy hermes in    Copy the last user message
-  sivtr copy hermes tool  Copy the last tool output
-  sivtr copy hermes all   Copy the whole parsed session
-
-Examples:
-  sivtr copy hermes
-  sivtr copy hermes --session 2
-  sivtr copy hermes --session 20260426_134409_4f3e2502
-  sivtr copy hermes out --print
-  sivtr copy hermes --pick
   sivtr copy hermes all --lines 1:20
 ";
 
@@ -570,7 +449,7 @@ const SEARCH_AFTER_HELP: &str = r##"
 Target selectors:
   terminal[/<session>[/<record>[/<line>]]]  Search terminal command records
   agent[/<session>[/<turn>[/<line>]]]       Search all AI/agent records
-  <provider>[/<session>[/<turn>[/<line>]]] Search one provider: codex, claude, pi, opencode
+  <provider>[/<session>[/<turn>[/<line>]]] Search one provider: codex, claude, hermes, pi, opencode
   Use * for wildcard path segments, e.g. terminal/*/3 or pi/*/*.
 
 Filters:
@@ -838,23 +717,23 @@ pub enum CopySubcommand {
     Ref(CopyRefArgs),
 
     /// Copy content from the current Codex conversation session
-    #[command(after_help = COPY_CODEX_AFTER_HELP)]
+    #[command(after_help = COPY_AGENT_AFTER_HELP)]
     Codex(AgentCopyCommand),
 
     /// Copy content from the current Claude Code conversation session
-    #[command(after_help = COPY_CLAUDE_AFTER_HELP)]
+    #[command(after_help = COPY_AGENT_AFTER_HELP)]
     Claude(AgentCopyCommand),
 
     /// Copy content from the current OpenCode conversation session
-    #[command(name = "opencode", after_help = COPY_OPENCODE_AFTER_HELP)]
+    #[command(name = "opencode", after_help = COPY_AGENT_AFTER_HELP)]
     OpenCode(AgentCopyCommand),
 
     /// Copy content from the current Hermes conversation session
-    #[command(after_help = COPY_HERMES_AFTER_HELP)]
+    #[command(after_help = COPY_AGENT_AFTER_HELP)]
     Hermes(AgentCopyCommand),
 
     /// Copy content from the current Pi conversation session
-    #[command(after_help = COPY_PI_AFTER_HELP)]
+    #[command(after_help = COPY_AGENT_AFTER_HELP)]
     Pi(AgentCopyCommand),
 }
 
