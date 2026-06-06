@@ -751,16 +751,16 @@ mod tests {
             "https://github.com/arcsin1/oh-my-ppt.git",
         );
         let transcript = sessions.join("session.jsonl");
-        fs::write(
-            &transcript,
-            format!(
-                "{{\"sessionId\":\"abc\",\"cwd\":\"{}\",\"customTitle\":\"Initial\"}}\n\
-                 {{\"sessionId\":\"abc\",\"cwd\":\"{}\"}}\n",
-                dir.path().display(),
-                candidate.display()
-            ),
-        )
-        .unwrap();
+        let first_event = serde_json::json!({
+            "sessionId": "abc",
+            "cwd": dir.path(),
+            "customTitle": "Initial",
+        });
+        let second_event = serde_json::json!({
+            "sessionId": "abc",
+            "cwd": candidate,
+        });
+        fs::write(&transcript, format!("{first_event}\n{second_event}\n")).unwrap();
 
         let sessions = list_recent_jsonl_sessions(&sessions, Some(&target), |path| {
             parse_jsonl_meta(path, "Claude", 50, |meta, value| {
