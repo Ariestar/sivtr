@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -185,10 +186,12 @@ impl AgentSessionMeta {
     }
 
     fn cwd_candidates(&self) -> impl Iterator<Item = &str> {
-        self.cwd
-            .as_deref()
-            .into_iter()
-            .chain(self.cwd_history.iter().map(String::as_str))
+        self.cwd_history.iter().map(String::as_str).chain(
+            self.cwd
+                .as_deref()
+                .into_iter()
+                .filter(|cwd| !self.cwd_history.iter().any(|existing| existing == cwd)),
+        )
     }
 }
 
@@ -459,6 +462,7 @@ pub fn normalize_path_for_match(path: &Path) -> String {
 struct WorkspaceMatchTarget {
     normalized_path: String,
     remote_keys: HashSet<String>,
+    candidate_remote_keys: RefCell<HashMap<String, HashSet<String>>>,
 }
 
 impl WorkspaceMatchTarget {
@@ -466,19 +470,37 @@ impl WorkspaceMatchTarget {
         Self {
             normalized_path: normalize_path_for_match(path),
             remote_keys: git_remote_keys(path),
+            candidate_remote_keys: RefCell::new(HashMap::new()),
         }
     }
 
     fn matches(&self, candidate: &Path) -> bool {
-        if normalize_path_for_match(candidate) == self.normalized_path {
+        let normalized_candidate = normalize_path_for_match(candidate);
+        if normalized_candidate == self.normalized_path {
             return true;
         }
 
+        if self.remote_keys.is_empty() {
+            return false;
+        }
+
+        {
+            let cache = self.candidate_remote_keys.borrow();
+            if let Some(candidate_keys) = cache.get(&normalized_candidate) {
+                return candidate_keys
+                    .iter()
+                    .any(|candidate_key| self.remote_keys.contains(candidate_key));
+            }
+        }
+
         let candidate_keys = git_remote_keys(candidate);
-        !self.remote_keys.is_empty()
-            && candidate_keys
-                .iter()
-                .any(|candidate_key| self.remote_keys.contains(candidate_key))
+        let matches = candidate_keys
+            .iter()
+            .any(|candidate_key| self.remote_keys.contains(candidate_key));
+        self.candidate_remote_keys
+            .borrow_mut()
+            .insert(normalized_candidate, candidate_keys);
+        matches
     }
 }
 
@@ -558,19 +580,37 @@ fn normalize_remote_url(url: &str) -> Option<String> {
     }
 
     let without_suffix = trimmed.strip_suffix(".git").unwrap_or(trimmed);
-    let normalized = if let Some(path) = without_suffix.strip_prefix("git@github.com:") {
-        format!("github.com/{path}")
-    } else if let Some(path) = without_suffix.strip_prefix("ssh://git@github.com/") {
-        format!("github.com/{path}")
-    } else if let Some(path) = without_suffix.strip_prefix("https://github.com/") {
-        format!("github.com/{path}")
-    } else if let Some(path) = without_suffix.strip_prefix("http://github.com/") {
-        format!("github.com/{path}")
+    let normalized = if let Some((_, rest)) = without_suffix.split_once("://") {
+        normalize_remote_authority_path(rest).unwrap_or_else(|| without_suffix.to_string())
+    } else if let Some((authority, path)) = split_scp_like_remote(without_suffix) {
+        format!(
+            "{}/{}",
+            authority.rsplit('@').next().unwrap_or(authority),
+            path.trim_start_matches('/')
+        )
     } else {
         without_suffix.to_string()
     };
 
     Some(normalized.replace('\\', "/").to_lowercase())
+}
+
+fn normalize_remote_authority_path(rest: &str) -> Option<String> {
+    let (authority, path) = rest.split_once('/')?;
+    let host = authority.rsplit('@').next()?.trim();
+    let path = path.trim_start_matches('/').trim();
+    if host.is_empty() || path.is_empty() {
+        return None;
+    }
+    Some(format!("{host}/{path}"))
+}
+
+fn split_scp_like_remote(remote: &str) -> Option<(&str, &str)> {
+    let (authority, path) = remote.split_once(':')?;
+    if !authority.contains('@') || path.trim().is_empty() {
+        return None;
+    }
+    Some((authority, path))
 }
 
 fn is_trailing_partial_json_line(error: &serde_json::Error) -> bool {
@@ -691,6 +731,39 @@ mod tests {
             normalize_remote_url("ssh://git@github.com/Ariestar/sivtr.git/").as_deref(),
             Some("github.com/ariestar/sivtr")
         );
+    }
+
+    #[test]
+    fn normalizes_generic_git_remote_url_forms() {
+        assert_eq!(
+            normalize_remote_url("https://gitlab.example.com/team/sivtr.git").as_deref(),
+            Some("gitlab.example.com/team/sivtr")
+        );
+        assert_eq!(
+            normalize_remote_url("git@gitlab.example.com:team/sivtr.git").as_deref(),
+            Some("gitlab.example.com/team/sivtr")
+        );
+        assert_eq!(
+            normalize_remote_url("ssh://git@gitlab.example.com:2222/team/sivtr.git").as_deref(),
+            Some("gitlab.example.com:2222/team/sivtr")
+        );
+    }
+
+    #[test]
+    fn cwd_candidates_do_not_duplicate_the_primary_cwd() {
+        let mut tracked = AgentSessionMeta::default();
+        tracked.add_cwd("/repo");
+        tracked.add_cwd("/repo/subdir");
+        assert_eq!(
+            tracked.cwd_candidates().collect::<Vec<_>>(),
+            vec!["/repo", "/repo/subdir"]
+        );
+
+        let fallback = AgentSessionMeta {
+            cwd: Some("/repo".to_string()),
+            ..AgentSessionMeta::default()
+        };
+        assert_eq!(fallback.cwd_candidates().collect::<Vec<_>>(), vec!["/repo"]);
     }
 
     #[test]
