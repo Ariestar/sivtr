@@ -147,7 +147,10 @@ fn execute_semantic(args: &WorkSemanticArgs) -> Result<()> {
         return Ok(());
     }
 
-    let anchors: Vec<WorkRef> = results.iter().map(|result| result.record_ref.clone()).collect();
+    let anchors: Vec<WorkRef> = results
+        .iter()
+        .map(|result| result.record_ref.clone())
+        .collect();
     let matched = workset::records_for_anchors(records.records(), &anchors);
     let set = WorkSet::with_anchors(cwd.display().to_string(), matched, anchors);
     set.save_last()?;
@@ -230,101 +233,9 @@ fn records_for_session_marker(cwd: &Path, marker: &WorkSessionMarker) -> Result<
 }
 
 fn tags_match(filter: &[String], tags: &[String]) -> bool {
-<<<<<<< HEAD
-    filter.iter().all(|tag| tags.iter().any(|part_tag| part_tag == tag))
-=======
-    filter.iter().all(|t| tags.iter().any(|pt| pt == t))
-}
-
-fn resolve_cwd(cwd: Option<&Path>) -> Result<std::path::PathBuf> {
-    Ok(cwd
-        .map(Path::to_path_buf)
-        .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?))
-}
-
-fn execute_semantic(args: &WorkSemanticArgs) -> Result<()> {
-    let cwd = resolve_cwd(args.cwd.as_deref())?;
-    let filter_tags = args.tag.clone();
-    let records = current_work_record_index(
-        &AgentProvider::all()
-            .iter()
-            .map(|s| s.provider)
-            .collect::<Vec<_>>(),
-        &cwd,
-        None,
-    )?;
-    let results = semantic_search(records.records(), &args.query, args.limit, |record| {
-        tags_match_record(&record.parts, &filter_tags)
-    });
-    if results.is_empty() {
-        println!(
-            "No semantically relevant records found for `{}`",
-            args.query
-        );
-        return Ok(());
-    }
-    let anchors: Vec<WorkRef> = results.iter().map(|r| r.record_ref.clone()).collect();
-    let matched = workset::records_for_anchors(records.records(), &anchors);
-    let set = WorkSet::with_anchors(cwd.display().to_string(), matched, anchors);
-    set.save_last()?;
-    for result in &results {
-        let record = records
-            .resolve(&result.record_ref)
-            .with_context(|| format!("Record not found: {}", result.record_ref))?;
-        eprintln!(
-            "{}  [{:<5}]  (score: {}, terms: {})",
-            result.record_ref,
-            record.kind_label(),
-            result.score,
-            result.matched_terms.join(", "),
-        );
-    }
-    show::print_workset(&set, show::resolve_output_format(None, false, false, true))?;
-    Ok(())
-}
-
-fn execute_links(args: &WorkLinksArgs) -> Result<()> {
-    let cwd = resolve_cwd(args.cwd.as_deref())?;
-    let records = current_work_record_index(
-        &AgentProvider::all()
-            .iter()
-            .map(|s| s.provider)
-            .collect::<Vec<_>>(),
-        &cwd,
-        None,
-    )?;
-    let mut links = records.infer_links();
-    if let Some(kind) = &args.kind {
-        let wanted = match kind.to_lowercase().as_str() {
-            "caused_by" => WorkLinkKind::CausedBy,
-            "follows_up" => WorkLinkKind::FollowsUp,
-            "references" => WorkLinkKind::References,
-            _ => bail!("Unknown link kind `{kind}`; expected caused_by, follows_up, or references"),
-        };
-        links.retain(|l| l.kind == wanted);
-    }
-    if let Some(ref_prefix) = &args.ref_ {
-        links.retain(|l| {
-            l.from.to_string().starts_with(ref_prefix) || l.to.to_string().starts_with(ref_prefix)
-        });
-    }
-    if args.json {
-        println!("{}", serde_json::to_string_pretty(&links)?);
-        return Ok(());
-    }
-    if links.is_empty() {
-        println!("No causal links found.");
-        return Ok(());
-    }
-    for link in &links {
-        let kind_str = serde_json::to_value(link.kind)
-            .ok()
-            .and_then(|v| v.as_str().map(str::to_string))
-            .unwrap_or_else(|| format!("{:?}", link.kind));
-        println!("{}  →  {}  [{}]", link.from, link.to, kind_str);
-    }
-    Ok(())
->>>>>>> f65cdcc (fix: resolve all six architecture issues)
+    filter
+        .iter()
+        .all(|tag| tags.iter().any(|part_tag| part_tag == tag))
 }
 
 fn tags_match_record(parts: &[sivtr_core::record::WorkPart], filter: &[String]) -> bool {
