@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -165,7 +167,32 @@ pub struct AgentSessionInfo {
 pub struct AgentSessionMeta {
     pub id: Option<String>,
     pub cwd: Option<String>,
+    pub cwd_history: Vec<String>,
     pub title: Option<String>,
+}
+
+impl AgentSessionMeta {
+    pub fn add_cwd(&mut self, cwd: impl Into<String>) {
+        let cwd = cwd.into();
+        if cwd.trim().is_empty() {
+            return;
+        }
+        if self.cwd.is_none() {
+            self.cwd = Some(cwd.clone());
+        }
+        if !self.cwd_history.iter().any(|existing| existing == &cwd) {
+            self.cwd_history.push(cwd);
+        }
+    }
+
+    fn cwd_candidates(&self) -> impl Iterator<Item = &str> {
+        self.cwd_history.iter().map(String::as_str).chain(
+            self.cwd
+                .as_deref()
+                .into_iter()
+                .filter(|cwd| !self.cwd_history.iter().any(|existing| existing == cwd)),
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -232,18 +259,16 @@ pub fn list_recent_jsonl_sessions(
     cwd: Option<&Path>,
     parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
 ) -> Result<Vec<AgentSessionInfo>> {
-    let wanted = cwd.map(normalize_path_for_match);
+    let wanted = cwd.map(WorkspaceMatchTarget::new);
     let mut sessions = Vec::new();
 
     for path in jsonl_files(root)? {
         let meta = parse_meta(&path)?;
-        if let Some(wanted) = wanted.as_deref() {
-            let matches_cwd = meta
-                .cwd
-                .as_deref()
-                .map(|cwd| normalize_path_for_match(Path::new(cwd)) == wanted)
-                .unwrap_or(false);
-            if !matches_cwd {
+        if let Some(wanted) = wanted.as_ref() {
+            if !meta
+                .cwd_candidates()
+                .any(|candidate| wanted.matches(Path::new(candidate)))
+            {
                 continue;
             }
         }
@@ -339,9 +364,6 @@ pub fn parse_jsonl_meta(
             )
         })?;
         update_meta(&mut meta, &value);
-        if meta.id.is_some() && meta.cwd.is_some() && meta.title.is_some() {
-            break;
-        }
     }
 
     Ok(meta)
@@ -437,6 +459,160 @@ pub fn normalize_path_for_match(path: &Path) -> String {
         .to_lowercase()
 }
 
+struct WorkspaceMatchTarget {
+    normalized_path: String,
+    remote_keys: HashSet<String>,
+    candidate_remote_keys: RefCell<HashMap<String, HashSet<String>>>,
+}
+
+impl WorkspaceMatchTarget {
+    fn new(path: &Path) -> Self {
+        Self {
+            normalized_path: normalize_path_for_match(path),
+            remote_keys: git_remote_keys(path),
+            candidate_remote_keys: RefCell::new(HashMap::new()),
+        }
+    }
+
+    fn matches(&self, candidate: &Path) -> bool {
+        let normalized_candidate = normalize_path_for_match(candidate);
+        if normalized_candidate == self.normalized_path {
+            return true;
+        }
+
+        if self.remote_keys.is_empty() {
+            return false;
+        }
+
+        {
+            let cache = self.candidate_remote_keys.borrow();
+            if let Some(candidate_keys) = cache.get(&normalized_candidate) {
+                return candidate_keys
+                    .iter()
+                    .any(|candidate_key| self.remote_keys.contains(candidate_key));
+            }
+        }
+
+        let candidate_keys = git_remote_keys(candidate);
+        let matches = candidate_keys
+            .iter()
+            .any(|candidate_key| self.remote_keys.contains(candidate_key));
+        self.candidate_remote_keys
+            .borrow_mut()
+            .insert(normalized_candidate, candidate_keys);
+        matches
+    }
+}
+
+fn git_remote_keys(path: &Path) -> HashSet<String> {
+    let Some(root) = git_root(path) else {
+        return HashSet::new();
+    };
+    let Some(config_path) = git_config_path(&root) else {
+        return HashSet::new();
+    };
+    parse_git_remote_keys(&config_path)
+}
+
+fn git_root(path: &Path) -> Option<PathBuf> {
+    let mut dir = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| path.to_path_buf())
+    };
+
+    loop {
+        if dir.join(".git").exists() {
+            return Some(dir);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
+
+fn git_config_path(root: &Path) -> Option<PathBuf> {
+    let dot_git = root.join(".git");
+    if dot_git.is_dir() {
+        return Some(dot_git.join("config"));
+    }
+
+    let gitdir = fs::read_to_string(&dot_git).ok()?;
+    let relative = gitdir.trim().strip_prefix("gitdir:")?.trim();
+    let git_dir = resolve_gitdir(root, relative);
+    Some(git_dir.join("config"))
+}
+
+fn resolve_gitdir(root: &Path, gitdir: &str) -> PathBuf {
+    let path = PathBuf::from(gitdir);
+    if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    }
+}
+
+fn parse_git_remote_keys(config_path: &Path) -> HashSet<String> {
+    fs::read_to_string(config_path)
+        .ok()
+        .map(|config| {
+            config
+                .lines()
+                .filter_map(remote_key_from_config_line)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn remote_key_from_config_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    let url = trimmed.strip_prefix("url")?.trim_start();
+    let url = url.strip_prefix('=')?.trim();
+    normalize_remote_url(url)
+}
+
+fn normalize_remote_url(url: &str) -> Option<String> {
+    let trimmed = url.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let without_suffix = trimmed.strip_suffix(".git").unwrap_or(trimmed);
+    let normalized = if let Some((_, rest)) = without_suffix.split_once("://") {
+        normalize_remote_authority_path(rest).unwrap_or_else(|| without_suffix.to_string())
+    } else if let Some((authority, path)) = split_scp_like_remote(without_suffix) {
+        format!(
+            "{}/{}",
+            authority.rsplit('@').next().unwrap_or(authority),
+            path.trim_start_matches('/')
+        )
+    } else {
+        without_suffix.to_string()
+    };
+
+    Some(normalized.replace('\\', "/").to_lowercase())
+}
+
+fn normalize_remote_authority_path(rest: &str) -> Option<String> {
+    let (authority, path) = rest.split_once('/')?;
+    let host = authority.rsplit('@').next()?.trim();
+    let path = path.trim_start_matches('/').trim();
+    if host.is_empty() || path.is_empty() {
+        return None;
+    }
+    Some(format!("{host}/{path}"))
+}
+
+fn split_scp_like_remote(remote: &str) -> Option<(&str, &str)> {
+    let (authority, path) = remote.split_once(':')?;
+    if !authority.contains('@') || path.trim().is_empty() {
+        return None;
+    }
+    Some((authority, path))
+}
+
 fn is_trailing_partial_json_line(error: &serde_json::Error) -> bool {
     matches!(error.classify(), serde_json::error::Category::Eof)
 }
@@ -525,4 +701,166 @@ fn format_block_with_heading(block: &AgentBlock, text: &str) -> Option<String> {
     };
 
     Some(format!("## {heading}\n{text}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn write_git_remote(repo: &Path, name: &str, url: &str) {
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::write(
+            repo.join(".git").join("config"),
+            format!("[remote \"{name}\"]\n\turl = {url}\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn normalizes_common_github_remote_url_forms() {
+        assert_eq!(
+            normalize_remote_url("https://github.com/Ariestar/sivtr.git").as_deref(),
+            Some("github.com/ariestar/sivtr")
+        );
+        assert_eq!(
+            normalize_remote_url("git@github.com:Ariestar/sivtr.git").as_deref(),
+            Some("github.com/ariestar/sivtr")
+        );
+        assert_eq!(
+            normalize_remote_url("ssh://git@github.com/Ariestar/sivtr.git/").as_deref(),
+            Some("github.com/ariestar/sivtr")
+        );
+    }
+
+    #[test]
+    fn normalizes_generic_git_remote_url_forms() {
+        assert_eq!(
+            normalize_remote_url("https://gitlab.example.com/team/sivtr.git").as_deref(),
+            Some("gitlab.example.com/team/sivtr")
+        );
+        assert_eq!(
+            normalize_remote_url("git@gitlab.example.com:team/sivtr.git").as_deref(),
+            Some("gitlab.example.com/team/sivtr")
+        );
+        assert_eq!(
+            normalize_remote_url("ssh://git@gitlab.example.com:2222/team/sivtr.git").as_deref(),
+            Some("gitlab.example.com:2222/team/sivtr")
+        );
+    }
+
+    #[test]
+    fn cwd_candidates_do_not_duplicate_the_primary_cwd() {
+        let mut tracked = AgentSessionMeta::default();
+        tracked.add_cwd("/repo");
+        tracked.add_cwd("/repo/subdir");
+        assert_eq!(
+            tracked.cwd_candidates().collect::<Vec<_>>(),
+            vec!["/repo", "/repo/subdir"]
+        );
+
+        let fallback = AgentSessionMeta {
+            cwd: Some("/repo".to_string()),
+            ..AgentSessionMeta::default()
+        };
+        assert_eq!(fallback.cwd_candidates().collect::<Vec<_>>(), vec!["/repo"]);
+    }
+
+    #[test]
+    fn matches_repositories_with_shared_remote() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("oh-my-ppt-fork");
+        let candidate = dir.path().join("oh-my-ppt");
+        fs::create_dir_all(&target).unwrap();
+        fs::create_dir_all(&candidate).unwrap();
+        write_git_remote(
+            &target,
+            "upstream",
+            "https://github.com/arcsin1/oh-my-ppt.git",
+        );
+        write_git_remote(&candidate, "origin", "git@github.com:arcsin1/oh-my-ppt.git");
+
+        assert!(WorkspaceMatchTarget::new(&target).matches(&candidate));
+    }
+
+    #[test]
+    fn does_not_match_unrelated_repositories() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("oh-my-ppt-fork");
+        let candidate = dir.path().join("sivtr");
+        fs::create_dir_all(&target).unwrap();
+        fs::create_dir_all(&candidate).unwrap();
+        write_git_remote(
+            &target,
+            "upstream",
+            "https://github.com/arcsin1/oh-my-ppt.git",
+        );
+        write_git_remote(
+            &candidate,
+            "origin",
+            "https://github.com/Ariestar/sivtr.git",
+        );
+
+        assert!(!WorkspaceMatchTarget::new(&target).matches(&candidate));
+    }
+
+    #[test]
+    fn includes_sessions_with_later_matching_cwd_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = dir.path().join("sessions");
+        let target = dir.path().join("oh-my-ppt-fork");
+        let candidate = dir.path().join("oh-my-ppt");
+        fs::create_dir_all(&sessions).unwrap();
+        fs::create_dir_all(&target).unwrap();
+        fs::create_dir_all(&candidate).unwrap();
+        write_git_remote(
+            &target,
+            "upstream",
+            "https://github.com/arcsin1/oh-my-ppt.git",
+        );
+        write_git_remote(
+            &candidate,
+            "origin",
+            "https://github.com/arcsin1/oh-my-ppt.git",
+        );
+        let transcript = sessions.join("session.jsonl");
+        let first_event = serde_json::json!({
+            "sessionId": "abc",
+            "cwd": dir.path(),
+            "customTitle": "Initial",
+        });
+        let second_event = serde_json::json!({
+            "sessionId": "abc",
+            "cwd": candidate,
+        });
+        fs::write(&transcript, format!("{first_event}\n{second_event}\n")).unwrap();
+
+        let sessions = list_recent_jsonl_sessions(&sessions, Some(&target), |path| {
+            parse_jsonl_meta(path, "Claude", 50, |meta, value| {
+                if meta.id.is_none() {
+                    meta.id = value
+                        .get("sessionId")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                }
+                if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
+                    meta.add_cwd(cwd);
+                }
+                if meta.title.is_none() {
+                    meta.title = value
+                        .get("customTitle")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                }
+            })
+        })
+        .unwrap();
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id.as_deref(), Some("abc"));
+        assert_eq!(
+            sessions[0].cwd.as_deref(),
+            Some(dir.path().to_str().unwrap())
+        );
+    }
 }

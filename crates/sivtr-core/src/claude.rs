@@ -48,8 +48,8 @@ fn update_meta(meta: &mut AgentSessionMeta, value: &Value) {
             .and_then(Value::as_str)
             .map(str::to_string);
     }
-    if meta.cwd.is_none() {
-        meta.cwd = value.get("cwd").and_then(Value::as_str).map(str::to_string);
+    if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
+        meta.add_cwd(cwd);
     }
     if meta.title.is_none() {
         meta.title = event_title(value);
@@ -351,6 +351,29 @@ mod tests {
     use crate::ai::{
         format_blocks, select_blocks, AgentBlockKind, AgentSelection, AgentSessionProvider,
     };
+
+    #[test]
+    fn tracks_later_claude_cwd_events_in_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"type":"user","sessionId":"abc","cwd":"/home/jacob","customTitle":"Named session","message":{"role":"user","content":"hello"}}
+{"type":"assistant","sessionId":"abc","cwd":"/home/jacob/ref/oh-my-ppt-fork","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}
+"#,
+        )
+        .unwrap();
+
+        let meta = super::parse_session_meta(&path).unwrap();
+
+        assert_eq!(meta.id.as_deref(), Some("abc"));
+        assert_eq!(meta.cwd.as_deref(), Some("/home/jacob"));
+        assert_eq!(meta.title.as_deref(), Some("Named session"));
+        assert!(meta
+            .cwd_history
+            .iter()
+            .any(|cwd| cwd == "/home/jacob/ref/oh-my-ppt-fork"));
+    }
 
     #[test]
     fn parses_claude_messages_and_tools() {
