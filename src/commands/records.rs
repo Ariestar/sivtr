@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use sivtr_core::ai::AgentProvider;
+use sivtr_core::ai::{AgentProvider, AgentSessionProvider};
 use sivtr_core::record::{WorkRecord, WorkRecordIndex, WorkRef};
 use sivtr_core::{session, workspace};
 use std::collections::HashMap;
@@ -50,25 +50,40 @@ fn agent_records(
 
     for provider in providers {
         let source = provider.session_provider();
-        let mut sessions = source.list_recent_sessions(Some(cwd))?;
-        if let Some(limit) = recent_sessions {
-            sessions.truncate(limit);
-        }
+        records.extend(agent_records_from_source(
+            source.as_ref(),
+            cwd,
+            recent_sessions,
+        )?);
+    }
 
-        for info in sessions {
-            let session = match source.parse_session_file(&info.path) {
-                Ok(session) => session,
-                Err(error) => {
-                    eprintln!(
-                        "sivtr: warning: failed to parse {} session {}: {error:#}",
-                        source.provider().name(),
-                        info.path.display()
-                    );
-                    continue;
-                }
-            };
-            records.extend(WorkRecord::chat_turns(source.provider(), &session));
-        }
+    Ok(records)
+}
+
+fn agent_records_from_source(
+    source: &dyn AgentSessionProvider,
+    cwd: &Path,
+    recent_sessions: Option<usize>,
+) -> Result<Vec<WorkRecord>> {
+    let mut records = Vec::new();
+    let mut sessions = source.list_recent_sessions(Some(cwd))?;
+    if let Some(limit) = recent_sessions {
+        sessions.truncate(limit);
+    }
+
+    for info in sessions {
+        let session = match source.parse_session_file(&info.path) {
+            Ok(session) => session,
+            Err(error) => {
+                eprintln!(
+                    "sivtr: warning: failed to parse {} session {}: {error:#}",
+                    source.provider().name(),
+                    info.path.display()
+                );
+                continue;
+            }
+        };
+        records.extend(WorkRecord::chat_turns(source.provider(), &session));
     }
 
     Ok(records)
@@ -203,11 +218,11 @@ fn rewrite_record_session_display_id(record: &mut WorkRecord, display_id: &str) 
 mod tests {
     use super::*;
     use anyhow::Result;
+    use sivtr_core::ai::{AgentSession, AgentSessionInfo, AgentSessionProvider};
     use sivtr_core::record::{
         WorkChannel, WorkPart, WorkPartIo, WorkPartKind, WorkRecordKind, WorkSessionRef,
         WorkSource, WorkTime,
     };
-    use sivtr_core::ai::{AgentSession, AgentSessionInfo, AgentSessionProvider};
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime};
 
@@ -325,18 +340,7 @@ mod tests {
             ],
         };
 
-        let provider = source.provider();
-        let mut records = Vec::new();
-        let mut sessions = source.list_recent_sessions(Some(&cwd)).unwrap();
-        sessions.truncate(10);
-
-        for info in sessions {
-            let session = match source.parse_session_file(&info.path) {
-                Ok(session) => session,
-                Err(_) => continue,
-            };
-            records.extend(WorkRecord::chat_turns(provider, &session));
-        }
+        let records = agent_records_from_source(&source, &cwd, Some(10)).unwrap();
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].session.id, "good");

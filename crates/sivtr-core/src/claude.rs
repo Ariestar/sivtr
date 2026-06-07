@@ -351,7 +351,17 @@ mod tests {
     use crate::ai::{
         format_blocks, select_blocks, AgentBlockKind, AgentSelection, AgentSessionProvider,
     };
-    use std::env;
+    use std::{
+        env,
+        sync::{Mutex, OnceLock},
+    };
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     #[test]
     fn parses_claude_messages_and_tools() {
@@ -615,6 +625,7 @@ mod tests {
 
     #[test]
     fn skips_malformed_unrelated_sessions_during_listing() {
+        let _guard = env_lock();
         let dir = tempfile::tempdir().unwrap();
         let original_claude_home = env::var_os("CLAUDE_HOME");
         env::set_var("CLAUDE_HOME", dir.path());

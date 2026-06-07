@@ -1346,9 +1346,9 @@ mod tests {
     use super::{
         agent_session_preview, build_agent_session_choices, filter_lines_by_regex,
         filter_lines_by_spec, load_workspace_session, record_to_copy_parts, records_to_text_pairs,
-        ref_text_pair, resolve_agent_session_selector, resolved_workspace_session,
-        AgentBlockKind, AgentProvider, AgentSelection, AgentSession, AgentSessionInfo,
-        AgentSessionProvider, TextPair,
+        ref_text_pair, resolve_agent_session_selector, resolved_workspace_session, AgentBlockKind,
+        AgentProvider, AgentSelection, AgentSession, AgentSessionInfo, AgentSessionProvider,
+        TextPair,
     };
     use anyhow::Result;
     use sivtr_core::ai::AgentBlock;
