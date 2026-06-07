@@ -94,7 +94,7 @@ sivtr
 
 这个 TUI 把 terminal 和 Agent sessions 放在一起。你可以：
 
-- 在 Source 面板切换 terminal、Claude、Codex、OpenCode、Pi；
+- 在 Source 面板切换 terminal、Claude、Codex、Hermes、OpenCode、Pi；
 - 在 Sessions 面板选择某次工作记录；
 - 在 Dialogues 面板选择某条命令块或某轮对话；
 - 在 Content 面板查看具体内容；

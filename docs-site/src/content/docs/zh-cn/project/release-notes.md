@@ -12,6 +12,7 @@ description: sivtr 面向用户的发布说明。
 - 新增 `sivtr filter`：作为一等 WorkSet 过滤命令，可用于已保存变量、source selector 和 stdin `@` 管道。
 - 新增 `sivtr var`：管理命名 WorkSet 记忆，包含 `set`、`list`、`rm`、`merge`、`drop` 和 `cleanup`。
 - 新增 `sivtr nav`：用 `<`、`>N`、`+N`、`-N`、`[A..B]` 和 `~` 做确定性 anchor 移动。`nav` 不会隐式展开 child anchors。
+- 新增 Hermes agent session provider，支持 copy、picker、search、refs 和 WorkSet 工作流。
 - 新增全局 `--color auto|always|never`，控制状态和诊断输出颜色。
 
 ### Changed

@@ -61,6 +61,7 @@ max_entries = 0
 | --- | --- |
 | Codex | `~/.codex/sessions` rollout JSONL 文件 |
 | Claude Code | 当前 transcript/session 环境变量和本地 Claude transcripts |
+| Hermes | `$HERMES_HOME/sessions`；Windows 默认 `%LOCALAPPDATA%\hermes\sessions`，其他平台默认 `~/.hermes/sessions` |
 | OpenCode | OpenCode 本地数据库 |
 | Pi | Pi agent session JSONL 文件 |
 

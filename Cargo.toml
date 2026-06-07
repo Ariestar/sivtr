@@ -3,7 +3,7 @@ members = ["crates/sivtr-core", "."]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 license = "Apache-2.0"
 rust-version = "1.88"
@@ -16,8 +16,8 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-description = "Terminal output workspace for the AI era - capture, sift, browse, search, select, and reuse terminal output and AI coding sessions"
-keywords = ["terminal", "cli", "tui", "codex", "ai"]
+description = "Terminal output workspace for the AI era - capture, browse, search, select, and reuse terminal output and AI coding sessions"
+keywords = ["terminal", "cli", "tui", "agents", "ai"]
 categories = ["command-line-utilities", "development-tools"]
 exclude = [
     "/docs-site/public/demo/**",
@@ -34,7 +34,7 @@ name = "sivtr"
 path = "src/main.rs"
 
 [dependencies]
-sivtr-core = { version = "0.2.3", path = "crates/sivtr-core" }
+sivtr-core = { version = "0.2.4", path = "crates/sivtr-core" }
 chrono = { version = "0.4", features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
 ratatui = "0.29"

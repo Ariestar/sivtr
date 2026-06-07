@@ -128,6 +128,7 @@ Providers:
 | --- | --- |
 | Codex | `sivtr copy codex` |
 | Claude Code | `sivtr copy claude` |
+| Hermes | `sivtr copy hermes` |
 | OpenCode | `sivtr copy opencode` |
 | Pi | `sivtr copy pi` |
 
@@ -152,6 +153,7 @@ Examples:
 ```bash
 sivtr copy claude
 sivtr copy claude out --print
+sivtr copy hermes out --print
 sivtr copy claude --session 2
 sivtr copy codex 2..4
 sivtr copy codex out --pick
@@ -206,6 +208,7 @@ Targets:
 | `agent[/<session>[/<turn>[/<line>]]]` | All supported AI/agent records |
 | `codex[/<session>[/<turn>[/<line>]]]` | Codex records |
 | `claude[/<session>[/<turn>[/<line>]]]` | Claude Code records |
+| `hermes[/<session>[/<turn>[/<line>]]]` | Hermes records |
 | `opencode[/<session>[/<turn>[/<line>]]]` | OpenCode records |
 | `pi[/<session>[/<turn>[/<line>]]]` | Pi records |
 

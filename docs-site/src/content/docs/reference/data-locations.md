@@ -61,6 +61,7 @@ max_entries = 0
 | --- | --- |
 | Codex | `~/.codex/sessions` rollout JSONL files |
 | Claude Code | Current transcript/session environment and local Claude transcripts |
+| Hermes | `$HERMES_HOME/sessions`, `%LOCALAPPDATA%\hermes\sessions` on Windows, or `~/.hermes/sessions` elsewhere |
 | OpenCode | OpenCode local database |
 | Pi | Pi agent session JSONL files |
 

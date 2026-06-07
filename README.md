@@ -64,7 +64,7 @@ With `sivtr`, you can:
 
 - **Shell history that keeps the output**: capture commands from Bash, Zsh, PowerShell, and Nushell, including stdout, stderr, exit code, cwd, and timing.
 - **A viewer for long output**: pipe `cargo test`, build logs, or stack traces into a fast keyboard-first TUI.
-- **One search box for local work**: search terminal output and Codex, Claude Code, OpenCode, and Pi sessions from the current repo.
+- **One search box for local work**: search terminal output and Codex, Claude Code, Hermes, OpenCode, and Pi sessions from the current repo.
 - **Click-back / copy-back evidence**: every match can be shown, copied, expanded with nearby context, or handed to an agent.
 - **Named memory variables**: save any result set as `@failures`, reuse `@last`, pass stdin as `@`, list vars with `sivtr var list`, and select slices like `@failures[1,3..5]`.
 - **Deterministic anchor navigation**: move refs through parent/child/sibling/session structure with `sivtr nav`, without implicit expansion.
@@ -159,7 +159,7 @@ Memory variables:
 | `sivtr` / `sivtr pipe` | Read stdin and open the output browser. |
 | `sivtr run <command>` | Execute a command, capture output, then browse it. |
 | `sivtr copy` | Copy recent terminal command blocks. |
-| `sivtr copy <provider>` | Copy content from Codex, Claude Code, OpenCode, or Pi sessions. |
+| `sivtr copy <provider>` | Copy content from Codex, Claude Code, Hermes, OpenCode, or Pi sessions. |
 | `sivtr search` / `sivtr s` | Search terminal and agent memory; saves matches as `@last`. |
 | `sivtr filter <source>` | Apply the shared WorkSet filters to a source or piped WorkSet. |
 | `sivtr var` | List, save, remove, merge, drop, or clean up named WorkSet variables. |
@@ -183,6 +183,7 @@ Memory variables:
 | Terminal | Bash, Zsh, PowerShell, Nushell shell hooks; pipe and run capture. |
 | Codex | Local rollout/session JSONL files. |
 | Claude Code | Local transcript/session files. |
+| Hermes | Local Hermes session JSONL files. |
 | OpenCode | Local session data. |
 | Pi | Local Pi agent session logs. |
 

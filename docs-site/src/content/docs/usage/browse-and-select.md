@@ -80,6 +80,7 @@ Open a picker with commands such as:
 sivtr copy --pick
 sivtr copy claude --pick
 sivtr copy codex --pick
+sivtr copy hermes --pick
 ```
 
 The picker has Source, Sessions, Dialogues, and Content panes.

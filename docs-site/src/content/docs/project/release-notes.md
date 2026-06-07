@@ -12,6 +12,7 @@ description: User-facing release notes for sivtr.
 - Added `sivtr filter` as a first-class WorkSet filtering command for saved variables, source selectors, and stdin `@` pipelines.
 - Added `sivtr var` for named WorkSet memory: `set`, `list`, `rm`, `merge`, `drop`, and `cleanup`.
 - Added `sivtr nav` for deterministic anchor motion with `<`, `>N`, `+N`, `-N`, `[A..B]`, and `~`. `nav` does not implicitly expand child anchors.
+- Added Hermes as a supported agent session provider for copy, picker, search, refs, and WorkSet workflows.
 - Added global `--color auto|always|never` for status and diagnostic output.
 
 ### Changed

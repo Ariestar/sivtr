@@ -111,7 +111,7 @@ session_dirs = []
 
 On macOS, a typical shared path is `/Users/Shared/sivtr/root-codex/sessions`.
 
-Only Codex mirrors are currently configured here. Claude, OpenCode, and Pi discovery use their provider-specific local locations and environment signals.
+Only Codex mirrors are currently configured here. Claude, Hermes, OpenCode, and Pi discovery use their provider-specific local locations and environment signals.
 
 ## hotkey
 

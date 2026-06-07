@@ -1,6 +1,6 @@
 ---
 title: Agent 会话
-description: 把 Codex、Claude Code、OpenCode 与 Pi 会话变成可复用的 Agent 记忆。
+description: 把 Codex、Claude Code、Hermes、OpenCode 与 Pi 会话变成可复用的 Agent 记忆。
 ---
 
 `sivtr` 把 Agent transcript 当成本地 workspace memory source。你可以复制最新的有用 turn，在 picker 中浏览旧 session，跨 provider 搜索，并通过精确 ref 展示内容，而不必手动打开原始 transcript 文件。过去的 Agent 工作会成为人和后续 Agent 都能复用的记忆。
@@ -13,6 +13,7 @@ Skill 是让后续 Agent 学会使用这份记忆的方式。`sivtr` memory skil
 | --- | --- | --- |
 | Codex | `sivtr copy codex ...` | `~/.codex/sessions` 下的 Codex rollout JSONL 文件 |
 | Claude Code | `sivtr copy claude ...` | Claude transcript/session 环境变量和本地 transcripts |
+| Hermes | `sivtr copy hermes ...` | `HERMES_HOME` 或平台 Hermes data 目录下的 session JSONL 文件 |
 | OpenCode | `sivtr copy opencode ...` | OpenCode 本地数据库 |
 | Pi | `sivtr copy pi ...` | Pi agent 目录下的 session JSONL 文件 |
 
@@ -27,6 +28,7 @@ sivtr search agent --match "panic" --format timeline
 ```bash
 sivtr copy codex out
 sivtr copy claude out
+sivtr copy hermes out
 sivtr copy opencode out
 sivtr copy pi out
 ```
@@ -53,7 +55,7 @@ sivtr copy claude all
 | `tool` | 最近工具输出 |
 | `all` | 完整解析会话 |
 
-把 `claude` 换成 `codex`、`opencode` 或 `pi` 即可。
+把 `claude` 换成 `codex`、`hermes`、`opencode` 或 `pi` 即可。
 
 ## 选择更早内容
 
@@ -78,6 +80,7 @@ sivtr copy claude out --session 3 --print
 ```bash
 sivtr copy claude tool --regex error
 sivtr copy codex all --lines 1:40
+sivtr copy hermes out --print
 sivtr copy pi out --print
 ```
 
@@ -90,6 +93,7 @@ Filter 在选中文本组装后运行。见 [Selector 和 Filter](/zh-cn/referen
 ```bash
 sivtr copy codex --pick
 sivtr copy claude --pick
+sivtr copy hermes --pick
 sivtr copy opencode --pick
 sivtr copy pi --pick
 ```

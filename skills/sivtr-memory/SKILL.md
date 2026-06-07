@@ -38,7 +38,7 @@ Mental model to keep in mind:
 - In shell pipelines, `@` means "read the WorkSet JSON from stdin". Do not pipe `--refs` text into `@`; either omit `--refs` in intermediate commands or use `@last` / `@name`.
 
 1. Convert the user's vague reference into a small query.
-2. Choose a source: `terminal`, `agent`, `pi`, `codex`, `claude`, `opencode`, a WorkRef selector, or a WorkSet variable such as `@last` / `@name[1,3]`.
+2. Choose a source: `terminal`, `agent`, `pi`, `codex`, `claude`, `hermes`, `opencode`, a WorkRef selector, or a WorkSet variable such as `@last` / `@name[1,3]`.
 3. Search with a small limit. Put content terms in `-m` / `--match`. Use `--last` / `--since` for time windows, `-i` / `--in` for part candidate filters, and `--kind` for part kind filters.
    - Latest terminal error: `sivtr s terminal --status fail --latest 1 --save latest_failure --refs`
    - Broader terminal error scan: `sivtr s terminal -m "Error|error|failed|fatal|not found|External command failed" --latest 20 --save error_hits --refs`
@@ -73,7 +73,7 @@ Core semantics:
 
 Source forms:
 
-- `terminal`, `agent`, `pi`, `codex`, `claude`, `opencode`
+- `terminal`, `agent`, `pi`, `codex`, `claude`, `hermes`, `opencode`
 - `terminal/<session>/<record>`, `<provider>/<session>/<turn>`, `<provider>/<session>/<turn>/<i|o>/<part>`, and selector variants
 - `@last`, `@name`, `@name[1]`, `@name[1,3]`, `@name[1..5]`, `@name[1..3,8]`
 - `@` reads a WorkSet from stdin in shell pipelines

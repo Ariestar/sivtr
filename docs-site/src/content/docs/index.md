@@ -23,7 +23,7 @@ For the full workflow, install both pieces: the `sivtr` CLI/TUI and the bundled 
 - **Keep the output, not just the command** from pipes, subprocesses, shell integration, and local agent transcripts.
 - **Browse long logs comfortably** in a keyboard-first Vim-style TUI.
 - **Copy the last useful thing** as input, output, bare command, or full block.
-- **Search local agent conversations** from Codex, Claude Code, OpenCode, or Pi when you need an old decision or explanation.
+- **Search local agent conversations** from Codex, Claude Code, Hermes, OpenCode, or Pi when you need an old decision or explanation.
 - **Let agents start from evidence** so "fix the terminal error" can begin with the latest captured failure instead of a paste request.
 - **Jump back to the source** behind a summary, search hit, or handoff note.
 - **Save search results as variables** like `@last` and `@failures`, then reuse them in follow-up commands.

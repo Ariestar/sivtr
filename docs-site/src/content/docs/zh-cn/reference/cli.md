@@ -128,6 +128,7 @@ Provider：
 | --- | --- |
 | Codex | `sivtr copy codex` |
 | Claude Code | `sivtr copy claude` |
+| Hermes | `sivtr copy hermes` |
 | OpenCode | `sivtr copy opencode` |
 | Pi | `sivtr copy pi` |
 
@@ -152,6 +153,7 @@ Agent copy 选项包含所有通用 copy 选项，外加：
 ```bash
 sivtr copy claude
 sivtr copy claude out --print
+sivtr copy hermes out --print
 sivtr copy claude --session 2
 sivtr copy codex 2..4
 sivtr copy codex out --pick
@@ -206,6 +208,7 @@ Targets：
 | `agent[/<session>[/<turn>[/<line>]]]` | 所有受支持 AI / Agent 记录 |
 | `codex[/<session>[/<turn>[/<line>]]]` | Codex 记录 |
 | `claude[/<session>[/<turn>[/<line>]]]` | Claude Code 记录 |
+| `hermes[/<session>[/<turn>[/<line>]]]` | Hermes 记录 |
 | `opencode[/<session>[/<turn>[/<line>]]]` | OpenCode 记录 |
 | `pi[/<session>[/<turn>[/<line>]]]` | Pi 记录 |
 

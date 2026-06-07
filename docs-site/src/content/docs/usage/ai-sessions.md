@@ -1,6 +1,6 @@
 ---
 title: Agent Sessions
-description: Turn Codex, Claude Code, OpenCode, and Pi sessions into reusable agent memory.
+description: Turn Codex, Claude Code, Hermes, OpenCode, and Pi sessions into reusable agent memory.
 ---
 
 `sivtr` treats agent transcripts as local workspace memory sources. You can copy the latest useful turn, browse older sessions in a picker, search across providers, and show exact refs without opening raw transcript files. Prior agent work becomes memory for both humans and later agents.
@@ -13,6 +13,7 @@ Skills are how later agents learn to use this memory. A `sivtr` memory skill can
 | --- | --- | --- |
 | Codex | `sivtr copy codex ...` | Codex rollout JSONL files under `~/.codex/sessions` |
 | Claude Code | `sivtr copy claude ...` | Claude transcript/session environment and local transcripts |
+| Hermes | `sivtr copy hermes ...` | Hermes session JSONL files under `HERMES_HOME` or the platform Hermes data directory |
 | OpenCode | `sivtr copy opencode ...` | OpenCode local database |
 | Pi | `sivtr copy pi ...` | Pi session JSONL files under the Pi agent directory |
 
@@ -27,6 +28,7 @@ sivtr search agent --match "panic" --format timeline
 ```bash
 sivtr copy codex out
 sivtr copy claude out
+sivtr copy hermes out
 sivtr copy opencode out
 sivtr copy pi out
 ```
@@ -53,7 +55,7 @@ sivtr copy claude all
 | `tool` | Last tool output |
 | `all` | Whole parsed session |
 
-Replace `claude` with `codex`, `opencode`, or `pi`.
+Replace `claude` with `codex`, `hermes`, `opencode`, or `pi`.
 
 ## Select older items
 
@@ -78,6 +80,7 @@ sivtr copy claude out --session 3 --print
 ```bash
 sivtr copy claude tool --regex error
 sivtr copy codex all --lines 1:40
+sivtr copy hermes out --print
 sivtr copy pi out --print
 ```
 
@@ -90,6 +93,7 @@ Open a provider-specific picker:
 ```bash
 sivtr copy codex --pick
 sivtr copy claude --pick
+sivtr copy hermes --pick
 sivtr copy opencode --pick
 sivtr copy pi --pick
 ```

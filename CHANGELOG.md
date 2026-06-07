@@ -9,6 +9,7 @@ All notable user-facing changes to this project are documented here.
 - Added `sivtr filter` as a first-class WorkSet filtering command, sharing search filters across sources, saved WorkSets, and stdin `@` pipelines.
 - Added `sivtr var` for named WorkSet memory: `set`, `list`, `rm`, `merge`, `drop`, and `cleanup`.
 - Added `sivtr nav` for deterministic anchor motion with `<`, `>N`, `+N`, `-N`, `[A..B]`, and `~`; child movement is explicit and never defaults to expansion.
+- Added Hermes as a supported agent session provider for copy, picker, search, refs, and WorkSet workflows.
 - Added global `--color auto|always|never` for status and diagnostic output.
 
 ### Changed

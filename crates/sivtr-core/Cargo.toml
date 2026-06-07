@@ -5,8 +5,8 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-description = "Core library for sivtr terminal output and AI coding session processing"
-keywords = ["terminal", "tui", "codex", "ai"]
+description = "Core library for sivtr terminal output and AI coding session processing across local agent providers"
+keywords = ["terminal", "tui", "agents", "ai"]
 categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]

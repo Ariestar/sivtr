@@ -94,7 +94,7 @@ sivtr
 
 The TUI puts terminal and agent sessions together. You can:
 
-- switch between terminal, Claude, Codex, OpenCode, and Pi in the Source pane;
+- switch between terminal, Claude, Codex, Hermes, OpenCode, and Pi in the Source pane;
 - select a work record in the Sessions pane;
 - select a command block or dialogue turn in the Dialogues pane;
 - inspect exact content in the Content pane;

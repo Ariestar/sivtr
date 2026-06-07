@@ -12,6 +12,7 @@ Open the current provider picker:
 ```bash
 sivtr copy claude --pick
 sivtr copy codex --pick
+sivtr copy hermes --pick
 sivtr copy opencode --pick
 sivtr copy pi --pick
 ```
@@ -76,7 +77,7 @@ sivtr hotkey start --provider all
 sivtr hotkey start --provider claude
 ```
 
-Supported provider values are `all`, `codex`, `claude`, `opencode`, and `pi`.
+Supported provider values are `all`, `codex`, `claude`, `hermes`, `opencode`, and `pi`.
 
 When the chord is pressed, the daemon opens a terminal running an internal picker command for the daemon working directory. The picker tries the newest non-empty current session first and falls back to the session list.
 

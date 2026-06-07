@@ -36,7 +36,7 @@ cargo test
 git status --short
 ```
 
-Recent commands and output will now appear in the workspace. Agent sessions (Claude, Codex, OpenCode, Pi) are read from their local session directories.
+Recent commands and output will now appear in the workspace. Agent sessions (Claude, Codex, Hermes, OpenCode, Pi) are read from their local session directories.
 
 ## 3. Open the unified workspace TUI
 
@@ -52,7 +52,7 @@ The workspace TUI has four panes:
 
 | Pane | Purpose |
 | --- | --- |
-| Source | Choose a source, such as terminal, Claude, Codex, OpenCode, or Pi. |
+| Source | Choose a source, such as terminal, Claude, Codex, Hermes, OpenCode, or Pi. |
 | Sessions | Choose a terminal record or agent session. |
 | Dialogues | Choose a dialogue turn or command block. |
 | Content | Inspect input, output, tool results, or message content. |
@@ -100,6 +100,7 @@ One agent provider only:
 ```bash
 sivtr copy claude --pick
 sivtr copy codex --pick
+sivtr copy hermes --pick
 sivtr copy opencode --pick
 sivtr copy pi --pick
 ```
@@ -123,6 +124,7 @@ Read agent sessions:
 ```bash
 sivtr copy claude out --print
 sivtr copy codex out --print
+sivtr copy hermes out --print
 sivtr copy opencode out --print
 sivtr copy pi out --print
 ```

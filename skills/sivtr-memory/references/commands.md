@@ -10,7 +10,7 @@ Source forms:
 
 - `terminal`: terminal command records
 - `agent`: AI/agent conversation records from all providers
-- `codex`, `claude`, `pi`, `opencode`: one provider's conversation records
+- `codex`, `claude`, `hermes`, `pi`, `opencode`: one provider's conversation records
 - `terminal/<session>/<record>/<line>` or `<provider>/<session>/<turn>/<line>` with optional trailing segments
 - `<provider>/<session>/<turn>/<i|o>/<part>` for input/output part refs
 - `@last`, `@name`, `@name[1]`, `@name[1,3]`, `@name[1..5]`, `@name[1..3,8]`
@@ -239,6 +239,7 @@ sivtr s terminal -m "cargo test" -i title --latest 20 --refs
 ```bash
 sivtr s codex -m "<query>" --latest 20 --refs
 sivtr s claude -m "<query>" --latest 20 --refs
+sivtr s hermes -m "<query>" --latest 20 --refs
 sivtr s pi -m "<query>" --latest 20 --refs
 sivtr s opencode -m "<query>" --latest 20 --refs
 ```
