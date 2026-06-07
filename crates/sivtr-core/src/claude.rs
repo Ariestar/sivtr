@@ -351,6 +351,17 @@ mod tests {
     use crate::ai::{
         format_blocks, select_blocks, AgentBlockKind, AgentSelection, AgentSessionProvider,
     };
+    use std::{
+        env,
+        sync::{Mutex, OnceLock},
+    };
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     #[test]
     fn tracks_later_claude_cwd_events_in_metadata() {
@@ -633,5 +644,63 @@ mod tests {
             format_blocks(&blocks),
             "## User\nsecond\n\n## Assistant\nnew"
         );
+    }
+
+    #[test]
+    fn skips_malformed_unrelated_sessions_during_listing() {
+        let _guard = env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let original_claude_home = env::var_os("CLAUDE_HOME");
+        env::set_var("CLAUDE_HOME", dir.path());
+
+        let projects = dir.path().join("projects").join("workspace");
+        std::fs::create_dir_all(&projects).unwrap();
+
+        let valid_path = projects.join("valid.jsonl");
+        std::fs::write(
+            &valid_path,
+            r#"{"type":"user","sessionId":"good","cwd":"C:\\repo","message":{"role":"user","content":"hello"}}
+{"type":"assistant","sessionId":"good","cwd":"C:\\repo","customTitle":"valid session","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}
+"#,
+        )
+        .unwrap();
+
+        let malformed_path = projects.join("malformed.jsonl");
+        std::fs::write(
+            &malformed_path,
+            r#"{"type":"user","sessionId":"bad","cwd":"C:\\repo","message":{"role":"user","content":"oops"}}
+{"type":"assistant","sessionId":"bad","cwd":"C:\\repo","message":{"role":"assistant","content":[{"type":"text","text":"broken"}]}
+"#,
+        )
+        .unwrap();
+
+        let sessions = ClaudeProvider.list_recent_sessions(None).unwrap();
+
+        match original_claude_home {
+            Some(value) => env::set_var("CLAUDE_HOME", value),
+            None => env::remove_var("CLAUDE_HOME"),
+        }
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id.as_deref(), Some("good"));
+        assert_eq!(sessions[0].title.as_deref(), Some("valid session"));
+    }
+
+    #[test]
+    fn explicit_malformed_claude_session_still_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"type":"user","sessionId":"bad","cwd":"C:\\repo","message":{"role":"user","content":"oops"}}
+{"type":"assistant","sessionId":"bad","cwd":"C:\\repo","message":{"role":"assistant","content":[{"type":"text","text":"broken"}]}}{"type":"user","sessionId":"bad","cwd":"C:\\repo","message":{"role":"user","content":"glued"}}
+"#,
+        )
+        .unwrap();
+
+        let error = ClaudeProvider.parse_session_file(&path).unwrap_err();
+        let message = format!("{error:#}");
+
+        assert!(message.contains("Failed to parse Claude session line 2 as JSON"));
     }
 }
