@@ -533,7 +533,17 @@ fn build_agent_session_choices(
     let mut choices = Vec::new();
 
     for info in sessions {
-        let session = source.parse_session_file(&info.path)?;
+        let session = match source.parse_session_file(&info.path) {
+            Ok(session) => session,
+            Err(error) => {
+                eprintln!(
+                    "sivtr: warning: failed to parse {} session {}: {error:#}",
+                    source.provider().name(),
+                    info.path.display()
+                );
+                continue;
+            }
+        };
         if let Some(choice) =
             build_agent_session_choice(source.provider(), info, session, selection_mode)
         {
@@ -1091,7 +1101,17 @@ fn selectable_agent_sessions(
     let mut selectable = Vec::new();
 
     for info in sessions {
-        let session = source.parse_session_file(&info.path)?;
+        let session = match source.parse_session_file(&info.path) {
+            Ok(session) => session,
+            Err(error) => {
+                eprintln!(
+                    "sivtr: warning: failed to parse {} session {}: {error:#}",
+                    source.provider().name(),
+                    info.path.display()
+                );
+                continue;
+            }
+        };
         if session.blocks.is_empty()
             || WorkRecord::selected_chat_records(source.provider(), &session, selection_mode)
                 .is_empty()
@@ -1133,7 +1153,18 @@ fn resolve_current_agent_session_with_blocks(
     }
 
     for session in source.list_recent_sessions(Some(cwd))? {
-        if agent_session_has_blocks(source, &session.path)? {
+        let has_blocks = match agent_session_has_blocks(source, &session.path) {
+            Ok(has_blocks) => has_blocks,
+            Err(error) => {
+                eprintln!(
+                    "sivtr: warning: failed to parse {} session {}: {error:#}",
+                    source.provider().name(),
+                    session.path.display()
+                );
+                continue;
+            }
+        };
+        if has_blocks {
             return Ok(Some(session.path));
         }
     }
@@ -1313,10 +1344,11 @@ fn record_text_mode(mode: CopyMode) -> RecordTextMode {
 mod tests {
     use super::vim::{is_vim_command, vim_single_quote};
     use super::{
-        agent_session_preview, filter_lines_by_regex, filter_lines_by_spec, load_workspace_session,
-        record_to_copy_parts, records_to_text_pairs, ref_text_pair, resolve_agent_session_selector,
-        resolved_workspace_session, AgentBlockKind, AgentProvider, AgentSelection, AgentSession,
-        AgentSessionInfo, AgentSessionProvider, TextPair,
+        agent_session_preview, build_agent_session_choices, filter_lines_by_regex,
+        filter_lines_by_spec, load_workspace_session, record_to_copy_parts, records_to_text_pairs,
+        ref_text_pair, resolve_agent_session_selector, resolved_workspace_session,
+        AgentBlockKind, AgentProvider, AgentSelection, AgentSession, AgentSessionInfo,
+        AgentSessionProvider, TextPair,
     };
     use anyhow::Result;
     use sivtr_core::ai::AgentBlock;
@@ -1810,6 +1842,57 @@ mod tests {
         );
     }
 
+    #[test]
+    fn build_agent_session_choices_skips_malformed_sessions() {
+        let source = SparseSelectableSource {
+            infos: vec![
+                AgentSessionInfo {
+                    path: PathBuf::from("broken.jsonl"),
+                    id: Some("broken".to_string()),
+                    cwd: Some("d:\\repo".to_string()),
+                    title: None,
+                    modified: SystemTime::UNIX_EPOCH + Duration::from_secs(2),
+                },
+                AgentSessionInfo {
+                    path: PathBuf::from("good.jsonl"),
+                    id: Some("good".to_string()),
+                    cwd: Some("d:\\repo".to_string()),
+                    title: None,
+                    modified: SystemTime::UNIX_EPOCH + Duration::from_secs(1),
+                },
+            ],
+            sessions: HashMap::from([(
+                PathBuf::from("good.jsonl"),
+                AgentSession {
+                    path: PathBuf::from("good.jsonl"),
+                    id: Some("good".to_string()),
+                    cwd: Some("d:\\repo".to_string()),
+                    title: None,
+                    blocks: vec![
+                        AgentBlock {
+                            kind: AgentBlockKind::User,
+                            timestamp: None,
+                            label: None,
+                            text: "question".to_string(),
+                        },
+                        AgentBlock {
+                            kind: AgentBlockKind::Assistant,
+                            timestamp: None,
+                            label: None,
+                            text: "answer".to_string(),
+                        },
+                    ],
+                },
+            )]),
+        };
+
+        let choices =
+            build_agent_session_choices(&source, &source.infos, AgentSelection::LastTurn).unwrap();
+
+        assert_eq!(choices.len(), 1);
+        assert_eq!(choices[0].title, "question  [good]");
+    }
+
     struct FakeAgentSource {
         require_cwd: bool,
         infos: Vec<AgentSessionInfo>,
@@ -1870,6 +1953,9 @@ mod tests {
         }
 
         fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
+            if path == Path::new("broken.jsonl") {
+                anyhow::bail!("synthetic parse error")
+            }
             self.sessions
                 .get(path)
                 .cloned()

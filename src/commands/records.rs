@@ -56,7 +56,17 @@ fn agent_records(
         }
 
         for info in sessions {
-            let session = source.parse_session_file(&info.path)?;
+            let session = match source.parse_session_file(&info.path) {
+                Ok(session) => session,
+                Err(error) => {
+                    eprintln!(
+                        "sivtr: warning: failed to parse {} session {}: {error:#}",
+                        source.provider().name(),
+                        info.path.display()
+                    );
+                    continue;
+                }
+            };
             records.extend(WorkRecord::chat_turns(source.provider(), &session));
         }
     }
@@ -192,10 +202,14 @@ fn rewrite_record_session_display_id(record: &mut WorkRecord, display_id: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Result;
     use sivtr_core::record::{
         WorkChannel, WorkPart, WorkPartIo, WorkPartKind, WorkRecordKind, WorkSessionRef,
         WorkSource, WorkTime,
     };
+    use sivtr_core::ai::{AgentSession, AgentSessionInfo, AgentSessionProvider};
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, SystemTime};
 
     #[test]
     fn keeps_short_session_ids_when_already_unique() {
@@ -287,6 +301,86 @@ mod tests {
             .iter()
             .any(|part| part.text == "assistant with more detail"));
         assert_eq!(records[0].session.id, "session-01234567");
+    }
+
+    #[test]
+    fn agent_records_skips_malformed_session_files() {
+        let cwd = PathBuf::from("/repo");
+        let source = BrokenAgentSource {
+            infos: vec![
+                AgentSessionInfo {
+                    path: PathBuf::from("broken.jsonl"),
+                    id: Some("broken".to_string()),
+                    cwd: Some("/repo".to_string()),
+                    title: Some("broken".to_string()),
+                    modified: SystemTime::UNIX_EPOCH + Duration::from_secs(2),
+                },
+                AgentSessionInfo {
+                    path: PathBuf::from("good.jsonl"),
+                    id: Some("good".to_string()),
+                    cwd: Some("/repo".to_string()),
+                    title: Some("good".to_string()),
+                    modified: SystemTime::UNIX_EPOCH + Duration::from_secs(1),
+                },
+            ],
+        };
+
+        let provider = source.provider();
+        let mut records = Vec::new();
+        let mut sessions = source.list_recent_sessions(Some(&cwd)).unwrap();
+        sessions.truncate(10);
+
+        for info in sessions {
+            let session = match source.parse_session_file(&info.path) {
+                Ok(session) => session,
+                Err(_) => continue,
+            };
+            records.extend(WorkRecord::chat_turns(provider, &session));
+        }
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].session.id, "good");
+    }
+
+    struct BrokenAgentSource {
+        infos: Vec<AgentSessionInfo>,
+    }
+
+    impl AgentSessionProvider for BrokenAgentSource {
+        fn provider(&self) -> AgentProvider {
+            AgentProvider::Claude
+        }
+
+        fn list_recent_sessions(&self, _cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
+            Ok(self.infos.clone())
+        }
+
+        fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
+            if path == Path::new("broken.jsonl") {
+                anyhow::bail!("synthetic parse error")
+            }
+
+            Ok(AgentSession {
+                path: path.to_path_buf(),
+                id: Some("good".to_string()),
+                cwd: Some("/repo".to_string()),
+                title: Some("good".to_string()),
+                blocks: vec![
+                    sivtr_core::ai::AgentBlock {
+                        kind: sivtr_core::ai::AgentBlockKind::User,
+                        timestamp: None,
+                        label: None,
+                        text: "question".to_string(),
+                    },
+                    sivtr_core::ai::AgentBlock {
+                        kind: sivtr_core::ai::AgentBlockKind::Assistant,
+                        timestamp: None,
+                        label: None,
+                        text: "assistant".to_string(),
+                    },
+                ],
+            })
+        }
     }
 
     fn test_record(work_ref: WorkRef, display_id: &str, canonical_id: Option<&str>) -> WorkRecord {

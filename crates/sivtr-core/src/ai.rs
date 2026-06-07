@@ -236,7 +236,16 @@ pub fn list_recent_jsonl_sessions(
     let mut sessions = Vec::new();
 
     for path in jsonl_files(root)? {
-        let meta = parse_meta(&path)?;
+        let meta = match parse_meta(&path) {
+            Ok(meta) => meta,
+            Err(error) => {
+                eprintln!(
+                    "sivtr: warning: failed to parse agent session metadata {}: {error:#}",
+                    path.display()
+                );
+                continue;
+            }
+        };
         if let Some(wanted) = wanted.as_deref() {
             let matches_cwd = meta
                 .cwd
