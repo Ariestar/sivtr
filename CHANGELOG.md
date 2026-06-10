@@ -2,95 +2,13 @@
 
 All notable user-facing changes to this project are documented here.
 
-## Unreleased
+Detailed release notes live in [`changelogs/`](changelogs/).
 
-### Added
+## Releases
 
-- Added `sivtr filter` as a first-class WorkSet filtering command, sharing search filters across sources, saved WorkSets, and stdin `@` pipelines.
-- Added `sivtr var` for named WorkSet memory: `set`, `list`, `rm`, `merge`, `drop`, and `cleanup`.
-- Added `sivtr nav` for deterministic anchor motion with `<`, `>N`, `+N`, `-N`, `[A..B]`, and `~`; child movement is explicit and never defaults to expansion.
-- Added Hermes as a supported agent session provider for copy, picker, search, refs, and WorkSet workflows.
-- Added global `--color auto|always|never` for status and diagnostic output.
-
-### Changed
-
-- Standardized user-facing status/diagnostic messages and kept status output on stderr so stdout remains usable for data pipelines.
-- Unified `search` and `work parts` filtering through the shared WorkSet filter implementation.
-
-### Fixed
-
-- Fixed Nushell shell integration on Windows by preserving the rendered prompt through a pid-scoped prompt cache before `flush`, avoiding empty captured output caused by non-leaking Nushell prompt-closure environment mutation.
-
-## [0.2.3] - 2026-05-28
-
-### Added
-
-- Added OpenCode and Pi session providers alongside Codex and Claude Code for agent search, refs, and workspace browsing. ([421652b](https://github.com/Ariestar/sivtr/commit/421652b44aab45bc22acb09f3ab8ea307e08f127), [d2bf657](https://github.com/Ariestar/sivtr/commit/d2bf657d094cdf578eb7a55f0f0eee51736c3c53))
-- Added the canonical WorkRecord/WorkPart model with typed WorkRefs, including part-level refs such as `pi/<session>/<turn>/o/1`. ([d993d03](https://github.com/Ariestar/sivtr/commit/d993d031399a35be1b43e1fcfcb165c0dc934f13), [a3de450](https://github.com/Ariestar/sivtr/commit/a3de4506bac622af8958aad26447709b7e1c28da), [5abafcd](https://github.com/Ariestar/sivtr/commit/5abafcd49cbd01474a475cb6dc8ae4ebaca8b960), [53c6442](https://github.com/Ariestar/sivtr/commit/53c6442674e4f9db14156ff88ff9e4ef08a2be3b))
-- Added WorkSet-based memory workflows: `search`, `show`, `zoom`, `work records`, and `work parts` now operate on reusable `records + anchors` selections with `@last`, named `@sets`, stdin `@` pipelines, `--refs`, and `--json` output. ([940712a](https://github.com/Ariestar/sivtr/commit/940712a39d72de73edf9dc585d811abc9de67173), [9d07972](https://github.com/Ariestar/sivtr/commit/9d07972cb2676d9a3b00e72ed858d7f269629463), [a931885](https://github.com/Ariestar/sivtr/commit/a93188546bf3218d876ab8d24ac56dc8e421ce3a))
-- Added target-first search and rich filters for provider/session/record/part selectors, `--kind`, input/output/command fields, exclusion, status, exit code, duration, cwd, time ranges, sorting, and latest-result limits. ([40a028f](https://github.com/Ariestar/sivtr/commit/40a028f807745116646cb8dcf12dc64a12b6b3cb), [9b17432](https://github.com/Ariestar/sivtr/commit/9b1743251029970bcd6b26af20c1e560615f1c4c), [32540a2](https://github.com/Ariestar/sivtr/commit/32540a2a24d289377c0964345c964747997f5d31), [43f8d5f](https://github.com/Ariestar/sivtr/commit/43f8d5f59117f1dc45bcf6ea33ab7abb9588ca53), [acfdf78](https://github.com/Ariestar/sivtr/commit/acfdf78715a5ed98a207d4d721c923736dc5901a))
-- Added `sivtr show` for refs and part anchors, plus `sivtr zoom` for expanding any anchor back to nearby parent records. ([ce558b2](https://github.com/Ariestar/sivtr/commit/ce558b2e7f7ce9dd100460392cb1d19596bdc749), [5982f4c](https://github.com/Ariestar/sivtr/commit/5982f4cde42f713d426a54aa0ce8420f2e65fc8e), [a931885](https://github.com/Ariestar/sivtr/commit/a93188546bf3218d876ab8d24ac56dc8e421ce3a))
-- Added `sivtr doctor`, `sivtr init show`, `sivtr init uninstall`, and `sivtr init all` diagnostics and shell-hook management flows. ([d5b939e](https://github.com/Ariestar/sivtr/commit/d5b939ee6c94320004c9557c88f9deecccb71392), [d187d77](https://github.com/Ariestar/sivtr/commit/d187d77831743b152ad9d8c2238c2ad0c9ab1876), [c02e4d1](https://github.com/Ariestar/sivtr/commit/c02e4d10ddab09bc8c58d5b2ed6bb35196c81792))
-- Added `sivtr version --verbose` with binary path, build metadata, repo root, and debug-binary diagnostics. ([182fde3](https://github.com/Ariestar/sivtr/commit/182fde34d681885893c99355beb48e38fc18c60a), [1fe09e1](https://github.com/Ariestar/sivtr/commit/1fe09e1ee1679b6779f005fe58b7cc526fb12c81))
-- Added `install.sh`, multi-platform CI/release automation, docs playbooks, troubleshooting/data-location references, and the `sivtr-memory` skill package. ([1fe09e1](https://github.com/Ariestar/sivtr/commit/1fe09e1ee1679b6779f005fe58b7cc526fb12c81), [37706cf](https://github.com/Ariestar/sivtr/commit/37706cf5fd63e069c2f71bfdcf1f2d4597167cf8), [78b3334](https://github.com/Ariestar/sivtr/commit/78b3334d7c51102e08171d63bd0498bf7d68c474), [22380f5](https://github.com/Ariestar/sivtr/commit/22380f5d6236d8361c80b812b179d8facf703f79))
-
-### Changed
-
-- Search and work traversal now use WorkParts as the source of truth; input/output text is a projection over parts instead of separate duplicated payloads. ([b9d463e](https://github.com/Ariestar/sivtr/commit/b9d463e7f6675a2c91d027de1b07a8ef8b01fbd9), [7e39982](https://github.com/Ariestar/sivtr/commit/7e399826f7532aacde645c93a360a547ff6ac096), [a931885](https://github.com/Ariestar/sivtr/commit/a93188546bf3218d876ab8d24ac56dc8e421ce3a))
-- Workspace resolution now scopes terminal and agent records by git root so subdirectories in the same repository share workspace memory. ([5980b04](https://github.com/Ariestar/sivtr/commit/5980b04cb7180c169a4b05b5819b8a5d9b78c570), [e61ca54](https://github.com/Ariestar/sivtr/commit/e61ca5432626a68103e6c6b738fd883f8a7f09ba))
-- Workspace picker, copy, and search flows now route through typed work records/refs for more consistent selections and copy output. ([7f2d7a8](https://github.com/Ariestar/sivtr/commit/7f2d7a8565852ec01108f0ee6d488edb2a091a88), [325569f](https://github.com/Ariestar/sivtr/commit/325569f539535497d255aace14c788a6172b09d4), [c700233](https://github.com/Ariestar/sivtr/commit/c700233a3cf1c1f0a499f1c3df738e9647ee6542))
-- Agent titles and snippets skip skill boilerplate and prefer the real user request. ([b01b158](https://github.com/Ariestar/sivtr/commit/b01b1584155222686fd3b19a822b02a15f7262e2), [701c89d](https://github.com/Ariestar/sivtr/commit/701c89d61bb38bb99b64c718609f91ed929dcfaa), [71d7b60](https://github.com/Ariestar/sivtr/commit/71d7b60948aff601cc9e57e1bec82258ca284434))
-- Documentation was reorganized around local-first memory, AI sessions, refs/selectors, launchers, and common playbooks. ([697c83b](https://github.com/Ariestar/sivtr/commit/697c83b672050ef77ba02c2d06abca48ad38dbdc), [1af9a61](https://github.com/Ariestar/sivtr/commit/1af9a6193ed457fbac360fb4ccaea951a6ed8e78), [60da546](https://github.com/Ariestar/sivtr/commit/60da5467b9c1327ab07edde29cba5b76cb6b4f03))
-
-### Fixed
-
-- Fixed workspace picker leakage across repositories and made provider/session titles more resilient. ([2fd288e](https://github.com/Ariestar/sivtr/commit/2fd288e1cea33be412341125a41eef88fed6939a), [cd6cb16](https://github.com/Ariestar/sivtr/commit/cd6cb16bb666601d8f1fb4272bf0e36f248befe9), [7cb1863](https://github.com/Ariestar/sivtr/commit/7cb18639b478dc32a4de20c38f88ace70f20875a))
-- Kept interrupted agent turns searchable. ([3515b16](https://github.com/Ariestar/sivtr/commit/3515b1641b8061a3cfff66d260c34a479342e932))
-- Fixed local timestamp parsing and normalization for terminal and agent records. ([93fdbc1](https://github.com/Ariestar/sivtr/commit/93fdbc1bf83ddeb811dc6c0df19315e442e0c695), [5007f59](https://github.com/Ariestar/sivtr/commit/5007f59d6e0b9b0671c2275ab73732a6bba12595), [71d7b60](https://github.com/Ariestar/sivtr/commit/71d7b60948aff601cc9e57e1bec82258ca284434))
-- Fixed legacy shell-hook migration, PowerShell hook output handling, and launcher/help inconsistencies. ([580b093](https://github.com/Ariestar/sivtr/commit/580b093eed1f88900511e2169eea62749b7d6472), [888fba5](https://github.com/Ariestar/sivtr/commit/888fba5dd4cae7062e67e2bd95c226153dab54cb), [a3dfe5e](https://github.com/Ariestar/sivtr/commit/a3dfe5e9451c31c4540dafebb1074961e666dba1))
-- Fixed false positives and clippy warnings across the record/search/workset refactors. ([95c5a6a](https://github.com/Ariestar/sivtr/commit/95c5a6a1ac883fb3b93ee90bec5153c717644dff), [1aadfc0](https://github.com/Ariestar/sivtr/commit/1aadfc03a53f4e830babcc1749de893b653333b5), [a3dfe5e](https://github.com/Ariestar/sivtr/commit/a3dfe5e9451c31c4540dafebb1074961e666dba1))
-
-## [0.1.3] - 2026-05-20
-
-### Added
-
-- Added the workspace picker experience for browsing AI sessions with richer content rendering, search navigation, scrolling, and line-numbered content views.
-- Added workspace copy shortcuts for AI sessions: `i` copies user input, `o` copies assistant output, and `y` copies the whole dialogue block without role headings.
-- Added project roadmap pages to the documentation site.
-
-### Fixed
-
-- Hardened VS Code picker command quoting across PowerShell, cmd.exe, fish, and POSIX shells.
-- Ignored Claude `ai-title` metadata events instead of failing session parsing.
-- Fixed CI clippy warnings.
-
-## [0.1.2] - 2026-05-02
-
-### Fixed
-
-- Treat cancelling interactive pickers as a normal exit.
-
-## [0.1.1] - 2026-05-01
-
-### Fixed
-
-- Fixed Codex copy picker TUI selection logic.
-- Fixed terminal exit handling that could leave the terminal stuck.
-
-## [0.1.0] - 2026-04-28
-
-### Added
-
-- Added `sivtr`, a terminal output workspace for capturing command output and AI coding sessions.
-- Added pipe mode with `command | sivtr`.
-- Added run mode with `sivtr run <command>`.
-- Added Vim-style navigation, modal interaction, visual selection, search, and clipboard copy.
-- Added local SQLite history with full-text search.
-- Added Codex session capture helpers with `sivtr copy codex` for reusing assistant replies, user prompts, and tool output.
-- Added command-block copy, diff, and picker workflows.
-- Added TOML configuration support.
-- Added Windows global hotkey support for the Codex picker workflow.
-
-### Notes
-
-- This is the first public release. The CLI and configuration format may still change during the `0.1.x` series.
+- [0.2.4 - 2026-06-10](changelogs/0.2.4.md)
+- [0.2.3 - 2026-05-28](changelogs/0.2.3.md)
+- [0.1.3 - 2026-05-20](changelogs/0.1.3.md)
+- [0.1.2 - 2026-05-02](changelogs/0.1.2.md)
+- [0.1.1 - 2026-05-01](changelogs/0.1.1.md)
+- [0.1.0 - 2026-04-28](changelogs/0.1.0.md)
