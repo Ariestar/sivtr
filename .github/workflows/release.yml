@@ -4,12 +4,19 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version without the leading v, for example 0.2.4"
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 env:
   CARGO_TERM_COLOR: always
+  RELEASE_REF_NAME: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}
 
 jobs:
   build:
@@ -71,7 +78,7 @@ jobs:
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
-          $name = "sivtr-${{ github.ref_name }}-${{ matrix.name }}"
+          $name = "sivtr-${{ env.RELEASE_REF_NAME }}-${{ matrix.name }}"
           New-Item -ItemType Directory -Path $name | Out-Null
           if ("${{ matrix.target }}") {
             Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" $name
@@ -86,7 +93,7 @@ jobs:
         if: matrix.archive == 'tar.gz'
         shell: bash
         run: |
-          name="sivtr-${GITHUB_REF_NAME}-${{ matrix.name }}"
+          name="sivtr-${RELEASE_REF_NAME}-${{ matrix.name }}"
           mkdir "$name"
           if [ -n "${{ matrix.target }}" ]; then
             cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "$name/"
@@ -99,7 +106,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sivtr-${{ github.ref_name }}-${{ matrix.name }}
+          name: sivtr-${{ env.RELEASE_REF_NAME }}-${{ matrix.name }}
           path: |
             *.zip
             *.tar.gz
@@ -132,7 +139,7 @@ jobs:
             exit 1
           fi
 
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_REF_NAME#v}"
           manifest_version="$(cargo metadata --no-deps --format-version 1 \
             | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(p["version"] for p in data["packages"] if p["name"] == "sivtr"))')"
 
@@ -143,7 +150,7 @@ jobs:
 
           crate_exists() {
             local crate="$1"
-            curl -fsSL "https://crates.io/api/v1/crates/${crate}/${version}" >/dev/null 2>&1
+            curl -A "sivtr-release-ci" -fsSL "https://crates.io/api/v1/crates/${crate}/${version}" >/dev/null 2>&1
           }
 
           wait_for_crate() {
@@ -187,7 +194,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_REF_NAME#v}"
           notes="changelogs/${version}.md"
 
           if [ ! -f "$notes" ]; then
@@ -205,6 +212,7 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_REF_NAME }}
           body_path: ${{ steps.notes.outputs.path }}
           files: |
             artifacts/**/*
