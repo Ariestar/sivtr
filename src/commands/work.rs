@@ -1,12 +1,14 @@
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use sivtr_core::ai::AgentProvider;
-use sivtr_core::record::{WorkRecord, WorkRef};
+use sivtr_core::record::{semantic_search, WorkLinkKind, WorkRecord, WorkRef};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 
-use crate::cli::{WorkCommand, WorkPartsArgs, WorkRecordsArgs, WorkSessionsArgs};
+use crate::cli::{
+    WorkCommand, WorkLinksArgs, WorkPartsArgs, WorkRecordsArgs, WorkSemanticArgs, WorkSessionsArgs,
+};
 use crate::commands::filter;
 use crate::commands::records::current_work_record_index;
 use crate::commands::show;
@@ -48,6 +50,8 @@ pub fn execute(command: &WorkCommand) -> Result<()> {
         crate::cli::WorkSubcommand::Sessions(args) => execute_sessions(args),
         crate::cli::WorkSubcommand::Records(args) => execute_records(args),
         crate::cli::WorkSubcommand::Parts(args) => execute_parts(args),
+        crate::cli::WorkSubcommand::Semantic(args) => execute_semantic(args),
+        crate::cli::WorkSubcommand::Links(args) => execute_links(args),
     }
 }
 
@@ -124,6 +128,93 @@ fn execute_parts(args: &WorkPartsArgs) -> Result<()> {
     )
 }
 
+fn execute_semantic(args: &WorkSemanticArgs) -> Result<()> {
+    let cwd = resolve_cwd(args.cwd.as_deref())?;
+    let filter_tags = args.tag.clone();
+    let providers = AgentProvider::all()
+        .iter()
+        .map(|spec| spec.provider)
+        .collect::<Vec<_>>();
+    let records = current_work_record_index(&providers, &cwd, None)?;
+    let results = semantic_search(records.records(), &args.query, args.limit, |record| {
+        tags_match_record(&record.parts, &filter_tags)
+    });
+    if results.is_empty() {
+        println!(
+            "No semantically relevant records found for `{}`",
+            args.query
+        );
+        return Ok(());
+    }
+
+    let anchors: Vec<WorkRef> = results
+        .iter()
+        .map(|result| result.record_ref.clone())
+        .collect();
+    let matched = workset::records_for_anchors(records.records(), &anchors);
+    let set = WorkSet::with_anchors(cwd.display().to_string(), matched, anchors);
+    set.save_last()?;
+
+    for result in &results {
+        let record = records
+            .resolve(&result.record_ref)
+            .with_context(|| format!("Record not found: {}", result.record_ref))?;
+        eprintln!(
+            "{}  [{:<5}]  (score: {}, terms: {})",
+            result.record_ref,
+            record.kind_label(),
+            result.score,
+            result.matched_terms.join(", "),
+        );
+    }
+
+    show::print_workset(&set, show::resolve_output_format(None, false, false, true))
+}
+
+fn execute_links(args: &WorkLinksArgs) -> Result<()> {
+    let cwd = resolve_cwd(args.cwd.as_deref())?;
+    let providers = AgentProvider::all()
+        .iter()
+        .map(|spec| spec.provider)
+        .collect::<Vec<_>>();
+    let records = current_work_record_index(&providers, &cwd, None)?;
+    let mut links = records.infer_links();
+
+    if let Some(kind) = &args.kind {
+        let wanted = match kind.to_ascii_lowercase().as_str() {
+            "caused_by" => WorkLinkKind::CausedBy,
+            "follows_up" => WorkLinkKind::FollowsUp,
+            "references" => WorkLinkKind::References,
+            _ => bail!("Unknown link kind `{kind}`; expected caused_by, follows_up, or references"),
+        };
+        links.retain(|link| link.kind == wanted);
+    }
+    if let Some(ref_prefix) = &args.ref_ {
+        links.retain(|link| {
+            link.from.to_string().starts_with(ref_prefix)
+                || link.to.to_string().starts_with(ref_prefix)
+        });
+    }
+
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&links)?);
+        return Ok(());
+    }
+    if links.is_empty() {
+        println!("No causal links found.");
+        return Ok(());
+    }
+
+    for link in &links {
+        let kind = serde_json::to_value(link.kind)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_else(|| format!("{:?}", link.kind));
+        println!("{}  ->  {}  [{}]", link.from, link.to, kind);
+    }
+    Ok(())
+}
+
 fn records_for_session_marker(cwd: &Path, marker: &WorkSessionMarker) -> Result<WorkSet> {
     let providers = marker.providers();
     let records = current_work_record_index(&providers, cwd, None)?;
@@ -139,6 +230,19 @@ fn records_for_session_marker(cwd: &Path, marker: &WorkSessionMarker) -> Result<
     }
 
     Ok(WorkSet::new(cwd.display().to_string(), selected))
+}
+
+fn tags_match(filter: &[String], tags: &[String]) -> bool {
+    filter
+        .iter()
+        .all(|tag| tags.iter().any(|part_tag| part_tag == tag))
+}
+
+fn tags_match_record(parts: &[sivtr_core::record::WorkPart], filter: &[String]) -> bool {
+    if filter.is_empty() {
+        return true;
+    }
+    parts.iter().any(|part| tags_match(filter, &part.tags))
 }
 
 fn resolve_cwd(cwd: Option<&Path>) -> Result<std::path::PathBuf> {
@@ -349,7 +453,6 @@ mod tests {
         let work_ref: WorkRef = reference.parse().unwrap();
         WorkRecord {
             schema_version: sivtr_core::record::RECORD_SCHEMA_VERSION,
-            work_ref: work_ref.clone(),
             kind: if matches!(work_ref, WorkRef::Terminal { .. }) {
                 WorkRecordKind::TerminalCommand
             } else {
@@ -370,6 +473,7 @@ mod tests {
                 canonical_id: Some(format!("{}-session-0123456789abcdef", work_ref.session())),
                 path: None,
             },
+            work_ref,
             cwd: None,
             time: WorkTime::from_components(timestamp.map(str::to_string), None, None),
             status: None,
@@ -383,6 +487,7 @@ mod tests {
                     label: None,
                     text: "user prompt".to_string(),
                     ansi: None,
+                    tags: Vec::new(),
                 },
                 WorkPart {
                     io: WorkPartIo::Output,
@@ -392,6 +497,7 @@ mod tests {
                     label: None,
                     text: "assistant reply".to_string(),
                     ansi: None,
+                    tags: Vec::new(),
                 },
             ],
         }

@@ -192,6 +192,8 @@ pub struct WorkPart {
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ansi: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -922,6 +924,7 @@ fn terminal_parts(entry: &SessionEntry, command: &str, output: &str) -> Vec<Work
             label: None,
             text: prompt.to_string(),
             ansi: entry.prompt_ansi.clone(),
+            tags: Vec::new(),
         });
     }
     if !command.is_empty() {
@@ -934,6 +937,7 @@ fn terminal_parts(entry: &SessionEntry, command: &str, output: &str) -> Vec<Work
             label: None,
             text: command.to_string(),
             ansi: None,
+            tags: Vec::new(),
         });
     }
     if !output.is_empty() {
@@ -946,6 +950,7 @@ fn terminal_parts(entry: &SessionEntry, command: &str, output: &str) -> Vec<Work
             label: None,
             text: output.to_string(),
             ansi: entry.output_ansi.clone(),
+            tags: Vec::new(),
         });
     }
     parts
@@ -984,6 +989,7 @@ fn agent_parts(blocks: &[AgentBlock]) -> Vec<WorkPart> {
             label: block.label.clone(),
             text,
             ansi: None,
+            tags: Vec::new(),
         });
     }
     parts

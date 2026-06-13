@@ -500,6 +500,7 @@ mod tests {
                     label: None,
                     text: format!("cmd {index}"),
                     ansi: None,
+                    tags: Vec::new(),
                 },
                 WorkPart {
                     io: WorkPartIo::Output,
@@ -509,6 +510,7 @@ mod tests {
                     label: None,
                     text: format!("out {index}.1"),
                     ansi: None,
+                    tags: Vec::new(),
                 },
                 WorkPart {
                     io: WorkPartIo::Output,
@@ -518,6 +520,7 @@ mod tests {
                     label: None,
                     text: format!("out {index}.2"),
                     ansi: None,
+                    tags: Vec::new(),
                 },
             ],
         }

@@ -1413,6 +1413,7 @@ mod tests {
                 label: Some("tool".to_string()),
                 text: "hidden tool call".to_string(),
                 ansi: None,
+                tags: Vec::new(),
             }],
         };
         let dialogue = WorkspaceDialogue {
@@ -1469,6 +1470,7 @@ mod tests {
                 label: Some("tool".to_string()),
                 text: "hidden tool call".to_string(),
                 ansi: None,
+                tags: Vec::new(),
             }],
         };
         let dialogue = WorkspaceDialogue {
@@ -1531,6 +1533,7 @@ mod tests {
                     label: None,
                     text: "question".to_string(),
                     ansi: None,
+                    tags: Vec::new(),
                 },
                 sivtr_core::record::WorkPart {
                     io: sivtr_core::record::WorkPartIo::Input,
@@ -1540,6 +1543,7 @@ mod tests {
                     label: Some("Bash".to_string()),
                     text: "cargo test".to_string(),
                     ansi: None,
+                    tags: Vec::new(),
                 },
                 sivtr_core::record::WorkPart {
                     io: sivtr_core::record::WorkPartIo::Output,
@@ -1549,6 +1553,7 @@ mod tests {
                     label: Some("Bash".to_string()),
                     text: "ok".to_string(),
                     ansi: None,
+                    tags: Vec::new(),
                 },
                 sivtr_core::record::WorkPart {
                     io: sivtr_core::record::WorkPartIo::Output,
@@ -1558,6 +1563,7 @@ mod tests {
                     label: None,
                     text: "answer".to_string(),
                     ansi: None,
+                    tags: Vec::new(),
                 },
             ],
         };

@@ -308,6 +308,7 @@ mod tests {
             label: Some("assistant".to_string()),
             text: "assistant with more detail".to_string(),
             ansi: None,
+            tags: Vec::new(),
         });
 
         dedup_records(&mut records);
@@ -416,6 +417,7 @@ mod tests {
                     label: None,
                     text: "user".to_string(),
                     ansi: None,
+                    tags: Vec::new(),
                 },
                 WorkPart {
                     io: WorkPartIo::Output,
@@ -425,6 +427,7 @@ mod tests {
                     label: None,
                     text: "assistant".to_string(),
                     ansi: None,
+                    tags: Vec::new(),
                 },
             ],
         }

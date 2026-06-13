@@ -542,6 +542,13 @@ Examples:
   sivtr s agent -m "ssh.github.com" | sivtr work parts @ --io output | sivtr s @ -m "main -> main" | sivtr show @ --full
 "#;
 
+const WORK_SEMANTIC_AFTER_HELP: &str = r#"
+Examples:
+  sivtr work semantic "build error"
+  sivtr work semantic "deploy failure" --tag ci
+  sivtr work semantic "linker" --limit 5
+"#;
+
 const HOTKEY_AFTER_HELP: &str = "\
 Examples:
   sivtr hotkey start
@@ -934,6 +941,10 @@ pub struct SearchArgs {
     /// Save the result WorkSet as @name
     #[arg(long, value_name = "NAME")]
     pub save: Option<String>,
+
+    /// Use TF-IDF semantic keyword search instead of regex
+    #[arg(long)]
+    pub semantic: bool,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -1196,6 +1207,13 @@ pub enum WorkSubcommand {
     /// List part markers for one record ref
     #[command(after_help = WORK_PARTS_AFTER_HELP)]
     Parts(WorkPartsArgs),
+
+    /// Semantic keyword search across records
+    #[command(after_help = WORK_SEMANTIC_AFTER_HELP)]
+    Semantic(WorkSemanticArgs),
+
+    /// List causal links between records
+    Links(WorkLinksArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -1256,6 +1274,10 @@ pub struct WorkPartsArgs {
     #[arg(short = 'm', long = "match", value_name = "REGEX")]
     pub match_: Option<String>,
 
+    /// Tag filter (AND semantics: all tags must match)
+    #[arg(long, value_name = "TAG")]
+    pub tag: Vec<String>,
+
     /// Workspace directory used to resolve current AI sessions
     #[arg(long, value_name = "PATH")]
     pub cwd: Option<PathBuf>,
@@ -1275,6 +1297,43 @@ pub struct WorkPartsArgs {
     /// Save the result WorkSet as @name
     #[arg(long, value_name = "NAME")]
     pub save: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct WorkSemanticArgs {
+    /// Search query
+    pub query: String,
+
+    /// Tag filter (AND semantics)
+    #[arg(long, value_name = "TAG")]
+    pub tag: Vec<String>,
+
+    /// Maximum number of results
+    #[arg(short = 'l', long, default_value_t = 10)]
+    pub limit: usize,
+
+    /// Workspace directory used to resolve current AI sessions
+    #[arg(long, value_name = "PATH")]
+    pub cwd: Option<PathBuf>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct WorkLinksArgs {
+    /// Filter by link kind: caused_by, follows_up, or references
+    #[arg(long, value_name = "KIND")]
+    pub kind: Option<String>,
+
+    /// Filter links to/from refs matching this prefix
+    #[arg(long, value_name = "PREFIX")]
+    pub ref_: Option<String>,
+
+    /// Workspace directory used to resolve current AI sessions
+    #[arg(long, value_name = "PATH")]
+    pub cwd: Option<PathBuf>,
+
+    /// Print machine-readable JSON
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args, Debug, Clone, Default)]

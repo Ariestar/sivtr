@@ -2610,6 +2610,7 @@ mod tests {
             label: Some("tool".to_string()),
             text: "hidden cargo test".to_string(),
             ansi: None,
+            tags: Vec::new(),
         }];
         let sessions = vec![WorkspaceSession {
             source: WorkspaceSource::Agent(AgentProvider::Codex),
@@ -2653,6 +2654,7 @@ mod tests {
             label: Some("tool".to_string()),
             text: "first line\nneedle one\nmiddle\nneedle two".to_string(),
             ansi: None,
+            tags: Vec::new(),
         }];
         let sessions = vec![WorkspaceSession {
             source: WorkspaceSource::Agent(AgentProvider::Codex),
@@ -2708,6 +2710,7 @@ mod tests {
             label: Some("tool".to_string()),
             text: "hidden cargo test".to_string(),
             ansi: None,
+            tags: Vec::new(),
         }];
         let sessions = vec![WorkspaceSession {
             source: WorkspaceSource::Agent(AgentProvider::Codex),
@@ -3045,6 +3048,7 @@ mod tests {
             label: Some("tool".to_string()),
             text: "hidden cargo test".to_string(),
             ansi: None,
+            tags: Vec::new(),
         }];
         let dialogues = vec![WorkspaceDialogue {
             source: WorkspaceSource::Agent(AgentProvider::Codex),
@@ -3143,6 +3147,7 @@ mod tests {
                 label: None,
                 text: plain.to_string(),
                 ansi: None,
+                tags: Vec::new(),
             }],
         }
     }

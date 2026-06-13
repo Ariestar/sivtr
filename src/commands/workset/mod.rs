@@ -253,6 +253,7 @@ mod tests {
                 label: None,
                 text: format!("record {index}"),
                 ansi: None,
+                tags: Vec::new(),
             }],
         }
     }
