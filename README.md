@@ -69,6 +69,7 @@ With `sivtr`, you can:
 - **Named memory variables**: save any result set as `@failures`, reuse `@last`, pass stdin as `@`, list vars with `sivtr var list`, and select slices like `@failures[1,3..5]`.
 - **Deterministic anchor navigation**: move refs through parent/child/sibling/session structure with `sivtr nav`, without implicit expansion.
 - **Agent-ready memory** through the bundled `sivtr-memory` skill.
+- **Cross-device access**: serve a workspace read-only and browse another device's sessions with a `desk://...` ref, like reading local — for collaborative dev.
 - **Diagnostics** with `sivtr doctor`, `sivtr init show`, and `sivtr init uninstall`.
 
 ## Quick start
@@ -178,14 +179,35 @@ Memory variables:
 | `sivtr work sessions` | List terminal and agent sessions in the current workspace. |
 | `sivtr work records <source>` | Turn sessions or saved variables into event-level refs. |
 | `sivtr work parts <source>` | Extract only useful inputs/outputs from matching events. |
-| `sivtr show <ref-or-workset>` | Print the content behind refs, `@last`, `@name`, or piped results. |
+| `sivtr show <ref-or-workset>` | Print the content behind refs, `@last`, `@name`, or piped results. Also accepts remote refs like `desk://terminal/...`. |
 | `sivtr zoom <source>` | Add surrounding record context around search hits. |
 | `sivtr diff <left> <right>` | Compare recent command blocks. |
+| `sivtr serve` | Expose this workspace's sessions read-only over HTTP for remote devices. |
+| `sivtr remote` | Manage remote devices (`add`/`list`/`remove`/`test`) used by `desk://...` refs. |
 | `sivtr doctor` | Diagnose binary, config, session logs, hooks, providers, and clipboard. |
 | `sivtr init <shell>` | Install shell integration; also supports `show` and `uninstall`. |
 | `sivtr config` | Manage the TOML config file. |
 | `sivtr history` | List, search, and show captured output history. |
 | `sivtr hotkey` | Manage the Windows AI session picker hotkey daemon. |
+
+## Remote access
+
+Two devices running sivtr can read each other's workspace sessions like reading local — for collaborative work where you want to see a teammate's terminal output or AI session without leaving your machine.
+
+On the device that owns the workspace, start the read-only server (generates a token if you don't pass `--token`):
+
+```bash
+sivtr serve                 # localhost only; add --lan to expose on the network
+```
+
+On the other device, register it, then use a `<alias>://` ref anywhere a normal ref goes:
+
+```bash
+sivtr remote add desk --host desk.local --port 7421 --token <token>
+sivtr show desk://terminal/session_42/3/o/1
+```
+
+`sivtr serve` is opt-in, localhost by default, bearer-token gated, read-only, and redacts obvious secrets (API keys, tokens, PEM keys) before anything leaves the machine. Unregistered aliases error — register them with `sivtr remote add`.
 
 ## Supported sources
 
