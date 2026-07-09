@@ -457,7 +457,7 @@ fn pick_agent_sessions_content_on_terminal(
             selection_mode,
         ));
     }
-    sessions.sort_by(|a, b| b.modified.cmp(&a.modified));
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.modified));
 
     let sessions = workspace_sessions_from_agent_choices(sessions, None)?;
     if sessions.is_empty() {
@@ -497,7 +497,7 @@ fn build_current_lazy_agent_session_choices(
         ));
     }
 
-    choices.sort_by(|a, b| b.modified.cmp(&a.modified));
+    choices.sort_by_key(|s| std::cmp::Reverse(s.modified));
     Ok(choices)
 }
 
@@ -720,7 +720,7 @@ fn workspace_sessions_from_agent_choices(
     cwd: Option<&std::path::Path>,
 ) -> Result<Vec<WorkspaceSession>> {
     choices.extend(build_terminal_context_sessions(cwd)?);
-    choices.sort_by(|a, b| b.modified.cmp(&a.modified));
+    choices.sort_by_key(|s| std::cmp::Reverse(s.modified));
     Ok(choices)
 }
 

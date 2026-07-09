@@ -6,7 +6,7 @@ resolver = "2"
 version = "0.2.4"
 edition = "2021"
 license = "Apache-2.0"
-rust-version = "1.88"
+rust-version = "1.91"
 repository = "https://github.com/Ariestar/sivtr"
 
 [package]
@@ -68,6 +68,8 @@ axum = "0.7"
 getrandom = "0.2"
 ureq = { version = "2", features = ["json"] }
 toml = "0.8"
+iroh = "1.0"
+base64 = "0.22"
 anyhow = "1"
 atty = "0.2"
 arboard = "3"

@@ -10,6 +10,7 @@
 //! localhost, bearer-token required, read-only (no write endpoints), and
 //! workspace-scoped. See `commands::serve` for the CLI entry and bind policy.
 
+pub mod iroh;
 pub mod redact;
 
 use std::net::SocketAddr;

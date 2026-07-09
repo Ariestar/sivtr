@@ -19,6 +19,20 @@ use sivtr_core::workspace::{self, WorkspaceMetadata};
 pub fn execute(args: &PairArgs) -> Result<()> {
     let workspace = resolve_workspace(args.workspace.as_deref())?;
 
+    // A dedicated runtime for the server path (both iroh and axum are async);
+    // every other CLI command stays fully synchronous.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("Failed to start the server runtime")?;
+
+    // iroh is the default: zero-config, encrypted, cross-network. `--tcp` opts
+    // into the plain HTTP server (localhost, or --lan for all interfaces).
+    if !args.tcp {
+        runtime.block_on(crate::serve::iroh::serve_iroh(workspace, !args.no_redact))?;
+        return Ok(());
+    }
+
     let token = match &args.token {
         Some(t) if !t.trim().is_empty() => t.trim().to_string(),
         _ => {
@@ -49,13 +63,6 @@ pub fn execute(args: &PairArgs) -> Result<()> {
         workspace,
         redact: !args.no_redact,
     };
-
-    // A dedicated runtime for the serve path only; every other CLI command
-    // stays fully synchronous.
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("Failed to start the server runtime")?;
 
     runtime.block_on(serve::serve(cfg))?;
     Ok(())

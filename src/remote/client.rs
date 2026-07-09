@@ -1,9 +1,9 @@
-//! Synchronous HTTP client for a remote sivtr `serve` endpoint.
+//! Synchronous client for a remote sivtr device.
 //!
-//! Wraps the same JSON API `sivtr serve` exposes, so a remote WorkRef
-//! (`desk://terminal/...`) resolves to a `WorkRecord`/`WorkPart` exactly like a
-//! local ref — the client turns a network round-trip into the same owned types
-//! `load_source` already feeds downstream.
+//! Branches on the remote's transport: `Tcp` calls the HTTP JSON API via ureq;
+//! `Iroh` runs the iroh future on a one-shot runtime (the read path stays sync,
+//! so callers like `sivtr show` don't need to be async). Both produce the same
+//! owned `WorkRecord` that `load_source` feeds downstream.
 
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -11,33 +11,65 @@ use sivtr_core::record::WorkRecord;
 
 use super::config::Remote;
 
-/// One connection to a remote device's serve endpoint.
+/// One connection to a remote device.
 pub struct RemoteClient {
-    agent: ureq::Agent,
-    base_url: String,
-    token: String,
     alias: String,
+    remote: Remote,
 }
 
 impl RemoteClient {
     pub fn new(alias: &str, remote: Remote) -> Self {
-        let base_url = remote.base_url();
         Self {
-            agent: ureq::AgentBuilder::new()
-                .timeout(std::time::Duration::from_secs(15))
-                .build(),
-            base_url,
-            token: remote.token,
             alias: alias.to_string(),
+            remote,
         }
     }
 
-    /// Ping `/agent-card` to confirm reachability and the token.
+    /// Reachability check. For TCP, pings `/agent-card`; for iroh, resolves the
+    /// ticket shape (a live probe happens on first resolve).
     pub fn ping(&self) -> Result<String> {
+        match &self.remote {
+            Remote::Tcp { .. } => self.ping_tcp(),
+            Remote::Iroh { ticket } => {
+                crate::serve::iroh::addr_from_ticket(ticket)?;
+                Ok("iroh".into())
+            }
+        }
+    }
+
+    /// Resolve a local-shape ref (the body, no origin prefix) to a record.
+    pub fn resolve(&self, body_ref: &str) -> Result<WorkRecord> {
+        match &self.remote {
+            Remote::Tcp { .. } => self.resolve_tcp(body_ref),
+            Remote::Iroh { ticket } => {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .context("Failed to start the iroh client runtime")?;
+                runtime.block_on(crate::serve::iroh::resolve_via_iroh(ticket, body_ref))
+            }
+        }
+    }
+
+    fn tcp_parts(&self) -> (&str, u16, &str) {
+        match &self.remote {
+            Remote::Tcp { host, port, token } => (host, *port, token),
+            Remote::Iroh { .. } => unreachable!("called tcp_parts on an iroh remote"),
+        }
+    }
+
+    fn agent(&self) -> ureq::Agent {
+        ureq::AgentBuilder::new()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+    }
+
+    fn ping_tcp(&self) -> Result<String> {
+        let (host, port, token) = self.tcp_parts();
         let resp: serde_json::Value = self
-            .agent
-            .get(&format!("{}/agent-card", self.base_url))
-            .set("Authorization", &format!("Bearer {}", self.token))
+            .agent()
+            .get(&format!("http://{host}:{port}/agent-card"))
+            .set("Authorization", &format!("Bearer {token}"))
             .call()
             .context(format!("failed to reach remote `{}`", self.alias))?
             .into_json()
@@ -49,38 +81,27 @@ impl RemoteClient {
             .to_string())
     }
 
-    /// Resolve a local-shape ref (the body, no origin prefix) to a record.
-    pub fn resolve(&self, body_ref: &str) -> Result<WorkRecord> {
+    fn resolve_tcp(&self, body_ref: &str) -> Result<WorkRecord> {
         #[derive(Serialize)]
         struct Req<'a> {
             #[serde(rename = "ref")]
             reference: &'a str,
         }
-        let resp: ResolveResponse = self.post_json(
-            "/resolve",
-            &Req {
-                reference: body_ref,
-            },
-        )?;
-        Ok(resp.record)
-    }
-
-    fn post_json<Req: Serialize, Resp: serde::de::DeserializeOwned>(
-        &self,
-        path: &str,
-        body: &Req,
-    ) -> Result<Resp> {
-        let url = format!("{}{}", self.base_url, path);
+        let (host, port, token) = self.tcp_parts();
+        let url = format!("http://{host}:{port}/resolve");
         let response = self
-            .agent
+            .agent()
             .post(&url)
-            .set("Authorization", &format!("Bearer {}", self.token))
-            .send_json(serde_json::to_value(body)?)
-            .map_err(|e| map_ureq_error(&self.alias, path, e))?;
-        response.into_json().context(format!(
-            "invalid response from remote `{}` at {path}",
+            .set("Authorization", &format!("Bearer {token}"))
+            .send_json(serde_json::to_value(&Req {
+                reference: body_ref,
+            })?)
+            .map_err(|e| map_ureq_error(&self.alias, "/resolve", e))?;
+        let resp: ResolveResponse = response.into_json().context(format!(
+            "invalid response from remote `{}` at /resolve",
             self.alias
-        ))
+        ))?;
+        Ok(resp.record)
     }
 }
 

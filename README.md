@@ -197,19 +197,20 @@ Two devices running sivtr can read each other's workspace sessions like reading 
 On the device that owns the workspace, start the read-only server:
 
 ```bash
-sivtr pair                    # localhost only; prompts to pick a workspace; generates a token
+sivtr pair                    # default: iroh — zero-config encrypted cross-network; prints a pairing ticket
 sivtr pair -w <key>           # expose a specific workspace by its key
-sivtr pair --lan              # expose on the network (LAN)
+sivtr pair --tcp              # plain HTTP instead of iroh (localhost; add --lan for the network)
 ```
 
-On the other device, register it with an SSH-style target, then use a `<alias>://` ref anywhere a normal ref goes:
+On the other device, register it, then use a `<alias>://` ref anywhere a normal ref goes:
 
 ```bash
-sivtr remote add desk@192.168.1.20      # port defaults to 7421; prompts for the token
+sivtr remote add desk <iroh-ticket>       # iroh (default) — from `sivtr pair`'s ticket
+sivtr remote add desk 192.168.1.20        # TCP (LAN); port defaults to 7421; prompts for the token
 sivtr show desk://terminal/session_42/3/o/1
 ```
 
-`sivtr pair` is opt-in, localhost by default, bearer-token gated, read-only, and redacts obvious secrets (API keys, tokens, PEM keys) before anything leaves the machine. Unregistered aliases error — register them with `sivtr remote add`.
+`sivtr pair` is opt-in, read-only, and redacts obvious secrets (API keys, tokens, PEM keys) before anything leaves the machine. The default iroh transport adds encrypted, NAT-traversing pairing via [iroh](https://iroh.computer) (relay-assisted, no port forwarding, no account). `--tcp` falls back to plain HTTP for localhost/LAN use. Unregistered aliases error — register them with `sivtr remote add`.
 
 ## Supported sources
 

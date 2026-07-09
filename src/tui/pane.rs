@@ -136,11 +136,8 @@ fn panel_scrollbar_thumb(scroll: PanelScroll, track_height: usize) -> Option<(us
     let max_offset = scroll.total.saturating_sub(viewport);
     let offset = scroll.offset.min(max_offset);
     let movable = track_height.saturating_sub(thumb_height);
-    let thumb_top = if max_offset == 0 {
-        0
-    } else {
-        (offset * movable + max_offset / 2) / max_offset
-    };
+    let numerator = offset * movable + max_offset / 2;
+    let thumb_top = numerator.checked_div(max_offset).unwrap_or(0);
     Some((thumb_top, thumb_height))
 }
 

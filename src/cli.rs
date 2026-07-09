@@ -1188,19 +1188,25 @@ pub struct ShowArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct PairArgs {
-    /// Port to listen on
+    /// Port to listen on (TCP mode only)
     #[arg(short, long, value_name = "PORT", default_value_t = 7421)]
     pub port: u16,
 
-    /// Bind to all interfaces (LAN) instead of localhost only. Exposes your
-    /// workspace over the network — make sure `--token` is set and the network
-    /// is trusted.
+    /// Use plain TCP HTTP instead of iroh. `--lan` then binds all interfaces;
+    /// otherwise TCP binds localhost. Without this flag, pair uses iroh
+    /// (zero-config, encrypted, cross-network) and prints a pairing ticket.
     #[arg(long)]
+    pub tcp: bool,
+
+    /// TCP mode only: bind to all interfaces (LAN) instead of localhost. Has
+    /// no effect with iroh (which reaches across networks without a bind).
+    #[arg(long, requires = "tcp")]
     pub lan: bool,
 
-    /// Bearer token clients must present. If omitted, sivtr generates a random
-    /// one and prints it once at startup.
-    #[arg(long, value_name = "TOKEN")]
+    /// Bearer token clients must present (TCP mode only; iroh authenticates by
+    /// endpoint id). If omitted in TCP mode, sivtr generates a random one and
+    /// prints it once at startup.
+    #[arg(long, value_name = "TOKEN", requires = "tcp")]
     pub token: Option<String>,
 
     /// Disable secret redaction of served output. By default obvious API keys,
@@ -1227,12 +1233,13 @@ pub enum RemoteAction {
     List,
     /// Add or update a remote device
     Add {
-        /// Remote target in SSH form: `<alias>@<host>[:<port>]`. The alias is
-        /// the name used in refs (`desk://...`), host is the address (hostname
-        /// or IP), port defaults to 7421. Example: `desk@192.168.1.20:7421`.
-        target: String,
-        /// Bearer token the remote expects. Omit to be prompted interactively
-        /// (keeps it out of shell history).
+        /// Alias used in refs, e.g. `desk` in `desk://terminal/...`
+        name: String,
+        /// `host[:port]` for a TCP remote, or an iroh ticket for zero-config
+        /// cross-network pairing. The form is auto-detected.
+        addr: String,
+        /// Bearer token (TCP only). Omit to be prompted interactively (keeps it
+        /// out of shell history). Ignored for iroh tickets.
         #[arg(long, value_name = "TOKEN")]
         token: Option<String>,
     },

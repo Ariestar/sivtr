@@ -11,7 +11,7 @@ use crate::remote::{RemoteClient, Remotes};
 pub fn execute(cmd: RemoteCommand) -> Result<()> {
     match cmd.action {
         RemoteAction::List => list(),
-        RemoteAction::Add { target, token } => add(&target, token),
+        RemoteAction::Add { name, addr, token } => add(&name, &addr, token),
         RemoteAction::Remove { name } => remove(&name),
         RemoteAction::Test { name } => test(&name),
     }
@@ -24,36 +24,21 @@ fn list() -> Result<()> {
         return Ok(());
     }
     for (alias, remote) in &remotes.remotes {
-        output::detail(alias, format!("{} (port {})", remote.host, remote.port));
+        output::detail(alias, format!("[{}] {}", remote.kind(), remote.describe()));
     }
     Ok(())
 }
 
-/// Parse an SSH-style target `<alias>@<host>[:<port>]`.
-fn parse_target(target: &str) -> Result<(String, String, u16)> {
-    let (alias, host_port) = target
-        .split_once('@')
-        .with_context(|| format!("expected `<alias>@<host>[:<port>]`, got `{target}`"))?;
-    let alias = alias.trim().to_ascii_lowercase();
-    if alias.is_empty() {
-        bail!("empty alias in `{target}`");
-    }
-    if !alias
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
-        bail!("alias `{alias}` must be [a-z0-9_-]+");
-    }
-
-    // Split host[:port] on the last ':' (so IPv6 hosts in brackets still work).
-    let (host, port) = match host_port.rsplit_once(':') {
+/// Parse `host[:port]` (no alias). Port defaults to 7421.
+fn parse_host_port(addr: &str) -> Result<(String, u16)> {
+    let (host, port) = match addr.rsplit_once(':') {
         Some((h, p)) => (h.to_string(), p.parse::<u16>().context("invalid port")?),
-        None => (host_port.to_string(), 7421),
+        None => (addr.to_string(), 7421),
     };
     if host.is_empty() {
-        bail!("empty host in `{target}`");
+        bail!("empty host in `{addr}`");
     }
-    Ok((alias, host, port))
+    Ok((host, port))
 }
 
 /// Resolve the bearer token: use `--token` if given, otherwise prompt on a tty.
@@ -87,17 +72,19 @@ fn resolve_token(flag: Option<String>) -> Result<String> {
     Ok(token)
 }
 
-fn add(target: &str, token: Option<String>) -> Result<()> {
-    let (name, host, port) = parse_target(target)?;
-    let token = resolve_token(token)?;
-    let mut remotes = Remotes::load()?;
-    let remote = crate::remote::Remote {
-        host,
-        port,
-        token,
-        workspace: None,
+fn add(name: &str, addr: &str, token: Option<String>) -> Result<()> {
+    let remote = if crate::serve::iroh::addr_from_ticket(addr).is_ok() {
+        // iroh ticket — no token needed.
+        crate::remote::Remote::Iroh {
+            ticket: addr.to_string(),
+        }
+    } else {
+        let (host, port) = parse_host_port(addr)?;
+        let token = resolve_token(token)?;
+        crate::remote::Remote::Tcp { host, port, token }
     };
-    let existed = remotes.remotes.insert(name.clone(), remote).is_some();
+    let mut remotes = Remotes::load()?;
+    let existed = remotes.remotes.insert(name.to_string(), remote).is_some();
     remotes.save()?;
     output::success(if existed {
         format!("updated remote `{name}`")

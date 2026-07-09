@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn unique_anchors_preserves_first_occurrence() {
-        let records = vec![record(1), record(2)];
+        let records = [record(1), record(2)];
         let anchors = vec![
             records[0].work_ref.record_ref(),
             records[1].work_ref.record_ref(),

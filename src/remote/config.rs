@@ -1,10 +1,10 @@
 //! `remotes.toml` — registry of remote sivtr devices.
 //!
-//! Maps a ref alias (the `desk` in `desk://terminal/...`) to a host/port/token,
-//! so a remote WorkRef resolves to a concrete `sivtr serve` endpoint. Stored at
-//! `<data_dir>/sivtr/remotes.toml` alongside the other config. Unregistered
-//! aliases are an error (see WorkRef parsing) — there is no `host:port://`
-//! shorthand, because the bearer token must live somewhere.
+//! Maps a ref alias (the `desk` in `desk://terminal/...`) to either a TCP
+//! `sivtr pair` endpoint (host/port/token) or an iroh ticket (zero-config,
+//! cross-network). Stored at `<data_dir>/sivtr/remotes.toml`. Unregistered
+//! aliases are an error — there is no `host:port://` shorthand, because the
+//! bearer token / ticket must live somewhere.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -16,15 +16,22 @@ use serde::{Deserialize, Serialize};
 use sivtr_core::workspace;
 
 /// A configured remote device.
+///
+/// `Tcp` is the direct host:port transport (localhost/LAN); `Iroh` is the
+/// zero-config encrypted transport (cross-NAT, relay-assisted).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Remote {
-    pub host: String,
-    #[serde(default = "default_port")]
-    pub port: u16,
-    pub token: String,
-    /// Optional hint for the workspace cwd display on the client side.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workspace: Option<String>,
+#[serde(tag = "transport", rename_all = "lowercase")]
+pub enum Remote {
+    Tcp {
+        host: String,
+        #[serde(default = "default_port")]
+        port: u16,
+        token: String,
+    },
+    Iroh {
+        /// base64 endpoint-address ticket printed by `sivtr pair --iroh`.
+        ticket: String,
+    },
 }
 
 fn default_port() -> u16 {
@@ -32,10 +39,19 @@ fn default_port() -> u16 {
 }
 
 impl Remote {
-    /// `http://host:port` — serve is plain HTTP (localhost default; TLS is a
-    /// future concern, so the scheme is fixed for now).
-    pub fn base_url(&self) -> String {
-        format!("http://{}:{}", self.host, self.port)
+    /// A short label for `remote list`/`test`.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Remote::Tcp { .. } => "tcp",
+            Remote::Iroh { .. } => "iroh",
+        }
+    }
+
+    pub fn describe(&self) -> String {
+        match self {
+            Remote::Tcp { host, port, .. } => format!("{host} (port {port})"),
+            Remote::Iroh { ticket } => format!("iroh:{}…", &ticket[..ticket.len().min(8)]),
+        }
     }
 }
 
@@ -96,24 +112,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_remotes_toml() {
+    fn parses_tcp_and_iroh_remotes() {
         let text = r#"
 [remotes.desk]
+transport = "tcp"
 host = "desk.local"
 port = 7421
 token = "s-abc"
 
-[remotes.laptop]
-host = "192.168.1.20"
-token = "s-xyz"
+[remotes.box]
+transport = "iroh"
+ticket = "eyJ0ZXN0IjoidGlja2V0In0="
 "#;
         let remotes: Remotes = toml::from_str(text).unwrap();
-        assert_eq!(remotes.get("desk").unwrap().host, "desk.local");
-        assert_eq!(remotes.get("laptop").unwrap().port, 7421); // default
+        assert!(matches!(
+            remotes.get("desk").unwrap(),
+            Remote::Tcp { host, port, .. } if host == "desk.local" && *port == 7421
+        ));
+        assert_eq!(remotes.get("desk").unwrap().kind(), "tcp");
         assert_eq!(
-            remotes.get("desk").unwrap().base_url(),
-            "http://desk.local:7421"
+            remotes.get("desk").unwrap().describe(),
+            "desk.local (port 7421)"
         );
+        assert!(matches!(remotes.get("box").unwrap(), Remote::Iroh { .. }));
+        assert_eq!(remotes.get("box").unwrap().kind(), "iroh");
     }
 
     #[test]
