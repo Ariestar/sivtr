@@ -88,6 +88,9 @@ fn run() -> Result<()> {
         Some(Commands::Doctor) => {
             commands::doctor::execute()?;
         }
+        Some(Commands::Migrate) => {
+            commands::migrate::execute()?;
+        }
         Some(Commands::Init { target }) => {
             commands::init::execute(&target)?;
         }

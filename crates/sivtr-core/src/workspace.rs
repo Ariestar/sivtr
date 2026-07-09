@@ -138,6 +138,119 @@ pub fn list_workspaces() -> Result<Vec<WorkspaceMetadata>> {
     Ok(out)
 }
 
+/// Outcome of [`migrate_workspace_keys`].
+#[derive(Debug, Default)]
+pub struct WorkspaceMigration {
+    /// `(old_key, new_key)` for each renamed workspace dir.
+    pub migrated: Vec<(String, String)>,
+    /// Workspaces already on the current key scheme (no rename needed).
+    pub current: usize,
+    /// Dirs that could not be migrated, with the reason.
+    pub skipped: Vec<(PathBuf, String)>,
+}
+
+impl WorkspaceMigration {
+    pub fn changed(&self) -> bool {
+        !self.migrated.is_empty()
+    }
+}
+
+/// Re-key workspace dirs whose stored root predates the absolute-based key
+/// scheme.
+///
+/// Legacy `workspace.json` roots were stored via `std::fs::canonicalize`, which
+/// prepends a `\\?\` verbatim prefix on Windows. The current scheme derives the
+/// key from `std::path::absolute` (no prefix), so legacy dirs no longer match
+/// the key a fresh access computes — their captured sessions become unreachable.
+/// This strips the legacy prefix, recomputes the key, and renames the dir +
+/// rewrites `workspace.json` when they differ. Idempotent: a second run is a
+/// no-op.
+pub fn migrate_workspace_keys() -> Result<WorkspaceMigration> {
+    let base = data_dir().join(WORKSPACES_DIR);
+    let mut report = WorkspaceMigration::default();
+    if !base.exists() {
+        return Ok(report);
+    }
+
+    for entry in fs::read_dir(&base)? {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let dir = entry.path();
+        let Some(old_key) = dir.file_name().and_then(|n| n.to_str()).map(str::to_string) else {
+            continue;
+        };
+        let meta_path = dir.join("workspace.json");
+        let Some(mut meta) = load_workspace_metadata(&meta_path) else {
+            continue;
+        };
+
+        // Legacy canonicalize roots carry a `\\?\` (or `\\?\UNC\`) prefix that
+        // the current absolute-based scheme does not produce. Strip it to
+        // recompute the key the way a fresh access would.
+        let cleaned = strip_legacy_verbatim(&meta.root);
+        let new_root =
+            std::path::absolute(Path::new(&cleaned)).unwrap_or_else(|_| PathBuf::from(&cleaned));
+        let new_root_text = new_root.to_string_lossy().to_string();
+        let new_key = workspace_key(&new_root_text);
+
+        if new_key == old_key {
+            // Key matches; just tidy the root field if it still carries the
+            // legacy prefix.
+            if meta.root != new_root_text {
+                meta.root = new_root_text;
+                let _ = write_workspace_metadata(&meta_path, &meta);
+            }
+            report.current += 1;
+            continue;
+        }
+
+        let target = base.join(&new_key);
+        if target.exists() {
+            report
+                .skipped
+                .push((dir, format!("target key {new_key} already exists")));
+            continue;
+        }
+        match fs::rename(&dir, &target) {
+            Ok(()) => {
+                meta.key = new_key.clone();
+                meta.root = new_root_text;
+                let _ = write_workspace_metadata(&target.join("workspace.json"), &meta);
+                report.migrated.push((old_key, new_key));
+            }
+            Err(e) => report.skipped.push((dir, format!("rename failed: {e}"))),
+        }
+    }
+    Ok(report)
+}
+
+fn load_workspace_metadata(path: &Path) -> Option<WorkspaceMetadata> {
+    let text = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+fn write_workspace_metadata(path: &Path, meta: &WorkspaceMetadata) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, serde_json::to_string_pretty(meta)?)?;
+    Ok(())
+}
+
+/// Strip a legacy `\\?\` / `\\?\UNC\` verbatim prefix from a stored root, as
+/// written by the old `canonicalize`-based scheme. Only used when reading
+/// legacy `workspace.json` data during migration.
+fn strip_legacy_verbatim(root: &str) -> String {
+    if let Some(rest) = root.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else {
+        root.strip_prefix(r"\\?\")
+            .map(str::to_string)
+            .unwrap_or_else(|| root.to_string())
+    }
+}
+
 pub fn terminal_session_id_from_path(path: &Path) -> String {
     path.file_stem()
         .and_then(|name| name.to_str())

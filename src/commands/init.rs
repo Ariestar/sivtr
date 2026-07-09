@@ -218,7 +218,18 @@ enum InstallStatus {
 
 /// Install shell hook, show status, or uninstall hooks.
 pub fn execute(shell: &str) -> Result<()> {
-    match shell.to_lowercase().as_str() {
+    let target = shell.to_lowercase();
+    // Re-key legacy workspace dirs as part of setup, so upgrades don't orphan
+    // previously captured sessions. Only for shell-hook installs (show,
+    // uninstall, and shortcut helpers are unrelated).
+    let is_shell_install = matches!(
+        target.as_str(),
+        "powershell" | "pwsh" | "bash" | "zsh" | "nu" | "nushell" | "all" | "-all" | "--all"
+    );
+    if is_shell_install {
+        run_workspace_migration()?;
+    }
+    match target.as_str() {
         "powershell" | "pwsh" => install_powershell_hook(),
         "bash" => install_single_shell_hook(&bash_profile_path()?, &BASH_SPEC),
         "zsh" => install_single_shell_hook(&zsh_profile_path()?, &ZSH_SPEC),
@@ -247,6 +258,19 @@ pub fn execute(shell: &str) -> Result<()> {
     }?;
 
     maybe_start_hotkey()
+}
+
+/// Re-key legacy workspace dirs during setup. Same core function as
+/// `sivtr migrate`; init just prints a brief summary when anything changed.
+fn run_workspace_migration() -> Result<()> {
+    let report = sivtr_core::workspace::migrate_workspace_keys()?;
+    if report.changed() {
+        eprintln!(
+            "sivtr: migrated {} legacy workspace(s) to the current key scheme (run `sivtr migrate` for details)",
+            report.migrated.len()
+        );
+    }
+    Ok(())
 }
 
 fn install_powershell_hook() -> Result<()> {

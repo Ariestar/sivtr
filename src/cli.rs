@@ -642,6 +642,9 @@ pub enum Commands {
     /// Diagnose installation and environment
     Doctor,
 
+    /// Re-key legacy workspace dirs to the current scheme (idempotent; also run by `init`)
+    Migrate,
+
     /// Generate shell integration or desktop shortcut helpers
     Init {
         /// Integration target: powershell, bash, zsh, nushell, all, tmux, linux-shortcut, macos-shortcut, show, uninstall
