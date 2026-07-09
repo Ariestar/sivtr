@@ -182,7 +182,7 @@ Memory variables:
 | `sivtr show <ref-or-workset>` | Print the content behind refs, `@last`, `@name`, or piped results. Also accepts remote refs like `desk://terminal/...`. |
 | `sivtr zoom <source>` | Add surrounding record context around search hits. |
 | `sivtr diff <left> <right>` | Compare recent command blocks. |
-| `sivtr serve` | Expose this workspace's sessions read-only over HTTP for remote devices. |
+| `sivtr serve` / `sivtr pair` | Expose a workspace's sessions read-only over HTTP so another device can pair. |
 | `sivtr remote` | Manage remote devices (`add`/`list`/`remove`/`test`) used by `desk://...` refs. |
 | `sivtr doctor` | Diagnose binary, config, session logs, hooks, providers, and clipboard. |
 | `sivtr init <shell>` | Install shell integration; also supports `show` and `uninstall`. |
@@ -194,10 +194,12 @@ Memory variables:
 
 Two devices running sivtr can read each other's workspace sessions like reading local — for collaborative work where you want to see a teammate's terminal output or AI session without leaving your machine.
 
-On the device that owns the workspace, start the read-only server (generates a token if you don't pass `--token`):
+On the device that owns the workspace, start the read-only server (`sivtr pair`, also reachable as `sivtr serve`):
 
 ```bash
-sivtr serve                 # localhost only; add --lan to expose on the network
+sivtr pair                    # localhost only; prompts to pick a workspace; generates a token
+sivtr pair -w <key>           # expose a specific workspace by its key
+sivtr pair --lan              # expose on the network (LAN)
 ```
 
 On the other device, register it with an SSH-style target, then use a `<alias>://` ref anywhere a normal ref goes:
@@ -207,7 +209,7 @@ sivtr remote add desk@192.168.1.20      # port defaults to 7421; prompts for the
 sivtr show desk://terminal/session_42/3/o/1
 ```
 
-`sivtr serve` is opt-in, localhost by default, bearer-token gated, read-only, and redacts obvious secrets (API keys, tokens, PEM keys) before anything leaves the machine. Unregistered aliases error — register them with `sivtr remote add`.
+`sivtr serve` / `sivtr pair` is opt-in, localhost by default, bearer-token gated, read-only, and redacts obvious secrets (API keys, tokens, PEM keys) before anything leaves the machine. Unregistered aliases error — register them with `sivtr remote add`.
 
 ## Supported sources
 

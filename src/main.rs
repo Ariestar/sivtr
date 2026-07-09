@@ -70,8 +70,8 @@ fn run() -> Result<()> {
         Some(Commands::Show(args)) => {
             commands::show::execute(&args)?;
         }
-        Some(Commands::Serve(args)) => {
-            commands::serve::execute(&args)?;
+        Some(Commands::Pair(args)) => {
+            commands::pair::execute(&args)?;
         }
         Some(Commands::Remote(cmd)) => {
             commands::remote::execute(cmd)?;

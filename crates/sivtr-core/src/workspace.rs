@@ -112,6 +112,32 @@ pub fn terminal_log_paths_for_workspace(cwd: &Path) -> Result<Vec<PathBuf>> {
     Ok(logs)
 }
 
+/// All known workspaces, parsed from `<data_dir>/workspaces/<key>/workspace.json`,
+/// most-recently-seen first. An empty result means sivtr has not recorded any
+/// workspace yet (e.g. `sivtr init` was never run in a git repo).
+pub fn list_workspaces() -> Result<Vec<WorkspaceMetadata>> {
+    let dir = data_dir().join(WORKSPACES_DIR);
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        let meta_path = entry.path().join("workspace.json");
+        if !meta_path.is_file() {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(&meta_path) else {
+            continue;
+        };
+        if let Ok(meta) = serde_json::from_str::<WorkspaceMetadata>(&text) {
+            out.push(meta);
+        }
+    }
+    out.sort_by(|a, b| b.last_seen_at.cmp(&a.last_seen_at));
+    Ok(out)
+}
+
 pub fn terminal_session_id_from_path(path: &Path) -> String {
     path.file_stem()
         .and_then(|name| name.to_str())

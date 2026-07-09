@@ -630,8 +630,9 @@ pub enum Commands {
     /// Show a captured terminal or AI workspace ref
     Show(ShowArgs),
 
-    /// Serve this workspace's sessions read-only over HTTP for remote devices
-    Serve(ServeArgs),
+    /// Expose a workspace's sessions read-only over HTTP so another device can pair
+    #[command(visible_alias = "serve")]
+    Pair(PairArgs),
 
     /// Manage remote sivtr devices (see `remotes.toml`)
     Remote(RemoteCommand),
@@ -1184,7 +1185,7 @@ pub struct ShowArgs {
 }
 
 #[derive(Args, Debug, Clone)]
-pub struct ServeArgs {
+pub struct PairArgs {
     /// Port to listen on
     #[arg(short, long, value_name = "PORT", default_value_t = 7421)]
     pub port: u16,
@@ -1205,9 +1206,11 @@ pub struct ServeArgs {
     #[arg(long)]
     pub no_redact: bool,
 
-    /// Workspace directory to serve (defaults to the current directory)
-    #[arg(long, value_name = "PATH")]
-    pub cwd: Option<PathBuf>,
+    /// Workspace key to expose (see `sivtr pair` with no flag for the list).
+    /// If omitted, an interactive picker lists known workspaces (or the current
+    /// workspace is used when stdin is not interactive).
+    #[arg(short, long, value_name = "KEY")]
+    pub workspace: Option<String>,
 }
 
 #[derive(Parser, Debug)]
