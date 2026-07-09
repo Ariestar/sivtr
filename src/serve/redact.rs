@@ -24,6 +24,9 @@ fn patterns() -> Vec<(&'static str, Regex)> {
         ("github_pat", Regex::new(r"gh[pousr]_[A-Za-z0-9]{16,}").unwrap()),
         // OpenAI / Anthropic-style API keys
         ("openai_key", Regex::new(r"sk-[A-Za-z0-9]{16,}").unwrap()),
+        // sivtr serve pairing tokens (s- namespace) — redact our own tokens so a
+        // generated token that leaks into captured output is masked too.
+        ("sivtr_token", Regex::new(r"s-[A-Za-z0-9]{16,}").unwrap()),
         // Slack tokens
         ("slack_token", Regex::new(r"xox[abprs]-[A-Za-z0-9-]{10,}").unwrap()),
         // AWS access key ids
@@ -102,6 +105,10 @@ mod tests {
         assert_eq!(
             redact_text("key=sk-abcd1234efgh5678ijkl", &patterns),
             "key=[REDACTED]"
+        );
+        assert_eq!(
+            redact_text("token s-deadbeefcafef00d1234567890abcdef", &patterns),
+            "token [REDACTED]"
         );
         assert_eq!(
             redact_text("Authorization: Bearer abcdef1234567890XYZ", &patterns),

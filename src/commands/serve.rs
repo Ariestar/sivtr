@@ -69,12 +69,14 @@ pub fn execute(args: &ServeArgs) -> Result<()> {
     Ok(())
 }
 
-/// Generate a short, URL-safe bearer token via the OS RNG. Not cryptographic
+/// Generate a short, URL-safe bearer token via the OS RNG. Prefixed with `s-`
+/// (the sivtr token namespace) so the built-in redactor masks it — a generated
+/// token that leaks into captured output is itself redacted. Not cryptographic
 /// strength, but sufficient for a LAN pairing token and readable for sharing.
 fn generate_token() -> String {
     let mut bytes = [0u8; 20];
     getrandom::getrandom(&mut bytes).expect("OS RNG unavailable; pass --token explicitly");
-    hex_encode(&bytes)
+    format!("s-{}", hex_encode(&bytes))
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
