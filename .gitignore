@@ -33,3 +33,6 @@ session_*.log
 /editors/vscode/out/
 /editors/vscode/*.vsix
 /.playwright-mcp/
+
+# CodeGraph (local code-intelligence index, not committed)
+.codegraph/

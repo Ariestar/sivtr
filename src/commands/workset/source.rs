@@ -62,14 +62,41 @@ pub fn load_source(source: &str, cwd: Option<&Path>) -> Result<WorkSetSource> {
         return Ok(WorkSetSource::Reference(super::load_reference(source)?));
     }
 
-    let cwd = cwd
-        .map(Path::to_path_buf)
-        .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
+    // A concrete WorkRef (local or remote). Selectors like `terminal/*` are not
+    // valid WorkRefs and fall through to the selector path below.
     if let Ok(work_ref) = source.parse::<WorkRef>() {
+        // A remote origin routes to that device's `sivtr serve` instead of the
+        // local workspace index.
+        if let Some(alias) = work_ref.remote_name() {
+            return resolve_remote_ref_source(alias, &work_ref);
+        }
+        let cwd = cwd
+            .map(Path::to_path_buf)
+            .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
         return resolve_ref_source(source, &cwd, &work_ref);
     }
 
+    let cwd = cwd
+        .map(Path::to_path_buf)
+        .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
     resolve_selector_source(source, &cwd)
+}
+
+/// Resolve a remote WorkRef by calling that device's serve endpoint. The body
+/// (without the `alias://` prefix) is sent to `/resolve`; the returned record
+/// keeps its origin on the anchor so downstream refs round-trip as remote.
+fn resolve_remote_ref_source(alias: &str, work_ref: &WorkRef) -> Result<WorkSetSource> {
+    let remote = crate::remote::lookup(alias)?;
+    let client = crate::remote::RemoteClient::new(alias, remote);
+    // Serve expects a local-shape ref; render the body alone (Local is the
+    // bare shorthand, so wrapping in Local yields the body string).
+    let body_ref = WorkRef::Local(work_ref.body().clone()).to_string();
+    let record = client.resolve(&body_ref)?;
+    Ok(WorkSetSource::Records {
+        cwd: PathBuf::from("."),
+        records: vec![record],
+        anchors: vec![work_ref.clone()],
+    })
 }
 
 fn read_stdin() -> Result<WorkSet> {

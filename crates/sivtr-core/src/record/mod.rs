@@ -10,4 +10,4 @@ pub use model::{
     WorkPart, WorkPartIo, WorkPartKind, WorkRecord, WorkRecordCopyParts, WorkRecordKind,
     WorkSessionRef, WorkSource, WorkStatus, WorkTime, RECORD_SCHEMA_VERSION,
 };
-pub use refs::{WorkRef, WorkRefSelector, WorkRefTarget};
+pub use refs::{RefOrigin, WorkRef, WorkRefBody, WorkRefSelector, WorkRefTarget};

@@ -3,6 +3,8 @@ mod cli;
 mod command_blocks;
 mod commands;
 mod output;
+mod remote;
+mod serve;
 mod tui;
 
 use anyhow::Result;
@@ -67,6 +69,12 @@ fn run() -> Result<()> {
         }
         Some(Commands::Show(args)) => {
             commands::show::execute(&args)?;
+        }
+        Some(Commands::Serve(args)) => {
+            commands::serve::execute(&args)?;
+        }
+        Some(Commands::Remote(cmd)) => {
+            commands::remote::execute(cmd)?;
         }
         Some(Commands::Hotkey(cmd)) => {
             commands::hotkey::execute(cmd)?;

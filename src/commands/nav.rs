@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use sivtr_core::ai::AgentProvider;
-use sivtr_core::record::{WorkPartIo, WorkRecord, WorkRef, WorkRefTarget};
+use sivtr_core::record::{WorkPartIo, WorkRecord, WorkRef, WorkRefBody, WorkRefTarget};
 
 use crate::cli::NavArgs;
 use crate::commands::records::current_work_record_index;
@@ -248,16 +248,16 @@ fn session_records_for<'a>(
 }
 
 fn same_stream(left: &WorkRecord, right: &WorkRecord) -> bool {
-    match (&left.work_ref, &right.work_ref) {
-        (WorkRef::Terminal { .. }, WorkRef::Terminal { .. }) => {
+    match (left.work_ref.body(), right.work_ref.body()) {
+        (WorkRefBody::Terminal { .. }, WorkRefBody::Terminal { .. }) => {
             left.work_ref.session() == right.work_ref.session()
         }
         (
-            WorkRef::Agent {
+            WorkRefBody::Agent {
                 provider: left_provider,
                 ..
             },
-            WorkRef::Agent {
+            WorkRefBody::Agent {
                 provider: right_provider,
                 ..
             },

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use anyhow::{Context, Result};
 use sivtr_core::ai::AgentProvider;
-use sivtr_core::record::{WorkRecord, WorkRef};
+use sivtr_core::record::{WorkRecord, WorkRef, WorkRefBody};
 
 use crate::cli::ZoomArgs;
 use crate::commands::records::current_work_record_index;
@@ -100,16 +100,16 @@ fn expand_around(
 }
 
 fn same_stream(left: &WorkRecord, right: &WorkRecord) -> bool {
-    match (&left.work_ref, &right.work_ref) {
-        (WorkRef::Terminal { .. }, WorkRef::Terminal { .. }) => {
+    match (left.work_ref.body(), right.work_ref.body()) {
+        (WorkRefBody::Terminal { .. }, WorkRefBody::Terminal { .. }) => {
             left.work_ref.session() == right.work_ref.session()
         }
         (
-            WorkRef::Agent {
+            WorkRefBody::Agent {
                 provider: left_provider,
                 ..
             },
-            WorkRef::Agent {
+            WorkRefBody::Agent {
                 provider: right_provider,
                 ..
             },
