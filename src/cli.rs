@@ -630,6 +630,9 @@ pub enum Commands {
     /// Show a captured terminal or AI workspace ref
     Show(ShowArgs),
 
+    /// Serve this workspace's sessions read-only over HTTP for remote devices
+    Serve(ServeArgs),
+
     /// Manage configuration
     Config(ConfigCommand),
 
@@ -1175,6 +1178,33 @@ pub struct ShowArgs {
     /// Alias for --format workset
     #[arg(long, conflicts_with = "format")]
     pub json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ServeArgs {
+    /// Port to listen on
+    #[arg(short, long, value_name = "PORT", default_value_t = 7421)]
+    pub port: u16,
+
+    /// Bind to all interfaces (LAN) instead of localhost only. Exposes your
+    /// workspace over the network — make sure `--token` is set and the network
+    /// is trusted.
+    #[arg(long)]
+    pub lan: bool,
+
+    /// Bearer token clients must present. If omitted, sivtr generates a random
+    /// one and prints it once at startup.
+    #[arg(long, value_name = "TOKEN")]
+    pub token: Option<String>,
+
+    /// Disable secret redaction of served output. By default obvious API keys,
+    /// tokens, and private keys are masked before anything leaves the machine.
+    #[arg(long)]
+    pub no_redact: bool,
+
+    /// Workspace directory to serve (defaults to the current directory)
+    #[arg(long, value_name = "PATH")]
+    pub cwd: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug)]

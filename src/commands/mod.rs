@@ -18,6 +18,7 @@ pub mod pipe;
 pub mod records;
 pub mod run;
 pub mod search;
+pub mod serve;
 pub mod show;
 pub mod time_filter;
 pub mod var;
