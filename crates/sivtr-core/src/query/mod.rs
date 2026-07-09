@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::ai::{AgentProvider, AgentSessionProvider};
-use crate::record::{WorkRecord, WorkRecordIndex, WorkRef};
+use crate::record::{WorkRecord, WorkRecordIndex, WorkRef, WorkRefBody};
 use crate::{session, workspace};
 
 /// A session file that could not be parsed, retained so callers can warn.
@@ -150,13 +150,13 @@ fn dedup_records(records: &mut Vec<WorkRecord>) {
 }
 
 fn record_identity_key(record: &WorkRecord) -> String {
-    match (&record.session.canonical_id, &record.work_ref) {
-        (Some(canonical_id), WorkRef::Terminal { record_index, .. }) => {
+    match (&record.session.canonical_id, record.work_ref.body()) {
+        (Some(canonical_id), WorkRefBody::Terminal { record_index, .. }) => {
             format!("terminal:{canonical_id}:{record_index}")
         }
         (
             Some(canonical_id),
-            WorkRef::Agent {
+            WorkRefBody::Agent {
                 provider,
                 turn_index,
                 ..
@@ -211,9 +211,9 @@ fn normalize_session_display_ids(records: &mut [WorkRecord]) {
 }
 
 fn session_source_key(reference: &WorkRef) -> String {
-    match reference {
-        WorkRef::Terminal { .. } => "terminal".to_string(),
-        WorkRef::Agent { provider, .. } => format!("agent:{}", provider.command_name()),
+    match reference.body() {
+        WorkRefBody::Terminal { .. } => "terminal".to_string(),
+        WorkRefBody::Agent { provider, .. } => format!("agent:{}", provider.command_name()),
     }
 }
 
@@ -242,16 +242,30 @@ fn prefix_chars(value: &str, len: usize) -> String {
 
 fn rewrite_record_session_display_id(record: &mut WorkRecord, display_id: &str) {
     record.session.id = display_id.to_string();
-    record.work_ref = match &record.work_ref {
-        WorkRef::Terminal { record_index, .. } => {
-            WorkRef::terminal_record(display_id, *record_index)
-        }
-        WorkRef::Agent {
+    // Preserve the origin (local/remote); only the session id in the body changes.
+    let new_body = match record.work_ref.body() {
+        WorkRefBody::Terminal {
+            record_index,
+            target,
+            ..
+        } => WorkRefBody::Terminal {
+            session: display_id.to_string(),
+            record_index: *record_index,
+            target: *target,
+        },
+        WorkRefBody::Agent {
             provider,
             turn_index,
+            target,
             ..
-        } => WorkRef::agent_record(*provider, display_id, *turn_index),
+        } => WorkRefBody::Agent {
+            provider: *provider,
+            session: display_id.to_string(),
+            turn_index: *turn_index,
+            target: *target,
+        },
     };
+    record.work_ref = record.work_ref.with_body(new_body);
 }
 
 #[cfg(test)]

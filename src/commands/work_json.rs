@@ -16,9 +16,11 @@ pub struct WorkJsonSessionMeta {
 }
 
 fn session_ref(record: &WorkRecord) -> String {
-    match &record.work_ref {
-        sivtr_core::record::WorkRef::Terminal { session, .. } => format!("terminal/{session}"),
-        sivtr_core::record::WorkRef::Agent {
+    match record.work_ref.body() {
+        sivtr_core::record::WorkRefBody::Terminal { session, .. } => {
+            format!("terminal/{session}")
+        }
+        sivtr_core::record::WorkRefBody::Agent {
             provider, session, ..
         } => {
             format!("{}/{session}", provider.command_name())

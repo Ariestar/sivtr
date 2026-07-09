@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use sivtr_core::ai::AgentProvider;
-use sivtr_core::record::{WorkRecord, WorkRef};
+use sivtr_core::record::{WorkRecord, WorkRefBody};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
@@ -214,12 +214,12 @@ fn timestamp_tag(timestamp: Option<&str>) -> String {
 
 impl WorkSessionMarker {
     fn from_record(record: &WorkRecord) -> Self {
-        match &record.work_ref {
-            WorkRef::Terminal { session, .. } => Self {
+        match record.work_ref.body() {
+            WorkRefBody::Terminal { session, .. } => Self {
                 source: WorkSessionSource::Terminal,
                 session: session.clone(),
             },
-            WorkRef::Agent {
+            WorkRefBody::Agent {
                 provider, session, ..
             } => Self {
                 source: WorkSessionSource::Agent(*provider),
@@ -291,7 +291,7 @@ impl std::str::FromStr for WorkSessionMarker {
 mod tests {
     use super::*;
     use sivtr_core::record::{
-        WorkChannel, WorkPart, WorkPartIo, WorkPartKind, WorkRecordKind, WorkSessionRef,
+        WorkChannel, WorkPart, WorkPartIo, WorkPartKind, WorkRecordKind, WorkRef, WorkSessionRef,
         WorkSource, WorkTime,
     };
 
@@ -350,13 +350,13 @@ mod tests {
         WorkRecord {
             schema_version: sivtr_core::record::RECORD_SCHEMA_VERSION,
             work_ref: work_ref.clone(),
-            kind: if matches!(work_ref, WorkRef::Terminal { .. }) {
+            kind: if matches!(work_ref.body(), WorkRefBody::Terminal { .. }) {
                 WorkRecordKind::TerminalCommand
             } else {
                 WorkRecordKind::ChatTurn
             },
             source: WorkSource {
-                channel: if matches!(work_ref, WorkRef::Terminal { .. }) {
+                channel: if matches!(work_ref.body(), WorkRefBody::Terminal { .. }) {
                     WorkChannel::Terminal
                 } else {
                     WorkChannel::Chat
