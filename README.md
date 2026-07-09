@@ -200,10 +200,10 @@ On the device that owns the workspace, start the read-only server (generates a t
 sivtr serve                 # localhost only; add --lan to expose on the network
 ```
 
-On the other device, register it, then use a `<alias>://` ref anywhere a normal ref goes:
+On the other device, register it with an SSH-style target, then use a `<alias>://` ref anywhere a normal ref goes:
 
 ```bash
-sivtr remote add desk --host desk.local --port 7421 --token <token>
+sivtr remote add desk@192.168.1.20      # port defaults to 7421; prompts for the token
 sivtr show desk://terminal/session_42/3/o/1
 ```
 

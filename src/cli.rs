@@ -1222,17 +1222,14 @@ pub enum RemoteAction {
     List,
     /// Add or update a remote device
     Add {
-        /// Alias used in refs, e.g. `desk` in `desk://terminal/...`
-        name: String,
-        /// Host or IP address
-        #[arg(long, value_name = "HOST")]
-        host: String,
-        /// Port (defaults to 7421)
-        #[arg(long, value_name = "PORT", default_value_t = 7421)]
-        port: u16,
-        /// Bearer token the remote expects
+        /// Remote target in SSH form: `<alias>@<host>[:<port>]`. The alias is
+        /// the name used in refs (`desk://...`), host is the address (hostname
+        /// or IP), port defaults to 7421. Example: `desk@192.168.1.20:7421`.
+        target: String,
+        /// Bearer token the remote expects. Omit to be prompted interactively
+        /// (keeps it out of shell history).
         #[arg(long, value_name = "TOKEN")]
-        token: String,
+        token: Option<String>,
     },
     /// Remove a remote device
     Remove {
