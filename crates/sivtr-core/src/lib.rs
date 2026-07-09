@@ -10,6 +10,7 @@ pub mod history;
 pub mod opencode;
 pub mod parse;
 pub mod pi;
+pub mod query;
 pub mod record;
 pub mod search;
 pub mod selection;
