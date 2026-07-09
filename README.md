@@ -69,7 +69,7 @@ With `sivtr`, you can:
 - **Named memory variables**: save any result set as `@failures`, reuse `@last`, pass stdin as `@`, list vars with `sivtr var list`, and select slices like `@failures[1,3..5]`.
 - **Deterministic anchor navigation**: move refs through parent/child/sibling/session structure with `sivtr nav`, without implicit expansion.
 - **Agent-ready memory** through the bundled `sivtr-memory` skill.
-- **Cross-device access**: serve a workspace read-only and browse another device's sessions with a `desk://...` ref, like reading local — for collaborative dev.
+- **Cross-device access**: expose a workspace read-only and browse another device's sessions with a `desk://...` ref, like reading local — for collaborative dev.
 - **Diagnostics** with `sivtr doctor`, `sivtr init show`, and `sivtr init uninstall`.
 
 ## Quick start
@@ -182,7 +182,7 @@ Memory variables:
 | `sivtr show <ref-or-workset>` | Print the content behind refs, `@last`, `@name`, or piped results. Also accepts remote refs like `desk://terminal/...`. |
 | `sivtr zoom <source>` | Add surrounding record context around search hits. |
 | `sivtr diff <left> <right>` | Compare recent command blocks. |
-| `sivtr serve` / `sivtr pair` | Expose a workspace's sessions read-only over HTTP so another device can pair. |
+| `sivtr pair` | Expose a workspace's sessions read-only over HTTP so another device can pair. |
 | `sivtr remote` | Manage remote devices (`add`/`list`/`remove`/`test`) used by `desk://...` refs. |
 | `sivtr doctor` | Diagnose binary, config, session logs, hooks, providers, and clipboard. |
 | `sivtr init <shell>` | Install shell integration; also supports `show` and `uninstall`. |
@@ -194,7 +194,7 @@ Memory variables:
 
 Two devices running sivtr can read each other's workspace sessions like reading local — for collaborative work where you want to see a teammate's terminal output or AI session without leaving your machine.
 
-On the device that owns the workspace, start the read-only server (`sivtr pair`, also reachable as `sivtr serve`):
+On the device that owns the workspace, start the read-only server:
 
 ```bash
 sivtr pair                    # localhost only; prompts to pick a workspace; generates a token
@@ -209,7 +209,7 @@ sivtr remote add desk@192.168.1.20      # port defaults to 7421; prompts for the
 sivtr show desk://terminal/session_42/3/o/1
 ```
 
-`sivtr serve` / `sivtr pair` is opt-in, localhost by default, bearer-token gated, read-only, and redacts obvious secrets (API keys, tokens, PEM keys) before anything leaves the machine. Unregistered aliases error — register them with `sivtr remote add`.
+`sivtr pair` is opt-in, localhost by default, bearer-token gated, read-only, and redacts obvious secrets (API keys, tokens, PEM keys) before anything leaves the machine. Unregistered aliases error — register them with `sivtr remote add`.
 
 ## Supported sources
 

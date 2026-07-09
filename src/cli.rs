@@ -631,7 +631,6 @@ pub enum Commands {
     Show(ShowArgs),
 
     /// Expose a workspace's sessions read-only over HTTP so another device can pair
-    #[command(visible_alias = "serve")]
     Pair(PairArgs),
 
     /// Manage remote sivtr devices (see `remotes.toml`)
