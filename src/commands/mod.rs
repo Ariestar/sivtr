@@ -16,6 +16,7 @@ pub mod init;
 pub mod nav;
 pub mod pipe;
 pub mod records;
+pub mod remote;
 pub mod run;
 pub mod search;
 pub mod serve;

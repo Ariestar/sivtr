@@ -633,6 +633,9 @@ pub enum Commands {
     /// Serve this workspace's sessions read-only over HTTP for remote devices
     Serve(ServeArgs),
 
+    /// Manage remote sivtr devices (see `remotes.toml`)
+    Remote(RemoteCommand),
+
     /// Manage configuration
     Config(ConfigCommand),
 
@@ -1205,6 +1208,42 @@ pub struct ServeArgs {
     /// Workspace directory to serve (defaults to the current directory)
     #[arg(long, value_name = "PATH")]
     pub cwd: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug)]
+pub struct RemoteCommand {
+    #[command(subcommand)]
+    pub action: RemoteAction,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RemoteAction {
+    /// List configured remote devices
+    List,
+    /// Add or update a remote device
+    Add {
+        /// Alias used in refs, e.g. `desk` in `desk://terminal/...`
+        name: String,
+        /// Host or IP address
+        #[arg(long, value_name = "HOST")]
+        host: String,
+        /// Port (defaults to 7421)
+        #[arg(long, value_name = "PORT", default_value_t = 7421)]
+        port: u16,
+        /// Bearer token the remote expects
+        #[arg(long, value_name = "TOKEN")]
+        token: String,
+    },
+    /// Remove a remote device
+    Remove {
+        /// Alias to remove
+        name: String,
+    },
+    /// Ping a remote's `/agent-card` to verify reachability and the token
+    Test {
+        /// Alias to test
+        name: String,
+    },
 }
 
 #[derive(Parser, Debug)]

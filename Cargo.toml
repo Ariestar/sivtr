@@ -66,6 +66,8 @@ crossterm = "0.28"
 tokio = { version = "1", features = ["full"] }
 axum = "0.7"
 getrandom = "0.2"
+ureq = { version = "2", features = ["json"] }
+toml = "0.8"
 anyhow = "1"
 atty = "0.2"
 arboard = "3"
