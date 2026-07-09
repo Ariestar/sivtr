@@ -146,9 +146,12 @@ pub fn terminal_session_id_from_path(path: &Path) -> String {
 }
 
 fn paths_for_root(root: PathBuf) -> Result<WorkspacePaths> {
-    let root = canonicalize_lossy(&root);
-    let root_text = root.to_string_lossy().to_string();
-    let key = workspace_key(&root_text);
+    // Absolutify without canonicalizing: `std::fs::canonicalize` adds a `\\?\`
+    // verbatim prefix on Windows (root cause of ugly displayed paths and keys),
+    // and resolves symlinks we don't need. `absolute` makes the path absolute
+    // (so a relative `--cwd` still keys stably) without either side effect.
+    let root = std::path::absolute(&root).unwrap_or(root);
+    let key = workspace_key(&root.to_string_lossy());
     let dir = data_dir().join(WORKSPACES_DIR).join(&key);
     Ok(WorkspacePaths {
         key,
@@ -194,10 +197,6 @@ fn git_root(cwd: &Path) -> Result<Option<PathBuf>> {
             return Ok(None);
         }
     }
-}
-
-fn canonicalize_lossy(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn workspace_key(root: &str) -> String {
