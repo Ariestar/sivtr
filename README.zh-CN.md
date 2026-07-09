@@ -73,16 +73,24 @@
 
 ## 快速开始
 
-安装 CLI：
+安装预编译 CLI（无需 Rust 工具链）：
 
 ```bash
-cargo install sivtr
+cargo binstall sivtr
 ```
 
-Linux/macOS 也可以使用预编译安装脚本：
+其它方式：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh
+brew install ariestar/sivtr/sivtr   # macOS/Linux，通过 Homebrew
+cargo install sivtr                  # 从源码编译（需要 Rust）
+curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh   # Linux/macOS/WSL 一行安装
+```
+
+Windows（PowerShell）：
+
+```powershell
+irm https://raw.githubusercontent.com/Ariestar/sivtr/main/install.ps1 | iex
 ```
 
 启用 shell capture：
@@ -91,6 +99,9 @@ curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh
 sivtr init bash       # 或 zsh、powershell、nushell
 sivtr doctor
 ```
+
+> [!NOTE]
+> 在 Windows 上，如果 `sivtr init powershell` 提示 profile 没有加载，执行一次 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` 把当前用户的执行策略调高即可。sivtr 不会修改注册表——hook 只写在你的 PowerShell profile 里。
 
 捕获并浏览输出：
 

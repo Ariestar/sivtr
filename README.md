@@ -73,16 +73,24 @@ With `sivtr`, you can:
 
 ## Quick start
 
-Install the CLI:
+Install the prebuilt CLI (no Rust toolchain needed):
 
 ```bash
-cargo install sivtr
+cargo binstall sivtr
 ```
 
-Or use the prebuilt installer on Linux/macOS:
+Other ways:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh
+brew install ariestar/sivtr/sivtr   # macOS/Linux via Homebrew
+cargo install sivtr                  # build from source (needs Rust)
+curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh   # Linux/macOS/WSL one-liner
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/Ariestar/sivtr/main/install.ps1 | iex
 ```
 
 Enable shell capture:
@@ -91,6 +99,9 @@ Enable shell capture:
 sivtr init bash       # or zsh, powershell, nushell
 sivtr doctor
 ```
+
+> [!NOTE]
+> On Windows, if `sivtr init powershell` reports that the profile did not load, raise the current-user execution policy once with `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`. sivtr never edits the registry — the hook lives only in your PowerShell profile.
 
 Capture and browse output:
 

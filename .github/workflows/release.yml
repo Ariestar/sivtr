@@ -217,3 +217,58 @@ jobs:
           files: |
             artifacts/**/*
             install.sh
+            install.ps1
+
+  homebrew:
+    name: Publish Homebrew formula
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      # Skip gracefully if the tap is not set up yet (no secret), so a release
+      # never fails just because Homebrew distribution is not configured.
+      - name: Gate on tap token
+        id: gate
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+        run: |
+          if [ -z "${TOKEN}" ]; then
+            echo "::warning::HOMEBREW_TAP_GITHUB_TOKEN is not set; skipping Homebrew tap publish. Create the Ariestar/homebrew-sivtr tap and add the secret to enable 'brew install ariestar/sivtr/sivtr'."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout sivtr (formula template)
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/checkout@v4
+
+      - name: Checkout tap
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: Ariestar/homebrew-sivtr
+          token: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          path: tap
+
+      - name: Render and push formula
+        if: steps.gate.outputs.skip != 'true'
+        shell: bash
+        env:
+          VERSION: ${{ env.RELEASE_REF_NAME }}
+        run: |
+          set -euo pipefail
+          v="${VERSION#v}"
+          url="https://github.com/Ariestar/sivtr/archive/refs/tags/v${v}.tar.gz"
+          sha="$(curl -fsSL "$url" | sha256sum | awk '{print $1}')"
+          mkdir -p tap/Formula
+          sed -e "s|@VERSION@|${v}|g" \
+              -e "s|@SOURCE_SHA256@|${sha}|g" \
+              -e "s|@SOURCE_URL@|${url}|g" \
+              packaging/homebrew/sivtr.rb > tap/Formula/sivtr.rb
+          cd tap
+          git config user.name "sivtr-release-bot"
+          git config user.email "actions@github.com"
+          git add Formula/sivtr.rb
+          git commit -m "sivtr ${v}" || echo "nothing to commit"
+          git push

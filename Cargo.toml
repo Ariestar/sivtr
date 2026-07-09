@@ -33,6 +33,30 @@ default-run = "sivtr"
 name = "sivtr"
 path = "src/main.rs"
 
+# cargo-binstall — lets `cargo binstall sivtr` download a prebuilt binary from
+# GitHub Releases instead of compiling from source. Asset names mirror the build
+# matrix in .github/workflows/release.yml (sivtr-<version>-<asset>.<ext>); each
+# archive holds a top-level sivtr-<version>-<asset>/ directory containing the binary.
+[package.metadata.binstall]
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/sivtr-v{ version }-windows-x64.zip"
+bin-dir = "sivtr-v{ version }-windows-x64/{ bin }{ binary-ext }"
+pkg-fmt = "zip"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/sivtr-v{ version }-linux-x64.tar.gz"
+bin-dir = "sivtr-v{ version }-linux-x64/{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-musl]
+pkg-url = "{ repo }/releases/download/v{ version }/sivtr-v{ version }-linux-x64-musl.tar.gz"
+bin-dir = "sivtr-v{ version }-linux-x64-musl/{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.aarch64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/sivtr-v{ version }-macos.tar.gz"
+bin-dir = "sivtr-v{ version }-macos/{ bin }{ binary-ext }"
+
 [dependencies]
 sivtr-core = { version = "0.2.4", path = "crates/sivtr-core" }
 chrono = { version = "0.4", features = ["clock"] }
