@@ -266,9 +266,9 @@ async fn process_local(
             alias,
         } => {
             let mount = context.store.mount(&workspace_key, &alias)?;
-            let response = exchange_with_mount(
+            let response = exchange_with_peer(
                 context,
-                &mount,
+                &mount.peer_id,
                 RemoteRequest::Probe {
                     share_id: mount.share_id.clone(),
                 },
@@ -291,9 +291,9 @@ async fn process_local(
             source,
         } => {
             let mount = context.store.mount(&workspace_key, &alias)?;
-            let response = exchange_with_mount(
+            let response = exchange_with_peer(
                 context,
-                &mount,
+                &mount.peer_id,
                 RemoteRequest::Source {
                     share_id: mount.share_id.clone(),
                     source,
@@ -302,7 +302,12 @@ async fn process_local(
             .await?;
             match response {
                 RemoteResponse::Source(mut source) => {
-                    qualify_source(&mount, &mut source);
+                    qualify_source_origin(
+                        &mount.alias,
+                        &mount.peer_id,
+                        &mount.share_id,
+                        &mut source,
+                    );
                     LocalResponse::Source(source)
                 }
                 response => bail!("Unexpected remote response: {response:?}"),
@@ -371,14 +376,6 @@ async fn redeem_remote(
     context
         .store
         .add_mount(workspace_key, alias, &peer_id, &share_id, &share_name)
-}
-
-async fn exchange_with_mount(
-    context: &DaemonContext,
-    mount: &MountInfo,
-    request: RemoteRequest,
-) -> Result<RemoteResponse> {
-    exchange_with_peer(context, &mount.peer_id, request).await
 }
 
 async fn exchange_with_peer(
@@ -484,10 +481,6 @@ async fn process_remote(
             })
         }
     }
-}
-
-fn qualify_source(mount: &MountInfo, response: &mut SourceResponse) {
-    qualify_source_origin(&mount.alias, &mount.peer_id, &mount.share_id, response);
 }
 
 fn qualify_source_origin(
