@@ -630,8 +630,8 @@ pub enum Commands {
     /// Show a captured terminal or AI workspace ref
     Show(ShowArgs),
 
-    /// Expose a workspace's sessions read-only over HTTP so another device can pair
-    Pair(PairArgs),
+    /// Serve a workspace's sessions read-only for another device
+    Serve(ServeArgs),
 
     /// Manage remote sivtr devices (see `remotes.toml`)
     Remote(RemoteCommand),
@@ -1187,14 +1187,14 @@ pub struct ShowArgs {
 }
 
 #[derive(Args, Debug, Clone)]
-pub struct PairArgs {
+pub struct ServeArgs {
     /// Port to listen on (TCP mode only)
     #[arg(short, long, value_name = "PORT", default_value_t = 7421)]
     pub port: u16,
 
     /// Use plain TCP HTTP instead of iroh. `--lan` then binds all interfaces;
-    /// otherwise TCP binds localhost. Without this flag, pair uses iroh
-    /// (zero-config, encrypted, cross-network) and prints a pairing ticket.
+    /// otherwise TCP binds localhost. Without this flag, serve uses iroh
+    /// (zero-config, encrypted, cross-network) and prints a connection ticket.
     #[arg(long)]
     pub tcp: bool,
 
@@ -1214,7 +1214,7 @@ pub struct PairArgs {
     #[arg(long)]
     pub no_redact: bool,
 
-    /// Workspace key to expose (see `sivtr pair` with no flag for the list).
+    /// Workspace key to expose (see `sivtr serve` with no flag for the list).
     /// If omitted, an interactive picker lists known workspaces (or the current
     /// workspace is used when stdin is not interactive).
     #[arg(short, long, value_name = "KEY")]
@@ -1236,7 +1236,7 @@ pub enum RemoteAction {
         /// Alias used in refs, e.g. `desk` in `desk://terminal/...`
         name: String,
         /// `host[:port]` for a TCP remote, or an iroh ticket for zero-config
-        /// cross-network pairing. The form is auto-detected.
+        /// cross-network connection. The form is auto-detected.
         addr: String,
         /// Bearer token (TCP only). Omit to be prompted interactively (keeps it
         /// out of shell history). Ignored for iroh tickets.
@@ -1618,6 +1618,21 @@ mod tests {
         match cli.command {
             Some(Commands::Clear(args)) => assert!(args.all),
             _ => panic!("expected clear command"),
+        }
+    }
+
+    #[test]
+    fn serve_accepts_tcp_options() {
+        let cli =
+            Cli::try_parse_from(["sivtr", "serve", "--tcp", "--lan", "--port", "9000"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Serve(args)) => {
+                assert!(args.tcp);
+                assert!(args.lan);
+                assert_eq!(args.port, 9000);
+            }
+            _ => panic!("expected serve command"),
         }
     }
 

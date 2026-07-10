@@ -1,6 +1,6 @@
-//! iroh transport — zero-config, encrypted, cross-network pairing.
+//! iroh transport — zero-config, encrypted, cross-network connection.
 //!
-//! Replaces host/port/NAT with "connect by EndpointAddr". `sivtr pair --iroh`
+//! Replaces host/port/NAT with "connect by EndpointAddr". `sivtr serve`
 //! prints a ticket (base64 of the endpoint address); `sivtr remote add <ticket>`
 //! stores it; `RemoteClient` connects over iroh. n0's default relays handle
 //! rendezvous + hole-punching, with a relay fallback — so it works across NATs
@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 use sivtr_core::ai::AgentProvider;
 use sivtr_core::query::load_workspace_records;
 use sivtr_core::record::{WorkRecord, WorkRef};
+
+use crate::output;
 
 /// Application protocol identifier for the resolve service.
 const ALPN: &[u8] = b"sivtr/resolve/1";
@@ -60,9 +62,9 @@ pub async fn serve_iroh(workspace: PathBuf, redact: bool) -> Result<()> {
     endpoint.online().await;
 
     let ticket = ticket_from_addr(&endpoint.addr())?;
-    eprintln!("sivtr: iroh pairing ready. On the other device run:");
-    eprintln!("  sivtr remote add {ticket}");
-    eprintln!("sivtr: press Ctrl+C to stop");
+    output::info("iroh serve endpoint ready; on the other device run:");
+    output::plain(format!("  sivtr remote add {ticket}"));
+    output::plain("press Ctrl+C to stop");
 
     while let Some(connecting) = endpoint.accept().await {
         let conn = match connecting.await {
@@ -71,7 +73,7 @@ pub async fn serve_iroh(workspace: PathBuf, redact: bool) -> Result<()> {
         };
         // Handle one connection inline (prototype; a spawn pool can come later).
         if let Err(err) = handle_connection(conn, &workspace, redact).await {
-            eprintln!("sivtr: iroh connection error: {err:#}");
+            output::error(format!("iroh connection error: {err:#}"));
         }
     }
     Ok(())

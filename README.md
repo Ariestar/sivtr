@@ -182,7 +182,7 @@ Memory variables:
 | `sivtr show <ref-or-workset>` | Print the content behind refs, `@last`, `@name`, or piped results. Also accepts remote refs like `desk://terminal/...`. |
 | `sivtr zoom <source>` | Add surrounding record context around search hits. |
 | `sivtr diff <left> <right>` | Compare recent command blocks. |
-| `sivtr pair` | Expose a workspace's sessions read-only over HTTP so another device can pair. |
+| `sivtr serve` | Serve a workspace's sessions read-only for another device. |
 | `sivtr remote` | Manage remote devices (`add`/`list`/`remove`/`test`) used by `desk://...` refs. |
 | `sivtr doctor` | Diagnose binary, config, session logs, hooks, providers, and clipboard. |
 | `sivtr init <shell>` | Install shell integration; also supports `show` and `uninstall`. |
@@ -197,20 +197,20 @@ Two devices running sivtr can read each other's workspace sessions like reading 
 On the device that owns the workspace, start the read-only server:
 
 ```bash
-sivtr pair                    # default: iroh — zero-config encrypted cross-network; prints a pairing ticket
-sivtr pair -w <key>           # expose a specific workspace by its key
-sivtr pair --tcp              # plain HTTP instead of iroh (localhost; add --lan for the network)
+sivtr serve                   # default: iroh — zero-config encrypted cross-network; prints a connection ticket
+sivtr serve -w <key>          # expose a specific workspace by its key
+sivtr serve --tcp             # plain HTTP instead of iroh (localhost; add --lan for the network)
 ```
 
 On the other device, register it, then use a `<alias>://` ref anywhere a normal ref goes:
 
 ```bash
-sivtr remote add desk <iroh-ticket>       # iroh (default) — from `sivtr pair`'s ticket
+sivtr remote add desk <iroh-ticket>       # iroh (default) — from `sivtr serve`'s ticket
 sivtr remote add desk 192.168.1.20        # TCP (LAN); port defaults to 7421; prompts for the token
 sivtr show desk://terminal/session_42/3/o/1
 ```
 
-`sivtr pair` is opt-in, read-only, and redacts obvious secrets (API keys, tokens, PEM keys) before anything leaves the machine. The default iroh transport adds encrypted, NAT-traversing pairing via [iroh](https://iroh.computer) (relay-assisted, no port forwarding, no account). `--tcp` falls back to plain HTTP for localhost/LAN use. Unregistered aliases error — register them with `sivtr remote add`.
+`sivtr serve` is opt-in, read-only, and redacts obvious secrets (API keys, tokens, PEM keys) before anything leaves the machine. The default iroh transport adds encrypted, NAT-traversing connectivity via [iroh](https://iroh.computer) (relay-assisted, no port forwarding, no account). `--tcp` falls back to plain HTTP for localhost/LAN use. Unregistered aliases error — register them with `sivtr remote add`.
 
 ## Supported sources
 

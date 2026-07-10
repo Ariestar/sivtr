@@ -1,5 +1,5 @@
-//! `sivtr pair` — expose a workspace's sessions read-only over HTTP so another
-//! device can pair with this one and read it via a `desk://...` ref.
+//! `sivtr serve` — expose a workspace's sessions read-only so another device
+//! can read it via a `desk://...` ref.
 //!
 //! Picks the workspace to expose (`-w <key>`, or an interactive numbered picker,
 //! or the current workspace), resolves the bind address (localhost default;
@@ -12,11 +12,12 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 
-use crate::cli::PairArgs;
-use crate::serve::{self, ServeConfig};
+use crate::cli::ServeArgs;
+use crate::output;
+use crate::serve::{self as serve_backend, ServeConfig};
 use sivtr_core::workspace::{self, WorkspaceMetadata};
 
-pub fn execute(args: &PairArgs) -> Result<()> {
+pub fn execute(args: &ServeArgs) -> Result<()> {
     let workspace = resolve_workspace(args.workspace.as_deref())?;
 
     // A dedicated runtime for the server path (both iroh and axum are async);
@@ -37,9 +38,8 @@ pub fn execute(args: &PairArgs) -> Result<()> {
         Some(t) if !t.trim().is_empty() => t.trim().to_string(),
         _ => {
             let generated = generate_token();
-            // Printed to stderr so stdout stays clean for any piped consumer.
-            eprintln!("sivtr: generated bearer token (share it with the pairing client):");
-            eprintln!("  {generated}");
+            output::info("generated bearer token (share it with the remote client)");
+            output::plain(format!("  {generated}"));
             generated
         }
     };
@@ -52,10 +52,16 @@ pub fn execute(args: &PairArgs) -> Result<()> {
     let addr = SocketAddr::new(ip, args.port);
 
     if args.lan {
-        eprintln!("sivtr: WARNING — binding to all interfaces (LAN). Ensure the network is trusted and the token is kept secret.");
+        output::warning(
+            "binding to all interfaces (LAN); ensure the network is trusted and the token is kept secret",
+        );
     }
-    eprintln!("sivtr: serving {} on http://{}", workspace.display(), addr);
-    eprintln!("sivtr: press Ctrl+C to stop");
+    output::info(format!(
+        "serving {} on http://{}",
+        workspace.display(),
+        addr
+    ));
+    output::plain("press Ctrl+C to stop");
 
     let cfg = ServeConfig {
         addr,
@@ -64,7 +70,7 @@ pub fn execute(args: &PairArgs) -> Result<()> {
         redact: !args.no_redact,
     };
 
-    runtime.block_on(serve::serve(cfg))?;
+    runtime.block_on(serve_backend::serve(cfg))?;
     Ok(())
 }
 
@@ -104,7 +110,7 @@ fn current_workspace_root() -> Result<PathBuf> {
     match workspace::resolve_workspace_for_dir(&cwd)? {
         Some(paths) => Ok(paths.root),
         None => bail!(
-            "{} is not inside a git workspace; run `sivtr pair` from a repo or pass -w <key>",
+            "{} is not inside a git workspace; run `sivtr serve` from a repo or pass -w <key>",
             cwd.display()
         ),
     }
@@ -119,13 +125,13 @@ fn pick_interactive(all: &[WorkspaceMetadata]) -> Result<Option<PathBuf>> {
         .and_then(|c| workspace::resolve_workspace_for_dir(c).ok().flatten())
         .map(|p| p.root);
 
-    eprintln!("Select a workspace to pair:");
+    output::plain("Select a workspace to serve:");
     for (i, meta) in all.iter().enumerate() {
         let marker = match &cwd_root {
             Some(root) if root == &PathBuf::from(&meta.root) => " (current)",
             _ => "",
         };
-        eprintln!("  {:>2}. {}{}", i + 1, meta.root, marker);
+        output::plain(format!("  {:>2}. {}{}", i + 1, meta.root, marker));
     }
     eprint!("Enter number (blank for current): ");
     io::stderr().flush().ok();

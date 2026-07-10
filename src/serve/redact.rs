@@ -24,7 +24,7 @@ fn patterns() -> Vec<(&'static str, Regex)> {
         ("github_pat", Regex::new(r"gh[pousr]_[A-Za-z0-9]{16,}").unwrap()),
         // OpenAI / Anthropic-style API keys
         ("openai_key", Regex::new(r"sk-[A-Za-z0-9]{16,}").unwrap()),
-        // sivtr serve pairing tokens (s- namespace) — redact our own tokens so a
+        // sivtr serve connection tokens (s- namespace) — redact our own tokens so a
         // generated token that leaks into captured output is masked too.
         ("sivtr_token", Regex::new(r"s-[A-Za-z0-9]{16,}").unwrap()),
         // Slack tokens

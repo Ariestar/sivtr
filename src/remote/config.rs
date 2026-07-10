@@ -1,7 +1,7 @@
 //! `remotes.toml` — registry of remote sivtr devices.
 //!
 //! Maps a ref alias (the `desk` in `desk://terminal/...`) to either a TCP
-//! `sivtr pair` endpoint (host/port/token) or an iroh ticket (zero-config,
+//! `sivtr serve` endpoint (host/port/token) or an iroh ticket (zero-config,
 //! cross-network). Stored at `<data_dir>/sivtr/remotes.toml`. Unregistered
 //! aliases are an error — there is no `host:port://` shorthand, because the
 //! bearer token / ticket must live somewhere.
@@ -29,7 +29,7 @@ pub enum Remote {
         token: String,
     },
     Iroh {
-        /// base64 endpoint-address ticket printed by `sivtr pair --iroh`.
+        /// base64 endpoint-address ticket printed by `sivtr serve`.
         ticket: String,
     },
 }
