@@ -223,13 +223,11 @@ fn markdown_task_item(line: &str) -> Option<(String, &str, Style)> {
     let (_marker, rest) = markdown_list_item(line)?;
     let (symbol, rest, style) = if let Some(rest) = rest.strip_prefix("[ ] ") {
         ("□ ", rest, structural_marker_style())
-    } else if let Some(rest) = rest
-        .strip_prefix("[x] ")
-        .or_else(|| rest.strip_prefix("[X] "))
-    {
-        ("■ ", rest, task_done_marker_style())
     } else {
-        return None;
+        let rest = rest
+            .strip_prefix("[x] ")
+            .or_else(|| rest.strip_prefix("[X] "))?;
+        ("■ ", rest, task_done_marker_style())
     };
 
     Some((symbol.to_string(), rest, style))
