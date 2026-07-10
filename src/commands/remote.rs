@@ -6,7 +6,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::cli::{RemoteAction, RemoteCommand};
 use crate::output;
-use crate::remote::{RemoteClient, Remotes};
+use crate::remote::{normalize_alias, RemoteClient, Remotes};
 
 pub fn execute(cmd: RemoteCommand) -> Result<()> {
     match cmd.action {
@@ -73,6 +73,7 @@ fn resolve_token(flag: Option<String>) -> Result<String> {
 }
 
 fn add(name: &str, addr: &str, token: Option<String>) -> Result<()> {
+    let name = normalize_alias(name)?;
     let remote = if crate::serve::iroh::addr_from_ticket(addr).is_ok() {
         // iroh ticket — no token needed.
         crate::remote::Remote::Iroh {
@@ -84,7 +85,7 @@ fn add(name: &str, addr: &str, token: Option<String>) -> Result<()> {
         crate::remote::Remote::Tcp { host, port, token }
     };
     let mut remotes = Remotes::load()?;
-    let existed = remotes.remotes.insert(name.to_string(), remote).is_some();
+    let existed = remotes.remotes.insert(name.clone(), remote).is_some();
     remotes.save()?;
     output::success(if existed {
         format!("updated remote `{name}`")
@@ -95,8 +96,9 @@ fn add(name: &str, addr: &str, token: Option<String>) -> Result<()> {
 }
 
 fn remove(name: &str) -> Result<()> {
+    let name = normalize_alias(name)?;
     let mut remotes = Remotes::load()?;
-    if remotes.remotes.remove(name).is_none() {
+    if remotes.remotes.remove(&name).is_none() {
         output::warning(format!("no remote named `{name}`"));
         return Ok(());
     }
@@ -106,11 +108,12 @@ fn remove(name: &str) -> Result<()> {
 }
 
 fn test(name: &str) -> Result<()> {
-    let remote = crate::remote::lookup(name)?;
-    let client = RemoteClient::new(name, remote);
-    match client.ping() {
-        Ok(agent_name) => output::success(format!("remote `{name}` reachable ({agent_name})")),
-        Err(e) => output::error(format!("remote `{name}` unreachable: {e:#}")),
-    }
+    let name = normalize_alias(name)?;
+    let remote = crate::remote::lookup(&name)?;
+    let client = RemoteClient::new(&name, remote);
+    let agent_name = client
+        .ping()
+        .with_context(|| format!("remote `{name}` unreachable"))?;
+    output::success(format!("remote `{name}` reachable ({agent_name})"));
     Ok(())
 }

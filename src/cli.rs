@@ -450,6 +450,7 @@ Target selectors:
   terminal[/<session>[/<record>[/<line>]]]  Search terminal command records
   agent[/<session>[/<turn>[/<line>]]]       Search all AI/agent records
   <provider>[/<session>[/<turn>[/<line>]]] Search one provider: codex, claude, hermes, pi, opencode
+  <remote>://<selector>                     Run the same selector against a configured remote
   Use * for wildcard path segments, e.g. terminal/*/3 or pi/*/*.
 
 Filters:
@@ -491,6 +492,7 @@ Examples:
   sivtr search pi/019e5941 --match "cargo test" --format md
   sivtr search pi/019e5941/7 --format workset
   sivtr search terminal/session_13104/3/12 --format workset
+  sivtr search desk://terminal --status failure --latest 5 --refs
 "##;
 
 const WORK_SESSIONS_AFTER_HELP: &str = "\
@@ -500,11 +502,12 @@ Defaults:
 
 Scope:
   Terminal sessions from the current git workspace are always included.
-  `--provider` limits which AI providers are scanned.
+  `--provider` limits which local AI providers are scanned when no source is given.
 
 Examples:
   sivtr work sessions
   sivtr work sessions --provider codex
+  sivtr work sessions desk://agent
   sivtr work sessions --json
 ";
 
@@ -516,10 +519,13 @@ Defaults:
 Sources:
   terminal/<session>
   <provider>/<session>
+  <remote>://terminal/<session>
+  <remote>://<provider>/<session>
   @last, @name, @name[1,3], @
 
 Examples:
   sivtr work records terminal/session_123 --refs
+  sivtr work records desk://terminal/session_123 --refs
   sivtr work records @last[1] -f timeline
   sivtr work records @ --json
 ";
@@ -538,6 +544,7 @@ Filters:
 
 Examples:
   sivtr work parts @last[1] --io output --refs
+  sivtr work parts desk://pi/019df7fb/3 --io output --refs
   sivtr work parts pi/019df7fb/3 --kind tool_output -m "error|failed" --refs
   sivtr s agent -m "ssh.github.com" | sivtr work parts @ --io output | sivtr s @ -m "main -> main" | sivtr show @ --full
 "#;
@@ -1248,7 +1255,7 @@ pub enum RemoteAction {
         /// Alias to remove
         name: String,
     },
-    /// Ping a remote's `/agent-card` to verify reachability and the token
+    /// Perform a real transport and protocol round trip to the remote
     Test {
         /// Alias to test
         name: String,
@@ -1278,6 +1285,9 @@ pub enum WorkSubcommand {
 
 #[derive(Args, Debug, Clone)]
 pub struct WorkSessionsArgs {
+    /// Optional local or remote source selector, for example `desk://agent`.
+    pub source: Option<String>,
+
     /// AI provider sessions to include; terminal workspace records are always included
     #[arg(long, default_value_t = HotkeyProviderSelection::default(), value_name = "PROVIDER")]
     pub provider: HotkeyProviderSelection,
@@ -2046,11 +2056,27 @@ mod tests {
         match cli.command {
             Some(Commands::Work(cmd)) => match cmd.action {
                 WorkSubcommand::Sessions(args) => {
+                    assert_eq!(args.source, None);
                     assert_eq!(
                         args.provider,
                         HotkeyProviderSelection::provider(AgentProvider::Codex)
                     );
                     assert!(args.json);
+                }
+                _ => panic!("expected work sessions command"),
+            },
+            _ => panic!("expected work command"),
+        }
+    }
+
+    #[test]
+    fn work_sessions_accepts_remote_source() {
+        let cli = Cli::try_parse_from(["sivtr", "work", "sessions", "desk://agent"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Work(cmd)) => match cmd.action {
+                WorkSubcommand::Sessions(args) => {
+                    assert_eq!(args.source.as_deref(), Some("desk://agent"));
                 }
                 _ => panic!("expected work sessions command"),
             },

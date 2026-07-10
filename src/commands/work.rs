@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use serde::Serialize;
 use sivtr_core::ai::AgentProvider;
 use sivtr_core::record::{WorkRecord, WorkRefBody};
@@ -21,6 +21,7 @@ enum WorkSessionSource {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WorkSessionMarker {
+    remote: Option<String>,
     source: WorkSessionSource,
     session: String,
 }
@@ -53,13 +54,21 @@ pub fn execute(command: &WorkCommand) -> Result<()> {
 
 fn execute_sessions(args: &WorkSessionsArgs) -> Result<()> {
     let cwd = resolve_cwd(args.cwd.as_deref())?;
-    let providers = args.provider.providers();
-    let records = current_work_record_index(&providers, &cwd, None)?;
-    let items = build_session_items(records.records());
+    let (display_cwd, records) = if let Some(source) = args.source.as_deref() {
+        let loaded = workset::load_source(source, Some(&cwd))?;
+        let display_cwd = loaded.cwd().display().to_string();
+        let (records, _) = loaded.into_parts();
+        (display_cwd, records)
+    } else {
+        let providers = args.provider.providers();
+        let records = current_work_record_index(&providers, &cwd, None)?;
+        (cwd.display().to_string(), records.records().to_vec())
+    };
+    let items = build_session_items(&records);
 
     if args.json {
         let output = WorkSessionsJsonOutput {
-            cwd: cwd.display().to_string(),
+            cwd: display_cwd,
             sessions: items,
         };
         println!("{}", serde_json::to_string_pretty(&output)?);
@@ -79,21 +88,18 @@ fn execute_sessions(args: &WorkSessionsArgs) -> Result<()> {
 
 fn execute_records(args: &WorkRecordsArgs) -> Result<()> {
     let cwd = resolve_cwd(args.cwd.as_deref())?;
-    let mut set = if let Ok(marker) = args.source.parse::<WorkSessionMarker>() {
-        records_for_session_marker(&cwd, &marker)?
-    } else {
-        let source = workset::load_source(&args.source, Some(&cwd))?;
-        let (records, anchors) = source.into_parts();
-        let record_anchors = anchors
-            .into_iter()
-            .map(|anchor| anchor.record_ref())
-            .collect::<Vec<_>>();
-        WorkSet::with_anchors(
-            cwd.display().to_string(),
-            workset::records_for_anchors(&records, &record_anchors),
-            record_anchors,
-        )
-    };
+    let source = workset::load_source(&args.source, Some(&cwd))?;
+    let display_cwd = source.cwd().display().to_string();
+    let (records, anchors) = source.into_parts();
+    let record_anchors = anchors
+        .into_iter()
+        .map(|anchor| anchor.record_ref())
+        .collect::<Vec<_>>();
+    let mut set = WorkSet::with_anchors(
+        display_cwd,
+        workset::records_for_anchors(&records, &record_anchors),
+        record_anchors,
+    );
     set.save_last()?;
     if let Some(name) = args.save.as_deref() {
         set.save_as(name)?;
@@ -122,23 +128,6 @@ fn execute_parts(args: &WorkPartsArgs) -> Result<()> {
         &set,
         show::resolve_output_format(args.format, false, args.refs, args.json),
     )
-}
-
-fn records_for_session_marker(cwd: &Path, marker: &WorkSessionMarker) -> Result<WorkSet> {
-    let providers = marker.providers();
-    let records = current_work_record_index(&providers, cwd, None)?;
-    let selected = records
-        .records()
-        .iter()
-        .filter(|record| marker.matches_record(record))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    if selected.is_empty() {
-        bail!("No records found for `{marker}`");
-    }
-
-    Ok(WorkSet::new(cwd.display().to_string(), selected))
 }
 
 fn resolve_cwd(cwd: Option<&Path>) -> Result<std::path::PathBuf> {
@@ -180,7 +169,7 @@ fn session_group_key(record: &WorkRecord, marker: &WorkSessionMarker) -> String 
         .canonical_id
         .as_deref()
         .unwrap_or(marker.session.as_str());
-    format!("{}/{}", marker.source_name(), session_id)
+    format!("{marker}/{session_id}")
 }
 
 fn format_session_item(item: &WorkSessionListItem) -> String {
@@ -216,27 +205,18 @@ impl WorkSessionMarker {
     fn from_record(record: &WorkRecord) -> Self {
         match record.work_ref.body() {
             WorkRefBody::Terminal { session, .. } => Self {
+                remote: record.work_ref.remote_name().map(str::to_string),
                 source: WorkSessionSource::Terminal,
                 session: session.clone(),
             },
             WorkRefBody::Agent {
                 provider, session, ..
             } => Self {
+                remote: record.work_ref.remote_name().map(str::to_string),
                 source: WorkSessionSource::Agent(*provider),
                 session: session.clone(),
             },
         }
-    }
-
-    fn providers(&self) -> Vec<AgentProvider> {
-        match self.source {
-            WorkSessionSource::Terminal => Vec::new(),
-            WorkSessionSource::Agent(provider) => vec![provider],
-        }
-    }
-
-    fn matches_record(&self, record: &WorkRecord) -> bool {
-        self.source == Self::from_record(record).source && record.session.matches_id(&self.session)
     }
 
     fn source_name(&self) -> &'static str {
@@ -249,41 +229,10 @@ impl WorkSessionMarker {
 
 impl fmt::Display for WorkSessionMarker {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}/{}", self.source_name(), self.session)
-    }
-}
-
-impl std::str::FromStr for WorkSessionMarker {
-    type Err = anyhow::Error;
-
-    fn from_str(value: &str) -> Result<Self> {
-        let parts = value
-            .split('/')
-            .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>();
-        if parts.len() != 2 {
-            bail!(
-                "Invalid session ref `{value}`; expected terminal/<session> or <provider>/<session>"
-            );
+        if let Some(remote) = self.remote.as_deref() {
+            write!(formatter, "{remote}://")?;
         }
-
-        let source = if parts[0].eq_ignore_ascii_case("terminal") {
-            WorkSessionSource::Terminal
-        } else {
-            WorkSessionSource::Agent(AgentProvider::from_command_name(parts[0]).ok_or_else(
-                || {
-                    anyhow::anyhow!(
-                        "Invalid session ref `{value}`; unknown source `{}`",
-                        parts[0]
-                    )
-                },
-            )?)
-        };
-
-        Ok(Self {
-            source,
-            session: parts[1].to_string(),
-        })
+        write!(formatter, "{}/{}", self.source_name(), self.session)
     }
 }
 
@@ -296,15 +245,17 @@ mod tests {
     };
 
     #[test]
-    fn parses_session_refs() {
-        let terminal: WorkSessionMarker = "terminal/session_123".parse().unwrap();
-        assert_eq!(terminal.to_string(), "terminal/session_123");
+    fn session_markers_preserve_remote_origin() {
+        let record = test_record(
+            "desk://terminal/session_123/1",
+            "command",
+            Some("2026-05-24T12:00:00Z"),
+        );
 
-        let agent: WorkSessionMarker = "codex/abcdef12".parse().unwrap();
-        assert_eq!(agent.to_string(), "codex/abcdef12");
-
-        assert!("codex/abcdef12/3".parse::<WorkSessionMarker>().is_err());
-        assert!("unknown/abcdef12".parse::<WorkSessionMarker>().is_err());
+        assert_eq!(
+            build_session_items(&[record])[0].ref_,
+            "desk://terminal/session_123"
+        );
     }
 
     #[test]

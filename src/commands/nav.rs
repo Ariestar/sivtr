@@ -1,9 +1,7 @@
 use anyhow::{bail, Context, Result};
-use sivtr_core::ai::AgentProvider;
 use sivtr_core::record::{WorkPartIo, WorkRecord, WorkRef, WorkRefBody, WorkRefTarget};
 
 use crate::cli::NavArgs;
-use crate::commands::records::current_work_record_index;
 use crate::commands::show;
 use crate::commands::var;
 use crate::commands::workset::{self, WorkSet};
@@ -21,10 +19,7 @@ pub fn execute(args: &NavArgs) -> Result<()> {
     let source = workset::load_source(&args.source, args.cwd.as_deref())?;
     let cwd = source.cwd();
     let (source_records, source_anchors) = source.into_parts();
-    let providers = providers_for_records(&source_records);
-    let all_records = current_work_record_index(&providers, &cwd, None)?
-        .records()
-        .to_vec();
+    let all_records = workset::load_context_records(&source_records, &source_anchors, &cwd)?;
     let anchors = navigate(&source_records, &source_anchors, &all_records, &args.motion)?;
     let records = workset::records_for_anchors(&all_records, &anchors);
     let set = WorkSet::with_anchors(cwd.display().to_string(), records, anchors);
@@ -33,18 +28,6 @@ pub fn execute(args: &NavArgs) -> Result<()> {
         &set,
         show::resolve_output_format(args.format, false, args.refs, args.json),
     )
-}
-
-fn providers_for_records(records: &[WorkRecord]) -> Vec<AgentProvider> {
-    let mut providers = Vec::new();
-    for record in records {
-        if let Some(provider) = record.work_ref.provider() {
-            if !providers.contains(&provider) {
-                providers.push(provider);
-            }
-        }
-    }
-    providers
 }
 
 fn navigate(
@@ -463,6 +446,31 @@ mod tests {
             ">0"
         )
         .is_err());
+    }
+
+    #[test]
+    fn navigation_preserves_remote_origin() {
+        let mut records = (1..=3).map(test_record).collect::<Vec<_>>();
+        for record in &mut records {
+            record.work_ref = WorkRef::Remote {
+                name: "desk".to_string(),
+                body: record.work_ref.body().clone(),
+            };
+        }
+        let start = vec![records[1].work_ref.record_ref()];
+
+        assert_refs(
+            navigate(&records, &start, &records, "+1").expect("remote sibling"),
+            &["desk://terminal/session_1/3"],
+        );
+        assert_refs(
+            navigate(&records, &start, &records, "~").expect("remote session"),
+            &[
+                "desk://terminal/session_1/1",
+                "desk://terminal/session_1/2",
+                "desk://terminal/session_1/3",
+            ],
+        );
     }
 
     fn assert_refs(actual: Vec<WorkRef>, expected: &[&str]) {

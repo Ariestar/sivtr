@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::SystemTime;
 
 use crate::commands::command_block_selector::{parse_selector, resolve_selector, CommandSelection};
-use crate::commands::records::current_work_record_index;
+use crate::commands::workset;
 use crate::output;
 use sivtr_core::ai::{
     AgentBlockKind, AgentProvider, AgentSelection, AgentSession, AgentSessionInfo,
@@ -294,21 +294,9 @@ pub fn execute_ref(
     lines: Option<&str>,
 ) -> Result<()> {
     let work_ref: WorkRef = reference.parse()?;
-    let cwd = cwd
-        .map(Path::to_path_buf)
-        .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
-    let providers = work_ref
-        .provider()
-        .map(|provider| vec![provider])
-        .unwrap_or_else(|| {
-            AgentProvider::all()
-                .iter()
-                .map(|spec| spec.provider)
-                .collect()
-        });
-    let records = current_work_record_index(&providers, &cwd, None)?;
-    let record = records
-        .resolve(&work_ref)
+    let source = workset::load_source(reference, cwd)?;
+    let (records, _) = source.into_parts();
+    let record = workset::record_for_anchor(&records, &work_ref)
         .with_context(|| format!("No record found for ref `{reference}`"))?;
     let mut text = ref_text_pair(record, &work_ref, reference)?;
 

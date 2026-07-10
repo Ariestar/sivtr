@@ -1,11 +1,11 @@
+use std::collections::HashSet;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
-use sivtr_core::ai::AgentProvider;
-use sivtr_core::record::{WorkRecord, WorkRef, WorkRefSelector};
+use anyhow::{Context, Result};
+use sivtr_core::record::{WorkRecord, WorkRef, WorkRefBody};
 
-use crate::commands::records::current_work_record_index;
+use crate::commands::records::current_work_source;
 
 use super::WorkSet;
 
@@ -62,41 +62,26 @@ pub fn load_source(source: &str, cwd: Option<&Path>) -> Result<WorkSetSource> {
         return Ok(WorkSetSource::Reference(super::load_reference(source)?));
     }
 
-    // A concrete WorkRef (local or remote). Selectors like `terminal/*` are not
-    // valid WorkRefs and fall through to the selector path below.
-    if let Ok(work_ref) = source.parse::<WorkRef>() {
-        // A remote origin routes to that device's `sivtr serve` instead of the
-        // local workspace index.
-        if let Some(alias) = work_ref.remote_name() {
-            return resolve_remote_ref_source(alias, &work_ref);
-        }
-        let cwd = cwd
-            .map(Path::to_path_buf)
-            .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
-        return resolve_ref_source(source, &cwd, &work_ref);
-    }
-
     let cwd = cwd
         .map(Path::to_path_buf)
         .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
-    resolve_selector_source(source, &cwd)
-}
-
-/// Resolve a remote WorkRef by calling that device's serve endpoint. The body
-/// (without the `alias://` prefix) is sent to `/resolve`; the returned record
-/// keeps its origin on the anchor so downstream refs round-trip as remote.
-fn resolve_remote_ref_source(alias: &str, work_ref: &WorkRef) -> Result<WorkSetSource> {
-    let remote = crate::remote::lookup(alias)?;
-    let client = crate::remote::RemoteClient::new(alias, remote);
-    // Serve expects a local-shape ref; render the body alone (Local is the
-    // bare shorthand, so wrapping in Local yields the body string).
-    let body_ref = WorkRef::Local(work_ref.body().clone()).to_string();
-    let record = client.resolve(&body_ref)?;
-    Ok(WorkSetSource::Records {
-        cwd: PathBuf::from("."),
-        records: vec![record],
-        anchors: vec![work_ref.clone()],
-    })
+    if let Some((origin, body)) = source.split_once("://") {
+        if body.is_empty() {
+            anyhow::bail!("remote source `{source}` is missing a selector");
+        }
+        if origin.eq_ignore_ascii_case("local") {
+            return load_local_source(body, &cwd);
+        }
+        let alias = origin.to_ascii_lowercase();
+        let remote = crate::remote::lookup(&alias)?;
+        let response = crate::remote::RemoteClient::new(&alias, remote).load_source(body)?;
+        return Ok(WorkSetSource::Records {
+            cwd,
+            records: response.records,
+            anchors: response.anchors,
+        });
+    }
+    load_local_source(source, &cwd)
 }
 
 fn read_stdin() -> Result<WorkSet> {
@@ -110,59 +95,51 @@ fn read_stdin() -> Result<WorkSet> {
     Ok(set)
 }
 
-fn resolve_ref_source(source: &str, cwd: &Path, work_ref: &WorkRef) -> Result<WorkSetSource> {
-    let record_ref = work_ref.record_ref();
-    let providers = record_ref
-        .provider()
-        .map(|provider| vec![provider])
-        .unwrap_or_else(all_agent_providers);
-    let index = current_work_record_index(&providers, cwd, None)?;
-    let record = index
-        .resolve(&record_ref)
-        .with_context(|| format!("No record found for ref `{source}`"))?;
+fn load_local_source(source: &str, cwd: &Path) -> Result<WorkSetSource> {
+    let result = current_work_source(cwd, source)?;
     Ok(WorkSetSource::Records {
         cwd: cwd.to_path_buf(),
-        records: vec![record.clone()],
-        anchors: vec![work_ref.clone()],
+        records: result.records,
+        anchors: result.anchors,
     })
 }
 
-fn resolve_selector_source(source: &str, cwd: &Path) -> Result<WorkSetSource> {
-    let selector: WorkRefSelector = source.parse()?;
-    let providers = selector.providers();
-    let index = current_work_record_index(&providers, cwd, None)?;
+pub fn load_context_records(
+    source_records: &[WorkRecord],
+    source_anchors: &[WorkRef],
+    cwd: &Path,
+) -> Result<Vec<WorkRecord>> {
+    let mut sources = Vec::new();
+    let mut seen_sources = HashSet::new();
+    for anchor in source_anchors {
+        let record = super::record_for_anchor(source_records, anchor)
+            .with_context(|| format!("No record found for ref `{anchor}`"))?;
+        let body = match record.work_ref.body() {
+            WorkRefBody::Terminal { session, .. } => format!("terminal/{session}"),
+            WorkRefBody::Agent {
+                provider, session, ..
+            } => format!("{}/{session}", provider.command_name()),
+        };
+        let source = match anchor.remote_name() {
+            Some(alias) => format!("{alias}://{body}"),
+            None => body,
+        };
+        if seen_sources.insert(source.clone()) {
+            sources.push(source);
+        }
+    }
+
     let mut records = Vec::new();
-    let mut anchors = Vec::new();
-
-    for record in index.records() {
-        if !selector.matches_work_ref(&record.work_ref) {
-            continue;
-        }
-        let record_ref = record.work_ref.record_ref();
-        records.push(record.clone());
-        if let Some(lines) = selector.selected_lines() {
-            for line in lines {
-                anchors.push(record_ref.with_line(*line));
+    let mut seen_records = HashSet::new();
+    for source in sources {
+        let loaded = load_source(&source, Some(cwd))?;
+        let (loaded_records, _) = loaded.into_parts();
+        for record in loaded_records {
+            let key = record.work_ref.record_ref().to_string();
+            if seen_records.insert(key) {
+                records.push(record);
             }
-        } else {
-            anchors.push(record_ref);
         }
     }
-
-    if records.is_empty() {
-        bail!("No record found for ref selector `{source}`");
-    }
-
-    Ok(WorkSetSource::Records {
-        cwd: cwd.to_path_buf(),
-        records,
-        anchors,
-    })
-}
-
-fn all_agent_providers() -> Vec<AgentProvider> {
-    AgentProvider::all()
-        .iter()
-        .map(|spec| spec.provider)
-        .collect()
+    Ok(records)
 }

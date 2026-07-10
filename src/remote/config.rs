@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use sivtr_core::workspace;
@@ -100,11 +100,24 @@ impl Remotes {
 
 /// Look up a remote alias in the on-disk registry.
 pub fn lookup(alias: &str) -> Result<Remote> {
+    let alias = normalize_alias(alias)?;
     let remotes = Remotes::load()?;
     remotes
-        .get(alias)
+        .get(&alias)
         .cloned()
         .with_context(|| format!("unknown remote `{alias}`; register it with `sivtr remote add`"))
+}
+
+pub fn normalize_alias(alias: &str) -> Result<String> {
+    if alias.is_empty()
+        || alias.eq_ignore_ascii_case("local")
+        || !alias.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '_' || character == '-'
+        })
+    {
+        bail!("remote alias must be [a-zA-Z0-9_-]+ and must not be `local`");
+    }
+    Ok(alias.to_ascii_lowercase())
 }
 
 #[cfg(test)]
@@ -142,5 +155,12 @@ ticket = "eyJ0ZXN0IjoidGlja2V0In0="
     fn empty_file_is_empty_remotes() {
         let remotes: Remotes = toml::from_str("").unwrap();
         assert!(remotes.remotes.is_empty());
+    }
+
+    #[test]
+    fn aliases_are_validated_and_normalized() {
+        assert_eq!(normalize_alias("Desk_1").unwrap(), "desk_1");
+        assert!(normalize_alias("local").is_err());
+        assert!(normalize_alias("bad alias").is_err());
     }
 }

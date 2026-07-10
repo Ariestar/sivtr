@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::ai::{AgentProvider, AgentSessionProvider};
-use crate::record::{WorkRecord, WorkRecordIndex, WorkRef, WorkRefBody};
+use crate::record::{WorkRecord, WorkRecordIndex, WorkRef, WorkRefBody, WorkRefSelector};
 use crate::{session, workspace};
 
 /// A session file that could not be parsed, retained so callers can warn.
@@ -31,6 +31,14 @@ pub struct QueryResult {
     /// Records successfully loaded, ready for `WorkRecordIndex::new`.
     pub records: Vec<WorkRecord>,
     /// Session files that failed to parse, with the reason.
+    pub skipped: Vec<SkippedSession>,
+}
+
+/// Records and active anchors selected from one workspace source.
+#[derive(Debug, Default)]
+pub struct SourceQueryResult {
+    pub records: Vec<WorkRecord>,
+    pub anchors: Vec<WorkRef>,
     pub skipped: Vec<SkippedSession>,
 }
 
@@ -64,6 +72,68 @@ pub fn load_workspace_records(
         .records
         .sort_by(|a, b| b.time.primary_at().cmp(&a.time.primary_at()));
     Ok(result)
+}
+
+/// Load one concrete ref or selector from a workspace.
+///
+/// `source` is the local-shaped body (`terminal/...`, `agent`, `pi/...`).
+/// Remote aliases are attached by the client after the response arrives.
+pub fn load_workspace_source(cwd: &Path, source: &str) -> Result<SourceQueryResult> {
+    if let Ok(reference) = source.parse::<WorkRef>() {
+        if !reference.is_local() {
+            anyhow::bail!("remote aliases are not valid inside a served source");
+        }
+        let providers = reference
+            .provider()
+            .map(|provider| vec![provider])
+            .unwrap_or_else(all_agent_providers);
+        let result = load_workspace_records(&providers, cwd, None)?;
+        let index = WorkRecordIndex::new(result.records);
+        let record = index
+            .resolve(&reference)
+            .cloned()
+            .with_context(|| format!("No record found for ref `{source}`"))?;
+        return Ok(SourceQueryResult {
+            records: vec![record],
+            anchors: vec![reference],
+            skipped: result.skipped,
+        });
+    }
+
+    let selector: WorkRefSelector = source.parse()?;
+    let result = load_workspace_records(&selector.providers(), cwd, None)?;
+    let mut records = Vec::new();
+    let mut anchors = Vec::new();
+
+    for record in result.records {
+        if !selector.matches_work_ref(&record.work_ref) {
+            continue;
+        }
+        let record_ref = record.work_ref.record_ref();
+        if let Some(lines) = selector.selected_lines() {
+            anchors.extend(lines.iter().map(|line| record_ref.with_line(*line)));
+        } else {
+            anchors.push(record_ref);
+        }
+        records.push(record);
+    }
+
+    if records.is_empty() {
+        anyhow::bail!("No record found for ref selector `{source}`");
+    }
+
+    Ok(SourceQueryResult {
+        records,
+        anchors,
+        skipped: result.skipped,
+    })
+}
+
+fn all_agent_providers() -> Vec<AgentProvider> {
+    AgentProvider::all()
+        .iter()
+        .map(|spec| spec.provider)
+        .collect()
 }
 
 fn terminal_records(cwd: &Path) -> Result<Vec<WorkRecord>> {

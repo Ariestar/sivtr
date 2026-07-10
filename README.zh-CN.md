@@ -202,12 +202,17 @@ sivtr serve -w <key>          # 指定要开放的 workspace（按 key）
 sivtr serve --tcp             # 用明文 HTTP 代替 iroh（localhost；加 --lan 暴露到局域网）
 ```
 
-在另一台设备上登记它，然后用 `<别名>://` ref（和普通 ref 用法完全一样）：
+在另一台设备上登记它。所有接受 source 或 ref 的命令都原生支持 `<别名>://` 前缀：
 
 ```bash
 sivtr remote add desk <iroh-ticket>       # iroh（默认）——来自 `sivtr serve` 打印的 ticket
 sivtr remote add desk 192.168.1.20        # TCP（局域网）；端口默认 7421；token 会提示输入
+sivtr remote test desk
+sivtr s desk://terminal --status failure --latest 5 --refs
 sivtr show desk://terminal/session_42/3/o/1
+sivtr zoom desk://terminal/session_42/3 -C 2
+sivtr nav desk://terminal/session_42/3 +1 --refs
+sivtr copy ref desk://terminal/session_42/3/o/1 --print
 ```
 
 `sivtr serve` 是 opt-in、只读，并在数据离开本机前脱敏常见密钥（API key、token、PEM 私钥）。默认的 iroh 传输通过 [iroh](https://iroh.computer) 提供加密、穿透 NAT 的连接（中继辅助、无需端口转发、无需账号）；`--tcp` 回退到明文 HTTP，用于 localhost/局域网。未登记的别名会报错——用 `sivtr remote add` 登记。

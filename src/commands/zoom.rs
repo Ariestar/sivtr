@@ -1,11 +1,9 @@
 use std::collections::HashSet;
 
 use anyhow::{Context, Result};
-use sivtr_core::ai::AgentProvider;
 use sivtr_core::record::{WorkRecord, WorkRef, WorkRefBody};
 
 use crate::cli::ZoomArgs;
-use crate::commands::records::current_work_record_index;
 use crate::commands::show;
 use crate::commands::workset::{self, WorkSet};
 
@@ -21,10 +19,7 @@ pub fn execute(args: &ZoomArgs) -> Result<()> {
     let expanded = if source_records.is_empty() || source_anchors.is_empty() {
         Vec::new()
     } else {
-        let providers = providers_for_records(&source_records);
-        let all_records = current_work_record_index(&providers, &cwd, None)?
-            .records()
-            .to_vec();
+        let all_records = workset::load_context_records(&source_records, &source_anchors, &cwd)?;
         expand_around(
             &source_records,
             &source_anchors,
@@ -45,18 +40,6 @@ pub fn execute(args: &ZoomArgs) -> Result<()> {
     )?;
 
     Ok(())
-}
-
-fn providers_for_records(records: &[WorkRecord]) -> Vec<AgentProvider> {
-    let mut providers = Vec::new();
-    for record in records {
-        if let Some(provider) = record.work_ref.provider() {
-            if !providers.contains(&provider) {
-                providers.push(provider);
-            }
-        }
-    }
-    providers
 }
 
 fn expand_around(

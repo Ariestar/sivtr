@@ -1,7 +1,7 @@
 //! Read-only HTTP-JSON server: the "remote" half of sivtr-to-sivtr peer access.
 //!
-//! Exposes the workspace query surface (`resolve` / `resolve-part` / `search` /
-//! `sessions`) over HTTP so another device's sivtr can read this workspace's
+//! Exposes the workspace query surface (`source` / `resolve` / `resolve-part` /
+//! `search` / `sessions`) over HTTP so another device's sivtr can read this workspace's
 //! structured sessions like reading local. The core does the work; this layer
 //! only maps JSON ↔ core types, authenticates the bearer token, and redacts
 //! obvious secrets before anything leaves the machine.
@@ -25,8 +25,10 @@ use axum::{Json, Router};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sivtr_core::ai::AgentProvider;
-use sivtr_core::query::load_workspace_records;
+use sivtr_core::query::{load_workspace_records, load_workspace_source};
 use sivtr_core::record::{WorkPart, WorkRecord, WorkRecordIndex, WorkRecordSearchScope, WorkRef};
+
+use crate::remote::protocol::{AgentCard, SourceRequest, SourceResponse};
 
 /// Configuration handed to [`serve`]. All fields are enforced by the caller
 /// (`commands::serve`): a missing/empty token must never reach here.
@@ -53,6 +55,7 @@ pub async fn serve(cfg: ServeConfig) -> Result<()> {
 
     let app = Router::new()
         .route("/agent-card", get(agent_card))
+        .route("/source", post(source))
         .route("/resolve", post(resolve))
         .route("/resolve-part", post(resolve_part))
         .route("/search", post(search))
@@ -131,25 +134,40 @@ impl AppState {
 
 // --- agent card ------------------------------------------------------------
 
-#[derive(Serialize)]
-struct AgentCard {
-    name: &'static str,
-    version: &'static str,
-    protocol: &'static str,
-    capabilities: &'static [&'static str],
-}
-
 async fn agent_card(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<AgentCard>, ApiError> {
     require_auth(&headers, &state.token)?;
-    Ok(Json(AgentCard {
-        name: "sivtr",
-        version: env!("CARGO_PKG_VERSION"),
-        protocol: "sivtr/1",
-        capabilities: &["resolve", "resolve-part", "search", "sessions"],
-    }))
+    Ok(Json(AgentCard::current()))
+}
+
+pub(crate) fn load_source_response(
+    workspace: &std::path::Path,
+    redact: bool,
+    source: &str,
+) -> Result<SourceResponse> {
+    let result = load_workspace_source(workspace, source)?;
+    let records = if redact {
+        result.records.iter().map(redact::redact_record).collect()
+    } else {
+        result.records
+    };
+    Ok(SourceResponse {
+        records,
+        anchors: result.anchors,
+    })
+}
+
+async fn source(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<SourceRequest>,
+) -> Result<Json<SourceResponse>, ApiError> {
+    require_auth(&headers, &state.token)?;
+    load_source_response(&state.workspace, state.redact, &req.source)
+        .map(Json)
+        .map_err(|error| ApiError::BadRequest(format!("{error:#}")))
 }
 
 // --- resolve ---------------------------------------------------------------

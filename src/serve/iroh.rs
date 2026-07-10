@@ -6,8 +6,8 @@
 //! rendezvous + hole-punching, with a relay fallback — so it works across NATs
 //! without any network config. Self-hostable relays later for full local-first.
 //!
-//! The wire protocol is the same resolve request/response the HTTP server uses,
-//! framed over a single QUIC bi-stream (request bytes → finish → response bytes).
+//! The wire protocol supports exact resolve and source-selector requests over a
+//! single QUIC bi-stream (request bytes → finish → response bytes).
 
 use std::path::{Path, PathBuf};
 
@@ -16,11 +16,10 @@ use base64::prelude::*;
 use iroh::endpoint::presets;
 use iroh::{Endpoint, EndpointAddr};
 use serde::{Deserialize, Serialize};
-use sivtr_core::ai::AgentProvider;
-use sivtr_core::query::load_workspace_records;
-use sivtr_core::record::{WorkRecord, WorkRef};
+use sivtr_core::record::WorkRecord;
 
 use crate::output;
+use crate::remote::protocol::{SourceRequest, SourceResponse};
 
 /// Application protocol identifier for the resolve service.
 const ALPN: &[u8] = b"sivtr/resolve/1";
@@ -36,6 +35,19 @@ struct ResolveRequest {
 struct ResolveResponse {
     record: Option<WorkRecord>,
     error: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SourceWireResponse {
+    source: Option<SourceResponse>,
+    error: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum WireRequest {
+    Resolve(ResolveRequest),
+    Source(SourceRequest),
 }
 
 /// Encode an [`EndpointAddr`] as a pasteable ticket: base64(json).
@@ -86,25 +98,37 @@ async fn handle_connection(
 ) -> Result<()> {
     let (mut send, mut recv) = conn.accept_bi().await.context("accept stream")?;
     let req_bytes = recv.read_to_end(MAX_MSG).await.context("read request")?;
-    let req: ResolveRequest = serde_json::from_slice(&req_bytes).context("parse request")?;
+    let req: WireRequest = serde_json::from_slice(&req_bytes).context("parse request")?;
 
-    let resp = match resolve_record(workspace, &req.reference) {
-        Ok(mut record) => {
-            if redact {
-                record = crate::serve::redact::redact_record(&record);
-            }
-            ResolveResponse {
-                record: Some(record),
-                error: None,
-            }
+    let resp_bytes = match req {
+        WireRequest::Resolve(req) => {
+            let resp = match crate::serve::load_source_response(workspace, redact, &req.reference) {
+                Ok(source) => ResolveResponse {
+                    record: source.records.into_iter().next(),
+                    error: None,
+                },
+                Err(err) => ResolveResponse {
+                    record: None,
+                    error: Some(format!("{err:#}")),
+                },
+            };
+            serde_json::to_vec(&resp)
         }
-        Err(err) => ResolveResponse {
-            record: None,
-            error: Some(format!("{err:#}")),
-        },
-    };
-
-    let resp_bytes = serde_json::to_vec(&resp).context("serialize response")?;
+        WireRequest::Source(req) => {
+            let resp = match crate::serve::load_source_response(workspace, redact, &req.source) {
+                Ok(source) => SourceWireResponse {
+                    source: Some(source),
+                    error: None,
+                },
+                Err(err) => SourceWireResponse {
+                    source: None,
+                    error: Some(format!("{err:#}")),
+                },
+            };
+            serde_json::to_vec(&resp)
+        }
+    }
+    .context("serialize response")?;
     send.write_all(&resp_bytes)
         .await
         .context("write response")?;
@@ -113,22 +137,53 @@ async fn handle_connection(
     Ok(())
 }
 
-/// Resolve a local-shape ref against a workspace (the server-side logic).
-fn resolve_record(workspace: &Path, reference: &str) -> Result<WorkRecord> {
-    let work_ref: WorkRef = reference.parse().context("parse ref")?;
-    let providers: Vec<AgentProvider> = AgentProvider::all()
-        .iter()
-        .map(|spec| spec.provider)
-        .collect();
-    let index = load_workspace_records(&providers, workspace, None)?.into_index();
-    index
-        .resolve(&work_ref)
-        .cloned()
-        .with_context(|| format!("no record for `{reference}`"))
-}
-
 /// Client side: connect via ticket and resolve a ref. Returns the record.
 pub async fn resolve_via_iroh(ticket: &str, body_ref: &str) -> Result<WorkRecord> {
+    let resp_bytes = exchange(
+        ticket,
+        &ResolveRequest {
+            reference: body_ref.to_string(),
+        },
+    )
+    .await?;
+    let resp: ResolveResponse = serde_json::from_slice(&resp_bytes).context("parse response")?;
+
+    match resp.record {
+        Some(record) => Ok(record),
+        None => anyhow::bail!(resp.error.unwrap_or_else(|| "unknown remote error".into())),
+    }
+}
+
+pub async fn source_via_iroh(ticket: &str, source: &str) -> Result<SourceResponse> {
+    let resp_bytes = exchange(
+        ticket,
+        &SourceRequest {
+            source: source.to_string(),
+        },
+    )
+    .await?;
+    let resp: SourceWireResponse =
+        serde_json::from_slice(&resp_bytes).context("parse source response")?;
+    match resp.source {
+        Some(source) => Ok(source),
+        None => anyhow::bail!(resp.error.unwrap_or_else(|| "unknown remote error".into())),
+    }
+}
+
+/// Perform a real connection and protocol round trip without requiring a known ref.
+pub async fn probe_via_iroh(ticket: &str) -> Result<()> {
+    let resp_bytes = exchange(
+        ticket,
+        &ResolveRequest {
+            reference: "terminal/__sivtr_remote_probe__/1".to_string(),
+        },
+    )
+    .await?;
+    let _: ResolveResponse = serde_json::from_slice(&resp_bytes).context("parse probe response")?;
+    Ok(())
+}
+
+async fn exchange(ticket: &str, request: &impl Serialize) -> Result<Vec<u8>> {
     let addr = addr_from_ticket(ticket)?;
     let endpoint = Endpoint::bind(presets::N0)
         .await
@@ -139,20 +194,13 @@ pub async fn resolve_via_iroh(ticket: &str, body_ref: &str) -> Result<WorkRecord
         .context("Failed to connect over iroh")?;
 
     let (mut send, mut recv) = conn.open_bi().await.context("open stream")?;
-    let req = serde_json::to_vec(&ResolveRequest {
-        reference: body_ref.to_string(),
-    })?;
+    let req = serde_json::to_vec(request)?;
     send.write_all(&req).await.context("write request")?;
     send.finish().context("finish request")?;
 
     let resp_bytes = recv.read_to_end(MAX_MSG).await.context("read response")?;
-    let resp: ResolveResponse = serde_json::from_slice(&resp_bytes).context("parse response")?;
 
     conn.close(0u32.into(), b"done");
     endpoint.close().await;
-
-    match resp.record {
-        Some(record) => Ok(record),
-        None => anyhow::bail!(resp.error.unwrap_or_else(|| "unknown remote error".into())),
-    }
+    Ok(resp_bytes)
 }
