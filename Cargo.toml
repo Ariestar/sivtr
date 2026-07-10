@@ -64,10 +64,10 @@ clap = { version = "4", features = ["derive"] }
 ratatui = "0.29"
 crossterm = "0.28"
 tokio = { version = "1", features = ["full"] }
-axum = "0.7"
 getrandom = "0.2"
-ureq = { version = "2", features = ["json"] }
-toml = "0.8"
+fs2 = "0.4"
+rusqlite = { version = "0.32", features = ["bundled"] }
+sha2 = "0.10"
 iroh = "1.0"
 base64 = "0.22"
 anyhow = "1"
@@ -80,6 +80,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 pulldown-cmark = { version = "0.13", default-features = false }
 unicode-width = "0.2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["fileapi", "handleapi", "processenv", "processthreadsapi", "winbase", "winnt", "winuser", "windef", "minwindef"] }

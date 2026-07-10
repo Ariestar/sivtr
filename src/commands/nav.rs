@@ -453,7 +453,11 @@ mod tests {
         let mut records = (1..=3).map(test_record).collect::<Vec<_>>();
         for record in &mut records {
             record.work_ref = WorkRef::Remote {
-                name: "desk".to_string(),
+                origin: sivtr_core::record::RemoteRefOrigin {
+                    alias: "desk".to_string(),
+                    peer_id: Some("peer".to_string()),
+                    share_id: Some("share".to_string()),
+                },
                 body: record.work_ref.body().clone(),
             };
         }

@@ -4,7 +4,6 @@ mod command_blocks;
 mod commands;
 mod output;
 mod remote;
-mod serve;
 mod tui;
 
 use anyhow::Result;
@@ -73,6 +72,12 @@ fn run() -> Result<()> {
         Some(Commands::Serve(args)) => {
             commands::serve::execute(&args)?;
         }
+        Some(Commands::Share(cmd)) => {
+            commands::share::execute(cmd)?;
+        }
+        Some(Commands::Peer(cmd)) => {
+            commands::peer::execute(cmd)?;
+        }
         Some(Commands::Remote(cmd)) => {
             commands::remote::execute(cmd)?;
         }
@@ -138,6 +143,9 @@ fn run() -> Result<()> {
         }
         Some(Commands::HotkeyPickAgent(args)) => {
             run_hotkey_pick_agent(&args)?;
+        }
+        Some(Commands::ServeDaemon) => {
+            remote::daemon::run()?;
         }
         None => {
             if atty::isnt(atty::Stream::Stdin) {

@@ -84,13 +84,6 @@ pub fn redact_part(mut part: WorkPart, patterns: &[(&'static str, Regex)]) -> Wo
     part
 }
 
-/// Redact a single part, compiling patterns internally. Convenience for
-/// callers that have one part (e.g. `resolve-part`) rather than a whole record.
-pub fn redact_part_owned(part: WorkPart) -> WorkPart {
-    let patterns = patterns();
-    redact_part(part, &patterns)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

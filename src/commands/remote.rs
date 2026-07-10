@@ -1,119 +1,109 @@
-//! `sivtr remote` — manage the `remotes.toml` registry of remote devices.
-
-use std::io::{self, BufRead, Write};
-
 use anyhow::{bail, Context, Result};
+use sivtr_core::workspace;
 
 use crate::cli::{RemoteAction, RemoteCommand};
 use crate::output;
-use crate::remote::{normalize_alias, RemoteClient, Remotes};
+use crate::remote::local;
+use crate::remote::protocol::{LocalRequest, LocalResponse};
 
-pub fn execute(cmd: RemoteCommand) -> Result<()> {
-    match cmd.action {
-        RemoteAction::List => list(),
-        RemoteAction::Add { name, addr, token } => add(&name, &addr, token),
-        RemoteAction::Remove { name } => remove(&name),
-        RemoteAction::Test { name } => test(&name),
+pub fn execute(command: RemoteCommand) -> Result<()> {
+    let workspace_key = current_workspace_key()?;
+    match command.action {
+        RemoteAction::List => list(&workspace_key),
+        RemoteAction::Add { alias, invite } => add(&workspace_key, &alias, &invite),
+        RemoteAction::Remove { alias } => remove(&workspace_key, &alias),
+        RemoteAction::Rename { alias, new_alias } => rename(&workspace_key, &alias, &new_alias),
+        RemoteAction::Test { alias } => test(&workspace_key, &alias),
     }
 }
 
-fn list() -> Result<()> {
-    let remotes = Remotes::load()?;
-    if remotes.remotes.is_empty() {
-        output::plain("no remotes configured; add one with `sivtr remote add`");
-        return Ok(());
-    }
-    for (alias, remote) in &remotes.remotes {
-        output::detail(alias, format!("[{}] {}", remote.kind(), remote.describe()));
-    }
-    Ok(())
+fn current_workspace_key() -> Result<String> {
+    workspace::resolve_current_workspace()?
+        .map(|paths| paths.key)
+        .context("Remote mounts require a git workspace")
 }
 
-/// Parse `host[:port]` (no alias). Port defaults to 7421.
-fn parse_host_port(addr: &str) -> Result<(String, u16)> {
-    let (host, port) = match addr.rsplit_once(':') {
-        Some((h, p)) => (h.to_string(), p.parse::<u16>().context("invalid port")?),
-        None => (addr.to_string(), 7421),
-    };
-    if host.is_empty() {
-        bail!("empty host in `{addr}`");
-    }
-    Ok((host, port))
-}
-
-/// Resolve the bearer token: use `--token` if given, otherwise prompt on a tty.
-/// Prompting keeps the token out of shell history and `ps` output.
-fn resolve_token(flag: Option<String>) -> Result<String> {
-    if let Some(token) = flag {
-        let token = token.trim().to_string();
-        if token.is_empty() {
-            bail!("--token must not be empty");
+fn list(workspace_key: &str) -> Result<()> {
+    match local::call(LocalRequest::RemoteList {
+        workspace_key: workspace_key.to_string(),
+    })? {
+        LocalResponse::Mounts(mounts) => {
+            if mounts.is_empty() {
+                output::plain("no remote shares mounted in this workspace");
+            }
+            for mount in mounts {
+                output::detail(
+                    mount.alias,
+                    format!(
+                        "{} / {} ({} / {})",
+                        mount.peer_name, mount.share_name, mount.peer_id, mount.share_id
+                    ),
+                );
+            }
+            Ok(())
         }
-        return Ok(token);
+        response => bail!("Unexpected daemon response: {response:?}"),
     }
-
-    if !atty::is(atty::Stream::Stdin) {
-        bail!(
-            "no token provided and stdin is not interactive; pass --token for non-interactive use"
-        );
-    }
-    eprint!("token: ");
-    io::stderr().flush().ok();
-    let stdin = io::stdin();
-    let mut line = String::new();
-    stdin
-        .lock()
-        .read_line(&mut line)
-        .context("failed to read token")?;
-    let token = line.trim().to_string();
-    if token.is_empty() {
-        bail!("no token entered");
-    }
-    Ok(token)
 }
 
-fn add(name: &str, addr: &str, token: Option<String>) -> Result<()> {
-    let name = normalize_alias(name)?;
-    let remote = if crate::serve::iroh::addr_from_ticket(addr).is_ok() {
-        // iroh ticket — no token needed.
-        crate::remote::Remote::Iroh {
-            ticket: addr.to_string(),
+fn add(workspace_key: &str, alias: &str, invite: &str) -> Result<()> {
+    match local::call(LocalRequest::RemoteAdd {
+        workspace_key: workspace_key.to_string(),
+        alias: alias.to_string(),
+        invite: invite.to_string(),
+    })? {
+        LocalResponse::RemoteAdded { mount } => {
+            output::success(format!("mounted remote share as `{}`", mount.alias));
+            output::detail("peer", mount.peer_name);
+            output::detail("share", mount.share_name);
+            Ok(())
         }
-    } else {
-        let (host, port) = parse_host_port(addr)?;
-        let token = resolve_token(token)?;
-        crate::remote::Remote::Tcp { host, port, token }
-    };
-    let mut remotes = Remotes::load()?;
-    let existed = remotes.remotes.insert(name.clone(), remote).is_some();
-    remotes.save()?;
-    output::success(if existed {
-        format!("updated remote `{name}`")
-    } else {
-        format!("added remote `{name}`")
-    });
-    Ok(())
-}
-
-fn remove(name: &str) -> Result<()> {
-    let name = normalize_alias(name)?;
-    let mut remotes = Remotes::load()?;
-    if remotes.remotes.remove(&name).is_none() {
-        output::warning(format!("no remote named `{name}`"));
-        return Ok(());
+        response => bail!("Unexpected daemon response: {response:?}"),
     }
-    remotes.save()?;
-    output::success(format!("removed remote `{name}`"));
-    Ok(())
 }
 
-fn test(name: &str) -> Result<()> {
-    let name = normalize_alias(name)?;
-    let remote = crate::remote::lookup(&name)?;
-    let client = RemoteClient::new(&name, remote);
-    let agent_name = client
-        .ping()
-        .with_context(|| format!("remote `{name}` unreachable"))?;
-    output::success(format!("remote `{name}` reachable ({agent_name})"));
-    Ok(())
+fn remove(workspace_key: &str, alias: &str) -> Result<()> {
+    match local::call(LocalRequest::RemoteRemove {
+        workspace_key: workspace_key.to_string(),
+        alias: alias.to_string(),
+    })? {
+        LocalResponse::Mount(mount) => {
+            output::success(format!("removed local mount `{}`", mount.alias));
+            output::info("the remote grant remains active until the share owner revokes it");
+            Ok(())
+        }
+        response => bail!("Unexpected daemon response: {response:?}"),
+    }
+}
+
+fn rename(workspace_key: &str, alias: &str, new_alias: &str) -> Result<()> {
+    match local::call(LocalRequest::RemoteRename {
+        workspace_key: workspace_key.to_string(),
+        alias: alias.to_string(),
+        new_alias: new_alias.to_string(),
+    })? {
+        LocalResponse::Mount(mount) => {
+            output::success(format!("renamed remote mount to `{}`", mount.alias));
+            Ok(())
+        }
+        response => bail!("Unexpected daemon response: {response:?}"),
+    }
+}
+
+fn test(workspace_key: &str, alias: &str) -> Result<()> {
+    match local::call(LocalRequest::RemoteTest {
+        workspace_key: workspace_key.to_string(),
+        alias: alias.to_string(),
+    })? {
+        LocalResponse::RemoteTested {
+            peer_name,
+            share_name,
+        } => {
+            output::success(format!(
+                "remote `{alias}` reachable ({peer_name} / {share_name})"
+            ));
+            Ok(())
+        }
+        response => bail!("Unexpected daemon response: {response:?}"),
+    }
 }

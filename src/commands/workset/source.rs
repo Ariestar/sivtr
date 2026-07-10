@@ -72,9 +72,30 @@ pub fn load_source(source: &str, cwd: Option<&Path>) -> Result<WorkSetSource> {
         if origin.eq_ignore_ascii_case("local") {
             return load_local_source(body, &cwd);
         }
+        if origin.eq_ignore_ascii_case("sivtr") {
+            let mut parts = body.splitn(4, '/');
+            let peer_id = parts.next().filter(|value| !value.is_empty());
+            let share_id = parts.next().filter(|value| !value.is_empty());
+            let alias = parts.next().filter(|value| !value.is_empty());
+            let selector = parts.next().filter(|value| !value.is_empty());
+            let (Some(peer_id), Some(share_id), Some(alias), Some(selector)) =
+                (peer_id, share_id, alias, selector)
+            else {
+                anyhow::bail!("invalid canonical remote source `{source}`");
+            };
+            let response =
+                crate::remote::RemoteClient::load_canonical(peer_id, share_id, alias, selector)?;
+            return Ok(WorkSetSource::Records {
+                cwd,
+                records: response.records,
+                anchors: response.anchors,
+            });
+        }
         let alias = origin.to_ascii_lowercase();
-        let remote = crate::remote::lookup(&alias)?;
-        let response = crate::remote::RemoteClient::new(&alias, remote).load_source(body)?;
+        let workspace = sivtr_core::workspace::resolve_workspace_for_dir(&cwd)?
+            .with_context(|| format!("Remote `{alias}` requires a git workspace context"))?;
+        let response =
+            crate::remote::RemoteClient::new(&workspace.key, &alias).load_source(body)?;
         return Ok(WorkSetSource::Records {
             cwd,
             records: response.records,
@@ -120,9 +141,12 @@ pub fn load_context_records(
                 provider, session, ..
             } => format!("{}/{session}", provider.command_name()),
         };
-        let source = match anchor.remote_name() {
-            Some(alias) => format!("{alias}://{body}"),
-            None => body,
+        let source = match (anchor.remote_name(), anchor.remote_ids()) {
+            (Some(alias), Some((peer_id, share_id))) => {
+                format!("sivtr://{peer_id}/{share_id}/{alias}/{body}")
+            }
+            (Some(alias), None) => format!("{alias}://{body}"),
+            (None, _) => body,
         };
         if seen_sources.insert(source.clone()) {
             sources.push(source);

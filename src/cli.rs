@@ -637,10 +637,16 @@ pub enum Commands {
     /// Show a captured terminal or AI workspace ref
     Show(ShowArgs),
 
-    /// Serve a workspace's sessions read-only for another device
-    Serve(ServeArgs),
+    /// Manage the local sivtr remote-memory daemon
+    Serve(ServeCommand),
 
-    /// Manage remote sivtr devices (see `remotes.toml`)
+    /// Manage workspaces explicitly shared by this device
+    Share(ShareCommand),
+
+    /// Manage paired device identities
+    Peer(PeerCommand),
+
+    /// Manage remote workspace mounts for the current workspace
     Remote(RemoteCommand),
 
     /// Manage configuration
@@ -703,6 +709,10 @@ pub enum Commands {
     /// Internal: open the AI session picker from the Windows hotkey daemon
     #[command(hide = true)]
     HotkeyPickAgent(HotkeyPickAgentArgs),
+
+    /// Internal: run the remote-memory daemon
+    #[command(hide = true)]
+    ServeDaemon,
 }
 
 #[derive(Args, Debug)]
@@ -1193,39 +1203,80 @@ pub struct ShowArgs {
     pub json: bool,
 }
 
-#[derive(Args, Debug, Clone)]
-pub struct ServeArgs {
-    /// Port to listen on (TCP mode only)
-    #[arg(short, long, value_name = "PORT", default_value_t = 7421)]
-    pub port: u16,
+#[derive(Parser, Debug)]
+pub struct ServeCommand {
+    #[command(subcommand)]
+    pub action: ServeAction,
+}
 
-    /// Use plain TCP HTTP instead of iroh. `--lan` then binds all interfaces;
-    /// otherwise TCP binds localhost. Without this flag, serve uses iroh
-    /// (zero-config, encrypted, cross-network) and prints a connection ticket.
-    #[arg(long)]
-    pub tcp: bool,
+#[derive(Subcommand, Debug)]
+pub enum ServeAction {
+    /// Start the daemon in the background
+    Start,
+    /// Stop the running daemon cleanly
+    Stop,
+    /// Restart the daemon
+    Restart,
+    /// Show daemon identity and runtime state
+    Status,
+    /// Print the daemon log path
+    Logs,
+    /// Run the daemon in the foreground
+    Foreground,
+}
 
-    /// TCP mode only: bind to all interfaces (LAN) instead of localhost. Has
-    /// no effect with iroh (which reaches across networks without a bind).
-    #[arg(long, requires = "tcp")]
-    pub lan: bool,
+#[derive(Parser, Debug)]
+pub struct ShareCommand {
+    #[command(subcommand)]
+    pub action: ShareAction,
+}
 
-    /// Bearer token clients must present (TCP mode only; iroh authenticates by
-    /// endpoint id). If omitted in TCP mode, sivtr generates a random one and
-    /// prints it once at startup.
-    #[arg(long, value_name = "TOKEN", requires = "tcp")]
-    pub token: Option<String>,
+#[derive(Subcommand, Debug)]
+pub enum ShareAction {
+    /// Explicitly expose a workspace through the daemon
+    Add {
+        /// Workspace path; defaults to the current directory
+        path: Option<PathBuf>,
+        /// Stable share name; defaults to the workspace directory name
+        #[arg(long)]
+        name: Option<String>,
+        /// Disable secret redaction for this share
+        #[arg(long)]
+        no_redact: bool,
+    },
+    /// List local shares
+    List,
+    /// Remove a share and all grants and invitations attached to it
+    Remove { share: String },
+    /// Enable a disabled share
+    Enable { share: String },
+    /// Disable a share without deleting it
+    Disable { share: String },
+    /// Create a single-use invitation for a share
+    Invite {
+        share: String,
+        /// Invitation lifetime, such as 10m, 2h, or 1d
+        #[arg(long, default_value = "10m")]
+        expires: String,
+    },
+    /// List active peer grants for a share
+    Grants { share: String },
+    /// Revoke a peer's access to a share
+    Revoke { share: String, peer: String },
+}
 
-    /// Disable secret redaction of served output. By default obvious API keys,
-    /// tokens, and private keys are masked before anything leaves the machine.
-    #[arg(long)]
-    pub no_redact: bool,
+#[derive(Parser, Debug)]
+pub struct PeerCommand {
+    #[command(subcommand)]
+    pub action: PeerAction,
+}
 
-    /// Workspace key to expose (see `sivtr serve` with no flag for the list).
-    /// If omitted, an interactive picker lists known workspaces (or the current
-    /// workspace is used when stdin is not interactive).
-    #[arg(short, long, value_name = "KEY")]
-    pub workspace: Option<String>,
+#[derive(Subcommand, Debug)]
+pub enum PeerAction {
+    /// List known peer identities
+    List,
+    /// Forget a peer and remove all local mounts and grants involving it
+    Forget { peer: String },
 }
 
 #[derive(Parser, Debug)]
@@ -1236,30 +1287,21 @@ pub struct RemoteCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum RemoteAction {
-    /// List configured remote devices
+    /// List remote mounts in the current workspace
     List,
-    /// Add or update a remote device
+    /// Redeem an invitation and mount the remote share in the current workspace
     Add {
-        /// Alias used in refs, e.g. `desk` in `desk://terminal/...`
-        name: String,
-        /// `host[:port]` for a TCP remote, or an iroh ticket for zero-config
-        /// cross-network connection. The form is auto-detected.
-        addr: String,
-        /// Bearer token (TCP only). Omit to be prompted interactively (keeps it
-        /// out of shell history). Ignored for iroh tickets.
-        #[arg(long, value_name = "TOKEN")]
-        token: Option<String>,
+        /// Workspace-local alias used in refs, e.g. `desk://terminal/...`
+        alias: String,
+        /// Single-use sivtr invitation
+        invite: String,
     },
-    /// Remove a remote device
-    Remove {
-        /// Alias to remove
-        name: String,
-    },
-    /// Perform a real transport and protocol round trip to the remote
-    Test {
-        /// Alias to test
-        name: String,
-    },
+    /// Remove a mount from the current workspace
+    Remove { alias: String },
+    /// Rename a workspace-local mount
+    Rename { alias: String, new_alias: String },
+    /// Perform an authenticated transport and authorization round trip
+    Test { alias: String },
 }
 
 #[derive(Parser, Debug)]
@@ -1632,15 +1674,12 @@ mod tests {
     }
 
     #[test]
-    fn serve_accepts_tcp_options() {
-        let cli =
-            Cli::try_parse_from(["sivtr", "serve", "--tcp", "--lan", "--port", "9000"]).unwrap();
+    fn serve_parses_lifecycle_action() {
+        let cli = Cli::try_parse_from(["sivtr", "serve", "start"]).unwrap();
 
         match cli.command {
-            Some(Commands::Serve(args)) => {
-                assert!(args.tcp);
-                assert!(args.lan);
-                assert_eq!(args.port, 9000);
+            Some(Commands::Serve(command)) => {
+                assert!(matches!(command.action, ServeAction::Start));
             }
             _ => panic!("expected serve command"),
         }

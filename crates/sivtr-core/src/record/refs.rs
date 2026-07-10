@@ -94,19 +94,20 @@ impl WorkRefSelector {
     }
 }
 
-/// Where a ref lives: on this machine, or on a named remote device.
-///
-/// `Local` and `Remote` are fully symmetric variants — `Local` is not a
-/// "default" or "optional" origin, it is a real variant. The only asymmetry is
-/// in the **textual shorthand**: a bare ref like `terminal/session_42/3` is
-/// parsed as `Local` and `Local` is rendered without a `local://` prefix, so
-/// existing refs/handoffs/docs stay unchanged. `Remote` always carries the
-/// device alias (`desk://terminal/...`), looked up in `remotes.toml` by the
-/// transport layer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkRef {
     Local(WorkRefBody),
-    Remote { name: String, body: WorkRefBody },
+    Remote {
+        origin: RemoteRefOrigin,
+        body: WorkRefBody,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteRefOrigin {
+    pub alias: String,
+    pub peer_id: Option<String>,
+    pub share_id: Option<String>,
 }
 
 /// The local shape of a ref: a terminal record or an agent turn, plus a target
@@ -163,7 +164,7 @@ impl WorkRef {
     pub fn origin(&self) -> RefOrigin<'_> {
         match self {
             Self::Local(_) => RefOrigin::Local,
-            Self::Remote { name, .. } => RefOrigin::Remote(name),
+            Self::Remote { origin, .. } => RefOrigin::Remote(&origin.alias),
         }
     }
 
@@ -174,7 +175,16 @@ impl WorkRef {
     pub fn remote_name(&self) -> Option<&str> {
         match self {
             Self::Local(_) => None,
-            Self::Remote { name, .. } => Some(name),
+            Self::Remote { origin, .. } => Some(&origin.alias),
+        }
+    }
+
+    pub fn remote_ids(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::Remote { origin, .. } => {
+                Some((origin.peer_id.as_deref()?, origin.share_id.as_deref()?))
+            }
+            Self::Local(_) => None,
         }
     }
 
@@ -245,8 +255,8 @@ impl WorkRef {
     pub fn with_body(&self, body: WorkRefBody) -> Self {
         match self {
             Self::Local(_) => Self::Local(body),
-            Self::Remote { name, .. } => Self::Remote {
-                name: name.clone(),
+            Self::Remote { origin, .. } => Self::Remote {
+                origin: origin.clone(),
                 body,
             },
         }
@@ -307,8 +317,8 @@ impl fmt::Display for WorkRef {
             // Local is the shorthand: rendered bare, no `local://` prefix, so
             // existing refs/handoffs/docs are byte-identical.
             Self::Local(body) => write_body(f, body),
-            Self::Remote { name, body } => {
-                write!(f, "{name}://")?;
+            Self::Remote { origin, body } => {
+                write!(f, "{}://", origin.alias)?;
                 write_body(f, body)
             }
         }
@@ -339,6 +349,37 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &WorkRefBody) -> fmt::Result {
     }
 }
 
+fn body_to_string(body: &WorkRefBody) -> String {
+    match body {
+        WorkRefBody::Terminal {
+            session,
+            record_index,
+            target,
+        } => parts_to_string(&["terminal", session, &record_index.to_string()], *target),
+        WorkRefBody::Agent {
+            provider,
+            session,
+            turn_index,
+            target,
+        } => parts_to_string(
+            &[provider.command_name(), session, &turn_index.to_string()],
+            *target,
+        ),
+    }
+}
+
+fn parts_to_string(parts: &[&str], target: WorkRefTarget) -> String {
+    let mut value = parts.join("/");
+    match target {
+        WorkRefTarget::Record => {}
+        WorkRefTarget::Line(line) => value.push_str(&format!("/{line}")),
+        WorkRefTarget::Part { io, index } => {
+            value.push_str(&format!("/{}/{index}", part_segment(io)));
+        }
+    }
+    value
+}
+
 fn write_parts(f: &mut fmt::Formatter<'_>, parts: &[&str], target: WorkRefTarget) -> fmt::Result {
     write!(f, "{}", parts.join("/"))?;
     match target {
@@ -356,7 +397,18 @@ impl Serialize for WorkRef {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(&self.to_string())
+        match self {
+            Self::Remote { origin, body }
+                if origin.peer_id.is_some() && origin.share_id.is_some() =>
+            {
+                let peer_id = origin.peer_id.as_deref().expect("checked");
+                let share_id = origin.share_id.as_deref().expect("checked");
+                let mut value = format!("sivtr://{peer_id}/{share_id}/{}/", origin.alias);
+                value.push_str(&body_to_string(body));
+                serializer.serialize_str(&value)
+            }
+            _ => serializer.serialize_str(&self.to_string()),
+        }
     }
 }
 
@@ -487,9 +539,34 @@ impl FromStr for WorkRef {
             if scheme.eq_ignore_ascii_case("local") {
                 return Ok(Self::Local(rest.parse::<WorkRefBody>()?));
             }
+            if scheme.eq_ignore_ascii_case("sivtr") {
+                let mut parts = rest.splitn(4, '/');
+                let peer_id = parts.next().filter(|value| !value.is_empty());
+                let share_id = parts.next().filter(|value| !value.is_empty());
+                let alias = parts.next().filter(|value| !value.is_empty());
+                let body = parts.next().filter(|value| !value.is_empty());
+                let (Some(peer_id), Some(share_id), Some(alias), Some(body)) =
+                    (peer_id, share_id, alias, body)
+                else {
+                    bail!("Invalid canonical remote ref `{value}`");
+                };
+                validate_alias(alias, value)?;
+                return Ok(Self::Remote {
+                    origin: RemoteRefOrigin {
+                        alias: alias.to_ascii_lowercase(),
+                        peer_id: Some(peer_id.to_string()),
+                        share_id: Some(share_id.to_string()),
+                    },
+                    body: body.parse::<WorkRefBody>()?,
+                });
+            }
             validate_alias(scheme, value)?;
             return Ok(Self::Remote {
-                name: scheme.to_ascii_lowercase(),
+                origin: RemoteRefOrigin {
+                    alias: scheme.to_ascii_lowercase(),
+                    peer_id: None,
+                    share_id: None,
+                },
                 body: rest.parse::<WorkRefBody>()?,
             });
         }
@@ -648,7 +725,11 @@ mod tests {
         assert_eq!(
             reference,
             WorkRef::Remote {
-                name: "desk".to_string(),
+                origin: RemoteRefOrigin {
+                    alias: "desk".to_string(),
+                    peer_id: None,
+                    share_id: None,
+                },
                 body: WorkRefBody::Terminal {
                     session: "session_42".to_string(),
                     record_index: 3,
@@ -676,6 +757,30 @@ mod tests {
             reference.record_ref().to_string(),
             "laptop://codex/abc123/5"
         );
+    }
+
+    #[test]
+    fn resolved_remote_refs_serialize_with_canonical_identity() {
+        let reference = WorkRef::Remote {
+            origin: RemoteRefOrigin {
+                alias: "desk".to_string(),
+                peer_id: Some("peer_123".to_string()),
+                share_id: Some("sh_456".to_string()),
+            },
+            body: WorkRefBody::Terminal {
+                session: "session_42".to_string(),
+                record_index: 3,
+                target: WorkRefTarget::Record,
+            },
+        };
+        assert_eq!(reference.to_string(), "desk://terminal/session_42/3");
+        let json = serde_json::to_string(&reference).unwrap();
+        assert_eq!(
+            json,
+            "\"sivtr://peer_123/sh_456/desk/terminal/session_42/3\""
+        );
+        let restored: WorkRef = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, reference);
     }
 
     #[test]
