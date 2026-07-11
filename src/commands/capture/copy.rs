@@ -3,8 +3,10 @@ use regex::Regex;
 use std::path::Path;
 use std::time::SystemTime;
 
-use crate::commands::command_block_selector::{parse_selector, resolve_selector, CommandSelection};
-use crate::commands::workset;
+use crate::commands::capture::command_block_selector::{
+    parse_selector, resolve_selector, CommandSelection,
+};
+use crate::commands::memory::workset;
 use crate::output;
 use sivtr_core::ai::{
     AgentBlockKind, AgentProvider, AgentSelection, AgentSession, AgentSessionInfo,

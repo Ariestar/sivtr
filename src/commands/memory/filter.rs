@@ -14,9 +14,9 @@ use crate::cli::{
     FilterArgs, SearchArgs, SearchFieldArg, SearchSortArg, SearchStatusArg, WorkPartFilterArg,
     WorkPartsArgs,
 };
-use crate::commands::show;
-use crate::commands::time_filter::{build_time_range, TimeRange};
-use crate::commands::workset::{self, WorkSet, WorkSetSource};
+use crate::commands::memory::show;
+use crate::commands::memory::time_filter::{build_time_range, TimeRange};
+use crate::commands::memory::workset::{self, WorkSet, WorkSetSource};
 
 struct MatchedAnchor<'a> {
     record: &'a WorkRecord,

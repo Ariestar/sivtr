@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 
 use crate::cli::{PeerAction, PeerCommand};
 use crate::output;
-use crate::remote::local;
+use crate::remote::ipc;
 use crate::remote::protocol::{LocalRequest, LocalResponse};
 
 pub fn execute(command: PeerCommand) -> Result<()> {
@@ -13,7 +13,7 @@ pub fn execute(command: PeerCommand) -> Result<()> {
 }
 
 fn list() -> Result<()> {
-    match local::call(LocalRequest::PeerList)? {
+    match ipc::call(LocalRequest::PeerList)? {
         LocalResponse::Peers(peers) => {
             if peers.is_empty() {
                 output::plain("no peers known");
@@ -28,7 +28,7 @@ fn list() -> Result<()> {
 }
 
 fn forget(peer: &str) -> Result<()> {
-    match local::call(LocalRequest::PeerForget {
+    match ipc::call(LocalRequest::PeerForget {
         peer: peer.to_string(),
     })? {
         LocalResponse::Peer(peer) => {

@@ -5,7 +5,7 @@ use sivtr_core::capture::scrollback;
 use sivtr_core::session;
 
 use crate::command_blocks::{CommandBlockTextMode, ParsedCommandBlock};
-use crate::commands::command_block_selector::{parse_selector, resolve_selector};
+use crate::commands::capture::command_block_selector::{parse_selector, resolve_selector};
 
 const MIN_SIDE_BY_SIDE_WIDTH: usize = 20;
 const SIDE_BY_SIDE_OVERHEAD: usize = 7;

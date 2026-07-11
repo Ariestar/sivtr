@@ -313,7 +313,7 @@ mod tests {
             records[0].work_ref.record_ref(),
         ];
 
-        let unique = crate::commands::var::unique_anchors(anchors)
+        let unique = crate::commands::memory::var::unique_anchors(anchors)
             .into_iter()
             .map(|anchor| anchor.to_string())
             .collect::<Vec<_>>();

@@ -6,7 +6,7 @@ use sivtr_core::workspace;
 
 use crate::cli::{ShareAction, ShareCommand};
 use crate::output;
-use crate::remote::local;
+use crate::remote::ipc;
 use crate::remote::protocol::{LocalRequest, LocalResponse};
 
 pub fn execute(command: ShareCommand) -> Result<()> {
@@ -39,7 +39,7 @@ fn add(path: Option<PathBuf>, name: Option<String>, redact: bool) -> Result<()> 
             .unwrap_or("workspace")
             .to_string()
     });
-    match local::call(LocalRequest::ShareAdd {
+    match ipc::call(LocalRequest::ShareAdd {
         workspace_key: paths.key,
         root: paths.root.display().to_string(),
         name,
@@ -60,7 +60,7 @@ fn add(path: Option<PathBuf>, name: Option<String>, redact: bool) -> Result<()> 
 }
 
 fn list() -> Result<()> {
-    match local::call(LocalRequest::ShareList)? {
+    match ipc::call(LocalRequest::ShareList)? {
         LocalResponse::Shares(shares) => {
             if shares.is_empty() {
                 output::plain("no workspaces are shared");
@@ -79,7 +79,7 @@ fn list() -> Result<()> {
 }
 
 fn remove(share: &str) -> Result<()> {
-    match local::call(LocalRequest::ShareRemove {
+    match ipc::call(LocalRequest::ShareRemove {
         share: share.to_string(),
     })? {
         LocalResponse::Share(share) => {
@@ -91,7 +91,7 @@ fn remove(share: &str) -> Result<()> {
 }
 
 fn set_enabled(share: &str, enabled: bool) -> Result<()> {
-    match local::call(LocalRequest::ShareSetEnabled {
+    match ipc::call(LocalRequest::ShareSetEnabled {
         share: share.to_string(),
         enabled,
     })? {
@@ -109,7 +109,7 @@ fn set_enabled(share: &str, enabled: bool) -> Result<()> {
 
 fn invite(share: &str, expires: &str) -> Result<()> {
     let valid_for_seconds = parse_duration(expires)?;
-    match local::call(LocalRequest::ShareInvite {
+    match ipc::call(LocalRequest::ShareInvite {
         share: share.to_string(),
         valid_for_seconds,
     })? {
@@ -134,7 +134,7 @@ fn invite(share: &str, expires: &str) -> Result<()> {
 }
 
 fn grants(share: &str) -> Result<()> {
-    match local::call(LocalRequest::ShareGrants {
+    match ipc::call(LocalRequest::ShareGrants {
         share: share.to_string(),
     })? {
         LocalResponse::Grants(grants) => {
@@ -154,7 +154,7 @@ fn grants(share: &str) -> Result<()> {
 }
 
 fn revoke(share: &str, peer: &str) -> Result<()> {
-    match local::call(LocalRequest::ShareRevoke {
+    match ipc::call(LocalRequest::ShareRevoke {
         share: share.to_string(),
         peer: peer.to_string(),
     })? {

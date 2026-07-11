@@ -3,7 +3,7 @@ use sivtr_core::workspace;
 
 use crate::cli::{RemoteAction, RemoteCommand};
 use crate::output;
-use crate::remote::local;
+use crate::remote::ipc;
 use crate::remote::protocol::{LocalRequest, LocalResponse};
 
 pub fn execute(command: RemoteCommand) -> Result<()> {
@@ -24,7 +24,7 @@ fn current_workspace_key() -> Result<String> {
 }
 
 fn list(workspace_key: &str) -> Result<()> {
-    match local::call(LocalRequest::RemoteList {
+    match ipc::call(LocalRequest::RemoteList {
         workspace_key: workspace_key.to_string(),
     })? {
         LocalResponse::Mounts(mounts) => {
@@ -47,7 +47,7 @@ fn list(workspace_key: &str) -> Result<()> {
 }
 
 fn add(workspace_key: &str, alias: &str, invite: &str) -> Result<()> {
-    match local::call(LocalRequest::RemoteAdd {
+    match ipc::call(LocalRequest::RemoteAdd {
         workspace_key: workspace_key.to_string(),
         alias: alias.to_string(),
         invite: invite.to_string(),
@@ -63,7 +63,7 @@ fn add(workspace_key: &str, alias: &str, invite: &str) -> Result<()> {
 }
 
 fn remove(workspace_key: &str, alias: &str) -> Result<()> {
-    match local::call(LocalRequest::RemoteRemove {
+    match ipc::call(LocalRequest::RemoteRemove {
         workspace_key: workspace_key.to_string(),
         alias: alias.to_string(),
     })? {
@@ -77,7 +77,7 @@ fn remove(workspace_key: &str, alias: &str) -> Result<()> {
 }
 
 fn rename(workspace_key: &str, alias: &str, new_alias: &str) -> Result<()> {
-    match local::call(LocalRequest::RemoteRename {
+    match ipc::call(LocalRequest::RemoteRename {
         workspace_key: workspace_key.to_string(),
         alias: alias.to_string(),
         new_alias: new_alias.to_string(),
@@ -91,7 +91,7 @@ fn rename(workspace_key: &str, alias: &str, new_alias: &str) -> Result<()> {
 }
 
 fn test(workspace_key: &str, alias: &str) -> Result<()> {
-    match local::call(LocalRequest::RemoteTest {
+    match ipc::call(LocalRequest::RemoteTest {
         workspace_key: workspace_key.to_string(),
         alias: alias.to_string(),
     })? {

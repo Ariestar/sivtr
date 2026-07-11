@@ -481,13 +481,7 @@ impl FromStr for WorkRef {
             if rest.is_empty() {
                 bail!("Invalid work ref `{value}`; missing body after `:`");
             }
-            // Reject legacy `scheme://body` so it fails clearly instead of
-            // parsing as origin=`scheme/` body=`/body`.
-            if rest.starts_with('/') {
-                bail!(
-                    "Invalid work ref `{value}`; use `origin:body` (for example `desk:terminal/session/1`), not `://`"
-                );
-            }
+            reject_legacy_scheme_syntax(value)?;
             let origin = origin.trim();
             if origin.eq_ignore_ascii_case("local") {
                 return Ok(Self::Local(rest.parse::<WorkRefBody>()?));
@@ -501,6 +495,19 @@ impl FromStr for WorkRef {
 
         Ok(Self::Local(value.parse::<WorkRefBody>()?))
     }
+}
+
+/// Reject legacy `scheme://body` so it fails clearly instead of parsing as
+/// `origin=scheme/` + `body=/...`.
+pub fn reject_legacy_scheme_syntax(value: &str) -> Result<()> {
+    if let Some((_, rest)) = value.split_once(':') {
+        if rest.starts_with('/') {
+            bail!(
+                "Invalid work ref `{value}`; use `origin:body` (for example `desk:terminal/session/1`), not `://`"
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Origin rules: `name` or `device/workspace`, each segment `[A-Za-z0-9_-]+`,

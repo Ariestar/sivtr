@@ -5,7 +5,7 @@ use sivtr_core::record::{WorkPartIo, WorkPartKind};
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use crate::commands::show::WorkSetOutputFormat;
+use crate::commands::memory::show::WorkSetOutputFormat;
 
 mod remote;
 pub use remote::*;

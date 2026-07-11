@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use sivtr_core::ai::AgentProvider;
-use sivtr_core::query::{load_workspace_records, load_workspace_source, SourceQueryResult};
+use sivtr_core::query::load_workspace_records;
 use sivtr_core::record::WorkRecordIndex;
 
 use crate::output;
@@ -21,13 +21,7 @@ pub(crate) fn current_work_record_index(
     Ok(result.into_index())
 }
 
-pub(crate) fn current_work_source(cwd: &Path, source: &str) -> Result<SourceQueryResult> {
-    let result = load_workspace_source(cwd, source)?;
-    warn_skipped(&result.skipped);
-    Ok(result)
-}
-
-fn warn_skipped(skipped_sessions: &[sivtr_core::query::SkippedSession]) {
+pub(crate) fn warn_skipped(skipped_sessions: &[sivtr_core::query::SkippedSession]) {
     for skipped in skipped_sessions {
         output::warning(format!(
             "failed to parse {} session {}: {:#}",

@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use sivtr_core::record::{WorkPart, WorkRecord, WorkRef, WorkRefTarget};
 
 use crate::cli::ShowArgs;
-use crate::commands::workset;
+use crate::commands::memory::workset;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkSetOutputFormat {

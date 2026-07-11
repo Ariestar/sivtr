@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use sivtr_core::record::{WorkRecord, WorkRef, WorkRefBody};
 
 use crate::cli::ZoomArgs;
-use crate::commands::show;
-use crate::commands::workset::{self, WorkSet};
+use crate::commands::memory::show;
+use crate::commands::memory::workset::{self, WorkSet};
 
 pub fn execute(args: &ZoomArgs) -> Result<()> {
     let source = workset::load_source(&args.source, args.cwd.as_deref())?;

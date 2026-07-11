@@ -3,9 +3,10 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use sivtr_core::record::{WorkRecord, WorkRef, WorkRefBody};
+use sivtr_core::query::load_workspace_source;
+use sivtr_core::record::{reject_legacy_scheme_syntax, WorkRecord, WorkRef, WorkRefBody};
 
-use crate::commands::records::current_work_source;
+use crate::commands::memory::records::warn_skipped;
 
 use super::WorkSet;
 
@@ -72,11 +73,7 @@ pub fn load_source(source: &str, cwd: Option<&Path>) -> Result<WorkSetSource> {
         if body.is_empty() {
             anyhow::bail!("source `{source}` is missing a selector after `:`");
         }
-        if body.starts_with('/') {
-            anyhow::bail!(
-                "source `{source}` uses legacy `://` syntax; use `origin:body` (for example `desk:terminal`)"
-            );
-        }
+        reject_legacy_scheme_syntax(source)?;
         if origin.eq_ignore_ascii_case("local") {
             return load_local_source(body, &cwd);
         }
@@ -96,7 +93,7 @@ pub fn load_source(source: &str, cwd: Option<&Path>) -> Result<WorkSetSource> {
         // 2. Local workspace by directory basename (e.g. `docs:terminal`).
         if !origin.contains('/') {
             if let Some(root) =
-                crate::commands::workspace::resolve_local_workspace_by_name(&origin)?
+                crate::commands::remote::workspace::resolve_local_workspace_by_name(&origin)?
             {
                 return load_local_source(body, &root);
             }
@@ -157,7 +154,8 @@ fn read_stdin() -> Result<WorkSet> {
 }
 
 fn load_local_source(source: &str, cwd: &Path) -> Result<WorkSetSource> {
-    let result = current_work_source(cwd, source)?;
+    let result = load_workspace_source(cwd, source)?;
+    warn_skipped(&result.skipped);
     Ok(WorkSetSource::Records {
         cwd: cwd.to_path_buf(),
         records: result.records,

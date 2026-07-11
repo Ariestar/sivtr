@@ -5,7 +5,7 @@ use anyhow::{bail, Result};
 use sivtr_core::record::{WorkRecord, WorkRef};
 
 use crate::cli::{VarCommand, VarSubcommand};
-use crate::commands::workset::{self, WorkSet};
+use crate::commands::memory::workset::{self, WorkSet};
 use crate::output;
 
 pub fn execute(command: &VarCommand) -> Result<()> {

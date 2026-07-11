@@ -6,7 +6,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::cli::{ServeAction, ServeCommand};
 use crate::output;
-use crate::remote::local;
+use crate::remote::ipc;
 use crate::remote::protocol::{LocalRequest, LocalResponse};
 
 pub fn execute(command: &ServeCommand) -> Result<()> {
@@ -14,14 +14,14 @@ pub fn execute(command: &ServeCommand) -> Result<()> {
         ServeAction::Start => start(),
         ServeAction::Stop => stop(),
         ServeAction::Restart => {
-            if local::running() {
+            if ipc::running() {
                 stop()?;
             }
             start()
         }
         ServeAction::Status => status(),
         ServeAction::Logs => {
-            output::plain(local::daemon_log_path().display().to_string());
+            output::plain(ipc::daemon_log_path().display().to_string());
             Ok(())
         }
         ServeAction::Foreground => crate::remote::daemon::run(),
@@ -29,12 +29,12 @@ pub fn execute(command: &ServeCommand) -> Result<()> {
 }
 
 fn start() -> Result<()> {
-    if local::running() {
+    if ipc::running() {
         output::success("sivtr daemon is already running");
         return Ok(());
     }
     crate::remote::daemon::remove_stale_daemon_info()?;
-    let log_path = local::daemon_log_path();
+    let log_path = ipc::daemon_log_path();
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -54,7 +54,7 @@ fn start() -> Result<()> {
 
     let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
-        if local::running() {
+        if ipc::running() {
             output::success("sivtr daemon started");
             return status();
         }
@@ -67,18 +67,18 @@ fn start() -> Result<()> {
 }
 
 fn stop() -> Result<()> {
-    if !local::running() {
+    if !ipc::running() {
         crate::remote::daemon::remove_stale_daemon_info()?;
         output::warning("sivtr daemon is not running");
         return Ok(());
     }
-    match local::call(LocalRequest::Shutdown)? {
+    match ipc::call(LocalRequest::Shutdown)? {
         LocalResponse::Ok => {}
         response => bail!("Unexpected daemon response: {response:?}"),
     }
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
-        if !local::running() {
+        if !ipc::running() {
             output::success("sivtr daemon stopped");
             return Ok(());
         }
@@ -88,11 +88,11 @@ fn stop() -> Result<()> {
 }
 
 fn status() -> Result<()> {
-    if !local::running() {
+    if !ipc::running() {
         output::plain("stopped");
         return Ok(());
     }
-    match local::call(LocalRequest::Status)? {
+    match ipc::call(LocalRequest::Status)? {
         LocalResponse::Status(status) => {
             output::plain("running");
             output::detail("device", status.device_name);

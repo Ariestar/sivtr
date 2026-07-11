@@ -5,7 +5,7 @@ use crossterm::event::{
 use ratatui::widgets::ListState;
 use std::process::Command;
 
-use crate::commands::command_block_selector::CommandSelection;
+use crate::commands::capture::command_block_selector::CommandSelection;
 use crate::tui::content_view::{
     clamp_content_position, content_link_at, content_position_in_text_row, content_text_area,
     content_view_line_count, line_count, selected_content_text, ContentPosition, ContentSelection,
@@ -2321,7 +2321,7 @@ mod tests {
         workspace_picked_content_with_line_filter, workspace_search_target_ref,
         WorkspaceCopyShortcut,
     };
-    use crate::commands::command_block_selector::CommandSelection;
+    use crate::commands::capture::command_block_selector::CommandSelection;
     use crate::tui::workspace::{
         TextPair, WorkspaceCopyParts, WorkspaceDialogue, WorkspaceFocus, WorkspaceSession,
         WorkspaceSource,

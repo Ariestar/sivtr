@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use crate::cli::SearchArgs;
-use crate::commands::{filter, show, workset};
+use crate::commands::memory::{filter, show, workset};
 
 pub fn execute(args: &SearchArgs) -> Result<()> {
     let source = workset::load_source(&args.source, args.cwd.as_deref())?;

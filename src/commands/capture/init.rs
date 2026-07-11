@@ -454,7 +454,7 @@ fn maybe_start_hotkey() -> Result<()> {
         }
 
         if prompt_start_hotkey()? {
-            crate::commands::hotkey::execute(HotkeyCommand {
+            crate::commands::system::hotkey::execute(HotkeyCommand {
                 action: Some(HotkeyAction::Start(HotkeyStartArgs {
                     chord: None,
                     provider: Default::default(),

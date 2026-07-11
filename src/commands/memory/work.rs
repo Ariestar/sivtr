@@ -7,11 +7,11 @@ use std::fmt;
 use std::path::Path;
 
 use crate::cli::{WorkCommand, WorkPartsArgs, WorkRecordsArgs, WorkSessionsArgs};
-use crate::commands::filter;
-use crate::commands::records::current_work_record_index;
-use crate::commands::show;
-use crate::commands::work_json::{session_meta, WorkJsonSessionMeta};
-use crate::commands::workset::{self, WorkSet};
+use crate::commands::memory::filter;
+use crate::commands::memory::records::current_work_record_index;
+use crate::commands::memory::show;
+use crate::commands::memory::work_json::{session_meta, WorkJsonSessionMeta};
+use crate::commands::memory::workset::{self, WorkSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WorkSessionSource {

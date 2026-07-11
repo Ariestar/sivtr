@@ -2,9 +2,9 @@ use anyhow::{bail, Context, Result};
 use sivtr_core::record::{WorkPartIo, WorkRecord, WorkRef, WorkRefBody, WorkRefTarget};
 
 use crate::cli::NavArgs;
-use crate::commands::show;
-use crate::commands::var;
-use crate::commands::workset::{self, WorkSet};
+use crate::commands::memory::show;
+use crate::commands::memory::var;
+use crate::commands::memory::workset::{self, WorkSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Step {

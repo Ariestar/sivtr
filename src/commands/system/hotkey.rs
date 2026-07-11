@@ -9,7 +9,7 @@ use crate::cli::{
     HotkeyAction, HotkeyCommand, HotkeyPickAgentArgs, HotkeyProviderSelection, HotkeyServeArgs,
     HotkeyStartArgs,
 };
-use crate::commands::copy::{self, AgentPickerRequest};
+use crate::commands::capture::copy::{self, AgentPickerRequest};
 use sivtr_core::ai::AgentSelection;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

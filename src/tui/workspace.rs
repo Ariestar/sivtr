@@ -6,7 +6,7 @@ use regex::Regex;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use crate::commands::command_block_selector::CommandSelection;
+use crate::commands::capture::command_block_selector::CommandSelection;
 use crate::tui::content_view::{
     content_cursor_position, highlight_spans, render_content_view, ContentSelection, ContentView,
     ContentViewMode,
