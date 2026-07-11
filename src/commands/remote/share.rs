@@ -3,9 +3,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use chrono::{TimeZone, Utc};
-use sivtr_core::workspace;
+use sivtr_core::workspace::{self, WorkspaceMetadata};
 
 use crate::cli::{ShareAction, ShareCommand};
+use crate::commands::remote::workspace::workspace_display_name;
 use crate::output;
 use crate::remote::ipc;
 use crate::remote::protocol::{LocalRequest, LocalResponse, ShareInfo};
@@ -14,7 +15,7 @@ use super::serve;
 
 pub fn execute(command: ShareCommand) -> Result<()> {
     match command.action {
-        None => open(
+        None => interactive_share(
             command.path,
             command.name,
             !command.no_redact,
@@ -61,26 +62,52 @@ pub fn execute(command: ShareCommand) -> Result<()> {
 
 /// Default `sivtr share` flow:
 /// 1. ensure daemon
-/// 2. interactively confirm current workspace (Enter = yes)
+/// 2. interactively pick a workspace (Enter = current)
 /// 3. share if needed
 /// 4. print invite
-fn open(path: Option<PathBuf>, name: Option<String>, redact: bool, expires: &str) -> Result<()> {
+fn interactive_share(
+    path: Option<PathBuf>,
+    name: Option<String>,
+    redact: bool,
+    expires: &str,
+) -> Result<()> {
     serve::ensure_running()?;
 
-    let path =
-        path.unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
-    let paths = workspace::ensure_workspace_for_dir(&path)?
-        .with_context(|| format!("{} is not inside a git workspace", path.display()))?;
-    let share_name = name.unwrap_or_else(|| default_share_name(&paths.root));
+    // Explicit --path/--name skip the picker and share that target after confirm.
+    if path.is_some() || name.is_some() {
+        let path =
+            path.unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
+        let paths = workspace::ensure_workspace_for_dir(&path)?
+            .with_context(|| format!("{} is not inside a git workspace", path.display()))?;
+        let share_name = name.unwrap_or_else(|| default_share_name(&paths.root));
+        confirm_single(&paths.root, &share_name)?;
+        return finish_share(paths.root, paths.key, share_name, redact, expires);
+    }
 
-    confirm_share_current(&paths.root, &share_name)?;
+    let selected = pick_workspace()?;
+    let share_name = default_share_name(Path::new(&selected.root));
+    finish_share(
+        PathBuf::from(&selected.root),
+        selected.key,
+        share_name,
+        redact,
+        expires,
+    )
+}
 
-    let share = match find_share_for_workspace(&paths.key) {
+fn finish_share(
+    root: PathBuf,
+    workspace_key: String,
+    share_name: String,
+    redact: bool,
+    expires: &str,
+) -> Result<()> {
+    let share = match find_share_for_workspace(&workspace_key) {
         Ok(existing) => {
             output::info(format!("workspace already shared as `{}`", existing.name));
             existing
         }
-        Err(_) => add(Some(path), Some(share_name), redact)?,
+        Err(_) => add(Some(root), Some(share_name), redact)?,
     };
     if !share.enabled {
         set_enabled(&share.name, true)?;
@@ -88,13 +115,134 @@ fn open(path: Option<PathBuf>, name: Option<String>, redact: bool, expires: &str
     invite(&share.name, expires)
 }
 
-fn confirm_share_current(root: &Path, share_name: &str) -> Result<()> {
+#[derive(Clone)]
+struct WorkspaceChoice {
+    key: String,
+    root: String,
+    name: String,
+    current: bool,
+}
+
+fn pick_workspace() -> Result<WorkspaceChoice> {
     if !atty::is(atty::Stream::Stdin) || !atty::is(atty::Stream::Stderr) {
         bail!(
             "refusing to share non-interactively; re-run in a terminal, or use `sivtr share add` explicitly"
         );
     }
 
+    let current = workspace::resolve_current_workspace()?;
+    // Ensure the current repo is registered so it appears in the list.
+    if let Some(ref paths) = current {
+        let _ = workspace::ensure_workspace_for_dir(&paths.root)?;
+    }
+
+    let mut metas = workspace::list_workspaces()?;
+    if let Some(ref paths) = current {
+        if !metas.iter().any(|meta| meta.key == paths.key) {
+            metas.insert(
+                0,
+                WorkspaceMetadata {
+                    key: paths.key.clone(),
+                    root: paths.root.display().to_string(),
+                    created_at: String::new(),
+                    last_seen_at: String::new(),
+                },
+            );
+        }
+    }
+    if metas.is_empty() {
+        bail!("no workspaces recorded yet; run inside a git repo first");
+    }
+
+    // Current first, then recent.
+    let current_key = current.as_ref().map(|paths| paths.key.as_str());
+    metas.sort_by(|a, b| {
+        let a_cur = Some(a.key.as_str()) == current_key;
+        let b_cur = Some(b.key.as_str()) == current_key;
+        b_cur
+            .cmp(&a_cur)
+            .then_with(|| b.last_seen_at.cmp(&a.last_seen_at))
+    });
+
+    let choices: Vec<WorkspaceChoice> = metas
+        .into_iter()
+        .map(|meta| {
+            let current = Some(meta.key.as_str()) == current_key;
+            WorkspaceChoice {
+                name: workspace_display_name(&meta),
+                key: meta.key,
+                root: meta.root,
+                current,
+            }
+        })
+        .collect();
+
+    let default_index = choices
+        .iter()
+        .position(|choice| choice.current)
+        .unwrap_or(0);
+
+    output::info("share which workspace?");
+    for (index, choice) in choices.iter().enumerate() {
+        let marker = if choice.current { " [current]" } else { "" };
+        let prefix = if index == default_index { ">" } else { " " };
+        output::plain(format!(
+            "{prefix} {:>2}. {:<20} {}{marker}",
+            index + 1,
+            choice.name,
+            choice.root
+        ));
+    }
+    output::hint(format!(
+        "Enter = {} ({}), or type number/name. q to cancel",
+        choices[default_index].name,
+        default_index + 1
+    ));
+    eprint!("> ");
+    let _ = io::stderr().flush();
+
+    let mut line = String::new();
+    io::stdin()
+        .read_line(&mut line)
+        .context("Failed to read workspace selection")?;
+    let answer = line.trim();
+    if answer.eq_ignore_ascii_case("q")
+        || answer.eq_ignore_ascii_case("quit")
+        || answer.eq_ignore_ascii_case("n")
+        || answer.eq_ignore_ascii_case("no")
+    {
+        bail!("share cancelled");
+    }
+    if answer.is_empty() {
+        return Ok(choices[default_index].clone());
+    }
+    if let Ok(number) = answer.parse::<usize>() {
+        if (1..=choices.len()).contains(&number) {
+            return Ok(choices[number - 1].clone());
+        }
+        bail!(
+            "invalid selection `{answer}`; choose 1-{} or a workspace name",
+            choices.len()
+        );
+    }
+    let needle = answer.to_ascii_lowercase();
+    let matches: Vec<_> = choices
+        .iter()
+        .filter(|choice| choice.name == needle || choice.key == needle)
+        .collect();
+    match matches.as_slice() {
+        [only] => Ok((*only).clone()),
+        [] => bail!("unknown workspace `{answer}`"),
+        _ => bail!("ambiguous workspace `{answer}`; use the list number instead"),
+    }
+}
+
+fn confirm_single(root: &Path, share_name: &str) -> Result<()> {
+    if !atty::is(atty::Stream::Stdin) || !atty::is(atty::Stream::Stderr) {
+        bail!(
+            "refusing to share non-interactively; re-run in a terminal, or use `sivtr share add` explicitly"
+        );
+    }
     output::info(format!(
         "share workspace `{}` as `{share_name}`?",
         root.display()
@@ -102,7 +250,6 @@ fn confirm_share_current(root: &Path, share_name: &str) -> Result<()> {
     output::hint("Press Enter to confirm, or type n/no to cancel");
     eprint!("> ");
     let _ = io::stderr().flush();
-
     let mut line = String::new();
     io::stdin()
         .read_line(&mut line)
@@ -111,10 +258,7 @@ fn confirm_share_current(root: &Path, share_name: &str) -> Result<()> {
     if answer.is_empty() || answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes") {
         return Ok(());
     }
-    if answer.eq_ignore_ascii_case("n") || answer.eq_ignore_ascii_case("no") {
-        bail!("share cancelled");
-    }
-    bail!("share cancelled; expected Enter / y / n");
+    bail!("share cancelled");
 }
 
 fn add(path: Option<PathBuf>, name: Option<String>, redact: bool) -> Result<ShareInfo> {
