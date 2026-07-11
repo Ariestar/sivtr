@@ -7,7 +7,9 @@ use std::str::FromStr;
 
 use crate::commands::memory::show::WorkSetOutputFormat;
 
+mod mcp;
 mod remote;
+pub use mcp::*;
 pub use remote::*;
 
 pub(crate) const TIME_FILTER_HELP: &str = "Accepts RFC3339 timestamps, Unix seconds/milliseconds, relative durations like 30m, 2h, 7d, or aliases like today, yesterday, tomorrow, this morning, this afternoon, this evening, tonight, and now.";
@@ -643,6 +645,9 @@ pub enum Commands {
 
     /// Show a captured terminal or AI workspace ref
     Show(ShowArgs),
+
+    /// Manage the read-only MCP server for agent hosts
+    Mcp(McpCommand),
 
     /// Manage the local sivtr remote-memory daemon
     Serve(ServeCommand),
@@ -1517,6 +1522,53 @@ pub struct CodexExportArgs {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    #[test]
+    fn mcp_serve_parses() {
+        let cli = Cli::try_parse_from(["sivtr", "mcp", "serve"]).unwrap();
+        match cli.command {
+            Some(Commands::Mcp(cmd)) => assert!(matches!(cmd.action, McpAction::Serve)),
+            _ => panic!("expected mcp serve"),
+        }
+    }
+
+    #[test]
+    fn mcp_install_parses_targets() {
+        let cli = Cli::try_parse_from([
+            "sivtr",
+            "mcp",
+            "install",
+            "-t",
+            "claude,cursor",
+            "-l",
+            "global",
+            "-y",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Mcp(cmd)) => match cmd.action {
+                McpAction::Install(args) => {
+                    assert_eq!(args.target, "claude,cursor");
+                    assert_eq!(args.location, McpLocation::Global);
+                    assert!(args.yes);
+                }
+                _ => panic!("expected mcp install"),
+            },
+            _ => panic!("expected mcp command"),
+        }
+    }
+
+    #[test]
+    fn mcp_print_config_parses() {
+        let cli = Cli::try_parse_from(["sivtr", "mcp", "print-config", "claude"]).unwrap();
+        match cli.command {
+            Some(Commands::Mcp(cmd)) => match cmd.action {
+                McpAction::PrintConfig { target } => assert_eq!(target, McpTarget::Claude),
+                _ => panic!("expected print-config"),
+            },
+            _ => panic!("expected mcp command"),
+        }
+    }
 
     #[test]
     fn global_color_flag_accepts_never() {

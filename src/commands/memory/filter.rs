@@ -141,16 +141,22 @@ impl FilterSpec {
 }
 
 pub fn execute(args: &FilterArgs) -> Result<()> {
+    let set = run(args)?;
+    show::print_workset(
+        &set,
+        show::resolve_output_format(args.format, false, args.refs, args.json),
+    )
+}
+
+/// Load, filter, and optionally save a WorkSet without printing.
+pub fn run(args: &FilterArgs) -> Result<WorkSet> {
     let source = workset::load_source(&args.source, args.cwd.as_deref())?;
     let mut set = apply_source(source, FilterSpec::from_filter_args(args)?)?;
     set.save_last()?;
     if let Some(name) = args.save.as_deref() {
         set.save_as(name)?;
     }
-    show::print_workset(
-        &set,
-        show::resolve_output_format(args.format, false, args.refs, args.json),
-    )
+    Ok(set)
 }
 
 pub(crate) fn apply_source(source: WorkSetSource, spec: FilterSpec) -> Result<WorkSet> {

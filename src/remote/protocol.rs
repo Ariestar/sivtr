@@ -4,8 +4,8 @@ use iroh::EndpointAddr;
 use serde::{Deserialize, Serialize};
 use sivtr_core::record::{WorkRecord, WorkRef};
 
-use super::state::{GrantInfo, MountInfo, PeerInfo};
 pub use super::state::ShareInfo;
+use super::state::{GrantInfo, MountInfo, PeerInfo};
 
 pub const REMOTE_ALPN: &[u8] = b"sivtr/memory/1";
 pub const MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
@@ -34,8 +34,7 @@ impl InviteTicket {
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(encoded)
             .context("Invalid invitation key")?;
-        let ticket: Self =
-            serde_json::from_slice(&bytes).context("Invalid invitation key")?;
+        let ticket: Self = serde_json::from_slice(&bytes).context("Invalid invitation key")?;
         if ticket.version != 1 {
             bail!("Unsupported invitation version {}", ticket.version);
         }

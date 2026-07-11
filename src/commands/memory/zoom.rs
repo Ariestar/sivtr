@@ -8,6 +8,16 @@ use crate::commands::memory::show;
 use crate::commands::memory::workset::{self, WorkSet};
 
 pub fn execute(args: &ZoomArgs) -> Result<()> {
+    let workset = run(args)?;
+    show::print_workset(
+        &workset,
+        show::resolve_output_format(args.format, false, args.refs, args.json),
+    )?;
+    Ok(())
+}
+
+/// Expand neighboring records and optionally save without printing.
+pub fn run(args: &ZoomArgs) -> Result<WorkSet> {
     let source = workset::load_source(&args.source, args.cwd.as_deref())?;
     let cwd = source.cwd();
     let (source_records, source_anchors) = source.into_parts();
@@ -34,12 +44,7 @@ pub fn execute(args: &ZoomArgs) -> Result<()> {
     if let Some(name) = args.save.as_deref() {
         workset.save_as(name)?;
     }
-    show::print_workset(
-        &workset,
-        show::resolve_output_format(args.format, false, args.refs, args.json),
-    )?;
-
-    Ok(())
+    Ok(workset)
 }
 
 fn expand_around(

@@ -84,14 +84,15 @@ pub fn resolve_output_format(
 }
 
 pub fn execute(args: &ShowArgs) -> Result<()> {
-    let set = resolve_target(args)?;
+    let set = run(args)?;
     print_workset(
         &set,
         resolve_output_format(args.format, args.full, args.refs, args.json),
     )
 }
 
-fn resolve_target(args: &ShowArgs) -> Result<workset::WorkSet> {
+/// Resolve a show source into a WorkSet without printing.
+pub fn run(args: &ShowArgs) -> Result<workset::WorkSet> {
     Ok(workset::load_source(&args.source, args.cwd.as_deref())?.into_workset())
 }
 
@@ -121,21 +122,65 @@ fn anchor_items(set: &workset::WorkSet) -> Result<Vec<AnchorItem<'_>>> {
 }
 
 fn print_full(set: &workset::WorkSet) -> Result<()> {
-    let items = anchor_items(set)?
+    let items = render_full_items(set)?
+        .into_iter()
+        .map(|(ref_, content)| ShowItem { ref_, content })
+        .collect();
+    print_show_items(items);
+    Ok(())
+}
+
+/// Collect full content for each anchor without printing.
+pub fn render_full_items(set: &workset::WorkSet) -> Result<Vec<(WorkRef, String)>> {
+    anchor_items(set)?
         .into_iter()
         .map(|item| {
             let content = item
                 .record
                 .content_for_target(item.anchor.target())
                 .with_context(|| format!("No content found for ref `{}`", item.anchor))?;
-            Ok(ShowItem {
-                ref_: item.anchor,
-                content,
+            Ok((item.anchor, content))
+        })
+        .collect()
+}
+
+/// Compact summary rows for agent-facing responses.
+pub fn render_summary_items(set: &workset::WorkSet) -> Result<Vec<SummaryItem>> {
+    anchor_items(set)?
+        .into_iter()
+        .map(|item| {
+            Ok(SummaryItem {
+                reference: item.anchor.to_string(),
+                title: item.record.title.clone(),
+                time: item
+                    .record
+                    .time
+                    .primary_at()
+                    .map(str::to_string)
+                    .unwrap_or_default(),
+                source: source_label(item.record).to_string(),
+                status: item.record.status.as_ref().map(|status| {
+                    match status.outcome {
+                        sivtr_core::record::WorkOutcome::Success => "success",
+                        sivtr_core::record::WorkOutcome::Failure => "failure",
+                        sivtr_core::record::WorkOutcome::Unknown => "unknown",
+                    }
+                    .to_string()
+                }),
+                snippet: anchor_summary(item.record, &item.anchor),
             })
         })
-        .collect::<Result<Vec<_>>>()?;
-    print_show_items(items);
-    Ok(())
+        .collect()
+}
+
+#[derive(Debug, Clone)]
+pub struct SummaryItem {
+    pub reference: String,
+    pub title: String,
+    pub time: String,
+    pub source: String,
+    pub status: Option<String>,
+    pub snippet: String,
 }
 
 fn print_show_items(items: Vec<ShowItem>) {

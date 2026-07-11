@@ -2,6 +2,7 @@ mod app;
 mod cli;
 mod command_blocks;
 mod commands;
+mod mcp;
 mod output;
 mod remote;
 mod tui;
@@ -71,6 +72,9 @@ fn run() -> Result<()> {
         }
         Some(Commands::Show(args)) => {
             commands::memory::show::execute(&args)?;
+        }
+        Some(Commands::Mcp(cmd)) => {
+            commands::system::mcp::execute(cmd)?;
         }
         Some(Commands::Serve(args)) => {
             commands::remote::serve::execute(&args)?;
