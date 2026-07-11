@@ -65,37 +65,30 @@ pub fn load_source(source: &str, cwd: Option<&Path>) -> Result<WorkSetSource> {
     let cwd = cwd
         .map(Path::to_path_buf)
         .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
-    if let Some((origin, body)) = source.split_once("://") {
+
+    // `origin:body` — origin is alias / local workspace / device/workspace.
+    // Bare body is local current workspace.
+    if let Some((origin, body)) = source.split_once(':') {
         if body.is_empty() {
-            anyhow::bail!("remote source `{source}` is missing a selector");
+            anyhow::bail!("source `{source}` is missing a selector after `:`");
+        }
+        if body.starts_with('/') {
+            anyhow::bail!(
+                "source `{source}` uses legacy `://` syntax; use `origin:body` (for example `desk:terminal`)"
+            );
         }
         if origin.eq_ignore_ascii_case("local") {
             return load_local_source(body, &cwd);
         }
-        if origin.eq_ignore_ascii_case("sivtr") {
-            let mut parts = body.splitn(4, '/');
-            let peer_id = parts.next().filter(|value| !value.is_empty());
-            let share_id = parts.next().filter(|value| !value.is_empty());
-            let alias = parts.next().filter(|value| !value.is_empty());
-            let selector = parts.next().filter(|value| !value.is_empty());
-            let (Some(peer_id), Some(share_id), Some(alias), Some(selector)) =
-                (peer_id, share_id, alias, selector)
-            else {
-                anyhow::bail!("invalid canonical remote source `{source}`");
-            };
-            let response =
-                crate::remote::RemoteClient::load_canonical(peer_id, share_id, alias, selector)?;
-            return Ok(WorkSetSource::Records {
-                cwd,
-                records: response.records,
-                anchors: response.anchors,
-            });
-        }
-        let alias = origin.to_ascii_lowercase();
+        let origin = origin.to_ascii_lowercase();
         let workspace = sivtr_core::workspace::resolve_workspace_for_dir(&cwd)?
-            .with_context(|| format!("Remote `{alias}` requires a git workspace context"))?;
+            .with_context(|| format!("Origin `{origin}` requires a git workspace context"))?;
+
+        // Prefer workspace-local mount alias, then fall back later if needed.
+        // For now only mounts are wired; local-other-workspace can be added via
+        // the same origin string once discovery is in place.
         let response =
-            crate::remote::RemoteClient::new(&workspace.key, &alias).load_source(body)?;
+            crate::remote::RemoteClient::new(&workspace.key, &origin).load_source(body)?;
         return Ok(WorkSetSource::Records {
             cwd,
             records: response.records,
@@ -141,12 +134,9 @@ pub fn load_context_records(
                 provider, session, ..
             } => format!("{}/{session}", provider.command_name()),
         };
-        let source = match (anchor.remote_name(), anchor.remote_ids()) {
-            (Some(alias), Some((peer_id, share_id))) => {
-                format!("sivtr://{peer_id}/{share_id}/{alias}/{body}")
-            }
-            (Some(alias), None) => format!("{alias}://{body}"),
-            (None, _) => body,
+        let source = match anchor.remote_name() {
+            Some(origin) => format!("{origin}:{body}"),
+            None => body,
         };
         if seen_sources.insert(source.clone()) {
             sources.push(source);

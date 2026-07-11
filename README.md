@@ -69,7 +69,7 @@ With `sivtr`, you can:
 - **Named memory variables**: save any result set as `@failures`, reuse `@last`, pass stdin as `@`, list vars with `sivtr var list`, and select slices like `@failures[1,3..5]`.
 - **Deterministic anchor navigation**: move refs through parent/child/sibling/session structure with `sivtr nav`, without implicit expansion.
 - **Agent-ready memory** through the bundled `sivtr-memory` skill.
-- **Cross-device access**: expose a workspace read-only and browse another device's sessions with a `desk://...` ref, like reading local — for collaborative dev.
+- **Cross-device access**: expose a workspace read-only and browse another device's sessions with a `desk:...` ref, like reading local — for collaborative dev.
 - **Diagnostics** with `sivtr doctor`, `sivtr init show`, and `sivtr init uninstall`.
 
 ## Quick start
@@ -179,11 +179,11 @@ Memory variables:
 | `sivtr work sessions` | List terminal and agent sessions in the current workspace. |
 | `sivtr work records <source>` | Turn sessions or saved variables into event-level refs. |
 | `sivtr work parts <source>` | Extract only useful inputs/outputs from matching events. |
-| `sivtr show <ref-or-workset>` | Print the content behind refs, `@last`, `@name`, or piped results. Also accepts remote refs like `desk://terminal/...`. |
+| `sivtr show <ref-or-workset>` | Print the content behind refs, `@last`, `@name`, or piped results. Also accepts remote refs like `desk:terminal/...`. |
 | `sivtr zoom <source>` | Add surrounding record context around search hits. |
 | `sivtr diff <left> <right>` | Compare recent command blocks. |
 | `sivtr serve` | Serve a workspace's sessions read-only for another device. |
-| `sivtr remote` | Manage remote devices (`add`/`list`/`remove`/`test`) used by `desk://...` refs. |
+| `sivtr remote` | Manage remote devices (`add`/`list`/`remove`/`test`) used by `desk:...` refs. |
 | `sivtr doctor` | Diagnose binary, config, session logs, hooks, providers, and clipboard. |
 | `sivtr init <shell>` | Install shell integration; also supports `show` and `uninstall`. |
 | `sivtr config` | Manage the TOML config file. |
@@ -208,11 +208,11 @@ On the other device, register it. The `<alias>://` prefix works anywhere a comma
 sivtr remote add desk <iroh-ticket>       # iroh (default) — from `sivtr serve`'s ticket
 sivtr remote add desk 192.168.1.20        # TCP (LAN); port defaults to 7421; prompts for the token
 sivtr remote test desk
-sivtr s desk://terminal --status failure --latest 5 --refs
-sivtr show desk://terminal/session_42/3/o/1
-sivtr zoom desk://terminal/session_42/3 -C 2
-sivtr nav desk://terminal/session_42/3 +1 --refs
-sivtr copy ref desk://terminal/session_42/3/o/1 --print
+sivtr s desk:terminal --status failure --latest 5 --refs
+sivtr show desk:terminal/session_42/3/o/1
+sivtr zoom desk:terminal/session_42/3 -C 2
+sivtr nav desk:terminal/session_42/3 +1 --refs
+sivtr copy ref desk:terminal/session_42/3/o/1 --print
 ```
 
 `sivtr serve` is opt-in, read-only, and redacts obvious secrets (API keys, tokens, PEM keys) before anything leaves the machine. The default iroh transport adds encrypted, NAT-traversing connectivity via [iroh](https://iroh.computer) (relay-assisted, no port forwarding, no account). `--tcp` falls back to plain HTTP for localhost/LAN use. Unregistered aliases error — register them with `sivtr remote add`.

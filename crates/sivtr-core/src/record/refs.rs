@@ -97,17 +97,12 @@ impl WorkRefSelector {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkRef {
     Local(WorkRefBody),
+    /// Non-current origin. Left-hand side of `origin:body`
+    /// (`alias`, local workspace name, or `device/workspace`).
     Remote {
-        origin: RemoteRefOrigin,
+        origin: String,
         body: WorkRefBody,
     },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteRefOrigin {
-    pub alias: String,
-    pub peer_id: Option<String>,
-    pub share_id: Option<String>,
 }
 
 /// The local shape of a ref: a terminal record or an agent turn, plus a target
@@ -160,11 +155,11 @@ impl WorkRef {
         }
     }
 
-    /// Where this ref lives — `Local` or `Remote(name)`.
+    /// Where this ref lives — `Local` or `Remote(origin)`.
     pub fn origin(&self) -> RefOrigin<'_> {
         match self {
             Self::Local(_) => RefOrigin::Local,
-            Self::Remote { origin, .. } => RefOrigin::Remote(&origin.alias),
+            Self::Remote { origin, .. } => RefOrigin::Remote(origin.as_str()),
         }
     }
 
@@ -175,16 +170,7 @@ impl WorkRef {
     pub fn remote_name(&self) -> Option<&str> {
         match self {
             Self::Local(_) => None,
-            Self::Remote { origin, .. } => Some(&origin.alias),
-        }
-    }
-
-    pub fn remote_ids(&self) -> Option<(&str, &str)> {
-        match self {
-            Self::Remote { origin, .. } => {
-                Some((origin.peer_id.as_deref()?, origin.share_id.as_deref()?))
-            }
-            Self::Local(_) => None,
+            Self::Remote { origin, .. } => Some(origin.as_str()),
         }
     }
 
@@ -314,11 +300,10 @@ pub enum RefOrigin<'a> {
 impl fmt::Display for WorkRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            // Local is the shorthand: rendered bare, no `local://` prefix, so
-            // existing refs/handoffs/docs are byte-identical.
+            // Local is the shorthand: bare body, no origin prefix.
             Self::Local(body) => write_body(f, body),
             Self::Remote { origin, body } => {
-                write!(f, "{}://", origin.alias)?;
+                write!(f, "{origin}:")?;
                 write_body(f, body)
             }
         }
@@ -349,37 +334,6 @@ fn write_body(f: &mut fmt::Formatter<'_>, body: &WorkRefBody) -> fmt::Result {
     }
 }
 
-fn body_to_string(body: &WorkRefBody) -> String {
-    match body {
-        WorkRefBody::Terminal {
-            session,
-            record_index,
-            target,
-        } => parts_to_string(&["terminal", session, &record_index.to_string()], *target),
-        WorkRefBody::Agent {
-            provider,
-            session,
-            turn_index,
-            target,
-        } => parts_to_string(
-            &[provider.command_name(), session, &turn_index.to_string()],
-            *target,
-        ),
-    }
-}
-
-fn parts_to_string(parts: &[&str], target: WorkRefTarget) -> String {
-    let mut value = parts.join("/");
-    match target {
-        WorkRefTarget::Record => {}
-        WorkRefTarget::Line(line) => value.push_str(&format!("/{line}")),
-        WorkRefTarget::Part { io, index } => {
-            value.push_str(&format!("/{}/{index}", part_segment(io)));
-        }
-    }
-    value
-}
-
 fn write_parts(f: &mut fmt::Formatter<'_>, parts: &[&str], target: WorkRefTarget) -> fmt::Result {
     write!(f, "{}", parts.join("/"))?;
     match target {
@@ -397,18 +351,7 @@ impl Serialize for WorkRef {
     where
         S: serde::Serializer,
     {
-        match self {
-            Self::Remote { origin, body }
-                if origin.peer_id.is_some() && origin.share_id.is_some() =>
-            {
-                let peer_id = origin.peer_id.as_deref().expect("checked");
-                let share_id = origin.share_id.as_deref().expect("checked");
-                let mut value = format!("sivtr://{peer_id}/{share_id}/{}/", origin.alias);
-                value.push_str(&body_to_string(body));
-                serializer.serialize_str(&value)
-            }
-            _ => serializer.serialize_str(&self.to_string()),
-        }
+        serializer.serialize_str(&self.to_string())
     }
 }
 
@@ -532,41 +475,26 @@ impl FromStr for WorkRef {
     type Err = anyhow::Error;
 
     fn from_str(value: &str) -> Result<Self> {
-        // `<scheme>://<body>` — scheme is the source: `local` or a remote alias.
-        // A bare ref with no scheme is shorthand for `local://`.
-        if let Some((scheme, rest)) = value.split_once("://") {
-            let scheme = scheme.trim();
-            if scheme.eq_ignore_ascii_case("local") {
+        // `origin:body` — origin is alias, local workspace, or `device/workspace`.
+        // A bare ref with no `:` is local (current workspace).
+        if let Some((origin, rest)) = value.split_once(':') {
+            if rest.is_empty() {
+                bail!("Invalid work ref `{value}`; missing body after `:`");
+            }
+            // Reject legacy `scheme://body` so it fails clearly instead of
+            // parsing as origin=`scheme/` body=`/body`.
+            if rest.starts_with('/') {
+                bail!(
+                    "Invalid work ref `{value}`; use `origin:body` (for example `desk:terminal/session/1`), not `://`"
+                );
+            }
+            let origin = origin.trim();
+            if origin.eq_ignore_ascii_case("local") {
                 return Ok(Self::Local(rest.parse::<WorkRefBody>()?));
             }
-            if scheme.eq_ignore_ascii_case("sivtr") {
-                let mut parts = rest.splitn(4, '/');
-                let peer_id = parts.next().filter(|value| !value.is_empty());
-                let share_id = parts.next().filter(|value| !value.is_empty());
-                let alias = parts.next().filter(|value| !value.is_empty());
-                let body = parts.next().filter(|value| !value.is_empty());
-                let (Some(peer_id), Some(share_id), Some(alias), Some(body)) =
-                    (peer_id, share_id, alias, body)
-                else {
-                    bail!("Invalid canonical remote ref `{value}`");
-                };
-                validate_alias(alias, value)?;
-                return Ok(Self::Remote {
-                    origin: RemoteRefOrigin {
-                        alias: alias.to_ascii_lowercase(),
-                        peer_id: Some(peer_id.to_string()),
-                        share_id: Some(share_id.to_string()),
-                    },
-                    body: body.parse::<WorkRefBody>()?,
-                });
-            }
-            validate_alias(scheme, value)?;
+            let origin = validate_origin(origin, value)?;
             return Ok(Self::Remote {
-                origin: RemoteRefOrigin {
-                    alias: scheme.to_ascii_lowercase(),
-                    peer_id: None,
-                    share_id: None,
-                },
+                origin,
                 body: rest.parse::<WorkRefBody>()?,
             });
         }
@@ -575,22 +503,37 @@ impl FromStr for WorkRef {
     }
 }
 
-/// Alias rules: `[A-Za-z0-9_-]+`, case-insensitive (normalized to lowercase),
-/// and `local` is reserved.
-fn validate_alias(name: &str, reference: &str) -> Result<()> {
+/// Origin rules: `name` or `device/workspace`, each segment `[A-Za-z0-9_-]+`,
+/// case-insensitive (normalized to lowercase). `local` is reserved.
+fn validate_origin(name: &str, reference: &str) -> Result<String> {
     if name.is_empty() {
-        bail!("Invalid work ref `{reference}`; empty remote alias before `://`");
+        bail!("Invalid work ref `{reference}`; empty origin before `:`");
     }
-    if name.eq_ignore_ascii_case("local") {
-        bail!("Invalid work ref `{reference}`; `local` is reserved — a bare ref is already local");
+    let segments: Vec<&str> = name.split('/').collect();
+    if segments.is_empty() || segments.len() > 2 {
+        bail!("Invalid work ref `{reference}`; origin must be `name` or `device/workspace`");
     }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
-        bail!("Invalid work ref `{reference}`; remote alias `{name}` must be [a-zA-Z0-9_-]+");
+    let mut normalized = Vec::with_capacity(segments.len());
+    for segment in segments {
+        if segment.is_empty() {
+            bail!("Invalid work ref `{reference}`; empty origin segment");
+        }
+        if segment.eq_ignore_ascii_case("local") {
+            bail!(
+                "Invalid work ref `{reference}`; `local` is reserved — a bare ref is already local"
+            );
+        }
+        if !segment
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            bail!(
+                "Invalid work ref `{reference}`; origin segment `{segment}` must be [a-zA-Z0-9_-]+"
+            );
+        }
+        normalized.push(segment.to_ascii_lowercase());
     }
-    Ok(())
+    Ok(normalized.join("/"))
 }
 
 fn parse_one_based(part: &str, label: &str, reference: &str) -> Result<usize> {
@@ -708,11 +651,11 @@ mod tests {
 
     #[test]
     fn local_scheme_is_shorthand_for_local() {
-        // `local://` parses to the same Local variant as a bare ref, but renders
-        // bare (Local is the shorthand) — so bare and local:// round-trip equal
-        // while being distinct input strings.
+        // `local:body` parses to the same Local variant as a bare ref, but
+        // renders bare — so bare and local: round-trip equal while being
+        // distinct input strings.
         let bare: WorkRef = "terminal/session_42/3".parse().unwrap();
-        let explicit: WorkRef = "local://terminal/session_42/3".parse().unwrap();
+        let explicit: WorkRef = "local:terminal/session_42/3".parse().unwrap();
         assert_eq!(bare, explicit);
         assert!(bare.is_local());
         assert_eq!(bare.remote_name(), None);
@@ -720,16 +663,12 @@ mod tests {
     }
 
     #[test]
-    fn remote_alias_parses_and_renders() {
-        let reference: WorkRef = "desk://terminal/session_42/3/o/1".parse().unwrap();
+    fn remote_origin_parses_and_renders() {
+        let reference: WorkRef = "desk:terminal/session_42/3/o/1".parse().unwrap();
         assert_eq!(
             reference,
             WorkRef::Remote {
-                origin: RemoteRefOrigin {
-                    alias: "desk".to_string(),
-                    peer_id: None,
-                    share_id: None,
-                },
+                origin: "desk".to_string(),
                 body: WorkRefBody::Terminal {
                     session: "session_42".to_string(),
                     record_index: 3,
@@ -742,71 +681,76 @@ mod tests {
         );
         assert!(!reference.is_local());
         assert_eq!(reference.remote_name(), Some("desk"));
-        assert_eq!(reference.to_string(), "desk://terminal/session_42/3/o/1");
+        assert_eq!(reference.to_string(), "desk:terminal/session_42/3/o/1");
     }
 
     #[test]
-    fn remote_alias_preserved_through_target_changes() {
-        let reference: WorkRef = "laptop://codex/abc123/5".parse().unwrap();
-        // with_line / record_ref must keep the remote alias, not drop to Local.
+    fn device_workspace_origin_parses_and_renders() {
+        let reference: WorkRef = "alice/sivtr:codex/abc123/5".parse().unwrap();
+        assert_eq!(reference.remote_name(), Some("alice/sivtr"));
+        assert_eq!(reference.to_string(), "alice/sivtr:codex/abc123/5");
+    }
+
+    #[test]
+    fn remote_origin_preserved_through_target_changes() {
+        let reference: WorkRef = "laptop:codex/abc123/5".parse().unwrap();
+        // with_line / record_ref must keep the origin, not drop to Local.
         assert_eq!(
             reference.with_line(2).to_string(),
-            "laptop://codex/abc123/5/2"
+            "laptop:codex/abc123/5/2"
         );
-        assert_eq!(
-            reference.record_ref().to_string(),
-            "laptop://codex/abc123/5"
-        );
+        assert_eq!(reference.record_ref().to_string(), "laptop:codex/abc123/5");
     }
 
     #[test]
-    fn resolved_remote_refs_serialize_with_canonical_identity() {
+    fn remote_refs_serialize_as_display_form() {
         let reference = WorkRef::Remote {
-            origin: RemoteRefOrigin {
-                alias: "desk".to_string(),
-                peer_id: Some("peer_123".to_string()),
-                share_id: Some("sh_456".to_string()),
-            },
+            origin: "desk".to_string(),
             body: WorkRefBody::Terminal {
                 session: "session_42".to_string(),
                 record_index: 3,
                 target: WorkRefTarget::Record,
             },
         };
-        assert_eq!(reference.to_string(), "desk://terminal/session_42/3");
+        assert_eq!(reference.to_string(), "desk:terminal/session_42/3");
         let json = serde_json::to_string(&reference).unwrap();
-        assert_eq!(
-            json,
-            "\"sivtr://peer_123/sh_456/desk/terminal/session_42/3\""
-        );
+        assert_eq!(json, "\"desk:terminal/session_42/3\"");
         let restored: WorkRef = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, reference);
     }
 
     #[test]
-    fn remote_alias_uppercased_normalized_to_lowercase() {
-        let reference: WorkRef = "Desk://terminal/session_42/3".parse().unwrap();
+    fn remote_origin_uppercased_normalized_to_lowercase() {
+        let reference: WorkRef = "Desk:terminal/session_42/3".parse().unwrap();
         assert_eq!(reference.remote_name(), Some("desk"));
-        assert_eq!(reference.to_string(), "desk://terminal/session_42/3");
+        assert_eq!(reference.to_string(), "desk:terminal/session_42/3");
+
+        let full: WorkRef = "Alice/Sivtr:terminal/session_42/3".parse().unwrap();
+        assert_eq!(full.remote_name(), Some("alice/sivtr"));
+        assert_eq!(full.to_string(), "alice/sivtr:terminal/session_42/3");
     }
 
     #[test]
-    fn rejects_invalid_remote_aliases() {
-        // digits, underscore, hyphen are valid alias chars.
-        assert!("dev_2://terminal/x/1".parse::<WorkRef>().is_ok());
-        assert!("my-box://terminal/x/1".parse::<WorkRef>().is_ok());
+    fn rejects_invalid_remote_origins() {
+        // digits, underscore, hyphen are valid origin segment chars.
+        assert!("dev_2:terminal/x/1".parse::<WorkRef>().is_ok());
+        assert!("my-box:terminal/x/1".parse::<WorkRef>().is_ok());
+        assert!("alice/sivtr:terminal/x/1".parse::<WorkRef>().is_ok());
         // uppercase normalized to lowercase.
         assert_eq!(
-            "Dev_2://terminal/x/1"
+            "Dev_2:terminal/x/1"
                 .parse::<WorkRef>()
                 .unwrap()
                 .remote_name(),
             Some("dev_2")
         );
-        // spaces / symbols / empty alias are rejected.
-        assert!("bad alias://terminal/x/1".parse::<WorkRef>().is_err());
-        assert!("dev!://terminal/x/1".parse::<WorkRef>().is_err());
-        assert!("://terminal/x/1".parse::<WorkRef>().is_err());
+        // spaces / symbols / empty / legacy :// / too many segments are rejected.
+        assert!("bad alias:terminal/x/1".parse::<WorkRef>().is_err());
+        assert!("dev!:terminal/x/1".parse::<WorkRef>().is_err());
+        assert!(":terminal/x/1".parse::<WorkRef>().is_err());
+        assert!("desk://terminal/x/1".parse::<WorkRef>().is_err());
+        assert!("a/b/c:terminal/x/1".parse::<WorkRef>().is_err());
+        assert!("local:terminal/x/1".parse::<WorkRef>().is_ok()); // reserved -> Local
     }
 
     #[test]

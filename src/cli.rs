@@ -450,7 +450,7 @@ Target selectors:
   terminal[/<session>[/<record>[/<line>]]]  Search terminal command records
   agent[/<session>[/<turn>[/<line>]]]       Search all AI/agent records
   <provider>[/<session>[/<turn>[/<line>]]] Search one provider: codex, claude, hermes, pi, opencode
-  <remote>://<selector>                     Run the same selector against a configured remote
+  <remote>:<selector>                      Run the same selector against a configured remote
   Use * for wildcard path segments, e.g. terminal/*/3 or pi/*/*.
 
 Filters:
@@ -492,7 +492,7 @@ Examples:
   sivtr search pi/019e5941 --match "cargo test" --format md
   sivtr search pi/019e5941/7 --format workset
   sivtr search terminal/session_13104/3/12 --format workset
-  sivtr search desk://terminal --status failure --latest 5 --refs
+  sivtr search desk:terminal --status failure --latest 5 --refs
 "##;
 
 const WORK_SESSIONS_AFTER_HELP: &str = "\
@@ -507,7 +507,7 @@ Scope:
 Examples:
   sivtr work sessions
   sivtr work sessions --provider codex
-  sivtr work sessions desk://agent
+  sivtr work sessions desk:agent
   sivtr work sessions --json
 ";
 
@@ -519,13 +519,13 @@ Defaults:
 Sources:
   terminal/<session>
   <provider>/<session>
-  <remote>://terminal/<session>
-  <remote>://<provider>/<session>
+  <remote>:terminal/<session>
+  <remote>:<provider>/<session>
   @last, @name, @name[1,3], @
 
 Examples:
   sivtr work records terminal/session_123 --refs
-  sivtr work records desk://terminal/session_123 --refs
+  sivtr work records desk:terminal/session_123 --refs
   sivtr work records @last[1] -f timeline
   sivtr work records @ --json
 ";
@@ -544,7 +544,7 @@ Filters:
 
 Examples:
   sivtr work parts @last[1] --io output --refs
-  sivtr work parts desk://pi/019df7fb/3 --io output --refs
+  sivtr work parts desk:pi/019df7fb/3 --io output --refs
   sivtr work parts pi/019df7fb/3 --kind tool_output -m "error|failed" --refs
   sivtr s agent -m "ssh.github.com" | sivtr work parts @ --io output | sivtr s @ -m "main -> main" | sivtr show @ --full
 "#;
@@ -1291,7 +1291,7 @@ pub enum RemoteAction {
     List,
     /// Redeem an invitation and mount the remote share in the current workspace
     Add {
-        /// Workspace-local alias used in refs, e.g. `desk://terminal/...`
+        /// Workspace-local alias used in refs, e.g. `desk:terminal/...`
         alias: String,
         /// Single-use sivtr invitation
         invite: String,
@@ -1327,7 +1327,7 @@ pub enum WorkSubcommand {
 
 #[derive(Args, Debug, Clone)]
 pub struct WorkSessionsArgs {
-    /// Optional local or remote source selector, for example `desk://agent`.
+    /// Optional local or remote source selector, for example `desk:agent`.
     pub source: Option<String>,
 
     /// AI provider sessions to include; terminal workspace records are always included
@@ -2110,12 +2110,12 @@ mod tests {
 
     #[test]
     fn work_sessions_accepts_remote_source() {
-        let cli = Cli::try_parse_from(["sivtr", "work", "sessions", "desk://agent"]).unwrap();
+        let cli = Cli::try_parse_from(["sivtr", "work", "sessions", "desk:agent"]).unwrap();
 
         match cli.command {
             Some(Commands::Work(cmd)) => match cmd.action {
                 WorkSubcommand::Sessions(args) => {
-                    assert_eq!(args.source.as_deref(), Some("desk://agent"));
+                    assert_eq!(args.source.as_deref(), Some("desk:agent"));
                 }
                 _ => panic!("expected work sessions command"),
             },

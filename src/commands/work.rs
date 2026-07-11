@@ -230,7 +230,7 @@ impl WorkSessionMarker {
 impl fmt::Display for WorkSessionMarker {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(remote) = self.remote.as_deref() {
-            write!(formatter, "{remote}://")?;
+            write!(formatter, "{remote}:")?;
         }
         write!(formatter, "{}/{}", self.source_name(), self.session)
     }
@@ -247,14 +247,14 @@ mod tests {
     #[test]
     fn session_markers_preserve_remote_origin() {
         let record = test_record(
-            "desk://terminal/session_123/1",
+            "desk:terminal/session_123/1",
             "command",
             Some("2026-05-24T12:00:00Z"),
         );
 
         assert_eq!(
             build_session_items(&[record])[0].ref_,
-            "desk://terminal/session_123"
+            "desk:terminal/session_123"
         );
     }
 

@@ -168,12 +168,6 @@ pub enum LocalRequest {
         alias: String,
         source: String,
     },
-    RemoteSourceCanonical {
-        peer_id: String,
-        share_id: String,
-        alias: String,
-        source: String,
-    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

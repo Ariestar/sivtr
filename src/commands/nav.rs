@@ -453,11 +453,7 @@ mod tests {
         let mut records = (1..=3).map(test_record).collect::<Vec<_>>();
         for record in &mut records {
             record.work_ref = WorkRef::Remote {
-                origin: sivtr_core::record::RemoteRefOrigin {
-                    alias: "desk".to_string(),
-                    peer_id: Some("peer".to_string()),
-                    share_id: Some("share".to_string()),
-                },
+                origin: "desk".to_string(),
                 body: record.work_ref.body().clone(),
             };
         }
@@ -465,14 +461,14 @@ mod tests {
 
         assert_refs(
             navigate(&records, &start, &records, "+1").expect("remote sibling"),
-            &["desk://terminal/session_1/3"],
+            &["desk:terminal/session_1/3"],
         );
         assert_refs(
             navigate(&records, &start, &records, "~").expect("remote session"),
             &[
-                "desk://terminal/session_1/1",
-                "desk://terminal/session_1/2",
-                "desk://terminal/session_1/3",
+                "desk:terminal/session_1/1",
+                "desk:terminal/session_1/2",
+                "desk:terminal/session_1/3",
             ],
         );
     }
