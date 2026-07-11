@@ -518,6 +518,78 @@ sivtr wb list
 
 Exact syntax for every remote subcommand is above. For the model, setup path, and safety defaults, see [Remote Access](/usage/remote-access/). For a teammate scenario, see [Remote collaboration memory](/playbooks/remote-collaboration-memory/).
 
+## mcp
+
+```bash
+sivtr mcp serve
+sivtr mcp install [OPTIONS]
+sivtr mcp uninstall [OPTIONS]
+sivtr mcp print-config <claude|cursor|codex>
+```
+
+Read-only MCP server for agent hosts, plus one-shot host registration.
+
+### serve
+
+Runs the MCP server on stdio:
+
+```bash
+sivtr mcp serve
+```
+
+Tools:
+
+| Tool | Purpose |
+| --- | --- |
+| `sivtr_search` | Search terminal/agent memory; supports `desk:...` origins |
+| `sivtr_show` | Expand a ref or WorkSet handle |
+| `sivtr_zoom` | Neighboring record context |
+| `sivtr_filter` | Narrow `@last` / `@name` / a source |
+| `sivtr_status` | Version, hooks, providers, daemon, `wb` local origins, mounts, vars |
+
+### install / uninstall
+
+Writes or removes the sivtr MCP entry in agent host config (same idea as `codegraph install`):
+
+```bash
+sivtr mcp install -y                      # auto-detect hosts, global
+sivtr mcp install -t claude,cursor -l global
+sivtr mcp install -t claude -l local      # project .mcp.json
+sivtr mcp uninstall -t all -y
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `-t, --target` | `claude`, `cursor`, `codex`, `auto`, or `all` |
+| `-l, --location` | `global` (default) or `local` |
+| `-y, --yes` | Non-interactive |
+
+Install locations:
+
+| Target | Global path |
+| --- | --- |
+| Claude Code | `~/.claude.json` → `mcpServers.sivtr` |
+| Cursor | `~/.cursor/mcp.json` → `mcpServers.sivtr` |
+| Codex | `~/.codex/config.toml` → `[mcp_servers.sivtr]` |
+
+Registered command is always:
+
+```text
+sivtr mcp serve
+```
+
+### print-config
+
+Print a snippet without writing files:
+
+```bash
+sivtr mcp print-config claude
+sivtr mcp print-config cursor
+sivtr mcp print-config codex
+```
+
+MCP is not a full CLI mirror. Interactive, write, and capture commands stay on the CLI. Strategy still lives in the `sivtr-memory` skill.
+
 ## version
 
 ```bash

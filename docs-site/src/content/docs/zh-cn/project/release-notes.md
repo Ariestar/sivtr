@@ -16,6 +16,7 @@ description: sivtr 面向用户的发布说明。
 - 新增全局 `--color auto|always|never`，控制状态和诊断输出颜色。
 - 新增跨设备远程记忆：设备 daemon（`sivtr serve`）、显式分享（`sivtr share`）、挂载（`sivtr remote`）、peer（`sivtr peer`）和本机 workspace 标签（`sivtr wb`）。
 - 新增 `origin:body` WorkRef，例如 `desk:terminal/...` 和 `docs:codex/4`，用于远端和其他本机 workspace。
+- 新增只读 MCP server（`sivtr mcp`），工具：`sivtr_search`、`sivtr_show`、`sivtr_zoom`、`sivtr_filter`、`sivtr_status`（含 `wb` origin 与 mounts）。
 
 ### Changed
 

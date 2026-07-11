@@ -69,6 +69,7 @@ With `sivtr`, you can:
 - **Named memory variables**: save any result set as `@failures`, reuse `@last`, pass stdin as `@`, list vars with `sivtr var list`, and select slices like `@failures[1,3..5]`.
 - **Deterministic anchor navigation**: move refs through parent/child/sibling/session structure with `sivtr nav`, without implicit expansion.
 - **Agent-ready memory** through the bundled `sivtr-memory` skill.
+- **Optional MCP server** (`sivtr mcp serve`, install with `sivtr mcp install`) for structured agent tool calls: search, show, zoom, filter, status.
 - **Cross-device access**: expose a workspace read-only and browse another device's sessions with a `desk:...` ref, like reading local — for collaborative dev.
 - **Diagnostics** with `sivtr doctor`, `sivtr init show`, and `sivtr init uninstall`.
 
@@ -186,6 +187,7 @@ Memory variables:
 | `sivtr share` | Explicitly share a local workspace for remote peers. |
 | `sivtr remote` | Mount remote shares into the current workspace (`add`/`list`/`remove`/`test`). |
 | `sivtr workspace` / `sivtr wb` | List known local workspaces (origin labels for `name:body` refs). |
+| `sivtr mcp` | MCP server + host install (`serve` / `install` / `uninstall` / `print-config`). |
 | `sivtr doctor` | Diagnose binary, config, session logs, hooks, providers, and clipboard. |
 | `sivtr init <shell>` | Install shell integration; also supports `show` and `uninstall`. |
 | `sivtr config` | Manage the TOML config file. |

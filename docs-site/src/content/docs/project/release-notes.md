@@ -16,6 +16,7 @@ description: User-facing release notes for sivtr.
 - Added global `--color auto|always|never` for status and diagnostic output.
 - Added cross-device remote memory: device daemon (`sivtr serve`), explicit shares (`sivtr share`), mounts (`sivtr remote`), peers (`sivtr peer`), and local workspace labels (`sivtr wb`).
 - Added `origin:body` WorkRefs such as `desk:terminal/...` and `docs:codex/4` for remote and other-local-workspace sources.
+- Added read-only MCP server (`sivtr mcp`) with tools `sivtr_search`, `sivtr_show`, `sivtr_zoom`, `sivtr_filter`, and `sivtr_status` (includes `wb` origins and mounts).
 
 ### Changed
 

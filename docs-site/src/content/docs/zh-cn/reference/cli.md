@@ -518,6 +518,78 @@ sivtr wb list
 
 各 remote 子命令的精确语法见上。模型、设置路径和安全默认见 [远程访问](/zh-cn/usage/remote-access/)。协作场景见 [远程协作记忆](/zh-cn/playbooks/remote-collaboration-memory/)。
 
+## mcp
+
+```bash
+sivtr mcp serve
+sivtr mcp install [OPTIONS]
+sivtr mcp uninstall [OPTIONS]
+sivtr mcp print-config <claude|cursor|codex>
+```
+
+面向 agent 宿主的只读 MCP server，以及一键写入宿主配置。
+
+### serve
+
+在 stdio 上运行 MCP server：
+
+```bash
+sivtr mcp serve
+```
+
+工具：
+
+| 工具 | 用途 |
+| --- | --- |
+| `sivtr_search` | 搜索 terminal/agent 记忆；支持 `desk:...` origin |
+| `sivtr_show` | 展开 ref 或 WorkSet handle |
+| `sivtr_zoom` | 邻近 record 上下文 |
+| `sivtr_filter` | 缩小 `@last` / `@name` / source |
+| `sivtr_status` | 版本、hooks、providers、daemon、`wb` 本机 origin、mounts、vars |
+
+### install / uninstall
+
+把 sivtr MCP 写入或移出 agent 宿主配置（类似 `codegraph install`）：
+
+```bash
+sivtr mcp install -y                      # 自动检测宿主，global
+sivtr mcp install -t claude,cursor -l global
+sivtr mcp install -t claude -l local      # 项目 .mcp.json
+sivtr mcp uninstall -t all -y
+```
+
+| 选项 | 含义 |
+| --- | --- |
+| `-t, --target` | `claude`、`cursor`、`codex`、`auto` 或 `all` |
+| `-l, --location` | `global`（默认）或 `local` |
+| `-y, --yes` | 非交互 |
+
+安装位置：
+
+| 目标 | Global 路径 |
+| --- | --- |
+| Claude Code | `~/.claude.json` → `mcpServers.sivtr` |
+| Cursor | `~/.cursor/mcp.json` → `mcpServers.sivtr` |
+| Codex | `~/.codex/config.toml` → `[mcp_servers.sivtr]` |
+
+注册命令始终为：
+
+```text
+sivtr mcp serve
+```
+
+### print-config
+
+只打印配置片段，不写文件：
+
+```bash
+sivtr mcp print-config claude
+sivtr mcp print-config cursor
+sivtr mcp print-config codex
+```
+
+MCP 不是完整 CLI 镜像。交互、写入和捕获命令仍走 CLI。策略仍在 `sivtr-memory` skill。
+
 ## version
 
 ```bash

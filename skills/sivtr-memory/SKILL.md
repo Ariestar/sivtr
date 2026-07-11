@@ -13,6 +13,24 @@ Core rule:
 
 > Search for evidence first. Expand only the smallest relevant context. Ask when memory is missing, ambiguous, stale, or permission is required.
 
+## MCP tools (preferred when available)
+
+If the host exposes sivtr MCP tools, prefer them over shelling out to the CLI. Register with:
+
+```bash
+sivtr mcp install -y
+```
+
+| Tool | Use |
+| --- | --- |
+| `sivtr_search` | Narrow search over `terminal` / `agent` / provider / `desk:...` |
+| `sivtr_show` | Expand a ref or `@last` / `@name` |
+| `sivtr_zoom` | Neighboring record context |
+| `sivtr_filter` | Narrow `@last` or a saved set |
+| `sivtr_status` | Hooks, providers, daemon, local workspace origins (`wb`), mounts, vars |
+
+Fall back to CLI commands below when MCP is not configured.
+
 ## When to Use
 
 Use this skill whenever local work memory may contain useful evidence. Sivtr retrieves recent terminal activity, AI conversation history, prior decisions, validation output, debugging trails, and handoff context.
