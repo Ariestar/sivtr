@@ -143,7 +143,7 @@ sivtr diff 1 2
 Ref 用在 `show` 中，适合回到搜索结果指向的精确位置。
 
 ```text
-source/session[/dialogue[/block]]
+[origin:]source/session[/dialogue[/block]]
 ```
 
 示例：
@@ -152,9 +152,11 @@ source/session[/dialogue[/block]]
 sivtr show terminal/current/2
 sivtr show claude/<session-id>/3
 sivtr show claude/<session-id>/3/2
+sivtr show desk:terminal/session_42/3
+sivtr show docs:codex/4
 ```
 
-`search --format json` 会输出 ref，所以人和 Agent 都可以先搜索，再用 ref 展开同一份证据。
+`search --format refs` / `--format workset` 会输出 ref，所以人和 Agent 都可以先搜索，再用 ref 展开同一份证据。origin 来自挂载的远端别名（`sivtr remote add`）或本机 workspace 名（`sivtr wb list`）。
 
 ## WorkSet：可管道传递的记忆选择
 
@@ -201,6 +203,7 @@ sivtr nav @hit '~' --refs          # 所属 session records
 | `sivtr var` | 保存、列出、合并、移除或删除命名 WorkSet 变量 |
 | `sivtr nav` | 用确定性的 parent / child / sibling / session motion 移动 anchors |
 | `sivtr show` | 用 ref 或 WorkSet 展开精确内容 |
+| `sivtr share` / `remote` | 显式 opt-in 的只读跨设备记忆挂载 |
 | `sivtr diff` | 比较两个最近终端命令块 |
 | `sivtr run` / pipe | 临时捕获并浏览单次命令输出 |
 
@@ -220,4 +223,4 @@ sivtr copy cmd 1..10 --print
 
 ## Local-first
 
-`sivtr` 默认读取本机上的终端记录和 Agent session。本地数据、统一入口和可追溯引用，让它适合作为 workspace memory 入口。
+`sivtr` 默认读取本机上的终端记录和 Agent session。本地数据、统一入口和可追溯引用，让它适合作为 workspace memory 入口。跨设备访问通过 [远程访问](/zh-cn/usage/remote-access/) 显式开启；场景玩法见 [远程协作记忆](/zh-cn/playbooks/remote-collaboration-memory/)。

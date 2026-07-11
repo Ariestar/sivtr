@@ -181,4 +181,5 @@ This browser is for one captured output. The bare `sivtr` workspace TUI is the m
 - Read the [Mental Model](/start/core-concepts/) to understand sources, sessions, dialogues, blocks, and refs.
 - See [Playbooks](/playbooks/) for real workflows.
 - Read [Browse and Select](/usage/browse-and-select/) for full workspace TUI controls.
+- Use [Remote Access](/usage/remote-access/) when you need another device's memory.
 - Keep [CLI Reference](/reference/cli/) open for exact options.

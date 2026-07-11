@@ -99,7 +99,7 @@ sivtr show terminal/current/2 --json
 - PR 交接文档生成器；
 - 基于验证记录的发布说明草稿器；
 - 事故回顾助手；
-- 远程协作记忆读取器；
+- 远程协作记忆读取器（[远程访问](/zh-cn/usage/remote-access/) + `desk:...` refs）；
 - 基于本地会话的项目入门指南。
 
 具体玩法见[玩法实例](/zh-cn/playbooks/)。

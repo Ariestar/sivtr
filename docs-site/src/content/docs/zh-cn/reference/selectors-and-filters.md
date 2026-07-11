@@ -141,13 +141,13 @@ sivtr copy out --ansi
 
 ## Workspace ref
 
-`search --format json` 会输出 `show` 可以打印的 ref：
+`search --format refs` 和 `search --format workset` 会输出 `show` 可以打印的 ref：
 
 ```text
-source/session[/dialogue[/line]]
+[origin:]source/session[/dialogue[/line]]
 ```
 
-示例：
+本地示例：
 
 ```bash
 sivtr show claude/<session>
@@ -156,5 +156,19 @@ sivtr show claude/<session>/<dialogue>/<line>
 sivtr show terminal/current/<block>
 sivtr show terminal/current/<block>/<line>
 ```
+
+带 origin 的示例（`origin:body`）：
+
+```bash
+sivtr show desk:terminal/session_42/3
+sivtr show desk:agent/<session>/3/o/1
+sivtr show docs:codex/4
+sivtr s desk:terminal --status failure --latest 5 --refs
+```
+
+origin 来自：
+
+- 用 `sivtr remote add <alias> <invite>` 创建的远端挂载别名；
+- `sivtr wb list` 列出的本机 workspace 目录名。
 
 Dialogue 和 line 索引都是 1-based。

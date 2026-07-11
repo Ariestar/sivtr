@@ -141,13 +141,13 @@ Plain text remains the default because it is stable for search, issue reports, a
 
 ## Workspace refs
 
-`search --format json` emits refs that `show` can print:
+`search --format refs` and `search --format workset` emit refs that `show` can print:
 
 ```text
-source/session[/dialogue[/line]]
+[origin:]source/session[/dialogue[/line]]
 ```
 
-Examples:
+Local examples:
 
 ```bash
 sivtr show claude/<session>
@@ -156,5 +156,19 @@ sivtr show claude/<session>/<dialogue>/<line>
 sivtr show terminal/current/<block>
 sivtr show terminal/current/<block>/<line>
 ```
+
+Origin-prefixed examples (`origin:body`):
+
+```bash
+sivtr show desk:terminal/session_42/3
+sivtr show desk:agent/<session>/3/o/1
+sivtr show docs:codex/4
+sivtr s desk:terminal --status failure --latest 5 --refs
+```
+
+Origins come from:
+
+- mounted remote aliases created with `sivtr remote add <alias> <invite>`;
+- local workspace directory names listed by `sivtr wb list`.
 
 Dialogue and line indices are 1-based.

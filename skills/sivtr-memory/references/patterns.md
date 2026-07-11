@@ -74,6 +74,26 @@ When the user wants a summary of what happened:
 - Expand only refs that anchor the timeline.
 - Produce a compact timeline with evidence, not a transcript dump.
 
+## Remote Teammate Memory
+
+When the user asks what another machine, teammate, or mounted alias already tried:
+
+- Check mounts and local workspace labels first: `sivtr remote list`, `sivtr wb list`.
+- Search the origin-prefixed source, not local defaults: `sivtr s desk:agent -m "<topic>" --latest 20 --save remote_hits --refs`.
+- Expand only the strongest hits with `zoom` / `show`.
+- Treat remote results as evidence from another device; verify current local files before acting.
+- Do not run `sivtr share`, `remote add`, or `share revoke` unless the user explicitly asks.
+
+Example:
+
+```bash
+sivtr remote list
+sivtr s desk:agent -m "panic|failed|decision|next step" --latest 20 --save remote_hits --refs
+sivtr filter @remote_hits -m "<bug-topic>" --save remote_thread --refs
+sivtr zoom @remote_thread[1] -C 2 --save remote_ctx --refs
+sivtr show @remote_ctx --full
+```
+
 ## Missing Memory
 
 When no useful evidence is found:

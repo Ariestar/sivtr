@@ -143,7 +143,7 @@ sivtr diff 1 2
 Refs are used by `show`. They point to exact workspace locations from search results.
 
 ```text
-source/session[/dialogue[/block]]
+[origin:]source/session[/dialogue[/block]]
 ```
 
 Examples:
@@ -152,9 +152,11 @@ Examples:
 sivtr show terminal/current/2
 sivtr show claude/<session-id>/3
 sivtr show claude/<session-id>/3/2
+sivtr show desk:terminal/session_42/3
+sivtr show docs:codex/4
 ```
 
-`search --format json` returns refs, so humans and agents can search first and then expand the same evidence.
+`search --format refs` / `--format workset` returns refs, so humans and agents can search first and then expand the same evidence. Origins come from mounted remote aliases (`sivtr remote add`) or local workspace names (`sivtr wb list`).
 
 ## WorkSet: pipeable memory selections
 
@@ -201,6 +203,7 @@ Shared workspace memory can be opened, searched, copied, expanded, compared, or 
 | `sivtr var` | Save, list, merge, drop, or remove named WorkSet variables |
 | `sivtr nav` | Move anchors with deterministic parent/child/sibling/session motion |
 | `sivtr show` | Expand exact content by ref or WorkSet |
+| `sivtr share` / `remote` | Opt-in read-only cross-device memory mounts |
 | `sivtr diff` | Compare two recent terminal command blocks |
 | `sivtr run` / pipe | Temporarily capture and browse one command output |
 
@@ -220,4 +223,4 @@ Then the agent continues with code inspection and verification.
 
 ## Local-first
 
-By default, `sivtr` reads terminal records and agent sessions on your machine. Local data, one interface, and traceable references make it work well as a shared memory workspace.
+By default, `sivtr` reads terminal records and agent sessions on your machine. Local data, one interface, and traceable references make it work well as a shared memory workspace. Cross-device access is opt-in through [Remote Access](/usage/remote-access/); the scenario playbook is [Remote collaboration memory](/playbooks/remote-collaboration-memory/).

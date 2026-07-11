@@ -1,11 +1,13 @@
 ---
 title: 远程协作记忆
-description: 未来方向：有权限地访问队友的 Agent 记忆。
+description: 通过挂载别名读取队友终端或 Agent 记忆的场景玩法。
 ---
 
 ## 场景
 
-你在修一个 bug，另一个队友的 Agent 已经调查过了。经过授权后，你想直接搜索他们的 Agent 记忆，查看已经尝试过的方案。
+你在修一个 bug，另一个队友的 Agent 已经调查过了。经过授权后，你想直接搜索他们的 Agent 记忆，查看已经尝试过的方案——不用离开本机，也不用互相粘贴日志。
+
+功能设置、安全默认和命令地图见 [远程访问](/zh-cn/usage/remote-access/)。本页是场景路径。
 
 ## 你会说
 
@@ -14,32 +16,50 @@ Alice 的 Agent 在这个 bug 上试过什么？
 我继续之前，给我看 Bob 那边的验证输出。
 ```
 
-## 当前状态
+## 一次性设置
 
-今天，`sivtr` 是本地优先的。它可以读取显式配置的本地或镜像 session 树（比如 Codex export）。远程协作记忆是 roadmap 方向，尚未实现。
+两端都需要安装 `sivtr`。share / remote 命令需要 daemon 时会自动启动。
 
-## 未来工作流
+在拥有 workspace 的设备上：
 
-```text
-远程队友 session 记录 -> 有权限的记忆源 -> search/show refs -> 协作工作流
+```bash
+sivtr share                   # 交互选择 workspace（Enter = 当前），打印 bare invite key
 ```
 
-这样你或你的 Agent 就可以：
+在另一台设备的目标 workspace 里：
 
-- 看到另一个 Agent 在同一个问题上已经试过什么。
-- 在继续队友的工作之前，先读他们的验证输出。
-- 总结导致某个决策的远程对话线索。
+```bash
+sivtr remote add desk <invite-key>
+sivtr remote test desk
+```
 
-## 安全模型
+## 日常工作流
 
-远程记忆应该保持和本地记忆一样的原则：
+```bash
+sivtr s desk:terminal --status failure --latest 5 --refs
+sivtr s desk:agent -m "panic|failed|decision" --latest 20 --save remote_hits --refs
+sivtr show desk:terminal/session_42/3/o/1 --full
+sivtr zoom desk:agent/<session>/3 -C 2 --save remote_ctx --refs
+sivtr show @remote_ctx -f timeline
+sivtr filter @remote_hits -m "cargo test" --save remote_tests --refs
+```
 
-- 显式授权连接（不能静默访问）。
-- 选择性披露（共享特定 session，不是全部）。
-- 引用能追溯到源记录。
-- 清楚区分本地证据和远程队友记忆。
-- 默认仍然是本地优先。
+## 收尾
+
+所有者：
+
+```bash
+sivtr share grants alice-desk
+sivtr share revoke alice-desk <peer>
+```
+
+对端：
+
+```bash
+sivtr remote list
+sivtr remote remove desk
+```
 
 ## 视频演示大纲
 
-等远程记忆源支持实现后，视频可以展示两个工作区通过共享 `sivtr` 记忆协作——一个 Agent 从另一个 Agent 停下的地方接手。
+两台机器：所有者跑 `sivtr share`，消费者把 invite 挂成 `desk`，搜索 `desk:terminal` 找到失败，zoom 命中，再从队友的证据继续修。

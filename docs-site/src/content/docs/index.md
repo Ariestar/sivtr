@@ -27,6 +27,7 @@ For the full workflow, install both pieces: the `sivtr` CLI/TUI and the bundled 
 - **Let agents start from evidence** so "fix the terminal error" can begin with the latest captured failure instead of a paste request.
 - **Jump back to the source** behind a summary, search hit, or handoff note.
 - **Save search results as variables** like `@last` and `@failures`, then reuse them in follow-up commands.
+- **Share a workspace read-only** with a teammate and search their sessions as `desk:terminal/...`.
 - **Launch memory pickers** from the terminal, tmux, VS Code, Windows hotkeys, or generated desktop shortcuts.
 
 ## First useful commands
@@ -64,6 +65,7 @@ sivtr search agent --match "panic" --format timeline
 | Teach agents the memory workflow | [Skills and Reusable Procedures](/usage/skills/) |
 | See practical community workflows | [Playbooks](/playbooks/) |
 | Search and dereference memory | [Search and Show Results](/usage/search-and-show/) |
+| Share and mount remote memory | [Remote Access](/usage/remote-access/) |
 | Open pickers quickly | [Launch Pickers and Hotkeys](/usage/launchers-and-hotkeys/) |
 | Check exact syntax | [CLI Reference](/reference/cli/) |
 
@@ -74,10 +76,10 @@ sivtr search agent --match "panic" --format timeline
 | Layer | What it describes |
 | --- | --- |
 | What happened | Terminal output, command blocks, agent conversations, tool results, and local history. |
-| How you reuse it | TUI browsing, search, copy, show, diff, skills, playbooks, and memory variables like `@last`. |
+| How you reuse it | TUI browsing, search, copy, show, diff, skills, playbooks, remote mounts, and memory variables like `@last`. |
 
 Terminal sources produce command blocks. Agent providers produce conversation blocks. Selectors like `1` and `2..4` pick recent items for copy commands. Search results can be saved as variables such as `@failures`, then shown, expanded, or piped into the next command.
 
 ## Local by default
 
-`sivtr` reads local shell logs, local history, and local agent transcripts. Shared Codex trees are opt-in through explicit export and configuration. See [Data Locations](/reference/data-locations/) for where records live.
+`sivtr` reads local shell logs, local history, and local agent transcripts. Cross-device access is opt-in through [Remote Access](/usage/remote-access/). Shared Codex trees are also opt-in through explicit export and configuration. See [Data Locations](/reference/data-locations/) for where records live.

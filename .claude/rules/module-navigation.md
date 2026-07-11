@@ -12,53 +12,64 @@
 ```
 src/
 ├── main.rs                    ← Command routing (start here for any command)
-├── cli.rs                     ← All Clap definitions (~2000 lines)
+├── cli/
+│   ├── mod.rs                 ← Top-level Clap definitions
+│   └── remote.rs              ← Serve/Share/Peer/Remote/Workspace Clap types
 ├── app.rs                     ← Application state
 ├── command_blocks.rs          ← Command block parsing and selection
 ├── commands/
-│   ├── init.rs                ← Shell hook injection + show/uninstall
-│   ├── copy.rs                ← Copy command + workspace picker
-│   ├── copy/workspace_picker.rs ← Interactive picker TUI
-│   ├── search.rs              ← Search command with pipeline
-│   ├── show.rs                ← Show ref content
-│   ├── diff.rs                ← Diff two blocks
-│   ├── work.rs                ← Workspace traversal (sessions/records/parts)
-│   ├── work_json.rs           ← JSON metadata helpers for work command
-│   ├── config.rs              ← Config init/show/edit
-│   ├── doctor.rs              ← Environment diagnostics
-│   ├── hotkey.rs              ← Global hotkey (Windows)
-│   ├── flush.rs               ← Internal: shell hook callback
-│   ├── browse.rs              ← TUI browse entry
-│   ├── records.rs             ← Record display
-│   ├── import.rs              ← Import session log
-│   ├── history.rs             ← History management
-│   ├── version.rs             ← Version diagnostics
-│   ├── time_filter.rs         ← Time filter parsing
-│   ├── run.rs / pipe.rs       ← Run and pipe commands
-│   └── clear.rs               ← Clear session logs
-├── tui/                       ← Terminal UI framework
-│   ├── mod.rs / terminal.rs   ← TUI core
-│   ├── views/                 ← Browse, search, status views
-│   ├── workspace.rs           ← Workspace data model for TUI
-│   └── workspace_search.rs    ← Workspace search in TUI
-│
+│   ├── capture/               ← Shell capture + copy/diff/import/init/flush/browse
+│   │   ├── copy.rs            ← Copy command + workspace picker
+│   │   ├── copy/workspace_picker.rs
+│   │   ├── copy/vim.rs
+│   │   ├── init.rs            ← Shell hook injection + show/uninstall
+│   │   ├── run.rs / pipe.rs   ← Run and pipe commands
+│   │   ├── flush.rs           ← Internal: shell hook callback
+│   │   ├── import.rs / clear.rs / diff.rs / browse.rs
+│   │   └── command_block_selector.rs
+│   ├── memory/                ← WorkSet / search / show surface
+│   │   ├── search.rs / filter.rs / var.rs / nav.rs / zoom.rs
+│   │   ├── show.rs / work.rs / work_json.rs / records.rs
+│   │   ├── time_filter.rs
+│   │   └── workset/           ← WorkSet source resolution + store
+│   ├── remote/                ← Device daemon CLI surface
+│   │   ├── serve.rs           ← start/stop/restart/status/logs/foreground
+│   │   ├── share.rs           ← interactive share + add/list/invite/grants/revoke
+│   │   ├── mounts.rs          ← remote add/list/remove/rename/test
+│   │   ├── peer.rs            ← peer list/forget
+│   │   └── workspace.rs       ← wb list + local origin name resolution
+│   └── system/                ← config, doctor, history, hotkey, codex, migrate, version
+├── remote/                    ← Daemon runtime (not CLI handlers)
+│   ├── daemon.rs              ← iroh remote + localhost control plane
+│   ├── state.rs               ← SQLite peers/shares/grants/invites/mounts
+│   ├── identity.rs            ← stable device key
+│   ├── protocol.rs            ← LocalRequest/RemoteRequest types + InviteTicket
+│   └── ipc.rs                 ← CLI → daemon control IPC
+└── tui/                       ← Terminal UI framework
+    ├── mod.rs / terminal.rs   ← TUI core
+    ├── views/                 ← Browse, search, status views
+    ├── workspace.rs           ← Workspace data model for TUI
+    └── workspace_search.rs    ← Workspace search in TUI
+
 crates/sivtr-core/src/
 ├── lib.rs                     ← Core library root
 ├── ai.rs                      ← AgentProvider, session parsing, block selection
 ├── claude.rs                  ← Claude Code JSONL parser
 ├── codex.rs                   ← Codex rollout JSONL parser
+├── hermes.rs                  ← Hermes session parser
 ├── opencode.rs                ← OpenCode session parser
 ├── pi.rs                      ← Pi session parser
 ├── record/
 │   ├── model.rs               ← WorkRecord, WorkPart, WorkTime (data model center)
-│   ├── refs.rs                ← WorkRef parsing and formatting
+│   ├── refs.rs                ← WorkRef parsing (Local body + Remote origin:body)
 │   ├── index.rs               ← Record indexing
 │   └── mod.rs                 ← Re-exports
+├── query/                     ← load_workspace_records / load_workspace_source
 ├── search/
 │   ├── mod.rs                 ← Search types and orchestration
 │   ├── matcher.rs             ← Content matching logic
 │   └── navigator.rs           ← Workspace navigation for search
-├── workspace.rs               ← Workspace resolution
+├── workspace.rs               ← Workspace resolution + data_dir()
 ├── config/                    ← SivtrConfig, key bindings
 ├── session.rs                 ← Session log reading
 ├── session/                   ← Session entry types and capture
@@ -75,7 +86,7 @@ crates/sivtr-core/src/
 
 ### "Where is command X handled?"
 ```
-Grep pattern="Search\b\|Copy\b\|Init\b" path="src/main.rs"
+Grep pattern="Search\b|Copy\b|Init\b|Share\b|Serve\b" path="src/main.rs"
 ```
 
 ### "Where is function X defined?"
@@ -85,7 +96,7 @@ Grep pattern="fn execute\b|fn filter_" type="rust"
 
 ### "All command modules"
 ```
-Glob pattern="src/commands/*.rs"
+Glob pattern="src/commands/**/*.rs"
 ```
 
 ### "Record model tests"
@@ -95,11 +106,17 @@ Grep pattern="#\[cfg(test)\]" path="crates/sivtr-core/src/record/model.rs"
 
 ### "Provider session discovery"
 ```
-Grep pattern="find_sessions\|discover_sessions" type="rust"
+Grep pattern="find_sessions|discover_sessions" type="rust"
+```
+
+### "Remote daemon / share / mount"
+```
+Grep pattern="ShareAdd|RemoteAdd|InviteTicket|StateStore" type="rust"
 ```
 
 ## Anti-Patterns
 
 - Don't read all command files to find one function — Grep first
 - Don't use Bash `find` or `grep` — use dedicated tools
-- Don't read `cli.rs` end-to-end — Grep for the specific arg definition
+- Don't read `cli/mod.rs` end-to-end — Grep for the specific arg definition
+- Don't assume remote lives under `src/commands/` only — daemon runtime is `src/remote/`

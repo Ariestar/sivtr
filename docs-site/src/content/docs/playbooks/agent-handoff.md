@@ -45,7 +45,7 @@ Both tasks complete. Build passes, 69 pages generated.
 
 ## Decisions made
 - Playbooks moved to a separate top-level section for future video demos.
-- Remote collaboration kept as roadmap direction, not implemented.
+- Remote collaboration uses explicit share + mount; handoffs stay local by default.
 
 ## Risks
 - Sitemap warning (non-blocking, needs `site` config in astro.config.mjs).

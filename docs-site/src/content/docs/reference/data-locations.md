@@ -102,3 +102,26 @@ Windows hotkey state is stored under `sivtr`'s platform config/state area and is
 sivtr hotkey status
 sivtr hotkey stop
 ```
+
+## Remote daemon state
+
+Cross-device remote memory uses a device-scoped daemon. Override the root with `SIVTR_DATA_DIR`; otherwise it is the platform config directory under `sivtr` (same root as `data_dir()`).
+
+| File | Purpose |
+| --- | --- |
+| `identity.key` | Stable device identity for iroh |
+| `remote-state.db` | SQLite peers, shares, grants, invites, mounts, audit |
+| `daemon.json` | Running daemon control info (port, token, node id) |
+| `daemon.lock` | Single-instance lock |
+| `daemon.log` | Daemon log file (`sivtr serve logs`) |
+
+```bash
+sivtr serve status
+sivtr serve logs
+sivtr share list
+sivtr remote list
+sivtr peer list
+sivtr wb list
+```
+
+Remote access is opt-in. Nothing is shared until `sivtr share` (or `share add`) runs. Mounts are workspace-local aliases registered with `sivtr remote add`. Feature guide: [Remote Access](/usage/remote-access/).

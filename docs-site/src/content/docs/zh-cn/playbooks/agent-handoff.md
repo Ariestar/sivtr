@@ -45,7 +45,7 @@ sivtr copy cmd 1..10 --print
 
 ## 已做的决策
 - Playbooks 拆分为独立顶层 section，方便后续挂视频演示。
-- 远程协作保留为 roadmap 方向，暂不实现。
+- 远程协作通过显式 share + mount 完成；交接默认仍在本地。
 
 ## 风险
 - Sitemap 警告（非阻塞，需要在 astro.config.mjs 中配置 `site`）。

@@ -22,7 +22,7 @@ Reliable CLI
 | Agent support | In progress | Provider-neutral parsing and browsing for AI-agent conversation records. |
 | Skills and playbooks | In progress | Reusable agent procedures that use `sivtr` as the unified memory entry point. |
 | TUI workspace | Planned | A dense keyboard-first interface for many sessions, many providers, and long conversations. |
-| Remote collaboration | Later | Permissioned access to teammate or remote agent chat records for collaborative memory workflows. |
+| Remote collaboration | Landed (core) | Permissioned, read-only access to teammate workspace memory via Share / Grant / Mount. |
 | `sivtr-me` | Later | An evidence-backed personal AI-era profile built from real work records. |
 
 ## CLI foundation
@@ -47,6 +47,7 @@ Agent sessions are a first-class memory source. The product goal is for agent tr
 
 - [x] Parse Codex session records.
 - [x] Parse Claude-style session records.
+- [x] Parse Hermes, OpenCode, and Pi session records.
 - [x] Copy the latest user, assistant, tool, turn, or full session block.
 - [x] Browse local and mirrored session directories through picker workflows.
 - [ ] Support more agent providers behind the shared session-provider interface.
@@ -82,13 +83,24 @@ The TUI should remain fast and keyboard-first, but it needs to scale from single
 
 ## Remote collaboration
 
-Remote collaboration extends the local memory model to permissioned teammate or remote agent records. The goal is not to become a hosted transcript service by default; it is to let explicit collaborators connect relevant chat/session records so agents can coordinate across people and machines.
+Remote collaboration extends the local memory model to permissioned teammate records. The goal is not to become a hosted transcript service; it is to let explicit collaborators mount relevant workspace memory so agents can coordinate across machines.
 
-- [ ] Support remote or teammate memory sources behind explicit opt-in configuration.
-- [ ] Preserve source refs and provenance across remote records.
-- [ ] Provide selective disclosure controls so sensitive local memory is not shared accidentally.
-- [ ] Let agents answer questions such as "what did the other agent already try?" or "show the remote validation output before I continue."
-- [ ] Keep local-first behavior as the default even when remote sources are available.
+Core model landed: **Device Daemon + Identity + Share + Grant + Mount** over encrypted iroh transport. Refs use `origin:body` (`desk:terminal/...`).
+
+- [x] Device daemon with auto-start (`sivtr serve`).
+- [x] Explicit workspace sharing (`sivtr share` / `share add` / `invite` / `grants` / `revoke`).
+- [x] Workspace-local mounts (`sivtr remote add|list|remove|rename|test`).
+- [x] Peer identity list/forget (`sivtr peer`).
+- [x] Remote origins in WorkRef (`origin:body`) for search, show, filter, nav, zoom, copy.
+- [x] Default secret redaction before data leaves the machine.
+- [x] Local workspace origin labels (`sivtr wb list`).
+- [ ] Identity CLI (`identity show|rotate|export`).
+- [ ] Share audit log and per-share redact toggle CLI.
+- [ ] Daemon autostart on login (`serve enable|disable`).
+- [ ] Peer rename / verify / disconnect helpers.
+- [ ] UDS or named-pipe control plane instead of localhost TCP.
+- [ ] Protocol version negotiation for older servers.
+- [ ] Richer selective disclosure (share specific sessions, not whole workspaces).
 
 ## sivtr-me
 
@@ -116,7 +128,7 @@ The roadmap does not imply that `sivtr` will become:
 ## Principles
 
 - **Capture first.** Important work should be recorded when it happens, not reconstructed later from memory.
-- **Local by default.** Personal transcripts and terminal history should remain under user control unless explicitly exported.
+- **Local by default.** Personal transcripts and terminal history should remain under user control unless explicitly shared or exported.
 - **Provider-neutral.** Agent support should be implemented through replaceable providers and stable shared abstractions.
 - **Skills are interfaces.** A skill is how an agent learns to operate the shared memory layer; it should be precise, testable, and evidence-seeking.
 - **Composable CLI.** Every interactive feature should have a scriptable path where practical.

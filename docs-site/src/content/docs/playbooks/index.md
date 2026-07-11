@@ -36,4 +36,4 @@ These short recordings show the core loop: capture local work, search it, narrow
 | [Build a recent work timeline](/playbooks/recent-work-timeline/) | The agent reconstructs what you worked on from timestamps, commands, and agent dialogues. |
 | [Continue after interruption](/playbooks/continue-after-interruption/) | The agent searches memory to find the most recent work thread. |
 | [Agent handoff](/playbooks/agent-handoff/) | The agent prepares a structured handoff with evidence and next steps. |
-| [Remote collaboration memory](/playbooks/remote-collaboration-memory/) | Future direction: search a teammate's agent memory with permission. |
+| [Remote collaboration memory](/playbooks/remote-collaboration-memory/) | Scenario for searching a teammate's memory after mounting it. Setup guide: [Remote Access](/usage/remote-access/). |

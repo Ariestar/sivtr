@@ -3,7 +3,7 @@ title: CLI 参考
 description: 命令语法、子命令、选项、provider、selector 和示例。
 ---
 
-本页记录公开 CLI 表面。事实来源是 `src/cli.rs`；已安装版本请以 `sivtr --help` 和 `sivtr <command> --help` 为准。
+本页记录公开 CLI 表面。事实来源是 `src/cli/`；已安装版本请以 `sivtr --help` 和 `sivtr <command> --help` 为准。
 
 ## 顶层
 
@@ -211,8 +211,9 @@ Targets：
 | `hermes[/<session>[/<turn>[/<line>]]]` | Hermes 记录 |
 | `opencode[/<session>[/<turn>[/<line>]]]` | OpenCode 记录 |
 | `pi[/<session>[/<turn>[/<line>]]]` | Pi 记录 |
+| `<origin>:<target>` | 远端或其他 workspace origin，例如 `desk:terminal` 或 `docs:codex/4` |
 
-可以用 `*` 作为 path segment 通配符，例如 `terminal/*/3` 或 `pi/*/*`。
+可以用 `*` 作为 path segment 通配符，例如 `terminal/*/3` 或 `pi/*/*`。origin 来自 `sivtr remote add <alias> ...` 挂载，或 `sivtr wb list` 列出的本机 workspace 名。
 
 选项：
 
@@ -392,9 +393,130 @@ sivtr show claude/<session-id>
 sivtr show claude/<session-id>/3
 sivtr show claude/<session-id>/3/7 --json
 sivtr show terminal/current/2
+sivtr show desk:terminal/session_42/3/o/1 --full
 sivtr show @last --full
 sivtr show @ctx -f timeline
 ```
+
+## serve
+
+```bash
+sivtr serve <COMMAND>
+```
+
+管理本机 remote-memory daemon。share / remote 命令需要时会自动启动。
+
+| 命令 | 含义 |
+| --- | --- |
+| `start` | 后台启动 daemon |
+| `stop` | 干净停止正在运行的 daemon |
+| `restart` | 重启 daemon |
+| `status` | 显示 daemon 身份和运行状态 |
+| `logs` | 打印 daemon 日志路径 |
+| `foreground` | 前台运行 daemon |
+
+```bash
+sivtr serve start
+sivtr serve status
+sivtr serve logs
+sivtr serve stop
+```
+
+## share
+
+```bash
+sivtr share [OPTIONS]
+sivtr share <COMMAND>
+```
+
+显式分享本机 workspace 给远端。裸 `sivtr share` 是交互入口：选择 workspace（Enter = 当前），确保 share 存在，并把 bare invite key 打印到 stdout。
+
+默认交互选项：
+
+| 选项 | 含义 |
+| --- | --- |
+| `--path <PATH>` | workspace 路径；确认后跳过选择器 |
+| `--name <NAME>` | 稳定 share 名；默认取 workspace 目录名 |
+| `--expires <DURATION>` | 邀请有效期（`10m`、`2h`、`1d`）；默认 `10m` |
+| `--no-redact` | 关闭此 share 的密钥脱敏 |
+
+子命令：
+
+| 命令 | 含义 |
+| --- | --- |
+| `add [PATH] [--name NAME] [--no-redact]` | 通过 daemon 暴露一个 workspace |
+| `list` | 列出本机 shares |
+| `remove <SHARE>` | 删除 share 及其 grants 和 invitations |
+| `enable <SHARE>` / `disable <SHARE>` | 启用/禁用 share，不删除 |
+| `invite <SHARE> [--expires DURATION]` | 创建单次使用邀请；bare key 打印到 stdout |
+| `grants <SHARE>` | 列出 share 的活跃 peer grants |
+| `revoke <SHARE> <PEER>` | 撤销某 peer 对该 share 的访问 |
+
+```bash
+sivtr share
+sivtr share add --name alice-desk
+sivtr share invite alice-desk --expires 10m
+sivtr share list
+sivtr share grants alice-desk
+sivtr share revoke alice-desk <peer>
+```
+
+## remote
+
+```bash
+sivtr remote <COMMAND>
+```
+
+把远端 share 挂到当前 git workspace，成为 `origin:body` refs 使用的本地别名。
+
+| 命令 | 含义 |
+| --- | --- |
+| `list` | 列出当前 workspace 的 remote mounts |
+| `add <ALIAS> <INVITE>` | 兑换邀请并挂载远端 share |
+| `remove <ALIAS>` | 删除本地 mount（grant 仍在，需所有者 revoke） |
+| `rename <ALIAS> <NEW>` | 重命名 workspace 本地 mount |
+| `test <ALIAS>` | 鉴权 + 传输往返探测 |
+
+```bash
+sivtr remote add desk <invite-key>
+sivtr remote test desk
+sivtr remote list
+sivtr s desk:terminal --status failure --latest 5 --refs
+sivtr show desk:agent/<session>/3 --full
+sivtr remote rename desk bob-desk
+sivtr remote remove desk
+```
+
+## peer
+
+```bash
+sivtr peer <COMMAND>
+```
+
+| 命令 | 含义 |
+| --- | --- |
+| `list` | 列出已知 peer 身份 |
+| `forget <PEER>` | 忘记 peer，并删除所有涉及它的本地 mounts 和 grants |
+
+```bash
+sivtr peer list
+sivtr peer forget <peer>
+```
+
+## workspace
+
+```bash
+sivtr workspace [list]
+sivtr wb list
+```
+
+列出已知本机 workspaces 及其 origin 标签，用于 `name:body` refs（例如 `docs:codex/4`）。别名：`sivtr wb`。
+
+```bash
+sivtr wb list
+```
+
+各 remote 子命令的精确语法见上。模型、设置路径和安全默认见 [远程访问](/zh-cn/usage/remote-access/)。协作场景见 [远程协作记忆](/zh-cn/playbooks/remote-collaboration-memory/)。
 
 ## version
 

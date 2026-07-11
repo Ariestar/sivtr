@@ -13,10 +13,13 @@ Source forms:
 - `codex`, `claude`, `hermes`, `pi`, `opencode`: one provider's conversation records
 - `terminal/<session>/<record>/<line>` or `<provider>/<session>/<turn>/<line>` with optional trailing segments
 - `<provider>/<session>/<turn>/<i|o>/<part>` for input/output part refs
+- `origin:body` for another local workspace name or a mounted remote alias, for example `desk:terminal`, `docs:codex/4`
 - `@last`, `@name`, `@name[1]`, `@name[1,3]`, `@name[1..5]`, `@name[1..3,8]`
 - `@` to read a WorkSet from stdin
 
 WorkSets contain materialized `records` plus active `anchors`. Pipes move anchors; records are the backing store. WorkSet selector indexes are 1-based. Discrete selectors keep the requested order. `filter` narrows anchors, `nav` moves anchors, `var` remembers anchors, and `show` renders anchors.
+
+Remote origins are registered with `sivtr remote add <alias> <invite>` or listed as local workspace names by `sivtr wb list`. Unregistered origins error.
 
 ## Search
 
@@ -167,6 +170,21 @@ sivtr var list
 - `sivtr filter` is available for narrowing an existing WorkSet with the same filter surface as `search`.
 - `sivtr var` manages named WorkSet variables: `set`, `list`, `rm`, `merge`, `drop`, and `cleanup`.
 - `sivtr nav` moves anchors deterministically with `<`, `>N`, `+N`, `-N`, `[A..B]`, and `~`; there is no implicit child expansion.
+
+## Search Remote / Other-Workspace Origins
+
+When the user refers to a teammate machine, a mounted alias, or another local workspace by name:
+
+```bash
+sivtr wb list
+sivtr remote list
+sivtr s desk:terminal --status fail --latest 5 --refs
+sivtr s desk:agent -m "decision|failed|TODO" --latest 20 --save remote_hits --refs
+sivtr show desk:terminal/session_42/3/o/1 --full
+sivtr show docs:codex/4 --full
+```
+
+If the origin is unknown, say so and stop. Do not invent mounts. Sharing/mounting (`sivtr share`, `sivtr remote add`) is an explicit user action, not a retrieval default.
 
 ## General Search
 
@@ -321,14 +339,15 @@ sivtr show @ctx -f md
 sivtr show "terminal/current/12" --full
 sivtr show "pi/019e4f40/3" --full
 sivtr show "codex/abc123/2/o/1" --full
+sivtr show "desk:terminal/session_42/3" --full
 ```
 
 Refs/selectors have this shape:
 
 ```text
-terminal/session/dialogue[/line]
-provider/session/dialogue[/line]
-provider/session/dialogue/<i|o>/<part>
+[origin:]terminal/session/dialogue[/line]
+[origin:]provider/session/dialogue[/line]
+[origin:]provider/session/dialogue/<i|o>/<part>
 ```
 
 The `dialogue` / `line` segments may be concrete numbers or selector lists/ranges when used as command input, for example `3-5,7` or `5-7,10`. Output refs remain concrete anchors. Part refs use `i` (input) or `o` (output) followed by a 1-based part index.
@@ -349,6 +368,7 @@ Copy content behind an exact ref to clipboard:
 sivtr copy ref "codex/019e4f40/3/o/1"
 sivtr copy ref "terminal/session_42/5" --print
 sivtr copy ref "pi/abc123/2/i/1" --lines "1:10"
+sivtr copy ref "desk:terminal/session_42/3/o/1" --print
 ```
 
 Supports `--print`, `--regex`, `--lines`, and `--cwd` options.

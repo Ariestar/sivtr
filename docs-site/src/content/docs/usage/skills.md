@@ -99,7 +99,7 @@ Potential registry entries include:
 - PR handoff writer;
 - release-note drafter from validated work;
 - incident recap assistant;
-- remote collaboration memory reader;
+- remote collaboration memory reader ([Remote Access](/usage/remote-access/) + `desk:...` refs);
 - project onboarding guide from local sessions.
 
 See [Playbooks](/playbooks/) for concrete workflows built on top of skills.

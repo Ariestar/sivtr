@@ -47,6 +47,17 @@ Record/turn and line segments are 1-based and accept `3`, `3-5`, `3,7`, or `3-5,
 
 Use `agent` for every supported AI provider, or a provider name for one provider.
 
+Targets can also use an origin prefix (`origin:body`) for another local workspace name or a mounted remote alias:
+
+```bash
+sivtr search desk:terminal --status failure --latest 5 --refs
+sivtr search desk:agent -m "decision|failed" --latest 20 --save remote_hits --refs
+sivtr show desk:terminal/session_42/3/o/1 --full
+sivtr show docs:codex/4
+```
+
+Origins come from `sivtr remote add <alias> ...` or `sivtr wb list`. Feature guide: [Remote Access](/usage/remote-access/).
+
 ## Content filters
 
 ```bash

@@ -14,11 +14,14 @@ description: User-facing release notes for sivtr.
 - Added `sivtr nav` for deterministic anchor motion with `<`, `>N`, `+N`, `-N`, `[A..B]`, and `~`. `nav` does not implicitly expand child anchors.
 - Added Hermes as a supported agent session provider for copy, picker, search, refs, and WorkSet workflows.
 - Added global `--color auto|always|never` for status and diagnostic output.
+- Added cross-device remote memory: device daemon (`sivtr serve`), explicit shares (`sivtr share`), mounts (`sivtr remote`), peers (`sivtr peer`), and local workspace labels (`sivtr wb`).
+- Added `origin:body` WorkRefs such as `desk:terminal/...` and `docs:codex/4` for remote and other-local-workspace sources.
 
 ### Changed
 
 - Standardized CLI status and diagnostic messages, keeping them on stderr so stdout remains safe for data pipelines.
 - `search` and `work parts` now share the same WorkSet filtering implementation.
+- Bare `sivtr share` is the interactive share entrypoint and prints a bare invite key on stdout for easy copy/paste.
 
 ### Fixed
 

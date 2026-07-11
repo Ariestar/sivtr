@@ -102,3 +102,26 @@ Windows hotkey 状态存放在 `sivtr` 的平台 config/state 区域下，由以
 sivtr hotkey status
 sivtr hotkey stop
 ```
+
+## Remote daemon 状态
+
+跨设备远程记忆使用设备级 daemon。可用 `SIVTR_DATA_DIR` 覆盖根目录；否则是平台 config 目录下的 `sivtr`（与 `data_dir()` 相同）。
+
+| 文件 | 用途 |
+| --- | --- |
+| `identity.key` | iroh 使用的稳定设备身份 |
+| `remote-state.db` | SQLite：peers、shares、grants、invites、mounts、audit |
+| `daemon.json` | 运行中 daemon 控制信息（port、token、node id） |
+| `daemon.lock` | 单实例锁 |
+| `daemon.log` | daemon 日志（`sivtr serve logs`） |
+
+```bash
+sivtr serve status
+sivtr serve logs
+sivtr share list
+sivtr remote list
+sivtr peer list
+sivtr wb list
+```
+
+远程访问是 opt-in。只有 `sivtr share`（或 `share add`）之后才会分享。mount 是用 `sivtr remote add` 登记的 workspace 本地别名。功能指南见 [远程访问](/zh-cn/usage/remote-access/)。

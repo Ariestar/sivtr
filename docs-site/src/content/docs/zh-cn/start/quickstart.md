@@ -179,4 +179,5 @@ sivtr run bun run build
 - 阅读[心智模型](/zh-cn/start/core-concepts/)理解 source、session、dialogue、block 和 ref。
 - 看[玩法实例](/zh-cn/playbooks/)了解真实工作流。
 - 查看[浏览和选择](/zh-cn/usage/browse-and-select/)学习完整 workspace TUI 操作。
+- 需要另一台设备记忆时，看[远程访问](/zh-cn/usage/remote-access/)。
 - 查看 [CLI 参考](/zh-cn/reference/cli/)确认精确选项。

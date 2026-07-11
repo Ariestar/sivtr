@@ -14,11 +14,14 @@ description: sivtr 面向用户的发布说明。
 - 新增 `sivtr nav`：用 `<`、`>N`、`+N`、`-N`、`[A..B]` 和 `~` 做确定性 anchor 移动。`nav` 不会隐式展开 child anchors。
 - 新增 Hermes agent session provider，支持 copy、picker、search、refs 和 WorkSet 工作流。
 - 新增全局 `--color auto|always|never`，控制状态和诊断输出颜色。
+- 新增跨设备远程记忆：设备 daemon（`sivtr serve`）、显式分享（`sivtr share`）、挂载（`sivtr remote`）、peer（`sivtr peer`）和本机 workspace 标签（`sivtr wb`）。
+- 新增 `origin:body` WorkRef，例如 `desk:terminal/...` 和 `docs:codex/4`，用于远端和其他本机 workspace。
 
 ### Changed
 
 - 统一 CLI 状态和诊断消息，并保持输出到 stderr，避免污染 stdout 数据管道。
 - `search` 和 `work parts` 现在共享同一套 WorkSet filtering 实现。
+- 裸 `sivtr share` 成为交互式分享入口，并把 bare invite key 打印到 stdout 方便复制。
 
 ### Fixed
 

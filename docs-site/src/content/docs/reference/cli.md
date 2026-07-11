@@ -3,7 +3,7 @@ title: CLI Reference
 description: Command syntax, subcommands, options, providers, selectors, and examples.
 ---
 
-This page documents the public CLI surface. The source of truth is `src/cli.rs`; run `sivtr --help` and `sivtr <command> --help` for installed-version help.
+This page documents the public CLI surface. The source of truth is `src/cli/`; run `sivtr --help` and `sivtr <command> --help` for installed-version help.
 
 ## Top-level
 
@@ -211,8 +211,9 @@ Targets:
 | `hermes[/<session>[/<turn>[/<line>]]]` | Hermes records |
 | `opencode[/<session>[/<turn>[/<line>]]]` | OpenCode records |
 | `pi[/<session>[/<turn>[/<line>]]]` | Pi records |
+| `<origin>:<target>` | Remote or other-workspace origin, for example `desk:terminal` or `docs:codex/4` |
 
-Use `*` for wildcard path segments, for example `terminal/*/3` or `pi/*/*`.
+Use `*` for wildcard path segments, for example `terminal/*/3` or `pi/*/*`. Origins come from `sivtr remote add <alias> ...` mounts or local workspace names listed by `sivtr wb list`.
 
 Options:
 
@@ -392,9 +393,130 @@ sivtr show claude/<session-id>
 sivtr show claude/<session-id>/3
 sivtr show claude/<session-id>/3/7 --json
 sivtr show terminal/current/2
+sivtr show desk:terminal/session_42/3/o/1 --full
 sivtr show @last --full
 sivtr show @ctx -f timeline
 ```
+
+## serve
+
+```bash
+sivtr serve <COMMAND>
+```
+
+Manages the local remote-memory daemon. Share and remote commands auto-start it when needed.
+
+| Command | Meaning |
+| --- | --- |
+| `start` | Start the daemon in the background |
+| `stop` | Stop the running daemon cleanly |
+| `restart` | Restart the daemon |
+| `status` | Show daemon identity and runtime state |
+| `logs` | Print the daemon log path |
+| `foreground` | Run the daemon in the foreground |
+
+```bash
+sivtr serve start
+sivtr serve status
+sivtr serve logs
+sivtr serve stop
+```
+
+## share
+
+```bash
+sivtr share [OPTIONS]
+sivtr share <COMMAND>
+```
+
+Explicitly shares a local workspace for remote peers. Bare `sivtr share` is interactive: pick a workspace (Enter = current), ensure the share exists, and print a bare invite key on stdout.
+
+Default interactive options:
+
+| Option | Meaning |
+| --- | --- |
+| `--path <PATH>` | Workspace path; skips the picker after confirm |
+| `--name <NAME>` | Stable share name; defaults to the workspace directory name |
+| `--expires <DURATION>` | Invitation lifetime (`10m`, `2h`, `1d`); default `10m` |
+| `--no-redact` | Disable secret redaction for this share |
+
+Subcommands:
+
+| Command | Meaning |
+| --- | --- |
+| `add [PATH] [--name NAME] [--no-redact]` | Expose a workspace through the daemon |
+| `list` | List local shares |
+| `remove <SHARE>` | Remove a share and all grants and invitations attached to it |
+| `enable <SHARE>` / `disable <SHARE>` | Toggle a share without deleting it |
+| `invite <SHARE> [--expires DURATION]` | Create a single-use invitation; prints the bare key on stdout |
+| `grants <SHARE>` | List active peer grants for a share |
+| `revoke <SHARE> <PEER>` | Revoke a peer's access to a share |
+
+```bash
+sivtr share
+sivtr share add --name alice-desk
+sivtr share invite alice-desk --expires 10m
+sivtr share list
+sivtr share grants alice-desk
+sivtr share revoke alice-desk <peer>
+```
+
+## remote
+
+```bash
+sivtr remote <COMMAND>
+```
+
+Mounts remote shares into the current git workspace as local aliases used in `origin:body` refs.
+
+| Command | Meaning |
+| --- | --- |
+| `list` | List remote mounts in the current workspace |
+| `add <ALIAS> <INVITE>` | Redeem an invitation and mount the remote share |
+| `remove <ALIAS>` | Remove a local mount (grant remains until the owner revokes it) |
+| `rename <ALIAS> <NEW>` | Rename a workspace-local mount |
+| `test <ALIAS>` | Authenticated transport and authorization round trip |
+
+```bash
+sivtr remote add desk <invite-key>
+sivtr remote test desk
+sivtr remote list
+sivtr s desk:terminal --status failure --latest 5 --refs
+sivtr show desk:agent/<session>/3 --full
+sivtr remote rename desk bob-desk
+sivtr remote remove desk
+```
+
+## peer
+
+```bash
+sivtr peer <COMMAND>
+```
+
+| Command | Meaning |
+| --- | --- |
+| `list` | List known peer identities |
+| `forget <PEER>` | Forget a peer and remove all local mounts and grants involving it |
+
+```bash
+sivtr peer list
+sivtr peer forget <peer>
+```
+
+## workspace
+
+```bash
+sivtr workspace [list]
+sivtr wb list
+```
+
+Lists known local workspaces and their origin labels for `name:body` refs (for example `docs:codex/4`). Alias: `sivtr wb`.
+
+```bash
+sivtr wb list
+```
+
+Exact syntax for every remote subcommand is above. For the model, setup path, and safety defaults, see [Remote Access](/usage/remote-access/). For a teammate scenario, see [Remote collaboration memory](/playbooks/remote-collaboration-memory/).
 
 ## version
 

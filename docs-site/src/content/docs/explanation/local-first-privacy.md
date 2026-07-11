@@ -26,6 +26,19 @@ sivtr codex export --dest /srv/sivtr/root-codex
 
 After export, normal file-system permissions and your sharing setup control who can read the exported tree.
 
+## Explicit remote share
+
+Cross-device memory access is also opt-in. Nothing leaves the machine until you run `sivtr share` (or `share add`) and a peer redeems a single-use invite:
+
+```bash
+sivtr share                   # interactive; prints bare invite key
+sivtr remote add desk <key>   # peer mounts under a local alias
+```
+
+Remote access is read-only. Secret redaction is on by default before records leave the device (`--no-redact` to disable for a share). Invites expire (default `10m`). Transport between daemons is encrypted iroh. Local-first remains the default: unregistered origins error.
+
+Full guide: [Remote Access](/usage/remote-access/).
+
 ## Shared mirrors should be read-only
 
 When sharing exported sessions across local accounts, prefer read-only access for consumers:
@@ -66,4 +79,5 @@ Set `auto_save = false` if captures should not be written automatically. Set `ma
 - Review copied text before pasting it into public chats, issues, hosted agents, or external AI tools.
 - Use line and regex filters to copy only the necessary evidence.
 - Keep shared Codex mirrors separate from the source account's live config.
-- Prefer `--format json` search output for tooling, but remember JSON content can still include sensitive text.
+- Prefer `--format json` / `--refs` search output for tooling, but remember JSON content can still include sensitive text.
+- Prefer short-lived invites and revoke grants (`sivtr share revoke`) when collaboration ends.
