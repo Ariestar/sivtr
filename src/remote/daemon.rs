@@ -17,7 +17,7 @@ use sivtr_core::query::load_workspace_source;
 use sivtr_core::record::WorkRef;
 
 use super::identity::Identity;
-use super::local;
+use super::ipc;
 use super::protocol::{
     DaemonInfo, DaemonStatus, InviteTicket, LocalEnvelope, LocalRequest, LocalResponse,
     RemoteRequest, RemoteResponse, SourceResponse, MAX_MESSAGE_SIZE, REMOTE_ALPN,
@@ -33,7 +33,7 @@ pub fn run() -> Result<()> {
 }
 
 async fn run_async() -> Result<()> {
-    let lock_path = local::daemon_lock_path();
+    let lock_path = ipc::daemon_lock_path();
     if let Some(parent) = lock_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -70,7 +70,7 @@ async fn run_async() -> Result<()> {
         endpoint: endpoint.addr(),
         started_at: started_at.clone(),
     };
-    local::write_daemon_info(&info)?;
+    ipc::write_daemon_info(&info)?;
     let _guard = DaemonInfoGuard;
 
     let context = Arc::new(DaemonContext {
@@ -127,7 +127,7 @@ struct DaemonInfoGuard;
 
 impl Drop for DaemonInfoGuard {
     fn drop(&mut self) {
-        local::remove_daemon_info();
+        ipc::remove_daemon_info();
     }
 }
 
@@ -478,7 +478,7 @@ fn random_token() -> String {
 }
 
 pub fn remove_stale_daemon_info() -> Result<()> {
-    match std::fs::remove_file(local::daemon_info_path()) {
+    match std::fs::remove_file(ipc::daemon_info_path()) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),

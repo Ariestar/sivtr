@@ -114,17 +114,18 @@ fn try_remote_mount(
     origin: &str,
     body: &str,
 ) -> Result<Option<crate::remote::protocol::SourceResponse>> {
-    if !crate::remote::local::running() {
+    use crate::remote::ipc;
+    use crate::remote::protocol::{LocalRequest, LocalResponse};
+
+    if !ipc::running() {
         return Ok(None);
     }
     // Only treat origin as a mount if it is registered; other errors (network,
     // auth) must surface instead of being mistaken for a local workspace name.
-    let mounts = match crate::remote::local::call(
-        crate::remote::protocol::LocalRequest::RemoteList {
-            workspace_key: workspace_key.to_string(),
-        },
-    ) {
-        Ok(crate::remote::protocol::LocalResponse::Mounts(mounts)) => mounts,
+    let mounts = match ipc::call(LocalRequest::RemoteList {
+        workspace_key: workspace_key.to_string(),
+    }) {
+        Ok(LocalResponse::Mounts(mounts)) => mounts,
         Ok(_) | Err(_) => return Ok(None),
     };
     if !mounts
@@ -133,9 +134,15 @@ fn try_remote_mount(
     {
         return Ok(None);
     }
-    Ok(Some(
-        crate::remote::RemoteClient::new(workspace_key, origin).load_source(body)?,
-    ))
+
+    match ipc::call(LocalRequest::RemoteSource {
+        workspace_key: workspace_key.to_string(),
+        alias: origin.to_ascii_lowercase(),
+        source: body.to_string(),
+    })? {
+        LocalResponse::Source(response) => Ok(Some(response)),
+        response => anyhow::bail!("Unexpected daemon response: {response:?}"),
+    }
 }
 
 fn read_stdin() -> Result<WorkSet> {

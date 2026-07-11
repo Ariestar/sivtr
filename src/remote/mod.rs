@@ -1,9 +1,9 @@
-pub mod client;
 pub mod daemon;
 pub mod identity;
-pub mod local;
+pub mod ipc;
 pub mod protocol;
 pub mod redact;
 pub mod state;
 
-pub use client::RemoteClient;
+// Backward-compatible alias used by existing command modules.
+pub use ipc as local;
