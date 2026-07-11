@@ -14,52 +14,52 @@ use super::serve;
 
 pub fn execute(command: ShareCommand) -> Result<()> {
     match command.action {
-        ShareAction::Open {
+        None => open(
+            command.path,
+            command.name,
+            !command.no_redact,
+            &command.expires,
+        ),
+        Some(ShareAction::Add {
             path,
             name,
-            expires,
             no_redact,
-        } => open(path, name, !no_redact, &expires),
-        ShareAction::Add {
-            path,
-            name,
-            no_redact,
-        } => {
+        }) => {
             serve::ensure_running()?;
             add(path, name, !no_redact).map(|_| ())
         }
-        ShareAction::List => {
+        Some(ShareAction::List) => {
             serve::ensure_running()?;
             list()
         }
-        ShareAction::Remove { share } => {
+        Some(ShareAction::Remove { share }) => {
             serve::ensure_running()?;
             remove(&share)
         }
-        ShareAction::Enable { share } => {
+        Some(ShareAction::Enable { share }) => {
             serve::ensure_running()?;
             set_enabled(&share, true)
         }
-        ShareAction::Disable { share } => {
+        Some(ShareAction::Disable { share }) => {
             serve::ensure_running()?;
             set_enabled(&share, false)
         }
-        ShareAction::Invite { share, expires } => {
+        Some(ShareAction::Invite { share, expires }) => {
             serve::ensure_running()?;
             invite(&share, &expires)
         }
-        ShareAction::Grants { share } => {
+        Some(ShareAction::Grants { share }) => {
             serve::ensure_running()?;
             grants(&share)
         }
-        ShareAction::Revoke { share, peer } => {
+        Some(ShareAction::Revoke { share, peer }) => {
             serve::ensure_running()?;
             revoke(&share, &peer)
         }
     }
 }
 
-/// One-shot share flow:
+/// Default `sivtr share` flow:
 /// 1. ensure daemon
 /// 2. interactively confirm current workspace (Enter = yes)
 /// 3. share if needed

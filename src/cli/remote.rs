@@ -26,25 +26,27 @@ pub enum ServeAction {
 #[derive(Parser, Debug)]
 pub struct ShareCommand {
     #[command(subcommand)]
-    pub action: ShareAction,
+    pub action: Option<ShareAction>,
+
+    /// Workspace path for the default interactive share flow
+    #[arg(long)]
+    pub path: Option<PathBuf>,
+
+    /// Stable share name for the default interactive share flow
+    #[arg(long)]
+    pub name: Option<String>,
+
+    /// Invitation lifetime for the default interactive share flow
+    #[arg(long, default_value = "10m")]
+    pub expires: String,
+
+    /// Disable secret redaction for the default interactive share flow
+    #[arg(long)]
+    pub no_redact: bool,
 }
 
 #[derive(Subcommand, Debug)]
 pub enum ShareAction {
-    /// One-shot: ensure daemon, share this workspace, print an invite
-    Open {
-        /// Workspace path; defaults to the current directory
-        path: Option<PathBuf>,
-        /// Stable share name; defaults to the workspace directory name
-        #[arg(long)]
-        name: Option<String>,
-        /// Invitation lifetime, such as 10m, 2h, or 1d
-        #[arg(long, default_value = "10m")]
-        expires: String,
-        /// Disable secret redaction for this share
-        #[arg(long)]
-        no_redact: bool,
-    },
     /// Explicitly expose a workspace through the daemon
     Add {
         /// Workspace path; defaults to the current directory
