@@ -367,13 +367,12 @@ fn invite(share: &str, expires: &str) -> Result<()> {
                 .timestamp_opt(expires_at, 0)
                 .single()
                 .context("Invalid invitation expiration")?;
+            // Keep stdout clean for copy: one status line on stderr, key alone on stdout.
             output::info(format!(
-                "single-use invitation for `{share_name}`; expires {}",
+                "invite for `{share_name}` (expires {}, single-use). Run on peer: sivtr remote add <alias> <key>",
                 expires_at.to_rfc3339()
             ));
-            output::hint("on the other machine:");
-            output::plain(format!("  sivtr remote add <alias> {ticket}"));
-            output::plain(ticket);
+            println!("{ticket}");
             Ok(())
         }
         response => bail!("Unexpected daemon response: {response:?}"),
