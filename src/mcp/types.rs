@@ -37,10 +37,10 @@ pub struct SearchParams {
     pub until: Option<String>,
     #[serde(default)]
     pub last: Option<String>,
-    /// Prefer latest N matches
+    /// Prefer latest N matches. Defaults to 5 when both latest and limit are omitted (CLI search default).
     #[serde(default)]
     pub latest: Option<usize>,
-    /// Cap result anchors (default 20 when latest is unset)
+    /// Cap result anchors (hard ceiling after latest). Prefer latest for "most recent N".
     #[serde(default)]
     pub limit: Option<usize>,
     #[serde(default)]
@@ -467,6 +467,32 @@ mod tests {
         assert_eq!(args.latest, Some(5));
         assert!(args.exclude_current);
         assert_eq!(args.save.as_deref(), Some("failures"));
+    }
+
+    #[test]
+    fn search_passes_unbounded_params_to_cli_defaults() {
+        // CLI search applies latest=5 when both are None; MCP just forwards.
+        let args = to_search_args(&SearchParams {
+            source: "terminal".into(),
+            match_regex: None,
+            exclude: None,
+            in_field: None,
+            kind: None,
+            status: None,
+            exit_code: None,
+            since: None,
+            until: None,
+            last: None,
+            latest: None,
+            limit: None,
+            cwd: None,
+            save: None,
+            detail: None,
+            exclude_current: None,
+        })
+        .expect("map");
+        assert_eq!(args.latest, None);
+        assert_eq!(args.limit, None);
     }
 
     #[test]

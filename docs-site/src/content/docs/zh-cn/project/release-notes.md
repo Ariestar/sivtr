@@ -23,6 +23,7 @@ description: sivtr 面向用户的发布说明。
 - 统一 CLI 状态和诊断消息，并保持输出到 stderr，避免污染 stdout 数据管道。
 - `search` 和 `work parts` 现在共享同一套 WorkSet filtering 实现。
 - 裸 `sivtr share` 成为交互式分享入口，并把 bare invite key 打印到 stdout 方便复制。
+- `sivtr search` 始终有界：未设 `--latest`/`--limit` 时默认 `--latest 5`（MCP 继承同一默认）。
 
 ### Fixed
 

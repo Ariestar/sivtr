@@ -231,8 +231,8 @@ Targets：
 | `--since <TIME>` | 只包含此时间之后或等于此时间的记录 |
 | `--until <TIME>` | 只包含此时间之前或等于此时间的记录 |
 | `--last <DURATION>` | 最近时间窗口，例如 `30m`、`2h`、`7d` |
-| `--latest <N>` | 在最终排序前取最新 N 条匹配记录 |
-| `-l, --limit <N>` | 最大打印结果组数 |
+| `--latest <N>` | 在最终排序前取最新 N 条匹配记录。未设 `--latest`/`--limit` 时默认 `5`。 |
+| `-l, --limit <N>` | 最大打印结果组数（latest/sort 后的硬上限） |
 | `--exclude-current`、`--other` | Agent 搜索时排除当前 agent session |
 | `--json` | `--format workset` 的别名 |
 | `--refs` | `--format refs` 的别名；逐行打印 refs |
@@ -541,7 +541,7 @@ sivtr mcp serve
 
 | 工具 | 用途 |
 | --- | --- |
-| `sivtr_search` | 搜索 terminal/agent 记忆；支持 `desk:...` origin |
+| `sivtr_search` | 搜索 terminal/agent 记忆；支持 `desk:...` origin。与 CLI search 相同边界（默认 `latest=5`）。 |
 | `sivtr_show` | 展开 ref 或 WorkSet handle |
 | `sivtr_zoom` | 邻近 record 上下文 |
 | `sivtr_filter` | 缩小 `@last` / `@name` / source |

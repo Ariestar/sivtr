@@ -231,8 +231,8 @@ Options:
 | `--since <TIME>` | Only include records at or after this time |
 | `--until <TIME>` | Only include records at or before this time |
 | `--last <DURATION>` | Recent time window, e.g. `30m`, `2h`, `7d` |
-| `--latest <N>` | Return the latest N matching records before final sort |
-| `-l, --limit <N>` | Maximum result groups to print |
+| `--latest <N>` | Return the latest N matching records before final sort. Defaults to `5` when neither `--latest` nor `--limit` is set. |
+| `-l, --limit <N>` | Maximum result groups to print (hard ceiling after latest/sort) |
 | `--exclude-current`, `--other` | Exclude the current agent session from agent searches |
 | `--json` | Alias for `--format workset` |
 | `--refs` | Alias for `--format refs`; prints refs, one per line |
@@ -541,7 +541,7 @@ Tools:
 
 | Tool | Purpose |
 | --- | --- |
-| `sivtr_search` | Search terminal/agent memory; supports `desk:...` origins |
+| `sivtr_search` | Search terminal/agent memory; supports `desk:...` origins. Same bounds as CLI search (`latest=5` by default). |
 | `sivtr_show` | Expand a ref or WorkSet handle |
 | `sivtr_zoom` | Neighboring record context |
 | `sivtr_filter` | Narrow `@last` / `@name` / a source |

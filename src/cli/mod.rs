@@ -473,6 +473,7 @@ Filters:
   --since/--until       Absolute time, relative duration, or aliases: today, yesterday, tomorrow,
                         this morning, this afternoon, this evening, tonight, now
   --latest <n>          Return the latest n matching anchors
+  --limit <n>           Cap result anchors after latest/sort
   --exclude-current     Exclude the current agent session from agent searches
   --other               Alias for --exclude-current
   --json                Alias for --format workset
@@ -485,6 +486,7 @@ WorkSets:
   Use @name as a search target to refine a saved WorkSet.
 
 Notes:
+  When neither --latest nor --limit is set, search defaults to --latest 5.
   Content hits may return structured refs such as `.../i/<n>` or `.../o/<n>`
   when the match belongs to a canonical input/output part.
 
@@ -944,11 +946,11 @@ pub struct SearchArgs {
     #[arg(long, value_name = "DURATION")]
     pub last: Option<String>,
 
-    /// Return the latest N matching anchors
+    /// Return the latest N matching anchors. Defaults to 5 when neither --latest nor --limit is set.
     #[arg(long, value_name = "N")]
     pub latest: Option<usize>,
 
-    /// Maximum number of result anchors to print
+    /// Maximum number of result anchors to print (hard ceiling after latest/sort)
     #[arg(short = 'l', long, value_name = "N")]
     pub limit: Option<usize>,
 

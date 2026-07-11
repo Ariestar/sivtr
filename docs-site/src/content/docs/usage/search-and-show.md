@@ -105,7 +105,7 @@ Useful sorts:
 - `exit-code`
 - `exit-code-asc`
 
-`--latest <N>` first keeps the latest N matching records. `--sort` then controls final presentation order.
+`--latest <N>` first keeps the latest N matching records. `--sort` then controls final presentation order. When neither `--latest` nor `--limit` is set, search defaults to `--latest 5`.
 
 ## Output formats
 

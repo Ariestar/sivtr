@@ -39,7 +39,7 @@ impl SivtrMcp {
     }
 
     #[tool(
-        description = "Search local or mounted remote workspace memory (terminal + AI sessions). Prefer narrow queries with latest/limit. Returns refs and compact summaries by default."
+        description = "Search local or mounted remote workspace memory (terminal + AI sessions). Uses the same bounds as CLI search: defaults to latest=5 when neither latest nor limit is set. Prefer narrow queries. Returns refs and compact summaries by default."
     )]
     fn sivtr_search(
         &self,
@@ -116,6 +116,7 @@ impl ServerHandler for SivtrMcp {
         info.instructions = Some(
             "sivtr is local workspace memory for terminal output and AI sessions. \
 Search narrowly, expand with show/zoom, and treat results as evidence—verify current files and tests before claiming present state. \
+Search defaults to latest=5 when neither latest nor limit is set (same as CLI). \
 Use origin-prefixed sources like desk:terminal only after mounts exist (see sivtr_status)."
                 .into(),
         );

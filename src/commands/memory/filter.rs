@@ -18,6 +18,9 @@ use crate::commands::memory::show;
 use crate::commands::memory::time_filter::{build_time_range, TimeRange};
 use crate::commands::memory::workset::{self, WorkSet, WorkSetSource};
 
+/// Default search bound when neither `--latest` nor `--limit` is set.
+const SEARCH_DEFAULT_LATEST: usize = 5;
+
 struct MatchedAnchor<'a> {
     record: &'a WorkRecord,
     anchor: WorkRef,
@@ -62,6 +65,11 @@ impl FilterSpec {
             args.last.as_deref(),
             Utc::now(),
         )?;
+        // Always bound search: explicit latest/limit win; otherwise default latest=5.
+        let (latest, limit) = match (args.latest, args.limit) {
+            (None, None) => (Some(SEARCH_DEFAULT_LATEST), None),
+            bounds => bounds,
+        };
         Ok(Self {
             mode: FilterMode::Anchors,
             regex: compile_regex(args.match_.as_deref())?,
@@ -76,9 +84,9 @@ impl FilterSpec {
             time_range,
             exclude_current: args.exclude_current,
             pre_sort: Some(SearchSortArg::Newest),
-            latest: args.latest,
+            latest,
             post_sort: Some(args.sort),
-            limit: args.limit.or_else(|| args.latest.is_none().then_some(20)),
+            limit,
         })
     }
 
@@ -679,5 +687,95 @@ mod tests {
         assert!(parse_duration_ms("").is_err());
         assert!(parse_duration_ms("ms").is_err());
         assert!(parse_duration_ms("1d").is_err());
+    }
+
+    #[test]
+    fn search_defaults_to_latest_five_when_unbounded() {
+        let args = SearchArgs {
+            source: "terminal".into(),
+            match_: None,
+            exclude: None,
+            in_field: SearchFieldArg::Content,
+            kind: None,
+            status: None,
+            exit_code: None,
+            min_duration: None,
+            max_duration: None,
+            sort: SearchSortArg::Newest,
+            cwd: None,
+            since: None,
+            until: None,
+            last: None,
+            latest: None,
+            limit: None,
+            exclude_current: false,
+            format: None,
+            json: false,
+            refs: false,
+            save: None,
+        };
+        let spec = FilterSpec::from_search_args(&args).expect("spec");
+        assert_eq!(spec.latest, Some(SEARCH_DEFAULT_LATEST));
+        assert_eq!(spec.limit, None);
+    }
+
+    #[test]
+    fn search_keeps_explicit_limit_without_forcing_latest() {
+        let args = SearchArgs {
+            source: "terminal".into(),
+            match_: None,
+            exclude: None,
+            in_field: SearchFieldArg::Content,
+            kind: None,
+            status: None,
+            exit_code: None,
+            min_duration: None,
+            max_duration: None,
+            sort: SearchSortArg::Newest,
+            cwd: None,
+            since: None,
+            until: None,
+            last: None,
+            latest: None,
+            limit: Some(12),
+            exclude_current: false,
+            format: None,
+            json: false,
+            refs: false,
+            save: None,
+        };
+        let spec = FilterSpec::from_search_args(&args).expect("spec");
+        assert_eq!(spec.latest, None);
+        assert_eq!(spec.limit, Some(12));
+    }
+
+    #[test]
+    fn search_keeps_explicit_latest_and_limit() {
+        let args = SearchArgs {
+            source: "terminal".into(),
+            match_: None,
+            exclude: None,
+            in_field: SearchFieldArg::Content,
+            kind: None,
+            status: None,
+            exit_code: None,
+            min_duration: None,
+            max_duration: None,
+            sort: SearchSortArg::Newest,
+            cwd: None,
+            since: None,
+            until: None,
+            last: None,
+            latest: Some(3),
+            limit: Some(10),
+            exclude_current: false,
+            format: None,
+            json: false,
+            refs: false,
+            save: None,
+        };
+        let spec = FilterSpec::from_search_args(&args).expect("spec");
+        assert_eq!(spec.latest, Some(3));
+        assert_eq!(spec.limit, Some(10));
     }
 }

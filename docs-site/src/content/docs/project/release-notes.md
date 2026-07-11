@@ -23,6 +23,7 @@ description: User-facing release notes for sivtr.
 - Standardized CLI status and diagnostic messages, keeping them on stderr so stdout remains safe for data pipelines.
 - `search` and `work parts` now share the same WorkSet filtering implementation.
 - Bare `sivtr share` is the interactive share entrypoint and prints a bare invite key on stdout for easy copy/paste.
+- `sivtr search` always bounds results: defaults to `--latest 5` when neither `--latest` nor `--limit` is set (MCP inherits the same default).
 
 ### Fixed
 

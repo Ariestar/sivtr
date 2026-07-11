@@ -105,7 +105,7 @@ sivtr search terminal --min-duration 500ms --sort duration --format compact
 - `exit-code`
 - `exit-code-asc`
 
-`--latest <N>` 会先保留最新 N 条匹配记录；`--sort` 再控制最终展示顺序。
+`--latest <N>` 会先保留最新 N 条匹配记录；`--sort` 再控制最终展示顺序。未设 `--latest`/`--limit` 时，search 默认 `--latest 5`。
 
 ## 输出格式
 
