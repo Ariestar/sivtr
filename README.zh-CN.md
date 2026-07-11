@@ -84,7 +84,6 @@ cargo binstall sivtr
 其它方式：
 
 ```bash
-brew install ariestar/sivtr/sivtr   # macOS/Linux，通过 Homebrew
 cargo install sivtr                  # 从源码编译（需要 Rust）
 curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh   # Linux/macOS/WSL 一行安装
 ```

@@ -84,7 +84,6 @@ cargo binstall sivtr
 Other ways:
 
 ```bash
-brew install ariestar/sivtr/sivtr   # macOS/Linux via Homebrew
 cargo install sivtr                  # build from source (needs Rust)
 curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh   # Linux/macOS/WSL one-liner
 ```
