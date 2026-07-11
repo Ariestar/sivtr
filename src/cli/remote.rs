@@ -107,7 +107,7 @@ pub enum RemoteAction {
     Add {
         /// Workspace-local alias used in refs, e.g. `desk:terminal/...`
         alias: String,
-        /// Invitation key from `sivtr share` (bare key; `sivtr-invite:` prefix optional)
+        /// Invitation key from `sivtr share` (copy the bare key only)
         invite: String,
     },
     /// Remove a mount from the current workspace

@@ -208,18 +208,14 @@ alice/sivtr:hermes/...  # device/workspace coordinate
 On the device that owns the workspace:
 
 ```bash
-sivtr serve start
-sivtr share add . --name sivtr
-sivtr share invite sivtr
+sivtr share                   # pick workspace (Enter = current), print invite key
 sivtr wb list                 # see local workspace origin labels
 ```
 
 On the other device:
 
 ```bash
-sivtr serve start
-sivtr remote add desk <sivtr-invite:...>
-sivtr remote test desk
+sivtr remote add desk <invite-key>   # bare key from `sivtr share` stdout
 sivtr s desk:terminal --status failure --latest 5 --refs
 sivtr show desk:terminal/session_42/3/o/1
 sivtr zoom desk:terminal/session_42/3 -C 2
@@ -227,7 +223,7 @@ sivtr nav desk:terminal/session_42/3 +1 --refs
 sivtr copy ref desk:terminal/session_42/3/o/1 --print
 ```
 
-Sharing is opt-in and read-only. Secrets are redacted by default before data leaves the machine. Remote access uses encrypted iroh transport. Unregistered origins error — register mounts with `sivtr remote add`, or list local workspaces with `sivtr wb`.
+Sharing is opt-in and read-only. Secrets are redacted by default before data leaves the machine. Remote access uses encrypted iroh transport; the daemon auto-starts when needed. Unregistered origins error — register mounts with `sivtr remote add`, or list local workspaces with `sivtr wb`.
 
 ## Supported sources
 

@@ -105,13 +105,14 @@ fn finish_share(
     let share = match find_share_for_workspace(&workspace_key) {
         Ok(existing) => {
             output::info(format!("workspace already shared as `{}`", existing.name));
-            existing
+            if !existing.enabled {
+                set_enabled(&existing.name, true)?;
+            }
+            // Re-fetch after enable so we invite with consistent state.
+            find_share_for_workspace(&workspace_key).unwrap_or(existing)
         }
         Err(_) => add(Some(root), Some(share_name), redact)?,
     };
-    if !share.enabled {
-        set_enabled(&share.name, true)?;
-    }
     invite(&share.name, expires)
 }
 

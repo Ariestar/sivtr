@@ -208,18 +208,14 @@ alice/sivtr:hermes/...  # device/workspace 坐标
 在持有 workspace 的设备上：
 
 ```bash
-sivtr serve start
-sivtr share add . --name sivtr
-sivtr share invite sivtr
+sivtr share                   # 交互选择 workspace（Enter = 当前），打印 invite key
 sivtr wb list                 # 查看本机 workspace origin 标签
 ```
 
 在另一台设备上：
 
 ```bash
-sivtr serve start
-sivtr remote add desk <sivtr-invite:...>
-sivtr remote test desk
+sivtr remote add desk <invite-key>   # 直接粘贴 `sivtr share` 输出的 bare key
 sivtr s desk:terminal --status failure --latest 5 --refs
 sivtr show desk:terminal/session_42/3/o/1
 sivtr zoom desk:terminal/session_42/3 -C 2
@@ -227,7 +223,7 @@ sivtr nav desk:terminal/session_42/3 +1 --refs
 sivtr copy ref desk:terminal/session_42/3/o/1 --print
 ```
 
-分享是 opt-in、只读，默认在数据离开本机前脱敏常见密钥。远程传输走加密 iroh。未登记的 origin 会报错——用 `sivtr remote add` 挂载，或用 `sivtr wb` 查看本机 workspace。
+分享是 opt-in、只读，默认在数据离开本机前脱敏常见密钥。远程传输走加密 iroh；需要时会自动启动 daemon。未登记的 origin 会报错——用 `sivtr remote add` 挂载，或用 `sivtr wb` 查看本机 workspace。
 
 ## 支持来源
 

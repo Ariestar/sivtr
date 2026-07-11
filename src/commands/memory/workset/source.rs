@@ -115,17 +115,15 @@ fn try_remote_mount(
     use crate::remote::protocol::{LocalRequest, LocalResponse};
 
     // Auto-start daemon when reading remote origins, then check mounts.
-    let _ = crate::commands::remote::serve::ensure_running();
-    if !ipc::running() {
-        return Ok(None);
-    }
+    crate::commands::remote::serve::ensure_running()?;
     // Only treat origin as a mount if it is registered; other errors (network,
     // auth) must surface instead of being mistaken for a local workspace name.
     let mounts = match ipc::call(LocalRequest::RemoteList {
         workspace_key: workspace_key.to_string(),
     }) {
         Ok(LocalResponse::Mounts(mounts)) => mounts,
-        Ok(_) | Err(_) => return Ok(None),
+        Ok(_) => return Ok(None),
+        Err(error) => return Err(error),
     };
     if !mounts
         .iter()

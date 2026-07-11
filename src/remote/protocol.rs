@@ -9,7 +9,6 @@ pub use super::state::ShareInfo;
 
 pub const REMOTE_ALPN: &[u8] = b"sivtr/memory/1";
 pub const MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
-const INVITE_PREFIX: &str = "sivtr-invite:";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InviteTicket {
@@ -24,22 +23,19 @@ pub struct InviteTicket {
 impl InviteTicket {
     pub fn encode(&self) -> Result<String> {
         let bytes = serde_json::to_vec(self).context("Failed to encode invitation")?;
-        // Bare key only — easy to copy/paste. Prefix is optional when parsing.
         Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
     }
 
     pub fn parse(value: &str) -> Result<Self> {
-        let encoded = value
-            .trim()
-            .strip_prefix(INVITE_PREFIX)
-            .unwrap_or_else(|| value.trim());
+        let encoded = value.trim();
         if encoded.is_empty() {
             bail!("Expected an invitation key");
         }
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(encoded)
-            .context("Invalid sivtr invitation key")?;
-        let ticket: Self = serde_json::from_slice(&bytes).context("Invalid sivtr invitation key")?;
+            .context("Invalid invitation key")?;
+        let ticket: Self =
+            serde_json::from_slice(&bytes).context("Invalid invitation key")?;
         if ticket.version != 1 {
             bail!("Unsupported invitation version {}", ticket.version);
         }
