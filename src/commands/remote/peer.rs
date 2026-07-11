@@ -5,7 +5,10 @@ use crate::output;
 use crate::remote::ipc;
 use crate::remote::protocol::{LocalRequest, LocalResponse};
 
+use super::serve;
+
 pub fn execute(command: PeerCommand) -> Result<()> {
+    serve::ensure_running()?;
     match command.action {
         PeerAction::List => list(),
         PeerAction::Forget { peer } => forget(&peer),

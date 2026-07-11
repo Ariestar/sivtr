@@ -6,7 +6,10 @@ use crate::output;
 use crate::remote::ipc;
 use crate::remote::protocol::{LocalRequest, LocalResponse};
 
+use super::serve;
+
 pub fn execute(command: RemoteCommand) -> Result<()> {
+    serve::ensure_running()?;
     let workspace_key = current_workspace_key()?;
     match command.action {
         RemoteAction::List => list(&workspace_key),
@@ -56,6 +59,10 @@ fn add(workspace_key: &str, alias: &str, invite: &str) -> Result<()> {
             output::success(format!("mounted remote share as `{}`", mount.alias));
             output::detail("peer", mount.peer_name);
             output::detail("share", mount.share_name);
+            output::hint(format!(
+                "try: sivtr s '{}:agent' --latest 5 --refs",
+                mount.alias
+            ));
             Ok(())
         }
         response => bail!("Unexpected daemon response: {response:?}"),

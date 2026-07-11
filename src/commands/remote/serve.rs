@@ -11,13 +11,13 @@ use crate::remote::protocol::{LocalRequest, LocalResponse};
 
 pub fn execute(command: &ServeCommand) -> Result<()> {
     match command.action {
-        ServeAction::Start => start(),
+        ServeAction::Start => start(true),
         ServeAction::Stop => stop(),
         ServeAction::Restart => {
             if ipc::running() {
                 stop()?;
             }
-            start()
+            start(true)
         }
         ServeAction::Status => status(),
         ServeAction::Logs => {
@@ -28,9 +28,17 @@ pub fn execute(command: &ServeCommand) -> Result<()> {
     }
 }
 
-fn start() -> Result<()> {
+/// Start the daemon if needed. Used by share/remote so users don't run `serve start` first.
+pub fn ensure_running() -> Result<()> {
+    start(false)
+}
+
+fn start(verbose: bool) -> Result<()> {
     if ipc::running() {
-        output::success("sivtr daemon is already running");
+        if verbose {
+            output::success("sivtr daemon is already running");
+            return status();
+        }
         return Ok(());
     }
     crate::remote::daemon::remove_stale_daemon_info()?;
@@ -55,8 +63,12 @@ fn start() -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
         if ipc::running() {
-            output::success("sivtr daemon started");
-            return status();
+            if verbose {
+                output::success("sivtr daemon started");
+                return status();
+            }
+            output::info("started sivtr daemon");
+            return Ok(());
         }
         std::thread::sleep(Duration::from_millis(100));
     }

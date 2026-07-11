@@ -114,6 +114,8 @@ fn try_remote_mount(
     use crate::remote::ipc;
     use crate::remote::protocol::{LocalRequest, LocalResponse};
 
+    // Auto-start daemon when reading remote origins, then check mounts.
+    let _ = crate::commands::remote::serve::ensure_running();
     if !ipc::running() {
         return Ok(None);
     }

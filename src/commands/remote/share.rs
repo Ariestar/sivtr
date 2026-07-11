@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use chrono::{TimeZone, Utc};
@@ -7,38 +8,121 @@ use sivtr_core::workspace;
 use crate::cli::{ShareAction, ShareCommand};
 use crate::output;
 use crate::remote::ipc;
-use crate::remote::protocol::{LocalRequest, LocalResponse};
+use crate::remote::protocol::{LocalRequest, LocalResponse, ShareInfo};
+
+use super::serve;
 
 pub fn execute(command: ShareCommand) -> Result<()> {
     match command.action {
+        ShareAction::Open {
+            path,
+            name,
+            expires,
+            no_redact,
+        } => open(path, name, !no_redact, &expires),
         ShareAction::Add {
             path,
             name,
             no_redact,
-        } => add(path, name, !no_redact),
-        ShareAction::List => list(),
-        ShareAction::Remove { share } => remove(&share),
-        ShareAction::Enable { share } => set_enabled(&share, true),
-        ShareAction::Disable { share } => set_enabled(&share, false),
-        ShareAction::Invite { share, expires } => invite(&share, &expires),
-        ShareAction::Grants { share } => grants(&share),
-        ShareAction::Revoke { share, peer } => revoke(&share, &peer),
+        } => {
+            serve::ensure_running()?;
+            add(path, name, !no_redact).map(|_| ())
+        }
+        ShareAction::List => {
+            serve::ensure_running()?;
+            list()
+        }
+        ShareAction::Remove { share } => {
+            serve::ensure_running()?;
+            remove(&share)
+        }
+        ShareAction::Enable { share } => {
+            serve::ensure_running()?;
+            set_enabled(&share, true)
+        }
+        ShareAction::Disable { share } => {
+            serve::ensure_running()?;
+            set_enabled(&share, false)
+        }
+        ShareAction::Invite { share, expires } => {
+            serve::ensure_running()?;
+            invite(&share, &expires)
+        }
+        ShareAction::Grants { share } => {
+            serve::ensure_running()?;
+            grants(&share)
+        }
+        ShareAction::Revoke { share, peer } => {
+            serve::ensure_running()?;
+            revoke(&share, &peer)
+        }
     }
 }
 
-fn add(path: Option<PathBuf>, name: Option<String>, redact: bool) -> Result<()> {
+/// One-shot share flow:
+/// 1. ensure daemon
+/// 2. interactively confirm current workspace (Enter = yes)
+/// 3. share if needed
+/// 4. print invite
+fn open(path: Option<PathBuf>, name: Option<String>, redact: bool, expires: &str) -> Result<()> {
+    serve::ensure_running()?;
+
     let path =
         path.unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
     let paths = workspace::ensure_workspace_for_dir(&path)?
         .with_context(|| format!("{} is not inside a git workspace", path.display()))?;
-    let name = name.unwrap_or_else(|| {
-        paths
-            .root
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or("workspace")
-            .to_string()
-    });
+    let share_name = name.unwrap_or_else(|| default_share_name(&paths.root));
+
+    confirm_share_current(&paths.root, &share_name)?;
+
+    let share = match find_share_for_workspace(&paths.key) {
+        Ok(existing) => {
+            output::info(format!("workspace already shared as `{}`", existing.name));
+            existing
+        }
+        Err(_) => add(Some(path), Some(share_name), redact)?,
+    };
+    if !share.enabled {
+        set_enabled(&share.name, true)?;
+    }
+    invite(&share.name, expires)
+}
+
+fn confirm_share_current(root: &Path, share_name: &str) -> Result<()> {
+    if !atty::is(atty::Stream::Stdin) || !atty::is(atty::Stream::Stderr) {
+        bail!(
+            "refusing to share non-interactively; re-run in a terminal, or use `sivtr share add` explicitly"
+        );
+    }
+
+    output::info(format!(
+        "share workspace `{}` as `{share_name}`?",
+        root.display()
+    ));
+    output::hint("Press Enter to confirm, or type n/no to cancel");
+    eprint!("> ");
+    let _ = io::stderr().flush();
+
+    let mut line = String::new();
+    io::stdin()
+        .read_line(&mut line)
+        .context("Failed to read confirmation")?;
+    let answer = line.trim();
+    if answer.is_empty() || answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes") {
+        return Ok(());
+    }
+    if answer.eq_ignore_ascii_case("n") || answer.eq_ignore_ascii_case("no") {
+        bail!("share cancelled");
+    }
+    bail!("share cancelled; expected Enter / y / n");
+}
+
+fn add(path: Option<PathBuf>, name: Option<String>, redact: bool) -> Result<ShareInfo> {
+    let path =
+        path.unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
+    let paths = workspace::ensure_workspace_for_dir(&path)?
+        .with_context(|| format!("{} is not inside a git workspace", path.display()))?;
+    let name = name.unwrap_or_else(|| default_share_name(&paths.root));
     match ipc::call(LocalRequest::ShareAdd {
         workspace_key: paths.key,
         root: paths.root.display().to_string(),
@@ -47,16 +131,33 @@ fn add(path: Option<PathBuf>, name: Option<String>, redact: bool) -> Result<()> 
     })? {
         LocalResponse::Share(share) => {
             output::success(format!("shared workspace `{}`", share.name));
-            output::detail("id", share.id);
-            output::detail("root", share.root);
+            output::detail("id", share.id.clone());
+            output::detail("root", share.root.clone());
             output::detail(
                 "redaction",
                 if share.redact { "enabled" } else { "disabled" },
             );
-            Ok(())
+            Ok(share)
         }
         response => bail!("Unexpected daemon response: {response:?}"),
     }
+}
+
+fn find_share_for_workspace(workspace_key: &str) -> Result<ShareInfo> {
+    match ipc::call(LocalRequest::ShareList)? {
+        LocalResponse::Shares(shares) => shares
+            .into_iter()
+            .find(|share| share.workspace_key == workspace_key)
+            .context("current workspace is not shared"),
+        response => bail!("Unexpected daemon response: {response:?}"),
+    }
+}
+
+fn default_share_name(root: &Path) -> String {
+    root.file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("workspace")
+        .to_string()
 }
 
 fn list() -> Result<()> {
@@ -126,6 +227,8 @@ fn invite(share: &str, expires: &str) -> Result<()> {
                 "single-use invitation for `{share_name}`; expires {}",
                 expires_at.to_rfc3339()
             ));
+            output::hint("on the other machine:");
+            output::plain(format!("  sivtr remote add <alias> {ticket}"));
             output::plain(ticket);
             Ok(())
         }

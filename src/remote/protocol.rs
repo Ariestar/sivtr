@@ -4,7 +4,8 @@ use iroh::EndpointAddr;
 use serde::{Deserialize, Serialize};
 use sivtr_core::record::{WorkRecord, WorkRef};
 
-use super::state::{GrantInfo, MountInfo, PeerInfo, ShareInfo};
+use super::state::{GrantInfo, MountInfo, PeerInfo};
+pub use super::state::ShareInfo;
 
 pub const REMOTE_ALPN: &[u8] = b"sivtr/memory/1";
 pub const MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
