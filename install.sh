@@ -3,7 +3,7 @@
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh
-#   SIVTR_VERSION=v0.2.4 sh install.sh        # pin a version
+#   SIVTR_VERSION=v0.2.5 sh install.sh        # pin a version
 #   SIVTR_INSTALL_DIR=/opt/bin sh install.sh  # override install location
 #
 # Windows users: prefer install.ps1 instead:
