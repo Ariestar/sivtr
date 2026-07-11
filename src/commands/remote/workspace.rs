@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{bail, Result};
 use sivtr_core::workspace::{self, WorkspaceMetadata};
@@ -45,12 +45,22 @@ fn list() -> Result<()> {
 }
 
 /// Human origin label for a local workspace: directory basename, lowercased.
+/// Accepts both `/` and `\` so Windows roots still yield a useful label on Unix.
 pub fn workspace_display_name(meta: &WorkspaceMetadata) -> String {
-    Path::new(&meta.root)
-        .file_name()
-        .and_then(|value| value.to_str())
+    path_basename(&meta.root)
         .unwrap_or(meta.key.as_str())
         .to_ascii_lowercase()
+}
+
+fn path_basename(path: &str) -> Option<&str> {
+    let trimmed = path.trim_end_matches(['/', '\\']);
+    if trimmed.is_empty() {
+        return None;
+    }
+    trimmed
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|segment| !segment.is_empty())
 }
 
 /// Resolve a local workspace by origin label (`docs`, `sivtr`, …).
@@ -77,17 +87,31 @@ pub fn resolve_local_workspace_by_name(name: &str) -> Result<Option<PathBuf>> {
 
 #[cfg(test)]
 mod tests {
-    use super::workspace_display_name;
+    use super::{path_basename, workspace_display_name};
     use sivtr_core::workspace::WorkspaceMetadata;
 
     #[test]
     fn display_name_uses_basename() {
-        let meta = WorkspaceMetadata {
+        let unix = WorkspaceMetadata {
+            key: "abc".into(),
+            root: "/home/user/Coding/sivtr".into(),
+            created_at: "t".into(),
+            last_seen_at: "t".into(),
+        };
+        assert_eq!(workspace_display_name(&unix), "sivtr");
+
+        let windows = WorkspaceMetadata {
             key: "abc".into(),
             root: r"D:\Coding\sivtr".into(),
             created_at: "t".into(),
             last_seen_at: "t".into(),
         };
-        assert_eq!(workspace_display_name(&meta), "sivtr");
+        assert_eq!(workspace_display_name(&windows), "sivtr");
+    }
+
+    #[test]
+    fn basename_trims_trailing_separators() {
+        assert_eq!(path_basename(r"D:\Coding\sivtr\"), Some("sivtr"));
+        assert_eq!(path_basename("/home/user/sivtr/"), Some("sivtr"));
     }
 }
