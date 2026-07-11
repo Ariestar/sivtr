@@ -66,6 +66,9 @@ fn run() -> Result<()> {
         Some(Commands::Work(cmd)) => {
             commands::work::execute(&cmd)?;
         }
+        Some(Commands::Workspace(cmd)) => {
+            commands::workspace::execute(cmd)?;
+        }
         Some(Commands::Show(args)) => {
             commands::show::execute(&args)?;
         }

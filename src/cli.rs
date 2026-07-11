@@ -634,6 +634,10 @@ pub enum Commands {
     /// Traverse workspace sessions, records, and parts without printing full content
     Work(WorkCommand),
 
+    /// List known local workspaces
+    #[command(visible_alias = "wb")]
+    Workspace(WorkspaceCommand),
+
     /// Show a captured terminal or AI workspace ref
     Show(ShowArgs),
 
@@ -643,7 +647,7 @@ pub enum Commands {
     /// Manage workspaces explicitly shared by this device
     Share(ShareCommand),
 
-    /// Manage paired device identities
+    /// Manage device identities known to this daemon
     Peer(PeerCommand),
 
     /// Manage remote workspace mounts for the current workspace
@@ -1302,6 +1306,18 @@ pub enum RemoteAction {
     Rename { alias: String, new_alias: String },
     /// Perform an authenticated transport and authorization round trip
     Test { alias: String },
+}
+
+#[derive(Parser, Debug)]
+pub struct WorkspaceCommand {
+    #[command(subcommand)]
+    pub action: Option<WorkspaceAction>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum WorkspaceAction {
+    /// List known local workspaces (origin labels for `name:body` refs)
+    List,
 }
 
 #[derive(Parser, Debug)]

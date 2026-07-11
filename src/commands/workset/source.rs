@@ -66,7 +66,7 @@ pub fn load_source(source: &str, cwd: Option<&Path>) -> Result<WorkSetSource> {
         .map(Path::to_path_buf)
         .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
 
-    // `origin:body` — origin is alias / local workspace / device/workspace.
+    // `origin:body` — origin is mount alias / local workspace name / device/workspace.
     // Bare body is local current workspace.
     if let Some((origin, body)) = source.split_once(':') {
         if body.is_empty() {
@@ -81,21 +81,61 @@ pub fn load_source(source: &str, cwd: Option<&Path>) -> Result<WorkSetSource> {
             return load_local_source(body, &cwd);
         }
         let origin = origin.to_ascii_lowercase();
-        let workspace = sivtr_core::workspace::resolve_workspace_for_dir(&cwd)?
-            .with_context(|| format!("Origin `{origin}` requires a git workspace context"))?;
 
-        // Prefer workspace-local mount alias, then fall back later if needed.
-        // For now only mounts are wired; local-other-workspace can be added via
-        // the same origin string once discovery is in place.
-        let response =
-            crate::remote::RemoteClient::new(&workspace.key, &origin).load_source(body)?;
-        return Ok(WorkSetSource::Records {
-            cwd,
-            records: response.records,
-            anchors: response.anchors,
-        });
+        // 1. Workspace-local mount alias (remote share).
+        if let Some(workspace) = sivtr_core::workspace::resolve_workspace_for_dir(&cwd)? {
+            if let Some(response) = try_remote_mount(&workspace.key, &origin, body)? {
+                return Ok(WorkSetSource::Records {
+                    cwd,
+                    records: response.records,
+                    anchors: response.anchors,
+                });
+            }
+        }
+
+        // 2. Local workspace by directory basename (e.g. `docs:terminal`).
+        if !origin.contains('/') {
+            if let Some(root) =
+                crate::commands::workspace::resolve_local_workspace_by_name(&origin)?
+            {
+                return load_local_source(body, &root);
+            }
+        }
+
+        anyhow::bail!(
+            "unknown origin `{origin}`; use `sivtr remote list` for mounts or `sivtr wb list` for local workspaces"
+        );
     }
     load_local_source(source, &cwd)
+}
+
+fn try_remote_mount(
+    workspace_key: &str,
+    origin: &str,
+    body: &str,
+) -> Result<Option<crate::remote::protocol::SourceResponse>> {
+    if !crate::remote::local::running() {
+        return Ok(None);
+    }
+    // Only treat origin as a mount if it is registered; other errors (network,
+    // auth) must surface instead of being mistaken for a local workspace name.
+    let mounts = match crate::remote::local::call(
+        crate::remote::protocol::LocalRequest::RemoteList {
+            workspace_key: workspace_key.to_string(),
+        },
+    ) {
+        Ok(crate::remote::protocol::LocalResponse::Mounts(mounts)) => mounts,
+        Ok(_) | Err(_) => return Ok(None),
+    };
+    if !mounts
+        .iter()
+        .any(|mount| mount.alias.eq_ignore_ascii_case(origin))
+    {
+        return Ok(None);
+    }
+    Ok(Some(
+        crate::remote::RemoteClient::new(workspace_key, origin).load_source(body)?,
+    ))
 }
 
 fn read_stdin() -> Result<WorkSet> {

@@ -182,8 +182,10 @@ Memory variables:
 | `sivtr show <ref-or-workset>` | Print the content behind refs, `@last`, `@name`, or piped results. Also accepts remote refs like `desk:terminal/...`. |
 | `sivtr zoom <source>` | Add surrounding record context around search hits. |
 | `sivtr diff <left> <right>` | Compare recent command blocks. |
-| `sivtr serve` | Serve a workspace's sessions read-only for another device. |
-| `sivtr remote` | Manage remote devices (`add`/`list`/`remove`/`test`) used by `desk:...` refs. |
+| `sivtr serve` | Start/stop the local remote-memory daemon. |
+| `sivtr share` | Explicitly share a local workspace for remote peers. |
+| `sivtr remote` | Mount remote shares into the current workspace (`add`/`list`/`remove`/`test`). |
+| `sivtr workspace` / `sivtr wb` | List known local workspaces (origin labels for `name:body` refs). |
 | `sivtr doctor` | Diagnose binary, config, session logs, hooks, providers, and clipboard. |
 | `sivtr init <shell>` | Install shell integration; also supports `show` and `uninstall`. |
 | `sivtr config` | Manage the TOML config file. |
@@ -194,19 +196,29 @@ Memory variables:
 
 Two devices running sivtr can read each other's workspace sessions like reading local — for collaborative work where you want to see a teammate's terminal output or AI session without leaving your machine.
 
-On the device that owns the workspace, start the read-only server:
+Refs use a single form: `origin:body`.
 
-```bash
-sivtr serve                   # default: iroh — zero-config encrypted cross-network; prints a connection ticket
-sivtr serve -w <key>          # expose a specific workspace by its key
-sivtr serve --tcp             # plain HTTP instead of iroh (localhost; add --lan for the network)
+```text
+codex/4                 # local current workspace
+docs:codex/4            # another local workspace by name
+desk:terminal/...       # mounted remote alias
+alice/sivtr:hermes/...  # device/workspace coordinate
 ```
 
-On the other device, register it. The `<alias>://` prefix works anywhere a command accepts a source or ref:
+On the device that owns the workspace:
 
 ```bash
-sivtr remote add desk <iroh-ticket>       # iroh (default) — from `sivtr serve`'s ticket
-sivtr remote add desk 192.168.1.20        # TCP (LAN); port defaults to 7421; prompts for the token
+sivtr serve start
+sivtr share add . --name sivtr
+sivtr share invite sivtr
+sivtr wb list                 # see local workspace origin labels
+```
+
+On the other device:
+
+```bash
+sivtr serve start
+sivtr remote add desk <sivtr-invite:...>
 sivtr remote test desk
 sivtr s desk:terminal --status failure --latest 5 --refs
 sivtr show desk:terminal/session_42/3/o/1
@@ -215,7 +227,7 @@ sivtr nav desk:terminal/session_42/3 +1 --refs
 sivtr copy ref desk:terminal/session_42/3/o/1 --print
 ```
 
-`sivtr serve` is opt-in, read-only, and redacts obvious secrets (API keys, tokens, PEM keys) before anything leaves the machine. The default iroh transport adds encrypted, NAT-traversing connectivity via [iroh](https://iroh.computer) (relay-assisted, no port forwarding, no account). `--tcp` falls back to plain HTTP for localhost/LAN use. Unregistered aliases error — register them with `sivtr remote add`.
+Sharing is opt-in and read-only. Secrets are redacted by default before data leaves the machine. Remote access uses encrypted iroh transport. Unregistered origins error — register mounts with `sivtr remote add`, or list local workspaces with `sivtr wb`.
 
 ## Supported sources
 

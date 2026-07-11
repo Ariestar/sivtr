@@ -29,5 +29,6 @@ pub mod var;
 pub mod version;
 pub mod work;
 pub mod work_json;
+pub mod workspace;
 pub mod workset;
 pub mod zoom;
