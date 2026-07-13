@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-use crate::ai::{
+use crate::agents::{
     list_recent_jsonl_sessions, parse_jsonl_meta, parse_jsonl_session, pretty_json_string,
     push_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionInfo, AgentSessionMeta,
     AgentSessionProvider,
@@ -148,7 +148,7 @@ fn extract_timestamp(value: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::HermesProvider;
-    use crate::ai::{AgentBlockKind, AgentSessionProvider};
+    use crate::agents::{AgentBlockKind, AgentSessionProvider};
 
     #[test]
     fn parses_hermes_messages_and_tools() {

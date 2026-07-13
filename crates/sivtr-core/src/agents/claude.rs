@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-use crate::ai::{
+use crate::agents::{
     extract_content_text, list_recent_jsonl_sessions, parse_jsonl_meta, parse_jsonl_session,
     pretty_json_value, push_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionInfo,
     AgentSessionMeta, AgentSessionProvider,
@@ -348,7 +348,7 @@ fn tool_child_body(inner: &str, tool_kind: EmbeddedToolKind) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::ClaudeProvider;
-    use crate::ai::{
+    use crate::agents::{
         format_blocks, select_blocks, AgentBlockKind, AgentSelection, AgentSessionProvider,
     };
     use std::{

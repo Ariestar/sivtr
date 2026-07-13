@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
-use crate::ai::{AgentProvider, AgentSession, AgentSessionInfo, AgentSessionProvider};
+use crate::agents::{AgentProvider, AgentSession, AgentSessionInfo, AgentSessionProvider};
 
 /// OpenClaw agent host support.
 ///
@@ -33,7 +33,8 @@ impl AgentSessionProvider for OpenClawProvider {
 }
 
 pub fn openclaw_home() -> PathBuf {
-    if let Ok(path) = std::env::var("OPENCLAW_STATE_DIR").or_else(|_| std::env::var("OPENCLAW_HOME"))
+    if let Ok(path) =
+        std::env::var("OPENCLAW_STATE_DIR").or_else(|_| std::env::var("OPENCLAW_HOME"))
     {
         if !path.trim().is_empty() {
             return PathBuf::from(path);
@@ -56,7 +57,7 @@ pub fn openclaw_config_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{openclaw_config_path, openclaw_home, OpenClawProvider};
-    use crate::ai::{AgentProvider, AgentSessionProvider};
+    use crate::agents::{AgentProvider, AgentSessionProvider};
 
     #[test]
     fn stub_provider_returns_no_sessions() {

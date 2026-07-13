@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::ai::{
-    extract_content_text, normalize_path_for_match, pretty_json_value, push_block, AgentBlockKind,
-    AgentProvider, AgentSession, AgentSessionInfo, AgentSessionProvider,
+use crate::agents::{
+    extract_content_text, normalize_path_for_match, open_readonly_db, pretty_json_value,
+    push_block, system_time_from_millis, AgentBlockKind, AgentProvider, AgentSession,
+    AgentSessionInfo, AgentSessionProvider,
 };
 
 const PROVIDER_NAME: &str = "OpenCode";
@@ -165,11 +165,6 @@ pub fn opencode_db_path() -> PathBuf {
         .join("share")
         .join("opencode")
         .join("opencode.db")
-}
-
-fn open_readonly_db(path: &Path) -> Result<Connection> {
-    Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .with_context(|| format!("Failed to open OpenCode database {}", path.display()))
 }
 
 fn opencode_session_path(id: &str) -> PathBuf {
@@ -372,18 +367,10 @@ fn extract_opencode_text(value: &Value) -> String {
         .unwrap_or_else(|| extract_content_text(value))
 }
 
-fn system_time_from_millis(value: i64) -> SystemTime {
-    if value <= 0 {
-        return UNIX_EPOCH;
-    }
-
-    UNIX_EPOCH + Duration::from_millis(value as u64)
-}
-
 #[cfg(test)]
 mod tests {
     use super::OpenCodeProvider;
-    use crate::ai::{AgentBlockKind, AgentSessionProvider};
+    use crate::agents::{AgentBlockKind, AgentSessionProvider};
     use rusqlite::{params, Connection};
 
     fn test_provider() -> (tempfile::TempDir, OpenCodeProvider) {

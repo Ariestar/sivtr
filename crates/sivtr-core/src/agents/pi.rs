@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-use crate::ai::{
+use crate::agents::{
     extract_content_text, list_recent_jsonl_sessions, parse_jsonl_meta, parse_jsonl_session,
     pretty_json_value, push_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionInfo,
     AgentSessionMeta, AgentSessionProvider,
@@ -158,7 +158,7 @@ fn push_text_items(
 #[cfg(test)]
 mod tests {
     use super::PiProvider;
-    use crate::ai::{AgentBlockKind, AgentSessionProvider};
+    use crate::agents::{AgentBlockKind, AgentSessionProvider};
 
     #[test]
     fn parses_pi_messages_and_tools() {

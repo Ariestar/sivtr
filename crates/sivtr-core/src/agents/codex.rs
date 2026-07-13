@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::ai::{
+use crate::agents::{
     extract_content_text, jsonl_files, list_recent_jsonl_sessions, normalize_path_for_match,
     parse_jsonl_meta, parse_jsonl_session, pretty_json_string, pretty_json_value, push_block,
     AgentBlockKind, AgentProvider, AgentSession, AgentSessionInfo, AgentSessionMeta,
@@ -353,7 +353,7 @@ fn dedup_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{configured_codex_session_dirs, CodexProvider};
-    use crate::ai::{
+    use crate::agents::{
         format_blocks, normalize_path_for_match, select_blocks, AgentBlockKind, AgentSelection,
         AgentSessionProvider,
     };

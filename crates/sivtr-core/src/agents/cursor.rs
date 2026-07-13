@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
-use crate::ai::{AgentProvider, AgentSession, AgentSessionInfo, AgentSessionProvider};
+use crate::agents::{AgentProvider, AgentSession, AgentSessionInfo, AgentSessionProvider};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CursorProvider;
@@ -39,7 +39,7 @@ pub fn cursor_home() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::CursorProvider;
-    use crate::ai::{AgentProvider, AgentSessionProvider};
+    use crate::agents::{AgentProvider, AgentSessionProvider};
 
     #[test]
     fn stub_provider_returns_no_sessions() {

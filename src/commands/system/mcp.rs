@@ -191,9 +191,7 @@ fn provider_config_exists(provider: AgentProvider) -> bool {
         }
         AgentProvider::Pi => pi_config_path().exists() || pi_home().exists(),
         AgentProvider::Hermes => hermes_config_path().exists() || hermes_home().exists(),
-        AgentProvider::OpenClaw => {
-            openclaw_config_path().exists() || openclaw_home().exists()
-        }
+        AgentProvider::OpenClaw => openclaw_config_path().exists() || openclaw_home().exists(),
     }
 }
 
@@ -664,11 +662,11 @@ fn hermes_config_path() -> PathBuf {
 }
 
 fn openclaw_home() -> PathBuf {
-    sivtr_core::openclaw::openclaw_home()
+    sivtr_core::agents::openclaw::openclaw_home()
 }
 
 fn openclaw_config_path() -> PathBuf {
-    sivtr_core::openclaw::openclaw_config_path()
+    sivtr_core::agents::openclaw::openclaw_config_path()
 }
 
 fn read_json_object(path: &Path) -> Result<Map<String, Value>> {
