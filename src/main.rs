@@ -100,6 +100,9 @@ fn run() -> Result<()> {
         Some(Commands::Doctor(args)) => {
             commands::system::doctor::execute(args)?;
         }
+        Some(Commands::Setup) => {
+            commands::system::setup::execute()?;
+        }
         Some(Commands::Init { target }) => {
             commands::capture::init::execute(&target)?;
         }

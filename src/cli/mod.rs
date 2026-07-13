@@ -680,6 +680,9 @@ pub enum Commands {
     /// Diagnose installation and environment
     Doctor(DoctorArgs),
 
+    /// One-command setup: detect environment, install hooks/config/MCP, smoke test
+    Setup,
+
     /// Generate shell integration or desktop shortcut helpers
     Init {
         /// Integration target: powershell, bash, zsh, nushell, all, tmux, linux-shortcut, macos-shortcut, show, uninstall

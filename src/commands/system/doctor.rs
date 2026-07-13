@@ -387,7 +387,7 @@ fn session_dir() -> Option<PathBuf> {
         .map(|d| d.join("sivtr"))
 }
 
-fn detect_installed_shells() -> Vec<String> {
+pub fn detect_installed_shells() -> Vec<String> {
     let mut installed = Vec::new();
     let home = match dirs::home_dir() {
         Some(h) => h,
@@ -442,7 +442,7 @@ fn detect_installed_shells() -> Vec<String> {
     installed
 }
 
-fn detect_current_shell() -> String {
+pub fn detect_current_shell() -> String {
     if let Ok(shell) = std::env::var("SHELL") {
         if shell.contains("zsh") {
             return "zsh".to_string();
