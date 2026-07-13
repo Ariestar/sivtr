@@ -22,7 +22,7 @@ Optionally register the read-only MCP server so agent hosts can call structured 
 ```bash
 sivtr mcp install -y
 # or:
-sivtr mcp install -t claude,cursor -l global
+sivtr mcp install -p claude,cursor -l global
 ```
 
 This writes `sivtr mcp serve` into host config (Claude Code / Cursor / Codex). MCP tools: `sivtr_search`, `sivtr_show`, `sivtr_zoom`, `sivtr_filter`, `sivtr_status` (includes local workspace origin labels from `ws` and mounts). The skill still teaches *when* and *how* to retrieve evidence; MCP is the structured execution surface. See [CLI Reference](/reference/cli/#mcp).

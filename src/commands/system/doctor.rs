@@ -445,7 +445,7 @@ impl Report {
             });
         } else if fix {
             let mcp_args = crate::cli::McpInstallArgs {
-                target: "auto".to_string(),
+                providers: Vec::new(), // detect installed hosts
                 location: crate::cli::McpLocation::Global,
                 yes: true,
             };
@@ -462,7 +462,7 @@ impl Report {
                     label: "MCP registration",
                     status: Status::Manual,
                     detail: format!("auto-install failed: {e}"),
-                    hint: Some("run `sivtr mcp install auto`".to_string()),
+                    hint: Some("run `sivtr mcp install` or `sivtr mcp install -p all`".to_string()),
                 }),
             }
         } else {
@@ -471,7 +471,9 @@ impl Report {
                 label: "MCP registration",
                 status: Status::Fail,
                 detail: "not registered for any host".to_string(),
-                hint: Some("run `sivtr mcp install auto`".to_string()),
+                hint: Some(
+                    "run `sivtr mcp install` or `sivtr mcp install -p claude,cursor`".to_string(),
+                ),
             });
         }
     }

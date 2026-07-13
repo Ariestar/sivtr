@@ -44,7 +44,7 @@ pub fn execute() -> Result<()> {
         run_step("installing MCP for selected agent hosts", || {
             for target in &mcp_targets {
                 let mcp_args = McpInstallArgs {
-                    target: target.clone(),
+                    providers: vec![target.clone()],
                     location: McpLocation::Global,
                     yes: true,
                 };

@@ -552,15 +552,15 @@ sivtr mcp serve
 把 sivtr MCP 写入或移出 agent 宿主配置（类似 `codegraph install`）：
 
 ```bash
-sivtr mcp install -y                      # 自动检测宿主，global
-sivtr mcp install -t claude,cursor -l global
-sivtr mcp install -t claude -l local      # 项目 .mcp.json
-sivtr mcp uninstall -t all -y
+sivtr mcp install -y                      # 检测已安装宿主，global
+sivtr mcp install -p claude,cursor -l global
+sivtr mcp install -p claude -l local      # 项目 .mcp.json
+sivtr mcp uninstall -p all -y
 ```
 
 | 选项 | 含义 |
 | --- | --- |
-| `-t, --target` | `claude`、`cursor`、`codex`、`auto` 或 `all` |
+| `-p, --provider` | `claude`、`cursor`、`codex`、`auto` 或 `all` |
 | `-l, --location` | `global`（默认）或 `local` |
 | `-y, --yes` | 非交互 |
 

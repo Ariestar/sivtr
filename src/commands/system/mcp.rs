@@ -32,9 +32,9 @@ pub fn execute(command: McpCommand) -> Result<()> {
 }
 
 pub fn install(args: &McpInstallArgs) -> Result<()> {
-    let targets = resolve_targets(&args.target)?;
+    let targets = resolve_targets(&args.providers)?;
     if targets.is_empty() {
-        bail!("no install targets resolved from `{}`", args.target);
+        bail!("no install targets resolved");
     }
     for target in targets {
         install_target(target, args.location)?;
@@ -43,9 +43,9 @@ pub fn install(args: &McpInstallArgs) -> Result<()> {
 }
 
 fn uninstall(args: &McpInstallArgs) -> Result<()> {
-    let targets = resolve_targets(&args.target)?;
+    let targets = resolve_targets(&args.providers)?;
     if targets.is_empty() {
-        bail!("no uninstall targets resolved from `{}`", args.target);
+        bail!("no uninstall targets resolved");
     }
     for target in targets {
         uninstall_target(target, args.location)?;
@@ -122,25 +122,36 @@ fn uninstall_target(target: AgentProvider, location: McpLocation) -> Result<()> 
     }
 }
 
-fn resolve_targets(raw: &str) -> Result<Vec<AgentProvider>> {
-    let trimmed = raw.trim().to_ascii_lowercase();
-    if trimmed.is_empty() || trimmed == "auto" {
+fn resolve_targets(providers: &[String]) -> Result<Vec<AgentProvider>> {
+    // Default (no -p): detect installed hosts.
+    if providers.is_empty() {
         return Ok(detect_targets());
     }
-    if trimmed == "all" {
-        return Ok(AgentProvider::all()
-            .iter()
-            .map(|spec| spec.provider)
-            .collect());
-    }
+
     let mut out = Vec::new();
-    for part in trimmed.split(',') {
-        let part = part.trim();
-        if part.is_empty() {
-            continue;
+    for raw in providers {
+        for part in raw.split(',') {
+            let part = part.trim().to_ascii_lowercase();
+            if part.is_empty() {
+                continue;
+            }
+            if part == "auto" {
+                bail!(
+                    "`auto` was removed; omit `-p` to detect installed hosts, or pass `-p all` / `-p claude,cursor,...`"
+                );
+            }
+            if part == "all" {
+                return Ok(AgentProvider::all()
+                    .iter()
+                    .map(|spec| spec.provider)
+                    .collect());
+            }
+            out.push(parse_target(&part)?);
         }
-        out.push(parse_target(part)?);
     }
+    // Dedup while preserving order.
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|provider| seen.insert(*provider));
     Ok(out)
 }
 
@@ -715,15 +726,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolves_auto_and_named_targets() {
-        let named = resolve_targets("claude,cursor").expect("parse");
+    fn resolves_default_named_and_all_targets() {
+        let named = resolve_targets(&["claude".into(), "cursor".into()]).expect("parse");
         assert_eq!(named, vec![AgentProvider::Claude, AgentProvider::Cursor]);
-        assert!(resolve_targets("nope").is_err());
+
+        let csv = resolve_targets(&["claude,cursor".into()]).expect("parse csv");
+        assert_eq!(csv, vec![AgentProvider::Claude, AgentProvider::Cursor]);
+
+        assert!(resolve_targets(&["nope".into()]).is_err());
+        assert!(resolve_targets(&["auto".into()])
+            .unwrap_err()
+            .to_string()
+            .contains("removed"));
+
+        let all = resolve_targets(&["all".into()]).expect("parse all");
+        assert_eq!(all.len(), AgentProvider::all().len());
     }
 
     #[test]
     fn resolves_all_targets() {
-        let all = resolve_targets("all").expect("parse");
+        let all = resolve_targets(&["all".into()]).expect("parse");
         assert_eq!(all.len(), AgentProvider::all().len());
     }
 

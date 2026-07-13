@@ -1551,7 +1551,7 @@ mod tests {
             "sivtr",
             "mcp",
             "install",
-            "-t",
+            "-p",
             "claude,cursor",
             "-l",
             "global",
@@ -1561,7 +1561,10 @@ mod tests {
         match cli.command {
             Some(Commands::Mcp(cmd)) => match cmd.action {
                 McpAction::Install(args) => {
-                    assert_eq!(args.target, "claude,cursor");
+                    assert_eq!(
+                        args.providers,
+                        vec!["claude".to_string(), "cursor".to_string()]
+                    );
                     assert_eq!(args.location, McpLocation::Global);
                     assert!(args.yes);
                 }

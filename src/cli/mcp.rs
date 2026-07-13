@@ -26,9 +26,16 @@ pub enum McpAction {
 
 #[derive(Args, Debug, Clone)]
 pub struct McpInstallArgs {
-    /// Target agent(s): claude, cursor, codex, opencode, openclaw, pi, hermes, auto, all
-    #[arg(short = 't', long = "target", default_value = "auto")]
-    pub target: String,
+    /// Provider host(s) to inject (comma-separated or repeated):
+    /// claude, cursor, codex, opencode, openclaw, pi, hermes, all.
+    /// Default: detect installed hosts.
+    #[arg(
+        short = 'p',
+        long = "provider",
+        value_delimiter = ',',
+        num_args = 1..
+    )]
+    pub providers: Vec<String>,
 
     /// Install location: global or local (project cwd)
     #[arg(short = 'l', long = "location", value_enum, default_value_t = McpLocation::Global)]

@@ -552,15 +552,15 @@ Tools:
 Writes or removes the sivtr MCP entry in agent host config (same idea as `codegraph install`):
 
 ```bash
-sivtr mcp install -y                      # auto-detect hosts, global
-sivtr mcp install -t claude,cursor -l global
-sivtr mcp install -t claude -l local      # project .mcp.json
-sivtr mcp uninstall -t all -y
+sivtr mcp install -y                      # detect installed hosts, global
+sivtr mcp install -p claude,cursor -l global
+sivtr mcp install -p claude -l local      # project .mcp.json
+sivtr mcp uninstall -p all -y
 ```
 
 | Flag | Meaning |
 | --- | --- |
-| `-t, --target` | `claude`, `cursor`, `codex`, `auto`, or `all` |
+| `-p, --provider` | Provider host(s): `claude`, `cursor`, `codex`, `opencode`, `openclaw`, `pi`, `hermes`, or `all`. Omit to detect installed hosts. |
 | `-l, --location` | `global` (default) or `local` |
 | `-y, --yes` | Non-interactive |
 
