@@ -178,7 +178,7 @@ pub(crate) fn render_list_panel(
             inactive_highlight_style()
         })
         .highlight_symbol("");
-    let mut local_state = state.clone();
+    let mut local_state = *state;
     frame.render_stateful_widget(list, area, &mut local_state);
 }
 

@@ -473,7 +473,7 @@ fn qualify_source_origin(origin: &str, response: &mut SourceResponse) {
 
 fn random_token() -> String {
     let mut bytes = [0u8; 32];
-    getrandom::getrandom(&mut bytes).expect("OS RNG unavailable");
+    getrandom::fill(&mut bytes).expect("OS RNG unavailable");
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 

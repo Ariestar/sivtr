@@ -10,7 +10,7 @@ impl HistoryStore {
         )?;
 
         let entries = stmt
-            .query_map(rusqlite::params![limit], |row| {
+            .query_map(rusqlite::params![limit as i64], |row| {
                 Ok(HistoryEntry {
                     id: row.get(0)?,
                     content: row.get(1)?,
@@ -39,7 +39,7 @@ impl HistoryStore {
         )?;
 
         let entries = stmt
-            .query_map(rusqlite::params![fts_query, limit], |row| {
+            .query_map(rusqlite::params![fts_query, limit as i64], |row| {
                 Ok(HistoryEntry {
                     id: row.get(0)?,
                     content: row.get(1)?,
@@ -93,7 +93,7 @@ impl HistoryStore {
              WHERE id NOT IN (
                SELECT id FROM history ORDER BY id DESC LIMIT ?1
              )",
-            rusqlite::params![max_entries],
+            rusqlite::params![max_entries as i64],
         )?;
 
         Ok(())

@@ -1565,7 +1565,7 @@ mod tests {
         let cli = Cli::try_parse_from(["sivtr", "mcp", "print-config", "claude"]).unwrap();
         match cli.command {
             Some(Commands::Mcp(cmd)) => match cmd.action {
-                McpAction::PrintConfig { target } => assert_eq!(target, McpTarget::Claude),
+                McpAction::PrintConfig { target } => assert_eq!(target, "claude"),
                 _ => panic!("expected print-config"),
             },
             _ => panic!("expected mcp command"),

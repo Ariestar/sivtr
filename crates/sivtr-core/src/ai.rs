@@ -11,6 +11,7 @@ use std::time::SystemTime;
 pub enum AgentProvider {
     Claude,
     Codex,
+    Cursor,
     Hermes,
     OpenCode,
     Pi,
@@ -44,6 +45,14 @@ const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
         factory: claude_provider,
     },
     AgentProviderSpec {
+        provider: AgentProvider::Cursor,
+        name: "Cursor",
+        command_name: "cursor",
+        current_transcript_env: None,
+        current_session_id_env: None,
+        factory: cursor_provider,
+    },
+    AgentProviderSpec {
         provider: AgentProvider::OpenCode,
         name: "OpenCode",
         command_name: "opencode",
@@ -75,6 +84,10 @@ fn codex_provider() -> Box<dyn AgentSessionProvider> {
 
 fn claude_provider() -> Box<dyn AgentSessionProvider> {
     Box::new(crate::claude::ClaudeProvider)
+}
+
+fn cursor_provider() -> Box<dyn AgentSessionProvider> {
+    Box::new(crate::cursor::CursorProvider)
 }
 
 fn opencode_provider() -> Box<dyn AgentSessionProvider> {

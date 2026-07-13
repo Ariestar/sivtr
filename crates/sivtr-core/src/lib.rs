@@ -4,6 +4,7 @@ pub mod capture;
 pub mod claude;
 pub mod codex;
 pub mod config;
+pub mod cursor;
 pub mod export;
 pub mod hermes;
 pub mod history;

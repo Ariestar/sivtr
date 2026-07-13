@@ -551,13 +551,13 @@ fn validate_alias(value: &str, label: &str) -> Result<()> {
 
 fn random_id(prefix: &str) -> String {
     let mut bytes = [0u8; 16];
-    getrandom::getrandom(&mut bytes).expect("OS RNG unavailable");
+    getrandom::fill(&mut bytes).expect("OS RNG unavailable");
     format!("{prefix}_{}", hex(&bytes))
 }
 
 fn random_secret() -> String {
     let mut bytes = [0u8; 32];
-    getrandom::getrandom(&mut bytes).expect("OS RNG unavailable");
+    getrandom::fill(&mut bytes).expect("OS RNG unavailable");
     base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes)
 }
 
