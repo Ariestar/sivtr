@@ -81,22 +81,32 @@ Optional:
 - `nvim`, `vim`, or `vi` for the Vim picker view used by some copy workflows
 - PowerShell, Bash, Zsh, or Nushell shell profile access for session logging
 
-## Install with Cargo
+## Install with cargo-binstall (recommended)
 
-Install the latest published release from crates.io:
+Download a prebuilt binary via [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) (no compile):
 
 ```bash
-cargo install sivtr
+cargo binstall sivtr
 ```
 
-Verify the binary:
+On Linux x86_64, binstall resolves to the **static musl** release asset, so the binary does not require a recent system GLIBC. This matches `install.sh`.
+
+Verify:
 
 ```bash
 sivtr --version
 sivtr --help
 ```
 
-## Quick Install (Linux/macOS)
+## Install with Cargo (from source)
+
+Build the latest published release from crates.io:
+
+```bash
+cargo install sivtr
+```
+
+## Quick Install script (Linux/macOS)
 
 Download a pre-built binary without compiling:
 
@@ -107,10 +117,10 @@ curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh
 Pin a specific version:
 
 ```bash
-SIVTR_VERSION=v0.1.3 curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh
+SIVTR_VERSION=v0.2.5 curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh
 ```
 
-This downloads a static binary to `~/.local/bin/sivtr` (or `$SIVTR_INSTALL_DIR`). Requires no Rust toolchain.
+This downloads a static musl binary to `~/.local/bin/sivtr` (or `$SIVTR_INSTALL_DIR`). Requires no Rust toolchain.
 
 ## Install from source
 

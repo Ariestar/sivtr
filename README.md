@@ -81,6 +81,8 @@ Install the prebuilt CLI (no Rust toolchain needed):
 cargo binstall sivtr
 ```
 
+On Linux, `cargo binstall` installs the static musl build by default (no GLIBC version requirement). Same asset as `install.sh`.
+
 Other ways:
 
 ```bash
@@ -246,6 +248,8 @@ Sharing is opt-in and read-only. Secrets are redacted by default before data lea
 - Memory skill: [skills/sivtr-memory](skills/sivtr-memory)
 
 ## Development
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, PR expectations, and coding guidelines.
 
 ```bash
 cargo fmt --all -- --check

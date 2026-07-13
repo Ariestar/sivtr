@@ -81,6 +81,8 @@
 cargo binstall sivtr
 ```
 
+Linux 上 `cargo binstall` 默认安装静态 musl 构建（不依赖系统 GLIBC 版本），与 `install.sh` 同源。
+
 其它方式：
 
 ```bash
@@ -246,6 +248,8 @@ sivtr copy ref desk:terminal/session_42/3/o/1 --print
 - Memory skill：[skills/sivtr-memory](skills/sivtr-memory)
 
 ## 开发
+
+环境、PR 约定与编码指南见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ```bash
 cargo fmt --all -- --check

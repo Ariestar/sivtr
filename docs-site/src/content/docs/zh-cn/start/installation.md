@@ -81,22 +81,32 @@ cargo uninstall sivtr # 移除二进制
 - `nvim`、`vim` 或 `vi`，用于部分 copy 工作流中的 Vim picker view
 - 可修改 PowerShell、Bash、Zsh 或 Nushell profile，用于会话记录
 
-## 用 Cargo 安装
+## 用 cargo-binstall 安装（推荐）
 
-从 crates.io 安装最新发布版本：
+通过 [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) 下载预编译二进制（无需编译）：
 
 ```bash
-cargo install sivtr
+cargo binstall sivtr
 ```
 
-验证二进制：
+Linux x86_64 上 binstall 会解析到 **静态 musl** 发布资源，不依赖较新的系统 GLIBC，与 `install.sh` 同源。
+
+验证：
 
 ```bash
 sivtr --version
 sivtr --help
 ```
 
-## 快速安装（Linux/macOS）
+## 用 Cargo 从源码安装
+
+从 crates.io 编译安装最新发布版本：
+
+```bash
+cargo install sivtr
+```
+
+## 快速安装脚本（Linux/macOS）
 
 下载预编译二进制，无需编译：
 
@@ -107,10 +117,10 @@ curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh
 指定版本：
 
 ```bash
-SIVTR_VERSION=v0.1.3 curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh
+SIVTR_VERSION=v0.2.5 curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh
 ```
 
-安装到 `~/.local/bin/sivtr`（或 `$SIVTR_INSTALL_DIR`）。无需 Rust 工具链。
+安装静态 musl 二进制到 `~/.local/bin/sivtr`（或 `$SIVTR_INSTALL_DIR`）。无需 Rust 工具链。
 
 ## 从源码安装
 

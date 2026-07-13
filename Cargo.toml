@@ -37,6 +37,11 @@ path = "src/main.rs"
 # GitHub Releases instead of compiling from source. Asset names mirror the build
 # matrix in .github/workflows/release.yml (sivtr-<version>-<asset>.<ext>); each
 # archive holds a top-level sivtr-<version>-<asset>/ directory containing the binary.
+#
+# Linux: both gnu and musl host triples resolve to the static musl build so
+# `cargo binstall sivtr` works on older distros that lack the GLIBC version
+# used by ubuntu-latest (see linux-x64-musl). The glibc-linked linux-x64 asset
+# remains published for users who explicitly want it.
 [package.metadata.binstall]
 pkg-fmt = "tgz"
 
@@ -46,8 +51,8 @@ bin-dir = "sivtr-v{ version }-windows-x64/{ bin }{ binary-ext }"
 pkg-fmt = "zip"
 
 [package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
-pkg-url = "{ repo }/releases/download/v{ version }/sivtr-v{ version }-linux-x64.tar.gz"
-bin-dir = "sivtr-v{ version }-linux-x64/{ bin }{ binary-ext }"
+pkg-url = "{ repo }/releases/download/v{ version }/sivtr-v{ version }-linux-x64-musl.tar.gz"
+bin-dir = "sivtr-v{ version }-linux-x64-musl/{ bin }{ binary-ext }"
 
 [package.metadata.binstall.overrides.x86_64-unknown-linux-musl]
 pkg-url = "{ repo }/releases/download/v{ version }/sivtr-v{ version }-linux-x64-musl.tar.gz"

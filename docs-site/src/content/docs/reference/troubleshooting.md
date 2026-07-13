@@ -5,6 +5,27 @@ description: Diagnose missing command blocks, empty agent sessions, clipboard is
 
 This page lists common failure modes and the first checks to run.
 
+## `GLIBC_2.xx' not found` after install
+
+Prebuilt **glibc-linked** Linux binaries are built on GitHub `ubuntu-latest` and may require a newer GLIBC than older distros provide. Current `cargo binstall sivtr` metadata serves the **static musl** asset for both `linux-gnu` and `linux-musl` hosts, so a fresh binstall should not hit this.
+
+If you still have an older glibc binary (for example from a previous install, or crates.io metadata not yet updated):
+
+```bash
+# reinstall static musl build explicitly
+cargo binstall sivtr --targets x86_64-unknown-linux-musl
+
+# or
+curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh
+```
+
+Confirm:
+
+```bash
+ldd "$(command -v sivtr)"   # static musl is typically "not a dynamic executable"
+sivtr --version
+```
+
 ## `sivtr copy out` finds no command blocks
 
 Command-block copy requires shell integration and a restarted shell.
