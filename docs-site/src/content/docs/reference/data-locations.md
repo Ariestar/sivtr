@@ -119,7 +119,7 @@ sivtr serve logs
 sivtr share list
 sivtr remote list
 sivtr peer list
-sivtr wb list
+sivtr ws list
 ```
 
 Remote access is opt-in. Nothing is shared until `sivtr share` (or `share add`) runs. Mounts are workspace-local aliases registered with `sivtr remote add`. Feature guide: [Remote Access](/usage/remote-access/).

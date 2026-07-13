@@ -56,7 +56,7 @@ sivtr show desk:terminal/session_42/3/o/1 --full
 sivtr show docs:codex/4
 ```
 
-Origins come from `sivtr remote add <alias> ...` or `sivtr wb list`. Feature guide: [Remote Access](/usage/remote-access/).
+Origins come from `sivtr remote add <alias> ...` or `sivtr ws list`. Feature guide: [Remote Access](/usage/remote-access/).
 
 ## Content filters
 

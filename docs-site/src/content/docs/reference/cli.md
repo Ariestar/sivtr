@@ -213,7 +213,7 @@ Targets:
 | `pi[/<session>[/<turn>[/<line>]]]` | Pi records |
 | `<origin>:<target>` | Remote or other-workspace origin, for example `desk:terminal` or `docs:codex/4` |
 
-Use `*` for wildcard path segments, for example `terminal/*/3` or `pi/*/*`. Origins come from `sivtr remote add <alias> ...` mounts or local workspace names listed by `sivtr wb list`.
+Use `*` for wildcard path segments, for example `terminal/*/3` or `pi/*/*`. Origins come from `sivtr remote add <alias> ...` mounts or local workspace names listed by `sivtr ws list`.
 
 Options:
 
@@ -507,13 +507,13 @@ sivtr peer forget <peer>
 
 ```bash
 sivtr workspace [list]
-sivtr wb list
+sivtr ws list
 ```
 
-Lists known local workspaces and their origin labels for `name:body` refs (for example `docs:codex/4`). Alias: `sivtr wb`.
+Lists known local workspaces and their origin labels for `name:body` refs (for example `docs:codex/4`). Alias: `sivtr ws`.
 
 ```bash
-sivtr wb list
+sivtr ws list
 ```
 
 Exact syntax for every remote subcommand is above. For the model, setup path, and safety defaults, see [Remote Access](/usage/remote-access/). For a teammate scenario, see [Remote collaboration memory](/playbooks/remote-collaboration-memory/).
@@ -545,7 +545,7 @@ Tools:
 | `sivtr_show` | Expand a ref or WorkSet handle |
 | `sivtr_zoom` | Neighboring record context |
 | `sivtr_filter` | Narrow `@last` / `@name` / a source |
-| `sivtr_status` | Version, hooks, providers, daemon, `wb` local origins, mounts, vars |
+| `sivtr_status` | Version, hooks, providers, daemon, `ws` local origins, mounts, vars |
 
 ### install / uninstall
 

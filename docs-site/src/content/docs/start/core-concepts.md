@@ -156,7 +156,7 @@ sivtr show desk:terminal/session_42/3
 sivtr show docs:codex/4
 ```
 
-`search --format refs` / `--format workset` returns refs, so humans and agents can search first and then expand the same evidence. Origins come from mounted remote aliases (`sivtr remote add`) or local workspace names (`sivtr wb list`).
+`search --format refs` / `--format workset` returns refs, so humans and agents can search first and then expand the same evidence. Origins come from mounted remote aliases (`sivtr remote add`) or local workspace names (`sivtr ws list`).
 
 ## WorkSet: pipeable memory selections
 

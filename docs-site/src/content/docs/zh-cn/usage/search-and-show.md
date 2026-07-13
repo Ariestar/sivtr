@@ -56,7 +56,7 @@ sivtr show desk:terminal/session_42/3/o/1 --full
 sivtr show docs:codex/4
 ```
 
-origin 来自 `sivtr remote add <alias> ...` 或 `sivtr wb list`。功能指南见 [远程访问](/zh-cn/usage/remote-access/)。
+origin 来自 `sivtr remote add <alias> ...` 或 `sivtr ws list`。功能指南见 [远程访问](/zh-cn/usage/remote-access/)。
 
 ## 内容过滤
 

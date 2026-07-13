@@ -136,7 +136,7 @@ Core model landed: **Device Daemon + Identity + Share + Grant + Mount** over enc
 - [x] Peer identity list/forget (`sivtr peer`).
 - [x] Remote origins in WorkRef (`origin:body`) for search, show, filter, nav, zoom, copy.
 - [x] Default secret redaction before data leaves the machine.
-- [x] Local workspace origin labels (`sivtr wb list`).
+- [x] Local workspace origin labels (`sivtr ws list`).
 - [ ] Identity CLI (`identity show|rotate|export`).
 - [ ] Share audit log and per-share redact toggle CLI.
 - [ ] Daemon autostart on login (`serve enable|disable`).

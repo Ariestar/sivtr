@@ -27,7 +27,7 @@ sivtr mcp install -y
 | `sivtr_show` | Expand a ref or `@last` / `@name` |
 | `sivtr_zoom` | Neighboring record context |
 | `sivtr_filter` | Narrow `@last` or a saved set |
-| `sivtr_status` | Hooks, providers, daemon, local workspace origins (`wb`), mounts, vars |
+| `sivtr_status` | Hooks, providers, daemon, local workspace origins (`ws`), mounts, vars |
 
 Fall back to CLI commands below when MCP is not configured.
 

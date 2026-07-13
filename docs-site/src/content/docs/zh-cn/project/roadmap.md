@@ -136,7 +136,7 @@ TUI 应保持快速和键盘优先,但需要从单个输出浏览扩展到多 so
 - [x] peer 身份 list/forget（`sivtr peer`）。
 - [x] WorkRef 支持 remote origin（`origin:body`），可用于 search / show / filter / nav / zoom / copy。
 - [x] 数据离开本机前默认脱敏。
-- [x] 本机 workspace origin 标签（`sivtr wb list`）。
+- [x] 本机 workspace origin 标签（`sivtr ws list`）。
 - [ ] Identity CLI（`identity show|rotate|export`）。
 - [ ] share audit log 与按 share 的 redact 开关 CLI。
 - [ ] 登录时自动启动 daemon（`serve enable|disable`）。

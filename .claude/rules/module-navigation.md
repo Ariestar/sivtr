@@ -37,7 +37,7 @@ src/
 │   │   ├── share.rs           ← interactive share + add/list/invite/grants/revoke
 │   │   ├── mounts.rs          ← remote add/list/remove/rename/test
 │   │   ├── peer.rs            ← peer list/forget
-│   │   └── workspace.rs       ← wb list + local origin name resolution
+│   │   └── workspace.rs       ← ws list + local origin name resolution
 │   └── system/                ← config, doctor, history, hotkey, codex, migrate, version
 ├── remote/                    ← Daemon runtime (not CLI handlers)
 │   ├── daemon.rs              ← iroh remote + localhost control plane

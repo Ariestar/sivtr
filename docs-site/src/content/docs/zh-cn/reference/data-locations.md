@@ -119,7 +119,7 @@ sivtr serve logs
 sivtr share list
 sivtr remote list
 sivtr peer list
-sivtr wb list
+sivtr ws list
 ```
 
 远程访问是 opt-in。只有 `sivtr share`（或 `share add`）之后才会分享。mount 是用 `sivtr remote add` 登记的 workspace 本地别名。功能指南见 [远程访问](/zh-cn/usage/remote-access/)。

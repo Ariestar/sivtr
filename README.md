@@ -58,20 +58,18 @@ With `sivtr`, you can:
 - save useful search results as named variables like `@failures` and reuse them in the next command.
 
 > [!IMPORTANT]
-> For agent workflows, install both the `sivtr` CLI and the bundled `sivtr-memory` skill. The CLI stores and retrieves local memory; the skill teaches your agent when and how to use it.
+> For agent workflows, install the `sivtr` CLI, register the MCP server with `sivtr mcp install`, and optionally add the bundled `sivtr-memory` skill. MCP is the main way agents read local evidence; the skill teaches when and how to use it.
 
 ## Features
 
+- **MCP-first agent memory**: install once with `sivtr mcp install`, then agents call `sivtr_search` / `sivtr_show` / `sivtr_zoom` / `sivtr_filter` / `sivtr_status` instead of asking you to paste logs.
 - **Shell history that keeps the output**: capture commands from Bash, Zsh, PowerShell, and Nushell, including stdout, stderr, exit code, cwd, and timing.
-- **A viewer for long output**: pipe `cargo test`, build logs, or stack traces into a fast keyboard-first TUI.
-- **One search box for local work**: search terminal output and Codex, Claude Code, Hermes, OpenCode, and Pi sessions from the current repo.
-- **Click-back / copy-back evidence**: every match can be shown, copied, expanded with nearby context, or handed to an agent.
-- **Named memory variables**: save any result set as `@failures`, reuse `@last`, pass stdin as `@`, list vars with `sivtr var list`, and select slices like `@failures[1,3..5]`.
-- **Deterministic anchor navigation**: move refs through parent/child/sibling/session structure with `sivtr nav`, without implicit expansion.
-- **Agent-ready memory** through the bundled `sivtr-memory` skill.
-- **Optional MCP server** (`sivtr mcp serve`, install with `sivtr mcp install`) for structured agent tool calls: search, show, zoom, filter, status.
-- **Cross-device access**: expose a workspace read-only and browse another device's sessions with a `desk:...` ref, like reading local — for collaborative dev.
-- **Diagnostics** with `sivtr doctor`, `sivtr init show`, and `sivtr init uninstall`.
+- **One search surface for local work**: terminal output plus Codex, Claude Code, Hermes, OpenCode, Cursor, and Pi sessions from the current repo — via MCP or CLI.
+- **Exact evidence, not summaries**: every hit resolves to a stable ref you can show, zoom, filter, or hand to the next agent.
+- **Named memory variables**: save result sets as `@failures`, reuse `@last`, pipe with `@`, and slice with `@failures[1,3..5]`.
+- **Cross-device access**: share a workspace read-only and browse another device with a `desk:...` ref.
+- **One-command setup**: `sivtr setup` for hooks + MCP host install; `sivtr doctor --fix` to repair.
+- **CLI still there when you want it**: search, show, filter, nav, and a TUI browser for humans — useful, not the main product story.
 
 ## Quick start
 
@@ -96,44 +94,52 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/Ariestar/sivtr/main/install.ps1 | iex
 ```
 
-Enable shell capture:
+First-time setup (hooks + MCP hosts):
 
 ```bash
-sivtr init bash       # or zsh, powershell, nushell
+sivtr setup             # hooks + MCP hosts + sivtr-memory skill (if missing)
+# or step by step:
+sivtr init powershell   # or bash, zsh, nushell
+sivtr mcp install       # Claude Code, Cursor, Codex, OpenCode, Pi, Hermes
+npx skills add Ariestar/sivtr --skill sivtr-memory -g -y
 sivtr doctor
 ```
 
 > [!NOTE]
 > On Windows, if `sivtr init powershell` reports that the profile did not load, raise the current-user execution policy once with `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`. sivtr never edits the registry — the hook lives only in your PowerShell profile.
 
-Capture and browse output:
+## Agent memory (MCP)
 
-```bash
-cargo test 2>&1 | sivtr
-```
+This is the main path. After `sivtr mcp install`, agents get structured tools over local terminal + AI session memory:
 
-Search recent workspace memory:
+| Tool | Use |
+| --- | --- |
+| `sivtr_search` | Find recent failures, decisions, or commands |
+| `sivtr_show` | Open the exact record/part behind a hit |
+| `sivtr_zoom` | Expand surrounding context |
+| `sivtr_filter` | Narrow a result set |
+| `sivtr_status` | Workspace / mount / origin health |
 
-```bash
-sivtr s agent -m "TODO|decision|failed" --since today -f timeline
-sivtr s terminal --status failure --latest 1 --refs
-```
-
-## Agent memory
-
-Install the bundled skill globally:
+Optional skill (teaches the agent when to call those tools):
 
 ```bash
 npx skills add Ariestar/sivtr --skill sivtr-memory -g
 ```
 
-Then ask your coding agent to use local memory first:
+Then ask:
 
 ```text
 Fix the latest terminal error. Use sivtr first.
 ```
 
-Instead of asking you to paste logs, the agent can search local evidence, open the exact matching output, patch the code, and verify the fix.
+The agent should search local evidence, open the matching output, patch, and verify — without you pasting logs.
+
+CLI search is still available when you want it yourself:
+
+```bash
+sivtr s terminal --status failure --latest 5 --refs
+sivtr s agent -m "TODO|decision|failed" --since today -f timeline
+```
 
 ## Examples
 
@@ -141,12 +147,11 @@ More end-to-end walkthroughs live in the [Playbooks](https://sivtr.pages.dev/pla
 
 | Workflow | What you do | Demo |
 | --- | --- | --- |
-| Fix the latest terminal error | Ask your agent: <br><code>Fix the latest terminal error. Use sivtr first.</code> | <img src="docs-site/public/demo/1.gif" alt="Fix the latest terminal error with sivtr" width="320"> |
-| Browse and copy recent terminal output | <code>cargo test 2&gt;&amp;1 &#124; sivtr</code><br><code>sivtr copy out --print</code> | <img src="docs-site/public/demo/2.gif" alt="Browse and copy recent terminal output" width="320"> |
-| Turn recent work into a timeline | <code>sivtr s agent --since today --sort oldest -f timeline</code><br><code>sivtr s terminal --since today --sort oldest -f timeline</code> | <img src="docs-site/public/demo/3.gif" alt="Build a recent work timeline" width="320"> |
-| Save results as variables and chain them | <code>sivtr s terminal -m "panic" --save failures</code><br><code>sivtr filter @failures --status failure --refs</code><br><code>sivtr var list</code> | <img src="docs-site/public/demo/4.gif" alt="Chain saved memory variables" width="320"> |
+| Fix the latest terminal error | Ask your agent (MCP): <br><code>Fix the latest terminal error. Use sivtr first.</code> | <img src="docs-site/public/demo/1.gif" alt="Fix the latest terminal error with sivtr" width="320"> |
 | Continue after interruption | Ask your agent: <br><code>Continue. Use sivtr memory first.</code> | <img src="docs-site/public/demo/5.gif" alt="Continue after interruption with sivtr memory" width="320"> |
 | Prepare a handoff for the next agent | Ask your agent: <br><code>Give the next agent a handoff with evidence.</code> | <img src="docs-site/public/demo/6.gif" alt="Prepare an evidence-backed handoff" width="320"> |
+| Turn recent work into a timeline | <code>sivtr s agent --since today --sort oldest -f timeline</code><br><code>sivtr s terminal --since today --sort oldest -f timeline</code> | <img src="docs-site/public/demo/3.gif" alt="Build a recent work timeline" width="320"> |
+| Save results as variables and chain them | <code>sivtr s terminal -m "panic" --save failures</code><br><code>sivtr filter @failures --status failure --refs</code> | <img src="docs-site/public/demo/4.gif" alt="Chain saved memory variables" width="320"> |
 
 ## Core concepts
 
@@ -187,7 +192,7 @@ Memory variables:
 | `sivtr serve` | Start/stop the local remote-memory daemon. |
 | `sivtr share` | Explicitly share a local workspace for remote peers. |
 | `sivtr remote` | Mount remote shares into the current workspace (`add`/`list`/`remove`/`test`). |
-| `sivtr workspace` / `sivtr wb` | List known local workspaces (origin labels for `name:body` refs). |
+| `sivtr workspace` / `sivtr ws` | List known local workspaces (origin labels for `name:body` refs). |
 | `sivtr mcp` | MCP server + host install (`serve` / `install` / `uninstall` / `print-config`). |
 | `sivtr doctor` | Diagnose binary, config, session logs, hooks, providers, and clipboard. |
 | `sivtr init <shell>` | Install shell integration; also supports `show` and `uninstall`. |
@@ -212,7 +217,7 @@ On the device that owns the workspace:
 
 ```bash
 sivtr share                   # pick workspace (Enter = current), print invite key
-sivtr wb list                 # see local workspace origin labels
+sivtr ws list                 # see local workspace origin labels
 ```
 
 On the other device:
@@ -226,7 +231,7 @@ sivtr nav desk:terminal/session_42/3 +1 --refs
 sivtr copy ref desk:terminal/session_42/3/o/1 --print
 ```
 
-Sharing is opt-in and read-only. Secrets are redacted by default before data leaves the machine. Remote access uses encrypted iroh transport; the daemon auto-starts when needed. Unregistered origins error — register mounts with `sivtr remote add`, or list local workspaces with `sivtr wb`.
+Sharing is opt-in and read-only. Secrets are redacted by default before data leaves the machine. Remote access uses encrypted iroh transport; the daemon auto-starts when needed. Unregistered origins error — register mounts with `sivtr remote add`, or list local workspaces with `sivtr ws`.
 
 ## Supported sources
 

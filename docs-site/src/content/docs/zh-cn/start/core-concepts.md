@@ -156,7 +156,7 @@ sivtr show desk:terminal/session_42/3
 sivtr show docs:codex/4
 ```
 
-`search --format refs` / `--format workset` 会输出 ref，所以人和 Agent 都可以先搜索，再用 ref 展开同一份证据。origin 来自挂载的远端别名（`sivtr remote add`）或本机 workspace 名（`sivtr wb list`）。
+`search --format refs` / `--format workset` 会输出 ref，所以人和 Agent 都可以先搜索，再用 ref 展开同一份证据。origin 来自挂载的远端别名（`sivtr remote add`）或本机 workspace 名（`sivtr ws list`）。
 
 ## WorkSet：可管道传递的记忆选择
 

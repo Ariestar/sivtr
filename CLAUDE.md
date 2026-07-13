@@ -99,7 +99,7 @@ sivtr share                   # interactive: pick workspace, print bare invite k
 sivtr remote add desk <key>   # mount peer share under local alias
 sivtr s desk:terminal --status failure --latest 5 --refs
 sivtr serve status            # daemon identity + share/peer counts
-sivtr wb list                 # local workspace origin labels
+sivtr ws list                 # local workspace origin labels
 ```
 
 State lives under `data_dir()` (`SIVTR_DATA_DIR` override, else platform config dir `/sivtr`): `identity.key`, `remote-state.db`, `daemon.json`, `daemon.lock`, `daemon.log`.

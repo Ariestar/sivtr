@@ -100,7 +100,7 @@ pub fn load_source(source: &str, cwd: Option<&Path>) -> Result<WorkSetSource> {
         }
 
         anyhow::bail!(
-            "unknown origin `{origin}`; use `sivtr remote list` for mounts or `sivtr wb list` for local workspaces"
+            "unknown origin `{origin}`; use `sivtr remote list` for mounts or `sivtr ws list` for local workspaces"
         );
     }
     load_local_source(source, &cwd)

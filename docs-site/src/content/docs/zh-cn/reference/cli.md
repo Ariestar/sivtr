@@ -213,7 +213,7 @@ Targets：
 | `pi[/<session>[/<turn>[/<line>]]]` | Pi 记录 |
 | `<origin>:<target>` | 远端或其他 workspace origin，例如 `desk:terminal` 或 `docs:codex/4` |
 
-可以用 `*` 作为 path segment 通配符，例如 `terminal/*/3` 或 `pi/*/*`。origin 来自 `sivtr remote add <alias> ...` 挂载，或 `sivtr wb list` 列出的本机 workspace 名。
+可以用 `*` 作为 path segment 通配符，例如 `terminal/*/3` 或 `pi/*/*`。origin 来自 `sivtr remote add <alias> ...` 挂载，或 `sivtr ws list` 列出的本机 workspace 名。
 
 选项：
 
@@ -507,13 +507,13 @@ sivtr peer forget <peer>
 
 ```bash
 sivtr workspace [list]
-sivtr wb list
+sivtr ws list
 ```
 
-列出已知本机 workspaces 及其 origin 标签，用于 `name:body` refs（例如 `docs:codex/4`）。别名：`sivtr wb`。
+列出已知本机 workspaces 及其 origin 标签，用于 `name:body` refs（例如 `docs:codex/4`）。别名：`sivtr ws`。
 
 ```bash
-sivtr wb list
+sivtr ws list
 ```
 
 各 remote 子命令的精确语法见上。模型、设置路径和安全默认见 [远程访问](/zh-cn/usage/remote-access/)。协作场景见 [远程协作记忆](/zh-cn/playbooks/remote-collaboration-memory/)。
@@ -545,7 +545,7 @@ sivtr mcp serve
 | `sivtr_show` | 展开 ref 或 WorkSet handle |
 | `sivtr_zoom` | 邻近 record 上下文 |
 | `sivtr_filter` | 缩小 `@last` / `@name` / source |
-| `sivtr_status` | 版本、hooks、providers、daemon、`wb` 本机 origin、mounts、vars |
+| `sivtr_status` | 版本、hooks、providers、daemon、`ws` 本机 origin、mounts、vars |
 
 ### install / uninstall
 

@@ -25,7 +25,7 @@ docs:codex/4            # 本机另一个 workspace 名
 desk:terminal/...       # 已挂载的远端别名
 ```
 
-用 `sivtr wb list` 查看本机 origin 标签。未登记的 origin 会报错。
+用 `sivtr ws list` 查看本机 origin 标签。未登记的 origin 会报错。
 
 ## 所有者设置
 
@@ -123,6 +123,6 @@ sivtr serve stop
 | `sivtr remote add\|list\|remove\|rename\|test` | 管理当前 workspace 的 mounts |
 | `sivtr peer list\|forget` | 管理已知 peer 身份 |
 | `sivtr serve ...` | 管理设备 daemon |
-| `sivtr wb list` | 列出本机 workspace origin 标签 |
+| `sivtr ws list` | 列出本机 workspace origin 标签 |
 
 精确语法见 [CLI 参考](/zh-cn/reference/cli/)。

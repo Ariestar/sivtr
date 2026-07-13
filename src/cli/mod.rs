@@ -653,7 +653,7 @@ pub enum Commands {
     Work(WorkCommand),
 
     /// List known local workspaces
-    #[command(visible_alias = "wb")]
+    #[command(visible_alias = "ws", alias = "wb")]
     Workspace(WorkspaceCommand),
 
     /// Show a captured terminal or AI workspace ref

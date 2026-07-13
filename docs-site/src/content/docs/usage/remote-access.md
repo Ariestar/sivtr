@@ -25,7 +25,7 @@ docs:codex/4            # another local workspace by name
 desk:terminal/...       # mounted remote alias
 ```
 
-List local origin labels with `sivtr wb list`. Unregistered origins error.
+List local origin labels with `sivtr ws list`. Unregistered origins error.
 
 ## Owner setup
 
@@ -123,6 +123,6 @@ See [Data Locations](/reference/data-locations/) and [Local-first and Privacy](/
 | `sivtr remote add\|list\|remove\|rename\|test` | Manage mounts in the current workspace |
 | `sivtr peer list\|forget` | Manage known peer identities |
 | `sivtr serve ...` | Manage the device daemon |
-| `sivtr wb list` | List local workspace origin labels |
+| `sivtr ws list` | List local workspace origin labels |
 
 Exact syntax: [CLI Reference](/reference/cli/).

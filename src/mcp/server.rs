@@ -98,7 +98,7 @@ impl SivtrMcp {
     }
 
     #[tool(
-        description = "Environment and origin status: version, hooks, providers, daemon, local workspace origin labels (wb), remote mounts, and saved WorkSet vars."
+        description = "Environment and origin status: version, hooks, providers, daemon, local workspace origin labels (ws), remote mounts, and saved WorkSet vars."
     )]
     fn sivtr_status(
         &self,

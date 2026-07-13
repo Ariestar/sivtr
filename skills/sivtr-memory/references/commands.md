@@ -19,7 +19,7 @@ Source forms:
 
 WorkSets contain materialized `records` plus active `anchors`. Pipes move anchors; records are the backing store. WorkSet selector indexes are 1-based. Discrete selectors keep the requested order. `filter` narrows anchors, `nav` moves anchors, `var` remembers anchors, and `show` renders anchors.
 
-Remote origins are registered with `sivtr remote add <alias> <invite>` or listed as local workspace names by `sivtr wb list`. Unregistered origins error.
+Remote origins are registered with `sivtr remote add <alias> <invite>` or listed as local workspace names by `sivtr ws list`. Unregistered origins error.
 
 ## Search
 
@@ -176,7 +176,7 @@ sivtr var list
 When the user refers to a teammate machine, a mounted alias, or another local workspace by name:
 
 ```bash
-sivtr wb list
+sivtr ws list
 sivtr remote list
 sivtr s desk:terminal --status fail --latest 5 --refs
 sivtr s desk:agent -m "decision|failed|TODO" --latest 20 --save remote_hits --refs

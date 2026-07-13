@@ -25,7 +25,7 @@ sivtr mcp install -y
 sivtr mcp install -t claude,cursor -l global
 ```
 
-这会把 `sivtr mcp serve` 写入宿主配置（Claude Code / Cursor / Codex）。MCP 工具：`sivtr_search`、`sivtr_show`、`sivtr_zoom`、`sivtr_filter`、`sivtr_status`（含 `wb` 本机 origin 标签和 mounts）。skill 仍负责教 *何时/如何* 取证；MCP 是结构化执行面。见 [CLI 参考](/zh-cn/reference/cli/#mcp)。
+这会把 `sivtr mcp serve` 写入宿主配置（Claude Code / Cursor / Codex）。MCP 工具：`sivtr_search`、`sivtr_show`、`sivtr_zoom`、`sivtr_filter`、`sivtr_status`（含 `ws` 本机 origin 标签和 mounts）。skill 仍负责教 *何时/如何* 取证；MCP 是结构化执行面。见 [CLI 参考](/zh-cn/reference/cli/#mcp)。
 
 ## 为什么需要 skill
 
