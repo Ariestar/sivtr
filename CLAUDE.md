@@ -80,7 +80,7 @@ pwd && git branch
 
 ## Shell Hook System
 
-`sivtr init {shell}` injects precmd hooks using marker blocks (`# >>> sivtr shell integration >>>`). Legacy `sift` markers auto-migrated. Session logs go to `$XDG_STATE_HOME/sivtr/session_<pid>.log`. Internal `sivtr flush` called by hooks on each prompt.
+`sivtr init {shell}` injects precmd hooks using marker blocks (`# >>> sivtr shell integration >>>`). Session logs go to `$XDG_STATE_HOME/sivtr/session_<pid>.log`. Internal `sivtr flush` called by hooks on each prompt.
 
 ## Search Pipeline
 

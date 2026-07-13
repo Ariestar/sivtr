@@ -354,22 +354,22 @@ mod tests {
     #[test]
     fn strips_ansi_from_entry_at_construction_boundary() {
         let entry = SessionEntry::new(
-            "\x1b[1;32msift\x1b[0m\n\x1b[1;36m❯ \x1b[0m ",
+            "\x1b[1;32msivtr\x1b[0m\n\x1b[1;36m❯ \x1b[0m ",
             "sivtr c 1",
             "\x1b[92mok\x1b[0m",
         );
 
-        assert_eq!(entry.prompt, "sift\n❯  ");
+        assert_eq!(entry.prompt, "sivtr\n❯  ");
         assert_eq!(entry.output, "ok");
         assert_eq!(
             entry.prompt_ansi.as_deref(),
-            Some("\x1b[1;32msift\x1b[0m\n\x1b[1;36m❯ \x1b[0m ")
+            Some("\x1b[1;32msivtr\x1b[0m\n\x1b[1;36m❯ \x1b[0m ")
         );
         assert_eq!(entry.output_ansi.as_deref(), Some("\x1b[92mok\x1b[0m"));
-        assert_eq!(render_entry(&entry), "sift\n❯  sivtr c 1\nok");
+        assert_eq!(render_entry(&entry), "sivtr\n❯  sivtr c 1\nok");
         assert_eq!(
             render_entry_ansi(&entry),
-            "\x1b[1;32msift\x1b[0m\n\x1b[1;36m❯ \x1b[0m sivtr c 1\n\x1b[92mok\x1b[0m"
+            "\x1b[1;32msivtr\x1b[0m\n\x1b[1;36m❯ \x1b[0m sivtr c 1\n\x1b[92mok\x1b[0m"
         );
     }
 

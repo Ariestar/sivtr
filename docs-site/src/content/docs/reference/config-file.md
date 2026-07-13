@@ -13,8 +13,6 @@ description: TOML configuration reference.
 | macOS | `~/Library/Application Support/sivtr/config.toml` |
 | Linux | `~/.config/sivtr/config.toml` |
 
-If a legacy `sift/config.toml` exists, `sivtr` reads it for compatibility.
-
 ## Full example
 
 ```toml

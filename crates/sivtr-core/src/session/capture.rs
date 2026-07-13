@@ -190,15 +190,15 @@ mod tests {
     #[test]
     fn strips_trailing_prompt_even_when_glyphs_degrade_in_snapshot() {
         let lines = vec![
-            "sift on � main !14 ?2 ⇡1",
+            "sivtr on main !14 ?2 ⇡1",
             "❯  cargo test",
             "ok",
-            "sift on � main !14 ?2 ⇡1",
+            "sivtr on main !14 ?2 ⇡1",
             "❯",
         ];
         assert_eq!(
             extract_output_from_snapshot(
-                "sift on 󰊢 main !14 ?2 ⇡1\n❯  ",
+                "sivtr on 󰊢 main !14 ?2 ⇡1\n❯  ",
                 "cargo test",
                 &lines,
                 120

@@ -117,7 +117,3 @@ Selectors are for recent items. Refs are for exact items returned by search or p
 ## Invalid shell logs
 
 If a shell session log cannot be parsed as structured entries, `sivtr` resets the invalid log before appending new entries. This protects normal workflows from a corrupted or legacy file.
-
-## Legacy compatibility
-
-The config and history path resolvers check the current `sivtr` path first. If no current file exists but a legacy `sift` file exists, `sivtr` reads the legacy file.

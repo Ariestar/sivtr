@@ -13,8 +13,6 @@ description: Where sivtr stores configuration, history, session logs, and provid
 | macOS | `~/Library/Application Support/sivtr/config.toml` |
 | Linux | `~/.config/sivtr/config.toml` |
 
-If a legacy `sift/config.toml` exists and the current `sivtr` config does not, `sivtr` reads the legacy file for compatibility.
-
 ## Shell session logs
 
 Shell integration writes per-process structured session logs.
