@@ -97,11 +97,8 @@ fn run() -> Result<()> {
         Some(Commands::Config(cfg_cmd)) => {
             commands::system::config::execute(cfg_cmd)?;
         }
-        Some(Commands::Doctor) => {
-            commands::system::doctor::execute()?;
-        }
-        Some(Commands::Migrate) => {
-            commands::system::migrate::execute()?;
+        Some(Commands::Doctor(args)) => {
+            commands::system::doctor::execute(args)?;
         }
         Some(Commands::Init { target }) => {
             commands::capture::init::execute(&target)?;

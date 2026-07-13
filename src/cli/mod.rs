@@ -600,6 +600,17 @@ impl From<ColorArg> for crate::output::ColorChoice {
     }
 }
 
+#[derive(Args, Debug)]
+pub struct DoctorArgs {
+    /// Fix detected problems automatically
+    #[arg(short = 'f', long = "fix")]
+    pub fix: bool,
+
+    /// Output structured JSON for agent/skill consumption
+    #[arg(long = "json")]
+    pub json: bool,
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Wrap a command execution and capture its output
@@ -667,10 +678,7 @@ pub enum Commands {
     Config(ConfigCommand),
 
     /// Diagnose installation and environment
-    Doctor,
-
-    /// Re-key legacy workspace dirs to the current scheme (idempotent; also run by `init`)
-    Migrate,
+    Doctor(DoctorArgs),
 
     /// Generate shell integration or desktop shortcut helpers
     Init {

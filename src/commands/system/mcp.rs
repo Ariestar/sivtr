@@ -31,7 +31,7 @@ pub fn execute(command: McpCommand) -> Result<()> {
     }
 }
 
-fn install(args: &McpInstallArgs) -> Result<()> {
+pub fn install(args: &McpInstallArgs) -> Result<()> {
     let targets = resolve_targets(&args.target)?;
     if targets.is_empty() {
         bail!("no install targets resolved from `{}`", args.target);
@@ -91,16 +91,10 @@ fn install_target(target: AgentProvider, location: McpLocation) -> Result<()> {
 
 fn uninstall_target(target: AgentProvider, location: McpLocation) -> Result<()> {
     match target {
-        AgentProvider::Claude => {
-            uninstall_json(claude_config_path(location), "mcpServers", target)
-        }
-        AgentProvider::Cursor => {
-            uninstall_json(cursor_config_path(location), "mcpServers", target)
-        }
+        AgentProvider::Claude => uninstall_json(claude_config_path(location), "mcpServers", target),
+        AgentProvider::Cursor => uninstall_json(cursor_config_path(location), "mcpServers", target),
         AgentProvider::Codex => uninstall_codex(location),
-        AgentProvider::OpenCode => {
-            uninstall_json(opencode_config_path(location), "mcp", target)
-        }
+        AgentProvider::OpenCode => uninstall_json(opencode_config_path(location), "mcp", target),
         AgentProvider::Pi => {
             if matches!(location, McpLocation::Local) {
                 bail!("pi only supports global uninstall currently; use --location global");
@@ -155,7 +149,7 @@ fn valid_target_list() -> String {
         .join(", ")
 }
 
-fn detect_targets() -> Vec<AgentProvider> {
+pub fn detect_targets() -> Vec<AgentProvider> {
     let mut targets = Vec::new();
     for spec in AgentProvider::all() {
         if provider_config_exists(spec.provider) {
