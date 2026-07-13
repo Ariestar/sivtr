@@ -117,7 +117,7 @@ curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh
 Pin a specific version:
 
 ```bash
-SIVTR_VERSION=v0.2.5 curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh
+SIVTR_VERSION=v0.2.6 curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh
 ```
 
 This downloads a static musl binary to `~/.local/bin/sivtr` (or `$SIVTR_INSTALL_DIR`). Requires no Rust toolchain.
