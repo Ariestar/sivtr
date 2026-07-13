@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::cli::DoctorArgs;
 use crate::commands::interactive;
+use crate::commands::system::skill;
 use crate::output;
 
 pub fn execute(args: DoctorArgs) -> Result<()> {
@@ -93,6 +94,7 @@ impl Report {
         self.check_shell_hooks(fix);
         self.check_workspace_keys(fix);
         self.check_mcp_registration(fix);
+        self.check_skill(fix);
         self.check_providers();
         self.check_clipboard();
     }
@@ -150,36 +152,68 @@ impl Report {
     }
 
     fn check_session_dir(&mut self) {
-        let path = session_dir();
-        if let Some(path) = path {
-            if path.exists() {
-                let count = std::fs::read_dir(&path).map(|d| d.count()).unwrap_or(0);
-                self.add(Check {
-                    name: "session_dir",
-                    label: "session log directory",
-                    status: Status::Pass,
-                    detail: format!("{} ({count} entries)", path.display()),
-                    hint: None,
-                });
-            } else {
-                self.add(Check {
-                    name: "session_dir",
-                    label: "session log directory",
-                    status: Status::Manual,
-                    detail: "missing".to_string(),
-                    hint: Some(
-                        "run `sivtr init <shell>`, restart the shell, then run a command"
-                            .to_string(),
-                    ),
-                });
+        // Terminal sessions live under data_dir()/workspaces/*/terminals/*.jsonl,
+        // not under dirs::state_dir(). The latter is a false missing path on Windows.
+        let base = workspace::data_dir().join("workspaces");
+        if !base.exists() {
+            self.add(Check {
+                name: "session_dir",
+                label: "terminal session storage",
+                status: Status::Manual,
+                detail: format!("no workspaces under {}", base.display()),
+                hint: Some(
+                    "run `sivtr init <shell>`, restart the shell, then run a command in a git repo"
+                        .to_string(),
+                ),
+            });
+            return;
+        }
+
+        let mut workspace_count = 0usize;
+        let mut terminal_logs = 0usize;
+        if let Ok(entries) = std::fs::read_dir(&base) {
+            for entry in entries.flatten() {
+                let terminals = entry.path().join("terminals");
+                if !terminals.is_dir() {
+                    continue;
+                }
+                workspace_count += 1;
+                if let Ok(files) = std::fs::read_dir(&terminals) {
+                    terminal_logs += files
+                        .flatten()
+                        .filter(|f| f.path().extension().and_then(|e| e.to_str()) == Some("jsonl"))
+                        .count();
+                }
             }
+        }
+
+        if terminal_logs > 0 {
+            self.add(Check {
+                name: "session_dir",
+                label: "terminal session storage",
+                status: Status::Pass,
+                detail: format!(
+                    "{} ({} workspace(s), {} terminal log(s))",
+                    base.display(),
+                    workspace_count,
+                    terminal_logs
+                ),
+                hint: None,
+            });
         } else {
             self.add(Check {
                 name: "session_dir",
-                label: "session log directory",
+                label: "terminal session storage",
                 status: Status::Manual,
-                detail: "unable to determine state directory".to_string(),
-                hint: None,
+                detail: format!(
+                    "{} ({} workspace(s), 0 terminal logs)",
+                    base.display(),
+                    workspace_count
+                ),
+                hint: Some(
+                    "hooks are installed, but no terminal logs yet — restart shell and run a command in a git repo"
+                        .to_string(),
+                ),
             });
         }
     }
@@ -233,7 +267,7 @@ impl Report {
         };
         match result {
             Ok(report) => {
-                if report.migrated.is_empty() && report.skipped.is_empty() {
+                if !report.needs_attention() && report.removed_duplicates.is_empty() {
                     self.add(Check {
                         name: "workspace_keys",
                         label: "workspace keys",
@@ -241,15 +275,34 @@ impl Report {
                         detail: format!("{} workspace(s) on current scheme", report.current),
                         hint: None,
                     });
-                } else if fix && !report.migrated.is_empty() {
+                    return;
+                }
+
+                if fix
+                    && (!report.migrated.is_empty() || !report.removed_duplicates.is_empty())
+                    && report.skipped.is_empty()
+                {
+                    let mut parts = Vec::new();
+                    if !report.migrated.is_empty() {
+                        parts.push(format!("migrated {}", report.migrated.len()));
+                    }
+                    if !report.removed_duplicates.is_empty() {
+                        parts.push(format!(
+                            "removed {} duplicate(s)",
+                            report.removed_duplicates.len()
+                        ));
+                    }
                     self.add(Check {
                         name: "workspace_keys",
                         label: "workspace keys",
                         status: Status::Fixed,
-                        detail: format!("migrated {} workspace(s)", report.migrated.len()),
+                        detail: parts.join(", "),
                         hint: None,
                     });
-                } else if !report.migrated.is_empty() {
+                    return;
+                }
+
+                if !report.migrated.is_empty() {
                     self.add(Check {
                         name: "workspace_keys",
                         label: "workspace keys",
@@ -257,18 +310,77 @@ impl Report {
                         detail: format!("{} workspace(s) need migration", report.migrated.len()),
                         hint: Some("run `sivtr doctor --fix`".to_string()),
                     });
-                } else {
+                    return;
+                }
+
+                if !report.duplicates.is_empty() {
+                    let samples: Vec<String> = report
+                        .duplicates
+                        .iter()
+                        .take(3)
+                        .map(|(old, new)| format!("{old} -> {new}"))
+                        .collect();
+                    let more = if report.duplicates.len() > 3 {
+                        format!(", +{} more", report.duplicates.len() - 3)
+                    } else {
+                        String::new()
+                    };
+                    self.add(Check {
+                        name: "workspace_keys",
+                        label: "workspace keys",
+                        status: Status::Fail,
+                        detail: format!(
+                            "{} legacy duplicate(s) ({}{more})",
+                            report.duplicates.len(),
+                            samples.join("; ")
+                        ),
+                        hint: Some(
+                            "run `sivtr doctor --fix` to merge unique logs and remove legacy dirs"
+                                .to_string(),
+                        ),
+                    });
+                    return;
+                }
+
+                if !report.skipped.is_empty() {
+                    let reasons: Vec<String> = report
+                        .skipped
+                        .iter()
+                        .take(3)
+                        .map(|(path, reason)| {
+                            let name = path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("workspace");
+                            format!("{name}: {reason}")
+                        })
+                        .collect();
+                    let more = if report.skipped.len() > 3 {
+                        format!(", +{} more", report.skipped.len() - 3)
+                    } else {
+                        String::new()
+                    };
                     self.add(Check {
                         name: "workspace_keys",
                         label: "workspace keys",
                         status: Status::Manual,
                         detail: format!(
-                            "{} workspace(s) skipped during migration",
-                            report.skipped.len()
+                            "{} workspace(s) could not be migrated ({reasons}{more})",
+                            report.skipped.len(),
+                            reasons = reasons.join("; ")
                         ),
                         hint: None,
                     });
+                    return;
                 }
+
+                self.add(Check {
+                    name: "workspace_keys",
+                    label: "workspace keys",
+                    status: Status::Pass,
+                    detail: format!("{} workspace(s) on current scheme", report.current),
+                    hint: None,
+                });
             }
             Err(e) => self.add(Check {
                 name: "workspace_keys",
@@ -277,6 +389,46 @@ impl Report {
                 detail: format!("migration check failed: {e}"),
                 hint: None,
             }),
+        }
+    }
+
+    fn check_skill(&mut self, fix: bool) {
+        if skill::is_installed() {
+            self.add(Check {
+                name: "skill",
+                label: "sivtr-memory skill",
+                status: Status::Pass,
+                detail: "installed".to_string(),
+                hint: None,
+            });
+            return;
+        }
+
+        if fix {
+            match skill::ensure_installed() {
+                Ok(detail) => self.add(Check {
+                    name: "skill",
+                    label: "sivtr-memory skill",
+                    status: Status::Fixed,
+                    detail,
+                    hint: None,
+                }),
+                Err(e) => self.add(Check {
+                    name: "skill",
+                    label: "sivtr-memory skill",
+                    status: Status::Manual,
+                    detail: format!("auto-install failed: {e}"),
+                    hint: Some(skill::install_hint()),
+                }),
+            }
+        } else {
+            self.add(Check {
+                name: "skill",
+                label: "sivtr-memory skill",
+                status: Status::Fail,
+                detail: "missing".to_string(),
+                hint: Some(skill::install_hint()),
+            });
         }
     }
 
@@ -401,13 +553,13 @@ fn print_human(report: &Report) {
     }
     output::blank();
     let ok = passed + fixed;
+    let failed = count_status(report, Status::Fail);
+    let manual = count_status(report, Status::Manual);
     if ok == total {
         output::success(format!("all {total} checks passed"));
     } else {
         output::warning(format!(
-            "{ok}/{total} checks passed ({} fixed, {} manual)",
-            fixed,
-            total - ok - count_status(report, Status::Manual)
+            "{ok}/{total} checks passed ({fixed} fixed, {failed} failed, {manual} manual)"
         ));
     }
 }
@@ -428,12 +580,6 @@ fn config_path() -> PathBuf {
             .join("sivtr")
             .join("config.toml")
     })
-}
-
-fn session_dir() -> Option<PathBuf> {
-    dirs::state_dir()
-        .or_else(|| dirs::home_dir().map(|h| h.join(".local").join("state")))
-        .map(|d| d.join("sivtr"))
 }
 
 pub fn detect_installed_shells() -> Vec<String> {

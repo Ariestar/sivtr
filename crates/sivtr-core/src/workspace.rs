@@ -148,13 +148,22 @@ pub struct WorkspaceMigration {
     pub migrated: Vec<(String, String)>,
     /// Workspaces already on the current key scheme (no rename needed).
     pub current: usize,
+    /// Legacy dirs whose target key already exists (duplicate of current scheme).
+    /// On migrate, these are merged into the current dir then removed.
+    pub duplicates: Vec<(String, String)>,
+    /// `(old_key, kept_key)` for duplicates removed during migrate.
+    pub removed_duplicates: Vec<(String, String)>,
     /// Dirs that could not be migrated, with the reason.
     pub skipped: Vec<(PathBuf, String)>,
 }
 
 impl WorkspaceMigration {
     pub fn changed(&self) -> bool {
-        !self.migrated.is_empty()
+        !self.migrated.is_empty() || !self.removed_duplicates.is_empty()
+    }
+
+    pub fn needs_attention(&self) -> bool {
+        !self.migrated.is_empty() || !self.duplicates.is_empty() || !self.skipped.is_empty()
     }
 }
 
@@ -171,7 +180,10 @@ pub fn inspect_workspace_keys() -> Result<WorkspaceMigration> {
 /// key from `std::path::absolute` (no prefix), so legacy dirs no longer match
 /// the key a fresh access computes — their captured sessions become unreachable.
 /// This strips the legacy prefix, recomputes the key, and renames the dir +
-/// rewrites `workspace.json` when they differ. Idempotent: a second run is a
+/// rewrites `workspace.json` when they differ.
+///
+/// If the target key already exists, unique terminal logs are copied into the
+/// current dir and the legacy dir is removed. Idempotent: a second run is a
 /// no-op.
 pub fn migrate_workspace_keys() -> Result<WorkspaceMigration> {
     scan_workspace_keys(true)
@@ -218,9 +230,20 @@ fn scan_workspace_keys(apply: bool) -> Result<WorkspaceMigration> {
 
         let target = base.join(&new_key);
         if target.exists() {
-            report
-                .skipped
-                .push((dir, format!("target key {new_key} already exists")));
+            // Current-scheme dir already owns this root. Keep it; drop the legacy
+            // duplicate after copying any terminal logs the current dir lacks.
+            if apply {
+                match merge_then_remove_duplicate(&dir, &target) {
+                    Ok(()) => report
+                        .removed_duplicates
+                        .push((old_key.clone(), new_key.clone())),
+                    Err(e) => report
+                        .skipped
+                        .push((dir, format!("failed to remove duplicate of {new_key}: {e}"))),
+                }
+            } else {
+                report.duplicates.push((old_key, new_key));
+            }
             continue;
         }
         if !apply {
@@ -238,6 +261,31 @@ fn scan_workspace_keys(apply: bool) -> Result<WorkspaceMigration> {
         }
     }
     Ok(report)
+}
+
+/// Copy any terminal logs from `legacy` that `current` lacks, then delete `legacy`.
+fn merge_then_remove_duplicate(legacy: &Path, current: &Path) -> Result<()> {
+    let legacy_terminals = legacy.join("terminals");
+    let current_terminals = current.join("terminals");
+    if legacy_terminals.is_dir() {
+        fs::create_dir_all(&current_terminals)?;
+        for entry in fs::read_dir(&legacy_terminals)? {
+            let entry = entry?;
+            let src = entry.path();
+            if !src.is_file() {
+                continue;
+            }
+            let dest = current_terminals.join(entry.file_name());
+            if !dest.exists() {
+                fs::copy(&src, &dest).with_context(|| {
+                    format!("failed to copy {} -> {}", src.display(), dest.display())
+                })?;
+            }
+        }
+    }
+    fs::remove_dir_all(legacy)
+        .with_context(|| format!("failed to remove legacy workspace {}", legacy.display()))?;
+    Ok(())
 }
 
 fn load_workspace_metadata(path: &Path) -> Option<WorkspaceMetadata> {
@@ -451,17 +499,103 @@ mod tests {
         let _ = std::fs::remove_dir_all(data);
     }
 
+    #[test]
+    fn migrate_removes_legacy_duplicate_when_current_key_exists() {
+        let data = unique_test_dir("workspace-dup");
+        let _guard = EnvGuard::set("SIVTR_DATA_DIR", &data);
+
+        let root = unique_test_dir("dup-root");
+        let legacy_root = format!(r"\\?\{}", root.display());
+        let old_key = workspace_key(&legacy_root);
+        let new_key = workspace_key(&root.to_string_lossy());
+        assert_ne!(old_key, new_key);
+
+        let old_dir = data.join("workspaces").join(&old_key);
+        let new_dir = data.join("workspaces").join(&new_key);
+        std::fs::create_dir_all(old_dir.join("terminals")).expect("legacy terminals");
+        std::fs::create_dir_all(new_dir.join("terminals")).expect("current terminals");
+
+        std::fs::write(
+            old_dir.join("workspace.json"),
+            serde_json::to_string_pretty(&WorkspaceMetadata {
+                key: old_key.clone(),
+                root: legacy_root,
+                created_at: "t0".into(),
+                last_seen_at: "t0".into(),
+            })
+            .expect("serialize legacy"),
+        )
+        .expect("write legacy meta");
+        std::fs::write(
+            new_dir.join("workspace.json"),
+            serde_json::to_string_pretty(&WorkspaceMetadata {
+                key: new_key.clone(),
+                root: root.to_string_lossy().to_string(),
+                created_at: "t0".into(),
+                last_seen_at: "t0".into(),
+            })
+            .expect("serialize current"),
+        )
+        .expect("write current meta");
+
+        // Unique log only in legacy, shared name already in current.
+        std::fs::write(
+            old_dir.join("terminals").join("only-old.jsonl"),
+            b"old-only",
+        )
+        .expect("legacy unique log");
+        std::fs::write(
+            old_dir.join("terminals").join("shared.jsonl"),
+            b"legacy-shared",
+        )
+        .expect("legacy shared log");
+        std::fs::write(
+            new_dir.join("terminals").join("shared.jsonl"),
+            b"current-shared",
+        )
+        .expect("current shared log");
+
+        let inspect = inspect_workspace_keys().expect("inspect");
+        assert_eq!(inspect.duplicates, vec![(old_key.clone(), new_key.clone())]);
+        assert!(old_dir.exists(), "inspect must not delete");
+
+        let migrate = migrate_workspace_keys().expect("migrate");
+        assert_eq!(migrate.removed_duplicates, vec![(old_key, new_key.clone())]);
+        assert!(!old_dir.exists(), "legacy duplicate removed");
+        assert_eq!(
+            std::fs::read_to_string(new_dir.join("terminals").join("only-old.jsonl"))
+                .expect("unique log copied"),
+            "old-only"
+        );
+        assert_eq!(
+            std::fs::read_to_string(new_dir.join("terminals").join("shared.jsonl"))
+                .expect("shared log kept"),
+            "current-shared"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(data);
+    }
+
     struct EnvGuard {
         key: &'static str,
         previous: Option<std::ffi::OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
     }
 
     impl EnvGuard {
         fn set(key: &'static str, value: &Path) -> Self {
+            // Env mutation is process-global; serialize tests that touch SIVTR_DATA_DIR.
+            static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let lock = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             let previous = std::env::var_os(key);
-            // SAFETY: test-only temporary env mutation, restored in Drop.
+            // SAFETY: test-only temporary env mutation, restored in Drop, guarded by LOCK.
             unsafe { std::env::set_var(key, value) };
-            Self { key, previous }
+            Self {
+                key,
+                previous,
+                _lock: lock,
+            }
         }
     }
 

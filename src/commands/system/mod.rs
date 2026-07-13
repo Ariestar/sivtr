@@ -5,4 +5,5 @@ pub mod history;
 pub mod hotkey;
 pub mod mcp;
 pub mod setup;
+pub mod skill;
 pub mod version;
