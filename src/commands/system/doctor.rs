@@ -43,7 +43,10 @@ fn execute_interactive_fix() -> Result<()> {
     }
 
     output::blank();
-    output::info(format!("{} issue(s) can be fixed automatically", fixable.len()));
+    output::info(format!(
+        "{} issue(s) can be fixed automatically",
+        fixable.len()
+    ));
     for check in &fixable {
         output::detail(check.label, &check.detail);
     }

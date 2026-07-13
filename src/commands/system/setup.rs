@@ -113,11 +113,8 @@ fn pick_mcp_targets() -> Result<Vec<String>> {
         .filter_map(|p| all.iter().position(|name| name == p.name()))
         .collect();
 
-    let selected = interactive::multi_select(
-        "Install sivtr MCP into which agent hosts?",
-        &all,
-        &defaults,
-    )?;
+    let selected =
+        interactive::multi_select("Install sivtr MCP into which agent hosts?", &all, &defaults)?;
 
     if selected.is_empty() {
         return Ok(Vec::new());

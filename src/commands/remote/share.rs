@@ -192,10 +192,7 @@ fn pick_workspace() -> Result<WorkspaceChoice> {
 
 fn confirm_single(root: &Path, share_name: &str) -> Result<()> {
     interactive::require_interactive("share")?;
-    let prompt = format!(
-        "Share workspace `{}` as `{share_name}`?",
-        root.display()
-    );
+    let prompt = format!("Share workspace `{}` as `{share_name}`?", root.display());
     if interactive::confirm(&prompt, true)? {
         return Ok(());
     }

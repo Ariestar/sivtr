@@ -53,9 +53,7 @@ pub fn multi_select(prompt: &str, items: &[String], defaults: &[usize]) -> Resul
             .filter(|i| *i < items.len())
             .collect());
     }
-    let bool_defaults: Vec<bool> = (0..items.len())
-        .map(|i| defaults.contains(&i))
-        .collect();
+    let bool_defaults: Vec<bool> = (0..items.len()).map(|i| defaults.contains(&i)).collect();
     Ok(MultiSelect::new()
         .with_prompt(prompt)
         .items(items)
