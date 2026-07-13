@@ -5,6 +5,7 @@
 //! `commands::system::doctor`.
 
 pub mod capture;
+pub mod interactive;
 pub mod memory;
 pub mod remote;
 pub mod system;

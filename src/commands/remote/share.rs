@@ -1,4 +1,3 @@
-use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -6,6 +5,7 @@ use chrono::{TimeZone, Utc};
 use sivtr_core::workspace::{self, WorkspaceMetadata};
 
 use crate::cli::{ShareAction, ShareCommand};
+use crate::commands::interactive;
 use crate::commands::remote::workspace::workspace_display_name;
 use crate::output;
 use crate::remote::ipc;
@@ -125,11 +125,7 @@ struct WorkspaceChoice {
 }
 
 fn pick_workspace() -> Result<WorkspaceChoice> {
-    if !atty::is(atty::Stream::Stdin) || !atty::is(atty::Stream::Stderr) {
-        bail!(
-            "refusing to share non-interactively; re-run in a terminal, or use `sivtr share add` explicitly"
-        );
-    }
+    interactive::require_interactive("share")?;
 
     let current = workspace::resolve_current_workspace()?;
     // Ensure the current repo is registered so it appears in the list.
@@ -182,81 +178,25 @@ fn pick_workspace() -> Result<WorkspaceChoice> {
         .iter()
         .position(|choice| choice.current)
         .unwrap_or(0);
-
-    output::info("share which workspace?");
-    for (index, choice) in choices.iter().enumerate() {
-        let marker = if choice.current { " [current]" } else { "" };
-        let prefix = if index == default_index { ">" } else { " " };
-        output::plain(format!(
-            "{prefix} {:>2}. {:<20} {}{marker}",
-            index + 1,
-            choice.name,
-            choice.root
-        ));
-    }
-    output::hint(format!(
-        "Enter = {} ({}), or type number/name. q to cancel",
-        choices[default_index].name,
-        default_index + 1
-    ));
-    eprint!("> ");
-    let _ = io::stderr().flush();
-
-    let mut line = String::new();
-    io::stdin()
-        .read_line(&mut line)
-        .context("Failed to read workspace selection")?;
-    let answer = line.trim();
-    if answer.eq_ignore_ascii_case("q")
-        || answer.eq_ignore_ascii_case("quit")
-        || answer.eq_ignore_ascii_case("n")
-        || answer.eq_ignore_ascii_case("no")
-    {
-        bail!("share cancelled");
-    }
-    if answer.is_empty() {
-        return Ok(choices[default_index].clone());
-    }
-    if let Ok(number) = answer.parse::<usize>() {
-        if (1..=choices.len()).contains(&number) {
-            return Ok(choices[number - 1].clone());
-        }
-        bail!(
-            "invalid selection `{answer}`; choose 1-{} or a workspace name",
-            choices.len()
-        );
-    }
-    let needle = answer.to_ascii_lowercase();
-    let matches: Vec<_> = choices
+    let labels: Vec<String> = choices
         .iter()
-        .filter(|choice| choice.name == needle || choice.key == needle)
+        .map(|choice| {
+            let marker = if choice.current { " [current]" } else { "" };
+            format!("{}  {}{marker}", choice.name, choice.root)
+        })
         .collect();
-    match matches.as_slice() {
-        [only] => Ok((*only).clone()),
-        [] => bail!("unknown workspace `{answer}`"),
-        _ => bail!("ambiguous workspace `{answer}`; use the list number instead"),
-    }
+
+    let index = interactive::select("Share which workspace?", &labels, default_index)?;
+    Ok(choices[index].clone())
 }
 
 fn confirm_single(root: &Path, share_name: &str) -> Result<()> {
-    if !atty::is(atty::Stream::Stdin) || !atty::is(atty::Stream::Stderr) {
-        bail!(
-            "refusing to share non-interactively; re-run in a terminal, or use `sivtr share add` explicitly"
-        );
-    }
-    output::info(format!(
-        "share workspace `{}` as `{share_name}`?",
+    interactive::require_interactive("share")?;
+    let prompt = format!(
+        "Share workspace `{}` as `{share_name}`?",
         root.display()
-    ));
-    output::hint("Press Enter to confirm, or type n/no to cancel");
-    eprint!("> ");
-    let _ = io::stderr().flush();
-    let mut line = String::new();
-    io::stdin()
-        .read_line(&mut line)
-        .context("Failed to read confirmation")?;
-    let answer = line.trim();
-    if answer.is_empty() || answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes") {
+    );
+    if interactive::confirm(&prompt, true)? {
         return Ok(());
     }
     bail!("share cancelled");

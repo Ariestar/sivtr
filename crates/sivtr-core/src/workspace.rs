@@ -141,10 +141,10 @@ pub fn list_workspaces() -> Result<Vec<WorkspaceMetadata>> {
     Ok(out)
 }
 
-/// Outcome of [`migrate_workspace_keys`].
+/// Outcome of [`inspect_workspace_keys`] / [`migrate_workspace_keys`].
 #[derive(Debug, Default)]
 pub struct WorkspaceMigration {
-    /// `(old_key, new_key)` for each renamed workspace dir.
+    /// `(old_key, new_key)` for each workspace that needs (or received) a rename.
     pub migrated: Vec<(String, String)>,
     /// Workspaces already on the current key scheme (no rename needed).
     pub current: usize,
@@ -158,6 +158,11 @@ impl WorkspaceMigration {
     }
 }
 
+/// Dry-run: report which workspace dirs need re-keying without renaming them.
+pub fn inspect_workspace_keys() -> Result<WorkspaceMigration> {
+    scan_workspace_keys(false)
+}
+
 /// Re-key workspace dirs whose stored root predates the absolute-based key
 /// scheme.
 ///
@@ -169,6 +174,10 @@ impl WorkspaceMigration {
 /// rewrites `workspace.json` when they differ. Idempotent: a second run is a
 /// no-op.
 pub fn migrate_workspace_keys() -> Result<WorkspaceMigration> {
+    scan_workspace_keys(true)
+}
+
+fn scan_workspace_keys(apply: bool) -> Result<WorkspaceMigration> {
     let base = data_dir().join(WORKSPACES_DIR);
     let mut report = WorkspaceMigration::default();
     if !base.exists() {
@@ -198,9 +207,8 @@ pub fn migrate_workspace_keys() -> Result<WorkspaceMigration> {
         let new_key = workspace_key(&new_root_text);
 
         if new_key == old_key {
-            // Key matches; just tidy the root field if it still carries the
-            // legacy prefix.
-            if meta.root != new_root_text {
+            // Key matches; only tidy the root field when applying migration.
+            if apply && meta.root != new_root_text {
                 meta.root = new_root_text;
                 let _ = write_workspace_metadata(&meta_path, &meta);
             }
@@ -213,6 +221,10 @@ pub fn migrate_workspace_keys() -> Result<WorkspaceMigration> {
             report
                 .skipped
                 .push((dir, format!("target key {new_key} already exists")));
+            continue;
+        }
+        if !apply {
+            report.migrated.push((old_key, new_key));
             continue;
         }
         match fs::rename(&dir, &target) {
@@ -338,7 +350,10 @@ fn modified_time(path: &Path) -> std::time::SystemTime {
 
 #[cfg(test)]
 mod tests {
-    use super::{git_root, terminal_session_id_from_path, workspace_key};
+    use super::{
+        git_root, inspect_workspace_keys, migrate_workspace_keys, terminal_session_id_from_path,
+        workspace_key, WorkspaceMetadata,
+    };
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -392,5 +407,70 @@ mod tests {
             terminal_session_id_from_path(Path::new("session_123.jsonl")),
             "session_123"
         );
+    }
+
+    #[test]
+    fn inspect_workspace_keys_is_dry_run_and_migrate_renames() {
+        let data = unique_test_dir("workspace-keys");
+        let _guard = EnvGuard::set("SIVTR_DATA_DIR", &data);
+
+        let root = unique_test_dir("legacy-root");
+        let legacy_root = format!(r"\\?\{}", root.display());
+        let old_key = workspace_key(&legacy_root);
+        let new_key = workspace_key(&root.to_string_lossy());
+        assert_ne!(old_key, new_key);
+
+        let old_dir = data.join("workspaces").join(&old_key);
+        std::fs::create_dir_all(&old_dir).expect("workspace dir");
+        let meta = WorkspaceMetadata {
+            key: old_key.clone(),
+            root: legacy_root,
+            created_at: "t0".into(),
+            last_seen_at: "t0".into(),
+        };
+        std::fs::write(
+            old_dir.join("workspace.json"),
+            serde_json::to_string_pretty(&meta).expect("serialize"),
+        )
+        .expect("write meta");
+
+        let inspect = inspect_workspace_keys().expect("inspect");
+        assert_eq!(inspect.migrated, vec![(old_key.clone(), new_key.clone())]);
+        assert!(old_dir.exists(), "inspect must not rename");
+
+        let migrate = migrate_workspace_keys().expect("migrate");
+        assert_eq!(migrate.migrated, vec![(old_key, new_key.clone())]);
+        assert!(!old_dir.exists());
+        assert!(data.join("workspaces").join(&new_key).exists());
+
+        let second = migrate_workspace_keys().expect("idempotent");
+        assert!(second.migrated.is_empty());
+        assert_eq!(second.current, 1);
+
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(data);
+    }
+
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &Path) -> Self {
+            let previous = std::env::var_os(key);
+            // SAFETY: test-only temporary env mutation, restored in Drop.
+            unsafe { std::env::set_var(key, value) };
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => unsafe { std::env::set_var(self.key, value) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
     }
 }

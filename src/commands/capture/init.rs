@@ -7,11 +7,6 @@ use std::process::Command;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-#[cfg(windows)]
-use crate::cli::{HotkeyAction, HotkeyCommand, HotkeyStartArgs};
-#[cfg(windows)]
-use std::io;
-
 struct HookSpec {
     hook: &'static str,
     marker_start: &'static str,
@@ -230,11 +225,11 @@ pub fn execute(shell: &str) -> Result<()> {
         "macos-shortcut" => install_macos_shortcut(),
         "show" | "status" => {
             show_status()?;
-            return Ok(());
+            Ok(())
         }
         "uninstall" => {
             uninstall_all()?;
-            return Ok(());
+            Ok(())
         }
         _ => {
             eprintln!(
@@ -245,9 +240,7 @@ pub fn execute(shell: &str) -> Result<()> {
             );
             std::process::exit(1);
         }
-    }?;
-
-    maybe_start_hotkey()
+    }
 }
 
 fn install_powershell_hook() -> Result<()> {
@@ -420,29 +413,6 @@ fn print_install_summary(installed: &[String], updated: &[String]) {
         eprintln!("sivtr: updated {path}");
     }
     eprintln!("  restart your terminal to activate");
-}
-
-fn maybe_start_hotkey() -> Result<()> {
-    #[cfg(windows)]
-    {
-        if !atty::is(atty::Stream::Stdin) {
-            eprintln!("sivtr: start the Codex hotkey later with `sivtr hotkey start`");
-            return Ok(());
-        }
-
-        if prompt_start_hotkey()? {
-            crate::commands::system::hotkey::execute(HotkeyCommand {
-                action: Some(HotkeyAction::Start(HotkeyStartArgs {
-                    chord: None,
-                    provider: Default::default(),
-                })),
-            })?;
-        } else {
-            eprintln!("sivtr: start the Codex hotkey later with `sivtr hotkey start`");
-        }
-    }
-
-    Ok(())
 }
 
 fn show_status() -> Result<()> {
@@ -628,21 +598,6 @@ fn remove_hook_block(content: &str, spec: &HookSpec) -> Option<String> {
     } else {
         None
     }
-}
-
-#[cfg(windows)]
-fn prompt_start_hotkey() -> Result<bool> {
-    eprint!("sivtr: start the Windows Codex hotkey now? [Y/n] ");
-    io::stderr().flush()?;
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    Ok(parse_yes_no_default_yes(&input))
-}
-
-#[cfg(windows)]
-fn parse_yes_no_default_yes(input: &str) -> bool {
-    !matches!(input.trim().to_lowercase().as_str(), "n" | "no")
 }
 
 fn install_into_profile(profile_path: &Path, spec: &HookSpec) -> Result<InstallStatus> {
@@ -924,9 +879,6 @@ mod tests {
     };
     use std::path::Path;
 
-    #[cfg(windows)]
-    use super::parse_yes_no_default_yes;
-
     #[test]
     fn keeps_current_powershell_hook_unchanged() {
         let profile = format!("before\n{POWERSHELL_HOOK}\nafter\n");
@@ -1092,21 +1044,5 @@ mod tests {
     #[test]
     fn command_exists_detects_programs_via_path_scan() {
         assert!(command_exists("sh"));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn hotkey_prompt_defaults_to_yes() {
-        assert!(parse_yes_no_default_yes(""));
-        assert!(parse_yes_no_default_yes("\n"));
-        assert!(parse_yes_no_default_yes("y"));
-        assert!(parse_yes_no_default_yes("YES"));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn hotkey_prompt_accepts_no() {
-        assert!(!parse_yes_no_default_yes("n"));
-        assert!(!parse_yes_no_default_yes("No\n"));
     }
 }

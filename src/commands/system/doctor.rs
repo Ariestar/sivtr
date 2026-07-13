@@ -5,9 +5,14 @@ use sivtr_core::workspace;
 use std::path::{Path, PathBuf};
 
 use crate::cli::DoctorArgs;
+use crate::commands::interactive;
 use crate::output;
 
 pub fn execute(args: DoctorArgs) -> Result<()> {
+    if args.fix && !args.json {
+        return execute_interactive_fix();
+    }
+
     let mut report = Report::default();
     report.run_checks(args.fix);
 
@@ -16,6 +21,42 @@ pub fn execute(args: DoctorArgs) -> Result<()> {
     } else {
         print_human(&report);
     }
+    Ok(())
+}
+
+fn execute_interactive_fix() -> Result<()> {
+    let mut report = Report::default();
+    report.run_checks(false);
+
+    print_human(&report);
+
+    let fixable: Vec<&Check> = report
+        .checks
+        .iter()
+        .filter(|c| c.status == Status::Fail)
+        .collect();
+
+    if fixable.is_empty() {
+        output::blank();
+        output::success("nothing to fix");
+        return Ok(());
+    }
+
+    output::blank();
+    output::info(format!("{} issue(s) can be fixed automatically", fixable.len()));
+    for check in &fixable {
+        output::detail(check.label, &check.detail);
+    }
+
+    if !interactive::confirm("Fix all issues?", true)? {
+        output::plain("skipped fixes");
+        return Ok(());
+    }
+
+    output::blank();
+    let mut fixed_report = Report::default();
+    fixed_report.run_checks(true);
+    print_human(&fixed_report);
     Ok(())
 }
 
@@ -182,7 +223,12 @@ impl Report {
     }
 
     fn check_workspace_keys(&mut self, fix: bool) {
-        match workspace::migrate_workspace_keys() {
+        let result = if fix {
+            workspace::migrate_workspace_keys()
+        } else {
+            workspace::inspect_workspace_keys()
+        };
+        match result {
             Ok(report) => {
                 if report.migrated.is_empty() && report.skipped.is_empty() {
                     self.add(Check {
