@@ -13,6 +13,7 @@ pub enum AgentProvider {
     Codex,
     Cursor,
     Hermes,
+    OpenClaw,
     OpenCode,
     Pi,
 }
@@ -61,6 +62,14 @@ const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
         factory: opencode_provider,
     },
     AgentProviderSpec {
+        provider: AgentProvider::OpenClaw,
+        name: "OpenClaw",
+        command_name: "openclaw",
+        current_transcript_env: None,
+        current_session_id_env: None,
+        factory: openclaw_provider,
+    },
+    AgentProviderSpec {
         provider: AgentProvider::Hermes,
         name: "Hermes",
         command_name: "hermes",
@@ -92,6 +101,10 @@ fn cursor_provider() -> Box<dyn AgentSessionProvider> {
 
 fn opencode_provider() -> Box<dyn AgentSessionProvider> {
     Box::new(crate::opencode::OpenCodeProvider::default())
+}
+
+fn openclaw_provider() -> Box<dyn AgentSessionProvider> {
+    Box::new(crate::openclaw::OpenClawProvider)
 }
 
 fn hermes_provider() -> Box<dyn AgentSessionProvider> {

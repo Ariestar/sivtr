@@ -19,14 +19,14 @@ pub enum McpAction {
 
     /// Print MCP config snippet without writing files
     PrintConfig {
-        /// Target agent id: claude, cursor, codex, opencode, pi, hermes
+        /// Target agent id: claude, cursor, codex, opencode, openclaw, pi, hermes
         target: String,
     },
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct McpInstallArgs {
-    /// Target agent(s): claude, cursor, codex, opencode, pi, hermes, auto, all
+    /// Target agent(s): claude, cursor, codex, opencode, openclaw, pi, hermes, auto, all
     #[arg(short = 't', long = "target", default_value = "auto")]
     pub target: String,
 

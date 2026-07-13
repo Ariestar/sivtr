@@ -8,6 +8,7 @@ pub mod cursor;
 pub mod export;
 pub mod hermes;
 pub mod history;
+pub mod openclaw;
 pub mod opencode;
 pub mod parse;
 pub mod pi;

@@ -86,6 +86,12 @@ fn install_target(target: AgentProvider, location: McpLocation) -> Result<()> {
             }
             install_hermes()
         }
+        AgentProvider::OpenClaw => {
+            if matches!(location, McpLocation::Local) {
+                bail!("openclaw only supports global install currently; use --location global");
+            }
+            install_openclaw()
+        }
     }
 }
 
@@ -106,6 +112,12 @@ fn uninstall_target(target: AgentProvider, location: McpLocation) -> Result<()> 
                 bail!("hermes only supports global uninstall currently; use --location global");
             }
             uninstall_hermes()
+        }
+        AgentProvider::OpenClaw => {
+            if matches!(location, McpLocation::Local) {
+                bail!("openclaw only supports global uninstall currently; use --location global");
+            }
+            uninstall_openclaw()
         }
     }
 }
@@ -179,6 +191,9 @@ fn provider_config_exists(provider: AgentProvider) -> bool {
         }
         AgentProvider::Pi => pi_config_path().exists() || pi_home().exists(),
         AgentProvider::Hermes => hermes_config_path().exists() || hermes_home().exists(),
+        AgentProvider::OpenClaw => {
+            openclaw_config_path().exists() || openclaw_home().exists()
+        }
     }
 }
 
@@ -221,6 +236,15 @@ fn print_config(target: AgentProvider) {
                 serde_yaml::Value::Mapping(servers),
             );
             println!("{}", serde_yaml::to_string(&root).unwrap_or_default());
+        }
+        AgentProvider::OpenClaw => {
+            let path = openclaw_config_path();
+            output::info(format!("Add to {}", path.display()));
+            println!();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&openclaw_print_config()).unwrap_or_default()
+            );
         }
     }
 }
@@ -412,6 +436,52 @@ fn uninstall_hermes() -> Result<()> {
     Ok(())
 }
 
+/// OpenClaw stores MCP servers under nested `mcp.servers` in openclaw.json.
+/// See https://docs.openclaw.ai/gateway/configuration-reference
+fn install_openclaw() -> Result<()> {
+    let provider = AgentProvider::OpenClaw;
+    let path = openclaw_config_path();
+    let mut root = read_json_object(&path)?;
+    let mcp = ensure_object(&mut root, "mcp")?;
+    let servers = ensure_object(mcp, "servers")?;
+    servers.insert(SERVER_NAME.to_string(), openclaw_entry());
+    write_json(&path, &Value::Object(root))?;
+    output::success(format!(
+        "installed MCP server for {} into {}",
+        provider.name(),
+        path.display()
+    ));
+    Ok(())
+}
+
+fn uninstall_openclaw() -> Result<()> {
+    let provider = AgentProvider::OpenClaw;
+    let path = openclaw_config_path();
+    if !path.exists() {
+        output::info(format!("no OpenClaw config at {}", path.display()));
+        return Ok(());
+    }
+    let mut root = read_json_object(&path)?;
+    let removed = root
+        .get_mut("mcp")
+        .and_then(|mcp| mcp.as_object_mut())
+        .and_then(|mcp| mcp.get_mut("servers"))
+        .and_then(|servers| servers.as_object_mut())
+        .and_then(|servers| servers.remove(SERVER_NAME))
+        .is_some();
+    if !removed {
+        output::info(format!("sivtr MCP was not installed in {}", path.display()));
+        return Ok(());
+    }
+    write_json(&path, &Value::Object(root))?;
+    output::success(format!(
+        "removed MCP server for {} from {}",
+        provider.name(),
+        path.display()
+    ));
+    Ok(())
+}
+
 fn claude_cursor_entry() -> Value {
     json!({
         "type": "stdio",
@@ -434,6 +504,23 @@ fn pi_entry() -> Value {
     json!({
         "command": "sivtr",
         "args": SERVER_ARGS,
+    })
+}
+
+fn openclaw_entry() -> Value {
+    json!({
+        "command": "sivtr",
+        "args": SERVER_ARGS,
+    })
+}
+
+fn openclaw_print_config() -> Value {
+    json!({
+        "mcp": {
+            "servers": {
+                SERVER_NAME: openclaw_entry(),
+            }
+        }
     })
 }
 
@@ -574,6 +661,14 @@ fn hermes_home() -> PathBuf {
 
 fn hermes_config_path() -> PathBuf {
     hermes_home().join("config.yaml")
+}
+
+fn openclaw_home() -> PathBuf {
+    sivtr_core::openclaw::openclaw_home()
+}
+
+fn openclaw_config_path() -> PathBuf {
+    sivtr_core::openclaw::openclaw_config_path()
 }
 
 fn read_json_object(path: &Path) -> Result<Map<String, Value>> {
