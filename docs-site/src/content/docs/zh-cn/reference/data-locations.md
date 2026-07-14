@@ -70,7 +70,7 @@ max_entries = 0
 `sivtr import claude-export` 默认把确定性批次写入：
 
 ```text
-~/.claude/projects/<编码后的 cwd>/sivtr-imports/<batch-id>/
+~/.claude/projects/<cwd 目录名>-<路径哈希>/sivtr-imports/<batch-id>/
 ```
 
 每个批次包含 Claude 可读取的 JSONL session、与源文件逐字节一致的快照，以及记录哈希、消息和分支映射的 manifest。已有批次永不覆盖；可以用 `--dest` 将批次根目录放到隔离位置进行验证或归档。

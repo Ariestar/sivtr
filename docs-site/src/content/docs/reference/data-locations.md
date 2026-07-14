@@ -70,7 +70,7 @@ Provider formats differ; `sivtr` normalizes them into sessions and dialogue unit
 `sivtr import claude-export` writes each deterministic batch under:
 
 ```text
-~/.claude/projects/<encoded-cwd>/sivtr-imports/<batch-id>/
+~/.claude/projects/<cwd-name>-<path-hash>/sivtr-imports/<batch-id>/
 ```
 
 Each batch contains Claude-readable JSONL sessions, byte-identical source snapshots, and a manifest with hashes and message/branch mappings. Existing batches are never overwritten. `--dest` can place the batch root elsewhere for isolated validation or archival use.

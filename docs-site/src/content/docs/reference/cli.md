@@ -52,7 +52,7 @@ Claude account exports use an explicit subcommand and do not change the shell-se
 sivtr import claude-export <EXPORT_DIR> [--cwd <PATH>] [--dest <PATH>] [--dry-run] [--json]
 ```
 
-The importer validates strict UTF-8, message roles, branch graphs, and destination conflicts before writing. By default it creates a deterministic batch under `~/.claude/projects/<encoded-cwd>/sivtr-imports/`. Use `--dry-run --json` to inspect the batch ID, source hashes, counts, destination, warnings, and idempotency state without writing files.
+The importer validates strict UTF-8, message roles, branch graphs, and destination conflicts before writing. By default it creates a deterministic batch under `~/.claude/projects/<cwd-name>-<path-hash>/sivtr-imports/`. Use `--dry-run --json` to inspect the batch ID, source hashes, counts, destination, warnings, and idempotency state without writing files.
 
 Imported sessions expose only user and assistant text in sivtr browsing and search. Thinking and tool blocks remain recoverable from the lossless source snapshots and per-event import metadata, but are not indexed or displayed.
 

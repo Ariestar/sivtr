@@ -16,6 +16,8 @@ use crate::claude::claude_home;
 
 const MANIFEST_SCHEMA_VERSION: u32 = 1;
 const IMPORTER_VERSION: &str = "claude-account-export-v1";
+const PROJECT_LABEL_MAX_CHARS: usize = 48;
+const PROJECT_HASH_CHARS: usize = 16;
 
 #[derive(Debug, Clone)]
 pub struct ClaudeExportImportOptions {
@@ -186,8 +188,20 @@ pub fn import_claude_export(
 }
 
 pub fn default_claude_project_dir(cwd: &Path) -> Result<PathBuf> {
-    let cwd = path_text(cwd, "target cwd")?;
-    let project = cwd
+    let cwd_text = path_text(cwd, "target cwd")?;
+    let path_hash = sha256_hex(cwd_text.as_bytes());
+    let label = cwd
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(safe_project_label)
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "project".to_string());
+    let project = format!("{label}-{}", &path_hash[..PROJECT_HASH_CHARS]);
+    Ok(claude_home().join("projects").join(project))
+}
+
+fn safe_project_label(name: &str) -> String {
+    let sanitized = name
         .chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
@@ -196,11 +210,11 @@ pub fn default_claude_project_dir(cwd: &Path) -> Result<PathBuf> {
                 '-'
             }
         })
+        .take(PROJECT_LABEL_MAX_CHARS)
         .collect::<String>();
-    if project.is_empty() {
-        bail!("target cwd cannot be encoded as a Claude project directory");
-    }
-    Ok(claude_home().join("projects").join(project))
+    sanitized
+        .trim_matches(|ch| ch == '-' || ch == '_')
+        .to_string()
 }
 
 fn canonical_directory(path: &Path, label: &str) -> Result<PathBuf> {
@@ -880,12 +894,14 @@ fn write_batch_contents(
 ) -> Result<()> {
     let source_dir = temp_dir.join("source");
     let sessions_dir = temp_dir.join("sessions");
+    fs::create_dir_all(temp_dir)
+        .with_context(|| format!("Failed to create {}", temp_dir.display()))?;
+    set_private_dir_permissions(temp_dir)?;
     fs::create_dir_all(&source_dir)
         .with_context(|| format!("Failed to create {}", source_dir.display()))?;
+    set_private_dir_permissions(&source_dir)?;
     fs::create_dir_all(&sessions_dir)
         .with_context(|| format!("Failed to create {}", sessions_dir.display()))?;
-    set_private_dir_permissions(temp_dir)?;
-    set_private_dir_permissions(&source_dir)?;
     set_private_dir_permissions(&sessions_dir)?;
 
     for source in source_files {
@@ -1151,6 +1167,26 @@ mod tests {
     }
 
     #[test]
+    fn default_project_directory_is_bounded_and_path_unique() {
+        let first = super::default_claude_project_dir(Path::new("/foo/bar"))
+            .expect("first project directory");
+        let second = super::default_claude_project_dir(Path::new("/foo-bar"))
+            .expect("second project directory");
+        let long = super::default_claude_project_dir(&PathBuf::from("x".repeat(400)))
+            .expect("long project directory");
+
+        assert_ne!(first.file_name(), second.file_name());
+        assert!(first
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("bar-") && name.len() <= 65));
+        assert!(long
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.len() <= 65));
+    }
+
+    #[test]
     fn imports_losslessly_with_roles_branches_and_idempotency() {
         let temp = tempfile::tempdir().expect("temp dir");
         let source = temp.path().join("export");
@@ -1171,6 +1207,18 @@ mod tests {
         assert!(!report.already_imported);
         let batch = PathBuf::from(&report.destination);
         assert!(batch.join("manifest.json").is_file());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for directory in [&batch, &batch.join("source"), &batch.join("sessions")] {
+                let mode = fs::metadata(directory)
+                    .expect("import directory metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777;
+                assert_eq!(mode, 0o700, "{} should be private", directory.display());
+            }
+        }
         assert_eq!(
             fs::read(batch.join("source").join("conversations.json")).expect("snapshot"),
             fs::read(source.join("conversations.json")).expect("source")

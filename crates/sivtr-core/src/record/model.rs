@@ -736,7 +736,7 @@ fn user_only_turn_before_trailing_tools(
         .all(|block| {
             matches!(
                 block.kind,
-                AgentBlockKind::ToolCall | AgentBlockKind::ToolOutput
+                AgentBlockKind::User | AgentBlockKind::ToolCall | AgentBlockKind::ToolOutput
             )
         })
         .then_some((start, blocks.len()))
@@ -1126,6 +1126,49 @@ mod tests {
             Some("first user message\n\nsecond user message")
         );
         assert_eq!(records[0].output_text().as_deref(), Some("answer"));
+    }
+
+    #[test]
+    fn chat_turn_records_keep_trailing_consecutive_users_and_tools() {
+        let session = AgentSession {
+            path: PathBuf::from("claude-export.jsonl"),
+            id: Some("abcdef123456".to_string()),
+            cwd: Some("D:\\archive".to_string()),
+            title: None,
+            blocks: vec![
+                AgentBlock {
+                    kind: AgentBlockKind::User,
+                    timestamp: Some("2026-05-23T12:00:00Z".to_string()),
+                    label: None,
+                    text: "first user message".to_string(),
+                },
+                AgentBlock {
+                    kind: AgentBlockKind::User,
+                    timestamp: Some("2026-05-23T12:01:00Z".to_string()),
+                    label: None,
+                    text: "second user message".to_string(),
+                },
+                AgentBlock {
+                    kind: AgentBlockKind::ToolCall,
+                    timestamp: Some("2026-05-23T12:02:00Z".to_string()),
+                    label: Some("bash".to_string()),
+                    text: r#"{"command":"cargo test"}"#.to_string(),
+                },
+            ],
+        };
+
+        let records = WorkRecord::chat_turns(AgentProvider::Claude, &session);
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].input_text().as_deref(),
+            Some("first user message\n\nsecond user message")
+        );
+        assert_eq!(records[0].output_text(), None);
+        assert!(records[0]
+            .parts
+            .iter()
+            .any(|part| part.kind == WorkPartKind::ToolCall));
     }
 
     #[test]
