@@ -748,6 +748,7 @@ pub fn is_real_user_block(block: &AgentBlock) -> bool {
 }
 
 fn is_agent_startup_user_text(text: &str) -> bool {
+    let text = text.trim_start();
     text.starts_with("# AGENTS.md instructions for")
         || text.starts_with("<environment_context>")
         || text.starts_with("<turn_aborted>")
@@ -755,8 +756,13 @@ fn is_agent_startup_user_text(text: &str) -> bool {
         || text.starts_with("<local-command-stdout>")
         || text.starts_with("<command-message>")
         || text.starts_with("<command-name>")
+        || text.starts_with("<command-args>")
         || text.starts_with("<ide_opened_file>")
-        || text.starts_with("[Request interrupted by user]")
+        || text.starts_with("<ide_selection>")
+        || text.starts_with("<system-reminder>")
+        || text.starts_with("<system_reminder>")
+        // Covers plain interrupt and "…for tool use" variants.
+        || text.starts_with("[Request interrupted by user")
 }
 
 fn agent_session_ref_id(id: Option<&str>, path: &Path) -> String {
@@ -1194,5 +1200,97 @@ mod tests {
                 .and_then(parse_timestamp),
             parse_timestamp("2026-05-23T12:02:00Z")
         );
+    }
+
+    #[test]
+    fn chat_turn_records_ignore_interrupted_tool_use_noise() {
+        let session = AgentSession {
+            path: PathBuf::from("claude-session.jsonl"),
+            id: Some("abcdef123456".to_string()),
+            cwd: Some("D:\\sivtr".to_string()),
+            title: None,
+            blocks: vec![
+                AgentBlock {
+                    kind: AgentBlockKind::User,
+                    timestamp: Some("2026-05-23T12:00:00Z".to_string()),
+                    label: None,
+                    text: "[Request interrupted by user for tool use]".to_string(),
+                },
+                AgentBlock {
+                    kind: AgentBlockKind::Assistant,
+                    timestamp: Some("2026-05-23T12:00:01Z".to_string()),
+                    label: None,
+                    text: "partial".to_string(),
+                },
+                AgentBlock {
+                    kind: AgentBlockKind::User,
+                    timestamp: Some("2026-05-23T12:01:00Z".to_string()),
+                    label: None,
+                    text: "continue".to_string(),
+                },
+                AgentBlock {
+                    kind: AgentBlockKind::Assistant,
+                    timestamp: Some("2026-05-23T12:02:00Z".to_string()),
+                    label: None,
+                    text: "done".to_string(),
+                },
+            ],
+        };
+
+        let records = WorkRecord::chat_turns(AgentProvider::Claude, &session);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].input_text().as_deref(), Some("continue"));
+        assert_eq!(records[0].output_text().as_deref(), Some("done"));
+        // Orphan assistant after filtered interrupt is not kept as its own turn.
+        assert!(!records
+            .iter()
+            .any(|record| record.output_text().as_deref() == Some("partial")));
+    }
+
+    #[test]
+    fn chat_turn_records_ignore_system_and_command_noise() {
+        let session = AgentSession {
+            path: PathBuf::from("claude-session.jsonl"),
+            id: Some("abcdef123456".to_string()),
+            cwd: Some("D:\\sivtr".to_string()),
+            title: None,
+            blocks: vec![
+                AgentBlock {
+                    kind: AgentBlockKind::User,
+                    timestamp: Some("2026-05-23T12:00:00Z".to_string()),
+                    label: None,
+                    text: "  <system-reminder>\nhidden\n</system-reminder>".to_string(),
+                },
+                AgentBlock {
+                    kind: AgentBlockKind::User,
+                    timestamp: Some("2026-05-23T12:00:01Z".to_string()),
+                    label: None,
+                    text: "<command-args>--foo</command-args>".to_string(),
+                },
+                AgentBlock {
+                    kind: AgentBlockKind::User,
+                    timestamp: Some("2026-05-23T12:00:02Z".to_string()),
+                    label: None,
+                    text: "<ide_selection>main.rs</ide_selection>".to_string(),
+                },
+                AgentBlock {
+                    kind: AgentBlockKind::User,
+                    timestamp: Some("2026-05-23T12:01:00Z".to_string()),
+                    label: None,
+                    text: "real question".to_string(),
+                },
+                AgentBlock {
+                    kind: AgentBlockKind::Assistant,
+                    timestamp: Some("2026-05-23T12:02:00Z".to_string()),
+                    label: None,
+                    text: "answer".to_string(),
+                },
+            ],
+        };
+
+        let records = WorkRecord::chat_turns(AgentProvider::Claude, &session);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].input_text().as_deref(), Some("real question"));
+        assert_eq!(records[0].parts[1].text, "answer");
     }
 }
