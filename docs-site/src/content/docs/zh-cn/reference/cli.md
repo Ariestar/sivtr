@@ -46,6 +46,16 @@ sivtr import
 
 打开当前结构化 shell session log。需要 shell 集成。
 
+Claude 账号导出使用独立子命令，不改变上面的 shell session 行为：
+
+```bash
+sivtr import claude-export <EXPORT_DIR> [--cwd <PATH>] [--dest <PATH>] [--dry-run] [--json]
+```
+
+导入器会在写入前校验严格 UTF-8、消息角色、分支图和目标冲突。默认目标是 `~/.claude/projects/<编码后的 cwd>/sivtr-imports/` 下的确定性批次目录。使用 `--dry-run --json` 可以在零写入的情况下查看批次 ID、源文件哈希、数量、目标路径、警告和幂等状态。
+
+导入会话在 sivtr 浏览和搜索中只显示 user 与 assistant 的正文。thinking 和工具块仍可从无损源快照及事件导入元数据中还原，但不会进入索引或展示。
+
 ## init
 
 ```bash

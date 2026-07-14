@@ -65,6 +65,16 @@ max_entries = 0
 
 Provider formats differ; `sivtr` normalizes them into sessions and dialogue units for copy, picker, search, and show workflows.
 
+## Claude export imports
+
+`sivtr import claude-export` writes each deterministic batch under:
+
+```text
+~/.claude/projects/<encoded-cwd>/sivtr-imports/<batch-id>/
+```
+
+Each batch contains Claude-readable JSONL sessions, byte-identical source snapshots, and a manifest with hashes and message/branch mappings. Existing batches are never overwritten. `--dest` can place the batch root elsewhere for isolated validation or archival use.
+
 ## Codex exported mirrors
 
 `codex export` writes a copy of local Codex session files into a destination you choose:

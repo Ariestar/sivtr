@@ -199,6 +199,21 @@ mod tests {
         assert!(!matches.is_empty());
     }
 
+    #[test]
+    fn line_match_anchor_resolves_to_same_line_after_blank_lines() {
+        let record = test_record("pi/abcdef12/2", "abcdef12", 2, "first line\n\nmatched line");
+        let regex = Regex::new("matched").expect("test regex should compile");
+
+        let matches = matching_lines(&record, &regex);
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].target, WorkRefTarget::Line(3));
+        assert_eq!(
+            record.content_for_target(matches[0].target).as_deref(),
+            Some(matches[0].content.as_str())
+        );
+    }
+
     fn test_record(
         _ref_id: &str,
         session_id: &str,

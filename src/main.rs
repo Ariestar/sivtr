@@ -22,6 +22,7 @@ use sivtr_core::ai::{AgentProvider, AgentSelection};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    output::configure_utf8_console();
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) if commands::capture::copy::is_pick_cancelled(&error) => ExitCode::SUCCESS,
@@ -43,8 +44,8 @@ fn run() -> Result<()> {
         Some(Commands::Pipe) => {
             commands::capture::pipe::execute()?;
         }
-        Some(Commands::Import) => {
-            commands::capture::import::execute()?;
+        Some(Commands::Import(command)) => {
+            commands::capture::import::execute(command)?;
         }
         Some(Commands::History(hist_cmd)) => {
             commands::system::history::execute(hist_cmd)?;

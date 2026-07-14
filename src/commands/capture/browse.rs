@@ -20,7 +20,7 @@ pub fn run_tui(app: &mut App, start_at_bottom: bool) -> Result<()> {
     }
 
     loop {
-        terminal.draw(|frame| {
+        tui::terminal::draw(&mut terminal, |frame| {
             let area = frame.area();
             app.buffer
                 .resize(area.width as usize, area.height.saturating_sub(2) as usize);

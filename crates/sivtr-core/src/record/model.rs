@@ -469,7 +469,6 @@ impl WorkRecord {
         let target_index = line.checked_sub(1)?;
         self.combined_text()
             .lines()
-            .filter(|line| !line.is_empty())
             .nth(target_index)
             .map(str::to_string)
     }
@@ -697,14 +696,19 @@ pub fn chat_turn_ranges(blocks: &[AgentBlock]) -> Vec<(usize, usize)> {
 
     for (idx, block) in blocks.iter().enumerate() {
         if block.kind == AgentBlockKind::User && is_real_user_block(block) {
-            if let Some(start) = start {
+            if let Some(existing_start) = start {
                 if has_assistant {
-                    ranges.push((start, idx));
+                    ranges.push((existing_start, idx));
+                    start = Some(idx);
+                    has_assistant = false;
                 }
+            } else {
+                start = Some(idx);
             }
-            start = Some(idx);
-            has_assistant = false;
-        } else if start.is_some() && block.kind == AgentBlockKind::Assistant {
+        } else if block.kind == AgentBlockKind::Assistant {
+            if start.is_none() {
+                start = Some(idx);
+            }
             has_assistant = true;
         }
     }
@@ -1083,6 +1087,70 @@ mod tests {
             parse_timestamp("2026-05-23T12:03:00Z")
         );
         assert_eq!(records[0].time.duration_ms, Some(120_000));
+    }
+
+    #[test]
+    fn chat_turn_records_keep_consecutive_user_messages() {
+        let session = AgentSession {
+            path: PathBuf::from("claude-export.jsonl"),
+            id: Some("abcdef123456".to_string()),
+            cwd: Some("D:\\archive".to_string()),
+            title: None,
+            blocks: vec![
+                AgentBlock {
+                    kind: AgentBlockKind::User,
+                    timestamp: Some("2026-05-23T12:00:00Z".to_string()),
+                    label: None,
+                    text: "first user message".to_string(),
+                },
+                AgentBlock {
+                    kind: AgentBlockKind::User,
+                    timestamp: Some("2026-05-23T12:01:00Z".to_string()),
+                    label: None,
+                    text: "second user message".to_string(),
+                },
+                AgentBlock {
+                    kind: AgentBlockKind::Assistant,
+                    timestamp: Some("2026-05-23T12:02:00Z".to_string()),
+                    label: None,
+                    text: "answer".to_string(),
+                },
+            ],
+        };
+
+        let records = WorkRecord::chat_turns(AgentProvider::Claude, &session);
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].input_text().as_deref(),
+            Some("first user message\n\nsecond user message")
+        );
+        assert_eq!(records[0].output_text().as_deref(), Some("answer"));
+    }
+
+    #[test]
+    fn chat_turn_records_keep_leading_assistant_message() {
+        let session = AgentSession {
+            path: PathBuf::from("claude-export.jsonl"),
+            id: Some("abcdef123456".to_string()),
+            cwd: Some("D:\\archive".to_string()),
+            title: None,
+            blocks: vec![AgentBlock {
+                kind: AgentBlockKind::Assistant,
+                timestamp: Some("2026-05-23T12:00:00Z".to_string()),
+                label: None,
+                text: "export starts mid-conversation".to_string(),
+            }],
+        };
+
+        let records = WorkRecord::chat_turns(AgentProvider::Claude, &session);
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].input_text(), None);
+        assert_eq!(
+            records[0].output_text().as_deref(),
+            Some("export starts mid-conversation")
+        );
     }
 
     #[test]

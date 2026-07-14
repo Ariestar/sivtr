@@ -65,6 +65,16 @@ max_entries = 0
 
 各 provider 格式不同；`sivtr` 会把它们归一化为 session 和 dialogue unit，用于 copy、picker、search 和 show 工作流。
 
+## Claude 导出导入
+
+`sivtr import claude-export` 默认把确定性批次写入：
+
+```text
+~/.claude/projects/<编码后的 cwd>/sivtr-imports/<batch-id>/
+```
+
+每个批次包含 Claude 可读取的 JSONL session、与源文件逐字节一致的快照，以及记录哈希、消息和分支映射的 manifest。已有批次永不覆盖；可以用 `--dest` 将批次根目录放到隔离位置进行验证或归档。
+
 ## Codex 导出 mirror
 
 `codex export` 会把本地 Codex session 文件复制到你选择的目标目录：

@@ -4249,6 +4249,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "strip-ansi-escapes",
  "tempfile",
  "thiserror 2.0.18",

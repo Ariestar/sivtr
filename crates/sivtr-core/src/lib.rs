@@ -2,6 +2,7 @@ pub mod agents;
 pub mod ai;
 pub mod buffer;
 pub mod capture;
+pub mod claude_export;
 pub mod config;
 pub mod export;
 pub mod history;

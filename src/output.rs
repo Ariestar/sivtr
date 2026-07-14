@@ -14,6 +14,15 @@ const COLOR_NEVER: u8 = 2;
 
 static COLOR_CHOICE: AtomicU8 = AtomicU8::new(COLOR_AUTO);
 
+pub fn configure_utf8_console() {
+    #[cfg(windows)]
+    unsafe {
+        const CP_UTF8: u32 = 65_001;
+        winapi::um::wincon::SetConsoleCP(CP_UTF8);
+        winapi::um::wincon::SetConsoleOutputCP(CP_UTF8);
+    }
+}
+
 pub fn set_color_choice(choice: ColorChoice) {
     COLOR_CHOICE.store(
         match choice {

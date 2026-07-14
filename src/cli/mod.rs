@@ -611,6 +611,42 @@ pub struct DoctorArgs {
     pub json: bool,
 }
 
+#[derive(Parser, Debug)]
+pub struct ImportCommand {
+    #[command(subcommand)]
+    pub action: Option<ImportAction>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ImportAction {
+    /// Convert a Claude account export into lossless local Claude JSONL sessions
+    #[command(name = "claude-export")]
+    ClaudeExport(ClaudeExportImportArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ClaudeExportImportArgs {
+    /// Directory containing conversations.json and/or design_chats/*.json
+    #[arg(value_name = "EXPORT_DIR")]
+    pub export_dir: PathBuf,
+
+    /// Cwd recorded in imported sessions; defaults to EXPORT_DIR
+    #[arg(long, value_name = "PATH")]
+    pub cwd: Option<PathBuf>,
+
+    /// Claude project directory; defaults to ~/.claude/projects/<encoded-cwd>
+    #[arg(long, value_name = "PATH")]
+    pub dest: Option<PathBuf>,
+
+    /// Validate and report without writing files
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Print a machine-readable import report
+    #[arg(long)]
+    pub json: bool,
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Wrap a command execution and capture its output
@@ -625,8 +661,8 @@ pub enum Commands {
     /// Read from stdin pipe (e.g., `cmd | sivtr`)
     Pipe,
 
-    /// Open the current session log
-    Import,
+    /// Open the current shell session log or import an external archive
+    Import(ImportCommand),
 
     /// Manage output history
     History(HistoryCommand),
@@ -1535,6 +1571,44 @@ pub struct CodexExportArgs {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    #[test]
+    fn import_without_subcommand_keeps_shell_session_behavior() {
+        let cli = Cli::try_parse_from(["sivtr", "import"]).expect("parse import");
+        match cli.command {
+            Some(Commands::Import(command)) => assert!(command.action.is_none()),
+            _ => panic!("expected import command"),
+        }
+    }
+
+    #[test]
+    fn claude_export_import_parses_options() {
+        let cli = Cli::try_parse_from([
+            "sivtr",
+            "import",
+            "claude-export",
+            "archive",
+            "--cwd",
+            "workspace",
+            "--dest",
+            "claude-project",
+            "--dry-run",
+            "--json",
+        ])
+        .expect("parse Claude export import");
+        match cli.command {
+            Some(Commands::Import(ImportCommand {
+                action: Some(ImportAction::ClaudeExport(args)),
+            })) => {
+                assert_eq!(args.export_dir, PathBuf::from("archive"));
+                assert_eq!(args.cwd, Some(PathBuf::from("workspace")));
+                assert_eq!(args.dest, Some(PathBuf::from("claude-project")));
+                assert!(args.dry_run);
+                assert!(args.json);
+            }
+            _ => panic!("expected Claude export import command"),
+        }
+    }
 
     #[test]
     fn mcp_serve_parses() {

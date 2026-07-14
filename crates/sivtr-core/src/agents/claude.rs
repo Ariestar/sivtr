@@ -68,10 +68,82 @@ fn apply_event(session: &mut AgentSession, value: &Value) {
         .and_then(Value::as_str)
         .map(str::to_string);
 
+    if is_sivtr_import(value) {
+        match value.get("type").and_then(Value::as_str) {
+            Some("user") => {
+                apply_imported_dialogue(session, value, AgentBlockKind::User, timestamp)
+            }
+            Some("assistant") => {
+                apply_imported_dialogue(session, value, AgentBlockKind::Assistant, timestamp)
+            }
+            _ => {}
+        }
+        return;
+    }
+
     match value.get("type").and_then(Value::as_str) {
         Some("user") => apply_message(session, value, AgentBlockKind::User, timestamp),
         Some("assistant") => apply_message(session, value, AgentBlockKind::Assistant, timestamp),
         _ => {}
+    }
+}
+
+fn is_sivtr_import(value: &Value) -> bool {
+    matches!(
+        value
+            .get("sivtrImport")
+            .and_then(|metadata| metadata.get("format"))
+            .and_then(Value::as_str),
+        Some("claude-account-export" | "claude-design-chat-export")
+    )
+}
+
+fn apply_imported_dialogue(
+    session: &mut AgentSession,
+    value: &Value,
+    kind: AgentBlockKind,
+    timestamp: Option<String>,
+) {
+    let Some(content) = value
+        .get("message")
+        .and_then(|message| message.get("content"))
+    else {
+        return;
+    };
+
+    match content {
+        Value::Array(items) => {
+            for item in items {
+                if item.get("type").and_then(Value::as_str) == Some("text") {
+                    push_imported_dialogue_block(
+                        session,
+                        kind,
+                        timestamp.clone(),
+                        extract_content_text(item),
+                    );
+                }
+            }
+        }
+        Value::String(text) => {
+            push_imported_dialogue_block(session, kind, timestamp, text.clone());
+        }
+        _ => {}
+    }
+}
+
+fn push_imported_dialogue_block(
+    session: &mut AgentSession,
+    kind: AgentBlockKind,
+    timestamp: Option<String>,
+    text: String,
+) {
+    if !text.is_empty() {
+        session.blocks.push(crate::ai::AgentBlock {
+            kind,
+            timestamp,
+            label: None,
+            text,
+        });
     }
 }
 
@@ -410,6 +482,27 @@ mod tests {
         assert_eq!(session.blocks[2].kind, AgentBlockKind::ToolCall);
         assert_eq!(session.blocks[3].kind, AgentBlockKind::ToolOutput);
         assert_eq!(session.blocks[4].kind, AgentBlockKind::Assistant);
+    }
+
+    #[test]
+    fn imported_sessions_expose_only_exact_dialogue_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"type":"user","sessionId":"imported","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"hidden output"},{"type":"text","text":" user 中文 한글 😀\r\nline "}]},"sivtrImport":{"format":"claude-account-export"}}
+{"type":"assistant","sessionId":"imported","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hidden reasoning"},{"type":"text","text":" assistant 正文 "},{"type":"tool_use","id":"tool-2","name":"Bash","input":{"command":"hidden"}}]},"sivtrImport":{"format":"claude-account-export"}}
+"#,
+        )
+        .unwrap();
+
+        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+
+        assert_eq!(session.blocks.len(), 2);
+        assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
+        assert_eq!(session.blocks[0].text, " user 中文 한글 😀\r\nline ");
+        assert_eq!(session.blocks[1].kind, AgentBlockKind::Assistant);
+        assert_eq!(session.blocks[1].text, " assistant 正文 ");
     }
 
     #[test]

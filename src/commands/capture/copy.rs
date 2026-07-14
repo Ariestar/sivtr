@@ -1439,9 +1439,9 @@ mod tests {
     #[test]
     fn resolves_ref_text_for_line_targets() {
         let record = test_record();
-        let reference = WorkRef::agent_record(AgentProvider::Codex, "session", 1).with_line(2);
+        let reference = WorkRef::agent_record(AgentProvider::Codex, "session", 1).with_line(3);
 
-        let text = ref_text_pair(&record, &reference, "codex/session/1/2").unwrap();
+        let text = ref_text_pair(&record, &reference, "codex/session/1/3").unwrap();
 
         assert_eq!(text.plain, "ok");
     }
