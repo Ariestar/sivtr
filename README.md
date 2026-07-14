@@ -5,9 +5,9 @@
 <h1 align="center">sivtr</h1>
 
 <p align="center">
-  Local workspace memory for terminal output and AI coding sessions.
+  A unified agent memory workspace for human and agent
   <br>
-  Capture what happened, search it later, and let agents reuse exact local evidence.
+  agents and terminals share one context to use
   <br>
   <strong>Your agent memory doesn’t need to be a heavyweight knowledge system.</strong>
 </p>
