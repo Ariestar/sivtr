@@ -5,9 +5,9 @@
 <h1 align="center">sivtr</h1>
 
 <p align="center">
-  面向终端输出和 AI Coding Sessions 的本地工作记忆层。
+  一个面相智能体和人的统一的记忆空间
   <br>
-  捕获发生过的事，之后搜索复用，让 Agent 使用精确的本地证据。
+  让智能体和终端共享同一个上下文
   <br>
   <strong>你的 Agent 记忆，不必是一套笨重的知识系统。</strong>
 </p>
