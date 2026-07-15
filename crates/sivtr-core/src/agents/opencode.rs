@@ -4,7 +4,7 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 use crate::agents::{
-    extract_content_text, normalize_path_for_match, open_readonly_db, pretty_json_value,
+    extract_content_text, filter_sessions_by_workspace, open_readonly_db, pretty_json_value,
     push_block, system_time_from_millis, AgentBlockKind, AgentProvider, AgentSession,
     AgentSessionInfo, AgentSessionProvider,
 };
@@ -42,7 +42,6 @@ impl AgentSessionProvider for OpenCodeProvider {
             return Ok(Vec::new());
         }
 
-        let wanted = cwd.map(normalize_path_for_match);
         let conn = open_readonly_db(&db_path)?;
         let mut stmt = conn.prepare(
             "select id, directory, time_updated, title from session order by time_updated desc, id desc",
@@ -58,22 +57,16 @@ impl AgentSessionProvider for OpenCodeProvider {
         let mut sessions = Vec::new();
         for row in rows {
             let (id, session_cwd, updated, title) = row?;
-            if let Some(wanted) = wanted.as_deref() {
-                if normalize_path_for_match(Path::new(&session_cwd)) != wanted {
-                    continue;
-                }
-            }
-
             sessions.push(AgentSessionInfo {
                 modified: system_time_from_millis(updated),
                 path: opencode_session_path(&id),
                 id: Some(id),
-                cwd: Some(session_cwd),
+                cwd: Some(session_cwd).filter(|value| !value.trim().is_empty()),
                 title: Some(title).filter(|title| !title.trim().is_empty()),
             });
         }
 
-        Ok(sessions)
+        Ok(filter_sessions_by_workspace(sessions, cwd))
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {

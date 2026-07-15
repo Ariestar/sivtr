@@ -172,17 +172,99 @@ fn valid_target_list() -> String {
         .join(", ")
 }
 
+/// Agent hosts that appear installed (config dir / config file present).
+/// Does not imply sivtr MCP is registered. Used for install defaults and doctor.
+pub fn detected_hosts() -> Vec<AgentProvider> {
+    AgentProvider::all()
+        .iter()
+        .map(|spec| spec.provider)
+        .filter(|provider| provider_config_exists(*provider))
+        .collect()
+}
+
+/// Install targets when `-p` is omitted: detected hosts, or Claude if none found.
 pub fn detect_targets() -> Vec<AgentProvider> {
-    let mut targets = Vec::new();
-    for spec in AgentProvider::all() {
-        if provider_config_exists(spec.provider) {
-            targets.push(spec.provider);
-        }
-    }
+    let mut targets = detected_hosts();
     if targets.is_empty() {
         targets.push(AgentProvider::Claude);
     }
     targets
+}
+
+/// Hosts where sivtr MCP is actually present in config (not merely "host installed").
+pub fn registered_targets() -> Vec<AgentProvider> {
+    AgentProvider::all()
+        .iter()
+        .map(|spec| spec.provider)
+        .filter(|provider| is_mcp_registered(*provider))
+        .collect()
+}
+
+fn is_mcp_registered(provider: AgentProvider) -> bool {
+    match provider {
+        AgentProvider::Claude => {
+            json_has_server(&claude_config_path(McpLocation::Global), "mcpServers")
+                || json_has_server(&claude_config_path(McpLocation::Local), "mcpServers")
+        }
+        AgentProvider::Cursor => {
+            json_has_server(&cursor_config_path(McpLocation::Global), "mcpServers")
+                || json_has_server(&cursor_config_path(McpLocation::Local), "mcpServers")
+        }
+        AgentProvider::Codex => {
+            let path = codex_config_path();
+            path.exists()
+                && fs::read_to_string(&path)
+                    .map(|text| text.contains("[mcp_servers.sivtr]"))
+                    .unwrap_or(false)
+        }
+        AgentProvider::OpenCode => {
+            json_has_server(&opencode_config_path(McpLocation::Global), "mcp")
+                || json_has_server(&opencode_config_path(McpLocation::Local), "mcp")
+        }
+        AgentProvider::Pi => json_has_server(&pi_config_path(), "mcpServers"),
+        AgentProvider::Hermes => yaml_has_server(&hermes_config_path(), "mcp_servers"),
+        AgentProvider::OpenClaw => openclaw_has_server(&openclaw_config_path()),
+    }
+}
+
+fn json_has_server(path: &Path, key: &str) -> bool {
+    let Ok(text) = fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(Value::Object(root)) = serde_json::from_str::<Value>(&text) else {
+        return false;
+    };
+    root.get(key)
+        .and_then(Value::as_object)
+        .is_some_and(|servers| servers.contains_key(SERVER_NAME))
+}
+
+fn yaml_has_server(path: &Path, key: &str) -> bool {
+    let Ok(text) = fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(root) = serde_yaml::from_str::<serde_yaml::Value>(&text) else {
+        return false;
+    };
+    root.get(key)
+        .and_then(serde_yaml::Value::as_mapping)
+        .is_some_and(|servers| {
+            servers.contains_key(serde_yaml::Value::String(SERVER_NAME.to_string()))
+        })
+}
+
+fn openclaw_has_server(path: &Path) -> bool {
+    let Ok(text) = fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(Value::Object(root)) = serde_json::from_str::<Value>(&text) else {
+        return false;
+    };
+    root.get("mcp")
+        .and_then(Value::as_object)
+        .and_then(|mcp| mcp.get("servers"))
+        .and_then(Value::as_object)
+        .is_some_and(|servers| servers.contains_key(SERVER_NAME))
 }
 
 fn provider_config_exists(provider: AgentProvider) -> bool {

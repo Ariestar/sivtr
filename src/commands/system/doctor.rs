@@ -93,6 +93,7 @@ impl Report {
         self.check_session_dir();
         self.check_shell_hooks(fix);
         self.check_workspace_keys(fix);
+        self.check_agent_hosts();
         self.check_mcp_registration(fix);
         self.check_skill(fix);
         self.check_providers();
@@ -432,31 +433,76 @@ impl Report {
         }
     }
 
+    fn check_agent_hosts(&mut self) {
+        let hosts = crate::commands::system::mcp::detected_hosts();
+        if hosts.is_empty() {
+            self.add(Check {
+                name: "agent_hosts",
+                label: "agent hosts",
+                status: Status::Manual,
+                detail: "none detected".to_string(),
+                hint: Some(
+                    "install Claude Code, Cursor, Codex, or another supported host, then re-run doctor"
+                        .to_string(),
+                ),
+            });
+            return;
+        }
+        let names: Vec<&str> = hosts.iter().map(|p| p.name()).collect();
+        self.add(Check {
+            name: "agent_hosts",
+            label: "agent hosts",
+            status: Status::Pass,
+            detail: names.join(", "),
+            hint: None,
+        });
+    }
+
     fn check_mcp_registration(&mut self, fix: bool) {
-        let targets = crate::commands::system::mcp::detect_targets();
-        let registered: Vec<&str> = targets.iter().map(|p| p.name()).collect();
+        let registered = crate::commands::system::mcp::registered_targets();
         if !registered.is_empty() {
+            let names: Vec<&str> = registered.iter().map(|p| p.name()).collect();
             self.add(Check {
                 name: "mcp",
                 label: "MCP registration",
                 status: Status::Pass,
-                detail: format!("registered for {}", registered.join(", ")),
+                detail: format!("sivtr entry present for {}", names.join(", ")),
                 hint: None,
             });
-        } else if fix {
+            return;
+        }
+
+        if fix {
             let mcp_args = crate::cli::McpInstallArgs {
                 providers: Vec::new(), // detect installed hosts
                 location: crate::cli::McpLocation::Global,
                 yes: true,
             };
             match crate::commands::system::mcp::install(&mcp_args) {
-                Ok(()) => self.add(Check {
-                    name: "mcp",
-                    label: "MCP registration",
-                    status: Status::Fixed,
-                    detail: "installed for detected hosts".to_string(),
-                    hint: None,
-                }),
+                Ok(()) => {
+                    let after = crate::commands::system::mcp::registered_targets();
+                    if after.is_empty() {
+                        self.add(Check {
+                            name: "mcp",
+                            label: "MCP registration",
+                            status: Status::Manual,
+                            detail: "install ran but no sivtr MCP entry was found".to_string(),
+                            hint: Some(
+                                "run `sivtr mcp install -p all` and verify host config paths"
+                                    .to_string(),
+                            ),
+                        });
+                    } else {
+                        let names: Vec<&str> = after.iter().map(|p| p.name()).collect();
+                        self.add(Check {
+                            name: "mcp",
+                            label: "MCP registration",
+                            status: Status::Fixed,
+                            detail: format!("installed sivtr MCP for {}", names.join(", ")),
+                            hint: None,
+                        });
+                    }
+                }
                 Err(e) => self.add(Check {
                     name: "mcp",
                     label: "MCP registration",
@@ -465,21 +511,23 @@ impl Report {
                     hint: Some("run `sivtr mcp install` or `sivtr mcp install -p all`".to_string()),
                 }),
             }
-        } else {
-            self.add(Check {
-                name: "mcp",
-                label: "MCP registration",
-                status: Status::Fail,
-                detail: "not registered for any host".to_string(),
-                hint: Some(
-                    "run `sivtr mcp install` or `sivtr mcp install -p claude,cursor`".to_string(),
-                ),
-            });
+            return;
         }
+
+        self.add(Check {
+            name: "mcp",
+            label: "MCP registration",
+            status: Status::Fail,
+            detail: "sivtr MCP entry missing in host configs".to_string(),
+            hint: Some(
+                "run `sivtr mcp install` or `sivtr mcp install -p claude,cursor`".to_string(),
+            ),
+        });
     }
 
     fn check_providers(&mut self) {
         let mut detail = String::new();
+        let mut errors = 0usize;
         for spec in sivtr_core::ai::AgentProvider::all() {
             let provider = spec.provider.session_provider();
             match provider.list_recent_sessions(None) {
@@ -490,6 +538,7 @@ impl Report {
                     detail.push_str(&format!("{}: {}  ", spec.provider.name(), s.len()));
                 }
                 Err(_) => {
+                    errors += 1;
                     detail.push_str(&format!("{}: error  ", spec.provider.name()));
                 }
             }
@@ -497,9 +546,17 @@ impl Report {
         self.add(Check {
             name: "providers",
             label: "provider sessions",
-            status: Status::Pass,
+            status: if errors == 0 {
+                Status::Pass
+            } else {
+                Status::Manual
+            },
             detail: detail.trim().to_string(),
-            hint: None,
+            hint: if errors == 0 {
+                None
+            } else {
+                Some("one or more providers failed to list sessions".to_string())
+            },
         });
     }
 

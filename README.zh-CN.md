@@ -17,7 +17,7 @@
   <a href="https://marketplace.visualstudio.com/items?itemName=ariestar.sivtr-vscode"><img alt="VS Code Marketplace" src="https://vsmarketplacebadges.dev/version/ariestar.sivtr-vscode.svg?style=flat-square&label=VS%20Code&color=007ACC"></a>
   <a href="https://github.com/Ariestar/sivtr/actions/workflows/rust.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Ariestar/sivtr/rust.yml?branch=main&style=flat-square"></a>
   <a href="https://deepwiki.com/Ariestar/sivtr"><img alt="Ask DeepWiki" src="https://deepwiki.com/badge.svg?repo=Ariestar/sivtr"></a>
-  <a href="rust-toolchain.toml"><img alt="Rust" src="https://img.shields.io/badge/rust-1.88%2B-orange?style=flat-square"></a>
+  <a href="Cargo.toml"><img alt="Rust" src="https://img.shields.io/badge/rust-1.91%2B-orange?style=flat-square"></a>
   <a href="https://linux.do/"><img alt="linux.do" src="https://img.shields.io/badge/friend-linux.do-1f883d?style=flat-square"></a>
 </p>
 
@@ -64,7 +64,7 @@
 
 - **MCP 优先的 Agent 记忆**：一次 `sivtr mcp install`，Agent 直接调用 `sivtr_search` / `sivtr_show` / `sivtr_zoom` / `sivtr_filter` / `sivtr_status`，不用你粘贴日志。
 - **带输出的 shell history**：记录 Bash、Zsh、PowerShell、Nushell 里的命令、stdout/stderr、退出码、目录和耗时。
-- **一个搜索面覆盖本地工作**：终端输出 + Codex / Claude Code / Hermes / OpenCode / Cursor / Pi 会话——MCP 或 CLI 都能用。
+- **一个搜索面覆盖本地工作**：终端输出 + 所有已注册 Agent provider（Codex / Claude Code / Cursor / Hermes / OpenCode / OpenClaw / Pi …）——MCP 或 CLI 都能用。
 - **精确证据，而不是摘要**：每个命中都落到稳定 ref，可 show / zoom / filter，或交给下一个 Agent。
 - **命名记忆变量**：把结果保存成 `@failures`，复用 `@last`，管道用 `@`，也可 `@failures[1,3..5]` 取子集。
 - **跨设备访问**：只读分享 workspace，用 `desk:...` ref 像读本地一样浏览另一台设备。
@@ -178,7 +178,7 @@ sivtr s agent -m "TODO|decision|failed" --since today -f timeline
 | `sivtr` / `sivtr pipe` | 读取 stdin 并打开输出浏览器。 |
 | `sivtr run <command>` | 执行命令、捕获输出并浏览。 |
 | `sivtr copy` | 复制最近终端命令块。 |
-| `sivtr copy <provider>` | 从 Codex、Claude Code、Hermes、OpenCode、Pi sessions 复制内容。 |
+| `sivtr copy <provider>` | 从任意已注册 Agent provider 复制内容（registry 驱动：Codex、Claude、Cursor、OpenCode、OpenClaw、Hermes、Pi…）。 |
 | `sivtr search` / `sivtr s` | 搜索终端和 Agent memory；命中结果保存为 `@last`。 |
 | `sivtr filter <source>` | 对 source 或管道传入的 WorkSet 应用统一过滤。 |
 | `sivtr var` | 列出、保存、删除、合并、移除或清空命名 WorkSet 变量。 |
@@ -240,8 +240,10 @@ sivtr copy ref desk:terminal/session_42/3/o/1 --print
 | Terminal | Bash、Zsh、PowerShell、Nushell shell hooks；pipe 和 run capture。 |
 | Codex | 本地 rollout/session JSONL files。 |
 | Claude Code | 本地 transcript/session files。 |
-| Hermes | 本地 Hermes session JSONL files。 |
-| OpenCode | 本地 session data。 |
+| Hermes | 本地 Hermes `state.db`（`sessions/` 下 JSONL 为 residual）。 |
+| OpenCode | 本地 session 数据库。 |
+| Cursor | 本地 Cursor agent transcript JSONL。 |
+| OpenClaw | 本地 OpenClaw agent SQLite（+ legacy JSONL）。 |
 | Pi | 本地 Pi agent session logs。 |
 
 ## 文档

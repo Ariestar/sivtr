@@ -5,7 +5,10 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use super::model::{AgentSession, AgentSessionInfo, AgentSessionMeta, WorkspaceMatchTarget};
+use super::model::{
+    workspace_matches_candidates, AgentSession, AgentSessionInfo, AgentSessionMeta,
+    WorkspaceMatchTarget,
+};
 
 pub fn list_recent_jsonl_sessions(
     root: &Path,
@@ -26,14 +29,9 @@ pub fn list_recent_jsonl_sessions(
                 continue;
             }
         };
-        // Only filter when the session recorded at least one cwd.
-        // Providers without workspace metadata (e.g. Hermes chat/weixin) must
-        // still surface sessions under current-directory queries.
+        // Shared policy: no cwd metadata → keep; otherwise path or git-remote match.
         if let Some(wanted) = wanted.as_ref() {
-            let mut candidates = meta.cwd_candidates().peekable();
-            if candidates.peek().is_some()
-                && !candidates.any(|candidate| wanted.matches(Path::new(candidate)))
-            {
+            if !workspace_matches_candidates(wanted, meta.cwd_candidates().map(Path::new)) {
                 continue;
             }
         }

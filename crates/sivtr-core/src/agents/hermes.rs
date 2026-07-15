@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use crate::agents::{
-    extract_content_text, list_recent_jsonl_sessions, normalize_path_for_match, open_readonly_db,
-    parse_jsonl_meta, parse_jsonl_session, pretty_json_string, pretty_json_value, push_block,
-    system_time_from_unix_secs, AgentBlockKind, AgentProvider, AgentSession, AgentSessionInfo,
-    AgentSessionMeta, AgentSessionProvider,
+    extract_content_text, filter_sessions_by_workspace, list_recent_jsonl_sessions,
+    open_readonly_db, parse_jsonl_meta, parse_jsonl_session, pretty_json_string, pretty_json_value,
+    push_block, system_time_from_unix_secs, AgentBlockKind, AgentProvider, AgentSession,
+    AgentSessionInfo, AgentSessionMeta, AgentSessionProvider,
 };
 
 const PROVIDER_NAME: &str = "Hermes";
@@ -41,15 +41,6 @@ impl AgentSessionProvider for HermesProvider {
             parse_session_meta,
         )?);
 
-        if let Some(cwd) = cwd {
-            let wanted = normalize_path_for_match(cwd);
-            sessions.retain(|session| match session.cwd.as_deref() {
-                // No workspace metadata (weixin/cron/cli without cwd): keep.
-                None => true,
-                Some(candidate) => normalize_path_for_match(Path::new(candidate)) == wanted,
-            });
-        }
-
         sessions.sort_by_key(|session| session.modified);
         sessions.reverse();
 
@@ -66,7 +57,7 @@ impl AgentSessionProvider for HermesProvider {
             id_ok && path_ok
         });
 
-        Ok(sessions)
+        Ok(filter_sessions_by_workspace(sessions, cwd))
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
@@ -216,7 +207,12 @@ fn parse_sqlite_session(db_path: &Path, session_id: &str, path: &Path) -> Result
                 ))
             },
         )
-        .with_context(|| format!("Hermes session `{session_id}` not found in {}", db_path.display()))?;
+        .with_context(|| {
+            format!(
+                "Hermes session `{session_id}` not found in {}",
+                db_path.display()
+            )
+        })?;
 
     let mut session = AgentSession {
         path: path.to_path_buf(),
@@ -310,7 +306,11 @@ fn apply_db_message(
     }
 }
 
-fn push_tool_calls_from_json(session: &mut AgentSession, tool_calls: &str, timestamp: Option<String>) {
+fn push_tool_calls_from_json(
+    session: &mut AgentSession,
+    tool_calls: &str,
+    timestamp: Option<String>,
+) {
     let Ok(value) = serde_json::from_str::<Value>(tool_calls) else {
         push_block(
             session,
@@ -348,7 +348,13 @@ fn push_one_tool_call(session: &mut AgentSession, tool_call: &Value, timestamp: 
             other => pretty_json_value(other),
         })
         .unwrap_or_else(|| pretty_json_value(tool_call));
-    push_block(session, AgentBlockKind::ToolCall, timestamp, name, arguments);
+    push_block(
+        session,
+        AgentBlockKind::ToolCall,
+        timestamp,
+        name,
+        arguments,
+    );
 }
 
 fn parse_session_meta(path: &Path) -> Result<AgentSessionMeta> {
@@ -440,7 +446,13 @@ fn push_tool_output(session: &mut AgentSession, value: &Value) {
         .or_else(|| value.get("name"))
         .and_then(Value::as_str)
         .map(str::to_string);
-    push_block(session, AgentBlockKind::ToolOutput, timestamp, label, content);
+    push_block(
+        session,
+        AgentBlockKind::ToolOutput,
+        timestamp,
+        label,
+        content,
+    );
 }
 
 fn content_text(value: &Value) -> String {
@@ -662,8 +674,9 @@ mod tests {
         drop(conn);
 
         let _guard = EnvGuard::set("HERMES_HOME", home.path());
-        let sessions =
-            HermesProvider.list_recent_sessions(Some(Path::new("/repo"))).expect("list");
+        let sessions = HermesProvider
+            .list_recent_sessions(Some(Path::new("/repo")))
+            .expect("list");
 
         let ids: Vec<_> = sessions
             .iter()
@@ -752,5 +765,4 @@ mod tests {
             }
         }
     }
-
-    }
+}

@@ -8,10 +8,8 @@ mod remote;
 mod tui;
 
 use anyhow::Result;
-use clap::Parser;
-
 use cli::{
-    AgentCopyArgs, AgentCopyCommand, AgentCopyMode, Cli, Commands, CopyArgs, CopyRefArgs,
+    AgentCopyArgs, AgentCopyCommand, AgentCopyMode, Commands, CopyArgs, CopyFlagArgs, CopyRefArgs,
     CopySimpleArgs, CopySubcommand, DiffArgs, HotkeyPickAgentArgs, HotkeyServeArgs,
 };
 use command_blocks::CommandBlockTextMode;
@@ -33,7 +31,7 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<()> {
-    let cli = Cli::parse();
+    let cli = cli::parse();
     output::set_color_choice(cli.color.into());
 
     match cli.command {
@@ -115,20 +113,23 @@ fn run() -> Result<()> {
                 run_copy_simple(&sub_args, CopyMode::CommandOnly, false)?
             }
             Some(CopySubcommand::Ref(sub_args)) => run_copy_ref(&sub_args)?,
-            Some(CopySubcommand::Claude(sub_args)) => {
-                run_agent_copy(AgentProvider::Claude, sub_args)?
-            }
-            Some(CopySubcommand::Codex(sub_args)) => {
-                run_agent_copy(AgentProvider::Codex, sub_args)?
-            }
-            Some(CopySubcommand::OpenCode(sub_args)) => {
-                run_agent_copy(AgentProvider::OpenCode, sub_args)?
-            }
-            Some(CopySubcommand::Hermes(sub_args)) => {
-                run_agent_copy(AgentProvider::Hermes, sub_args)?
-            }
-            Some(CopySubcommand::Pi(sub_args)) => run_agent_copy(AgentProvider::Pi, sub_args)?,
-            None => run_copy(&args.args, CopyMode::Both, true)?,
+            Some(CopySubcommand::External(tokens)) => match cli::resolve_copy_external(&tokens)
+                .map_err(|message| anyhow::anyhow!(message))?
+            {
+                cli::CopyExternal::Agent { provider, command } => {
+                    run_agent_copy(provider, command)?;
+                }
+                cli::CopyExternal::Terminal {
+                    selector,
+                    trailing_flags,
+                } => {
+                    // Parent flags apply when only a selector was given without extra flags;
+                    // merge parent flags with trailing (trailing wins if both set).
+                    let flags = merge_copy_flags(&args.flags, &trailing_flags);
+                    run_terminal_copy(selector.as_deref(), &flags, CopyMode::Both, true)?;
+                }
+            },
+            None => run_terminal_copy(None, &args.flags, CopyMode::Both, true)?,
         },
         Some(Commands::Ci(args)) => run_copy(&args, CopyMode::InputOnly, true)?,
         Some(Commands::Co(args)) => run_copy_simple(&args, CopyMode::OutputOnly, false)?,
@@ -194,6 +195,36 @@ fn run_copy(args: &CopyArgs, mode: CopyMode, include_prompt: bool) -> Result<()>
         regex: args.common.regex.as_deref(),
         lines: args.common.lines.as_deref(),
     })
+}
+
+fn run_terminal_copy(
+    selector: Option<&str>,
+    flags: &CopyFlagArgs,
+    mode: CopyMode,
+    include_prompt: bool,
+) -> Result<()> {
+    commands::capture::copy::execute(CopyRequest {
+        selector,
+        pick: flags.pick,
+        mode,
+        include_prompt,
+        prompt_override: flags.prompt.as_deref(),
+        print_full: flags.print,
+        ansi: flags.ansi,
+        regex: flags.regex.as_deref(),
+        lines: flags.lines.as_deref(),
+    })
+}
+
+fn merge_copy_flags(parent: &CopyFlagArgs, trailing: &CopyFlagArgs) -> CopyFlagArgs {
+    CopyFlagArgs {
+        ansi: parent.ansi || trailing.ansi,
+        pick: parent.pick || trailing.pick,
+        print: parent.print || trailing.print,
+        regex: trailing.regex.clone().or_else(|| parent.regex.clone()),
+        lines: trailing.lines.clone().or_else(|| parent.lines.clone()),
+        prompt: trailing.prompt.clone().or_else(|| parent.prompt.clone()),
+    }
 }
 
 fn run_copy_simple(args: &CopySimpleArgs, mode: CopyMode, include_prompt: bool) -> Result<()> {

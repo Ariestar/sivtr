@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::agents::{
-    extract_content_text, jsonl_files, list_recent_jsonl_sessions, normalize_path_for_match,
-    parse_jsonl_meta, parse_jsonl_session, pretty_json_string, pretty_json_value, push_block,
-    AgentBlockKind, AgentProvider, AgentSession, AgentSessionInfo, AgentSessionMeta,
-    AgentSessionProvider,
+    extract_content_text, filter_sessions_by_workspace, jsonl_files, list_recent_jsonl_sessions,
+    normalize_path_for_match, parse_jsonl_meta, parse_jsonl_session, pretty_json_string,
+    pretty_json_value, push_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionInfo,
+    AgentSessionMeta, AgentSessionProvider,
 };
 use crate::config::SivtrConfig;
 
@@ -23,7 +23,6 @@ impl AgentSessionProvider for CodexProvider {
     }
 
     fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
-        let wanted = cwd.map(normalize_path_for_match);
         let mut sessions = Vec::new();
 
         for root in configured_codex_session_dirs() {
@@ -49,16 +48,6 @@ impl AgentSessionProvider for CodexProvider {
                         continue;
                     }
                 };
-                if let Some(wanted) = wanted.as_deref() {
-                    let matches_cwd = meta
-                        .cwd
-                        .as_deref()
-                        .map(|cwd| normalize_path_for_match(Path::new(cwd)) == wanted)
-                        .unwrap_or(false);
-                    if !matches_cwd {
-                        continue;
-                    }
-                }
 
                 sessions.push(AgentSessionInfo {
                     modified: std::fs::metadata(&path)
@@ -74,7 +63,7 @@ impl AgentSessionProvider for CodexProvider {
 
         sessions.sort_by_key(|session| session.modified);
         sessions.reverse();
-        Ok(sessions)
+        Ok(filter_sessions_by_workspace(sessions, cwd))
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {

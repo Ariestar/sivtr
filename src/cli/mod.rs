@@ -1,9 +1,10 @@
-use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
+use clap::{ArgGroup, Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sivtr_core::ai::AgentProvider;
 use sivtr_core::record::{WorkPartIo, WorkPartKind};
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use crate::commands::memory::show::WorkSetOutputFormat;
 
@@ -267,7 +268,11 @@ impl std::fmt::Display for WorkPartFilterArg {
     }
 }
 
-const COPY_AFTER_HELP: &str = "\
+/// After-help for `copy`, generated once from the agent registry.
+static COPY_AFTER_HELP: LazyLock<String> = LazyLock::new(|| {
+    let providers = AgentProvider::command_names_csv();
+    format!(
+        "\
 Defaults:
   `sivtr copy` copies the last command block.
   The default content mode is input + output, with prompt preserved.
@@ -285,6 +290,17 @@ Modes:
   sivtr copy in        Copy input only
   sivtr copy out       Copy output only
   sivtr copy cmd       Copy the bare command only
+  sivtr copy ref <ref> Copy exact work-ref content
+  sivtr copy <provider>  Copy from an agent session
+
+Agent providers:
+  {providers}
+
+  sivtr copy <provider>       Last user + assistant turn
+  sivtr copy <provider> out   Last assistant reply
+  sivtr copy <provider> in    Last user message
+  sivtr copy <provider> tool  Last tool output
+  sivtr copy <provider> all   Whole parsed session
 
 Aliases:
   sivtr c              Same as `sivtr copy`
@@ -295,18 +311,17 @@ Aliases:
 Filters:
   Filters run after the selected blocks are merged.
   If both are set, `--regex` runs before `--lines`.
-  --regex error
-  --lines 10:20
-  --lines 1,3,8:12
 
 Examples:
   sivtr copy
   sivtr copy 3 --print
-  sivtr copy --prompt \":\"
   sivtr copy in 2..4
-  sivtr copy out --pick --regex panic
-  sivtr copy cmd --pick
-";
+  sivtr copy codex out --print
+  sivtr copy cursor --session 1
+  sivtr copy openclaw out --print
+"
+    )
+});
 
 const COPY_INPUT_AFTER_HELP: &str = "\
 Defaults:
@@ -376,41 +391,6 @@ Examples:
   sivtr copy ref claude/abc123/4 --cwd /path/to/project
 ";
 
-const COPY_AGENT_AFTER_HELP: &str = "\
-Defaults:
-  `sivtr copy <provider>` copies the last completed user + assistant turn
-  from the selected agent session.
-
-Session Resolution:
-  By default, sivtr reads the newest selectable provider session, preferring
-  a session from the current working directory when the provider records cwd.
-  `--session N` picks the Nth newest selectable session
-  (the same session numbering shown in `--pick`).
-  `--session ID` matches a session id or id prefix.
-
-Selector Semantics:
-  Selection is relative to the newest matching provider item.
-  `1` means the latest turn/message/tool output, `2` means the 2nd-latest.
-
-Modes:
-  sivtr copy <provider>       Copy the last user + assistant turn
-  sivtr copy <provider> out   Copy the last assistant reply
-  sivtr copy <provider> in    Copy the last user message
-  sivtr copy <provider> tool  Copy the last tool output
-  sivtr copy <provider> all   Copy the whole parsed session
-
-Filters:
-  Filters run after the selected text is assembled.
-  If both are set, `--regex` runs before `--lines`.
-
-Examples:
-  sivtr copy codex
-  sivtr copy claude out --print
-  sivtr copy pi --session 2
-  sivtr copy opencode --pick
-  sivtr copy hermes all --lines 1:20
-";
-
 const DIFF_AFTER_HELP: &str = "\
 Defaults:
   `sivtr diff <left> <right>` compares two command blocks from the current session.
@@ -450,11 +430,15 @@ Behavior:
   --context sets both sides; --before and --after override the corresponding side.
 ";
 
-const SEARCH_AFTER_HELP: &str = r##"
+/// After-help for `search`/`filter`, generated once from the agent registry.
+static SEARCH_AFTER_HELP: LazyLock<String> = LazyLock::new(|| {
+    let providers = AgentProvider::command_names_csv();
+    format!(
+        r##"
 Target selectors:
   terminal[/<session>[/<record>[/<line>]]]  Search terminal command records
   agent[/<session>[/<turn>[/<line>]]]       Search all AI/agent records
-  <provider>[/<session>[/<turn>[/<line>]]] Search one provider: codex, claude, hermes, pi, opencode
+  <provider>[/<session>[/<turn>[/<line>]]] Search one provider: {providers}
   <remote>:<selector>                      Run the same selector against a configured remote
   Use * for wildcard path segments, e.g. terminal/*/3 or pi/*/*.
 
@@ -500,7 +484,9 @@ Examples:
   sivtr search pi/019e5941/7 --format workset
   sivtr search terminal/session_13104/3/12 --format workset
   sivtr search desk:terminal --status failure --latest 5 --refs
-"##;
+"##
+    )
+});
 
 const WORK_SESSIONS_AFTER_HELP: &str = "\
 Defaults:
@@ -632,11 +618,10 @@ pub enum Commands {
     History(HistoryCommand),
 
     /// Search captured terminal and AI workspace sessions
-    #[command(visible_alias = "s", after_help = SEARCH_AFTER_HELP)]
+    #[command(visible_alias = "s")]
     Search(SearchArgs),
 
     /// Filter a WorkSet stream or selector
-    #[command(after_help = SEARCH_AFTER_HELP)]
     Filter(FilterArgs),
 
     /// Manage named WorkSet vars
@@ -691,7 +676,7 @@ pub enum Commands {
     },
 
     /// Copy recent command blocks to clipboard
-    #[command(visible_alias = "c", after_help = COPY_AFTER_HELP)]
+    #[command(visible_alias = "c")]
     Copy(Box<CopyCommand>),
 
     /// Alias for `copy in`
@@ -745,10 +730,13 @@ pub struct CopyCommand {
     #[command(subcommand)]
     pub mode: Option<CopySubcommand>,
 
+    /// Flags for bare `sivtr copy` (no positional selector here — selectors and agent
+    /// names arrive via [`CopySubcommand::External`]).
     #[command(flatten)]
-    pub args: CopyArgs,
+    pub flags: CopyFlagArgs,
 }
 
+/// Terminal modes, ref mode, or an external first token (agent provider **or** terminal selector).
 #[derive(Subcommand, Debug)]
 pub enum CopySubcommand {
     /// Copy recent command input blocks to clipboard
@@ -767,25 +755,87 @@ pub enum CopySubcommand {
     #[command(after_help = COPY_REF_AFTER_HELP)]
     Ref(CopyRefArgs),
 
-    /// Copy content from the current Codex conversation session
-    #[command(after_help = COPY_AGENT_AFTER_HELP)]
-    Codex(AgentCopyCommand),
+    /// First free token: registry provider name, or a terminal block selector (`3`, `2..4`).
+    #[command(external_subcommand)]
+    External(Vec<String>),
+}
 
-    /// Copy content from the current Claude Code conversation session
-    #[command(after_help = COPY_AGENT_AFTER_HELP)]
-    Claude(AgentCopyCommand),
+/// Result of resolving `CopySubcommand::External`.
+#[derive(Debug)]
+pub enum CopyExternal {
+    Agent {
+        provider: AgentProvider,
+        command: AgentCopyCommand,
+    },
+    /// Terminal copy with optional block selector (from the external token stream).
+    Terminal {
+        selector: Option<String>,
+        trailing_flags: CopyFlagArgs,
+    },
+}
 
-    /// Copy content from the current OpenCode conversation session
-    #[command(name = "opencode", after_help = COPY_AGENT_AFTER_HELP)]
-    OpenCode(AgentCopyCommand),
+/// Resolve external tokens: registry provider → agent copy; otherwise terminal selector.
+pub fn resolve_copy_external(tokens: &[String]) -> Result<CopyExternal, String> {
+    let (head, rest) = tokens
+        .split_first()
+        .ok_or_else(|| "missing copy target".to_string())?;
 
-    /// Copy content from the current Hermes conversation session
-    #[command(after_help = COPY_AGENT_AFTER_HELP)]
-    Hermes(AgentCopyCommand),
+    if let Some(provider) = AgentProvider::from_command_name(head) {
+        let command = AgentCopyCommand::try_parse_from(rest).unwrap_or_else(|error| error.exit());
+        return Ok(CopyExternal::Agent { provider, command });
+    }
 
-    /// Copy content from the current Pi conversation session
-    #[command(after_help = COPY_AGENT_AFTER_HELP)]
-    Pi(AgentCopyCommand),
+    // Terminal: first token is the block selector; remaining tokens are flag-only.
+    let trailing_flags = CopyFlagArgs::try_parse_from(rest).unwrap_or_else(|error| error.exit());
+    Ok(CopyExternal::Terminal {
+        selector: Some(head.clone()),
+        trailing_flags,
+    })
+}
+
+/// Top-level CLI parse: inject registry-generated after-help, then parse argv once.
+pub fn parse() -> Cli {
+    let mut cmd = Cli::command();
+    if let Some(sub) = cmd.find_subcommand_mut("search") {
+        *sub = std::mem::take(sub).after_help(SEARCH_AFTER_HELP.as_str());
+    }
+    if let Some(sub) = cmd.find_subcommand_mut("filter") {
+        *sub = std::mem::take(sub).after_help(SEARCH_AFTER_HELP.as_str());
+    }
+    if let Some(sub) = cmd.find_subcommand_mut("copy") {
+        *sub = std::mem::take(sub).after_help(COPY_AFTER_HELP.as_str());
+    }
+    let matches = cmd.get_matches();
+    Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit())
+}
+
+/// Flag-only args (no positional selector) used on bare `sivtr copy` and after a selector token.
+#[derive(Parser, Debug, Clone, Default)]
+#[command(no_binary_name = true, disable_help_subcommand = true)]
+pub struct CopyFlagArgs {
+    /// Copy the ANSI-decorated version when available
+    #[arg(long)]
+    pub ansi: bool,
+
+    /// Open the interactive picker
+    #[arg(long)]
+    pub pick: bool,
+
+    /// Print the copied text after copying
+    #[arg(long)]
+    pub print: bool,
+
+    /// Keep only lines matching this regex
+    #[arg(long, value_name = "PATTERN")]
+    pub regex: Option<String>,
+
+    /// Keep only selected 1-based lines, for example `10:20` or `1,3,8:12`
+    #[arg(long, value_name = "SPEC")]
+    pub lines: Option<String>,
+
+    /// Prompt text used in copied input instead of the original shell prompt
+    #[arg(long = "prompt", value_name = "TEXT")]
+    pub prompt: Option<String>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -1472,7 +1522,12 @@ impl<'de> Deserialize<'de> for HotkeyProviderSelection {
     }
 }
 
-#[derive(Args, Debug)]
+#[derive(Parser, Debug)]
+#[command(
+    name = "sivtr copy <provider>",
+    no_binary_name = true,
+    disable_help_subcommand = true
+)]
 pub struct AgentCopyCommand {
     #[command(subcommand)]
     pub mode: Option<AgentCopyMode>,
@@ -1725,169 +1780,101 @@ mod tests {
         }
     }
 
-    #[test]
-    fn codex_copy_defaults_to_last_turn() {
-        let cli = Cli::try_parse_from(["sivtr", "copy", "codex"]).unwrap();
-
+    fn copy_external_tokens(cli: Cli) -> Vec<String> {
         match cli.command {
             Some(Commands::Copy(cmd)) => match cmd.mode {
-                Some(CopySubcommand::Codex(codex)) => {
-                    assert!(codex.mode.is_none());
-                    assert_eq!(codex.args.common.common.selector, None);
+                Some(CopySubcommand::External(tokens)) => tokens,
+                other => panic!("expected copy external subcommand, got {other:?}"),
+            },
+            other => panic!("expected copy command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn copy_agent_defaults_to_last_turn_for_any_registry_provider() {
+        for name in AgentProvider::command_names() {
+            let cli = Cli::try_parse_from(["sivtr", "copy", name]).unwrap();
+            let tokens = copy_external_tokens(cli);
+            match resolve_copy_external(&tokens).unwrap() {
+                CopyExternal::Agent { provider, command } => {
+                    assert_eq!(provider.command_name(), name);
+                    assert!(command.mode.is_none());
+                    assert_eq!(command.args.common.common.selector, None);
                 }
-                _ => panic!("expected copy codex mode"),
-            },
-            _ => panic!("expected copy command"),
+                other => panic!("expected agent, got {other:?}"),
+            }
         }
     }
 
     #[test]
-    fn codex_copy_accepts_nested_mode() {
-        let cli = Cli::try_parse_from(["sivtr", "copy", "codex", "out", "--print"]).unwrap();
-
-        match cli.command {
-            Some(Commands::Copy(cmd)) => match cmd.mode {
-                Some(CopySubcommand::Codex(codex)) => match codex.mode {
-                    Some(AgentCopyMode::Out(args)) => assert!(args.common.common.print),
-                    _ => panic!("expected copy codex out mode"),
-                },
-                _ => panic!("expected copy codex mode"),
-            },
-            _ => panic!("expected copy command"),
-        }
-    }
-
-    #[test]
-    fn codex_copy_accepts_selector() {
-        let cli = Cli::try_parse_from(["sivtr", "copy", "codex", "2..4"]).unwrap();
-
-        match cli.command {
-            Some(Commands::Copy(cmd)) => match cmd.mode {
-                Some(CopySubcommand::Codex(codex)) => {
-                    assert_eq!(codex.args.common.common.selector.as_deref(), Some("2..4"));
+    fn copy_agent_accepts_nested_mode_selector_and_session() {
+        let cli = Cli::try_parse_from([
+            "sivtr",
+            "copy",
+            "cursor",
+            "out",
+            "2..4",
+            "--print",
+            "--session",
+            "abc",
+        ])
+        .unwrap();
+        let tokens = copy_external_tokens(cli);
+        match resolve_copy_external(&tokens).unwrap() {
+            CopyExternal::Agent { provider, command } => {
+                assert_eq!(provider, AgentProvider::Cursor);
+                match command.mode {
+                    Some(AgentCopyMode::Out(args)) => {
+                        assert!(args.common.common.print);
+                        assert_eq!(args.common.common.selector.as_deref(), Some("2..4"));
+                        assert_eq!(args.session.as_deref(), Some("abc"));
+                    }
+                    other => panic!("expected Out mode, got {other:?}"),
                 }
-                _ => panic!("expected copy codex mode"),
-            },
-            _ => panic!("expected copy command"),
+            }
+            other => panic!("expected agent, got {other:?}"),
         }
     }
 
     #[test]
-    fn codex_copy_accepts_session_selector() {
-        let cli = Cli::try_parse_from(["sivtr", "copy", "codex", "--session", "2"]).unwrap();
-
-        match cli.command {
-            Some(Commands::Copy(cmd)) => match cmd.mode {
-                Some(CopySubcommand::Codex(codex)) => {
-                    assert_eq!(codex.args.session.as_deref(), Some("2"));
-                }
-                _ => panic!("expected copy codex mode"),
-            },
-            _ => panic!("expected copy command"),
+    fn copy_terminal_selector_is_not_treated_as_provider() {
+        let cli = Cli::try_parse_from(["sivtr", "copy", "3", "--print"]).unwrap();
+        let tokens = copy_external_tokens(cli);
+        match resolve_copy_external(&tokens).unwrap() {
+            CopyExternal::Terminal {
+                selector,
+                trailing_flags,
+            } => {
+                assert_eq!(selector.as_deref(), Some("3"));
+                assert!(trailing_flags.print);
+            }
+            other => panic!("expected terminal, got {other:?}"),
         }
     }
 
     #[test]
-    fn claude_copy_accepts_nested_mode() {
-        let cli = Cli::try_parse_from(["sivtr", "copy", "claude", "out", "--print"]).unwrap();
-
-        match cli.command {
-            Some(Commands::Copy(cmd)) => match cmd.mode {
-                Some(CopySubcommand::Claude(claude)) => match claude.mode {
-                    Some(AgentCopyMode::Out(args)) => assert!(args.common.common.print),
-                    _ => panic!("expected copy claude out mode"),
-                },
-                _ => panic!("expected copy claude mode"),
-            },
-            _ => panic!("expected copy command"),
+    fn copy_unknown_provider_name_is_terminal_selector() {
+        // Non-registry names are terminal selectors (same as historical `copy 3`).
+        let cli = Cli::try_parse_from(["sivtr", "copy", "not-a-provider"]).unwrap();
+        let tokens = copy_external_tokens(cli);
+        match resolve_copy_external(&tokens).unwrap() {
+            CopyExternal::Terminal { selector, .. } => {
+                assert_eq!(selector.as_deref(), Some("not-a-provider"));
+            }
+            other => panic!("expected terminal, got {other:?}"),
         }
     }
 
     #[test]
-    fn claude_copy_accepts_session_selector() {
-        let cli = Cli::try_parse_from(["sivtr", "copy", "claude", "--session", "abc123"]).unwrap();
-
-        match cli.command {
-            Some(Commands::Copy(cmd)) => match cmd.mode {
-                Some(CopySubcommand::Claude(claude)) => {
-                    assert_eq!(claude.args.session.as_deref(), Some("abc123"));
-                }
-                _ => panic!("expected copy claude mode"),
-            },
-            _ => panic!("expected copy command"),
+    fn registry_provider_names_parse_for_hotkey_selection() {
+        for name in AgentProvider::command_names() {
+            assert_eq!(
+                name.parse::<HotkeyProviderSelection>().unwrap(),
+                HotkeyProviderSelection::provider(
+                    AgentProvider::from_command_name(name).expect("registry name")
+                )
+            );
         }
-    }
-
-    #[test]
-    fn opencode_copy_accepts_nested_mode() {
-        let cli = Cli::try_parse_from(["sivtr", "copy", "opencode", "out", "--print"]).unwrap();
-
-        match cli.command {
-            Some(Commands::Copy(cmd)) => match cmd.mode {
-                Some(CopySubcommand::OpenCode(opencode)) => match opencode.mode {
-                    Some(AgentCopyMode::Out(args)) => assert!(args.common.common.print),
-                    _ => panic!("expected copy opencode out mode"),
-                },
-                _ => panic!("expected copy opencode mode"),
-            },
-            _ => panic!("expected copy command"),
-        }
-    }
-
-    #[test]
-    fn opencode_provider_selection_is_supported() {
-        assert_eq!(
-            "opencode".parse::<HotkeyProviderSelection>().unwrap(),
-            HotkeyProviderSelection::provider(AgentProvider::OpenCode)
-        );
-    }
-
-    #[test]
-    fn pi_copy_accepts_nested_mode() {
-        let cli = Cli::try_parse_from(["sivtr", "copy", "pi", "out", "--print"]).unwrap();
-
-        match cli.command {
-            Some(Commands::Copy(cmd)) => match cmd.mode {
-                Some(CopySubcommand::Pi(pi)) => match pi.mode {
-                    Some(AgentCopyMode::Out(args)) => assert!(args.common.common.print),
-                    _ => panic!("expected copy pi out mode"),
-                },
-                _ => panic!("expected copy pi mode"),
-            },
-            _ => panic!("expected copy command"),
-        }
-    }
-
-    #[test]
-    fn pi_provider_selection_is_supported() {
-        assert_eq!(
-            "pi".parse::<HotkeyProviderSelection>().unwrap(),
-            HotkeyProviderSelection::provider(AgentProvider::Pi)
-        );
-    }
-
-    #[test]
-    fn hermes_copy_accepts_nested_mode() {
-        let cli = Cli::try_parse_from(["sivtr", "copy", "hermes", "out", "--print"]).unwrap();
-
-        match cli.command {
-            Some(Commands::Copy(cmd)) => match cmd.mode {
-                Some(CopySubcommand::Hermes(hermes)) => match hermes.mode {
-                    Some(AgentCopyMode::Out(args)) => assert!(args.common.common.print),
-                    _ => panic!("expected copy hermes out mode"),
-                },
-                _ => panic!("expected copy hermes mode"),
-            },
-            _ => panic!("expected copy command"),
-        }
-    }
-
-    #[test]
-    fn hermes_provider_selection_is_supported() {
-        assert_eq!(
-            "hermes".parse::<HotkeyProviderSelection>().unwrap(),
-            HotkeyProviderSelection::provider(AgentProvider::Hermes)
-        );
     }
 
     #[test]

@@ -155,4 +155,14 @@ impl AgentProvider {
     pub fn session_provider(self) -> Box<dyn AgentSessionProvider> {
         (self.spec().factory)()
     }
+
+    /// Registered provider CLI names (`codex`, `claude`, …), registry order.
+    pub fn command_names() -> impl Iterator<Item = &'static str> {
+        Self::all().iter().map(|spec| spec.command_name)
+    }
+
+    /// Comma-separated registered provider CLI names for help and errors.
+    pub fn command_names_csv() -> String {
+        Self::command_names().collect::<Vec<_>>().join(", ")
+    }
 }

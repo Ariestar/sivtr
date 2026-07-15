@@ -17,7 +17,7 @@
   <a href="https://marketplace.visualstudio.com/items?itemName=ariestar.sivtr-vscode"><img alt="VS Code Marketplace" src="https://vsmarketplacebadges.dev/version/ariestar.sivtr-vscode.svg?style=flat-square&label=VS%20Code&color=007ACC"></a>
   <a href="https://github.com/Ariestar/sivtr/actions/workflows/rust.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Ariestar/sivtr/rust.yml?branch=main&style=flat-square"></a>
   <a href="https://deepwiki.com/Ariestar/sivtr"><img alt="Ask DeepWiki" src="https://deepwiki.com/badge.svg?repo=Ariestar/sivtr"></a>
-  <a href="rust-toolchain.toml"><img alt="Rust" src="https://img.shields.io/badge/rust-1.88%2B-orange?style=flat-square"></a>
+  <a href="Cargo.toml"><img alt="Rust" src="https://img.shields.io/badge/rust-1.91%2B-orange?style=flat-square"></a>
   <a href="https://linux.do/"><img alt="linux.do" src="https://img.shields.io/badge/friend-linux.do-1f883d?style=flat-square"></a>
 </p>
 
@@ -64,7 +64,7 @@ With `sivtr`, you can:
 
 - **MCP-first agent memory**: install once with `sivtr mcp install`, then agents call `sivtr_search` / `sivtr_show` / `sivtr_zoom` / `sivtr_filter` / `sivtr_status` instead of asking you to paste logs.
 - **Shell history that keeps the output**: capture commands from Bash, Zsh, PowerShell, and Nushell, including stdout, stderr, exit code, cwd, and timing.
-- **One search surface for local work**: terminal output plus Codex, Claude Code, Hermes, OpenCode, Cursor, and Pi sessions from the current repo — via MCP or CLI.
+- **One search surface for local work**: terminal output plus all registered agent providers (Codex, Claude Code, Cursor, Hermes, OpenCode, OpenClaw, Pi, …) from the current repo — via MCP or CLI.
 - **Exact evidence, not summaries**: every hit resolves to a stable ref you can show, zoom, filter, or hand to the next agent.
 - **Named memory variables**: save result sets as `@failures`, reuse `@last`, pipe with `@`, and slice with `@failures[1,3..5]`.
 - **Cross-device access**: share a workspace read-only and browse another device with a `desk:...` ref.
@@ -178,7 +178,7 @@ Memory variables:
 | `sivtr` / `sivtr pipe` | Read stdin and open the output browser. |
 | `sivtr run <command>` | Execute a command, capture output, then browse it. |
 | `sivtr copy` | Copy recent terminal command blocks. |
-| `sivtr copy <provider>` | Copy content from Codex, Claude Code, Hermes, OpenCode, or Pi sessions. |
+| `sivtr copy <provider>` | Copy content from any registered agent provider (registry-driven: Codex, Claude, Cursor, OpenCode, OpenClaw, Hermes, Pi, …). |
 | `sivtr search` / `sivtr s` | Search terminal and agent memory; saves matches as `@last`. |
 | `sivtr filter <source>` | Apply the shared WorkSet filters to a source or piped WorkSet. |
 | `sivtr var` | List, save, remove, merge, drop, or clean up named WorkSet variables. |
@@ -240,8 +240,10 @@ Sharing is opt-in and read-only. Secrets are redacted by default before data lea
 | Terminal | Bash, Zsh, PowerShell, Nushell shell hooks; pipe and run capture. |
 | Codex | Local rollout/session JSONL files. |
 | Claude Code | Local transcript/session files. |
-| Hermes | Local Hermes session JSONL files. |
-| OpenCode | Local session data. |
+| Hermes | Local Hermes `state.db` (JSONL under `sessions/` as residual). |
+| OpenCode | Local session database. |
+| Cursor | Local Cursor agent transcript JSONL. |
+| OpenClaw | Local OpenClaw agent SQLite (+ legacy JSONL). |
 | Pi | Local Pi agent session logs. |
 
 ## Documentation

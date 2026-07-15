@@ -1,6 +1,6 @@
 ---
 title: Agent Sessions
-description: Turn Codex, Claude Code, Hermes, OpenCode, and Pi sessions into reusable agent memory.
+description: Turn registered agent providers (Codex, Claude, Cursor, Hermes, OpenCode, OpenClaw, Pi, …) into reusable agent memory.
 ---
 
 `sivtr` treats agent transcripts as local workspace memory sources. You can copy the latest useful turn, browse older sessions in a picker, search across providers, and show exact refs without opening raw transcript files. Prior agent work becomes memory for both humans and later agents.
@@ -9,15 +9,19 @@ Skills are how later agents learn to use this memory. A `sivtr` memory skill can
 
 ## Supported providers
 
+Providers come from the `AgentProvider` registry. Copy uses the same names:
+
 | Provider | Copy command | Default discovery |
 | --- | --- | --- |
-| Codex | `sivtr copy codex ...` | Codex rollout JSONL files under `~/.codex/sessions` |
-| Claude Code | `sivtr copy claude ...` | Claude transcript/session environment and local transcripts |
-| Hermes | `sivtr copy hermes ...` | Hermes session JSONL files under `HERMES_HOME` or the platform Hermes data directory |
+| Codex | `sivtr copy codex ...` | Codex rollout JSONL under `~/.codex/sessions` |
+| Claude Code | `sivtr copy claude ...` | Claude transcript/session env and local transcripts |
+| Cursor | `sivtr copy cursor ...` | Cursor agent transcript JSONL under `~/.cursor/projects` |
 | OpenCode | `sivtr copy opencode ...` | OpenCode local database |
-| Pi | `sivtr copy pi ...` | Pi session JSONL files under the Pi agent directory |
+| OpenClaw | `sivtr copy openclaw ...` | OpenClaw agent SQLite (+ legacy JSONL) |
+| Hermes | `sivtr copy hermes ...` | Hermes `state.db` (JSONL under `sessions/` residual) |
+| Pi | `sivtr copy pi ...` | Pi session JSONL under the Pi agent directory |
 
-Use `agent` in search commands when you want all supported providers:
+Use `agent` in search commands when you want all registered providers:
 
 ```bash
 sivtr search agent --match "panic" --format timeline
@@ -28,7 +32,9 @@ sivtr search agent --match "panic" --format timeline
 ```bash
 sivtr copy codex out
 sivtr copy claude out
+sivtr copy cursor out
 sivtr copy hermes out
+sivtr copy openclaw out
 sivtr copy opencode out
 sivtr copy pi out
 ```

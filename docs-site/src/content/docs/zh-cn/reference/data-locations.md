@@ -59,8 +59,10 @@ max_entries = 0
 | --- | --- |
 | Codex | `~/.codex/sessions` rollout JSONL 文件 |
 | Claude Code | 当前 transcript/session 环境变量和本地 Claude transcripts |
-| Hermes | `$HERMES_HOME/sessions`；Windows 默认 `%LOCALAPPDATA%\hermes\sessions`，其他平台默认 `~/.hermes/sessions` |
+| Hermes | 主路径：`$HERMES_HOME/state.db`（Windows 默认 `%LOCALAPPDATA%\hermes`，其他平台 `~/.hermes`）。Residual：同目录下 `sessions/*.jsonl`。 |
 | OpenCode | OpenCode 本地数据库 |
+| Cursor | `~/.cursor/projects/**/agent-transcripts/**/*.jsonl`（可用 `CURSOR_HOME` 覆盖） |
+| OpenClaw | `~/.openclaw/agents/<id>/agent/openclaw-agent.sqlite`（legacy JSONL 在 `sessions/`） |
 | Pi | Pi agent session JSONL 文件 |
 
 各 provider 格式不同；`sivtr` 会把它们归一化为 session 和 dialogue unit，用于 copy、picker、search 和 show 工作流。

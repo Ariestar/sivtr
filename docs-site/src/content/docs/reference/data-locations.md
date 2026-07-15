@@ -59,8 +59,10 @@ max_entries = 0
 | --- | --- |
 | Codex | `~/.codex/sessions` rollout JSONL files |
 | Claude Code | Current transcript/session environment and local Claude transcripts |
-| Hermes | `$HERMES_HOME/sessions`, `%LOCALAPPDATA%\hermes\sessions` on Windows, or `~/.hermes/sessions` elsewhere |
+| Hermes | Primary: `$HERMES_HOME/state.db` (Windows default `%LOCALAPPDATA%\hermes`, else `~/.hermes`). Residual: `sessions/*.jsonl` under the same home. |
 | OpenCode | OpenCode local database |
+| Cursor | `~/.cursor/projects/**/agent-transcripts/**/*.jsonl` (override home with `CURSOR_HOME`) |
+| OpenClaw | `~/.openclaw/agents/<id>/agent/openclaw-agent.sqlite` (legacy JSONL under `sessions/`) |
 | Pi | Pi agent session JSONL files |
 
 Provider formats differ; `sivtr` normalizes them into sessions and dialogue units for copy, picker, search, and show workflows.

@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use crate::agents::{
-    extract_content_text, jsonl_files, open_readonly_db, pretty_json_value, push_block,
-    system_time_from_millis, AgentBlockKind, AgentProvider, AgentSession, AgentSessionInfo,
-    AgentSessionProvider,
+    extract_content_text, filter_sessions_by_workspace, jsonl_files, open_readonly_db,
+    pretty_json_value, push_block, system_time_from_millis, AgentBlockKind, AgentProvider,
+    AgentSession, AgentSessionInfo, AgentSessionProvider,
 };
 
 const SESSION_PATH_PREFIX: &str = "openclaw-session-";
@@ -36,24 +36,12 @@ impl AgentSessionProvider for OpenClawProvider {
         sessions.extend(list_sqlite_sessions()?);
         sessions.extend(list_legacy_jsonl_sessions()?);
 
-        if let Some(cwd) = cwd {
-            let wanted = crate::agents::normalize_path_for_match(cwd);
-            sessions.retain(|session| {
-                session
-                    .cwd
-                    .as_deref()
-                    .map(Path::new)
-                    .map(crate::agents::normalize_path_for_match)
-                    .is_some_and(|candidate| candidate == wanted)
-            });
-        }
-
         sessions.sort_by_key(|session| session.modified);
         sessions.reverse();
         // Dedup by path (sqlite wins over legacy if both exist for same id).
         let mut seen = std::collections::HashSet::new();
         sessions.retain(|session| seen.insert(session.path.clone()));
-        Ok(sessions)
+        Ok(filter_sessions_by_workspace(sessions, cwd))
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {

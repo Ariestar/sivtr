@@ -205,6 +205,45 @@ pub fn normalize_path_for_match(path: &Path) -> String {
         .to_lowercase()
 }
 
+/// Shared workspace filter for agent session lists.
+///
+/// Policy (all providers):
+/// - `cwd == None` → keep every session
+/// - session has no cwd metadata → **keep** (unbound / weixin / cron / missing)
+/// - session has cwd → keep only when it matches the target path **or** shares a git remote
+pub fn filter_sessions_by_workspace(
+    sessions: Vec<AgentSessionInfo>,
+    cwd: Option<&Path>,
+) -> Vec<AgentSessionInfo> {
+    let Some(cwd) = cwd else {
+        return sessions;
+    };
+    let wanted = WorkspaceMatchTarget::new(cwd);
+    sessions
+        .into_iter()
+        .filter(|session| match session.cwd.as_deref() {
+            None => true,
+            Some(candidate) => wanted.matches(Path::new(candidate)),
+        })
+        .collect()
+}
+
+/// Whether any cwd candidate matches the workspace target.
+/// Empty candidate list means "no metadata" → keep (same policy as unbound sessions).
+pub(crate) fn workspace_matches_candidates(
+    wanted: &WorkspaceMatchTarget,
+    mut candidates: impl Iterator<Item = impl AsRef<Path>>,
+) -> bool {
+    let mut any = false;
+    for candidate in candidates.by_ref() {
+        any = true;
+        if wanted.matches(candidate.as_ref()) {
+            return true;
+        }
+    }
+    !any
+}
+
 pub(crate) struct WorkspaceMatchTarget {
     normalized_path: String,
     remote_keys: HashSet<String>,
@@ -544,5 +583,44 @@ mod tests {
         );
 
         assert!(!WorkspaceMatchTarget::new(&target).matches(&candidate));
+    }
+
+    #[test]
+    fn filter_sessions_keeps_unbound_and_matching_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        write_git_remote(&repo, "origin", "https://github.com/Ariestar/sivtr.git");
+
+        let sessions = vec![
+            AgentSessionInfo {
+                path: PathBuf::from("unbound"),
+                id: Some("u".into()),
+                cwd: None,
+                title: None,
+                modified: SystemTime::UNIX_EPOCH,
+            },
+            AgentSessionInfo {
+                path: PathBuf::from("match"),
+                id: Some("m".into()),
+                cwd: Some(repo.to_string_lossy().into_owned()),
+                title: None,
+                modified: SystemTime::UNIX_EPOCH,
+            },
+            AgentSessionInfo {
+                path: PathBuf::from("other"),
+                id: Some("o".into()),
+                cwd: Some(dir.path().join("other").to_string_lossy().into_owned()),
+                title: None,
+                modified: SystemTime::UNIX_EPOCH,
+            },
+        ];
+
+        let filtered = filter_sessions_by_workspace(sessions, Some(&repo));
+        let ids: Vec<_> = filtered
+            .iter()
+            .filter_map(|session| session.id.as_deref())
+            .collect();
+        assert_eq!(ids, vec!["u", "m"]);
     }
 }
