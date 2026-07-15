@@ -21,8 +21,73 @@ pub enum AgentProvider {
 pub enum AgentBlockKind {
     User,
     Assistant,
+    /// Tool invocation (name in `label` when known).
     ToolCall,
+    /// Tool result (name in `label` when known).
     ToolOutput,
+    /// Explicit skill invocation / payload (name in `label`).
+    Skill,
+    /// Model reasoning / thinking channel (not dialogue body).
+    Thinking,
+    /// MCP tool call (server/tool name in `label`).
+    McpCall,
+    /// MCP tool result.
+    McpResult,
+}
+
+impl AgentBlockKind {
+    pub fn is_dialogue(self) -> bool {
+        matches!(self, Self::User | Self::Assistant)
+    }
+
+    pub fn is_structure(self) -> bool {
+        !self.is_dialogue()
+    }
+
+    /// Content-block open tag for structural kinds (`<:tool:bash call:>`, …).
+    /// Dialogue returns `None` (plain text, no wrapper).
+    pub fn open_marker(self, label: Option<&str>) -> Option<String> {
+        let name = normalize_structure_name(label);
+        Some(match self {
+            Self::User | Self::Assistant => return None,
+            Self::ToolCall => format!("<:tool:{name} call:>"),
+            Self::ToolOutput => format!("<:tool:{name} result:>"),
+            Self::Skill => format!("<:skill:{name}:>"),
+            Self::Thinking => "<:thinking:>".to_string(),
+            Self::McpCall => format!("<:mcp:{name} call:>"),
+            Self::McpResult => format!("<:mcp:{name} result:>"),
+        })
+    }
+
+    fn close_marker(self, label: Option<&str>) -> Option<String> {
+        self.open_marker(label).map(|open| {
+            // `<:tag:>` → `<:/tag:>`
+            open.replacen("<:", "<:/", 1)
+        })
+    }
+
+    /// Serialize body for evidence export. Dialogue is plain; structure is marked.
+    pub fn format_block(self, label: Option<&str>, text: &str) -> String {
+        let text = text.trim();
+        match self.open_marker(label) {
+            None => text.to_string(),
+            Some(open) => {
+                let close = self.close_marker(label).unwrap_or_default();
+                if text.is_empty() {
+                    format!("{open}\n{close}")
+                } else {
+                    format!("{open}\n{text}\n{close}")
+                }
+            }
+        }
+    }
+}
+
+fn normalize_structure_name(label: Option<&str>) -> &str {
+    label
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unknown")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -450,38 +515,50 @@ fn select_last_turn(blocks: &[AgentBlock]) -> Vec<AgentBlock> {
         .iter()
         .rposition(|block| block.kind == AgentBlockKind::Assistant)
     else {
-        return Vec::new();
+        // User + tools only (interrupted before assistant): keep the trailing structure.
+        let Some(user_idx) = blocks
+            .iter()
+            .rposition(|block| block.kind == AgentBlockKind::User)
+        else {
+            return Vec::new();
+        };
+        return blocks[user_idx..].to_vec();
     };
     let user_idx = blocks[..assistant_idx]
         .iter()
         .rposition(|block| block.kind == AgentBlockKind::User)
         .unwrap_or(assistant_idx);
 
-    blocks[user_idx..=assistant_idx]
-        .iter()
-        .filter(|block| matches!(block.kind, AgentBlockKind::User | AgentBlockKind::Assistant))
-        .cloned()
-        .collect()
+    // Keep the full turn: user, tools/skills/thinking/mcp, assistant — never strip structure.
+    blocks[user_idx..=assistant_idx].to_vec()
 }
 
 fn format_block_with_heading(block: &AgentBlock, text: &str) -> Option<String> {
     let text = text.trim();
-    if text.is_empty() {
+    if text.is_empty() && block.kind.is_dialogue() {
         return None;
     }
+    Some(format_structured_block(
+        block.kind,
+        block.label.as_deref(),
+        text,
+    ))
+}
 
-    let heading = match block.kind {
-        AgentBlockKind::User => "User".to_string(),
-        AgentBlockKind::Assistant => "Assistant".to_string(),
-        AgentBlockKind::ToolCall => block
-            .label
-            .as_deref()
-            .map(|label| format!("Tool Call: {label}"))
-            .unwrap_or_else(|| "Tool Call".to_string()),
-        AgentBlockKind::ToolOutput => "Tool Output".to_string(),
-    };
+/// Serialize a block for human/machine-readable evidence (not Markdown dialogue headings).
+///
+/// Dialogue stays plain. Structural channels use content-block markers:
+/// `<:tool:bash call:>` … `<:tool:bash result:>`, `<:skill:name:>`, `<:thinking:>`, `<:mcp:name call:>`.
+pub fn format_structured_block(kind: AgentBlockKind, label: Option<&str>, text: &str) -> String {
+    kind.format_block(label, text)
+}
 
-    Some(format!("## {heading}\n{text}"))
+pub fn is_dialogue_block(kind: AgentBlockKind) -> bool {
+    kind.is_dialogue()
+}
+
+pub fn is_structure_block(kind: AgentBlockKind) -> bool {
+    kind.is_structure()
 }
 
 #[cfg(test)]

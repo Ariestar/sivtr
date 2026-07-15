@@ -421,13 +421,18 @@ mod tests {
 
         let blocks = select_blocks(&session, AgentSelection::LastTurn);
 
-        assert_eq!(blocks.len(), 2);
+        // Last turn keeps structural blocks (tool output between user and assistant).
+        assert_eq!(blocks.len(), 3);
         assert_eq!(blocks[0].text, "second");
-        assert_eq!(blocks[1].text, "new");
-        assert_eq!(
-            format_blocks(&blocks),
-            "## User\nsecond\n\n## Assistant\nnew"
-        );
+        assert_eq!(blocks[0].kind, AgentBlockKind::User);
+        assert_eq!(blocks[1].kind, AgentBlockKind::ToolOutput);
+        assert_eq!(blocks[2].text, "new");
+        assert_eq!(blocks[2].kind, AgentBlockKind::Assistant);
+        let formatted = format_blocks(&blocks);
+        assert!(formatted.contains("second"));
+        assert!(formatted.contains("<:tool:unknown result:>"));
+        assert!(formatted.contains("debug"));
+        assert!(formatted.contains("new"));
     }
 
     #[test]

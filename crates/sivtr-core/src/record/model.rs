@@ -1,7 +1,7 @@
 use super::refs::{WorkRef, WorkRefTarget};
 use crate::ai::{
-    format_blocks_with_text, select_blocks, AgentBlock, AgentBlockKind, AgentProvider,
-    AgentSelection, AgentSession,
+    format_blocks_with_text, format_structured_block, select_blocks, AgentBlock, AgentBlockKind,
+    AgentProvider, AgentSelection, AgentSession,
 };
 use crate::session::SessionEntry;
 use crate::time::{derive_ended_at, derive_started_at, duration_between_ms, normalize_timestamp};
@@ -74,7 +74,7 @@ impl WorkRecordCopyParts {
     }
 }
 
-pub const RECORD_SCHEMA_VERSION: u32 = 1;
+pub const RECORD_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -176,8 +176,102 @@ pub enum WorkPartKind {
     AssistantMessage,
     ToolCall,
     ToolOutput,
+    /// Explicit skill invocation / payload (label = skill name).
+    Skill,
+    /// Model thinking / reasoning channel (not dialogue body).
+    Thinking,
+    /// MCP tool call (label = server/tool name).
+    McpCall,
+    /// MCP tool result.
+    McpResult,
     Text,
     Error,
+}
+
+impl WorkPartKind {
+    pub fn is_dialogue(self) -> bool {
+        matches!(self, Self::UserMessage | Self::AssistantMessage)
+    }
+
+    /// Structural evidence channels (tools, skills, thinking, MCP) — never treat as plain prose.
+    pub fn is_structure(self) -> bool {
+        matches!(
+            self,
+            Self::ToolCall
+                | Self::ToolOutput
+                | Self::Skill
+                | Self::Thinking
+                | Self::McpCall
+                | Self::McpResult
+        )
+    }
+
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Prompt | Self::Command | Self::Text | Self::Error
+        )
+    }
+
+    /// Map chat-related kinds to agent block kinds for shared formatting.
+    pub fn as_agent_block_kind(self) -> Option<crate::ai::AgentBlockKind> {
+        use crate::ai::AgentBlockKind;
+        Some(match self {
+            Self::UserMessage => AgentBlockKind::User,
+            Self::AssistantMessage => AgentBlockKind::Assistant,
+            Self::ToolCall => AgentBlockKind::ToolCall,
+            Self::ToolOutput => AgentBlockKind::ToolOutput,
+            Self::Skill => AgentBlockKind::Skill,
+            Self::Thinking => AgentBlockKind::Thinking,
+            Self::McpCall => AgentBlockKind::McpCall,
+            Self::McpResult => AgentBlockKind::McpResult,
+            Self::Prompt | Self::Command | Self::Text | Self::Error => return None,
+        })
+    }
+
+    pub fn default_io(self) -> WorkPartIo {
+        match self {
+            Self::UserMessage
+            | Self::ToolCall
+            | Self::Skill
+            | Self::McpCall
+            | Self::Prompt
+            | Self::Command => WorkPartIo::Input,
+            Self::AssistantMessage
+            | Self::ToolOutput
+            | Self::Thinking
+            | Self::McpResult
+            | Self::Text
+            | Self::Error => WorkPartIo::Output,
+        }
+    }
+
+    /// Optional fence language for structured display of payload body.
+    pub fn code_language(self) -> Option<&'static str> {
+        match self {
+            Self::Command => Some("shell"),
+            Self::ToolCall | Self::McpCall => Some("json"),
+            _ => None,
+        }
+    }
+
+    /// CLI / filter token for this kind (single source for help + parsing aliases live in CLI).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Prompt => "prompt",
+            Self::Command => "command",
+            Self::UserMessage => "user_message",
+            Self::AssistantMessage => "assistant_message",
+            Self::ToolCall => "tool_call",
+            Self::ToolOutput => "tool_output",
+            Self::Skill => "skill",
+            Self::Thinking => "thinking",
+            Self::McpCall => "mcp_call",
+            Self::McpResult => "mcp_result",
+            Self::Text => "text",
+            Self::Error => "error",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -408,11 +502,17 @@ impl WorkRecord {
                     .iter()
                     .filter(|part| matches!(part.kind, WorkPartKind::Command)),
             )),
-            WorkRecordKind::ChatTurn => non_empty(join_part_text(
-                self.parts
-                    .iter()
-                    .filter(|part| matches!(part.kind, WorkPartKind::UserMessage)),
-            )),
+            WorkRecordKind::ChatTurn => {
+                non_empty(join_parts_structured(self.parts.iter().filter(|part| {
+                    matches!(
+                        part.kind,
+                        WorkPartKind::UserMessage
+                            | WorkPartKind::ToolCall
+                            | WorkPartKind::Skill
+                            | WorkPartKind::McpCall
+                    )
+                })))
+            }
         }
     }
 
@@ -424,8 +524,14 @@ impl WorkRecord {
                     .filter(|part| matches!(part.kind, WorkPartKind::Text)),
             )),
             WorkRecordKind::ChatTurn => {
-                non_empty(join_part_text(self.parts.iter().filter(|part| {
-                    matches!(part.kind, WorkPartKind::AssistantMessage)
+                non_empty(join_parts_structured(self.parts.iter().filter(|part| {
+                    matches!(
+                        part.kind,
+                        WorkPartKind::AssistantMessage
+                            | WorkPartKind::ToolOutput
+                            | WorkPartKind::Thinking
+                            | WorkPartKind::McpResult
+                    )
                 })))
             }
         }
@@ -453,13 +559,10 @@ impl WorkRecord {
                 }
             }
             WorkRecordKind::ChatTurn => {
-                for part in self.parts.iter().filter(|part| {
-                    matches!(
-                        part.kind,
-                        WorkPartKind::UserMessage | WorkPartKind::AssistantMessage
-                    )
-                }) {
-                    append_text_segment(text, &part.text);
+                for part in &self.parts {
+                    if part.kind.is_dialogue() || part.kind.is_structure() {
+                        append_text_segment(text, &format_work_part(part));
+                    }
                 }
             }
         }
@@ -729,12 +832,7 @@ fn user_only_turn_before_trailing_tools(
     blocks
         .get(start + 1..)?
         .iter()
-        .all(|block| {
-            matches!(
-                block.kind,
-                AgentBlockKind::ToolCall | AgentBlockKind::ToolOutput
-            )
-        })
+        .all(|block| block.kind.is_structure())
         .then_some((start, blocks.len()))
 }
 
@@ -803,6 +901,10 @@ fn last_timestamp(blocks: &[AgentBlock]) -> Option<String> {
         .find_map(|block| block.timestamp.clone())
 }
 
+fn format_blocks_with_compacted_skills(blocks: &[AgentBlock]) -> String {
+    format_blocks_with_text(blocks, |block| block.text.trim().to_string())
+}
+
 fn last_user_is_followed_only_by_tools(blocks: &[AgentBlock]) -> bool {
     let Some(user_idx) = blocks
         .iter()
@@ -811,47 +913,28 @@ fn last_user_is_followed_only_by_tools(blocks: &[AgentBlock]) -> bool {
         return false;
     };
 
-    blocks[user_idx + 1..].iter().all(|block| {
-        matches!(
-            block.kind,
-            AgentBlockKind::ToolCall | AgentBlockKind::ToolOutput
-        )
-    })
-}
-
-fn format_blocks_with_compacted_skills(blocks: &[AgentBlock]) -> String {
-    format_blocks_with_text(blocks, |block| compact_skill_blocks(block.text.trim()))
+    blocks[user_idx + 1..]
+        .iter()
+        .all(|block| block.kind.is_structure())
 }
 
 fn compact_skill_blocks(text: &str) -> String {
-    let mut output = String::new();
-    let mut rest = text;
-
-    while let Some(start) = rest.find("<skill ") {
-        output.push_str(&rest[..start]);
-        let candidate = &rest[start..];
-        let Some(open_end) = candidate.find('>') else {
-            output.push_str(candidate);
-            return trim_preserving_inner_whitespace(&output);
-        };
-        let opening = &candidate[..=open_end];
-        let Some(name) = skill_attribute(opening, "name") else {
-            output.push_str(&candidate[..=open_end]);
-            rest = &candidate[open_end + 1..];
-            continue;
-        };
-        let after_open = &candidate[open_end + 1..];
-        let Some(close_start) = after_open.find("</skill>") else {
-            output.push_str(candidate);
-            return trim_preserving_inner_whitespace(&output);
-        };
-
-        output.push_str(&format!("[skill:{name}]"));
-        rest = &after_open[close_start + "</skill>".len()..];
-    }
-
-    output.push_str(rest);
-    trim_preserving_inner_whitespace(&output)
+    // Kept for title/preview helpers: expand skills to markers without dropping content.
+    split_skill_segments(text, WorkPartKind::AssistantMessage)
+        .into_iter()
+        .map(|segment| match segment.kind {
+            WorkPartKind::Skill => {
+                let name = segment.label.as_deref().unwrap_or("unknown");
+                if segment.text.is_empty() {
+                    format!("<:skill:{name}:>")
+                } else {
+                    format_structured_block(AgentBlockKind::Skill, Some(name), &segment.text)
+                }
+            }
+            _ => segment.text,
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 fn skill_attribute(tag: &str, name: &str) -> Option<String> {
@@ -859,10 +942,6 @@ fn skill_attribute(tag: &str, name: &str) -> Option<String> {
     let start = tag.find(&needle)? + needle.len();
     let end = tag[start..].find('"')?;
     Some(tag[start..start + end].to_string())
-}
-
-fn trim_preserving_inner_whitespace(text: &str) -> String {
-    text.trim().to_string()
 }
 
 fn title_preview(text: &str) -> String {
@@ -876,19 +955,24 @@ fn preview(text: &str) -> String {
     preview_from_lines(text.lines())
 }
 
+fn is_skill_marker_line(line: &str) -> bool {
+    line.starts_with("<:skill:") || (line.starts_with("[skill:") && line.ends_with(']'))
+}
+
 fn preview_from_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> String {
     lines
         .into_iter()
         .map(str::trim)
-        .find(|line| !line.is_empty() && !line.starts_with("## "))
+        .find(|line| {
+            !line.is_empty()
+                && !line.starts_with("## ")
+                && !line.starts_with("<:")
+                && !is_skill_marker_line(line)
+        })
         .unwrap_or("<empty>")
         .chars()
         .take(80)
         .collect()
-}
-
-fn is_skill_marker_line(line: &str) -> bool {
-    line.starts_with("[skill:") && line.ends_with(']')
 }
 
 fn append_text_segment(output: &mut String, text: &str) {
@@ -962,37 +1046,168 @@ fn agent_parts(blocks: &[AgentBlock]) -> Vec<WorkPart> {
     let mut input_count = 0;
     let mut output_count = 0;
     for block in blocks {
-        let text = compact_skill_blocks(block.text.trim());
+        let text = block.text.trim();
         if text.is_empty() {
             continue;
         }
-        let (io, kind) = match block.kind {
-            AgentBlockKind::User => (WorkPartIo::Input, WorkPartKind::UserMessage),
-            AgentBlockKind::Assistant => (WorkPartIo::Output, WorkPartKind::AssistantMessage),
-            AgentBlockKind::ToolCall => (WorkPartIo::Input, WorkPartKind::ToolCall),
-            AgentBlockKind::ToolOutput => (WorkPartIo::Output, WorkPartKind::ToolOutput),
-        };
-        let index = match io {
-            WorkPartIo::Input => {
-                input_count += 1;
-                input_count
+
+        // Expand inlined <skill name="…">…</skill> in dialogue into structured Skill parts.
+        if matches!(block.kind, AgentBlockKind::User | AgentBlockKind::Assistant) {
+            let dialogue_kind = match block.kind {
+                AgentBlockKind::User => WorkPartKind::UserMessage,
+                _ => WorkPartKind::AssistantMessage,
+            };
+            for segment in split_skill_segments(text, dialogue_kind) {
+                push_agent_part(
+                    &mut parts,
+                    &mut input_count,
+                    &mut output_count,
+                    segment.kind,
+                    block.timestamp.clone(),
+                    segment.label,
+                    segment.text,
+                );
             }
-            WorkPartIo::Output => {
-                output_count += 1;
-                output_count
-            }
-        };
-        parts.push(WorkPart {
-            io,
+            continue;
+        }
+
+        let (kind, label) = map_agent_block(block);
+        push_agent_part(
+            &mut parts,
+            &mut input_count,
+            &mut output_count,
             kind,
-            index,
-            occurred_at: block.timestamp.clone(),
-            label: block.label.clone(),
-            text,
-            ansi: None,
-        });
+            block.timestamp.clone(),
+            label,
+            text.to_string(),
+        );
     }
     parts
+}
+
+struct TextSegment {
+    kind: WorkPartKind,
+    label: Option<String>,
+    text: String,
+}
+
+fn map_agent_block(block: &AgentBlock) -> (WorkPartKind, Option<String>) {
+    match block.kind {
+        AgentBlockKind::User => (WorkPartKind::UserMessage, block.label.clone()),
+        AgentBlockKind::Assistant => (WorkPartKind::AssistantMessage, block.label.clone()),
+        AgentBlockKind::ToolCall => (WorkPartKind::ToolCall, block.label.clone()),
+        AgentBlockKind::ToolOutput => (WorkPartKind::ToolOutput, block.label.clone()),
+        AgentBlockKind::Skill => (WorkPartKind::Skill, block.label.clone()),
+        AgentBlockKind::Thinking => (WorkPartKind::Thinking, block.label.clone()),
+        AgentBlockKind::McpCall => (WorkPartKind::McpCall, block.label.clone()),
+        AgentBlockKind::McpResult => (WorkPartKind::McpResult, block.label.clone()),
+    }
+}
+
+fn push_agent_part(
+    parts: &mut Vec<WorkPart>,
+    input_count: &mut usize,
+    output_count: &mut usize,
+    kind: WorkPartKind,
+    occurred_at: Option<String>,
+    label: Option<String>,
+    text: String,
+) {
+    let io = kind.default_io();
+    let index = match io {
+        WorkPartIo::Input => {
+            *input_count += 1;
+            *input_count
+        }
+        WorkPartIo::Output => {
+            *output_count += 1;
+            *output_count
+        }
+    };
+    parts.push(WorkPart {
+        io,
+        kind,
+        index,
+        occurred_at,
+        label,
+        text,
+        ansi: None,
+    });
+}
+
+/// Split dialogue text into plain dialogue + structured skill segments (never drop skills).
+fn split_skill_segments(text: &str, dialogue_kind: WorkPartKind) -> Vec<TextSegment> {
+    let mut segments = Vec::new();
+    let mut rest = text;
+    let mut plain = String::new();
+    while let Some(start) = rest.find("<skill ") {
+        plain.push_str(&rest[..start]);
+        let candidate = &rest[start..];
+        let Some(open_end) = candidate.find('>') else {
+            plain.push_str(candidate);
+            rest = "";
+            break;
+        };
+        let opening = &candidate[..=open_end];
+        let Some(name) = skill_attribute(opening, "name") else {
+            plain.push_str(&candidate[..=open_end]);
+            rest = &candidate[open_end + 1..];
+            continue;
+        };
+        let after_open = &candidate[open_end + 1..];
+        let Some(close_start) = after_open.find("</skill>") else {
+            plain.push_str(candidate);
+            rest = "";
+            break;
+        };
+        let body = after_open[..close_start].trim();
+        if !plain.trim().is_empty() {
+            segments.push(TextSegment {
+                kind: dialogue_kind,
+                label: None,
+                text: plain.trim().to_string(),
+            });
+            plain.clear();
+        }
+        segments.push(TextSegment {
+            kind: WorkPartKind::Skill,
+            label: Some(name),
+            text: body.to_string(),
+        });
+        rest = &after_open[close_start + "</skill>".len()..];
+    }
+    plain.push_str(rest);
+    if !plain.trim().is_empty() {
+        segments.push(TextSegment {
+            kind: dialogue_kind,
+            label: None,
+            text: plain.trim().to_string(),
+        });
+    }
+    // Empty skill body is still a structure hit (name-only skill use).
+    if segments.is_empty() {
+        segments.push(TextSegment {
+            kind: dialogue_kind,
+            label: None,
+            text: text.trim().to_string(),
+        });
+    }
+    segments
+}
+
+fn format_work_part(part: &WorkPart) -> String {
+    match part.kind.as_agent_block_kind() {
+        Some(agent_kind) => format_structured_block(agent_kind, part.label.as_deref(), &part.text),
+        None => part.text.clone(),
+    }
+}
+
+fn join_parts_structured<'a>(parts: impl IntoIterator<Item = &'a WorkPart>) -> String {
+    let mut output = String::new();
+    for part in parts {
+        append_text_segment(&mut output, &format_work_part(part));
+    }
+    output
 }
 
 #[cfg(test)]
@@ -1067,11 +1282,13 @@ mod tests {
         let records = WorkRecord::chat_turns(AgentProvider::Pi, &session);
 
         assert_eq!(records.len(), 1);
-        assert_eq!(
-            records[0].input_text().as_deref(),
-            Some("fix latest terminal error")
-        );
-        assert_eq!(records[0].output_text(), None);
+        let input = records[0].input_text().unwrap_or_default();
+        assert!(input.contains("fix latest terminal error"));
+        assert!(input.contains("<:tool:bash call:>"));
+        assert!(input.contains("cargo test"));
+        let output = records[0].output_text().unwrap_or_default();
+        assert!(output.contains("<:tool:bash result:>"));
+        assert!(output.contains("failed"));
         assert_eq!(
             records[0]
                 .time
@@ -1173,33 +1390,20 @@ mod tests {
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].title, "real task");
-        assert_eq!(
-            records[0].input_text().as_deref(),
-            Some("[skill:sivtr-memory]\n\nreal task")
-        );
+        assert!(records[0]
+            .parts
+            .iter()
+            .any(|part| part.kind == WorkPartKind::Skill
+                && part.label.as_deref() == Some("sivtr-memory")));
+        assert!(records[0]
+            .parts
+            .iter()
+            .any(|part| part.kind == WorkPartKind::UserMessage && part.text.contains("real task")));
+        let input = records[0].input_text().unwrap_or_default();
+        assert!(input.contains("<:skill:sivtr-memory:>"));
+        assert!(input.contains("long instructions"));
+        assert!(input.contains("real task"));
         assert_eq!(records[0].output_text().as_deref(), Some("done"));
-        assert_eq!(records[0].parts.len(), 2);
-        assert_eq!(records[0].parts[0].kind, WorkPartKind::UserMessage);
-        assert_eq!(
-            records[0].parts[0].text,
-            "[skill:sivtr-memory]\n\nreal task"
-        );
-        assert_eq!(
-            records[0].parts[0]
-                .occurred_at
-                .as_deref()
-                .and_then(parse_timestamp),
-            parse_timestamp("2026-05-23T12:01:00Z")
-        );
-        assert_eq!(records[0].parts[1].kind, WorkPartKind::AssistantMessage);
-        assert_eq!(records[0].parts[1].text, "done");
-        assert_eq!(
-            records[0].parts[1]
-                .occurred_at
-                .as_deref()
-                .and_then(parse_timestamp),
-            parse_timestamp("2026-05-23T12:02:00Z")
-        );
     }
 
     #[test]

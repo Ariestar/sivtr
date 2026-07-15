@@ -175,6 +175,16 @@ fn markdown_line_parts(line: &str) -> MarkdownLineParts<'_> {
         };
     }
 
+    // Content-block structure markers (`<:tool:…:>`, `<:skill:…:>`, …).
+    if let Some(style) = structure_marker_style(trimmed) {
+        return MarkdownLineParts {
+            prefix: leading.to_string(),
+            prefix_style: Style::default(),
+            content: trimmed,
+            content_style: style,
+        };
+    }
+
     if let Some(rest) = trimmed.strip_prefix("> ") {
         return MarkdownLineParts {
             prefix: format!("{leading}> "),
@@ -709,29 +719,41 @@ fn agent_heading_style(text: &str) -> Option<Style> {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )
-    } else if text.starts_with("Tool Call") || text.starts_with("Command") {
+    } else if text.starts_with("Command") {
         Some(
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         )
-    } else if text.starts_with("Tool Output") || text.starts_with("Output") {
+    } else if text.starts_with("Error") {
+        Some(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+    } else if text.starts_with("Output") {
         Some(
             Style::default()
                 .fg(Color::Blue)
                 .add_modifier(Modifier::BOLD),
         )
-    } else if text.starts_with("Error") {
-        Some(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
-    } else if text.starts_with("Prompt") {
-        Some(
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
-        )
     } else {
         None
     }
+}
+
+/// Style for `<:channel:…:>` structure markers (tools/skills/thinking/mcp).
+fn structure_marker_style(text: &str) -> Option<Style> {
+    if !(text.starts_with("<:") || text.starts_with("<:/")) {
+        return None;
+    }
+    // Result channels lean blue; everything else structural yellow.
+    let is_result = text.contains(" result:>") || text.contains(" result:");
+    Some(
+        Style::default()
+            .fg(if is_result {
+                Color::Blue
+            } else {
+                Color::Yellow
+            })
+            .add_modifier(Modifier::BOLD),
+    )
 }
 
 fn heading_style(level: usize) -> Style {
@@ -801,19 +823,23 @@ mod tests {
         let lines = render_markdown_window(
             &[
                 "## Command",
-                "## Tool Call (Bash)",
-                "## Tool Output (Bash)",
+                "<:tool:Bash call:>",
+                "<:tool:Bash result:>",
+                "<:skill:sivtr-memory:>",
+                "<:thinking:>",
                 "## Error",
             ],
             0,
-            4,
+            6,
             80,
         );
 
-        assert_eq!(lines[0].line.spans[1].style.fg, Some(Color::Yellow));
-        assert_eq!(lines[1].line.spans[1].style.fg, Some(Color::Yellow));
-        assert_eq!(lines[2].line.spans[1].style.fg, Some(Color::Blue));
-        assert_eq!(lines[3].line.spans[1].style.fg, Some(Color::Red));
+        assert_eq!(lines[0].line.spans[1].style.fg, Some(Color::Yellow)); // Command
+        assert_eq!(lines[1].line.spans[0].style.fg, Some(Color::Yellow)); // tool call
+        assert_eq!(lines[2].line.spans[0].style.fg, Some(Color::Blue)); // tool result
+        assert_eq!(lines[3].line.spans[0].style.fg, Some(Color::Yellow)); // skill
+        assert_eq!(lines[4].line.spans[0].style.fg, Some(Color::Yellow)); // thinking
+        assert_eq!(lines[5].line.spans[1].style.fg, Some(Color::Red)); // Error
     }
 
     #[test]

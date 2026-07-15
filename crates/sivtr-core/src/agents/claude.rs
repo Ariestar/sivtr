@@ -428,10 +428,7 @@ mod tests {
         let session = ClaudeProvider.parse_session_file(&path).unwrap();
 
         assert_eq!(session.blocks.len(), 2);
-        assert_eq!(
-            format_blocks(&session.blocks),
-            "## User\nhello\n\n## Assistant\ndone"
-        );
+        assert_eq!(format_blocks(&session.blocks), "hello\n\ndone");
     }
 
     #[test]
@@ -455,10 +452,7 @@ mod tests {
         assert_eq!(session.cwd.as_deref(), Some("C:\\repo"));
         assert_eq!(session.title.as_deref(), Some("Named session"));
         assert_eq!(session.blocks.len(), 2);
-        assert_eq!(
-            format_blocks(&session.blocks),
-            "## User\nhello\n\n## Assistant\ndone"
-        );
+        assert_eq!(format_blocks(&session.blocks), "hello\n\ndone");
     }
 
     #[test]
@@ -640,10 +634,7 @@ mod tests {
         let blocks = select_blocks(&session, AgentSelection::LastTurn);
 
         assert_eq!(blocks.len(), 2);
-        assert_eq!(
-            format_blocks(&blocks),
-            "## User\nsecond\n\n## Assistant\nnew"
-        );
+        assert_eq!(format_blocks(&blocks), "second\n\nnew");
     }
 
     #[test]

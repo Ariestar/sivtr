@@ -199,24 +199,55 @@ fn structured_record_text(record: &WorkRecord) -> String {
 }
 
 fn structured_part_text(record: &WorkRecord, part: &sivtr_core::record::WorkPart) -> String {
-    let heading = structured_part_heading(part);
     let marker = structured_part_marker_line(record, part);
-    match part.kind {
-        sivtr_core::record::WorkPartKind::UserMessage
-        | sivtr_core::record::WorkPartKind::AssistantMessage => {
-            format!("{heading}\n{marker}\n{}", part.text)
-        }
-        sivtr_core::record::WorkPartKind::Prompt
-        | sivtr_core::record::WorkPartKind::Command
-        | sivtr_core::record::WorkPartKind::ToolCall
-        | sivtr_core::record::WorkPartKind::ToolOutput
-        | sivtr_core::record::WorkPartKind::Text
-        | sivtr_core::record::WorkPartKind::Error => {
-            let language = structured_part_code_language(part)
-                .map(|language| format!("~~~{language}\n"))
-                .unwrap_or_else(|| "~~~\n".to_string());
-            format!("{heading}\n{marker}\n{language}{}\n~~~", part.text)
-        }
+    if part.kind.is_structure() {
+        let body = part
+            .kind
+            .as_agent_block_kind()
+            .map(|kind| {
+                sivtr_core::ai::format_structured_block(
+                    kind,
+                    part.label.as_deref(),
+                    part.text.trim(),
+                )
+            })
+            .unwrap_or_else(|| part.text.clone());
+        return format!("{marker}\n{body}");
+    }
+
+    if part.kind.is_dialogue() {
+        let heading = match part.kind {
+            sivtr_core::record::WorkPartKind::UserMessage => "## User",
+            _ => "## Assistant",
+        };
+        return format!("{heading}\n{marker}\n{}", part.text);
+    }
+
+    // Terminal / other prose parts keep lightweight headings.
+    let heading = structured_terminal_heading(part);
+    let language = part
+        .kind
+        .code_language()
+        .map(|language| format!("~~~{language}\n"))
+        .unwrap_or_else(|| "~~~\n".to_string());
+    format!("{heading}\n{marker}\n{language}{}\n~~~", part.text)
+}
+
+fn structured_terminal_heading(part: &sivtr_core::record::WorkPart) -> String {
+    let title = match part.kind {
+        sivtr_core::record::WorkPartKind::Prompt => "Prompt",
+        sivtr_core::record::WorkPartKind::Command => "Command",
+        sivtr_core::record::WorkPartKind::Text => "Output",
+        sivtr_core::record::WorkPartKind::Error => "Error",
+        _ => "Part",
+    };
+    match part
+        .label
+        .as_deref()
+        .filter(|label| !label.trim().is_empty())
+    {
+        Some(label) => format!("## {title} ({label})"),
+        None => format!("## {title}"),
     }
 }
 
@@ -229,40 +260,6 @@ fn structured_part_marker_line(record: &WorkRecord, part: &sivtr_core::record::W
         markers.push(format!("`{timestamp}`"));
     }
     markers.join("  ")
-}
-
-fn structured_part_heading(part: &sivtr_core::record::WorkPart) -> String {
-    let title = match part.kind {
-        sivtr_core::record::WorkPartKind::Prompt => "Prompt",
-        sivtr_core::record::WorkPartKind::Command => "Command",
-        sivtr_core::record::WorkPartKind::UserMessage => "User",
-        sivtr_core::record::WorkPartKind::AssistantMessage => "Assistant",
-        sivtr_core::record::WorkPartKind::ToolCall => "Tool Call",
-        sivtr_core::record::WorkPartKind::ToolOutput => "Tool Output",
-        sivtr_core::record::WorkPartKind::Text => "Output",
-        sivtr_core::record::WorkPartKind::Error => "Error",
-    };
-    match part
-        .label
-        .as_deref()
-        .filter(|label| !label.trim().is_empty())
-    {
-        Some(label) => format!("## {title} ({label})"),
-        None => format!("## {title}"),
-    }
-}
-
-fn structured_part_code_language(part: &sivtr_core::record::WorkPart) -> Option<&'static str> {
-    match part.kind {
-        sivtr_core::record::WorkPartKind::Command => Some("shell"),
-        sivtr_core::record::WorkPartKind::ToolCall => Some("bash"),
-        sivtr_core::record::WorkPartKind::Prompt
-        | sivtr_core::record::WorkPartKind::ToolOutput
-        | sivtr_core::record::WorkPartKind::Text
-        | sivtr_core::record::WorkPartKind::Error
-        | sivtr_core::record::WorkPartKind::UserMessage
-        | sivtr_core::record::WorkPartKind::AssistantMessage => None,
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1494,9 +1491,10 @@ mod tests {
             }),
         );
 
-        assert!(text.contains("## Tool Call (tool)"));
+        assert!(text.contains("<:tool:tool call:>"));
         assert!(text.contains("`codex/session/1/i/1`"));
-        assert!(text.contains("~~~bash\nhidden tool call\n~~~"));
+        assert!(text.contains("hidden tool call"));
+        assert!(text.contains("<:/tool:tool call:>"));
     }
 
     #[test]
@@ -1576,12 +1574,9 @@ mod tests {
         let text = workspace_content_text(&[dialogue], &[false], 0, ContentViewMode::Reading, None);
 
         assert!(text.contains("## User\n`codex/session/1/i/1`  `2026-05-24T12:00:00Z`\nquestion"));
-        assert!(text.contains(
-            "## Tool Call (Bash)\n`codex/session/1/i/2`  `2026-05-24T12:00:00Z`\n~~~bash\ncargo test\n~~~"
-        ));
-        assert!(text.contains(
-            "## Tool Output (Bash)\n`codex/session/1/o/1`  `2026-05-24T12:00:00Z`\n~~~\nok\n~~~"
-        ));
+        assert!(text.contains("<:tool:Bash call:>"));
+        assert!(text.contains("cargo test"));
+        assert!(text.contains("<:tool:Bash result:>"));
         assert!(
             text.contains("## Assistant\n`codex/session/1/o/2`  `2026-05-24T12:00:00Z`\nanswer")
         );

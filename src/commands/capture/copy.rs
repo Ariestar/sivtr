@@ -1607,7 +1607,10 @@ mod tests {
         assert!(units[0].plain.contains("review the project"));
         assert!(units[0].plain.contains("first observation"));
         assert!(units[0].plain.contains("final review"));
-        assert!(!units[0].plain.contains("Cargo.toml"));
+        // Structural evidence stays with the turn (tools are not stripped).
+        assert!(units[0].plain.contains("<:tool:Bash call:>"));
+        assert!(units[0].plain.contains("Cargo.toml"));
+        assert!(units[0].plain.contains("<:tool:Bash result:>"));
     }
 
     #[test]

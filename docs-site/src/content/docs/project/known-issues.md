@@ -15,7 +15,6 @@ Working list of known product gaps. Prefer fixing these over adding new surface 
 | Flag types split | Bare `copy` uses `CopyFlagArgs` (no positional selector). `copy in/out/cmd` still use `CopyCommonArgs` with optional selector. |
 | Parent flag merge | `copy 3 --print` may combine parent flags with trailing external flags via `merge_copy_flags`. |
 | Nested help | `copy cursor --help` / `copy codex out --help` show the nested parser help, not a single polished agent help page. |
-| Stale comment risk | Comments on `CopyCommand` must say `External`, not a removed `Agent` variant. |
 
 ### Preferred cleanup (later)
 
@@ -26,6 +25,32 @@ Pick one product shape and delete the other:
 2. **Keep current UX:** lock rules with tests, validate terminal selectors more strictly, unify flag structs, fix help strings.
 
 Do not reintroduce per-provider `CopySubcommand` variants.
+
+## Structured parts (landed baseline)
+
+Evidence channels are typed on `WorkPartKind` / `AgentBlockKind` with methods for extension:
+
+- `is_dialogue` / `is_structure` / `default_io` / `as_agent_block_kind` / `format_block` (markers)
+- Display protocol for structure: `<:tool:name call:>` … `<:tool:name result:>`, `<:skill:name:>`, `<:thinking:>`, `<:mcp:name call:>`
+- Last turn **keeps** structure (tools/skills/thinking/mcp); do not reintroduce stripping
+
+### Still incomplete (provider parsers)
+
+Most providers still only emit `User` / `Assistant` / `ToolCall` / `ToolOutput`. Skill/thinking/MCP kinds exist in the model for retrieval, but parsers do not yet classify:
+
+| Kind | Model | Provider emit today |
+| --- | --- | --- |
+| Skill | yes | mostly extracted from inlined `<skill name>` in dialogue text |
+| Thinking | yes | usually ignored at parse (e.g. Pi/OpenCode reasoning parts dropped) |
+| McpCall / McpResult | yes | still look like normal tools unless label/name is recognized later |
+
+Adding a new structure channel should be:
+
+1. New enum variant + methods on `AgentBlockKind` / `WorkPartKind` (markers, io, filters).
+2. CLI `WorkPartKindArg` alias (or derive from `as_str()`).
+3. Provider `apply_*` that emits the kind instead of dropping the event.
+
+Avoid reintroducing Markdown `## Tool Call` for structure.
 
 ## Workspace filter
 

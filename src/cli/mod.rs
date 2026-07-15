@@ -35,6 +35,10 @@ pub enum WorkPartKindArg {
     AssistantMessage,
     ToolCall,
     ToolOutput,
+    Skill,
+    Thinking,
+    McpCall,
+    McpResult,
     Text,
     Error,
 }
@@ -54,6 +58,10 @@ impl From<WorkPartKindArg> for WorkPartKind {
             WorkPartKindArg::AssistantMessage => WorkPartKind::AssistantMessage,
             WorkPartKindArg::ToolCall => WorkPartKind::ToolCall,
             WorkPartKindArg::ToolOutput => WorkPartKind::ToolOutput,
+            WorkPartKindArg::Skill => WorkPartKind::Skill,
+            WorkPartKindArg::Thinking => WorkPartKind::Thinking,
+            WorkPartKindArg::McpCall => WorkPartKind::McpCall,
+            WorkPartKindArg::McpResult => WorkPartKind::McpResult,
             WorkPartKindArg::Text => WorkPartKind::Text,
             WorkPartKindArg::Error => WorkPartKind::Error,
         }
@@ -71,10 +79,14 @@ impl FromStr for WorkPartKindArg {
             "assistant_message" | "assistant" => Ok(Self::AssistantMessage),
             "tool_call" | "call" => Ok(Self::ToolCall),
             "tool_output" | "tool" => Ok(Self::ToolOutput),
+            "skill" => Ok(Self::Skill),
+            "thinking" | "reason" | "reasoning" => Ok(Self::Thinking),
+            "mcp_call" | "mcp" => Ok(Self::McpCall),
+            "mcp_result" => Ok(Self::McpResult),
             "text" => Ok(Self::Text),
             "error" => Ok(Self::Error),
             _ => Err(format!(
-                "unknown part kind `{value}`; expected prompt, command, user_message, assistant_message, tool_call, tool_output, text, or error"
+                "unknown part kind `{value}`; expected prompt, command, user_message, assistant_message, tool_call, tool_output, skill, thinking, mcp_call, mcp_result, text, or error"
             )),
         }
     }
@@ -89,6 +101,10 @@ impl std::fmt::Display for WorkPartKindArg {
             Self::AssistantMessage => "assistant_message",
             Self::ToolCall => "tool_call",
             Self::ToolOutput => "tool_output",
+            Self::Skill => "skill",
+            Self::Thinking => "thinking",
+            Self::McpCall => "mcp_call",
+            Self::McpResult => "mcp_result",
             Self::Text => "text",
             Self::Error => "error",
         })
@@ -447,7 +463,8 @@ Filters:
   --exclude <regex>     Case-insensitive regex exclusion filter
   --in <field>          content, title, session, input, output, command, or all
   --kind <kind>        Part kind: prompt, command, user_message, assistant_message,
-                        tool_call, tool_output, text, or error
+                        tool_call, tool_output, skill, thinking, mcp_call, mcp_result,
+                        text, or error
   --status <status>     success, failure, or unknown
   --exit-code <code>    Exact terminal process exit code
   --min-duration <dur>  Minimum command duration, e.g. 500ms, 2s, 1m
@@ -967,7 +984,7 @@ pub struct SearchArgs {
     #[arg(short = 'i', long = "in", default_value_t = SearchFieldArg::default(), value_name = "FIELD")]
     pub in_field: SearchFieldArg,
 
-    /// Part kind filter: prompt, command, user_message, assistant_message, tool_call, tool_output, text, or error
+    /// Part kind filter: prompt, command, user_message, assistant_message, tool_call, tool_output, skill, thinking, mcp_call, mcp_result, text, or error
     #[arg(long, value_name = "KIND")]
     pub kind: Option<WorkPartKindArg>,
 
@@ -1063,7 +1080,7 @@ pub struct FilterArgs {
     #[arg(long, default_value_t = WorkPartFilterArg::default(), value_name = "IO")]
     pub io: WorkPartFilterArg,
 
-    /// Part kind filter: prompt, command, user_message, assistant_message, tool_call, tool_output, text, or error
+    /// Part kind filter: prompt, command, user_message, assistant_message, tool_call, tool_output, skill, thinking, mcp_call, mcp_result, text, or error
     #[arg(long, value_name = "KIND")]
     pub kind: Option<WorkPartKindArg>,
 
@@ -1352,7 +1369,7 @@ pub struct WorkPartsArgs {
     #[arg(long, default_value_t = WorkPartFilterArg::default(), value_name = "IO")]
     pub io: WorkPartFilterArg,
 
-    /// Part kind filter: prompt, command, user_message, assistant_message, tool_call, tool_output, text, or error
+    /// Part kind filter: prompt, command, user_message, assistant_message, tool_call, tool_output, skill, thinking, mcp_call, mcp_result, text, or error
     #[arg(long, value_name = "KIND")]
     pub kind: Option<WorkPartKindArg>,
 
