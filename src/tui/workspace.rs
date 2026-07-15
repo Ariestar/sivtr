@@ -237,34 +237,19 @@ fn raw_record_text(record: &WorkRecord) -> String {
         .join("\n\n")
 }
 
-fn structured_part_text(record: &WorkRecord, part: &sivtr_core::record::WorkPart) -> String {
-    let marker = structured_part_marker_line(record, part);
+fn structured_part_text(_record: &WorkRecord, part: &sivtr_core::record::WorkPart) -> String {
     if part.kind.is_structure() {
-        // Collapsed: one line, full payload only in Raw.
-        return format!("{marker}  {}", structure_fold_label(part));
+        // Folded: only the content-block marker — no ref/time/size noise.
+        return structure_fold_label(part);
     }
 
-    if part.kind.is_dialogue() {
-        let heading = match part.kind {
-            sivtr_core::record::WorkPartKind::UserMessage => "## User",
-            _ => "## Assistant",
-        };
-        return format!("{heading}\n{marker}\n{}", part.text);
-    }
-
-    let heading = structured_terminal_heading(part);
-    let language = part
-        .kind
-        .code_language()
-        .map(|language| format!("~~~{language}\n"))
-        .unwrap_or_else(|| "~~~\n".to_string());
-    format!("{heading}\n{marker}\n{language}{}\n~~~", part.text)
+    // Dialogue / terminal body only.
+    part.text.clone()
 }
 
-fn raw_part_text(record: &WorkRecord, part: &sivtr_core::record::WorkPart) -> String {
-    let marker = structured_part_marker_line(record, part);
+fn raw_part_text(_record: &WorkRecord, part: &sivtr_core::record::WorkPart) -> String {
     if part.kind.is_structure() {
-        let body = part
+        return part
             .kind
             .as_agent_block_kind()
             .map(|kind| {
@@ -275,63 +260,16 @@ fn raw_part_text(record: &WorkRecord, part: &sivtr_core::record::WorkPart) -> St
                 )
             })
             .unwrap_or_else(|| part.text.clone());
-        return format!("{marker}\n{body}");
     }
 
-    if part.kind.is_dialogue() {
-        let heading = match part.kind {
-            sivtr_core::record::WorkPartKind::UserMessage => "## User",
-            _ => "## Assistant",
-        };
-        return format!("{heading}\n{marker}\n{}", part.text);
-    }
-
-    let heading = structured_terminal_heading(part);
-    format!("{heading}\n{marker}\n{}", part.text)
+    part.text.clone()
 }
 
 fn structure_fold_label(part: &sivtr_core::record::WorkPart) -> String {
-    let open = part
-        .kind
+    part.kind
         .as_agent_block_kind()
         .and_then(|kind| kind.open_marker(part.label.as_deref()))
-        .unwrap_or_else(|| "<:structure:>".to_string());
-    let bytes = part.text.len();
-    let lines = part.text.lines().count().max(if part.text.is_empty() {
-        0
-    } else {
-        1
-    });
-    format!("{open}  … ({lines} lines, {bytes} B)  [r expand]")
-}
-
-fn structured_terminal_heading(part: &sivtr_core::record::WorkPart) -> String {
-    let title = match part.kind {
-        sivtr_core::record::WorkPartKind::Prompt => "Prompt",
-        sivtr_core::record::WorkPartKind::Command => "Command",
-        sivtr_core::record::WorkPartKind::Text => "Output",
-        sivtr_core::record::WorkPartKind::Error => "Error",
-        _ => "Part",
-    };
-    match part
-        .label
-        .as_deref()
-        .filter(|label| !label.trim().is_empty())
-    {
-        Some(label) => format!("## {title} ({label})"),
-        None => format!("## {title}"),
-    }
-}
-
-fn structured_part_marker_line(record: &WorkRecord, part: &sivtr_core::record::WorkPart) -> String {
-    let mut markers = vec![format!(
-        "`{}`",
-        record.work_ref.with_part(part.io, part.index)
-    )];
-    if let Some(timestamp) = part.occurred_at.as_deref().or(record.time.primary_at()) {
-        markers.push(format!("`{timestamp}`"));
-    }
-    markers.join("  ")
+        .unwrap_or_else(|| "<:structure:>".to_string())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1589,12 +1527,11 @@ mod tests {
             }),
         );
 
-        // Reading folds structure to one line (no payload body).
-        assert!(text.contains("<:tool:tool call:>"));
-        assert!(text.contains("`codex/session/1/i/1`"));
-        assert!(text.contains("[r expand]"));
+        // Reading folds structure to one open marker only.
+        assert_eq!(text.trim(), "<:tool:tool call:>");
         assert!(!text.contains("hidden tool call"));
-        assert!(!text.contains("<:/tool:tool call:>"));
+        assert!(!text.contains("codex/session"));
+        assert!(!text.contains("[r expand]"));
     }
 
     #[test]
@@ -1669,20 +1606,25 @@ mod tests {
 
         let reading =
             workspace_content_text(std::slice::from_ref(&dialogue), &[false], 0, ContentViewMode::Reading, None);
-        assert!(reading.contains("## User\n`codex/session/1/i/1`  `2026-05-24T12:00:00Z`\nquestion"));
+        assert!(reading.contains("question"));
         assert!(reading.contains("<:tool:Bash call:>"));
-        assert!(reading.contains("[r expand]"));
+        assert!(reading.contains("<:tool:Bash result:>"));
+        assert!(reading.contains("answer"));
         assert!(!reading.contains("cargo test"));
-        assert!(!reading.contains("<:/tool:Bash call:>"));
-        assert!(reading.contains("## Assistant\n`codex/session/1/o/2`  `2026-05-24T12:00:00Z`\nanswer"));
+        assert!(!reading.contains("codex/session"));
+        assert!(!reading.contains("## User"));
+        assert!(!reading.contains("[r expand]"));
 
         let raw = workspace_content_text(&[dialogue], &[false], 0, ContentViewMode::Raw, None);
+        assert!(raw.contains("question"));
         assert!(raw.contains("cargo test"));
         assert!(raw.contains("<:tool:Bash call:>"));
         assert!(raw.contains("<:/tool:Bash call:>"));
         assert!(raw.contains("<:tool:Bash result:>"));
         assert!(raw.contains("ok"));
-        assert!(!raw.contains("[r expand]"));
+        assert!(raw.contains("answer"));
+        assert!(!raw.contains("codex/session"));
+        assert!(!raw.contains("## User"));
     }
 
     #[test]

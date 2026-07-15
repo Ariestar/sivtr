@@ -2993,10 +2993,10 @@ mod tests {
             }),
         );
 
-        assert!(picked.units[0].plain.contains("<:tool:tool call:>"));
-        assert!(picked.units[0].plain.contains("[r expand]"));
-        // Displayed copy uses current content mode (Reading = folded structure).
+        assert_eq!(picked.units[0].plain.trim(), "<:tool:tool call:>");
+        // Displayed copy uses Reading mode: fold marker only, no payload.
         assert!(!picked.units[0].plain.contains("hidden cargo test"));
+        assert!(!picked.units[0].plain.contains("codex/"));
     }
 
     fn workspace_test_session(
