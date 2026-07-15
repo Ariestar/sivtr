@@ -96,7 +96,6 @@ pub(crate) struct WorkspaceSession {
     pub(crate) modified: SystemTime,
     pub(crate) title: String,
     pub(crate) search_title: String,
-    pub(crate) notice: Option<String>,
     pub(crate) records: Vec<WorkRecord>,
     pub(crate) load: Option<WorkspaceSessionLoad>,
 }
@@ -107,15 +106,22 @@ pub(crate) struct WorkspaceDialogue {
     pub(crate) work_ref: Option<WorkRef>,
     pub(crate) title: String,
     pub(crate) record: Option<WorkRecord>,
-    pub(crate) unit: TextPair,
     pub(crate) copy: WorkspaceCopyParts,
 }
 
 impl WorkspaceDialogue {
-    pub(crate) fn display_unit(&self, target: Option<WorkRefTarget>) -> TextPair {
-        target
-            .and_then(|target| self.targeted_unit(target))
-            .unwrap_or_else(|| self.unit.clone())
+    /// Text used for copy shortcuts / vim on the currently displayed content.
+    /// Always derived from `record.parts` when present — never a stale cache.
+    pub(crate) fn display_unit(
+        &self,
+        mode: ContentViewMode,
+        target: Option<WorkRefTarget>,
+    ) -> TextPair {
+        let plain = self.content_text(mode, target);
+        TextPair {
+            ansi: plain.clone(),
+            plain,
+        }
     }
 
     pub(crate) fn content_text(
@@ -127,29 +133,35 @@ impl WorkspaceDialogue {
             return match mode {
                 ContentViewMode::Raw => self
                     .targeted_plain_text(target)
-                    .unwrap_or_else(|| self.fallback_unit_text()),
+                    .unwrap_or_else(|| "<empty>".to_string()),
                 ContentViewMode::Reading => self
                     .targeted_structured_text(target)
-                    .or_else(|| self.targeted_plain_text(target))
-                    .unwrap_or_else(|| self.fallback_unit_text()),
+                    .unwrap_or_else(|| "<empty>".to_string()),
             };
         }
         if matches!(target, Some(WorkRefTarget::Line(_))) {
-            return self.fallback_unit_text();
-        }
-
-        // Always render from record.parts when present so Raw/Reading stay in sync with
-        // structure channels (tools/skills/thinking). Cached unit.plain is only a fallback.
-        if let Some(record) = self.record.as_ref() {
-            if !record.parts.is_empty() {
-                return match mode {
+            return self
+                .record
+                .as_ref()
+                .map(|record| match mode {
                     ContentViewMode::Raw => raw_record_text(record),
                     ContentViewMode::Reading => structured_record_text(record),
-                };
-            }
+                })
+                .filter(|text| !text.trim().is_empty())
+                .unwrap_or_else(|| "<empty>".to_string());
         }
 
-        self.fallback_unit_text()
+        // Single source of truth: record.parts.
+        let Some(record) = self.record.as_ref() else {
+            return "<empty>".to_string();
+        };
+        if record.parts.is_empty() {
+            return "<empty>".to_string();
+        }
+        match mode {
+            ContentViewMode::Raw => raw_record_text(record),
+            ContentViewMode::Reading => structured_record_text(record),
+        }
     }
 
     pub(crate) fn content_ref(&self, target: Option<WorkRefTarget>) -> Option<WorkRef> {
@@ -161,23 +173,13 @@ impl WorkspaceDialogue {
         Some(work_ref.with_target(target))
     }
 
-    fn fallback_unit_text(&self) -> String {
-        if self.unit.plain.trim().is_empty() {
-            "<empty>".to_string()
-        } else {
-            self.unit.plain.clone()
-        }
-    }
-
-    fn targeted_unit(&self, target: WorkRefTarget) -> Option<TextPair> {
-        let WorkRefTarget::Part { .. } = target else {
-            return None;
-        };
-        let part = self.record.as_ref()?.part_for_target(target)?;
-        Some(TextPair {
-            plain: part.text.clone(),
-            ansi: part.ansi.clone().unwrap_or_else(|| part.text.clone()),
-        })
+    /// Line count for scroll/search, from the same source as content_text.
+    pub(crate) fn content_line_count(
+        &self,
+        mode: ContentViewMode,
+        target: Option<WorkRefTarget>,
+    ) -> usize {
+        line_count_of(&self.content_text(mode, target))
     }
 
     fn targeted_plain_text(&self, target: WorkRefTarget) -> Option<String> {
@@ -201,13 +203,21 @@ impl WorkspaceDialogue {
     }
 }
 
+fn line_count_of(text: &str) -> usize {
+    if text.is_empty() {
+        1
+    } else {
+        text.lines().count().max(1)
+    }
+}
+
 /// Reading mode: structure channels are collapsed to a single marker line (fold).
 /// Expand with Raw mode (`r`) to see full payloads.
 fn structured_record_text(record: &WorkRecord) -> String {
-    if record.parts.is_empty() {
-        return record.combined_text();
-    }
-
+    debug_assert!(
+        !record.parts.is_empty(),
+        "structured_record_text requires parts"
+    );
     record
         .parts
         .iter()
@@ -218,10 +228,7 @@ fn structured_record_text(record: &WorkRecord) -> String {
 
 /// Raw mode: every part fully expanded, structure with open/close markers.
 fn raw_record_text(record: &WorkRecord) -> String {
-    if record.parts.is_empty() {
-        return record.combined_text();
-    }
-
+    debug_assert!(!record.parts.is_empty(), "raw_record_text requires parts");
     record
         .parts
         .iter()
@@ -1414,7 +1421,7 @@ mod tests {
     };
     use crate::tui::content_view::ContentViewMode;
     use crate::tui::workspace::{
-        TextPair, WorkspaceCopyParts, WorkspaceDialogue, WorkspaceSearchView, WorkspaceSource,
+        WorkspaceCopyParts, WorkspaceDialogue, WorkspaceSearchView, WorkspaceSource,
     };
     use crate::tui::workspace_search::WorkspaceSearchScope;
     use sivtr_core::ai::AgentProvider;
@@ -1430,22 +1437,56 @@ mod tests {
 
     #[test]
     fn content_preview_text_preserves_raw_text_without_line_number_prefixes() {
-        let dialogue = WorkspaceDialogue {
-            source: WorkspaceSource::Terminal,
-            work_ref: None,
-            title: "cmd".to_string(),
-            record: None,
-            unit: TextPair {
-                plain: "alpha\n\nomega".to_string(),
-                ansi: String::new(),
+        let record = WorkRecord {
+            schema_version: 2,
+            work_ref: WorkRef::agent_record(AgentProvider::Codex, "session", 1),
+            kind: sivtr_core::record::WorkRecordKind::ChatTurn,
+            source: sivtr_core::record::WorkSource {
+                channel: sivtr_core::record::WorkChannel::Chat,
+                provider: Some("codex".to_string()),
             },
+            session: sivtr_core::record::WorkSessionRef {
+                id: "session".to_string(),
+                canonical_id: None,
+                path: None,
+            },
+            cwd: None,
+            time: sivtr_core::record::WorkTime::default(),
+            status: None,
+            title: "cmd".to_string(),
+            parts: vec![
+                sivtr_core::record::WorkPart {
+                    io: sivtr_core::record::WorkPartIo::Input,
+                    kind: sivtr_core::record::WorkPartKind::UserMessage,
+                    index: 1,
+                    occurred_at: None,
+                    label: None,
+                    text: "alpha".to_string(),
+                    ansi: None,
+                },
+                sivtr_core::record::WorkPart {
+                    io: sivtr_core::record::WorkPartIo::Output,
+                    kind: sivtr_core::record::WorkPartKind::AssistantMessage,
+                    index: 1,
+                    occurred_at: None,
+                    label: None,
+                    text: "omega".to_string(),
+                    ansi: None,
+                },
+            ],
+        };
+        let dialogue = WorkspaceDialogue {
+            source: WorkspaceSource::Agent(AgentProvider::Codex),
+            work_ref: Some(record.work_ref.clone()),
+            title: "cmd".to_string(),
+            record: Some(record),
             copy: WorkspaceCopyParts::default(),
         };
 
-        assert_eq!(
-            workspace_content_text(&[dialogue], &[false], 0, ContentViewMode::Raw, None),
-            "alpha\n\nomega"
-        );
+        let text = workspace_content_text(&[dialogue], &[false], 0, ContentViewMode::Raw, None);
+        assert!(text.contains("alpha"));
+        assert!(text.contains("omega"));
+        assert!(!text.contains("[r expand]"));
     }
 
     #[test]
@@ -1482,10 +1523,6 @@ mod tests {
             work_ref: Some(WorkRef::agent_record(AgentProvider::Codex, "session", 1)),
             title: "cmd".to_string(),
             record: Some(record),
-            unit: TextPair {
-                plain: "visible\nanswer".to_string(),
-                ansi: String::new(),
-            },
             copy: WorkspaceCopyParts::default(),
         };
 
@@ -1538,10 +1575,6 @@ mod tests {
             work_ref: Some(WorkRef::agent_record(AgentProvider::Codex, "session", 1)),
             title: "cmd".to_string(),
             record: Some(record),
-            unit: TextPair {
-                plain: "visible\nanswer".to_string(),
-                ansi: String::new(),
-            },
             copy: WorkspaceCopyParts::default(),
         };
 
@@ -1631,11 +1664,6 @@ mod tests {
             work_ref: Some(WorkRef::agent_record(AgentProvider::Codex, "session", 1)),
             title: "cmd".to_string(),
             record: Some(record),
-            unit: TextPair {
-                // Stale cache without tools — content_text must ignore this when record.parts exist.
-                plain: "question\nanswer".to_string(),
-                ansi: String::new(),
-            },
             copy: WorkspaceCopyParts::default(),
         };
 
@@ -1701,7 +1729,6 @@ mod tests {
                 work_ref: Some(WorkRef::agent_record(AgentProvider::Codex, "session", 1)),
                 title: "first".to_string(),
                 record: None,
-                unit: TextPair::default(),
                 copy: WorkspaceCopyParts::default(),
             },
             WorkspaceDialogue {
@@ -1709,7 +1736,6 @@ mod tests {
                 work_ref: Some(WorkRef::agent_record(AgentProvider::Codex, "session", 2)),
                 title: "second".to_string(),
                 record: None,
-                unit: TextPair::default(),
                 copy: WorkspaceCopyParts::default(),
             },
         ];
@@ -1729,7 +1755,6 @@ mod tests {
             work_ref: Some(WorkRef::agent_record(AgentProvider::Codex, "session", 2)),
             title: "second".to_string(),
             record: None,
-            unit: TextPair::default(),
             copy: WorkspaceCopyParts::default(),
         }];
 

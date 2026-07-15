@@ -572,7 +572,6 @@ fn build_lazy_agent_session_choice(
         modified: info.modified,
         title,
         search_title,
-        notice: None,
         records: Vec::new(),
         load: Some(WorkspaceSessionLoad {
             provider,
@@ -602,11 +601,19 @@ fn load_workspace_session(session: &WorkspaceSession) -> Result<WorkspaceSession
     let parsed = match source.parse_session_file(&load.path) {
         Ok(parsed) => parsed,
         Err(_) => {
-            return Ok(unavailable_workspace_session(
-                load.provider,
-                info,
-                format!("Failed to load {} session.", load.provider.name()),
-            ));
+            // Empty session on failure — no UI notice record.
+            return Ok(WorkspaceSession {
+                source: WorkspaceSource::Agent(load.provider),
+                modified: info.modified,
+                title: agent_session_info_display_title(&info),
+                search_title: info
+                    .title
+                    .clone()
+                    .filter(|title| !title.trim().is_empty())
+                    .unwrap_or_else(|| agent_session_info_fallback_title(&info)),
+                records: Vec::new(),
+                load: None,
+            });
         }
     };
 
@@ -664,7 +671,6 @@ fn build_agent_session_choice(
         modified: info.modified,
         title,
         search_title,
-        notice: None,
         records,
         load: None,
     })
@@ -677,32 +683,20 @@ fn resolved_workspace_session(
     selection_mode: AgentSelection,
 ) -> WorkspaceSession {
     build_agent_session_choice(provider, info, session, selection_mode).unwrap_or_else(|| {
-        unavailable_workspace_session(
-            provider,
-            info.clone(),
-            format!("{} session has no selectable content.", provider.name()),
-        )
+        // Empty list — no notice/placeholder dialogue.
+        WorkspaceSession {
+            source: WorkspaceSource::Agent(provider),
+            modified: info.modified,
+            title: agent_session_info_display_title(info),
+            search_title: info
+                .title
+                .clone()
+                .filter(|title| !title.trim().is_empty())
+                .unwrap_or_else(|| agent_session_info_fallback_title(info)),
+            records: Vec::new(),
+            load: None,
+        }
     })
-}
-
-fn unavailable_workspace_session(
-    provider: AgentProvider,
-    info: AgentSessionInfo,
-    notice: String,
-) -> WorkspaceSession {
-    WorkspaceSession {
-        source: WorkspaceSource::Agent(provider),
-        modified: info.modified,
-        title: agent_session_info_display_title(&info),
-        search_title: info
-            .title
-            .clone()
-            .filter(|title| !title.trim().is_empty())
-            .unwrap_or_else(|| agent_session_info_fallback_title(&info)),
-        notice: Some(notice),
-        records: Vec::new(),
-        load: None,
-    }
 }
 
 fn workspace_sessions_from_agent_choices(
@@ -829,7 +823,6 @@ fn build_terminal_workspace_session(
         modified,
         search_title: title.clone(),
         title,
-        notice: None,
         records,
         load: None,
     })
@@ -1654,18 +1647,18 @@ mod tests {
     }
 
     #[test]
-    fn resolved_workspace_session_downgrades_tool_only_sessions_to_notice() {
+    fn resolved_workspace_session_empty_when_no_selectable_turns() {
         let info = AgentSessionInfo {
             path: PathBuf::from("tool-only.jsonl"),
             id: Some("tool-only".to_string()),
-            cwd: Some("d:\\repo".to_string()),
+            cwd: Some("d:\repo".to_string()),
             title: Some("tool only".to_string()),
             modified: SystemTime::UNIX_EPOCH,
         };
         let session = AgentSession {
             path: PathBuf::from("tool-only.jsonl"),
             id: Some("tool-only".to_string()),
-            cwd: Some("d:\\repo".to_string()),
+            cwd: Some("d:\repo".to_string()),
             title: Some("tool only".to_string()),
             blocks: vec![AgentBlock {
                 kind: AgentBlockKind::ToolOutput,
@@ -1683,14 +1676,9 @@ mod tests {
         );
 
         assert_eq!(resolved.title, "tool only  [tool-onl]");
-        assert_eq!(
-            resolved.notice.as_deref(),
-            Some("Claude session has no selectable content.")
-        );
         assert!(resolved.records.is_empty());
         assert!(resolved.load.is_none());
     }
-
     #[test]
     fn resolves_agent_session_selector_by_recent_index() {
         let source = FakeAgentSource {

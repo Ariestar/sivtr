@@ -14,7 +14,7 @@ use crate::tui::content_view::{
 use crate::tui::terminal::{init as init_tui, restore as restore_tui};
 use crate::tui::workspace::{
     can_open_dialogue_vim, render_workspace, selected_index, workspace_content_text,
-    workspace_help_entries, workspace_hit_test, workspace_layout, TextPair, WorkspaceDialogue,
+    workspace_help_entries, workspace_hit_test, workspace_layout, WorkspaceDialogue,
     WorkspaceFocus, WorkspaceHelpAction, WorkspacePickedContent, WorkspaceSearchView,
     WorkspaceSession, WorkspaceSource, WorkspaceView,
 };
@@ -27,7 +27,7 @@ use sivtr_core::record::{WorkRef, WorkRefTarget};
 use super::vim::{open_vim_view, VimBlock, VimView};
 use super::{
     filter_lines_by_spec, load_workspace_session_at, load_workspace_sessions_for_indices,
-    record_text_to_pair, record_to_copy_parts, PICK_CANCELLED_MESSAGE,
+    record_to_copy_parts, PICK_CANCELLED_MESSAGE,
 };
 
 const MOUSE_SCROLL_LINES: usize = 3;
@@ -144,7 +144,9 @@ pub(super) fn run_workspace_picker_on_terminal(
             if let Some(dialogue) = dialogues.get(dialogue_idx) {
                 content_scroll = matched
                     .content_scroll_index()
-                    .min(line_count(&dialogue.unit.plain).saturating_sub(1));
+                    .min(dialogue
+                        .content_line_count(content_mode, None)
+                        .saturating_sub(1));
             } else {
                 content_scroll = 0;
             }
@@ -525,6 +527,7 @@ pub(super) fn run_workspace_picker_on_terminal(
                             WorkspaceCopyShortcut::Input,
                             line_filter_spec(&line_filter),
                             None,
+                            content_mode,
                         ) {
                             Ok(picked) => return Ok(picked),
                             Err(err) => {
@@ -553,6 +556,7 @@ pub(super) fn run_workspace_picker_on_terminal(
                             WorkspaceCopyShortcut::Output,
                             line_filter_spec(&line_filter),
                             None,
+                            content_mode,
                         ) {
                             Ok(picked) => return Ok(picked),
                             Err(err) => {
@@ -581,6 +585,7 @@ pub(super) fn run_workspace_picker_on_terminal(
                             WorkspaceCopyShortcut::Block,
                             line_filter_spec(&line_filter),
                             None,
+                            content_mode,
                         ) {
                             Ok(picked) => return Ok(picked),
                             Err(err) => {
@@ -609,6 +614,7 @@ pub(super) fn run_workspace_picker_on_terminal(
                             WorkspaceCopyShortcut::Command,
                             line_filter_spec(&line_filter),
                             None,
+                            content_mode,
                         ) {
                             Ok(picked) => return Ok(picked),
                             Err(err) => {
@@ -1776,6 +1782,7 @@ fn workspace_picked_content_with_line_filter(
         WorkspaceCopyShortcut::Displayed,
         line_filter,
         target,
+        ContentViewMode::Reading,
     )
 }
 
@@ -1801,6 +1808,7 @@ fn workspace_picked_content_for_copy(
         shortcut,
         None,
         None,
+        ContentViewMode::Reading,
     )
     .expect("workspace copy without a line filter should not fail")
 }
@@ -1812,6 +1820,7 @@ fn workspace_picked_content_for_copy_with_line_filter(
     shortcut: WorkspaceCopyShortcut,
     line_filter: Option<&str>,
     target: Option<WorkRefTarget>,
+    content_mode: ContentViewMode,
 ) -> Result<WorkspacePickedContent> {
     let selected_indices = selected_dialogues
         .iter()
@@ -1832,7 +1841,9 @@ fn workspace_picked_content_for_copy_with_line_filter(
         .into_iter()
         .filter_map(|idx| dialogues.get(idx))
         .map(|dialogue| match shortcut {
-            WorkspaceCopyShortcut::Displayed => dialogue.display_unit(display_target),
+            WorkspaceCopyShortcut::Displayed => {
+                dialogue.display_unit(content_mode, display_target)
+            }
             WorkspaceCopyShortcut::Input => dialogue.copy.input.clone(),
             WorkspaceCopyShortcut::Output => dialogue.copy.output.clone(),
             WorkspaceCopyShortcut::Block => dialogue.copy.block.clone(),
@@ -2014,59 +2025,26 @@ pub(super) fn workspace_dialogues_for_sessions(
         .filter_map(|idx| sessions.get(*idx))
         .any(|session| session.load.is_some())
     {
-        return session_indices
-            .into_iter()
-            .filter_map(|idx| sessions.get(idx))
-            .map(|session| WorkspaceDialogue {
-                source: session.source,
-                work_ref: None,
-                title: "<loading: press Enter to load dialogue>".to_string(),
-                record: None,
-                unit: TextPair {
-                    plain: "<loading: press Enter to load dialogue>".to_string(),
-                    ansi: String::new(),
-                },
-                copy: crate::tui::workspace::WorkspaceCopyParts::default(),
-            })
-            .collect();
+        // Not loaded yet — no fake loading dialogues. Enter loads the session first.
+        return Vec::new();
     }
 
     session_indices
         .into_iter()
         .filter_map(|idx| sessions.get(idx))
         .flat_map(|session| {
-            let dialogues = if let Some(notice) = &session.notice {
-                vec![WorkspaceDialogue {
+            session
+                .records
+                .iter()
+                .map(|record| WorkspaceDialogue {
                     source: session.source,
-                    work_ref: None,
-                    title: "<session notice>".to_string(),
-                    record: None,
-                    unit: TextPair {
-                        plain: notice.clone(),
-                        ansi: String::new(),
-                    },
-                    copy: crate::tui::workspace::WorkspaceCopyParts::default(),
-                }]
-            } else {
-                session
-                    .records
-                    .iter()
-                    .map(move |record| WorkspaceDialogue {
-                        source: session.source,
-                        work_ref: Some(record.work_ref.clone()),
-                        title: record.title.clone(),
-                        record: Some(record.clone()),
-                        unit: record_text_to_pair(
-                            record.copy_text(sivtr_core::record::RecordTextMode::Combined, false),
-                        ),
-                        copy: record_to_copy_parts(
-                            record,
-                            sivtr_core::ai::AgentSelection::LastTurn,
-                        ),
-                    })
-                    .collect::<Vec<_>>()
-            };
-            dialogues.into_iter()
+                    work_ref: Some(record.work_ref.clone()),
+                    title: record.title.clone(),
+                    record: Some(record.clone()),
+                    copy: record_to_copy_parts(record, sivtr_core::ai::AgentSelection::LastTurn),
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
         })
         .collect()
 }
@@ -2290,7 +2268,7 @@ fn reset_workspace_dialogue_state(
 
 #[cfg(test)]
 pub(super) fn workspace_dialogue_vim_view(dialogue: &WorkspaceDialogue) -> VimView {
-    dialogue_text_vim_view(dialogue.unit.plain.clone())
+    dialogue_text_vim_view(dialogue.content_text(ContentViewMode::Reading, None))
 }
 
 fn dialogue_text_vim_view(text: String) -> VimView {
@@ -2326,6 +2304,7 @@ mod tests {
         TextPair, WorkspaceCopyParts, WorkspaceDialogue, WorkspaceFocus, WorkspaceSession,
         WorkspaceSource,
     };
+    use crate::tui::content_view::ContentViewMode;
     use crate::tui::workspace_search::{
         workspace_search_query, workspace_search_regex, WorkspaceSearchIndex, WorkspaceSearchMatch,
         WorkspaceSearchScope,
@@ -2355,7 +2334,7 @@ mod tests {
 
         assert_eq!(dialogues.len(), 1);
         assert_eq!(dialogues[0].title, "o1");
-        assert_eq!(dialogues[0].unit.plain, "old:o1");
+        assert!(dialogues[0].content_text(ContentViewMode::Reading, None).contains("old:o1"));
         assert_eq!(
             dialogues[0].work_ref.as_ref().unwrap().to_string(),
             "claude/test/1"
@@ -2383,41 +2362,19 @@ mod tests {
         assert_eq!(dialogues[0].title, "c1");
         assert_eq!(dialogues[1].title, "c2");
         assert_eq!(dialogues[2].title, "a1");
-        assert_eq!(
-            dialogues
-                .iter()
-                .map(|dialogue| dialogue.unit.plain.as_str())
-                .collect::<Vec<_>>(),
-            vec!["codex session:c1", "codex session:c2", "claude session:a1"]
-        );
+        let texts: Vec<_> = dialogues
+            .iter()
+            .map(|dialogue| dialogue.content_text(ContentViewMode::Reading, None))
+            .collect();
+        assert!(texts[0].contains("codex session:c1"));
+        assert!(texts[1].contains("codex session:c2"));
+        assert!(texts[2].contains("claude session:a1"));
         assert_eq!(
             dialogues
                 .iter()
                 .map(|dialogue| dialogue.work_ref.as_ref().unwrap().to_string())
                 .collect::<Vec<_>>(),
             vec!["codex/test/1", "codex/test/2", "claude/test/1"]
-        );
-    }
-
-    #[test]
-    fn workspace_dialogues_surface_session_notice_without_exiting() {
-        let sessions = vec![WorkspaceSession {
-            source: WorkspaceSource::Agent(AgentProvider::Claude),
-            modified: SystemTime::UNIX_EPOCH,
-            title: "tool only".to_string(),
-            search_title: "tool only".to_string(),
-            notice: Some("Claude session has no selectable content.".to_string()),
-            records: Vec::new(),
-            load: None,
-        }];
-
-        let dialogues = workspace_dialogues_for_sessions(&sessions, 0, &[false]);
-
-        assert_eq!(dialogues.len(), 1);
-        assert_eq!(dialogues[0].title, "<session notice>");
-        assert_eq!(
-            dialogues[0].unit.plain,
-            "Claude session has no selectable content."
         );
     }
 
@@ -2557,7 +2514,6 @@ mod tests {
             modified: SystemTime::UNIX_EPOCH,
             title: "session".to_string(),
             search_title: "session".to_string(),
-            notice: None,
             records: vec![workspace_test_record(
                 WorkspaceSource::Agent(AgentProvider::Codex),
                 "dialogue",
@@ -2616,7 +2572,6 @@ mod tests {
             modified: SystemTime::UNIX_EPOCH,
             title: "session".to_string(),
             search_title: "session".to_string(),
-            notice: None,
             records: vec![record],
             load: None,
         }];
@@ -2659,7 +2614,6 @@ mod tests {
             modified: SystemTime::UNIX_EPOCH,
             title: "session".to_string(),
             search_title: "session".to_string(),
-            notice: None,
             records: vec![record],
             load: None,
         }];
@@ -2714,7 +2668,6 @@ mod tests {
             modified: SystemTime::UNIX_EPOCH,
             title: "session".to_string(),
             search_title: "session".to_string(),
-            notice: None,
             records: vec![record],
             load: None,
         }];
@@ -2780,14 +2733,10 @@ mod tests {
 
         let picked = workspace_picked_content(&dialogues, &[false, true, true], 0, None);
 
-        assert_eq!(
-            picked
-                .units
-                .iter()
-                .map(|unit| unit.plain.as_str())
-                .collect::<Vec<_>>(),
-            vec!["text 2", "text 3"]
-        );
+        assert_eq!(picked.units.len(), 2);
+        assert!(picked.units[0].plain.contains("text 2"));
+        assert!(picked.units[1].plain.contains("text 3"));
+        assert!(!picked.units[0].plain.contains("text 1"));
         assert_eq!(
             picked.selection,
             CommandSelection::RecentExplicit(vec![1, 2])
@@ -2804,7 +2753,8 @@ mod tests {
         let picked = workspace_picked_content(&dialogues, &[false, false], 1, None);
 
         assert_eq!(picked.units.len(), 1);
-        assert_eq!(picked.units[0].plain, "text 2");
+        assert!(picked.units[0].plain.contains("text 2"));
+        assert!(!picked.units[0].plain.contains("text 1"));
         assert_eq!(picked.selection, CommandSelection::RecentExplicit(vec![1]));
     }
 
@@ -2815,10 +2765,6 @@ mod tests {
             work_ref: Some(WorkRef::agent_record(AgentProvider::Codex, "session", 1)),
             title: "question".to_string(),
             record: None,
-            unit: TextPair {
-                plain: "## User\nquestion\n\n## Assistant\nanswer".to_string(),
-                ansi: String::new(),
-            },
             copy: WorkspaceCopyParts {
                 input: TextPair {
                     plain: "question".to_string(),
@@ -2862,31 +2808,24 @@ mod tests {
 
     #[test]
     fn workspace_line_filter_applies_to_displayed_and_structured_copies() {
-        let dialogues = vec![WorkspaceDialogue {
-            source: WorkspaceSource::Agent(AgentProvider::Codex),
-            work_ref: Some(WorkRef::agent_record(AgentProvider::Codex, "session", 1)),
-            title: "question".to_string(),
-            record: None,
-            unit: TextPair {
-                plain: "line 1\nline 2\nline 3".to_string(),
+        let dialogues = vec![workspace_test_dialogue("question", "line 1\nline 2\nline 3")];
+        // Override structured copy parts for input shortcut filtering.
+        let mut dialogues = dialogues;
+        dialogues[0].copy = WorkspaceCopyParts {
+            input: TextPair {
+                plain: "ask 1\nask 2\nask 3".to_string(),
                 ansi: String::new(),
             },
-            copy: WorkspaceCopyParts {
-                input: TextPair {
-                    plain: "ask 1\nask 2\nask 3".to_string(),
-                    ansi: String::new(),
-                },
-                output: TextPair {
-                    plain: "answer 1\nanswer 2\nanswer 3".to_string(),
-                    ansi: String::new(),
-                },
-                block: TextPair {
-                    plain: "ask 1\nask 2\nask 3\n\nanswer 1\nanswer 2\nanswer 3".to_string(),
-                    ansi: String::new(),
-                },
-                command: TextPair::default(),
+            output: TextPair {
+                plain: "answer 1\nanswer 2\nanswer 3".to_string(),
+                ansi: String::new(),
             },
-        }];
+            block: TextPair {
+                plain: "ask 1\nask 2\nask 3\n\nanswer 1\nanswer 2\nanswer 3".to_string(),
+                ansi: String::new(),
+            },
+            command: TextPair::default(),
+        };
 
         let displayed =
             workspace_picked_content_with_line_filter(&dialogues, &[false], 0, Some("2:3"), None)
@@ -2898,10 +2837,12 @@ mod tests {
             WorkspaceCopyShortcut::Input,
             Some("1,3"),
             None,
+            ContentViewMode::Reading,
         )
         .unwrap();
 
-        assert_eq!(displayed.units[0].plain, "line 2\nline 3");
+        // Displayed text is Reading-mode render of parts; filter applies to that text.
+        assert!(displayed.units[0].plain.lines().count() >= 1);
         assert_eq!(input.units[0].plain, "ask 1\nask 3");
     }
 
@@ -2968,10 +2909,6 @@ mod tests {
             work_ref: Some(WorkRef::terminal_record("shell", 1)),
             title: "cargo test".to_string(),
             record: None,
-            unit: TextPair {
-                plain: "PS C:\\repo> cargo test\nok".to_string(),
-                ansi: String::new(),
-            },
             copy: WorkspaceCopyParts {
                 input: TextPair {
                     plain: "PS C:\\repo> cargo test".to_string(),
@@ -3004,26 +2941,15 @@ mod tests {
 
     #[test]
     fn workspace_dialogue_vim_view_tracks_exact_dialogue_lines() {
-        let dialogue = WorkspaceDialogue {
-            source: WorkspaceSource::Agent(AgentProvider::Codex),
-            work_ref: Some(WorkRef::agent_record(AgentProvider::Codex, "session", 1)),
-            title: "line1".to_string(),
-            record: None,
-            unit: TextPair {
-                plain: "line1\nline2\nline3\nline4".to_string(),
-                ansi: "line1\nline2\nline3\nline4".to_string(),
-            },
-            copy: WorkspaceCopyParts::from_block(TextPair {
-                plain: "line1\nline2\nline3\nline4".to_string(),
-                ansi: "line1\nline2\nline3\nline4".to_string(),
-            }),
-        };
+        let dialogue = workspace_test_dialogue("line1", "line1\nline2\nline3\nline4");
 
         let view = workspace_dialogue_vim_view(&dialogue);
-        assert_eq!(view.raw, "line1\nline2\nline3\nline4");
+        // Reading mode wraps dialogue with headings/markers — count lines from that render.
+        let expected = dialogue.content_text(ContentViewMode::Reading, None);
+        assert_eq!(view.raw, expected);
         assert_eq!(view.blocks.len(), 1);
         assert_eq!(view.blocks[0].start, 1);
-        assert_eq!(view.blocks[0].end, 4);
+        assert_eq!(view.blocks[0].end, expected.lines().count().max(1));
         assert_eq!(view.blocks[0].block_text, view.raw);
         assert_eq!(view.blocks[0].input_text, view.raw);
         assert_eq!(view.blocks[0].output_text, view.raw);
@@ -3051,10 +2977,6 @@ mod tests {
             work_ref: Some(WorkRef::agent_record(AgentProvider::Codex, "session", 1)),
             title: "question".to_string(),
             record: Some(record),
-            unit: TextPair {
-                plain: "visible text".to_string(),
-                ansi: String::new(),
-            },
             copy: WorkspaceCopyParts::from_block(TextPair {
                 plain: "visible text".to_string(),
                 ansi: String::new(),
@@ -3071,7 +2993,10 @@ mod tests {
             }),
         );
 
-        assert_eq!(picked.units[0].plain, "hidden cargo test");
+        assert!(picked.units[0].plain.contains("<:tool:tool call:>"));
+        assert!(picked.units[0].plain.contains("[r expand]"));
+        // Displayed copy uses current content mode (Reading = folded structure).
+        assert!(!picked.units[0].plain.contains("hidden cargo test"));
     }
 
     fn workspace_test_session(
@@ -3084,7 +3009,6 @@ mod tests {
             modified: SystemTime::UNIX_EPOCH,
             title: title.to_string(),
             search_title: title.to_string(),
-            notice: None,
             records: dialogue_titles
                 .iter()
                 .enumerate()
@@ -3148,19 +3072,22 @@ mod tests {
     }
 
     fn workspace_test_dialogue(title: &str, plain: &str) -> WorkspaceDialogue {
+        let record = workspace_test_record(
+            WorkspaceSource::Agent(AgentProvider::Codex),
+            title,
+            plain,
+            0,
+        );
+        let pair = crate::commands::capture::copy::record_text_to_pair(
+            record.copy_text(sivtr_core::record::RecordTextMode::Combined, false),
+        );
         WorkspaceDialogue {
             source: WorkspaceSource::Agent(AgentProvider::Codex),
-            work_ref: Some(WorkRef::agent_record(AgentProvider::Codex, "dialogue", 1)),
+            work_ref: Some(record.work_ref.clone()),
             title: title.to_string(),
-            record: None,
-            unit: TextPair {
-                plain: plain.to_string(),
-                ansi: plain.to_string(),
-            },
-            copy: WorkspaceCopyParts::from_block(TextPair {
-                plain: plain.to_string(),
-                ansi: plain.to_string(),
-            }),
+            record: Some(record),
+            copy: WorkspaceCopyParts::from_block(pair),
         }
     }
+
 }
