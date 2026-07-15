@@ -26,10 +26,13 @@ pub fn list_recent_jsonl_sessions(
                 continue;
             }
         };
+        // Only filter when the session recorded at least one cwd.
+        // Providers without workspace metadata (e.g. Hermes chat/weixin) must
+        // still surface sessions under current-directory queries.
         if let Some(wanted) = wanted.as_ref() {
-            if !meta
-                .cwd_candidates()
-                .any(|candidate| wanted.matches(Path::new(candidate)))
+            let mut candidates = meta.cwd_candidates().peekable();
+            if candidates.peek().is_some()
+                && !candidates.any(|candidate| wanted.matches(Path::new(candidate)))
             {
                 continue;
             }
@@ -234,5 +237,65 @@ mod tests {
             sessions[0].cwd.as_deref(),
             Some(dir.path().to_str().unwrap())
         );
+    }
+
+    #[test]
+    fn keeps_sessions_without_cwd_when_filtering_by_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = dir.path().join("sessions");
+        let target = dir.path().join("repo");
+        fs::create_dir_all(&sessions).unwrap();
+        fs::create_dir_all(&target).unwrap();
+
+        let no_cwd = sessions.join("no-cwd.jsonl");
+        fs::write(
+            &no_cwd,
+            r#"{"role":"session_meta","platform":"weixin","model":"m"}
+{"role":"user","content":"hi"}
+"#,
+        )
+        .unwrap();
+
+        let wrong_cwd = sessions.join("wrong-cwd.jsonl");
+        let other = dir.path().join("other");
+        fs::create_dir_all(&other).unwrap();
+        fs::write(
+            &wrong_cwd,
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "sessionId": "wrong",
+                    "cwd": other,
+                })
+            ),
+        )
+        .unwrap();
+
+        let listed = list_recent_jsonl_sessions(&sessions, Some(&target), |path| {
+            parse_jsonl_meta(path, "Hermes", 5, |meta, value| {
+                if meta.id.is_none() {
+                    meta.id = value
+                        .get("sessionId")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .or_else(|| {
+                            path.file_stem()
+                                .and_then(|name| name.to_str())
+                                .map(str::to_string)
+                        });
+                }
+                if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
+                    meta.add_cwd(cwd);
+                }
+            })
+        })
+        .unwrap();
+
+        let ids: Vec<_> = listed
+            .iter()
+            .filter_map(|session| session.id.clone())
+            .collect();
+        assert!(ids.iter().any(|id| id == "no-cwd"));
+        assert!(!ids.iter().any(|id| id == "wrong"));
     }
 }

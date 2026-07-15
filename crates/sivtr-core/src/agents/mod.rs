@@ -18,7 +18,7 @@ pub mod sqlite;
 
 pub use jsonl::{jsonl_files, list_recent_jsonl_sessions, parse_jsonl_meta, parse_jsonl_session};
 pub use model::*;
-pub use sqlite::{open_readonly_db, system_time_from_millis};
+pub use sqlite::{open_readonly_db, system_time_from_millis, system_time_from_unix_secs};
 
 #[derive(Clone, Copy)]
 pub struct AgentProviderSpec {

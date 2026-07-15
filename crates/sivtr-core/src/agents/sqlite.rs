@@ -16,3 +16,13 @@ pub fn system_time_from_millis(value: i64) -> SystemTime {
     }
     UNIX_EPOCH + Duration::from_millis(value as u64)
 }
+
+/// Convert a floating-point Unix epoch (seconds) into `SystemTime`.
+pub fn system_time_from_unix_secs(value: f64) -> SystemTime {
+    if !value.is_finite() || value <= 0.0 {
+        return UNIX_EPOCH;
+    }
+    let secs = value.trunc() as u64;
+    let nanos = ((value.fract()) * 1_000_000_000.0).round() as u32;
+    UNIX_EPOCH + Duration::new(secs, nanos.min(999_999_999))
+}

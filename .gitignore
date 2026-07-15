@@ -36,3 +36,6 @@ session_*.log
 
 # CodeGraph (local code-intelligence index, not committed)
 .codegraph/
+
+# Local Hermes dump from server (private transcripts; never commit)
+/hermes-from-server/
