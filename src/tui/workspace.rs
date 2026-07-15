@@ -127,26 +127,29 @@ impl WorkspaceDialogue {
             return match mode {
                 ContentViewMode::Raw => self
                     .targeted_plain_text(target)
-                    .unwrap_or_else(|| self.unit.plain.clone()),
+                    .unwrap_or_else(|| self.fallback_unit_text()),
                 ContentViewMode::Reading => self
                     .targeted_structured_text(target)
                     .or_else(|| self.targeted_plain_text(target))
-                    .unwrap_or_else(|| self.unit.plain.clone()),
+                    .unwrap_or_else(|| self.fallback_unit_text()),
             };
         }
         if matches!(target, Some(WorkRefTarget::Line(_))) {
-            return self.unit.plain.clone();
+            return self.fallback_unit_text();
         }
 
-        match mode {
-            ContentViewMode::Raw => self.unit.plain.clone(),
-            ContentViewMode::Reading => self
-                .record
-                .as_ref()
-                .map(structured_record_text)
-                .filter(|text| !text.trim().is_empty())
-                .unwrap_or_else(|| self.unit.plain.clone()),
+        // Always render from record.parts when present so Raw/Reading stay in sync with
+        // structure channels (tools/skills/thinking). Cached unit.plain is only a fallback.
+        if let Some(record) = self.record.as_ref() {
+            if !record.parts.is_empty() {
+                return match mode {
+                    ContentViewMode::Raw => raw_record_text(record),
+                    ContentViewMode::Reading => structured_record_text(record),
+                };
+            }
         }
+
+        self.fallback_unit_text()
     }
 
     pub(crate) fn content_ref(&self, target: Option<WorkRefTarget>) -> Option<WorkRef> {
@@ -156,6 +159,14 @@ impl WorkspaceDialogue {
             _ => return Some(work_ref.clone()),
         };
         Some(work_ref.with_target(target))
+    }
+
+    fn fallback_unit_text(&self) -> String {
+        if self.unit.plain.trim().is_empty() {
+            "<empty>".to_string()
+        } else {
+            self.unit.plain.clone()
+        }
     }
 
     fn targeted_unit(&self, target: WorkRefTarget) -> Option<TextPair> {
@@ -173,7 +184,12 @@ impl WorkspaceDialogue {
         let WorkRefTarget::Part { .. } = target else {
             return None;
         };
-        self.record.as_ref()?.content_for_target(target)
+        let record = self.record.as_ref()?;
+        let part = record.part_for_target(target)?;
+        if part.kind.is_structure() {
+            return Some(raw_part_text(record, part));
+        }
+        Some(part.text.clone())
     }
 
     fn targeted_structured_text(&self, target: WorkRefTarget) -> Option<String> {
@@ -185,6 +201,8 @@ impl WorkspaceDialogue {
     }
 }
 
+/// Reading mode: structure channels are collapsed to a single marker line (fold).
+/// Expand with Raw mode (`r`) to see full payloads.
 fn structured_record_text(record: &WorkRecord) -> String {
     if record.parts.is_empty() {
         return record.combined_text();
@@ -198,7 +216,45 @@ fn structured_record_text(record: &WorkRecord) -> String {
         .join("\n\n")
 }
 
+/// Raw mode: every part fully expanded, structure with open/close markers.
+fn raw_record_text(record: &WorkRecord) -> String {
+    if record.parts.is_empty() {
+        return record.combined_text();
+    }
+
+    record
+        .parts
+        .iter()
+        .map(|part| raw_part_text(record, part))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 fn structured_part_text(record: &WorkRecord, part: &sivtr_core::record::WorkPart) -> String {
+    let marker = structured_part_marker_line(record, part);
+    if part.kind.is_structure() {
+        // Collapsed: one line, full payload only in Raw.
+        return format!("{marker}  {}", structure_fold_label(part));
+    }
+
+    if part.kind.is_dialogue() {
+        let heading = match part.kind {
+            sivtr_core::record::WorkPartKind::UserMessage => "## User",
+            _ => "## Assistant",
+        };
+        return format!("{heading}\n{marker}\n{}", part.text);
+    }
+
+    let heading = structured_terminal_heading(part);
+    let language = part
+        .kind
+        .code_language()
+        .map(|language| format!("~~~{language}\n"))
+        .unwrap_or_else(|| "~~~\n".to_string());
+    format!("{heading}\n{marker}\n{language}{}\n~~~", part.text)
+}
+
+fn raw_part_text(record: &WorkRecord, part: &sivtr_core::record::WorkPart) -> String {
     let marker = structured_part_marker_line(record, part);
     if part.kind.is_structure() {
         let body = part
@@ -223,14 +279,23 @@ fn structured_part_text(record: &WorkRecord, part: &sivtr_core::record::WorkPart
         return format!("{heading}\n{marker}\n{}", part.text);
     }
 
-    // Terminal / other prose parts keep lightweight headings.
     let heading = structured_terminal_heading(part);
-    let language = part
+    format!("{heading}\n{marker}\n{}", part.text)
+}
+
+fn structure_fold_label(part: &sivtr_core::record::WorkPart) -> String {
+    let open = part
         .kind
-        .code_language()
-        .map(|language| format!("~~~{language}\n"))
-        .unwrap_or_else(|| "~~~\n".to_string());
-    format!("{heading}\n{marker}\n{language}{}\n~~~", part.text)
+        .as_agent_block_kind()
+        .and_then(|kind| kind.open_marker(part.label.as_deref()))
+        .unwrap_or_else(|| "<:structure:>".to_string());
+    let bytes = part.text.len();
+    let lines = part.text.lines().count().max(if part.text.is_empty() {
+        0
+    } else {
+        1
+    });
+    format!("{open}  … ({lines} lines, {bytes} B)  [r expand]")
 }
 
 fn structured_terminal_heading(part: &sivtr_core::record::WorkPart) -> String {
@@ -611,7 +676,7 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
         },
         WorkspaceHelpEntry {
             key: "r (Content)",
-            description: "toggle raw/read content mode",
+            description: "toggle fold/full structure display (read folds tools/skills/thinking; raw expands)",
             action: WorkspaceHelpAction::ToggleContentMode,
         },
         WorkspaceHelpEntry {
@@ -842,7 +907,7 @@ fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>)
                 "j/k move  Space toggle  v range  a all  : lines  i/o/y copy parts  c command  l/Right content  t vim  Enter copy  z fullscreen  / search  h/Esc back  ? help"
             }
             WorkspaceFocus::Content => {
-                "j/k scroll  v select text  : lines  i/o/y copy parts  c command  Ctrl-d/PageDown down  Ctrl-u/PageUp up  r mode  t vim  Enter copy  z fullscreen  / search  h/Esc back  ? help"
+                "j/k scroll  v select  : lines  i/o/y copy  r fold/full  t vim  Enter copy  z fullscreen  / search  h/Esc back  ? help"
             }
         }
     };
@@ -1386,7 +1451,7 @@ mod tests {
     #[test]
     fn content_preview_text_uses_targeted_part_text_in_raw_mode() {
         let record = WorkRecord {
-            schema_version: 1,
+            schema_version: 2,
             work_ref: WorkRef::agent_record(AgentProvider::Codex, "session", 1),
             kind: sivtr_core::record::WorkRecordKind::ChatTurn,
             source: sivtr_core::record::WorkSource {
@@ -1424,25 +1489,25 @@ mod tests {
             copy: WorkspaceCopyParts::default(),
         };
 
-        assert_eq!(
-            workspace_content_text(
-                &[dialogue],
-                &[false],
-                0,
-                ContentViewMode::Raw,
-                Some(WorkRefTarget::Part {
-                    io: sivtr_core::record::WorkPartIo::Input,
-                    index: 1,
-                }),
-            ),
-            "hidden tool call"
+        let text = workspace_content_text(
+            &[dialogue],
+            &[false],
+            0,
+            ContentViewMode::Raw,
+            Some(WorkRefTarget::Part {
+                io: sivtr_core::record::WorkPartIo::Input,
+                index: 1,
+            }),
         );
+        assert!(text.contains("<:tool:tool call:>"));
+        assert!(text.contains("hidden tool call"));
+        assert!(text.contains("<:/tool:tool call:>"));
     }
 
     #[test]
     fn content_preview_text_uses_structured_targeted_part_text_in_reading_mode() {
         let record = WorkRecord {
-            schema_version: 1,
+            schema_version: 2,
             work_ref: WorkRef::agent_record(AgentProvider::Codex, "session", 1),
             kind: sivtr_core::record::WorkRecordKind::ChatTurn,
             source: sivtr_core::record::WorkSource {
@@ -1491,16 +1556,18 @@ mod tests {
             }),
         );
 
+        // Reading folds structure to one line (no payload body).
         assert!(text.contains("<:tool:tool call:>"));
         assert!(text.contains("`codex/session/1/i/1`"));
-        assert!(text.contains("hidden tool call"));
-        assert!(text.contains("<:/tool:tool call:>"));
+        assert!(text.contains("[r expand]"));
+        assert!(!text.contains("hidden tool call"));
+        assert!(!text.contains("<:/tool:tool call:>"));
     }
 
     #[test]
-    fn reading_mode_structures_parts_with_headings_and_code_fences() {
+    fn reading_mode_folds_structure_and_raw_expands() {
         let record = WorkRecord {
-            schema_version: 1,
+            schema_version: 2,
             work_ref: WorkRef::agent_record(AgentProvider::Codex, "session", 1),
             kind: sivtr_core::record::WorkRecordKind::ChatTurn,
             source: sivtr_core::record::WorkSource {
@@ -1565,32 +1632,40 @@ mod tests {
             title: "cmd".to_string(),
             record: Some(record),
             unit: TextPair {
+                // Stale cache without tools — content_text must ignore this when record.parts exist.
                 plain: "question\nanswer".to_string(),
                 ansi: String::new(),
             },
             copy: WorkspaceCopyParts::default(),
         };
 
-        let text = workspace_content_text(&[dialogue], &[false], 0, ContentViewMode::Reading, None);
+        let reading =
+            workspace_content_text(std::slice::from_ref(&dialogue), &[false], 0, ContentViewMode::Reading, None);
+        assert!(reading.contains("## User\n`codex/session/1/i/1`  `2026-05-24T12:00:00Z`\nquestion"));
+        assert!(reading.contains("<:tool:Bash call:>"));
+        assert!(reading.contains("[r expand]"));
+        assert!(!reading.contains("cargo test"));
+        assert!(!reading.contains("<:/tool:Bash call:>"));
+        assert!(reading.contains("## Assistant\n`codex/session/1/o/2`  `2026-05-24T12:00:00Z`\nanswer"));
 
-        assert!(text.contains("## User\n`codex/session/1/i/1`  `2026-05-24T12:00:00Z`\nquestion"));
-        assert!(text.contains("<:tool:Bash call:>"));
-        assert!(text.contains("cargo test"));
-        assert!(text.contains("<:tool:Bash result:>"));
-        assert!(
-            text.contains("## Assistant\n`codex/session/1/o/2`  `2026-05-24T12:00:00Z`\nanswer")
-        );
+        let raw = workspace_content_text(&[dialogue], &[false], 0, ContentViewMode::Raw, None);
+        assert!(raw.contains("cargo test"));
+        assert!(raw.contains("<:tool:Bash call:>"));
+        assert!(raw.contains("<:/tool:Bash call:>"));
+        assert!(raw.contains("<:tool:Bash result:>"));
+        assert!(raw.contains("ok"));
+        assert!(!raw.contains("[r expand]"));
     }
 
     #[test]
     fn content_title_includes_view_mode() {
         assert_eq!(
             content_title(ContentViewMode::Reading, &[false, false], None),
-            "Content (read)"
+            "Content (read/fold)"
         );
         assert_eq!(
             content_title(ContentViewMode::Raw, &[true, false], None),
-            "Content (raw): 1 dialogue selected"
+            "Content (raw/full): 1 dialogue selected"
         );
     }
 
@@ -1600,7 +1675,7 @@ mod tests {
 
         assert_eq!(
             content_title(ContentViewMode::Reading, &[false], Some(&work_ref)),
-            "Content (read) [codex/session/2]"
+            "Content (read/fold) [codex/session/2]"
         );
     }
 
