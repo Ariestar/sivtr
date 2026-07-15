@@ -180,10 +180,6 @@ pub enum WorkPartKind {
     Skill,
     /// Model thinking / reasoning channel (not dialogue body).
     Thinking,
-    /// MCP tool call (label = server/tool name).
-    McpCall,
-    /// MCP tool result.
-    McpResult,
     Text,
     Error,
 }
@@ -193,16 +189,12 @@ impl WorkPartKind {
         matches!(self, Self::UserMessage | Self::AssistantMessage)
     }
 
-    /// Structural evidence channels (tools, skills, thinking, MCP) — never treat as plain prose.
+    /// Structural evidence (tools/skills/thinking) — keep in records, wrap for display,
+    /// and **exclude from default content search** unless `--kind` / `-i all` opts in.
     pub fn is_structure(self) -> bool {
         matches!(
             self,
-            Self::ToolCall
-                | Self::ToolOutput
-                | Self::Skill
-                | Self::Thinking
-                | Self::McpCall
-                | Self::McpResult
+            Self::ToolCall | Self::ToolOutput | Self::Skill | Self::Thinking
         )
     }
 
@@ -223,24 +215,18 @@ impl WorkPartKind {
             Self::ToolOutput => AgentBlockKind::ToolOutput,
             Self::Skill => AgentBlockKind::Skill,
             Self::Thinking => AgentBlockKind::Thinking,
-            Self::McpCall => AgentBlockKind::McpCall,
-            Self::McpResult => AgentBlockKind::McpResult,
             Self::Prompt | Self::Command | Self::Text | Self::Error => return None,
         })
     }
 
     pub fn default_io(self) -> WorkPartIo {
         match self {
-            Self::UserMessage
-            | Self::ToolCall
-            | Self::Skill
-            | Self::McpCall
-            | Self::Prompt
-            | Self::Command => WorkPartIo::Input,
+            Self::UserMessage | Self::ToolCall | Self::Skill | Self::Prompt | Self::Command => {
+                WorkPartIo::Input
+            }
             Self::AssistantMessage
             | Self::ToolOutput
             | Self::Thinking
-            | Self::McpResult
             | Self::Text
             | Self::Error => WorkPartIo::Output,
         }
@@ -250,7 +236,7 @@ impl WorkPartKind {
     pub fn code_language(self) -> Option<&'static str> {
         match self {
             Self::Command => Some("shell"),
-            Self::ToolCall | Self::McpCall => Some("json"),
+            Self::ToolCall => Some("json"),
             _ => None,
         }
     }
@@ -266,8 +252,6 @@ impl WorkPartKind {
             Self::ToolOutput => "tool_output",
             Self::Skill => "skill",
             Self::Thinking => "thinking",
-            Self::McpCall => "mcp_call",
-            Self::McpResult => "mcp_result",
             Self::Text => "text",
             Self::Error => "error",
         }
@@ -506,10 +490,7 @@ impl WorkRecord {
                 non_empty(join_parts_structured(self.parts.iter().filter(|part| {
                     matches!(
                         part.kind,
-                        WorkPartKind::UserMessage
-                            | WorkPartKind::ToolCall
-                            | WorkPartKind::Skill
-                            | WorkPartKind::McpCall
+                        WorkPartKind::UserMessage | WorkPartKind::ToolCall | WorkPartKind::Skill
                     )
                 })))
             }
@@ -530,7 +511,6 @@ impl WorkRecord {
                         WorkPartKind::AssistantMessage
                             | WorkPartKind::ToolOutput
                             | WorkPartKind::Thinking
-                            | WorkPartKind::McpResult
                     )
                 })))
             }
@@ -1099,8 +1079,6 @@ fn map_agent_block(block: &AgentBlock) -> (WorkPartKind, Option<String>) {
         AgentBlockKind::ToolOutput => (WorkPartKind::ToolOutput, block.label.clone()),
         AgentBlockKind::Skill => (WorkPartKind::Skill, block.label.clone()),
         AgentBlockKind::Thinking => (WorkPartKind::Thinking, block.label.clone()),
-        AgentBlockKind::McpCall => (WorkPartKind::McpCall, block.label.clone()),
-        AgentBlockKind::McpResult => (WorkPartKind::McpResult, block.label.clone()),
     }
 }
 

@@ -291,7 +291,14 @@ fn apply_part(
             None,
             extract_opencode_text(part),
         ),
-        Some("reasoning" | "step-start" | "step_finish" | "snapshot" | "file") => {}
+        Some("reasoning") => push_block(
+            session,
+            AgentBlockKind::Thinking,
+            timestamp,
+            None,
+            extract_opencode_text(part),
+        ),
+        Some("step-start" | "step_finish" | "snapshot" | "file") => {}
         _ => {}
     }
 }
@@ -469,15 +476,17 @@ mod tests {
         assert_eq!(session.id.as_deref(), Some("open-session"));
         assert_eq!(session.cwd.as_deref(), Some("D:\\sivtr"));
         assert_eq!(session.title.as_deref(), Some("Greeting"));
-        assert_eq!(session.blocks.len(), 4);
+        assert_eq!(session.blocks.len(), 5);
         assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
         assert_eq!(session.blocks[0].text, "hello");
-        assert_eq!(session.blocks[1].kind, AgentBlockKind::ToolCall);
-        assert_eq!(session.blocks[1].label.as_deref(), Some("bash"));
-        assert!(session.blocks[1].text.contains("echo hi"));
-        assert_eq!(session.blocks[2].kind, AgentBlockKind::ToolOutput);
-        assert_eq!(session.blocks[2].text, "hi");
-        assert_eq!(session.blocks[3].kind, AgentBlockKind::Assistant);
-        assert_eq!(session.blocks[3].text, "done");
+        assert_eq!(session.blocks[1].kind, AgentBlockKind::Thinking);
+        assert_eq!(session.blocks[1].text, "hidden");
+        assert_eq!(session.blocks[2].kind, AgentBlockKind::ToolCall);
+        assert_eq!(session.blocks[2].label.as_deref(), Some("bash"));
+        assert!(session.blocks[2].text.contains("echo hi"));
+        assert_eq!(session.blocks[3].kind, AgentBlockKind::ToolOutput);
+        assert_eq!(session.blocks[3].text, "hi");
+        assert_eq!(session.blocks[4].kind, AgentBlockKind::Assistant);
+        assert_eq!(session.blocks[4].text, "done");
     }
 }

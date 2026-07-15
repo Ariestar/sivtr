@@ -131,7 +131,20 @@ fn push_content_blocks(
                         timestamp.clone(),
                         extract_content_text(item),
                     ),
-                    Some("thinking") => {}
+                    Some("thinking") => {
+                        let thinking = item
+                            .get("thinking")
+                            .map(extract_content_text)
+                            .filter(|text| !text.trim().is_empty())
+                            .unwrap_or_else(|| extract_content_text(item));
+                        push_block(
+                            session,
+                            AgentBlockKind::Thinking,
+                            timestamp.clone(),
+                            None,
+                            thinking,
+                        );
+                    }
                     Some("tool_use") => push_tool_use(session, timestamp.clone(), item),
                     Some("tool_result") => {
                         if let Some(content) = item.get("content") {
@@ -489,15 +502,17 @@ mod tests {
 
         let session = ClaudeProvider.parse_session_file(&path).unwrap();
 
-        assert_eq!(session.blocks.len(), 4);
+        assert_eq!(session.blocks.len(), 5);
         assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
-        assert_eq!(session.blocks[1].kind, AgentBlockKind::ToolCall);
-        assert_eq!(session.blocks[1].label.as_deref(), Some("Bash"));
-        assert_eq!(session.blocks[1].text, "{\"command\":\"rtk ls\"}");
-        assert_eq!(session.blocks[2].kind, AgentBlockKind::ToolOutput);
-        assert_eq!(session.blocks[2].text, "ok");
-        assert_eq!(session.blocks[3].kind, AgentBlockKind::Assistant);
-        assert_eq!(session.blocks[3].text, "final answer");
+        assert_eq!(session.blocks[1].kind, AgentBlockKind::Thinking);
+        assert_eq!(session.blocks[1].text, "hidden");
+        assert_eq!(session.blocks[2].kind, AgentBlockKind::ToolCall);
+        assert_eq!(session.blocks[2].label.as_deref(), Some("Bash"));
+        assert_eq!(session.blocks[2].text, "{\"command\":\"rtk ls\"}");
+        assert_eq!(session.blocks[3].kind, AgentBlockKind::ToolOutput);
+        assert_eq!(session.blocks[3].text, "ok");
+        assert_eq!(session.blocks[4].kind, AgentBlockKind::Assistant);
+        assert_eq!(session.blocks[4].text, "final answer");
     }
 
     #[test]

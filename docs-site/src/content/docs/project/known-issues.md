@@ -31,26 +31,20 @@ Do not reintroduce per-provider `CopySubcommand` variants.
 Evidence channels are typed on `WorkPartKind` / `AgentBlockKind` with methods for extension:
 
 - `is_dialogue` / `is_structure` / `default_io` / `as_agent_block_kind` / `format_block` (markers)
-- Display protocol for structure: `<:tool:name call:>` … `<:tool:name result:>`, `<:skill:name:>`, `<:thinking:>`, `<:mcp:name call:>`
-- Last turn **keeps** structure (tools/skills/thinking/mcp); do not reintroduce stripping
+- Structure markers: `<:tool:name call:>` / `<:tool:name result:>`, `<:skill:name:>`, `<:thinking:>`
+- MCP is **not** a separate kind — MCP tools are normal tools (label = tool name)
+- Last turn **keeps** structure; do not reintroduce stripping from records
+- **Default content search** (`-i content`) skips `is_structure()` parts so they don't pollute full-text hits; use `--kind tool_call|skill|thinking` or `-i all` to include them
 
-### Still incomplete (provider parsers)
+### Provider emit gaps
 
-Most providers still only emit `User` / `Assistant` / `ToolCall` / `ToolOutput`. Skill/thinking/MCP kinds exist in the model for retrieval, but parsers do not yet classify:
+| Kind | Model | Default search | Parse emit |
+| --- | --- | --- | --- |
+| Tool* | yes | excluded unless opted in | most providers |
+| Skill | yes | excluded unless opted in | mainly inlined `<skill name>` |
+| Thinking | yes | excluded unless opted in | Claude/Pi/OpenCode reasoning now kept |
 
-| Kind | Model | Provider emit today |
-| --- | --- | --- |
-| Skill | yes | mostly extracted from inlined `<skill name>` in dialogue text |
-| Thinking | yes | usually ignored at parse (e.g. Pi/OpenCode reasoning parts dropped) |
-| McpCall / McpResult | yes | still look like normal tools unless label/name is recognized later |
-
-Adding a new structure channel should be:
-
-1. New enum variant + methods on `AgentBlockKind` / `WorkPartKind` (markers, io, filters).
-2. CLI `WorkPartKindArg` alias (or derive from `as_str()`).
-3. Provider `apply_*` that emits the kind instead of dropping the event.
-
-Avoid reintroducing Markdown `## Tool Call` for structure.
+Adding a new structure channel: extend enum methods first, then CLI kind aliases, then provider emit. Avoid Markdown `## Tool Call` for structure.
 
 ## Workspace filter
 

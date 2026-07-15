@@ -452,6 +452,14 @@ fn part_matches_filters(part: &WorkPart, spec: &FilterSpec) -> bool {
     if !part_field_matches(part, spec.in_field) {
         return false;
     }
+    // Default content search is dialogue-only so tools/skills/thinking don't pollute hits.
+    // Opt in with `-i all`, or target them with `--kind tool_call|skill|thinking|…`.
+    if matches!(spec.in_field, SearchFieldArg::Content)
+        && spec.kind.is_none()
+        && part.kind.is_structure()
+    {
+        return false;
+    }
     spec.regex
         .as_ref()
         .is_none_or(|regex| regex.is_match(&part.text))

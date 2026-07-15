@@ -124,7 +124,20 @@ fn push_assistant_items(session: &mut AgentSession, timestamp: Option<String>, c
                             .map(pretty_json_value)
                             .unwrap_or_default(),
                     ),
-                    Some("thinking") => {}
+                    Some("thinking") => {
+                        let thinking = item
+                            .get("thinking")
+                            .map(extract_content_text)
+                            .filter(|text| !text.trim().is_empty())
+                            .unwrap_or_else(|| extract_content_text(item));
+                        push_block(
+                            session,
+                            AgentBlockKind::Thinking,
+                            timestamp.clone(),
+                            None,
+                            thinking,
+                        );
+                    }
                     _ => {}
                 }
             }
@@ -180,15 +193,17 @@ mod tests {
 
         assert_eq!(session.id.as_deref(), Some("pi-session"));
         assert_eq!(session.cwd.as_deref(), Some("D:\\sivtr"));
-        assert_eq!(session.blocks.len(), 4);
+        assert_eq!(session.blocks.len(), 5);
         assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
         assert_eq!(session.blocks[0].text, "hello");
-        assert_eq!(session.blocks[1].kind, AgentBlockKind::ToolCall);
-        assert_eq!(session.blocks[1].label.as_deref(), Some("bash"));
-        assert!(session.blocks[1].text.contains("echo hi"));
-        assert_eq!(session.blocks[2].kind, AgentBlockKind::ToolOutput);
-        assert_eq!(session.blocks[2].text, "hi");
-        assert_eq!(session.blocks[3].kind, AgentBlockKind::Assistant);
-        assert_eq!(session.blocks[3].text, "done");
+        assert_eq!(session.blocks[1].kind, AgentBlockKind::Thinking);
+        assert_eq!(session.blocks[1].text, "hidden");
+        assert_eq!(session.blocks[2].kind, AgentBlockKind::ToolCall);
+        assert_eq!(session.blocks[2].label.as_deref(), Some("bash"));
+        assert!(session.blocks[2].text.contains("echo hi"));
+        assert_eq!(session.blocks[3].kind, AgentBlockKind::ToolOutput);
+        assert_eq!(session.blocks[3].text, "hi");
+        assert_eq!(session.blocks[4].kind, AgentBlockKind::Assistant);
+        assert_eq!(session.blocks[4].text, "done");
     }
 }

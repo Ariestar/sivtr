@@ -21,7 +21,7 @@ pub enum AgentProvider {
 pub enum AgentBlockKind {
     User,
     Assistant,
-    /// Tool invocation (name in `label` when known).
+    /// Tool invocation (name in `label` when known). MCP tools stay tools.
     ToolCall,
     /// Tool result (name in `label` when known).
     ToolOutput,
@@ -29,10 +29,6 @@ pub enum AgentBlockKind {
     Skill,
     /// Model reasoning / thinking channel (not dialogue body).
     Thinking,
-    /// MCP tool call (server/tool name in `label`).
-    McpCall,
-    /// MCP tool result.
-    McpResult,
 }
 
 impl AgentBlockKind {
@@ -54,8 +50,6 @@ impl AgentBlockKind {
             Self::ToolOutput => format!("<:tool:{name} result:>"),
             Self::Skill => format!("<:skill:{name}:>"),
             Self::Thinking => "<:thinking:>".to_string(),
-            Self::McpCall => format!("<:mcp:{name} call:>"),
-            Self::McpResult => format!("<:mcp:{name} result:>"),
         })
     }
 
@@ -548,7 +542,7 @@ fn format_block_with_heading(block: &AgentBlock, text: &str) -> Option<String> {
 /// Serialize a block for human/machine-readable evidence (not Markdown dialogue headings).
 ///
 /// Dialogue stays plain. Structural channels use content-block markers:
-/// `<:tool:bash call:>` … `<:tool:bash result:>`, `<:skill:name:>`, `<:thinking:>`, `<:mcp:name call:>`.
+/// `<:tool:bash call:>` … `<:tool:bash result:>`, `<:skill:name:>`, `<:thinking:>`.
 pub fn format_structured_block(kind: AgentBlockKind, label: Option<&str>, text: &str) -> String {
     kind.format_block(label, text)
 }
