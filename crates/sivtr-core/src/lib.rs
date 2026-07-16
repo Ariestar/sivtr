@@ -17,6 +17,7 @@ pub mod workspace;
 pub use agents::claude;
 pub use agents::codex;
 pub use agents::cursor;
+pub use agents::grok;
 pub use agents::hermes;
 pub use agents::openclaw;
 pub use agents::opencode;

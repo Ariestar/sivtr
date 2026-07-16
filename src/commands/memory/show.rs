@@ -2,7 +2,7 @@ use std::io::IsTerminal;
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
-use sivtr_core::record::{WorkPart, WorkRecord, WorkRef, WorkAt};
+use sivtr_core::record::{WorkAt, WorkPart, WorkRecord, WorkRef};
 
 use crate::cli::ShowArgs;
 use crate::commands::memory::workset;

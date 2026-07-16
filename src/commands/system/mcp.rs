@@ -12,6 +12,129 @@ use crate::output;
 
 const SERVER_NAME: &str = "sivtr";
 const SERVER_ARGS: &[&str] = &["mcp", "serve"];
+const TOML_MCP_MARKER: &str = "[mcp_servers.sivtr]";
+
+/// Where a host accepts MCP install.
+#[derive(Clone, Copy)]
+enum McpLocationSupport {
+    GlobalOnly,
+    GlobalOrLocal,
+}
+
+/// Config file shape used by a host.
+#[derive(Clone, Copy)]
+enum McpConfigKind {
+    /// Flat JSON: `{ "<key>": { "sivtr": ... } }`
+    Json {
+        key: &'static str,
+        entry: fn() -> Value,
+    },
+    /// TOML section: `[mcp_servers.sivtr]`
+    Toml,
+    /// YAML mapping: `<key>:\n  sivtr: ...`
+    Yaml { key: &'static str },
+    /// Nested JSON: `{ "<outer>": { "<inner>": { "sivtr": ... } } }`
+    JsonNested {
+        outer: &'static str,
+        inner: &'static str,
+        entry: fn() -> Value,
+    },
+}
+
+struct McpHostSpec {
+    provider: AgentProvider,
+    location: McpLocationSupport,
+    kind: McpConfigKind,
+    config_path: fn(McpLocation) -> PathBuf,
+    host_present: fn() -> bool,
+}
+
+const MCP_HOSTS: &[McpHostSpec] = &[
+    McpHostSpec {
+        provider: AgentProvider::Claude,
+        location: McpLocationSupport::GlobalOrLocal,
+        kind: McpConfigKind::Json {
+            key: "mcpServers",
+            entry: claude_cursor_entry,
+        },
+        config_path: claude_config_path,
+        host_present: claude_host_present,
+    },
+    McpHostSpec {
+        provider: AgentProvider::Cursor,
+        location: McpLocationSupport::GlobalOrLocal,
+        kind: McpConfigKind::Json {
+            key: "mcpServers",
+            entry: claude_cursor_entry,
+        },
+        config_path: cursor_config_path,
+        host_present: cursor_host_present,
+    },
+    McpHostSpec {
+        provider: AgentProvider::Codex,
+        location: McpLocationSupport::GlobalOnly,
+        kind: McpConfigKind::Toml,
+        config_path: |_loc| codex_config_path(),
+        host_present: codex_host_present,
+    },
+    McpHostSpec {
+        provider: AgentProvider::OpenCode,
+        location: McpLocationSupport::GlobalOrLocal,
+        kind: McpConfigKind::Json {
+            key: "mcp",
+            entry: opencode_entry,
+        },
+        config_path: opencode_config_path,
+        host_present: opencode_host_present,
+    },
+    McpHostSpec {
+        provider: AgentProvider::OpenClaw,
+        location: McpLocationSupport::GlobalOnly,
+        kind: McpConfigKind::JsonNested {
+            outer: "mcp",
+            inner: "servers",
+            entry: openclaw_entry,
+        },
+        config_path: |_loc| openclaw_config_path(),
+        host_present: openclaw_host_present,
+    },
+    McpHostSpec {
+        provider: AgentProvider::Grok,
+        location: McpLocationSupport::GlobalOnly,
+        kind: McpConfigKind::Toml,
+        config_path: |_loc| grok_config_path(),
+        host_present: grok_host_present,
+    },
+    McpHostSpec {
+        provider: AgentProvider::Hermes,
+        location: McpLocationSupport::GlobalOnly,
+        kind: McpConfigKind::Yaml { key: "mcp_servers" },
+        config_path: |_loc| hermes_config_path(),
+        host_present: hermes_host_present,
+    },
+    McpHostSpec {
+        provider: AgentProvider::Pi,
+        location: McpLocationSupport::GlobalOnly,
+        kind: McpConfigKind::Json {
+            key: "mcpServers",
+            entry: pi_entry,
+        },
+        config_path: |_loc| pi_config_path(),
+        host_present: pi_host_present,
+    },
+];
+
+fn mcp_host(provider: AgentProvider) -> &'static McpHostSpec {
+    MCP_HOSTS
+        .iter()
+        .find(|host| host.provider == provider)
+        .unwrap_or_else(|| {
+            panic!(
+                "MCP host registry missing provider {}",
+                provider.command_name()
+            )
+        })
+}
 
 pub fn execute(command: McpCommand) -> Result<()> {
     match command.action {
@@ -54,72 +177,45 @@ fn uninstall(args: &McpInstallArgs) -> Result<()> {
 }
 
 fn install_target(target: AgentProvider, location: McpLocation) -> Result<()> {
-    match target {
-        AgentProvider::Claude => install_json(
-            claude_config_path(location),
-            "mcpServers",
-            claude_cursor_entry(),
-            target,
-        ),
-        AgentProvider::Cursor => install_json(
-            cursor_config_path(location),
-            "mcpServers",
-            claude_cursor_entry(),
-            target,
-        ),
-        AgentProvider::Codex => install_codex(location),
-        AgentProvider::OpenCode => install_json(
-            opencode_config_path(location),
-            "mcp",
-            opencode_entry(),
-            target,
-        ),
-        AgentProvider::Pi => {
-            if matches!(location, McpLocation::Local) {
-                bail!("pi only supports global install currently; use --location global");
-            }
-            install_json(pi_config_path(), "mcpServers", pi_entry(), target)
-        }
-        AgentProvider::Hermes => {
-            if matches!(location, McpLocation::Local) {
-                bail!("hermes only supports global install currently; use --location global");
-            }
-            install_hermes()
-        }
-        AgentProvider::OpenClaw => {
-            if matches!(location, McpLocation::Local) {
-                bail!("openclaw only supports global install currently; use --location global");
-            }
-            install_openclaw()
-        }
+    let host = mcp_host(target);
+    ensure_location_allowed(host, location, "install")?;
+    let path = (host.config_path)(location);
+    match host.kind {
+        McpConfigKind::Json { key, entry } => install_json(path, key, entry(), target),
+        McpConfigKind::Toml => install_toml(path, target),
+        McpConfigKind::Yaml { key } => install_yaml(path, key, target),
+        McpConfigKind::JsonNested {
+            outer,
+            inner,
+            entry,
+        } => install_json_nested(path, outer, inner, entry(), target),
     }
 }
 
 fn uninstall_target(target: AgentProvider, location: McpLocation) -> Result<()> {
-    match target {
-        AgentProvider::Claude => uninstall_json(claude_config_path(location), "mcpServers", target),
-        AgentProvider::Cursor => uninstall_json(cursor_config_path(location), "mcpServers", target),
-        AgentProvider::Codex => uninstall_codex(location),
-        AgentProvider::OpenCode => uninstall_json(opencode_config_path(location), "mcp", target),
-        AgentProvider::Pi => {
-            if matches!(location, McpLocation::Local) {
-                bail!("pi only supports global uninstall currently; use --location global");
-            }
-            uninstall_json(pi_config_path(), "mcpServers", target)
-        }
-        AgentProvider::Hermes => {
-            if matches!(location, McpLocation::Local) {
-                bail!("hermes only supports global uninstall currently; use --location global");
-            }
-            uninstall_hermes()
-        }
-        AgentProvider::OpenClaw => {
-            if matches!(location, McpLocation::Local) {
-                bail!("openclaw only supports global uninstall currently; use --location global");
-            }
-            uninstall_openclaw()
+    let host = mcp_host(target);
+    ensure_location_allowed(host, location, "uninstall")?;
+    let path = (host.config_path)(location);
+    match host.kind {
+        McpConfigKind::Json { key, .. } => uninstall_json(path, key, target),
+        McpConfigKind::Toml => uninstall_toml(path, target),
+        McpConfigKind::Yaml { key } => uninstall_yaml(path, key, target),
+        McpConfigKind::JsonNested { outer, inner, .. } => {
+            uninstall_json_nested(path, outer, inner, target)
         }
     }
+}
+
+fn ensure_location_allowed(host: &McpHostSpec, location: McpLocation, action: &str) -> Result<()> {
+    if matches!(host.location, McpLocationSupport::GlobalOnly)
+        && matches!(location, McpLocation::Local)
+    {
+        bail!(
+            "{} only supports global {action} currently; use --location global",
+            host.provider.command_name()
+        );
+    }
+    Ok(())
 }
 
 fn resolve_targets(providers: &[String]) -> Result<Vec<AgentProvider>> {
@@ -165,20 +261,16 @@ fn parse_target(value: &str) -> Result<AgentProvider> {
 }
 
 fn valid_target_list() -> String {
-    AgentProvider::all()
-        .iter()
-        .map(|spec| spec.command_name)
-        .collect::<Vec<_>>()
-        .join(", ")
+    AgentProvider::command_names_csv()
 }
 
 /// Agent hosts that appear installed (config dir / config file present).
 /// Does not imply sivtr MCP is registered. Used for install defaults and doctor.
 pub fn detected_hosts() -> Vec<AgentProvider> {
-    AgentProvider::all()
+    MCP_HOSTS
         .iter()
-        .map(|spec| spec.provider)
-        .filter(|provider| provider_config_exists(*provider))
+        .filter(|host| (host.host_present)())
+        .map(|host| host.provider)
         .collect()
 }
 
@@ -193,129 +285,56 @@ pub fn detect_targets() -> Vec<AgentProvider> {
 
 /// Hosts where sivtr MCP is actually present in config (not merely "host installed").
 pub fn registered_targets() -> Vec<AgentProvider> {
-    AgentProvider::all()
+    MCP_HOSTS
         .iter()
-        .map(|spec| spec.provider)
-        .filter(|provider| is_mcp_registered(*provider))
+        .filter(|host| is_mcp_registered(host))
+        .map(|host| host.provider)
         .collect()
 }
 
-fn is_mcp_registered(provider: AgentProvider) -> bool {
-    match provider {
-        AgentProvider::Claude => {
-            json_has_server(&claude_config_path(McpLocation::Global), "mcpServers")
-                || json_has_server(&claude_config_path(McpLocation::Local), "mcpServers")
+fn is_mcp_registered(host: &McpHostSpec) -> bool {
+    match host.location {
+        McpLocationSupport::GlobalOnly => config_has_server(host, McpLocation::Global),
+        McpLocationSupport::GlobalOrLocal => {
+            config_has_server(host, McpLocation::Global)
+                || config_has_server(host, McpLocation::Local)
         }
-        AgentProvider::Cursor => {
-            json_has_server(&cursor_config_path(McpLocation::Global), "mcpServers")
-                || json_has_server(&cursor_config_path(McpLocation::Local), "mcpServers")
-        }
-        AgentProvider::Codex => {
-            let path = codex_config_path();
-            path.exists()
-                && fs::read_to_string(&path)
-                    .map(|text| text.contains("[mcp_servers.sivtr]"))
-                    .unwrap_or(false)
-        }
-        AgentProvider::OpenCode => {
-            json_has_server(&opencode_config_path(McpLocation::Global), "mcp")
-                || json_has_server(&opencode_config_path(McpLocation::Local), "mcp")
-        }
-        AgentProvider::Pi => json_has_server(&pi_config_path(), "mcpServers"),
-        AgentProvider::Hermes => yaml_has_server(&hermes_config_path(), "mcp_servers"),
-        AgentProvider::OpenClaw => openclaw_has_server(&openclaw_config_path()),
     }
 }
 
-fn json_has_server(path: &Path, key: &str) -> bool {
-    let Ok(text) = fs::read_to_string(path) else {
-        return false;
-    };
-    let Ok(Value::Object(root)) = serde_json::from_str::<Value>(&text) else {
-        return false;
-    };
-    root.get(key)
-        .and_then(Value::as_object)
-        .is_some_and(|servers| servers.contains_key(SERVER_NAME))
-}
-
-fn yaml_has_server(path: &Path, key: &str) -> bool {
-    let Ok(text) = fs::read_to_string(path) else {
-        return false;
-    };
-    let Ok(root) = serde_yaml::from_str::<serde_yaml::Value>(&text) else {
-        return false;
-    };
-    root.get(key)
-        .and_then(serde_yaml::Value::as_mapping)
-        .is_some_and(|servers| {
-            servers.contains_key(serde_yaml::Value::String(SERVER_NAME.to_string()))
-        })
-}
-
-fn openclaw_has_server(path: &Path) -> bool {
-    let Ok(text) = fs::read_to_string(path) else {
-        return false;
-    };
-    let Ok(Value::Object(root)) = serde_json::from_str::<Value>(&text) else {
-        return false;
-    };
-    root.get("mcp")
-        .and_then(Value::as_object)
-        .and_then(|mcp| mcp.get("servers"))
-        .and_then(Value::as_object)
-        .is_some_and(|servers| servers.contains_key(SERVER_NAME))
-}
-
-fn provider_config_exists(provider: AgentProvider) -> bool {
-    match provider {
-        AgentProvider::Claude => {
-            claude_config_path(McpLocation::Global).exists()
-                || dirs::home_dir().is_some_and(|home| home.join(".claude").exists())
+fn config_has_server(host: &McpHostSpec, location: McpLocation) -> bool {
+    let path = (host.config_path)(location);
+    match host.kind {
+        McpConfigKind::Json { key, .. } => json_has_server(&path, key),
+        McpConfigKind::Toml => toml_has_server(&path),
+        McpConfigKind::Yaml { key } => yaml_has_server(&path, key),
+        McpConfigKind::JsonNested { outer, inner, .. } => {
+            json_nested_has_server(&path, outer, inner)
         }
-        AgentProvider::Cursor => {
-            cursor_config_path(McpLocation::Global).exists()
-                || dirs::home_dir().is_some_and(|home| home.join(".cursor").exists())
-        }
-        AgentProvider::Codex => codex_config_path().exists(),
-        AgentProvider::OpenCode => {
-            opencode_config_path(McpLocation::Global).exists()
-                || node_config_dir().join("opencode").exists()
-        }
-        AgentProvider::Pi => pi_config_path().exists() || pi_home().exists(),
-        AgentProvider::Hermes => hermes_config_path().exists() || hermes_home().exists(),
-        AgentProvider::OpenClaw => openclaw_config_path().exists() || openclaw_home().exists(),
     }
 }
 
 fn print_config(target: AgentProvider) {
-    match target {
-        AgentProvider::Claude => print_json_config(
-            claude_config_path(McpLocation::Global),
-            "mcpServers",
-            claude_cursor_entry(),
-        ),
-        AgentProvider::Cursor => print_json_config(
-            cursor_config_path(McpLocation::Global),
-            "mcpServers",
-            claude_cursor_entry(),
-        ),
-        AgentProvider::Codex => {
-            let path = codex_config_path();
-            output::info(format!("Add to {}", path.display()));
-            println!();
-            println!("{}", codex_toml_snippet());
+    let host = mcp_host(target);
+    let path = (host.config_path)(McpLocation::Global);
+    output::info(format!("Add to {}", path.display()));
+    println!();
+    match host.kind {
+        McpConfigKind::Json { key, entry } => {
+            let mut root = Map::new();
+            root.insert(key.to_string(), Value::Object(Map::new()));
+            if let Some(Value::Object(servers)) = root.get_mut(key) {
+                servers.insert(SERVER_NAME.to_string(), entry());
+            }
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&Value::Object(root)).unwrap_or_default()
+            );
         }
-        AgentProvider::OpenCode => print_json_config(
-            opencode_config_path(McpLocation::Global),
-            "mcp",
-            opencode_entry(),
-        ),
-        AgentProvider::Pi => print_json_config(pi_config_path(), "mcpServers", pi_entry()),
-        AgentProvider::Hermes => {
-            let path = hermes_config_path();
-            output::info(format!("Add to {}", path.display()));
-            println!();
+        McpConfigKind::Toml => {
+            println!("{}", toml_mcp_snippet());
+        }
+        McpConfigKind::Yaml { key } => {
             let mut root = serde_yaml::Mapping::new();
             let mut servers = serde_yaml::Mapping::new();
             servers.insert(
@@ -323,35 +342,29 @@ fn print_config(target: AgentProvider) {
                 hermes_entry(),
             );
             root.insert(
-                serde_yaml::Value::String("mcp_servers".to_string()),
+                serde_yaml::Value::String(key.to_string()),
                 serde_yaml::Value::Mapping(servers),
             );
             println!("{}", serde_yaml::to_string(&root).unwrap_or_default());
         }
-        AgentProvider::OpenClaw => {
-            let path = openclaw_config_path();
-            output::info(format!("Add to {}", path.display()));
-            println!();
+        McpConfigKind::JsonNested {
+            outer,
+            inner,
+            entry,
+        } => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&openclaw_print_config()).unwrap_or_default()
+                serde_json::to_string_pretty(&json!({
+                    outer: {
+                        inner: {
+                            SERVER_NAME: entry(),
+                        }
+                    }
+                }))
+                .unwrap_or_default()
             );
         }
     }
-}
-
-fn print_json_config(path: PathBuf, key: &str, entry: Value) {
-    output::info(format!("Add to {}", path.display()));
-    println!();
-    let mut root = Map::new();
-    root.insert(key.to_string(), Value::Object(Map::new()));
-    if let Some(Value::Object(servers)) = root.get_mut(key) {
-        servers.insert(SERVER_NAME.to_string(), entry);
-    }
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&Value::Object(root)).unwrap_or_default()
-    );
 }
 
 fn install_json(path: PathBuf, key: &str, entry: Value, provider: AgentProvider) -> Result<()> {
@@ -359,11 +372,7 @@ fn install_json(path: PathBuf, key: &str, entry: Value, provider: AgentProvider)
     let servers = ensure_object(&mut root, key)?;
     servers.insert(SERVER_NAME.to_string(), entry);
     write_json(&path, &Value::Object(root))?;
-    output::success(format!(
-        "installed MCP server for {} into {}",
-        provider.name(),
-        path.display()
-    ));
+    report_installed(provider, &path);
     Ok(())
 }
 
@@ -376,11 +385,7 @@ fn uninstall_json(path: PathBuf, key: &str, provider: AgentProvider) -> Result<(
     if let Some(Value::Object(servers)) = root.get_mut(key) {
         if servers.remove(SERVER_NAME).is_some() {
             write_json(&path, &Value::Object(root))?;
-            output::success(format!(
-                "removed MCP server for {} from {}",
-                provider.name(),
-                path.display()
-            ));
+            report_removed(provider, &path);
             return Ok(());
         }
     }
@@ -388,66 +393,48 @@ fn uninstall_json(path: PathBuf, key: &str, provider: AgentProvider) -> Result<(
     Ok(())
 }
 
-fn install_codex(location: McpLocation) -> Result<()> {
-    let provider = AgentProvider::Codex;
-    if matches!(location, McpLocation::Local) {
-        bail!("codex only supports global install currently; use --location global");
-    }
-    let path = codex_config_path();
+fn install_toml(path: PathBuf, provider: AgentProvider) -> Result<()> {
     let mut text = if path.exists() {
         fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))?
     } else {
         String::new()
     };
-    remove_codex_block(&mut text);
+    remove_toml_mcp_block(&mut text);
     if !text.ends_with('\n') && !text.is_empty() {
         text.push('\n');
     }
     if !text.is_empty() {
         text.push('\n');
     }
-    text.push_str(&codex_toml_snippet());
+    text.push_str(&toml_mcp_snippet());
     text.push('\n');
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create {}", parent.display()))?;
-    }
-    fs::write(&path, text).with_context(|| format!("Failed to write {}", path.display()))?;
-    output::success(format!(
-        "installed MCP server for {} into {}",
-        provider.name(),
-        path.display()
-    ));
+    write_text(&path, &text)?;
+    report_installed(provider, &path);
     Ok(())
 }
 
-fn uninstall_codex(location: McpLocation) -> Result<()> {
-    let provider = AgentProvider::Codex;
-    if matches!(location, McpLocation::Local) {
-        bail!("codex only supports global uninstall currently; use --location global");
-    }
-    let path = codex_config_path();
+fn uninstall_toml(path: PathBuf, provider: AgentProvider) -> Result<()> {
     if !path.exists() {
-        output::info(format!("no Codex config at {}", path.display()));
+        output::info(format!(
+            "no {} config at {}",
+            provider.name(),
+            path.display()
+        ));
         return Ok(());
     }
     let mut text =
         fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))?;
-    if !remove_codex_block(&mut text) {
+    if !remove_toml_mcp_block(&mut text) {
         output::info(format!("sivtr MCP was not installed in {}", path.display()));
         return Ok(());
     }
-    fs::write(&path, text).with_context(|| format!("Failed to write {}", path.display()))?;
-    output::success(format!(
-        "removed MCP server for {} from {}",
-        provider.name(),
-        path.display()
-    ));
+    write_text(&path, &text)?;
+    report_removed(provider, &path);
     Ok(())
 }
 
-fn remove_codex_block(text: &mut String) -> bool {
-    let marker = "[mcp_servers.sivtr]";
+fn remove_toml_mcp_block(text: &mut String) -> bool {
+    let marker = TOML_MCP_MARKER;
     let Some(start) = text.find(marker) else {
         return false;
     };
@@ -465,9 +452,7 @@ fn remove_codex_block(text: &mut String) -> bool {
     true
 }
 
-fn install_hermes() -> Result<()> {
-    let provider = AgentProvider::Hermes;
-    let path = hermes_config_path();
+fn install_yaml(path: PathBuf, key: &str, provider: AgentProvider) -> Result<()> {
     let mut root: serde_yaml::Value = if path.exists() {
         let text = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
@@ -481,82 +466,76 @@ fn install_hermes() -> Result<()> {
         serde_yaml::Value::Mapping(Default::default())
     };
 
-    let servers = ensure_yaml_mapping(&mut root, "mcp_servers")?;
+    let servers = ensure_yaml_mapping(&mut root, key)?;
     servers.insert(
         serde_yaml::Value::String(SERVER_NAME.to_string()),
         hermes_entry(),
     );
 
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create {}", parent.display()))?;
-    }
     let text = serde_yaml::to_string(&root)?;
-    fs::write(&path, text).with_context(|| format!("Failed to write {}", path.display()))?;
-    output::success(format!(
-        "installed MCP server for {} into {}",
-        provider.name(),
-        path.display()
-    ));
+    write_text(&path, &text)?;
+    report_installed(provider, &path);
     Ok(())
 }
 
-fn uninstall_hermes() -> Result<()> {
-    let provider = AgentProvider::Hermes;
-    let path = hermes_config_path();
+fn uninstall_yaml(path: PathBuf, key: &str, provider: AgentProvider) -> Result<()> {
     if !path.exists() {
-        output::info(format!("no Hermes config at {}", path.display()));
+        output::info(format!(
+            "no {} config at {}",
+            provider.name(),
+            path.display()
+        ));
         return Ok(());
     }
     let text =
         fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))?;
     let mut root: serde_yaml::Value = serde_yaml::from_str(&text)
         .with_context(|| format!("Failed to parse YAML at {}", path.display()))?;
-    let removed = remove_yaml_server(&mut root, "mcp_servers", SERVER_NAME);
-    if !removed {
+    if !remove_yaml_server(&mut root, key, SERVER_NAME) {
         output::info(format!("sivtr MCP was not installed in {}", path.display()));
         return Ok(());
     }
     let text = serde_yaml::to_string(&root)?;
-    fs::write(&path, text).with_context(|| format!("Failed to write {}", path.display()))?;
-    output::success(format!(
-        "removed MCP server for {} from {}",
-        provider.name(),
-        path.display()
-    ));
+    write_text(&path, &text)?;
+    report_removed(provider, &path);
     Ok(())
 }
 
-/// OpenClaw stores MCP servers under nested `mcp.servers` in openclaw.json.
-/// See https://docs.openclaw.ai/gateway/configuration-reference
-fn install_openclaw() -> Result<()> {
-    let provider = AgentProvider::OpenClaw;
-    let path = openclaw_config_path();
+fn install_json_nested(
+    path: PathBuf,
+    outer: &str,
+    inner: &str,
+    entry: Value,
+    provider: AgentProvider,
+) -> Result<()> {
     let mut root = read_json_object(&path)?;
-    let mcp = ensure_object(&mut root, "mcp")?;
-    let servers = ensure_object(mcp, "servers")?;
-    servers.insert(SERVER_NAME.to_string(), openclaw_entry());
+    let outer_obj = ensure_object(&mut root, outer)?;
+    let servers = ensure_object(outer_obj, inner)?;
+    servers.insert(SERVER_NAME.to_string(), entry);
     write_json(&path, &Value::Object(root))?;
-    output::success(format!(
-        "installed MCP server for {} into {}",
-        provider.name(),
-        path.display()
-    ));
+    report_installed(provider, &path);
     Ok(())
 }
 
-fn uninstall_openclaw() -> Result<()> {
-    let provider = AgentProvider::OpenClaw;
-    let path = openclaw_config_path();
+fn uninstall_json_nested(
+    path: PathBuf,
+    outer: &str,
+    inner: &str,
+    provider: AgentProvider,
+) -> Result<()> {
     if !path.exists() {
-        output::info(format!("no OpenClaw config at {}", path.display()));
+        output::info(format!(
+            "no {} config at {}",
+            provider.name(),
+            path.display()
+        ));
         return Ok(());
     }
     let mut root = read_json_object(&path)?;
     let removed = root
-        .get_mut("mcp")
-        .and_then(|mcp| mcp.as_object_mut())
-        .and_then(|mcp| mcp.get_mut("servers"))
+        .get_mut(outer)
+        .and_then(|value| value.as_object_mut())
+        .and_then(|value| value.get_mut(inner))
         .and_then(|servers| servers.as_object_mut())
         .and_then(|servers| servers.remove(SERVER_NAME))
         .is_some();
@@ -565,12 +544,24 @@ fn uninstall_openclaw() -> Result<()> {
         return Ok(());
     }
     write_json(&path, &Value::Object(root))?;
+    report_removed(provider, &path);
+    Ok(())
+}
+
+fn report_installed(provider: AgentProvider, path: &Path) {
+    output::success(format!(
+        "installed MCP server for {} into {}",
+        provider.name(),
+        path.display()
+    ));
+}
+
+fn report_removed(provider: AgentProvider, path: &Path) {
     output::success(format!(
         "removed MCP server for {} from {}",
         provider.name(),
         path.display()
     ));
-    Ok(())
 }
 
 fn claude_cursor_entry() -> Value {
@@ -605,18 +596,8 @@ fn openclaw_entry() -> Value {
     })
 }
 
-fn openclaw_print_config() -> Value {
-    json!({
-        "mcp": {
-            "servers": {
-                SERVER_NAME: openclaw_entry(),
-            }
-        }
-    })
-}
-
-fn codex_toml_snippet() -> String {
-    format!("[mcp_servers.{SERVER_NAME}]\ncommand = \"sivtr\"\nargs = [\"mcp\", \"serve\"]\n")
+fn toml_mcp_snippet() -> String {
+    format!("{TOML_MCP_MARKER}\ncommand = \"sivtr\"\nargs = [\"mcp\", \"serve\"]\n")
 }
 
 fn hermes_entry() -> serde_yaml::Value {
@@ -636,6 +617,53 @@ fn hermes_entry() -> serde_yaml::Value {
     serde_yaml::Value::Mapping(entry)
 }
 
+fn json_has_server(path: &Path, key: &str) -> bool {
+    let Ok(text) = fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(Value::Object(root)) = serde_json::from_str::<Value>(&text) else {
+        return false;
+    };
+    root.get(key)
+        .and_then(Value::as_object)
+        .is_some_and(|servers| servers.contains_key(SERVER_NAME))
+}
+
+fn toml_has_server(path: &Path) -> bool {
+    path.exists()
+        && fs::read_to_string(path)
+            .map(|text| text.contains(TOML_MCP_MARKER))
+            .unwrap_or(false)
+}
+
+fn yaml_has_server(path: &Path, key: &str) -> bool {
+    let Ok(text) = fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(root) = serde_yaml::from_str::<serde_yaml::Value>(&text) else {
+        return false;
+    };
+    root.get(key)
+        .and_then(serde_yaml::Value::as_mapping)
+        .is_some_and(|servers| {
+            servers.contains_key(serde_yaml::Value::String(SERVER_NAME.to_string()))
+        })
+}
+
+fn json_nested_has_server(path: &Path, outer: &str, inner: &str) -> bool {
+    let Ok(text) = fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(Value::Object(root)) = serde_json::from_str::<Value>(&text) else {
+        return false;
+    };
+    root.get(outer)
+        .and_then(Value::as_object)
+        .and_then(|value| value.get(inner))
+        .and_then(Value::as_object)
+        .is_some_and(|servers| servers.contains_key(SERVER_NAME))
+}
+
 fn ensure_yaml_mapping<'a>(
     root: &'a mut serde_yaml::Value,
     key: &str,
@@ -648,7 +676,7 @@ fn ensure_yaml_mapping<'a>(
             );
         }
     } else {
-        bail!("Hermes config root must be a YAML mapping");
+        bail!("config root must be a YAML mapping");
     }
     match root.get_mut(serde_yaml::Value::String(key.to_string())) {
         Some(serde_yaml::Value::Mapping(map)) => Ok(map),
@@ -754,12 +782,47 @@ fn hermes_config_path() -> PathBuf {
     hermes_home().join("config.yaml")
 }
 
-fn openclaw_home() -> PathBuf {
-    sivtr_core::agents::openclaw::openclaw_home()
+fn grok_config_path() -> PathBuf {
+    sivtr_core::agents::grok::grok_config_path()
 }
 
 fn openclaw_config_path() -> PathBuf {
     sivtr_core::agents::openclaw::openclaw_config_path()
+}
+
+fn claude_host_present() -> bool {
+    claude_config_path(McpLocation::Global).exists()
+        || dirs::home_dir().is_some_and(|home| home.join(".claude").exists())
+}
+
+fn cursor_host_present() -> bool {
+    cursor_config_path(McpLocation::Global).exists()
+        || dirs::home_dir().is_some_and(|home| home.join(".cursor").exists())
+}
+
+fn codex_host_present() -> bool {
+    codex_config_path().exists()
+}
+
+fn opencode_host_present() -> bool {
+    opencode_config_path(McpLocation::Global).exists()
+        || node_config_dir().join("opencode").exists()
+}
+
+fn pi_host_present() -> bool {
+    pi_config_path().exists() || pi_home().exists()
+}
+
+fn hermes_host_present() -> bool {
+    hermes_config_path().exists() || hermes_home().exists()
+}
+
+fn openclaw_host_present() -> bool {
+    openclaw_config_path().exists() || sivtr_core::agents::openclaw::openclaw_home().exists()
+}
+
+fn grok_host_present() -> bool {
+    grok_config_path().exists() || sivtr_core::agents::grok::grok_home().exists()
 }
 
 fn read_json_object(path: &Path) -> Result<Map<String, Value>> {
@@ -794,13 +857,15 @@ fn ensure_object<'a>(
 }
 
 fn write_json(path: &Path, value: &Value) -> Result<()> {
+    write_text(path, &format!("{}\n", serde_json::to_string_pretty(value)?))
+}
+
+fn write_text(path: &Path, text: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create {}", parent.display()))?;
     }
-    let text = serde_json::to_string_pretty(value)?;
-    fs::write(path, format!("{text}\n"))
-        .with_context(|| format!("Failed to write {}", path.display()))
+    fs::write(path, text).with_context(|| format!("Failed to write {}", path.display()))
 }
 
 #[cfg(test)]
@@ -832,11 +897,20 @@ mod tests {
     }
 
     #[test]
-    fn removes_codex_block() {
+    fn mcp_host_registry_covers_every_provider() {
+        for spec in AgentProvider::all() {
+            let host = mcp_host(spec.provider);
+            assert_eq!(host.provider, spec.provider);
+        }
+        assert_eq!(MCP_HOSTS.len(), AgentProvider::all().len());
+    }
+
+    #[test]
+    fn removes_toml_mcp_block() {
         let mut text = String::from(
             "[mcp_servers.context7]\ncommand = \"x\"\n\n[mcp_servers.sivtr]\ncommand = \"sivtr\"\nargs = [\"mcp\", \"serve\"]\n\n[other]\na = 1\n",
         );
-        assert!(remove_codex_block(&mut text));
+        assert!(remove_toml_mcp_block(&mut text));
         assert!(!text.contains("mcp_servers.sivtr"));
         assert!(text.contains("mcp_servers.context7"));
         assert!(text.contains("[other]"));

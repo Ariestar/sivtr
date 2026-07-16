@@ -34,9 +34,7 @@ impl WorkRecordIndex {
 
     pub fn resolve(&self, reference: &WorkRef) -> Option<&WorkRecord> {
         let whole = reference.whole();
-        self.records
-            .iter()
-            .find(|record| record.work_ref == whole)
+        self.records.iter().find(|record| record.work_ref == whole)
     }
 
     pub fn resolve_part(&self, reference: &WorkRef) -> Option<&WorkPart> {

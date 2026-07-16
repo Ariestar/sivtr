@@ -19,15 +19,15 @@ pub enum McpAction {
 
     /// Print MCP config snippet without writing files
     PrintConfig {
-        /// Target agent id: claude, cursor, codex, opencode, openclaw, pi, hermes
+        /// Target agent command name (see `AgentProvider::command_names()`)
         target: String,
     },
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct McpInstallArgs {
-    /// Provider host(s) to inject (comma-separated or repeated):
-    /// claude, cursor, codex, opencode, openclaw, pi, hermes, all.
+    /// Provider host(s) to inject (comma-separated or repeated).
+    /// Use registered command names, or `all`.
     /// Default: detect installed hosts.
     #[arg(
         short = 'p',

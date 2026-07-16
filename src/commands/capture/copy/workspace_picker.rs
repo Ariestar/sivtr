@@ -22,7 +22,7 @@ use crate::tui::workspace_search::{
     workspace_search_has_query, workspace_search_scope, WorkspaceSearchIndex, WorkspaceSearchMatch,
     WorkspaceSearchOutput,
 };
-use sivtr_core::record::{WorkRef, WorkAt};
+use sivtr_core::record::{WorkAt, WorkRef};
 
 use super::vim::{open_vim_view, VimBlock, VimView};
 use super::{
@@ -142,11 +142,11 @@ pub(super) fn run_workspace_picker_on_terminal(
         }
         if let Some(matched) = pending_match {
             if let Some(dialogue) = dialogues.get(dialogue_idx) {
-                content_scroll = matched
-                    .content_scroll_index()
-                    .min(dialogue
+                content_scroll = matched.content_scroll_index().min(
+                    dialogue
                         .content_line_count(content_mode, None)
-                        .saturating_sub(1));
+                        .saturating_sub(1),
+                );
             } else {
                 content_scroll = 0;
             }
@@ -1841,9 +1841,7 @@ fn workspace_picked_content_for_copy_with_line_filter(
         .into_iter()
         .filter_map(|idx| dialogues.get(idx))
         .map(|dialogue| match shortcut {
-            WorkspaceCopyShortcut::Displayed => {
-                dialogue.display_unit(content_mode, display_target)
-            }
+            WorkspaceCopyShortcut::Displayed => dialogue.display_unit(content_mode, display_target),
             WorkspaceCopyShortcut::Input => dialogue.copy.input.clone(),
             WorkspaceCopyShortcut::Output => dialogue.copy.output.clone(),
             WorkspaceCopyShortcut::Block => dialogue.copy.block.clone(),
@@ -2300,11 +2298,11 @@ mod tests {
         WorkspaceCopyShortcut,
     };
     use crate::commands::capture::command_block_selector::CommandSelection;
+    use crate::tui::content_view::ContentViewMode;
     use crate::tui::workspace::{
         TextPair, WorkspaceCopyParts, WorkspaceDialogue, WorkspaceFocus, WorkspaceSession,
         WorkspaceSource,
     };
-    use crate::tui::content_view::ContentViewMode;
     use crate::tui::workspace_search::{
         workspace_search_query, workspace_search_regex, WorkspaceSearchIndex, WorkspaceSearchMatch,
         WorkspaceSearchScope,
@@ -2312,11 +2310,11 @@ mod tests {
     use crossterm::event::KeyCode;
     use ratatui::widgets::ListState;
     use sivtr_core::ai::AgentProvider;
+    use sivtr_core::record::{WorkAt, WorkRef};
     use sivtr_core::record::{
         WorkChannel, WorkPart, WorkPartIo, WorkPartKind, WorkRecord, WorkRecordKind,
         WorkSessionRef, WorkSource, WorkTime, RECORD_SCHEMA_VERSION,
     };
-    use sivtr_core::record::{WorkRef, WorkAt};
     use std::time::SystemTime;
 
     #[test]
@@ -2334,7 +2332,9 @@ mod tests {
 
         assert_eq!(dialogues.len(), 1);
         assert_eq!(dialogues[0].title, "o1");
-        assert!(dialogues[0].content_text(ContentViewMode::Reading, None).contains("old:o1"));
+        assert!(dialogues[0]
+            .content_text(ContentViewMode::Reading, None)
+            .contains("old:o1"));
         assert_eq!(
             dialogues[0].work_ref.as_ref().unwrap().to_string(),
             "claude/test/1"
@@ -2808,7 +2808,10 @@ mod tests {
 
     #[test]
     fn workspace_line_filter_applies_to_displayed_and_structured_copies() {
-        let dialogues = vec![workspace_test_dialogue("question", "line 1\nline 2\nline 3")];
+        let dialogues = vec![workspace_test_dialogue(
+            "question",
+            "line 1\nline 2\nline 3",
+        )];
         // Override structured copy parts for input shortcut filtering.
         let mut dialogues = dialogues;
         dialogues[0].copy = WorkspaceCopyParts {
@@ -3089,5 +3092,4 @@ mod tests {
             copy: WorkspaceCopyParts::from_block(pair),
         }
     }
-
 }

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**sivtr** is a terminal output workspace that captures, browses, searches, and reuses terminal command output and AI coding assistant sessions. Agent providers are registry-driven (Codex, Claude Code, Cursor, OpenCode, OpenClaw, Hermes, Pi, …) and four shells (Bash, Zsh, PowerShell, Nushell). Cross-device remote memory uses a local daemon with Share/Grant/Mount over encrypted iroh transport.
+**sivtr** is a terminal output workspace that captures, browses, searches, and reuses terminal command output and AI coding assistant sessions. Agent providers are registry-driven (Codex, Claude Code, Cursor, OpenCode, OpenClaw, Grok, Hermes, Pi, …) and four shells (Bash, Zsh, PowerShell, Nushell). Cross-device remote memory uses a local daemon with Share/Grant/Mount over encrypted iroh transport.
 
 Architecture: CLI binary (`src/`) wrapping a core library (`crates/sivtr-core/`). Clap-based subcommands for copy, search, show, work, filter, var, nav, zoom, init, diff, hotkey, doctor, serve, share, remote, peer, and workspace. TUI mode for browse/search views.
 
@@ -28,7 +28,7 @@ cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && carg
 crates/sivtr-core/src/     ← Core library (no CLI deps)
   agents/                  ← AgentProvider registry + per-provider parsers
     mod.rs / model.rs / jsonl.rs / sqlite.rs
-    claude.rs / codex.rs / cursor.rs / hermes.rs / openclaw.rs / opencode.rs / pi.rs
+    claude.rs / codex.rs / cursor.rs / grok.rs / hermes.rs / openclaw.rs / opencode.rs / pi.rs
   record/
     model.rs               ← WorkRecord, WorkPart, WorkTime (canonical model)
     refs.rs                ← WorkRef parsing (local body + origin:body remote form)

@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use sivtr_core::record::{WorkPartIo, WorkRecord, WorkRef, WorkPath, WorkAt};
+use sivtr_core::record::{WorkAt, WorkPartIo, WorkPath, WorkRecord, WorkRef};
 
 use crate::cli::NavArgs;
 use crate::commands::memory::show;
@@ -244,9 +244,7 @@ fn same_stream(left: &WorkRecord, right: &WorkRecord) -> bool {
                 provider: right_provider,
                 ..
             },
-        ) => {
-            left_provider == right_provider && left.work_ref.session() == right.work_ref.session()
-        }
+        ) => left_provider == right_provider && left.work_ref.session() == right.work_ref.session(),
         _ => false,
     }
 }
@@ -432,22 +430,10 @@ mod tests {
     fn child_index_is_deterministic_not_expand() {
         let records = vec![test_record(1)];
         assert_refs(
-            navigate(
-                &records,
-                &[records[0].work_ref.whole()],
-                &records,
-                ">3",
-            )
-            .expect("child"),
+            navigate(&records, &[records[0].work_ref.whole()], &records, ">3").expect("child"),
             &["terminal/session_1/1/o/2"],
         );
-        assert!(navigate(
-            &records,
-            &[records[0].work_ref.whole()],
-            &records,
-            ">0"
-        )
-        .is_err());
+        assert!(navigate(&records, &[records[0].work_ref.whole()], &records, ">0").is_err());
     }
 
     #[test]

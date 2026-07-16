@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use anyhow::{Context, Result};
-use sivtr_core::record::{WorkRecord, WorkRef, WorkPath};
+use sivtr_core::record::{WorkPath, WorkRecord, WorkRef};
 
 use crate::cli::ZoomArgs;
 use crate::commands::memory::show;
@@ -101,9 +101,7 @@ fn same_stream(left: &WorkRecord, right: &WorkRecord) -> bool {
                 provider: right_provider,
                 ..
             },
-        ) => {
-            left_provider == right_provider && left.work_ref.session() == right.work_ref.session()
-        }
+        ) => left_provider == right_provider && left.work_ref.session() == right.work_ref.session(),
         _ => false,
     }
 }

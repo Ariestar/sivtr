@@ -11,6 +11,7 @@ pub enum AgentProvider {
     Claude,
     Codex,
     Cursor,
+    Grok,
     Hermes,
     OpenClaw,
     OpenCode,

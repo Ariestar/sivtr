@@ -1416,8 +1416,8 @@ mod tests {
             0,
         )
         .unwrap();
-        let reference = WorkRef::terminal("current", 1)
-            .with_part(sivtr_core::record::WorkPartIo::Output, 1);
+        let reference =
+            WorkRef::terminal("current", 1).with_part(sivtr_core::record::WorkPartIo::Output, 1);
 
         let text = ref_text_pair(&record, &reference, "terminal/current/1/o/1").unwrap();
 

@@ -1,13 +1,14 @@
 //! Agent session providers and shared parsing skeletons.
 //!
 //! - [`model`]: shared session/block types and trait
-//! - [`jsonl`]: JSONL discovery/parsing helpers (Claude/Codex/Hermes/Pi)
+//! - [`jsonl`]: JSONL discovery/parsing helpers (Claude/Codex/Hermes/Grok/Pi)
 //! - [`sqlite`]: readonly SQLite helpers (OpenCode/OpenClaw)
 //! - per-provider modules keep only storage paths + schema mapping
 
 pub mod claude;
 pub mod codex;
 pub mod cursor;
+pub mod grok;
 pub mod hermes;
 pub mod jsonl;
 pub mod model;
@@ -72,6 +73,14 @@ const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
         factory: openclaw_provider,
     },
     AgentProviderSpec {
+        provider: AgentProvider::Grok,
+        name: "Grok",
+        command_name: "grok",
+        current_transcript_env: None,
+        current_session_id_env: None,
+        factory: grok_provider,
+    },
+    AgentProviderSpec {
         provider: AgentProvider::Hermes,
         name: "Hermes",
         command_name: "hermes",
@@ -107,6 +116,10 @@ fn opencode_provider() -> Box<dyn AgentSessionProvider> {
 
 fn openclaw_provider() -> Box<dyn AgentSessionProvider> {
     Box::new(crate::agents::openclaw::OpenClawProvider)
+}
+
+fn grok_provider() -> Box<dyn AgentSessionProvider> {
+    Box::new(crate::agents::grok::GrokProvider)
 }
 
 fn hermes_provider() -> Box<dyn AgentSessionProvider> {

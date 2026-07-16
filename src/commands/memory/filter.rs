@@ -6,8 +6,7 @@ use chrono::Utc;
 use regex::Regex;
 use sivtr_core::ai::{AgentProvider, AgentSessionProvider};
 use sivtr_core::record::{
-    WorkOutcome, WorkPart, WorkPartIo, WorkPartKind, WorkRecord, WorkRecordKind, WorkRef,
-    WorkAt,
+    WorkAt, WorkOutcome, WorkPart, WorkPartIo, WorkPartKind, WorkRecord, WorkRecordKind, WorkRef,
 };
 
 use crate::cli::{

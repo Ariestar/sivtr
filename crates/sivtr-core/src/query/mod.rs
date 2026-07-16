@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::ai::{AgentProvider, AgentSessionProvider};
-use crate::record::{WorkRecord, WorkRecordIndex, WorkRef, WorkPath, WorkRefSelector};
+use crate::record::{WorkPath, WorkRecord, WorkRecordIndex, WorkRef, WorkRefSelector};
 use crate::{session, workspace};
 
 /// A session file that could not be parsed, retained so callers can warn.

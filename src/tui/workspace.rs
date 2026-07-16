@@ -17,7 +17,7 @@ use crate::tui::pane::{
 };
 use crate::tui::workspace_search::{workspace_search_regex_for_query, WorkspaceSearchScope};
 use sivtr_core::ai::{AgentProvider, AgentSelection};
-use sivtr_core::record::{WorkRecord, WorkRef, WorkAt};
+use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WorkspaceSource {
@@ -29,12 +29,7 @@ impl WorkspaceSource {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Terminal => "terminal",
-            Self::Agent(provider) => match provider.command_name() {
-                "claude" => "claude",
-                "codex" => "codex",
-                "opencode" => "opencode",
-                _ => provider.command_name(),
-            },
+            Self::Agent(provider) => provider.command_name(),
         }
     }
 
@@ -112,11 +107,7 @@ pub(crate) struct WorkspaceDialogue {
 impl WorkspaceDialogue {
     /// Text used for copy shortcuts / vim on the currently displayed content.
     /// Always derived from `record.parts` when present — never a stale cache.
-    pub(crate) fn display_unit(
-        &self,
-        mode: ContentViewMode,
-        target: Option<WorkAt>,
-    ) -> TextPair {
+    pub(crate) fn display_unit(&self, mode: ContentViewMode, target: Option<WorkAt>) -> TextPair {
         let plain = self.content_text(mode, target);
         TextPair {
             ansi: plain.clone(),
@@ -124,11 +115,7 @@ impl WorkspaceDialogue {
         }
     }
 
-    pub(crate) fn content_text(
-        &self,
-        mode: ContentViewMode,
-        target: Option<WorkAt>,
-    ) -> String {
+    pub(crate) fn content_text(&self, mode: ContentViewMode, target: Option<WorkAt>) -> String {
         if let Some(target @ WorkAt::Part { .. }) = target {
             return match mode {
                 ContentViewMode::Raw => self
@@ -621,7 +608,8 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
         },
         WorkspaceHelpEntry {
             key: "r (Content)",
-            description: "toggle fold/full structure display (read folds tools/skills/thinking; raw expands)",
+            description:
+                "toggle fold/full structure display (read folds tools/skills/thinking; raw expands)",
             action: WorkspaceHelpAction::ToggleContentMode,
         },
         WorkspaceHelpEntry {
@@ -1363,7 +1351,7 @@ mod tests {
     };
     use crate::tui::workspace_search::WorkspaceSearchScope;
     use sivtr_core::ai::AgentProvider;
-    use sivtr_core::record::{WorkRecord, WorkRef, WorkAt};
+    use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
 
     #[test]
     fn can_open_dialogue_vim_accepts_sessions_when_dialogues_exist() {
@@ -1604,8 +1592,13 @@ mod tests {
             copy: WorkspaceCopyParts::default(),
         };
 
-        let reading =
-            workspace_content_text(std::slice::from_ref(&dialogue), &[false], 0, ContentViewMode::Reading, None);
+        let reading = workspace_content_text(
+            std::slice::from_ref(&dialogue),
+            &[false],
+            0,
+            ContentViewMode::Reading,
+            None,
+        );
         assert!(reading.contains("question"));
         assert!(reading.contains("<:tool:Bash call:>"));
         assert!(reading.contains("<:tool:Bash result:>"));

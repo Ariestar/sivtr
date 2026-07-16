@@ -25,9 +25,7 @@ pub fn expand_source(raw: &str, aliases: &BTreeMap<String, String>) -> Result<St
         bail!("source `{raw}` is missing a path after `:`");
     }
     if right.starts_with('/') {
-        bail!(
-            "Invalid source `{raw}`; use `scope:path` (for example `desk:terminal`), not `://`"
-        );
+        bail!("Invalid source `{raw}`; use `scope:path` (for example `desk:terminal`), not `://`");
     }
 
     let scope = resolve_scope_token(left.trim(), aliases)?;
@@ -60,9 +58,7 @@ pub fn resolve_alias(name: &str, aliases: &BTreeMap<String, String>) -> Result<S
         bail!("empty alias name");
     }
     aliases.get(&name).cloned().ok_or_else(|| {
-        anyhow::anyhow!(
-            "unknown alias `&{name}`; set with `sivtr alias set {name} <scope>`"
-        )
+        anyhow::anyhow!("unknown alias `&{name}`; set with `sivtr alias set {name} <scope>`")
     })
 }
 
