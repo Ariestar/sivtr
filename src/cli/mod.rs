@@ -670,12 +670,6 @@ pub enum Commands {
     /// Manage scope short aliases (`&name` → full scope)
     Alias(AliasCommand),
 
-    /// Set default scope/source for the current workspace
-    Use(UseCommand),
-
-    /// Show default scope/source and configured aliases
-    Context(ContextCommand),
-
     /// Manage configuration
     Config(ConfigCommand),
 
@@ -2689,19 +2683,6 @@ pub enum AliasSubcommand {
         name: String,
     },
 }
-
-#[derive(Parser, Debug)]
-pub struct UseCommand {
-    /// Scope, optional source: `desk`, `&ahs`, `ahs:claude`, `local:terminal`
-    #[arg(value_name = "SCOPE[:SOURCE]")]
-    pub spec: Option<String>,
-    /// Clear workspace context (back to bare local)
-    #[arg(long)]
-    pub clear: bool,
-}
-
-#[derive(Parser, Debug)]
-pub struct ContextCommand {}
 
 #[derive(Parser, Debug)]
 pub struct HistoryCommand {

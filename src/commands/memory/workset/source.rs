@@ -70,8 +70,7 @@ pub fn load_source(source: &str, cwd: Option<&Path>) -> Result<WorkSetSource> {
         .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
 
     let config = SivtrConfig::load().unwrap_or_default();
-    let ctx = workspace::load_context_for_dir(&cwd).unwrap_or_default();
-    let source = expand_source(source, &config.scope.aliases, &ctx)?;
+    let source = expand_source(source, &config.scope.aliases)?;
 
     // `scope:path` — scope is mount alias / local workspace name / device/workspace.
     // Bare path is local current workspace.

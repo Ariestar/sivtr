@@ -89,12 +89,6 @@ fn run() -> Result<()> {
         Some(Commands::Alias(cmd)) => {
             commands::memory::context::execute_alias(cmd)?;
         }
-        Some(Commands::Use(cmd)) => {
-            commands::memory::context::execute_use(cmd)?;
-        }
-        Some(Commands::Context(cmd)) => {
-            commands::memory::context::execute_context(cmd)?;
-        }
         Some(Commands::Hotkey(cmd)) => {
             commands::system::hotkey::execute(cmd)?;
         }
