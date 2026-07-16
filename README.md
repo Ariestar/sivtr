@@ -191,7 +191,7 @@ Memory variables:
 | `sivtr diff <left> <right>` | Compare recent command blocks. |
 | `sivtr serve` | Start/stop the local remote-memory daemon. |
 | `sivtr share` | Explicitly share a local workspace for remote peers. |
-| `sivtr remote` | Mount remote shares into the current workspace (`add`/`list`/`remove`/`test`). |
+| `sivtr remote` | Name peer shares in the current workspace (`add`/`list`/`remove`/`test`, like `git remote`). |
 | `sivtr workspace` / `sivtr ws` | List known local workspaces (origin labels for `name:body` refs). |
 | `sivtr mcp` | MCP server + host install (`serve` / `install` / `uninstall` / `print-config`). |
 | `sivtr doctor` | Diagnose binary, config, session logs, hooks, providers, and clipboard. |
@@ -209,7 +209,7 @@ Refs use a single form: `origin:body`.
 ```text
 codex/4                 # local current workspace
 docs:codex/4            # another local workspace by name
-desk:terminal/...       # mounted remote alias
+desk:terminal/...       # remote name from `remote add`
 alice/sivtr:hermes/...  # device/workspace coordinate
 ```
 

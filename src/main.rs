@@ -86,9 +86,6 @@ fn run() -> Result<()> {
         Some(Commands::Remote(cmd)) => {
             commands::remote::execute(cmd)?;
         }
-        Some(Commands::Alias(cmd)) => {
-            commands::memory::context::execute_alias(cmd)?;
-        }
         Some(Commands::Hotkey(cmd)) => {
             commands::system::hotkey::execute(cmd)?;
         }

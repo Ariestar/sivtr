@@ -429,7 +429,7 @@ sivtr share [OPTIONS]
 sivtr share <COMMAND>
 ```
 
-显式分享本机 workspace 给远端。裸 `sivtr share` 是交互入口：选择 workspace（Enter = 当前），确保 share 存在，并把 bare invite key 打印到 stdout。
+显式分享本机 workspace 给远端。裸 `sivtr share` 是交互入口：选择 workspace（Enter = 当前）并确保 share 存在（不出 pass）。出 pass 请用 `sivtr share pass <name>`。
 
 默认交互选项：
 
@@ -437,7 +437,6 @@ sivtr share <COMMAND>
 | --- | --- |
 | `--path <PATH>` | workspace 路径；确认后跳过选择器 |
 | `--name <NAME>` | 稳定 share 名；默认取 workspace 目录名 |
-| `--expires <DURATION>` | 邀请有效期（`10m`、`2h`、`1d`）；默认 `10m` |
 | `--no-redact` | 关闭此 share 的密钥脱敏 |
 
 子命令：
@@ -446,16 +445,16 @@ sivtr share <COMMAND>
 | --- | --- |
 | `add [PATH] [--name NAME] [--no-redact]` | 通过 daemon 暴露一个 workspace |
 | `list` | 列出本机 shares |
-| `remove <SHARE>` | 删除 share 及其 grants 和 invitations |
+| `remove <SHARE>` | 删除 share 及其 grants 和 passes |
 | `enable <SHARE>` / `disable <SHARE>` | 启用/禁用 share，不删除 |
-| `invite <SHARE> [--expires DURATION]` | 创建单次使用邀请；bare key 打印到 stdout |
+| `pass <SHARE> [--expires DURATION]` | 签发单次 pass；bare key 打印到 stdout |
 | `grants <SHARE>` | 列出 share 的活跃 peer grants |
 | `revoke <SHARE> <PEER>` | 撤销某 peer 对该 share 的访问 |
 
 ```bash
 sivtr share
 sivtr share add --name alice-desk
-sivtr share invite alice-desk --expires 10m
+sivtr share pass alice-desk --expires 10m
 sivtr share list
 sivtr share grants alice-desk
 sivtr share revoke alice-desk <peer>
@@ -467,15 +466,15 @@ sivtr share revoke alice-desk <peer>
 sivtr remote <COMMAND>
 ```
 
-把远端 share 挂到当前 git workspace，成为 `origin:body` refs 使用的本地别名。
+在当前 git workspace 里给远端 share 起名（类似 `git remote`）。该名是 `name:path` refs 的左侧。
 
 | 命令 | 含义 |
 | --- | --- |
-| `list` | 列出当前 workspace 的 remote mounts |
-| `add <ALIAS> <INVITE>` | 兑换邀请并挂载远端 share |
-| `remove <ALIAS>` | 删除本地 mount（grant 仍在，需所有者 revoke） |
-| `rename <ALIAS> <NEW>` | 重命名 workspace 本地 mount |
-| `test <ALIAS>` | 鉴权 + 传输往返探测 |
+| `list` | 列出当前 workspace 的 remotes |
+| `add <NAME> <PASS>` | 兑换 pass 并添加 remote |
+| `remove <NAME>` | 删除本地 remote 名（grant 仍在，需所有者 revoke） |
+| `rename <NAME> <NEW>` | 重命名本 workspace 的 remote |
+| `test <NAME>` | 可达性 + 授权探测 |
 
 ```bash
 sivtr remote add desk <invite-key>

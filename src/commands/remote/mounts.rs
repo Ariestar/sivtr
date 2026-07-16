@@ -23,7 +23,7 @@ pub fn execute(command: RemoteCommand) -> Result<()> {
 fn current_workspace_key() -> Result<String> {
     workspace::resolve_current_workspace()?
         .map(|paths| paths.key)
-        .context("Remote mounts require a git workspace")
+        .context("Remotes require a git workspace")
 }
 
 fn list(workspace_key: &str) -> Result<()> {
@@ -32,9 +32,10 @@ fn list(workspace_key: &str) -> Result<()> {
     })? {
         LocalResponse::Mounts(mounts) => {
             if mounts.is_empty() {
-                output::plain("no remote shares mounted in this workspace");
+                output::plain("no remotes in this workspace");
             }
             for mount in mounts {
+                // Git-style: name → peer / share
                 output::detail(
                     mount.alias,
                     format!(
@@ -56,7 +57,7 @@ fn add(workspace_key: &str, alias: &str, invite: &str) -> Result<()> {
         invite: invite.to_string(),
     })? {
         LocalResponse::RemoteAdded { mount } => {
-            output::success(format!("mounted remote share as `{}`", mount.alias));
+            output::success(format!("added remote `{}`", mount.alias));
             output::detail("peer", mount.peer_name);
             output::detail("share", mount.share_name);
             output::hint(format!(
@@ -75,8 +76,8 @@ fn remove(workspace_key: &str, alias: &str) -> Result<()> {
         alias: alias.to_string(),
     })? {
         LocalResponse::Mount(mount) => {
-            output::success(format!("removed local mount `{}`", mount.alias));
-            output::info("the remote grant remains active until the share owner revokes it");
+            output::success(format!("removed remote `{}`", mount.alias));
+            output::info("the remote grant remains until the share owner revokes it");
             Ok(())
         }
         response => bail!("Unexpected daemon response: {response:?}"),
@@ -90,7 +91,7 @@ fn rename(workspace_key: &str, alias: &str, new_alias: &str) -> Result<()> {
         new_alias: new_alias.to_string(),
     })? {
         LocalResponse::Mount(mount) => {
-            output::success(format!("renamed remote mount to `{}`", mount.alias));
+            output::success(format!("renamed remote to `{}`", mount.alias));
             Ok(())
         }
         response => bail!("Unexpected daemon response: {response:?}"),

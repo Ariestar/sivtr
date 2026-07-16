@@ -97,8 +97,9 @@ Target selectors: `terminal/<session>/<record>/<line>`, `agent/<session>/<turn>`
 Device-scoped daemon auto-starts when share/remote commands need it.
 
 ```bash
-sivtr share                   # interactive: pick workspace, print bare invite key
-sivtr remote add desk <key>   # mount peer share under local alias
+sivtr share                   # interactive: pick workspace, create share only
+sivtr share pass <name>       # issue single-use pass (stdout = bare key)
+sivtr remote add desk <pass>  # name a peer share in this workspace (git-remote style)
 sivtr s desk:terminal --status failure --latest 5 --refs
 sivtr serve status            # daemon identity + share/peer counts
 sivtr ws list                 # local workspace origin labels

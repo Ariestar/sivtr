@@ -1,6 +1,6 @@
 ---
 title: 远程访问
-description: 以只读方式分享 workspace，并把另一台设备的记忆挂成本地 origin 别名。
+description: 以只读方式分享 workspace，并用 remote 名挂接另一台设备的记忆（类似 git remote）。
 ---
 
 跨设备记忆让两台运行 `sivtr` 的机器像读本地 source 一样读取彼此的 workspace session。分享是显式的、只读的，并且默认脱敏。
@@ -12,34 +12,35 @@ description: 以只读方式分享 workspace，并把另一台设备的记忆挂
 | 部件 | 含义 |
 | --- | --- |
 | Device daemon | 每台机器一个。由 `sivtr serve` 启动；share/remote 需要时会自动拉起。 |
-| Share | 被显式暴露的本机 workspace。 |
-| Invite | 单次使用、短 TTL 的邀请 key。stdout 打印 bare key。 |
-| Grant | peer 兑换 invite 后获得的权限。 |
-| Mount | 当前 workspace 本地别名，成为 `origin:body` ref 的左侧。 |
+| Share | 被显式暴露的本机 workspace（远端「仓库」）。 |
+| Pass | 单次使用、短 TTL 的通行证。stdout 打印 bare key（`share pass`）。 |
+| Grant | peer 兑换 pass 后获得的权限。 |
+| Remote | 当前 workspace 内给 peer+share 起的本地名，成为 `name:path` 左侧（类似 `git remote`）。 |
 
 ref 统一为一种形式：
 
 ```text
 codex/4                 # 当前本地 workspace
 docs:codex/4            # 本机另一个 workspace 名
-desk:terminal/...       # 已挂载的远端别名
+desk:terminal/...       # remote add 得到的远端名
 ```
 
-用 `sivtr ws list` 查看本机 origin 标签。未登记的 origin 会报错。
+用 `sivtr ws list` 查看本机 workspace 标签。未登记的 scope 会报错。
 
 ## 所有者设置
 
 在拥有 workspace 的机器上：
 
 ```bash
-sivtr share                   # 选择 workspace（Enter = 当前），打印 invite key
+sivtr share                   # 选择 workspace（Enter = 当前）；只创建 share
+sivtr share pass <name>       # 签发单次 pass（stdout = bare key）
 ```
 
 非交互：
 
 ```bash
 sivtr share add --name alice-desk
-sivtr share invite alice-desk --expires 10m
+sivtr share pass alice-desk --expires 10m
 ```
 
 常用所有者命令：
@@ -55,10 +56,10 @@ sivtr serve status
 
 ## 对端设置
 
-在你想挂载的 git workspace 里：
+在要挂 remote 的 git workspace 里：
 
 ```bash
-sivtr remote add desk <invite-key>
+sivtr remote add desk <pass>
 sivtr remote test desk
 sivtr remote list
 ```
@@ -67,14 +68,14 @@ sivtr remote list
 
 ```bash
 sivtr remote rename desk bob-desk
-sivtr remote remove desk          # 只删本地 mount；grant 仍在，需所有者 revoke
+sivtr remote remove desk          # 只删本地名；grant 仍在，直到 owner revoke
 sivtr peer list
 sivtr peer forget <peer>
 ```
 
 ## 使用远端记忆
 
-挂载后的 origin 走和本地一样的 WorkSet 表面：
+remote 与本地 source 使用同一套 WorkSet 表面：
 
 ```bash
 sivtr s desk:terminal --status failure --latest 5 --refs
@@ -88,12 +89,12 @@ sivtr copy ref desk:terminal/session_42/3/o/1 --print
 
 ## 安全默认
 
-- 只有 `sivtr share` 或 `share add` 之后才会分享。
-- 访问是只读的。peer 不能写 session，也不能在所有者机器上跑命令。
-- 默认脱敏（`--no-redact` 可关闭）。
-- invite 单次使用、短寿命（默认 `10m`）。
-- daemon 之间走加密 iroh。
-- 默认仍然本地优先：未知 origin 直接失败，不会静默扫网。
+- 未运行 `sivtr share` / `share add` 前，什么都不会被分享。
+- 访问只读。peer 不能写 session，也不能在 owner 上跑命令。
+- 默认开启脱敏（`--no-redact` 可关）。
+- Pass 单次、短时（默认 `10m`）。
+- daemon 之间为加密 iroh 传输。
+- 本地优先：未知 scope 直接失败，不会静默扫网。
 
 ## Daemon 与数据
 
@@ -104,25 +105,25 @@ sivtr serve logs
 sivtr serve stop
 ```
 
-状态位于 `data_dir()`（可用 `SIVTR_DATA_DIR` 覆盖，否则是平台 config 目录下的 `sivtr`）：
+状态在 `data_dir()`（`SIVTR_DATA_DIR` 覆盖，否则平台 config 下的 `sivtr`）：
 
 | 文件 | 用途 |
 | --- | --- |
 | `identity.key` | 稳定设备身份 |
-| `remote-state.db` | peers、shares、grants、invites、mounts |
-| `daemon.json` / `daemon.lock` / `daemon.log` | 运行时控制与日志 |
+| `remote-state.db` | peers / shares / grants / passes / remotes |
+| `daemon.json` / `daemon.lock` / `daemon.log` | 运行控制与日志 |
 
-详见 [数据位置](/zh-cn/reference/data-locations/) 和 [Local-first 与隐私](/zh-cn/explanation/local-first-privacy/)。
+见 [数据位置](/zh-cn/reference/data-locations/) 与 [本地优先与隐私](/zh-cn/explanation/local-first-privacy/)。
 
-## 命令地图
+## 命令表
 
 | 命令 | 用途 |
 | --- | --- |
-| `sivtr share` | 交互式分享 + invite |
-| `sivtr share add\|list\|invite\|grants\|revoke...` | 管理 shares |
-| `sivtr remote add\|list\|remove\|rename\|test` | 管理当前 workspace 的 mounts |
-| `sivtr peer list\|forget` | 管理已知 peer 身份 |
+| `sivtr share` | 交互式 share（不出 pass） |
+| `sivtr share add\|list\|pass\|grants\|revoke...` | 管理 share |
+| `sivtr remote add\|list\|remove\|rename\|test` | 管理当前 workspace 的 remote |
+| `sivtr peer list\|forget` | 管理已知 peer |
 | `sivtr serve ...` | 管理设备 daemon |
-| `sivtr ws list` | 列出本机 workspace origin 标签 |
+| `sivtr ws list` | 列出本机 workspace 标签 |
 
-精确语法见 [CLI 参考](/zh-cn/reference/cli/)。
+精确语法：[CLI 参考](/zh-cn/reference/cli/)。

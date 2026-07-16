@@ -15,12 +15,7 @@ use super::serve;
 
 pub fn execute(command: ShareCommand) -> Result<()> {
     match command.action {
-        None => interactive_share(
-            command.path,
-            command.name,
-            !command.no_redact,
-            &command.expires,
-        ),
+        None => interactive_share(command.path, command.name, !command.no_redact),
         Some(ShareAction::Add {
             path,
             name,
@@ -45,9 +40,9 @@ pub fn execute(command: ShareCommand) -> Result<()> {
             serve::ensure_running()?;
             set_enabled(&share, false)
         }
-        Some(ShareAction::Invite { share, expires }) => {
+        Some(ShareAction::Pass { share, expires }) => {
             serve::ensure_running()?;
-            invite(&share, &expires)
+            issue_pass(&share, &expires)
         }
         Some(ShareAction::Grants { share }) => {
             serve::ensure_running()?;
@@ -63,14 +58,8 @@ pub fn execute(command: ShareCommand) -> Result<()> {
 /// Default `sivtr share` flow:
 /// 1. ensure daemon
 /// 2. interactively pick a workspace (Enter = current)
-/// 3. share if needed
-/// 4. print invite
-fn interactive_share(
-    path: Option<PathBuf>,
-    name: Option<String>,
-    redact: bool,
-    expires: &str,
-) -> Result<()> {
+/// 3. create share if needed (no pass — use `share pass`)
+fn interactive_share(path: Option<PathBuf>, name: Option<String>, redact: bool) -> Result<()> {
     serve::ensure_running()?;
 
     // Explicit --path/--name skip the picker and share that target after confirm.
@@ -81,7 +70,7 @@ fn interactive_share(
             .with_context(|| format!("{} is not inside a git workspace", path.display()))?;
         let share_name = name.unwrap_or_else(|| default_share_name(&paths.root));
         confirm_single(&paths.root, &share_name)?;
-        return finish_share(paths.root, paths.key, share_name, redact, expires);
+        return finish_share(paths.root, paths.key, share_name, redact);
     }
 
     let selected = pick_workspace()?;
@@ -91,7 +80,6 @@ fn interactive_share(
         selected.key,
         share_name,
         redact,
-        expires,
     )
 }
 
@@ -100,7 +88,6 @@ fn finish_share(
     workspace_key: String,
     share_name: String,
     redact: bool,
-    expires: &str,
 ) -> Result<()> {
     let share = match find_share_for_workspace(&workspace_key) {
         Ok(existing) => {
@@ -108,12 +95,15 @@ fn finish_share(
             if !existing.enabled {
                 set_enabled(&existing.name, true)?;
             }
-            // Re-fetch after enable so we invite with consistent state.
             find_share_for_workspace(&workspace_key).unwrap_or(existing)
         }
         Err(_) => add(Some(root), Some(share_name), redact)?,
     };
-    invite(&share.name, expires)
+    output::hint(format!(
+        "issue a pass with: sivtr share pass {}",
+        share.name
+    ));
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -219,6 +209,10 @@ fn add(path: Option<PathBuf>, name: Option<String>, redact: bool) -> Result<Shar
                 "redaction",
                 if share.redact { "enabled" } else { "disabled" },
             );
+            output::hint(format!(
+                "issue a pass with: sivtr share pass {}",
+                share.name
+            ));
             Ok(share)
         }
         response => bail!("Unexpected daemon response: {response:?}"),
@@ -290,7 +284,7 @@ fn set_enabled(share: &str, enabled: bool) -> Result<()> {
     }
 }
 
-fn invite(share: &str, expires: &str) -> Result<()> {
+fn issue_pass(share: &str, expires: &str) -> Result<()> {
     let valid_for_seconds = parse_duration(expires)?;
     match ipc::call(LocalRequest::ShareInvite {
         share: share.to_string(),
@@ -304,10 +298,10 @@ fn invite(share: &str, expires: &str) -> Result<()> {
             let expires_at = Utc
                 .timestamp_opt(expires_at, 0)
                 .single()
-                .context("Invalid invitation expiration")?;
-            // Keep stdout clean for copy: one status line on stderr, key alone on stdout.
+                .context("Invalid pass expiration")?;
+            // Keep stdout clean for copy: one status line on stderr, pass alone on stdout.
             output::info(format!(
-                "invite for `{share_name}` (expires {}, single-use). Run on peer: sivtr remote add <alias> <key>",
+                "pass for `{share_name}` (expires {}, single-use). Peer: sivtr remote add <name> <pass>",
                 expires_at.to_rfc3339()
             ));
             println!("{ticket}");
@@ -368,7 +362,7 @@ fn parse_duration(value: &str) -> Result<i64> {
     amount
         .checked_mul(multiplier)
         .filter(|seconds| *seconds > 0)
-        .context("Invitation duration must be positive")
+        .context("Pass duration must be positive")
 }
 
 #[cfg(test)]
@@ -376,7 +370,7 @@ mod tests {
     use super::parse_duration;
 
     #[test]
-    fn parses_invite_duration() {
+    fn parses_pass_duration() {
         assert_eq!(parse_duration("10m").unwrap(), 600);
         assert_eq!(parse_duration("2h").unwrap(), 7200);
         assert_eq!(parse_duration("1d").unwrap(), 86400);

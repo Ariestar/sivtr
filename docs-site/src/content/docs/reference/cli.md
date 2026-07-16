@@ -429,7 +429,7 @@ sivtr share [OPTIONS]
 sivtr share <COMMAND>
 ```
 
-Explicitly shares a local workspace for remote peers. Bare `sivtr share` is interactive: pick a workspace (Enter = current), ensure the share exists, and print a bare invite key on stdout.
+Explicitly shares a local workspace for remote peers. Bare `sivtr share` is interactive: pick a workspace (Enter = current) and ensure the share exists (no pass). Issue a pass with `sivtr share pass <name>`.
 
 Default interactive options:
 
@@ -437,7 +437,6 @@ Default interactive options:
 | --- | --- |
 | `--path <PATH>` | Workspace path; skips the picker after confirm |
 | `--name <NAME>` | Stable share name; defaults to the workspace directory name |
-| `--expires <DURATION>` | Invitation lifetime (`10m`, `2h`, `1d`); default `10m` |
 | `--no-redact` | Disable secret redaction for this share |
 
 Subcommands:
@@ -446,16 +445,16 @@ Subcommands:
 | --- | --- |
 | `add [PATH] [--name NAME] [--no-redact]` | Expose a workspace through the daemon |
 | `list` | List local shares |
-| `remove <SHARE>` | Remove a share and all grants and invitations attached to it |
+| `remove <SHARE>` | Remove a share and all grants and passes attached to it |
 | `enable <SHARE>` / `disable <SHARE>` | Toggle a share without deleting it |
-| `invite <SHARE> [--expires DURATION]` | Create a single-use invitation; prints the bare key on stdout |
+| `pass <SHARE> [--expires DURATION]` | Issue a single-use pass; prints the bare key on stdout |
 | `grants <SHARE>` | List active peer grants for a share |
 | `revoke <SHARE> <PEER>` | Revoke a peer's access to a share |
 
 ```bash
 sivtr share
 sivtr share add --name alice-desk
-sivtr share invite alice-desk --expires 10m
+sivtr share pass alice-desk --expires 10m
 sivtr share list
 sivtr share grants alice-desk
 sivtr share revoke alice-desk <peer>
@@ -467,15 +466,15 @@ sivtr share revoke alice-desk <peer>
 sivtr remote <COMMAND>
 ```
 
-Mounts remote shares into the current git workspace as local aliases used in `origin:body` refs.
+Names a peer share in the current git workspace (like `git remote`). The name is the left side of `name:path` refs.
 
 | Command | Meaning |
 | --- | --- |
-| `list` | List remote mounts in the current workspace |
-| `add <ALIAS> <INVITE>` | Redeem an invitation and mount the remote share |
-| `remove <ALIAS>` | Remove a local mount (grant remains until the owner revokes it) |
-| `rename <ALIAS> <NEW>` | Rename a workspace-local mount |
-| `test <ALIAS>` | Authenticated transport and authorization round trip |
+| `list` | List remotes in the current workspace |
+| `add <NAME> <PASS>` | Redeem a pass and add the remote |
+| `remove <NAME>` | Remove a local remote name (grant remains until the owner revokes it) |
+| `rename <NAME> <NEW>` | Rename a remote in this workspace |
+| `test <NAME>` | Reachability + authorization probe |
 
 ```bash
 sivtr remote add desk <invite-key>

@@ -2,7 +2,6 @@ pub mod keys;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 /// Top-level configuration.
@@ -21,8 +20,6 @@ pub struct SivtrConfig {
     pub codex: CodexConfig,
     /// Global hotkey settings.
     pub hotkey: HotkeyConfig,
-    /// Scope short aliases (`&ahs` → `desktop/ai-help-study`).
-    pub scope: ScopeConfig,
 }
 
 /// General behavior settings.
@@ -95,14 +92,6 @@ pub struct CodexConfig {
 pub struct HotkeyConfig {
     /// Hotkey chord used by `sivtr hotkey start`.
     pub chord: String,
-}
-
-/// Short aliases for WorkScope (`&name` → `name` or `device/workspace`).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ScopeConfig {
-    /// Map of alias name (no `&`) to a full scope string.
-    pub aliases: BTreeMap<String, String>,
 }
 
 // --- Defaults ---

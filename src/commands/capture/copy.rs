@@ -298,8 +298,7 @@ pub fn execute_ref(
     let dir = cwd
         .map(Path::to_path_buf)
         .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
-    let config = sivtr_core::config::SivtrConfig::load().unwrap_or_default();
-    let expanded = sivtr_core::record::expand_source(reference, &config.scope.aliases)?;
+    let expanded = sivtr_core::record::expand_source(reference)?;
     let work_ref: WorkRef = expanded
         .parse()
         .with_context(|| format!("Invalid work ref `{reference}`"))?;

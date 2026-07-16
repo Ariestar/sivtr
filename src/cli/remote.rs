@@ -36,10 +36,6 @@ pub struct ShareCommand {
     #[arg(long)]
     pub name: Option<String>,
 
-    /// Invitation lifetime for the default interactive share flow
-    #[arg(long, default_value = "10m")]
-    pub expires: String,
-
     /// Disable secret redaction for the default interactive share flow
     #[arg(long)]
     pub no_redact: bool,
@@ -60,16 +56,16 @@ pub enum ShareAction {
     },
     /// List local shares
     List,
-    /// Remove a share and all grants and invitations attached to it
+    /// Remove a share and all grants and passes attached to it
     Remove { share: String },
     /// Enable a disabled share
     Enable { share: String },
     /// Disable a share without deleting it
     Disable { share: String },
-    /// Create a single-use invitation for a share
-    Invite {
+    /// Issue a single-use pass peers redeem with `remote add`
+    Pass {
         share: String,
-        /// Invitation lifetime, such as 10m, 2h, or 1d
+        /// Pass lifetime, such as 10m, 2h, or 1d
         #[arg(long, default_value = "10m")]
         expires: String,
     },
@@ -101,20 +97,20 @@ pub struct RemoteCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum RemoteAction {
-    /// List remote mounts in the current workspace
+    /// List remotes in the current workspace (like `git remote -v`)
     List,
-    /// Redeem an invitation and mount the remote share in the current workspace
+    /// Redeem a pass and name a remote share in this workspace (like `git remote add`)
     Add {
-        /// Workspace-local alias used in refs, e.g. `desk:terminal/...`
+        /// Local remote name used in refs, e.g. `desk:terminal/...`
         alias: String,
-        /// Invitation key from `sivtr share` (copy the bare key only)
+        /// Single-use pass from `sivtr share pass` (bare key only)
         invite: String,
     },
-    /// Remove a mount from the current workspace
+    /// Remove a remote name from the current workspace
     Remove { alias: String },
-    /// Rename a workspace-local mount
+    /// Rename a remote in the current workspace
     Rename { alias: String, new_alias: String },
-    /// Perform an authenticated transport and authorization round trip
+    /// Reachability + authorization probe for a remote
     Test { alias: String },
 }
 

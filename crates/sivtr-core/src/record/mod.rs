@@ -3,7 +3,7 @@ pub mod index;
 pub mod model;
 pub mod refs;
 
-pub use expand::{expand_source, normalize_alias_name, resolve_alias, resolve_scope_token};
+pub use expand::{expand_source, resolve_scope_token};
 pub use index::{
     work_record_content_matches, WorkRecordIndex, WorkRecordMatch, WorkRecordSearchScope,
 };
