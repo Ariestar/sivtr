@@ -8,6 +8,7 @@ use base64::Engine;
 use chrono::Utc;
 use fs2::FileExt;
 use iroh::endpoint::presets;
+use iroh::endpoint::Connection;
 use iroh::{Endpoint, EndpointAddr};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -99,13 +100,14 @@ async fn run_async() -> Result<()> {
                 };
                 let context = context.clone();
                 tokio::spawn(async move {
-                    match connecting.await {
-                        Ok(connection) => {
-                            if let Err(error) = handle_remote(connection, context).await {
-                                crate::output::error(format!("remote connection error: {error:#}"));
-                            }
-                        }
-                        Err(error) => crate::output::error(format!("remote handshake error: {error}")),
+                    // UDP Initial packets from scanners / stale routes fail the QUIC
+                    // handshake with PROTOCOL_VIOLATION("authentication failed"). That is
+                    // transport noise, not application auth — drop it.
+                    let Ok(connection) = connecting.await else {
+                        return;
+                    };
+                    if let Err(error) = handle_remote(connection, context).await {
+                        crate::output::error(format!("remote connection error: {error:#}"));
                     }
                 });
             }
@@ -214,6 +216,7 @@ async fn process_local(
             share,
             valid_for_seconds,
         } => {
+            // Use live addr after online(); N0 may still refine paths after this snapshot.
             let invite = context.store.create_invite(&share, valid_for_seconds)?;
             let ticket = InviteTicket {
                 version: 1,
@@ -321,10 +324,9 @@ async fn redeem_remote(
     if invite.expires_at < Utc::now().timestamp() {
         bail!("Invitation is expired");
     }
-    let endpoint_json = serde_json::to_string(&invite.endpoint)?;
     let peer_id = invite.endpoint.id.to_string();
-    let response = exchange(
-        &context.endpoint,
+    let (response, observed) = exchange(
+        context,
         invite.endpoint,
         RemoteRequest::RedeemInvite {
             invite_id: invite.invite_id,
@@ -341,6 +343,8 @@ async fn redeem_remote(
         } => (server_name, share_id, share_name),
         response => bail!("Unexpected invitation response: {response:?}"),
     };
+    let endpoint_json =
+        serde_json::to_string(&observed).context("Failed to encode peer endpoint")?;
     context
         .store
         .save_remote_peer(&peer_id, &server_name, &endpoint_json)?;
@@ -357,18 +361,30 @@ async fn exchange_with_peer(
     let endpoint_json = context.store.peer_endpoint(peer_id)?;
     let address: EndpointAddr =
         serde_json::from_str(&endpoint_json).context("Invalid stored peer endpoint")?;
-    exchange(&context.endpoint, address, request).await
+    let (response, observed) = exchange(context, address, request).await?;
+    let endpoint_json =
+        serde_json::to_string(&observed).context("Failed to encode peer endpoint")?;
+    context
+        .store
+        .refresh_peer_endpoint(peer_id, &endpoint_json)
+        .context("Failed to refresh peer endpoint after successful dial")?;
+    Ok(response)
 }
 
+/// Dial the peer and exchange one request/response.
+///
+/// Default mode (`presets::N0`) includes address lookup. We dial the stored/bootstrap
+/// address first; if that fails, dial by `EndpointId` alone so N0 discovery can resolve
+/// current direct/relay paths. That is how default mode works — not a path rewrite.
+///
+/// After a successful dial, return iroh's observed addresses so callers can refresh storage.
 async fn exchange(
-    endpoint: &Endpoint,
+    context: &DaemonContext,
     address: EndpointAddr,
     request: RemoteRequest,
-) -> Result<RemoteResponse> {
-    let connection = endpoint
-        .connect(address, REMOTE_ALPN)
-        .await
-        .context("Failed to connect to remote sivtr daemon")?;
+) -> Result<(RemoteResponse, EndpointAddr)> {
+    let connection = connect_default(&context.endpoint, &address).await?;
+    let observed = observed_endpoint(&context.endpoint, &connection, &address).await;
     let (mut send, mut receive) = connection.open_bi().await?;
     send.write_all(&serde_json::to_vec(&request)?).await?;
     send.finish()?;
@@ -378,14 +394,52 @@ async fn exchange(
         serde_json::from_slice(&bytes).context("Invalid remote daemon response")?;
     match response {
         RemoteResponse::Error { message } => Err(anyhow::anyhow!(message)),
-        response => Ok(response),
+        response => Ok((response, observed)),
     }
 }
 
-async fn handle_remote(
-    connection: iroh::endpoint::Connection,
-    context: Arc<DaemonContext>,
-) -> Result<()> {
+/// Default-mode dial: known address first, then EndpointId discovery via N0.
+async fn connect_default(endpoint: &Endpoint, address: &EndpointAddr) -> Result<Connection> {
+    match endpoint.connect(address.clone(), REMOTE_ALPN).await {
+        Ok(connection) => Ok(connection),
+        Err(first) => {
+            // Already id-only: discovery was the only path; do not double-dial.
+            if address.is_empty() {
+                return Err(anyhow::anyhow!(first)).context("Failed to reach remote sivtr daemon");
+            }
+            match endpoint
+                .connect(EndpointAddr::new(address.id), REMOTE_ALPN)
+                .await
+            {
+                Ok(connection) => Ok(connection),
+                Err(second) => Err(anyhow::anyhow!(
+                    "known address failed ({first:#}); discovery by id failed ({second:#})"
+                ))
+                .context("Failed to reach remote sivtr daemon"),
+            }
+        }
+    }
+}
+
+async fn observed_endpoint(
+    endpoint: &Endpoint,
+    connection: &Connection,
+    dialed: &EndpointAddr,
+) -> EndpointAddr {
+    let remote_id = connection.remote_id();
+    if let Some(info) = endpoint.remote_info(remote_id).await {
+        let observed = EndpointAddr::from_parts(
+            info.id(),
+            info.into_addrs().map(|addr| addr.into_addr()),
+        );
+        if !observed.is_empty() {
+            return observed;
+        }
+    }
+    dialed.clone()
+}
+
+async fn handle_remote(connection: Connection, context: Arc<DaemonContext>) -> Result<()> {
     let peer_id = connection.remote_id().to_string();
     let (mut send, mut receive) = connection.accept_bi().await?;
     let bytes = receive.read_to_end(MAX_MESSAGE_SIZE).await?;

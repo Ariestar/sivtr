@@ -110,6 +110,19 @@ fn status() -> Result<()> {
             output::detail("device", status.device_name);
             output::detail("node", status.node_id);
             output::detail("started", status.started_at);
+            output::detail("mode", "default (n0 discovery + relay)");
+            let relays: Vec<String> = status
+                .endpoint
+                .relay_urls()
+                .map(|url| url.to_string())
+                .collect();
+            let direct = status.endpoint.ip_addrs().count();
+            if relays.is_empty() {
+                output::detail("relay", "none yet");
+            } else {
+                output::detail("relay", relays.join(", "));
+            }
+            output::detail("direct", format!("{direct} address(es)"));
             output::detail("shares", status.shares.to_string());
             output::detail("peers", status.peers.to_string());
             Ok(())

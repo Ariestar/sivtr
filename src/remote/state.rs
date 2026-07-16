@@ -334,6 +334,18 @@ impl StateStore {
         Ok(())
     }
 
+    /// Refresh reachability hints for a known peer. Identity (id) is stable; addresses expire.
+    pub fn refresh_peer_endpoint(&self, peer_id: &str, endpoint_json: &str) -> Result<()> {
+        let updated = self.connect()?.execute(
+            "UPDATE peers SET endpoint_json = ?1, last_seen_at = ?2 WHERE id = ?3",
+            params![endpoint_json, now(), peer_id],
+        )?;
+        if updated == 0 {
+            bail!("Unknown peer `{peer_id}`");
+        }
+        Ok(())
+    }
+
     pub fn peer_endpoint(&self, peer_id: &str) -> Result<String> {
         self.connect()?
             .query_row(
@@ -630,6 +642,23 @@ mod tests {
 
         assert!(store.mount("workspace-a", "desk").is_ok());
         assert!(store.mount("workspace-b", "desk").is_err());
+    }
+
+    #[test]
+    fn peer_endpoint_hints_refresh_without_renaming() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = StateStore::open(temp.path().join("state.db")).unwrap();
+        store
+            .save_remote_peer("peer-1", "alice", r#"{"id":"old","addrs":[]}"#)
+            .unwrap();
+        store
+            .refresh_peer_endpoint("peer-1", r#"{"id":"new","addrs":[]}"#)
+            .unwrap();
+        assert_eq!(
+            store.peer_endpoint("peer-1").unwrap(),
+            r#"{"id":"new","addrs":[]}"#
+        );
+        assert!(store.refresh_peer_endpoint("missing", "{}").is_err());
     }
 
     #[test]
