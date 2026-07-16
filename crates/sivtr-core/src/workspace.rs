@@ -57,6 +57,72 @@ pub fn data_dir() -> PathBuf {
         .join("sivtr")
 }
 
+/// Default scope / source for WorkRef expansion in a workspace (`sivtr use`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkContext {
+    /// Default scope name (`desk`, `docs`, `device/workspace`). None = local bare.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    /// Default source segment (`terminal`, `claude`, …). Prefixed when path omits it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+impl WorkContext {
+    pub fn is_empty(&self) -> bool {
+        self.scope.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_none()
+            && self
+                .source
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .is_none()
+    }
+}
+
+/// Load workspace context for `cwd` (or empty if not in a git workspace).
+pub fn load_context_for_dir(cwd: &Path) -> Result<WorkContext> {
+    let Some(paths) = resolve_workspace_for_dir(cwd)? else {
+        return Ok(WorkContext::default());
+    };
+    load_context(&paths)
+}
+
+/// Load context from a resolved workspace.
+pub fn load_context(paths: &WorkspacePaths) -> Result<WorkContext> {
+    let path = paths.dir.join("context.toml");
+    if !path.exists() {
+        return Ok(WorkContext::default());
+    }
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read context: {}", path.display()))?;
+    toml::from_str(&content)
+        .with_context(|| format!("Failed to parse context: {}", path.display()))
+}
+
+/// Save context for a workspace (creates workspace dir if needed).
+pub fn save_context(paths: &WorkspacePaths, ctx: &WorkContext) -> Result<()> {
+    fs::create_dir_all(&paths.dir)
+        .with_context(|| format!("Failed to create workspace dir: {}", paths.dir.display()))?;
+    let path = paths.dir.join("context.toml");
+    if ctx.is_empty() {
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Failed to clear context: {}", path.display()))
+            }
+        }
+        return Ok(());
+    }
+    let content = toml::to_string_pretty(ctx).context("Failed to serialize context")?;
+    fs::write(&path, content)
+        .with_context(|| format!("Failed to write context: {}", path.display()))?;
+    Ok(())
+}
+
 pub fn terminal_id() -> String {
     std::env::var("SIVTR_TERMINAL_ID")
         .ok()

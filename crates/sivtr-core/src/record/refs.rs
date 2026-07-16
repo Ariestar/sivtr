@@ -476,6 +476,11 @@ fn parse_path_and_at(value: &str) -> Result<(WorkPath, WorkAt)> {
     ))
 }
 
+/// Normalize a scope name: `name` or `device/workspace`, lowercase, `local` reserved.
+pub fn normalize_scope_name(name: &str) -> Result<String> {
+    parse_scope_name(name)
+}
+
 /// Scope rules: `name` or `device/workspace`, each segment `[A-Za-z0-9_-]+`,
 /// case-insensitive (normalized to lowercase). `local` is reserved.
 fn parse_scope_name(name: &str) -> Result<String> {

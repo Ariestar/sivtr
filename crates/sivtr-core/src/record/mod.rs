@@ -1,7 +1,11 @@
+pub mod expand;
 pub mod index;
 pub mod model;
 pub mod refs;
 
+pub use expand::{
+    expand_source, normalize_alias_name, resolve_alias, resolve_scope_token,
+};
 pub use index::{
     work_record_content_matches, WorkRecordIndex, WorkRecordMatch, WorkRecordSearchScope,
 };
@@ -10,4 +14,4 @@ pub use model::{
     WorkPart, WorkPartIo, WorkPartKind, WorkRecord, WorkRecordCopyParts, WorkRecordKind,
     WorkSessionRef, WorkSource, WorkStatus, WorkTime, RECORD_SCHEMA_VERSION,
 };
-pub use refs::{WorkAt, WorkPath, WorkRef, WorkRefSelector, WorkScope};
+pub use refs::{normalize_scope_name, WorkAt, WorkPath, WorkRef, WorkRefSelector, WorkScope};

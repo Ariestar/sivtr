@@ -3,8 +3,10 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use sivtr_core::config::SivtrConfig;
 use sivtr_core::query::load_workspace_source;
-use sivtr_core::record::{WorkPath, WorkRecord, WorkRef};
+use sivtr_core::record::{expand_source, WorkPath, WorkRecord, WorkRef};
+use sivtr_core::workspace;
 
 use crate::commands::memory::records::warn_skipped;
 
@@ -67,6 +69,10 @@ pub fn load_source(source: &str, cwd: Option<&Path>) -> Result<WorkSetSource> {
         .map(Path::to_path_buf)
         .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
 
+    let config = SivtrConfig::load().unwrap_or_default();
+    let ctx = workspace::load_context_for_dir(&cwd).unwrap_or_default();
+    let source = expand_source(source, &config.scope.aliases, &ctx)?;
+
     // `scope:path` — scope is mount alias / local workspace name / device/workspace.
     // Bare path is local current workspace.
     if let Some((scope, path)) = source.split_once(':') {
@@ -84,8 +90,8 @@ pub fn load_source(source: &str, cwd: Option<&Path>) -> Result<WorkSetSource> {
         let scope = scope.to_ascii_lowercase();
 
         // 1. Workspace-local mount alias (remote share).
-        if let Some(workspace) = sivtr_core::workspace::resolve_workspace_for_dir(&cwd)? {
-            if let Some(response) = try_remote_mount(&workspace.key, &scope, path)? {
+        if let Some(ws) = workspace::resolve_workspace_for_dir(&cwd)? {
+            if let Some(response) = try_remote_mount(&ws.key, &scope, path)? {
                 return Ok(WorkSetSource::Records {
                     cwd,
                     records: response.records,
@@ -107,7 +113,7 @@ pub fn load_source(source: &str, cwd: Option<&Path>) -> Result<WorkSetSource> {
             "unknown scope `{scope}`; use `sivtr remote list` for mounts or `sivtr ws list` for local workspaces"
         );
     }
-    load_local_source(source, &cwd)
+    load_local_source(&source, &cwd)
 }
 
 fn try_remote_mount(

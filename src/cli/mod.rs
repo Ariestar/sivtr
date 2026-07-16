@@ -667,6 +667,15 @@ pub enum Commands {
     /// Manage remote workspace mounts for the current workspace
     Remote(RemoteCommand),
 
+    /// Manage scope short aliases (`&name` → full scope)
+    Alias(AliasCommand),
+
+    /// Set default scope/source for the current workspace
+    Use(UseCommand),
+
+    /// Show default scope/source and configured aliases
+    Context(ContextCommand),
+
     /// Manage configuration
     Config(ConfigCommand),
 
@@ -2655,6 +2664,44 @@ pub enum ConfigAction {
     /// Open config file in editor
     Edit,
 }
+
+#[derive(Parser, Debug)]
+pub struct AliasCommand {
+    #[command(subcommand)]
+    pub action: AliasSubcommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AliasSubcommand {
+    /// List configured scope aliases
+    List,
+    /// Set a scope alias (`sivtr alias set ahs desktop/ai-help-study`)
+    Set {
+        /// Alias name without leading `&`
+        name: String,
+        /// Full scope (`name` or `device/workspace`)
+        scope: String,
+    },
+    /// Remove a scope alias
+    #[command(visible_alias = "rm")]
+    Remove {
+        /// Alias name without leading `&`
+        name: String,
+    },
+}
+
+#[derive(Parser, Debug)]
+pub struct UseCommand {
+    /// Scope, optional source: `desk`, `&ahs`, `ahs:claude`, `local:terminal`
+    #[arg(value_name = "SCOPE[:SOURCE]")]
+    pub spec: Option<String>,
+    /// Clear workspace context (back to bare local)
+    #[arg(long)]
+    pub clear: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct ContextCommand {}
 
 #[derive(Parser, Debug)]
 pub struct HistoryCommand {
