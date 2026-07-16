@@ -50,7 +50,7 @@ impl WorkSet {
     pub fn new(cwd: impl Into<String>, records: Vec<WorkRecord>) -> Self {
         let anchors = records
             .iter()
-            .map(|record| record.work_ref.record_ref())
+            .map(|record| record.work_ref.whole())
             .collect();
         Self::with_anchors(cwd, records, anchors)
     }
@@ -75,7 +75,7 @@ impl WorkSet {
             self.anchors = self
                 .records
                 .iter()
-                .map(|record| record.work_ref.record_ref())
+                .map(|record| record.work_ref.whole())
                 .collect();
         }
     }
@@ -84,7 +84,7 @@ impl WorkSet {
         if self.anchors.is_empty() {
             self.records
                 .iter()
-                .map(|record| record.work_ref.record_ref())
+                .map(|record| record.work_ref.whole())
                 .collect()
         } else {
             self.anchors.clone()
@@ -109,13 +109,13 @@ pub fn records_for_anchors(records: &[WorkRecord], anchors: &[WorkRef]) -> Vec<W
     let mut selected = Vec::new();
     let mut seen = HashSet::new();
     for anchor in anchors {
-        let record_ref = anchor.record_ref();
+        let record_ref = anchor.whole();
         if !seen.insert(record_ref.to_string()) {
             continue;
         }
         if let Some(record) = records
             .iter()
-            .find(|record| record.work_ref.record_ref() == record_ref)
+            .find(|record| record.work_ref.whole() == record_ref)
         {
             selected.push(record.clone());
         }
@@ -127,10 +127,10 @@ pub fn record_for_anchor<'a>(
     records: &'a [WorkRecord],
     anchor: &WorkRef,
 ) -> Option<&'a WorkRecord> {
-    let record_ref = anchor.record_ref();
+    let record_ref = anchor.whole();
     records
         .iter()
-        .find(|record| record.work_ref.record_ref() == record_ref)
+        .find(|record| record.work_ref.whole() == record_ref)
 }
 
 pub fn load_reference(reference: &str) -> Result<WorkSet> {
@@ -308,9 +308,9 @@ mod tests {
     fn unique_anchors_preserves_first_occurrence() {
         let records = [record(1), record(2)];
         let anchors = vec![
-            records[0].work_ref.record_ref(),
-            records[1].work_ref.record_ref(),
-            records[0].work_ref.record_ref(),
+            records[0].work_ref.whole(),
+            records[1].work_ref.whole(),
+            records[0].work_ref.whole(),
         ];
 
         let unique = crate::commands::memory::var::unique_anchors(anchors)

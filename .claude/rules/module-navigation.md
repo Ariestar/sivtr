@@ -61,7 +61,7 @@ crates/sivtr-core/src/
 ├── pi.rs                      ← Pi session parser
 ├── record/
 │   ├── model.rs               ← WorkRecord, WorkPart, WorkTime (data model center)
-│   ├── refs.rs                ← WorkRef parsing (Local body + Remote origin:body)
+│   ├── refs.rs                ← WorkRef = WorkScope + WorkPath + WorkAt ([scope:]path[/at])
 │   ├── index.rs               ← Record indexing
 │   └── mod.rs                 ← Re-exports
 ├── query/                     ← load_workspace_records / load_workspace_source

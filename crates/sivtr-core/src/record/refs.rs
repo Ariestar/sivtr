@@ -6,11 +6,111 @@ use std::str::FromStr;
 use crate::ai::AgentProvider;
 use crate::record::model::WorkPartIo;
 
+/// Where a ref lives: current workspace, or a named scope (`docs`, `desk`, `alice/sivtr`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkScope {
+    Local,
+    Named(String),
+}
+
+impl WorkScope {
+    pub fn is_local(&self) -> bool {
+        matches!(self, Self::Local)
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            Self::Local => None,
+            Self::Named(name) => Some(name.as_str()),
+        }
+    }
+
+    /// Parse a non-local scope name (`name` or `device/workspace`).
+    pub fn named(raw: &str) -> Result<Self> {
+        Ok(Self::Named(parse_scope_name(raw)?))
+    }
+}
+
+/// Scope-local logical path: `source/session/index` (not a filesystem path).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkPath {
+    Terminal {
+        session: String,
+        index: usize,
+    },
+    Agent {
+        provider: AgentProvider,
+        session: String,
+        index: usize,
+    },
+}
+
+impl WorkPath {
+    pub fn session(&self) -> &str {
+        match self {
+            Self::Terminal { session, .. } | Self::Agent { session, .. } => session,
+        }
+    }
+
+    pub fn index(&self) -> usize {
+        match self {
+            Self::Terminal { index, .. } | Self::Agent { index, .. } => *index,
+        }
+    }
+
+    pub fn provider(&self) -> Option<AgentProvider> {
+        match self {
+            Self::Terminal { .. } => None,
+            Self::Agent { provider, .. } => Some(*provider),
+        }
+    }
+
+    pub fn with_session(&self, session: impl Into<String>) -> Self {
+        match self {
+            Self::Terminal { index, .. } => Self::Terminal {
+                session: session.into(),
+                index: *index,
+            },
+            Self::Agent {
+                provider, index, ..
+            } => Self::Agent {
+                provider: *provider,
+                session: session.into(),
+                index: *index,
+            },
+        }
+    }
+}
+
+impl fmt::Display for WorkPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Terminal { session, index } => {
+                write!(f, "terminal/{session}/{index}")
+            }
+            Self::Agent {
+                provider,
+                session,
+                index,
+            } => write!(f, "{}/{session}/{index}", provider.command_name()),
+        }
+    }
+}
+
+/// Where on a resolved record this ref lands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorkRefTarget {
-    Record,
+pub enum WorkAt {
+    Whole,
     Line(usize),
     Part { io: WorkPartIo, index: usize },
+}
+
+/// Exact address: `[scope:]path[/at]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkRef {
+    pub scope: WorkScope,
+    pub path: WorkPath,
+    pub at: WorkAt,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,12 +144,12 @@ impl WorkRefSelector {
     }
 
     pub fn matches_work_ref(&self, reference: &WorkRef) -> bool {
-        let (session, records) = match (self, reference.body()) {
+        let (session, records) = match (self, &reference.path) {
             (
                 Self::Terminal {
                     session, records, ..
                 },
-                WorkRefBody::Terminal { .. },
+                WorkPath::Terminal { .. },
             ) => (session, records),
             (
                 Self::Agent {
@@ -58,7 +158,7 @@ impl WorkRefSelector {
                     records,
                     ..
                 },
-                WorkRefBody::Agent { .. },
+                WorkPath::Agent { .. },
             ) => (session, records),
             (
                 Self::Agent {
@@ -67,7 +167,7 @@ impl WorkRefSelector {
                     records,
                     ..
                 },
-                WorkRefBody::Agent { provider, .. },
+                WorkPath::Agent { provider, .. },
             ) if expected == provider => (session, records),
             _ => return false,
         };
@@ -79,7 +179,7 @@ impl WorkRefSelector {
         }
 
         if let Some(records) = records {
-            if !records.contains(&reference.record_index()) {
+            if !records.contains(&reference.index()) {
                 return false;
             }
         }
@@ -94,256 +194,122 @@ impl WorkRefSelector {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WorkRef {
-    Local(WorkRefBody),
-    /// Non-current origin. Left-hand side of `origin:body`
-    /// (`alias`, local workspace name, or `device/workspace`).
-    Remote {
-        origin: String,
-        body: WorkRefBody,
-    },
-}
-
-/// The local shape of a ref: a terminal record or an agent turn, plus a target
-/// (record / line / part). This is what `Local` and `Remote` wrap; content
-/// logic (search, match, render) operates on `WorkRefBody` and is agnostic to
-/// whether the ref is local or remote.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WorkRefBody {
-    Terminal {
-        session: String,
-        record_index: usize,
-        target: WorkRefTarget,
-    },
-    Agent {
-        provider: AgentProvider,
-        session: String,
-        turn_index: usize,
-        target: WorkRefTarget,
-    },
-}
-
 impl WorkRef {
-    pub fn terminal_record(session: impl Into<String>, record_index: usize) -> Self {
-        Self::Local(WorkRefBody::Terminal {
-            session: session.into(),
-            record_index,
-            target: WorkRefTarget::Record,
-        })
-    }
-
-    pub fn agent_record(
-        provider: AgentProvider,
-        session: impl Into<String>,
-        turn_index: usize,
-    ) -> Self {
-        Self::Local(WorkRefBody::Agent {
-            provider,
-            session: session.into(),
-            turn_index,
-            target: WorkRefTarget::Record,
-        })
-    }
-
-    /// The local/remote-agnostic body: terminal record or agent turn + target.
-    /// Content logic (search, match, render) should call this and match on
-    /// [`WorkRefBody`] rather than on [`WorkRef`] directly.
-    pub fn body(&self) -> &WorkRefBody {
-        match self {
-            Self::Local(body) | Self::Remote { body, .. } => body,
+    pub fn terminal(session: impl Into<String>, index: usize) -> Self {
+        Self {
+            scope: WorkScope::Local,
+            path: WorkPath::Terminal {
+                session: session.into(),
+                index,
+            },
+            at: WorkAt::Whole,
         }
     }
 
-    /// Where this ref lives — `Local` or `Remote(origin)`.
-    pub fn origin(&self) -> RefOrigin<'_> {
-        match self {
-            Self::Local(_) => RefOrigin::Local,
-            Self::Remote { origin, .. } => RefOrigin::Remote(origin.as_str()),
+    pub fn agent(provider: AgentProvider, session: impl Into<String>, index: usize) -> Self {
+        Self {
+            scope: WorkScope::Local,
+            path: WorkPath::Agent {
+                provider,
+                session: session.into(),
+                index,
+            },
+            at: WorkAt::Whole,
         }
     }
 
     pub fn is_local(&self) -> bool {
-        matches!(self, Self::Local(_))
+        self.scope.is_local()
     }
 
-    pub fn remote_name(&self) -> Option<&str> {
-        match self {
-            Self::Local(_) => None,
-            Self::Remote { origin, .. } => Some(origin.as_str()),
+    pub fn scope_name(&self) -> Option<&str> {
+        self.scope.name()
+    }
+
+    pub fn with_scope(&self, scope: WorkScope) -> Self {
+        Self {
+            scope,
+            path: self.path.clone(),
+            at: self.at,
         }
+    }
+
+    pub fn with_named_scope(&self, name: impl Into<String>) -> Self {
+        self.with_scope(WorkScope::Named(name.into()))
+    }
+
+    pub fn with_path(&self, path: WorkPath) -> Self {
+        Self {
+            scope: self.scope.clone(),
+            path,
+            at: self.at,
+        }
+    }
+
+    pub fn with_session(&self, session: impl Into<String>) -> Self {
+        self.with_path(self.path.with_session(session))
     }
 
     pub fn with_line(&self, line: usize) -> Self {
-        self.with_target(WorkRefTarget::Line(line))
+        self.with_at(WorkAt::Line(line))
     }
 
     pub fn with_part(&self, io: WorkPartIo, index: usize) -> Self {
-        self.with_target(WorkRefTarget::Part { io, index })
+        self.with_at(WorkAt::Part { io, index })
     }
 
-    /// Replace the target (record/line/part), keeping the origin and body.
-    pub fn with_target(&self, target: WorkRefTarget) -> Self {
-        let body = match self.body() {
-            WorkRefBody::Terminal {
-                session,
-                record_index,
-                ..
-            } => WorkRefBody::Terminal {
-                session: session.clone(),
-                record_index: *record_index,
-                target,
-            },
-            WorkRefBody::Agent {
-                provider,
-                session,
-                turn_index,
-                ..
-            } => WorkRefBody::Agent {
-                provider: *provider,
-                session: session.clone(),
-                turn_index: *turn_index,
-                target,
-            },
-        };
-        self.with_body(body)
-    }
-
-    /// The record-level ref (drop line/part target), keeping the origin.
-    pub fn record_ref(&self) -> Self {
-        let body = match self.body() {
-            WorkRefBody::Terminal {
-                session,
-                record_index,
-                ..
-            } => WorkRefBody::Terminal {
-                session: session.clone(),
-                record_index: *record_index,
-                target: WorkRefTarget::Record,
-            },
-            WorkRefBody::Agent {
-                provider,
-                session,
-                turn_index,
-                ..
-            } => WorkRefBody::Agent {
-                provider: *provider,
-                session: session.clone(),
-                turn_index: *turn_index,
-                target: WorkRefTarget::Record,
-            },
-        };
-        self.with_body(body)
-    }
-
-    /// Rebuild the ref with a new body, preserving the origin (Local or
-    /// Remote name).
-    pub fn with_body(&self, body: WorkRefBody) -> Self {
-        match self {
-            Self::Local(_) => Self::Local(body),
-            Self::Remote { origin, .. } => Self::Remote {
-                origin: origin.clone(),
-                body,
-            },
+    pub fn with_at(&self, at: WorkAt) -> Self {
+        Self {
+            scope: self.scope.clone(),
+            path: self.path.clone(),
+            at,
         }
     }
 
+    pub fn whole(&self) -> Self {
+        self.with_at(WorkAt::Whole)
+    }
+
     pub fn line(&self) -> Option<usize> {
-        match self.target() {
-            WorkRefTarget::Record => None,
-            WorkRefTarget::Line(line) => Some(line),
-            WorkRefTarget::Part { .. } => None,
+        match self.at {
+            WorkAt::Line(line) => Some(line),
+            WorkAt::Whole | WorkAt::Part { .. } => None,
         }
     }
 
     pub fn part(&self) -> Option<(WorkPartIo, usize)> {
-        match self.target() {
-            WorkRefTarget::Part { io, index } => Some((io, index)),
-            WorkRefTarget::Record | WorkRefTarget::Line(_) => None,
-        }
-    }
-
-    pub fn target(&self) -> WorkRefTarget {
-        match self.body() {
-            WorkRefBody::Terminal { target, .. } | WorkRefBody::Agent { target, .. } => *target,
+        match self.at {
+            WorkAt::Part { io, index } => Some((io, index)),
+            WorkAt::Whole | WorkAt::Line(_) => None,
         }
     }
 
     pub fn provider(&self) -> Option<AgentProvider> {
-        match self.body() {
-            WorkRefBody::Terminal { .. } => None,
-            WorkRefBody::Agent { provider, .. } => Some(*provider),
-        }
+        self.path.provider()
     }
 
     pub fn session(&self) -> &str {
-        match self.body() {
-            WorkRefBody::Terminal { session, .. } | WorkRefBody::Agent { session, .. } => session,
-        }
+        self.path.session()
     }
 
-    pub fn record_index(&self) -> usize {
-        match self.body() {
-            WorkRefBody::Terminal { record_index, .. } => *record_index,
-            WorkRefBody::Agent { turn_index, .. } => *turn_index,
-        }
+    pub fn index(&self) -> usize {
+        self.path.index()
     }
-}
-
-/// A borrowed view of where a [`WorkRef`] lives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RefOrigin<'a> {
-    Local,
-    Remote(&'a str),
 }
 
 impl fmt::Display for WorkRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            // Local is the shorthand: bare body, no origin prefix.
-            Self::Local(body) => write_body(f, body),
-            Self::Remote { origin, body } => {
-                write!(f, "{origin}:")?;
-                write_body(f, body)
-            }
+        if let WorkScope::Named(name) = &self.scope {
+            write!(f, "{name}:")?;
         }
-    }
-}
-
-fn write_body(f: &mut fmt::Formatter<'_>, body: &WorkRefBody) -> fmt::Result {
-    match body {
-        WorkRefBody::Terminal {
-            session,
-            record_index,
-            target,
-        } => write_parts(
-            f,
-            &["terminal", session, &record_index.to_string()],
-            *target,
-        ),
-        WorkRefBody::Agent {
-            provider,
-            session,
-            turn_index,
-            target,
-        } => write_parts(
-            f,
-            &[provider.command_name(), session, &turn_index.to_string()],
-            *target,
-        ),
-    }
-}
-
-fn write_parts(f: &mut fmt::Formatter<'_>, parts: &[&str], target: WorkRefTarget) -> fmt::Result {
-    write!(f, "{}", parts.join("/"))?;
-    match target {
-        WorkRefTarget::Record => {}
-        WorkRefTarget::Line(line) => write!(f, "/{line}")?,
-        WorkRefTarget::Part { io, index } => {
-            write!(f, "/{}/{index}", part_segment(io))?;
+        write!(f, "{}", self.path)?;
+        match self.at {
+            WorkAt::Whole => {}
+            WorkAt::Line(line) => write!(f, "/{line}")?,
+            WorkAt::Part { io, index } => write!(f, "/{}/{index}", part_segment(io))?,
         }
+        Ok(())
     }
-    Ok(())
 }
 
 impl Serialize for WorkRef {
@@ -423,120 +389,116 @@ impl FromStr for WorkRefSelector {
     }
 }
 
-impl FromStr for WorkRefBody {
-    type Err = anyhow::Error;
-
-    fn from_str(value: &str) -> Result<Self> {
-        let parts = value
-            .split('/')
-            .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>();
-        if !(3..=5).contains(&parts.len()) {
-            bail!(
-                "Invalid work ref `{value}`; expected terminal/<session>/<record>[/line|/i/<part>|/o/<part>] or <provider>/<session>/<turn>[/line|/i/<part>|/o/<part>]"
-            );
-        }
-
-        let target = match parts.len() {
-            3 => WorkRefTarget::Record,
-            4 => WorkRefTarget::Line(parse_one_based(parts[3], "line", value)?),
-            5 => WorkRefTarget::Part {
-                io: parse_part_io(parts[3], value)?,
-                index: parse_one_based(parts[4], "part", value)?,
-            },
-            _ => unreachable!("length already validated"),
-        };
-        let item_index = parse_one_based(parts[2], "record", value)?;
-
-        if parts[0].eq_ignore_ascii_case("terminal") {
-            return Ok(Self::Terminal {
-                session: parts[1].to_string(),
-                record_index: item_index,
-                target,
-            });
-        }
-
-        let provider = AgentProvider::from_command_name(parts[0]).ok_or_else(|| {
-            anyhow::anyhow!(
-                "Invalid work ref `{value}`; unknown provider `{}`",
-                parts[0]
-            )
-        })?;
-        Ok(Self::Agent {
-            provider,
-            session: parts[1].to_string(),
-            turn_index: item_index,
-            target,
-        })
-    }
-}
-
 impl FromStr for WorkRef {
     type Err = anyhow::Error;
 
     fn from_str(value: &str) -> Result<Self> {
-        // `origin:body` — origin is alias, local workspace, or `device/workspace`.
-        // A bare ref with no `:` is local (current workspace).
-        if let Some((origin, rest)) = value.split_once(':') {
+        // `scope:path[/at]` — bare path is local (current workspace).
+        if let Some((scope_raw, rest)) = value.split_once(':') {
             if rest.is_empty() {
-                bail!("Invalid work ref `{value}`; missing body after `:`");
+                bail!("Invalid work ref `{value}`; missing path after `:`");
             }
-            reject_legacy_scheme_syntax(value)?;
-            let origin = origin.trim();
-            if origin.eq_ignore_ascii_case("local") {
-                return Ok(Self::Local(rest.parse::<WorkRefBody>()?));
+            if rest.starts_with('/') {
+                bail!(
+                    "Invalid work ref `{value}`; use `scope:path` (for example `desk:terminal/session/1`), not `://`"
+                );
             }
-            let origin = validate_origin(origin, value)?;
-            return Ok(Self::Remote {
-                origin,
-                body: rest.parse::<WorkRefBody>()?,
+            let scope_raw = scope_raw.trim();
+            let (path, at) = parse_path_and_at(rest)?;
+            if scope_raw.eq_ignore_ascii_case("local") {
+                return Ok(Self {
+                    scope: WorkScope::Local,
+                    path,
+                    at,
+                });
+            }
+            return Ok(Self {
+                scope: WorkScope::Named(parse_scope_name(scope_raw)?),
+                path,
+                at,
             });
         }
 
-        Ok(Self::Local(value.parse::<WorkRefBody>()?))
+        let (path, at) = parse_path_and_at(value)?;
+        Ok(Self {
+            scope: WorkScope::Local,
+            path,
+            at,
+        })
     }
 }
 
-/// Reject legacy `scheme://body` so it fails clearly instead of parsing as
-/// `origin=scheme/` + `body=/...`.
-pub fn reject_legacy_scheme_syntax(value: &str) -> Result<()> {
-    if let Some((_, rest)) = value.split_once(':') {
-        if rest.starts_with('/') {
-            bail!(
-                "Invalid work ref `{value}`; use `origin:body` (for example `desk:terminal/session/1`), not `://`"
-            );
-        }
+fn parse_path_and_at(value: &str) -> Result<(WorkPath, WorkAt)> {
+    let parts = value
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if !(3..=5).contains(&parts.len()) {
+        bail!(
+            "Invalid work ref `{value}`; expected terminal/<session>/<index>[/line|/i/<part>|/o/<part>] or <provider>/<session>/<index>[/line|/i/<part>|/o/<part>]"
+        );
     }
-    Ok(())
+
+    let at = match parts.len() {
+        3 => WorkAt::Whole,
+        4 => WorkAt::Line(parse_one_based(parts[3], "line", value)?),
+        5 => WorkAt::Part {
+            io: parse_part_io(parts[3], value)?,
+            index: parse_one_based(parts[4], "part", value)?,
+        },
+        _ => unreachable!("length already validated"),
+    };
+    let index = parse_one_based(parts[2], "index", value)?;
+
+    if parts[0].eq_ignore_ascii_case("terminal") {
+        return Ok((
+            WorkPath::Terminal {
+                session: parts[1].to_string(),
+                index,
+            },
+            at,
+        ));
+    }
+
+    let provider = AgentProvider::from_command_name(parts[0]).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Invalid work ref `{value}`; unknown provider `{}`",
+            parts[0]
+        )
+    })?;
+    Ok((
+        WorkPath::Agent {
+            provider,
+            session: parts[1].to_string(),
+            index,
+        },
+        at,
+    ))
 }
 
-/// Origin rules: `name` or `device/workspace`, each segment `[A-Za-z0-9_-]+`,
+/// Scope rules: `name` or `device/workspace`, each segment `[A-Za-z0-9_-]+`,
 /// case-insensitive (normalized to lowercase). `local` is reserved.
-fn validate_origin(name: &str, reference: &str) -> Result<String> {
+fn parse_scope_name(name: &str) -> Result<String> {
     if name.is_empty() {
-        bail!("Invalid work ref `{reference}`; empty origin before `:`");
+        bail!("Invalid work ref; empty scope before `:`");
     }
     let segments: Vec<&str> = name.split('/').collect();
     if segments.is_empty() || segments.len() > 2 {
-        bail!("Invalid work ref `{reference}`; origin must be `name` or `device/workspace`");
+        bail!("Invalid work ref; scope must be `name` or `device/workspace`");
     }
     let mut normalized = Vec::with_capacity(segments.len());
     for segment in segments {
         if segment.is_empty() {
-            bail!("Invalid work ref `{reference}`; empty origin segment");
+            bail!("Invalid work ref; empty scope segment");
         }
         if segment.eq_ignore_ascii_case("local") {
-            bail!(
-                "Invalid work ref `{reference}`; `local` is reserved — a bare ref is already local"
-            );
+            bail!("Invalid work ref; `local` is reserved — a bare ref is already local");
         }
         if !segment
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
         {
-            bail!(
-                "Invalid work ref `{reference}`; origin segment `{segment}` must be [a-zA-Z0-9_-]+"
-            );
+            bail!("Invalid work ref; scope segment `{segment}` must be [a-zA-Z0-9_-]+");
         }
         normalized.push(segment.to_ascii_lowercase());
     }
@@ -608,14 +570,17 @@ mod tests {
         let reference: WorkRef = "terminal/current/3/12".parse().unwrap();
         assert_eq!(
             reference,
-            WorkRef::Local(WorkRefBody::Terminal {
-                session: "current".to_string(),
-                record_index: 3,
-                target: WorkRefTarget::Line(12),
-            })
+            WorkRef {
+                scope: WorkScope::Local,
+                path: WorkPath::Terminal {
+                    session: "current".to_string(),
+                    index: 3,
+                },
+                at: WorkAt::Line(12),
+            }
         );
         assert_eq!(reference.to_string(), "terminal/current/3/12");
-        assert_eq!(reference.record_ref().to_string(), "terminal/current/3");
+        assert_eq!(reference.whole().to_string(), "terminal/current/3");
     }
 
     #[test]
@@ -623,18 +588,21 @@ mod tests {
         let reference: WorkRef = "terminal/current/3/o/2".parse().unwrap();
         assert_eq!(
             reference,
-            WorkRef::Local(WorkRefBody::Terminal {
-                session: "current".to_string(),
-                record_index: 3,
-                target: WorkRefTarget::Part {
+            WorkRef {
+                scope: WorkScope::Local,
+                path: WorkPath::Terminal {
+                    session: "current".to_string(),
+                    index: 3,
+                },
+                at: WorkAt::Part {
                     io: WorkPartIo::Output,
                     index: 2,
                 },
-            })
+            }
         );
         assert_eq!(reference.part(), Some((WorkPartIo::Output, 2)));
         assert_eq!(reference.to_string(), "terminal/current/3/o/2");
-        assert_eq!(reference.record_ref().to_string(), "terminal/current/3");
+        assert_eq!(reference.whole().to_string(), "terminal/current/3");
     }
 
     #[test]
@@ -642,12 +610,15 @@ mod tests {
         let reference: WorkRef = "pi/abcdef12/2".parse().unwrap();
         assert_eq!(
             reference,
-            WorkRef::Local(WorkRefBody::Agent {
-                provider: AgentProvider::Pi,
-                session: "abcdef12".to_string(),
-                turn_index: 2,
-                target: WorkRefTarget::Record,
-            })
+            WorkRef {
+                scope: WorkScope::Local,
+                path: WorkPath::Agent {
+                    provider: AgentProvider::Pi,
+                    session: "abcdef12".to_string(),
+                    index: 2,
+                },
+                at: WorkAt::Whole,
+            }
         );
         assert_eq!(reference.with_line(7).to_string(), "pi/abcdef12/2/7");
         assert_eq!(
@@ -657,67 +628,63 @@ mod tests {
     }
 
     #[test]
-    fn local_scheme_is_shorthand_for_local() {
-        // `local:body` parses to the same Local variant as a bare ref, but
-        // renders bare — so bare and local: round-trip equal while being
-        // distinct input strings.
+    fn local_scope_is_shorthand_for_local() {
         let bare: WorkRef = "terminal/session_42/3".parse().unwrap();
         let explicit: WorkRef = "local:terminal/session_42/3".parse().unwrap();
         assert_eq!(bare, explicit);
         assert!(bare.is_local());
-        assert_eq!(bare.remote_name(), None);
+        assert_eq!(bare.scope_name(), None);
         assert_eq!(bare.to_string(), "terminal/session_42/3");
     }
 
     #[test]
-    fn remote_origin_parses_and_renders() {
+    fn named_scope_parses_and_renders() {
         let reference: WorkRef = "desk:terminal/session_42/3/o/1".parse().unwrap();
         assert_eq!(
             reference,
-            WorkRef::Remote {
-                origin: "desk".to_string(),
-                body: WorkRefBody::Terminal {
+            WorkRef {
+                scope: WorkScope::Named("desk".to_string()),
+                path: WorkPath::Terminal {
                     session: "session_42".to_string(),
-                    record_index: 3,
-                    target: WorkRefTarget::Part {
-                        io: WorkPartIo::Output,
-                        index: 1,
-                    },
+                    index: 3,
+                },
+                at: WorkAt::Part {
+                    io: WorkPartIo::Output,
+                    index: 1,
                 },
             }
         );
         assert!(!reference.is_local());
-        assert_eq!(reference.remote_name(), Some("desk"));
+        assert_eq!(reference.scope_name(), Some("desk"));
         assert_eq!(reference.to_string(), "desk:terminal/session_42/3/o/1");
     }
 
     #[test]
-    fn device_workspace_origin_parses_and_renders() {
+    fn device_workspace_scope_parses_and_renders() {
         let reference: WorkRef = "alice/sivtr:codex/abc123/5".parse().unwrap();
-        assert_eq!(reference.remote_name(), Some("alice/sivtr"));
+        assert_eq!(reference.scope_name(), Some("alice/sivtr"));
         assert_eq!(reference.to_string(), "alice/sivtr:codex/abc123/5");
     }
 
     #[test]
-    fn remote_origin_preserved_through_target_changes() {
+    fn scope_preserved_through_at_changes() {
         let reference: WorkRef = "laptop:codex/abc123/5".parse().unwrap();
-        // with_line / record_ref must keep the origin, not drop to Local.
         assert_eq!(
             reference.with_line(2).to_string(),
             "laptop:codex/abc123/5/2"
         );
-        assert_eq!(reference.record_ref().to_string(), "laptop:codex/abc123/5");
+        assert_eq!(reference.whole().to_string(), "laptop:codex/abc123/5");
     }
 
     #[test]
-    fn remote_refs_serialize_as_display_form() {
-        let reference = WorkRef::Remote {
-            origin: "desk".to_string(),
-            body: WorkRefBody::Terminal {
+    fn named_refs_serialize_as_display_form() {
+        let reference = WorkRef {
+            scope: WorkScope::Named("desk".to_string()),
+            path: WorkPath::Terminal {
                 session: "session_42".to_string(),
-                record_index: 3,
-                target: WorkRefTarget::Record,
+                index: 3,
             },
+            at: WorkAt::Whole,
         };
         assert_eq!(reference.to_string(), "desk:terminal/session_42/3");
         let json = serde_json::to_string(&reference).unwrap();
@@ -727,37 +694,34 @@ mod tests {
     }
 
     #[test]
-    fn remote_origin_uppercased_normalized_to_lowercase() {
+    fn named_scope_uppercased_normalized_to_lowercase() {
         let reference: WorkRef = "Desk:terminal/session_42/3".parse().unwrap();
-        assert_eq!(reference.remote_name(), Some("desk"));
+        assert_eq!(reference.scope_name(), Some("desk"));
         assert_eq!(reference.to_string(), "desk:terminal/session_42/3");
 
         let full: WorkRef = "Alice/Sivtr:terminal/session_42/3".parse().unwrap();
-        assert_eq!(full.remote_name(), Some("alice/sivtr"));
+        assert_eq!(full.scope_name(), Some("alice/sivtr"));
         assert_eq!(full.to_string(), "alice/sivtr:terminal/session_42/3");
     }
 
     #[test]
-    fn rejects_invalid_remote_origins() {
-        // digits, underscore, hyphen are valid origin segment chars.
+    fn rejects_invalid_scopes() {
         assert!("dev_2:terminal/x/1".parse::<WorkRef>().is_ok());
         assert!("my-box:terminal/x/1".parse::<WorkRef>().is_ok());
         assert!("alice/sivtr:terminal/x/1".parse::<WorkRef>().is_ok());
-        // uppercase normalized to lowercase.
         assert_eq!(
             "Dev_2:terminal/x/1"
                 .parse::<WorkRef>()
                 .unwrap()
-                .remote_name(),
+                .scope_name(),
             Some("dev_2")
         );
-        // spaces / symbols / empty / legacy :// / too many segments are rejected.
         assert!("bad alias:terminal/x/1".parse::<WorkRef>().is_err());
         assert!("dev!:terminal/x/1".parse::<WorkRef>().is_err());
         assert!(":terminal/x/1".parse::<WorkRef>().is_err());
         assert!("desk://terminal/x/1".parse::<WorkRef>().is_err());
         assert!("a/b/c:terminal/x/1".parse::<WorkRef>().is_err());
-        assert!("local:terminal/x/1".parse::<WorkRef>().is_ok()); // reserved -> Local
+        assert!("local:terminal/x/1".parse::<WorkRef>().is_ok());
     }
 
     #[test]

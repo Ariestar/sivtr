@@ -7,7 +7,7 @@ use regex::Regex;
 use sivtr_core::ai::{AgentProvider, AgentSessionProvider};
 use sivtr_core::record::{
     WorkOutcome, WorkPart, WorkPartIo, WorkPartKind, WorkRecord, WorkRecordKind, WorkRef,
-    WorkRefTarget,
+    WorkAt,
 };
 
 use crate::cli::{
@@ -341,10 +341,10 @@ fn matching_anchors<'a>(
     spec: &FilterSpec,
 ) -> Vec<MatchedAnchor<'a>> {
     match spec.mode {
-        FilterMode::Anchors => match anchor.target() {
-            WorkRefTarget::Record => record_anchor_matches(record, anchor, spec),
-            WorkRefTarget::Line(line) => line_anchor_matches(record, anchor, spec, line),
-            WorkRefTarget::Part { .. } => part_anchor_matches(record, anchor, spec),
+        FilterMode::Anchors => match anchor.at {
+            WorkAt::Whole => record_anchor_matches(record, anchor, spec),
+            WorkAt::Line(line) => line_anchor_matches(record, anchor, spec, line),
+            WorkAt::Part { .. } => part_anchor_matches(record, anchor, spec),
         },
         FilterMode::Parts => part_anchors_for(record, anchor, spec),
     }
@@ -384,7 +384,7 @@ fn line_anchor_matches<'a>(
     spec: &FilterSpec,
     line: usize,
 ) -> Vec<MatchedAnchor<'a>> {
-    let Some(text) = record.content_for_target(WorkRefTarget::Line(line)) else {
+    let Some(text) = record.content_for_at(WorkAt::Line(line)) else {
         return Vec::new();
     };
     if matches!(
@@ -409,7 +409,7 @@ fn part_anchor_matches<'a>(
     anchor: &WorkRef,
     spec: &FilterSpec,
 ) -> Vec<MatchedAnchor<'a>> {
-    let Some(part) = record.part_for_target(anchor.target()) else {
+    let Some(part) = record.part_for_at(anchor.at) else {
         return Vec::new();
     };
     part_matches_filters(part, spec)
@@ -423,9 +423,9 @@ fn part_anchors_for<'a>(
     anchor: &WorkRef,
     spec: &FilterSpec,
 ) -> Vec<MatchedAnchor<'a>> {
-    match anchor.target() {
-        WorkRefTarget::Part { .. } => part_anchor_matches(record, anchor, spec),
-        WorkRefTarget::Record | WorkRefTarget::Line(_) => record
+    match anchor.at {
+        WorkAt::Part { .. } => part_anchor_matches(record, anchor, spec),
+        WorkAt::Whole | WorkAt::Line(_) => record
             .parts
             .iter()
             .filter(|part| part_matches_filters(part, spec))
@@ -493,15 +493,15 @@ fn match_excluded(matched: &MatchedAnchor<'_>, regex: Option<&Regex>) -> bool {
         return false;
     };
 
-    match matched.anchor.target() {
-        WorkRefTarget::Record => matched
+    match matched.anchor.at {
+        WorkAt::Whole => matched
             .record
             .parts
             .iter()
             .any(|part| regex.is_match(&part.text)),
-        WorkRefTarget::Line(_) | WorkRefTarget::Part { .. } => matched
+        WorkAt::Line(_) | WorkAt::Part { .. } => matched
             .record
-            .content_for_target(matched.anchor.target())
+            .content_for_at(matched.anchor.at)
             .is_some_and(|text| regex.is_match(&text)),
     }
 }

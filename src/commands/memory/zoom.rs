@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use anyhow::{Context, Result};
-use sivtr_core::record::{WorkRecord, WorkRef, WorkRefBody};
+use sivtr_core::record::{WorkRecord, WorkRef, WorkPath};
 
 use crate::cli::ZoomArgs;
 use crate::commands::memory::show;
@@ -58,26 +58,26 @@ fn expand_around(
     let mut seen = HashSet::new();
 
     for anchor in source_anchors {
-        let source_ref = anchor.record_ref();
+        let source_ref = anchor.whole();
         let source = source_records
             .iter()
-            .find(|record| record.work_ref.record_ref() == source_ref)
+            .find(|record| record.work_ref.whole() == source_ref)
             .with_context(|| format!("No record found for ref `{source_ref}`"))?;
         let mut session_records = all_records
             .iter()
             .filter(|record| same_stream(source, record))
             .collect::<Vec<_>>();
-        session_records.sort_by_key(|record| record.work_ref.record_index());
+        session_records.sort_by_key(|record| record.work_ref.index());
 
         let position = session_records
             .iter()
-            .position(|record| record.work_ref.record_ref() == source_ref)
+            .position(|record| record.work_ref.whole() == source_ref)
             .with_context(|| format!("No record found for ref `{source_ref}`"))?;
         let start = position.saturating_sub(before);
         let end = (position + after).min(session_records.len() - 1);
 
         for record in &session_records[start..=end] {
-            let key = record.work_ref.record_ref().to_string();
+            let key = record.work_ref.whole().to_string();
             if seen.insert(key) {
                 expanded.push((*record).clone());
             }
@@ -88,20 +88,22 @@ fn expand_around(
 }
 
 fn same_stream(left: &WorkRecord, right: &WorkRecord) -> bool {
-    match (left.work_ref.body(), right.work_ref.body()) {
-        (WorkRefBody::Terminal { .. }, WorkRefBody::Terminal { .. }) => {
+    match (&left.work_ref.path, &right.work_ref.path) {
+        (WorkPath::Terminal { .. }, WorkPath::Terminal { .. }) => {
             left.work_ref.session() == right.work_ref.session()
         }
         (
-            WorkRefBody::Agent {
+            WorkPath::Agent {
                 provider: left_provider,
                 ..
             },
-            WorkRefBody::Agent {
+            WorkPath::Agent {
                 provider: right_provider,
                 ..
             },
-        ) => left_provider == right_provider && left.work_ref.session() == right.work_ref.session(),
+        ) => {
+            left_provider == right_provider && left.work_ref.session() == right.work_ref.session()
+        }
         _ => false,
     }
 }
@@ -119,7 +121,7 @@ mod tests {
         let sources = vec![records[1].clone(), records[2].clone()];
         let anchors = sources
             .iter()
-            .map(|record| record.work_ref.record_ref())
+            .map(|record| record.work_ref.whole())
             .collect::<Vec<_>>();
 
         let expanded =
@@ -162,7 +164,7 @@ mod tests {
     fn test_terminal_record(index: usize) -> WorkRecord {
         WorkRecord {
             schema_version: 1,
-            work_ref: WorkRef::terminal_record("session_1", index),
+            work_ref: WorkRef::terminal("session_1", index),
             kind: WorkRecordKind::TerminalCommand,
             source: WorkSource {
                 channel: WorkChannel::Terminal,

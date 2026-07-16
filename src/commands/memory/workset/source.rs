@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use sivtr_core::query::load_workspace_source;
-use sivtr_core::record::{reject_legacy_scheme_syntax, WorkRecord, WorkRef, WorkRefBody};
+use sivtr_core::record::{WorkPath, WorkRecord, WorkRef};
 
 use crate::commands::memory::records::warn_skipped;
 
@@ -67,21 +67,25 @@ pub fn load_source(source: &str, cwd: Option<&Path>) -> Result<WorkSetSource> {
         .map(Path::to_path_buf)
         .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
 
-    // `origin:body` — origin is mount alias / local workspace name / device/workspace.
-    // Bare body is local current workspace.
-    if let Some((origin, body)) = source.split_once(':') {
-        if body.is_empty() {
+    // `scope:path` — scope is mount alias / local workspace name / device/workspace.
+    // Bare path is local current workspace.
+    if let Some((scope, path)) = source.split_once(':') {
+        if path.is_empty() {
             anyhow::bail!("source `{source}` is missing a selector after `:`");
         }
-        reject_legacy_scheme_syntax(source)?;
-        if origin.eq_ignore_ascii_case("local") {
-            return load_local_source(body, &cwd);
+        if path.starts_with('/') {
+            anyhow::bail!(
+                "Invalid source `{source}`; use `scope:path` (for example `desk:terminal`), not `://`"
+            );
         }
-        let origin = origin.to_ascii_lowercase();
+        if scope.eq_ignore_ascii_case("local") {
+            return load_local_source(path, &cwd);
+        }
+        let scope = scope.to_ascii_lowercase();
 
         // 1. Workspace-local mount alias (remote share).
         if let Some(workspace) = sivtr_core::workspace::resolve_workspace_for_dir(&cwd)? {
-            if let Some(response) = try_remote_mount(&workspace.key, &origin, body)? {
+            if let Some(response) = try_remote_mount(&workspace.key, &scope, path)? {
                 return Ok(WorkSetSource::Records {
                     cwd,
                     records: response.records,
@@ -91,16 +95,16 @@ pub fn load_source(source: &str, cwd: Option<&Path>) -> Result<WorkSetSource> {
         }
 
         // 2. Local workspace by directory basename (e.g. `docs:terminal`).
-        if !origin.contains('/') {
+        if !scope.contains('/') {
             if let Some(root) =
-                crate::commands::remote::workspace::resolve_local_workspace_by_name(&origin)?
+                crate::commands::remote::workspace::resolve_local_workspace_by_name(&scope)?
             {
-                return load_local_source(body, &root);
+                return load_local_source(path, &root);
             }
         }
 
         anyhow::bail!(
-            "unknown origin `{origin}`; use `sivtr remote list` for mounts or `sivtr ws list` for local workspaces"
+            "unknown scope `{scope}`; use `sivtr remote list` for mounts or `sivtr ws list` for local workspaces"
         );
     }
     load_local_source(source, &cwd)
@@ -108,15 +112,15 @@ pub fn load_source(source: &str, cwd: Option<&Path>) -> Result<WorkSetSource> {
 
 fn try_remote_mount(
     workspace_key: &str,
-    origin: &str,
-    body: &str,
+    scope: &str,
+    path: &str,
 ) -> Result<Option<crate::remote::protocol::SourceResponse>> {
     use crate::remote::ipc;
     use crate::remote::protocol::{LocalRequest, LocalResponse};
 
-    // Auto-start daemon when reading remote origins, then check mounts.
+    // Auto-start daemon when reading remote scopes, then check mounts.
     crate::commands::remote::serve::ensure_running()?;
-    // Only treat origin as a mount if it is registered; other errors (network,
+    // Only treat scope as a mount if it is registered; other errors (network,
     // auth) must surface instead of being mistaken for a local workspace name.
     let mounts = match ipc::call(LocalRequest::RemoteList {
         workspace_key: workspace_key.to_string(),
@@ -127,15 +131,15 @@ fn try_remote_mount(
     };
     if !mounts
         .iter()
-        .any(|mount| mount.alias.eq_ignore_ascii_case(origin))
+        .any(|mount| mount.alias.eq_ignore_ascii_case(scope))
     {
         return Ok(None);
     }
 
     match ipc::call(LocalRequest::RemoteSource {
         workspace_key: workspace_key.to_string(),
-        alias: origin.to_ascii_lowercase(),
-        source: body.to_string(),
+        alias: scope.to_ascii_lowercase(),
+        source: path.to_string(),
     })? {
         LocalResponse::Source(response) => Ok(Some(response)),
         response => anyhow::bail!("Unexpected daemon response: {response:?}"),
@@ -173,15 +177,15 @@ pub fn load_context_records(
     for anchor in source_anchors {
         let record = super::record_for_anchor(source_records, anchor)
             .with_context(|| format!("No record found for ref `{anchor}`"))?;
-        let body = match record.work_ref.body() {
-            WorkRefBody::Terminal { session, .. } => format!("terminal/{session}"),
-            WorkRefBody::Agent {
+        let path = match &record.work_ref.path {
+            WorkPath::Terminal { session, .. } => format!("terminal/{session}"),
+            WorkPath::Agent {
                 provider, session, ..
             } => format!("{}/{session}", provider.command_name()),
         };
-        let source = match anchor.remote_name() {
-            Some(origin) => format!("{origin}:{body}"),
-            None => body,
+        let source = match anchor.scope_name() {
+            Some(scope) => format!("{scope}:{path}"),
+            None => path,
         };
         if seen_sources.insert(source.clone()) {
             sources.push(source);
@@ -194,7 +198,7 @@ pub fn load_context_records(
         let loaded = load_source(&source, Some(cwd))?;
         let (loaded_records, _) = loaded.into_parts();
         for record in loaded_records {
-            let key = record.work_ref.record_ref().to_string();
+            let key = record.work_ref.whole().to_string();
             if seen_records.insert(key) {
                 records.push(record);
             }

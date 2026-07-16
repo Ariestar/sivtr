@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use sivtr_core::record::{WorkPartIo, WorkRecord, WorkRef, WorkRefBody, WorkRefTarget};
+use sivtr_core::record::{WorkPartIo, WorkRecord, WorkRef, WorkPath, WorkAt};
 
 use crate::cli::NavArgs;
 use crate::commands::memory::show;
@@ -73,9 +73,9 @@ fn parent(
     source_records: &[WorkRecord],
     all_records: &[WorkRecord],
 ) -> Result<Vec<WorkRef>> {
-    match anchor.target() {
-        WorkRefTarget::Part { .. } | WorkRefTarget::Line(_) => Ok(vec![anchor.record_ref()]),
-        WorkRefTarget::Record => session(anchor, source_records, all_records),
+    match anchor.at {
+        WorkAt::Part { .. } | WorkAt::Line(_) => Ok(vec![anchor.whole()]),
+        WorkAt::Whole => session(anchor, source_records, all_records),
     }
 }
 
@@ -88,15 +88,15 @@ fn child(
     if index == 0 {
         bail!("child index must be 1-based");
     }
-    match anchor.target() {
-        WorkRefTarget::Record => {
+    match anchor.at {
+        WorkAt::Whole => {
             let record = record_for_anchor(anchor, source_records, all_records)?;
             let Some(part) = record.parts.get(index - 1) else {
                 return Ok(Vec::new());
             };
             Ok(vec![record.work_ref.with_part(part.io, part.index)])
         }
-        WorkRefTarget::Line(_) | WorkRefTarget::Part { .. } => Ok(Vec::new()),
+        WorkAt::Line(_) | WorkAt::Part { .. } => Ok(Vec::new()),
     }
 }
 
@@ -106,22 +106,22 @@ fn sibling(
     all_records: &[WorkRecord],
     offset: isize,
 ) -> Result<Vec<WorkRef>> {
-    match anchor.target() {
-        WorkRefTarget::Record => {
+    match anchor.at {
+        WorkAt::Whole => {
             let record = record_for_anchor(anchor, source_records, all_records)?;
             let session_records = session_records_for(record, all_records);
             let Some(position) = session_records
                 .iter()
-                .position(|candidate| candidate.work_ref.record_ref() == anchor.record_ref())
+                .position(|candidate| candidate.work_ref.whole() == anchor.whole())
             else {
                 return Ok(Vec::new());
             };
             let Some(target) = offset_index(position, offset, session_records.len()) else {
                 return Ok(Vec::new());
             };
-            Ok(vec![session_records[target].work_ref.record_ref()])
+            Ok(vec![session_records[target].work_ref.whole()])
         }
-        WorkRefTarget::Part { io, index } => {
+        WorkAt::Part { io, index } => {
             let record = record_for_anchor(anchor, source_records, all_records)?;
             let part_positions = parts_with_io(record, io);
             let Some(position) = part_positions
@@ -135,11 +135,11 @@ fn sibling(
             };
             Ok(vec![record.work_ref.with_part(io, part_positions[target])])
         }
-        WorkRefTarget::Line(line) => {
+        WorkAt::Line(line) => {
             let Some(target) = offset_one_based(line, offset) else {
                 return Ok(Vec::new());
             };
-            Ok(vec![anchor.record_ref().with_line(target)])
+            Ok(vec![anchor.whole().with_line(target)])
         }
     }
 }
@@ -154,22 +154,22 @@ fn window(
     if start > end {
         bail!("window start must be <= end");
     }
-    match anchor.target() {
-        WorkRefTarget::Record => {
+    match anchor.at {
+        WorkAt::Whole => {
             let record = record_for_anchor(anchor, source_records, all_records)?;
             let session_records = session_records_for(record, all_records);
             let position = session_records
                 .iter()
-                .position(|candidate| candidate.work_ref.record_ref() == anchor.record_ref())
-                .with_context(|| format!("No record found for ref `{}`", anchor.record_ref()))?;
+                .position(|candidate| candidate.work_ref.whole() == anchor.whole())
+                .with_context(|| format!("No record found for ref `{}`", anchor.whole()))?;
             let start = clamp_offset(position, start, session_records.len());
             let end = clamp_offset(position, end, session_records.len());
             Ok(session_records[start..=end]
                 .iter()
-                .map(|record| record.work_ref.record_ref())
+                .map(|record| record.work_ref.whole())
                 .collect())
         }
-        WorkRefTarget::Part { io, index } => {
+        WorkAt::Part { io, index } => {
             let record = record_for_anchor(anchor, source_records, all_records)?;
             let part_positions = parts_with_io(record, io);
             let position = part_positions
@@ -183,11 +183,11 @@ fn window(
                 .map(|part_index| record.work_ref.with_part(io, *part_index))
                 .collect())
         }
-        WorkRefTarget::Line(line) => {
+        WorkAt::Line(line) => {
             let start = offset_one_based(line, start).unwrap_or(1);
             let end = offset_one_based(line, end).unwrap_or(1).max(start);
             Ok((start..=end)
-                .map(|line| anchor.record_ref().with_line(line))
+                .map(|line| anchor.whole().with_line(line))
                 .collect())
         }
     }
@@ -201,7 +201,7 @@ fn session(
     let record = record_for_anchor(anchor, source_records, all_records)?;
     Ok(session_records_for(record, all_records)
         .into_iter()
-        .map(|record| record.work_ref.record_ref())
+        .map(|record| record.work_ref.whole())
         .collect())
 }
 
@@ -210,11 +210,11 @@ fn record_for_anchor<'a>(
     source_records: &'a [WorkRecord],
     all_records: &'a [WorkRecord],
 ) -> Result<&'a WorkRecord> {
-    let record_ref = anchor.record_ref();
+    let record_ref = anchor.whole();
     source_records
         .iter()
         .chain(all_records.iter())
-        .find(|record| record.work_ref.record_ref() == record_ref)
+        .find(|record| record.work_ref.whole() == record_ref)
         .with_context(|| format!("No record found for ref `{record_ref}`"))
 }
 
@@ -226,25 +226,27 @@ fn session_records_for<'a>(
         .iter()
         .filter(|candidate| same_stream(record, candidate))
         .collect::<Vec<_>>();
-    records.sort_by_key(|record| record.work_ref.record_index());
+    records.sort_by_key(|record| record.work_ref.index());
     records
 }
 
 fn same_stream(left: &WorkRecord, right: &WorkRecord) -> bool {
-    match (left.work_ref.body(), right.work_ref.body()) {
-        (WorkRefBody::Terminal { .. }, WorkRefBody::Terminal { .. }) => {
+    match (&left.work_ref.path, &right.work_ref.path) {
+        (WorkPath::Terminal { .. }, WorkPath::Terminal { .. }) => {
             left.work_ref.session() == right.work_ref.session()
         }
         (
-            WorkRefBody::Agent {
+            WorkPath::Agent {
                 provider: left_provider,
                 ..
             },
-            WorkRefBody::Agent {
+            WorkPath::Agent {
                 provider: right_provider,
                 ..
             },
-        ) => left_provider == right_provider && left.work_ref.session() == right.work_ref.session(),
+        ) => {
+            left_provider == right_provider && left.work_ref.session() == right.work_ref.session()
+        }
         _ => false,
     }
 }
@@ -432,7 +434,7 @@ mod tests {
         assert_refs(
             navigate(
                 &records,
-                &[records[0].work_ref.record_ref()],
+                &[records[0].work_ref.whole()],
                 &records,
                 ">3",
             )
@@ -441,7 +443,7 @@ mod tests {
         );
         assert!(navigate(
             &records,
-            &[records[0].work_ref.record_ref()],
+            &[records[0].work_ref.whole()],
             &records,
             ">0"
         )
@@ -449,15 +451,12 @@ mod tests {
     }
 
     #[test]
-    fn navigation_preserves_remote_origin() {
+    fn navigation_preserves_named_scope() {
         let mut records = (1..=3).map(test_record).collect::<Vec<_>>();
         for record in &mut records {
-            record.work_ref = WorkRef::Remote {
-                origin: "desk".to_string(),
-                body: record.work_ref.body().clone(),
-            };
+            record.work_ref = record.work_ref.with_named_scope("desk");
         }
-        let start = vec![records[1].work_ref.record_ref()];
+        let start = vec![records[1].work_ref.whole()];
 
         assert_refs(
             navigate(&records, &start, &records, "+1").expect("remote sibling"),
@@ -484,7 +483,7 @@ mod tests {
     fn test_record(index: usize) -> WorkRecord {
         WorkRecord {
             schema_version: sivtr_core::record::RECORD_SCHEMA_VERSION,
-            work_ref: WorkRef::terminal_record("session_1", index),
+            work_ref: WorkRef::terminal("session_1", index),
             kind: WorkRecordKind::TerminalCommand,
             source: WorkSource {
                 channel: WorkChannel::Terminal,

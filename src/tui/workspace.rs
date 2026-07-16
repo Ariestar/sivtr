@@ -17,7 +17,7 @@ use crate::tui::pane::{
 };
 use crate::tui::workspace_search::{workspace_search_regex_for_query, WorkspaceSearchScope};
 use sivtr_core::ai::{AgentProvider, AgentSelection};
-use sivtr_core::record::{WorkRecord, WorkRef, WorkRefTarget};
+use sivtr_core::record::{WorkRecord, WorkRef, WorkAt};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WorkspaceSource {
@@ -115,7 +115,7 @@ impl WorkspaceDialogue {
     pub(crate) fn display_unit(
         &self,
         mode: ContentViewMode,
-        target: Option<WorkRefTarget>,
+        target: Option<WorkAt>,
     ) -> TextPair {
         let plain = self.content_text(mode, target);
         TextPair {
@@ -127,9 +127,9 @@ impl WorkspaceDialogue {
     pub(crate) fn content_text(
         &self,
         mode: ContentViewMode,
-        target: Option<WorkRefTarget>,
+        target: Option<WorkAt>,
     ) -> String {
-        if let Some(target @ WorkRefTarget::Part { .. }) = target {
+        if let Some(target @ WorkAt::Part { .. }) = target {
             return match mode {
                 ContentViewMode::Raw => self
                     .targeted_plain_text(target)
@@ -139,7 +139,7 @@ impl WorkspaceDialogue {
                     .unwrap_or_else(|| "<empty>".to_string()),
             };
         }
-        if matches!(target, Some(WorkRefTarget::Line(_))) {
+        if matches!(target, Some(WorkAt::Line(_))) {
             return self
                 .record
                 .as_ref()
@@ -164,41 +164,41 @@ impl WorkspaceDialogue {
         }
     }
 
-    pub(crate) fn content_ref(&self, target: Option<WorkRefTarget>) -> Option<WorkRef> {
+    pub(crate) fn content_ref(&self, target: Option<WorkAt>) -> Option<WorkRef> {
         let work_ref = self.work_ref.as_ref()?;
         let target = match target {
-            Some(target @ WorkRefTarget::Part { .. }) => target,
+            Some(target @ WorkAt::Part { .. }) => target,
             _ => return Some(work_ref.clone()),
         };
-        Some(work_ref.with_target(target))
+        Some(work_ref.with_at(target))
     }
 
     /// Line count for scroll/search, from the same source as content_text.
     pub(crate) fn content_line_count(
         &self,
         mode: ContentViewMode,
-        target: Option<WorkRefTarget>,
+        target: Option<WorkAt>,
     ) -> usize {
         line_count_of(&self.content_text(mode, target))
     }
 
-    fn targeted_plain_text(&self, target: WorkRefTarget) -> Option<String> {
-        let WorkRefTarget::Part { .. } = target else {
+    fn targeted_plain_text(&self, target: WorkAt) -> Option<String> {
+        let WorkAt::Part { .. } = target else {
             return None;
         };
         let record = self.record.as_ref()?;
-        let part = record.part_for_target(target)?;
+        let part = record.part_for_at(target)?;
         if part.kind.is_structure() {
             return Some(raw_part_text(record, part));
         }
         Some(part.text.clone())
     }
 
-    fn targeted_structured_text(&self, target: WorkRefTarget) -> Option<String> {
-        let WorkRefTarget::Part { .. } = target else {
+    fn targeted_structured_text(&self, target: WorkAt) -> Option<String> {
+        let WorkAt::Part { .. } = target else {
             return None;
         };
-        let part = self.record.as_ref()?.part_for_target(target)?;
+        let part = self.record.as_ref()?.part_for_at(target)?;
         Some(structured_part_text(self.record.as_ref()?, part))
     }
 }
@@ -380,7 +380,7 @@ pub(crate) struct WorkspaceView<'a> {
     pub(crate) focus: WorkspaceFocus,
     pub(crate) content_scroll: usize,
     pub(crate) content_mode: ContentViewMode,
-    pub(crate) content_target: Option<WorkRefTarget>,
+    pub(crate) content_at: Option<WorkAt>,
     pub(crate) show_help: bool,
     pub(crate) help_state: &'a ListState,
     pub(crate) search: Option<WorkspaceSearchView<'a>>,
@@ -698,7 +698,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         view.dialogues,
         view.selected_dialogues,
         dialogue_idx,
-        view.content_target,
+        view.content_at,
     );
     let search_regex = view
         .search
@@ -742,7 +742,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         view.selected_dialogues,
         dialogue_idx,
         view.content_mode,
-        view.content_target,
+        view.content_at,
     );
     render_content_panel(
         frame,
@@ -919,7 +919,7 @@ fn current_content_ref(
     dialogues: &[WorkspaceDialogue],
     selected_dialogues: &[bool],
     highlighted_idx: usize,
-    target: Option<WorkRefTarget>,
+    target: Option<WorkAt>,
 ) -> Option<WorkRef> {
     current_content_dialogue(dialogues, selected_dialogues, highlighted_idx)
         .and_then(|dialogue| dialogue.content_ref(target))
@@ -1323,7 +1323,7 @@ pub(crate) fn workspace_content_text(
     selected_dialogues: &[bool],
     highlighted_idx: usize,
     mode: ContentViewMode,
-    target: Option<WorkRefTarget>,
+    target: Option<WorkAt>,
 ) -> String {
     if dialogues.is_empty() {
         return "<empty>".to_string();
@@ -1363,7 +1363,7 @@ mod tests {
     };
     use crate::tui::workspace_search::WorkspaceSearchScope;
     use sivtr_core::ai::AgentProvider;
-    use sivtr_core::record::{WorkRecord, WorkRef, WorkRefTarget};
+    use sivtr_core::record::{WorkRecord, WorkRef, WorkAt};
 
     #[test]
     fn can_open_dialogue_vim_accepts_sessions_when_dialogues_exist() {
@@ -1377,7 +1377,7 @@ mod tests {
     fn content_preview_text_preserves_raw_text_without_line_number_prefixes() {
         let record = WorkRecord {
             schema_version: 2,
-            work_ref: WorkRef::agent_record(AgentProvider::Codex, "session", 1),
+            work_ref: WorkRef::agent(AgentProvider::Codex, "session", 1),
             kind: sivtr_core::record::WorkRecordKind::ChatTurn,
             source: sivtr_core::record::WorkSource {
                 channel: sivtr_core::record::WorkChannel::Chat,
@@ -1431,7 +1431,7 @@ mod tests {
     fn content_preview_text_uses_targeted_part_text_in_raw_mode() {
         let record = WorkRecord {
             schema_version: 2,
-            work_ref: WorkRef::agent_record(AgentProvider::Codex, "session", 1),
+            work_ref: WorkRef::agent(AgentProvider::Codex, "session", 1),
             kind: sivtr_core::record::WorkRecordKind::ChatTurn,
             source: sivtr_core::record::WorkSource {
                 channel: sivtr_core::record::WorkChannel::Chat,
@@ -1458,7 +1458,7 @@ mod tests {
         };
         let dialogue = WorkspaceDialogue {
             source: WorkspaceSource::Agent(AgentProvider::Codex),
-            work_ref: Some(WorkRef::agent_record(AgentProvider::Codex, "session", 1)),
+            work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
             title: "cmd".to_string(),
             record: Some(record),
             copy: WorkspaceCopyParts::default(),
@@ -1469,7 +1469,7 @@ mod tests {
             &[false],
             0,
             ContentViewMode::Raw,
-            Some(WorkRefTarget::Part {
+            Some(WorkAt::Part {
                 io: sivtr_core::record::WorkPartIo::Input,
                 index: 1,
             }),
@@ -1483,7 +1483,7 @@ mod tests {
     fn content_preview_text_uses_structured_targeted_part_text_in_reading_mode() {
         let record = WorkRecord {
             schema_version: 2,
-            work_ref: WorkRef::agent_record(AgentProvider::Codex, "session", 1),
+            work_ref: WorkRef::agent(AgentProvider::Codex, "session", 1),
             kind: sivtr_core::record::WorkRecordKind::ChatTurn,
             source: sivtr_core::record::WorkSource {
                 channel: sivtr_core::record::WorkChannel::Chat,
@@ -1510,7 +1510,7 @@ mod tests {
         };
         let dialogue = WorkspaceDialogue {
             source: WorkspaceSource::Agent(AgentProvider::Codex),
-            work_ref: Some(WorkRef::agent_record(AgentProvider::Codex, "session", 1)),
+            work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
             title: "cmd".to_string(),
             record: Some(record),
             copy: WorkspaceCopyParts::default(),
@@ -1521,7 +1521,7 @@ mod tests {
             &[false],
             0,
             ContentViewMode::Reading,
-            Some(WorkRefTarget::Part {
+            Some(WorkAt::Part {
                 io: sivtr_core::record::WorkPartIo::Input,
                 index: 1,
             }),
@@ -1538,7 +1538,7 @@ mod tests {
     fn reading_mode_folds_structure_and_raw_expands() {
         let record = WorkRecord {
             schema_version: 2,
-            work_ref: WorkRef::agent_record(AgentProvider::Codex, "session", 1),
+            work_ref: WorkRef::agent(AgentProvider::Codex, "session", 1),
             kind: sivtr_core::record::WorkRecordKind::ChatTurn,
             source: sivtr_core::record::WorkSource {
                 channel: sivtr_core::record::WorkChannel::Chat,
@@ -1598,7 +1598,7 @@ mod tests {
         };
         let dialogue = WorkspaceDialogue {
             source: WorkspaceSource::Agent(AgentProvider::Codex),
-            work_ref: Some(WorkRef::agent_record(AgentProvider::Codex, "session", 1)),
+            work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
             title: "cmd".to_string(),
             record: Some(record),
             copy: WorkspaceCopyParts::default(),
@@ -1641,7 +1641,7 @@ mod tests {
 
     #[test]
     fn content_title_includes_current_dialogue_ref() {
-        let work_ref = WorkRef::agent_record(AgentProvider::Codex, "session", 2);
+        let work_ref = WorkRef::agent(AgentProvider::Codex, "session", 2);
 
         assert_eq!(
             content_title(ContentViewMode::Reading, &[false], Some(&work_ref)),
@@ -1668,14 +1668,14 @@ mod tests {
         let dialogues = vec![
             WorkspaceDialogue {
                 source: WorkspaceSource::Agent(AgentProvider::Codex),
-                work_ref: Some(WorkRef::agent_record(AgentProvider::Codex, "session", 1)),
+                work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
                 title: "first".to_string(),
                 record: None,
                 copy: WorkspaceCopyParts::default(),
             },
             WorkspaceDialogue {
                 source: WorkspaceSource::Agent(AgentProvider::Codex),
-                work_ref: Some(WorkRef::agent_record(AgentProvider::Codex, "session", 2)),
+                work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 2)),
                 title: "second".to_string(),
                 record: None,
                 copy: WorkspaceCopyParts::default(),
@@ -1694,7 +1694,7 @@ mod tests {
     fn current_content_ref_round_trips_active_part_target() {
         let dialogues = vec![WorkspaceDialogue {
             source: WorkspaceSource::Agent(AgentProvider::Codex),
-            work_ref: Some(WorkRef::agent_record(AgentProvider::Codex, "session", 2)),
+            work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 2)),
             title: "second".to_string(),
             record: None,
             copy: WorkspaceCopyParts::default(),
@@ -1704,7 +1704,7 @@ mod tests {
             &dialogues,
             &[false],
             0,
-            Some(WorkRefTarget::Part {
+            Some(WorkAt::Part {
                 io: sivtr_core::record::WorkPartIo::Output,
                 index: 1,
             }),

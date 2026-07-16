@@ -16,11 +16,11 @@ pub struct WorkJsonSessionMeta {
 }
 
 fn session_ref(record: &WorkRecord) -> String {
-    match record.work_ref.body() {
-        sivtr_core::record::WorkRefBody::Terminal { session, .. } => {
+    match &record.work_ref.path {
+        sivtr_core::record::WorkPath::Terminal { session, .. } => {
             format!("terminal/{session}")
         }
-        sivtr_core::record::WorkRefBody::Agent {
+        sivtr_core::record::WorkPath::Agent {
             provider, session, ..
         } => {
             format!("{}/{session}", provider.command_name())
@@ -70,7 +70,7 @@ mod tests {
     fn test_record() -> WorkRecord {
         WorkRecord {
             schema_version: sivtr_core::record::RECORD_SCHEMA_VERSION,
-            work_ref: WorkRef::agent_record(AgentProvider::Codex, "shortid", 3),
+            work_ref: WorkRef::agent(AgentProvider::Codex, "shortid", 3),
             kind: WorkRecordKind::ChatTurn,
             source: WorkSource {
                 channel: WorkChannel::Chat,

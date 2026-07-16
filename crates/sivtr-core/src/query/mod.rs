@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::ai::{AgentProvider, AgentSessionProvider};
-use crate::record::{WorkRecord, WorkRecordIndex, WorkRef, WorkRefBody, WorkRefSelector};
+use crate::record::{WorkRecord, WorkRecordIndex, WorkRef, WorkPath, WorkRefSelector};
 use crate::{session, workspace};
 
 /// A session file that could not be parsed, retained so callers can warn.
@@ -109,7 +109,7 @@ pub fn load_workspace_source(cwd: &Path, source: &str) -> Result<SourceQueryResu
         if !selector.matches_work_ref(&record.work_ref) {
             continue;
         }
-        let record_ref = record.work_ref.record_ref();
+        let record_ref = record.work_ref.whole();
         if let Some(lines) = selector.selected_lines() {
             anchors.extend(lines.iter().map(|line| record_ref.with_line(*line)));
         } else {
@@ -220,18 +220,16 @@ fn dedup_records(records: &mut Vec<WorkRecord>) {
 }
 
 fn record_identity_key(record: &WorkRecord) -> String {
-    match (&record.session.canonical_id, record.work_ref.body()) {
-        (Some(canonical_id), WorkRefBody::Terminal { record_index, .. }) => {
-            format!("terminal:{canonical_id}:{record_index}")
+    match (&record.session.canonical_id, &record.work_ref.path) {
+        (Some(canonical_id), WorkPath::Terminal { index, .. }) => {
+            format!("terminal:{canonical_id}:{index}")
         }
         (
             Some(canonical_id),
-            WorkRefBody::Agent {
-                provider,
-                turn_index,
-                ..
+            WorkPath::Agent {
+                provider, index, ..
             },
-        ) => format!("{}:{canonical_id}:{turn_index}", provider.command_name()),
+        ) => format!("{}:{canonical_id}:{index}", provider.command_name()),
         (None, _) => record.work_ref.to_string(),
     }
 }
@@ -281,9 +279,9 @@ fn normalize_session_display_ids(records: &mut [WorkRecord]) {
 }
 
 fn session_source_key(reference: &WorkRef) -> String {
-    match reference.body() {
-        WorkRefBody::Terminal { .. } => "terminal".to_string(),
-        WorkRefBody::Agent { provider, .. } => format!("agent:{}", provider.command_name()),
+    match &reference.path {
+        WorkPath::Terminal { .. } => "terminal".to_string(),
+        WorkPath::Agent { provider, .. } => format!("agent:{}", provider.command_name()),
     }
 }
 
@@ -312,30 +310,8 @@ fn prefix_chars(value: &str, len: usize) -> String {
 
 fn rewrite_record_session_display_id(record: &mut WorkRecord, display_id: &str) {
     record.session.id = display_id.to_string();
-    // Preserve the origin (local/remote); only the session id in the body changes.
-    let new_body = match record.work_ref.body() {
-        WorkRefBody::Terminal {
-            record_index,
-            target,
-            ..
-        } => WorkRefBody::Terminal {
-            session: display_id.to_string(),
-            record_index: *record_index,
-            target: *target,
-        },
-        WorkRefBody::Agent {
-            provider,
-            turn_index,
-            target,
-            ..
-        } => WorkRefBody::Agent {
-            provider: *provider,
-            session: display_id.to_string(),
-            turn_index: *turn_index,
-            target: *target,
-        },
-    };
-    record.work_ref = record.work_ref.with_body(new_body);
+    // Preserve scope; only the session id in the path changes.
+    record.work_ref = record.work_ref.with_session(display_id);
 }
 
 #[cfg(test)]
@@ -355,7 +331,7 @@ mod tests {
     #[test]
     fn keeps_short_session_ids_when_already_unique() {
         let mut records = vec![test_record(
-            WorkRef::agent_record(AgentProvider::Codex, "abcdef12", 1),
+            WorkRef::agent(AgentProvider::Codex, "abcdef12", 1),
             "abcdef12",
             Some("abcdef1234567890"),
         )];
@@ -370,12 +346,12 @@ mod tests {
     fn extends_display_ids_to_break_canonical_prefix_collisions() {
         let mut records = vec![
             test_record(
-                WorkRef::agent_record(AgentProvider::Codex, "abcdef12", 1),
+                WorkRef::agent(AgentProvider::Codex, "abcdef12", 1),
                 "abcdef12",
                 Some("abcdef1234567890"),
             ),
             test_record(
-                WorkRef::agent_record(AgentProvider::Codex, "abcdef12", 2),
+                WorkRef::agent(AgentProvider::Codex, "abcdef12", 2),
                 "abcdef12",
                 Some("abcdef1299999999"),
             ),
@@ -393,12 +369,12 @@ mod tests {
     fn keeps_provider_namespaces_independent_for_compaction() {
         let mut records = vec![
             test_record(
-                WorkRef::agent_record(AgentProvider::Codex, "abcdef12", 1),
+                WorkRef::agent(AgentProvider::Codex, "abcdef12", 1),
                 "abcdef12",
                 Some("abcdef1234567890"),
             ),
             test_record(
-                WorkRef::agent_record(AgentProvider::Claude, "abcdef12", 1),
+                WorkRef::agent(AgentProvider::Claude, "abcdef12", 1),
                 "abcdef12",
                 Some("abcdef1299999999"),
             ),
@@ -414,12 +390,12 @@ mod tests {
     fn deduplicates_canonical_records_and_keeps_more_complete_copy() {
         let mut records = vec![
             test_record(
-                WorkRef::agent_record(AgentProvider::Codex, "abcdef12", 1),
+                WorkRef::agent(AgentProvider::Codex, "abcdef12", 1),
                 "abcdef12",
                 Some("session-0123456789abcdef"),
             ),
             test_record(
-                WorkRef::agent_record(AgentProvider::Codex, "session-01234567", 1),
+                WorkRef::agent(AgentProvider::Codex, "session-01234567", 1),
                 "session-01234567",
                 Some("session-0123456789abcdef"),
             ),

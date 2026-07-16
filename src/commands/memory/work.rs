@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::Serialize;
 use sivtr_core::ai::AgentProvider;
-use sivtr_core::record::{WorkRecord, WorkRefBody};
+use sivtr_core::record::{WorkRecord, WorkPath};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
@@ -21,7 +21,7 @@ enum WorkSessionSource {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WorkSessionMarker {
-    remote: Option<String>,
+    scope: Option<String>,
     source: WorkSessionSource,
     session: String,
 }
@@ -93,7 +93,7 @@ fn execute_records(args: &WorkRecordsArgs) -> Result<()> {
     let (records, anchors) = source.into_parts();
     let record_anchors = anchors
         .into_iter()
-        .map(|anchor| anchor.record_ref())
+        .map(|anchor| anchor.whole())
         .collect::<Vec<_>>();
     let mut set = WorkSet::with_anchors(
         display_cwd,
@@ -203,16 +203,16 @@ fn timestamp_tag(timestamp: Option<&str>) -> String {
 
 impl WorkSessionMarker {
     fn from_record(record: &WorkRecord) -> Self {
-        match record.work_ref.body() {
-            WorkRefBody::Terminal { session, .. } => Self {
-                remote: record.work_ref.remote_name().map(str::to_string),
+        match &record.work_ref.path {
+            WorkPath::Terminal { session, .. } => Self {
+                scope: record.work_ref.scope_name().map(str::to_string),
                 source: WorkSessionSource::Terminal,
                 session: session.clone(),
             },
-            WorkRefBody::Agent {
+            WorkPath::Agent {
                 provider, session, ..
             } => Self {
-                remote: record.work_ref.remote_name().map(str::to_string),
+                scope: record.work_ref.scope_name().map(str::to_string),
                 source: WorkSessionSource::Agent(*provider),
                 session: session.clone(),
             },
@@ -229,8 +229,8 @@ impl WorkSessionMarker {
 
 impl fmt::Display for WorkSessionMarker {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(remote) = self.remote.as_deref() {
-            write!(formatter, "{remote}:")?;
+        if let Some(scope) = self.scope.as_deref() {
+            write!(formatter, "{scope}:")?;
         }
         write!(formatter, "{}/{}", self.source_name(), self.session)
     }
@@ -245,7 +245,7 @@ mod tests {
     };
 
     #[test]
-    fn session_markers_preserve_remote_origin() {
+    fn session_markers_preserve_scope() {
         let record = test_record(
             "desk:terminal/session_123/1",
             "command",
@@ -301,13 +301,13 @@ mod tests {
         WorkRecord {
             schema_version: sivtr_core::record::RECORD_SCHEMA_VERSION,
             work_ref: work_ref.clone(),
-            kind: if matches!(work_ref.body(), WorkRefBody::Terminal { .. }) {
+            kind: if matches!(work_ref.path, WorkPath::Terminal { .. }) {
                 WorkRecordKind::TerminalCommand
             } else {
                 WorkRecordKind::ChatTurn
             },
             source: WorkSource {
-                channel: if matches!(work_ref.body(), WorkRefBody::Terminal { .. }) {
+                channel: if matches!(work_ref.path, WorkPath::Terminal { .. }) {
                     WorkChannel::Terminal
                 } else {
                     WorkChannel::Chat

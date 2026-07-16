@@ -1,5 +1,5 @@
 use regex::{Regex, RegexBuilder};
-use sivtr_core::record::{work_record_content_matches, WorkRefTarget};
+use sivtr_core::record::{work_record_content_matches, WorkAt};
 
 use crate::tui::workspace::WorkspaceSession;
 
@@ -80,7 +80,7 @@ pub(crate) struct WorkspaceSearchOutput {
 pub(crate) struct WorkspaceSearchMatch {
     pub(crate) session_index: usize,
     pub(crate) dialogue_index: usize,
-    pub(crate) target: WorkRefTarget,
+    pub(crate) at: WorkAt,
     pub(crate) matched_line: usize,
 }
 
@@ -158,7 +158,7 @@ impl WorkspaceSearchIndex {
                         matches.push(WorkspaceSearchMatch {
                             session_index: filtered_session_index,
                             dialogue_index: 0,
-                            target: WorkRefTarget::Record,
+                            at: WorkAt::Whole,
                             matched_line: 1,
                         });
                     }
@@ -213,7 +213,7 @@ impl WorkspaceSearchIndex {
                     .map(move |(dialogue_index, _)| WorkspaceSearchMatch {
                         session_index,
                         dialogue_index,
-                        target: WorkRefTarget::Record,
+                        at: WorkAt::Whole,
                         matched_line: 1,
                     })
             })
@@ -271,7 +271,7 @@ impl WorkspaceSearchIndex {
                             .map(move |matched| WorkspaceSearchMatch {
                                 session_index,
                                 dialogue_index,
-                                target: matched.target,
+                                at: matched.at,
                                 matched_line: matched.matched_line,
                             })
                             .collect::<Vec<_>>()

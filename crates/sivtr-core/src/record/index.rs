@@ -1,7 +1,7 @@
 use regex::Regex;
 
 use super::model::{WorkPart, WorkPartIo, WorkRecord, WorkRecordKind};
-use super::refs::{WorkRef, WorkRefTarget};
+use super::refs::{WorkAt, WorkRef};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkRecordSearchScope {
@@ -13,7 +13,7 @@ pub enum WorkRecordSearchScope {
 #[derive(Debug, Clone)]
 pub struct WorkRecordMatch<'a> {
     pub record: &'a WorkRecord,
-    pub target: WorkRefTarget,
+    pub at: WorkAt,
     pub content: String,
     pub matched_line: usize,
 }
@@ -33,10 +33,10 @@ impl WorkRecordIndex {
     }
 
     pub fn resolve(&self, reference: &WorkRef) -> Option<&WorkRecord> {
-        let record_ref = reference.record_ref();
+        let whole = reference.whole();
         self.records
             .iter()
-            .find(|record| record.work_ref == record_ref)
+            .find(|record| record.work_ref == whole)
     }
 
     pub fn resolve_part(&self, reference: &WorkRef) -> Option<&WorkPart> {
@@ -60,7 +60,7 @@ impl WorkRecordIndex {
                 WorkRecordSearchScope::Title => {
                     regex.is_match(&record.title).then_some(WorkRecordMatch {
                         record,
-                        target: WorkRefTarget::Record,
+                        at: WorkAt::Whole,
                         content: record.title.clone(),
                         matched_line: 1,
                     })
@@ -110,7 +110,7 @@ fn matching_parts<'a>(record: &'a WorkRecord, regex: &Regex) -> Vec<WorkRecordMa
                 .filter(|(_, line)| regex.is_match(line))
                 .map(|(line_index, line)| WorkRecordMatch {
                     record,
-                    target: WorkRefTarget::Part {
+                    at: WorkAt::Part {
                         io: part.io,
                         index: part.index,
                     },
@@ -130,7 +130,7 @@ fn matching_lines<'a>(record: &'a WorkRecord, regex: &Regex) -> Vec<WorkRecordMa
         .filter(|(_, line)| regex.is_match(line))
         .map(|(line_index, line)| WorkRecordMatch {
             record,
-            target: WorkRefTarget::Line(line_index + 1),
+            at: WorkAt::Line(line_index + 1),
             content: line.to_string(),
             matched_line: line_index + 1,
         })
@@ -142,7 +142,7 @@ fn matching_session<'a>(record: &'a WorkRecord, regex: &Regex) -> Option<WorkRec
     if regex.is_match(session_id) {
         return Some(WorkRecordMatch {
             record,
-            target: WorkRefTarget::Record,
+            at: WorkAt::Whole,
             content: session_id.to_string(),
             matched_line: 1,
         });
@@ -167,11 +167,11 @@ mod tests {
     fn resolves_records_by_typed_ref() {
         let records = vec![test_record("pi/abcdef12/2", "abcdef12", 2, "hello\nneedle")];
         let index = WorkRecordIndex::new(records);
-        let reference = WorkRef::agent_record(AgentProvider::Pi, "abcdef12", 2);
+        let reference = WorkRef::agent(AgentProvider::Pi, "abcdef12", 2);
 
         assert_eq!(index.resolve(&reference).unwrap().title, "title");
         assert!(index
-            .resolve(&WorkRef::agent_record(AgentProvider::Pi, "abcdef12", 3))
+            .resolve(&WorkRef::agent(AgentProvider::Pi, "abcdef12", 3))
             .is_none());
     }
 
@@ -179,7 +179,7 @@ mod tests {
     fn resolves_parts_by_typed_ref() {
         let record = test_record_with_parts("terminal/current/1", "current", 1, "hello");
         let index = WorkRecordIndex::new(vec![record]);
-        let reference = WorkRef::terminal_record("current", 1).with_part(WorkPartIo::Output, 1);
+        let reference = WorkRef::terminal("current", 1).with_part(WorkPartIo::Output, 1);
 
         assert!(index.resolve_part(&reference).is_some());
     }
@@ -206,7 +206,7 @@ mod tests {
         combined: &str,
     ) -> WorkRecord {
         use crate::record::model::{WorkChannel, WorkSessionRef, WorkSource};
-        let work_ref = WorkRef::agent_record(AgentProvider::Pi, session_id, turn_index);
+        let work_ref = WorkRef::agent(AgentProvider::Pi, session_id, turn_index);
         WorkRecord {
             schema_version: 1,
             work_ref,
@@ -243,7 +243,7 @@ mod tests {
         text: &str,
     ) -> WorkRecord {
         use crate::record::model::{WorkChannel, WorkSessionRef, WorkSource};
-        let work_ref = WorkRef::terminal_record(session_id, turn_index);
+        let work_ref = WorkRef::terminal(session_id, turn_index);
         WorkRecord {
             schema_version: 1,
             work_ref,

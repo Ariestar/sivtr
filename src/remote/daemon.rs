@@ -14,7 +14,6 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 
 use sivtr_core::query::load_workspace_source;
-use sivtr_core::record::WorkRef;
 
 use super::identity::Identity;
 use super::ipc;
@@ -302,7 +301,7 @@ async fn process_local(
             .await?;
             match response {
                 RemoteResponse::Source(mut source) => {
-                    qualify_source_origin(&mount.alias, &mut source);
+                    qualify_source_scope(&mount.alias, &mut source);
                     LocalResponse::Source(source)
                 }
                 response => bail!("Unexpected remote response: {response:?}"),
@@ -455,19 +454,13 @@ async fn process_remote(
     }
 }
 
-fn qualify_source_origin(origin: &str, response: &mut SourceResponse) {
-    let origin = origin.to_ascii_lowercase();
+fn qualify_source_scope(scope: &str, response: &mut SourceResponse) {
+    let scope = scope.to_ascii_lowercase();
     for record in &mut response.records {
-        record.work_ref = WorkRef::Remote {
-            origin: origin.clone(),
-            body: record.work_ref.body().clone(),
-        };
+        record.work_ref = record.work_ref.with_named_scope(scope.clone());
     }
     for anchor in &mut response.anchors {
-        *anchor = WorkRef::Remote {
-            origin: origin.clone(),
-            body: anchor.body().clone(),
-        };
+        *anchor = anchor.with_named_scope(scope.clone());
     }
 }
 

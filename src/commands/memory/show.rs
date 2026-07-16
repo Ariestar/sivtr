@@ -2,7 +2,7 @@ use std::io::IsTerminal;
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
-use sivtr_core::record::{WorkPart, WorkRecord, WorkRef, WorkRefTarget};
+use sivtr_core::record::{WorkPart, WorkRecord, WorkRef, WorkAt};
 
 use crate::cli::ShowArgs;
 use crate::commands::memory::workset;
@@ -137,7 +137,7 @@ pub fn render_full_items(set: &workset::WorkSet) -> Result<Vec<(WorkRef, String)
         .map(|item| {
             let content = item
                 .record
-                .content_for_target(item.anchor.target())
+                .content_for_at(item.anchor.at)
                 .with_context(|| format!("No content found for ref `{}`", item.anchor))?;
             Ok((item.anchor, content))
         })
@@ -253,14 +253,14 @@ fn print_refs(set: &workset::WorkSet) {
 }
 
 fn anchor_summary(record: &WorkRecord, anchor: &WorkRef) -> String {
-    match anchor.target() {
-        WorkRefTarget::Record => record.title.clone(),
-        WorkRefTarget::Line(_) => record
-            .content_for_target(anchor.target())
+    match anchor.at {
+        WorkAt::Whole => record.title.clone(),
+        WorkAt::Line(_) => record
+            .content_for_at(anchor.at)
             .map(|text| summary_text(&text))
             .unwrap_or_else(|| record.title.clone()),
-        WorkRefTarget::Part { .. } => record
-            .part_for_target(anchor.target())
+        WorkAt::Part { .. } => record
+            .part_for_at(anchor.at)
             .map(part_summary)
             .unwrap_or_else(|| record.title.clone()),
     }
@@ -277,12 +277,12 @@ fn part_summary(part: &WorkPart) -> String {
 }
 
 fn anchor_timestamp<'a>(record: &'a WorkRecord, anchor: &WorkRef) -> Option<&'a str> {
-    match anchor.target() {
-        WorkRefTarget::Part { .. } => record
-            .part_for_target(anchor.target())
+    match anchor.at {
+        WorkAt::Part { .. } => record
+            .part_for_at(anchor.at)
             .and_then(|part| part.occurred_at.as_deref())
             .or_else(|| record.time.primary_at()),
-        WorkRefTarget::Record | WorkRefTarget::Line(_) => record.time.primary_at(),
+        WorkAt::Whole | WorkAt::Line(_) => record.time.primary_at(),
     }
 }
 

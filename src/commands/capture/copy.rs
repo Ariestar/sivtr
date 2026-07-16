@@ -319,7 +319,7 @@ pub fn execute_ref(
 
 fn ref_text_pair(record: &WorkRecord, work_ref: &WorkRef, input_ref: &str) -> Result<TextPair> {
     let plain = record
-        .content_for_target(work_ref.target())
+        .content_for_at(work_ref.at)
         .with_context(|| missing_ref_content_message(work_ref, input_ref))?;
     Ok(TextPair {
         ansi: plain.clone(),
@@ -1409,7 +1409,7 @@ mod tests {
             0,
         )
         .unwrap();
-        let reference = WorkRef::terminal_record("current", 1)
+        let reference = WorkRef::terminal("current", 1)
             .with_part(sivtr_core::record::WorkPartIo::Output, 1);
 
         let text = ref_text_pair(&record, &reference, "terminal/current/1/o/1").unwrap();
@@ -1432,7 +1432,7 @@ mod tests {
     #[test]
     fn resolves_ref_text_for_line_targets() {
         let record = test_record();
-        let reference = WorkRef::agent_record(AgentProvider::Codex, "session", 1).with_line(2);
+        let reference = WorkRef::agent(AgentProvider::Codex, "session", 1).with_line(2);
 
         let text = ref_text_pair(&record, &reference, "codex/session/1/2").unwrap();
 
@@ -1502,7 +1502,7 @@ mod tests {
     fn test_record() -> WorkRecord {
         WorkRecord {
             schema_version: 1,
-            work_ref: WorkRef::agent_record(AgentProvider::Codex, "session", 1),
+            work_ref: WorkRef::agent(AgentProvider::Codex, "session", 1),
             kind: WorkRecordKind::ChatTurn,
             source: WorkSource {
                 channel: WorkChannel::Chat,

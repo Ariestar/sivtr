@@ -109,7 +109,7 @@ fn merge_sets(mut base: WorkSet, mut addition: WorkSet) -> WorkSet {
     let mut records_by_ref = records_by_ref(base.records);
     for record in addition.records {
         records_by_ref
-            .entry(record.work_ref.record_ref().to_string())
+            .entry(record.work_ref.whole().to_string())
             .or_insert(record);
     }
 
@@ -155,7 +155,7 @@ pub(crate) fn unique_anchors(anchors: Vec<WorkRef>) -> Vec<WorkRef> {
 fn records_by_ref(records: Vec<WorkRecord>) -> HashMap<String, WorkRecord> {
     records
         .into_iter()
-        .map(|record| (record.work_ref.record_ref().to_string(), record))
+        .map(|record| (record.work_ref.whole().to_string(), record))
         .collect()
 }
 
@@ -165,7 +165,7 @@ fn records_for_unique_anchors(
 ) -> Vec<WorkRecord> {
     let mut records = Vec::new();
     for anchor in anchors {
-        if let Some(record) = records_by_ref.remove(&anchor.record_ref().to_string()) {
+        if let Some(record) = records_by_ref.remove(&anchor.whole().to_string()) {
             records.push(record);
         }
     }

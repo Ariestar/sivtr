@@ -58,7 +58,7 @@ src/                       ← CLI binary
 
 - `WorkRecord` — single command execution or AI turn
 - `WorkPart` / `WorkPartIo` — leaf content chunk; `WorkPartIo` is Input | Output, `WorkPartKind` is Prompt/Command/UserMessage/AssistantMessage/ToolCall/ToolOutput/Text/Error
-- `WorkRef` — typed reference: local `terminal/session_42/3/o/1`, `codex/abc123/5/i/2`, or remote `desk:terminal/...` / `docs:codex/4` (`origin:body`)
+- `WorkRef` — typed address: `WorkScope` + `WorkPath` + `WorkAt` as `[scope:]path[/at]` (e.g. `terminal/session_42/3/o/1`, `desk:codex/abc123/5/i/2`)
 - `WorkTime::from_components(started_at, ended_at, duration_ms)` — time construction
 - `AgentProvider` — registry in `agents/mod.rs` (`AgentProvider::all()` / `from_command_name` / `command_names_csv`); do not hardcode provider lists in CLI/help
 - Remote model: **Device Daemon + Identity + Share + Grant + Mount**
@@ -90,7 +90,7 @@ pwd && git branch
 sivtr search terminal --status failure --json | sivtr search terminal --exclude "example" -f timeline
 ```
 
-Target selectors: `terminal/<session>/<record>/<line>`, `agent/<session>/<turn>`, `<provider>/<session>/<turn>`. Part refs: `<provider>/<session>/<turn>/<i|o>/<part>`. Use `*` for wildcards. Remote origins: `desk:terminal/...`, `docs:codex/4`.
+Target selectors: `terminal/<session>/<record>/<line>`, `agent/<session>/<turn>`, `<provider>/<session>/<turn>`. Part refs: `<provider>/<session>/<turn>/<i|o>/<part>`. Use `*` for wildcards. Named scopes: `desk:terminal/...`, `docs:codex/4`.
 
 ## Remote Memory
 

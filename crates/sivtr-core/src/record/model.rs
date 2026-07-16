@@ -1,4 +1,4 @@
-use super::refs::{WorkRef, WorkRefTarget};
+use super::refs::{WorkAt, WorkRef};
 use crate::ai::{
     format_blocks_with_text, format_structured_block, select_blocks, AgentBlock, AgentBlockKind,
     AgentProvider, AgentSelection, AgentSession,
@@ -302,7 +302,7 @@ impl WorkRecord {
             .and_then(|name| name.to_str())
             .unwrap_or("current")
             .to_string();
-        let work_ref = WorkRef::terminal_record(session_id.clone(), index + 1);
+        let work_ref = WorkRef::terminal(session_id.clone(), index + 1);
         let title = if command.is_empty() {
             preview(&output)
         } else {
@@ -374,7 +374,7 @@ impl WorkRecord {
 
         let session_ref_id = agent_session_ref_id(session.id.as_deref(), &session.path);
         let canonical_id = agent_session_canonical_id(session.id.as_deref(), &session.path);
-        let work_ref = WorkRef::agent_record(provider, session_ref_id.clone(), index + 1);
+        let work_ref = WorkRef::agent(provider, session_ref_id.clone(), index + 1);
         let title = if user.trim().is_empty() {
             title_preview(&assistant)
         } else {
@@ -517,13 +517,11 @@ impl WorkRecord {
         }
     }
 
-    pub fn content_for_target(&self, target: WorkRefTarget) -> Option<String> {
-        match target {
-            WorkRefTarget::Record => Some(self.combined_text()).filter(|text| !text.is_empty()),
-            WorkRefTarget::Line(line) => self.line_text(line),
-            WorkRefTarget::Part { .. } => {
-                self.part_for_target(target).map(|part| part.text.clone())
-            }
+    pub fn content_for_at(&self, at: WorkAt) -> Option<String> {
+        match at {
+            WorkAt::Whole => Some(self.combined_text()).filter(|text| !text.is_empty()),
+            WorkAt::Line(line) => self.line_text(line),
+            WorkAt::Part { .. } => self.part_for_at(at).map(|part| part.text.clone()),
         }
     }
 
@@ -557,10 +555,10 @@ impl WorkRecord {
             .map(str::to_string)
     }
 
-    pub fn part_for_target(&self, target: WorkRefTarget) -> Option<&WorkPart> {
-        let (io, index) = match target {
-            WorkRefTarget::Part { io, index } => (io, index),
-            WorkRefTarget::Record | WorkRefTarget::Line(_) => return None,
+    pub fn part_for_at(&self, at: WorkAt) -> Option<&WorkPart> {
+        let (io, index) = match at {
+            WorkAt::Part { io, index } => (io, index),
+            WorkAt::Whole | WorkAt::Line(_) => return None,
         };
         self.parts
             .iter()
@@ -712,7 +710,7 @@ fn selected_block_record(
     let title = title_preview(&text);
     let session_ref_id = agent_session_ref_id(session.id.as_deref(), &session.path);
     let canonical_id = agent_session_canonical_id(session.id.as_deref(), &session.path);
-    let work_ref = WorkRef::agent_record(provider, session_ref_id.clone(), index + 1);
+    let work_ref = WorkRef::agent(provider, session_ref_id.clone(), index + 1);
     let block_timestamp = block.timestamp.as_deref().and_then(normalize_timestamp);
     WorkRecord {
         schema_version: RECORD_SCHEMA_VERSION,
@@ -748,7 +746,7 @@ fn selected_group_record(
 
     let session_ref_id = agent_session_ref_id(session.id.as_deref(), &session.path);
     let canonical_id = agent_session_canonical_id(session.id.as_deref(), &session.path);
-    let work_ref = WorkRef::agent_record(provider, session_ref_id.clone(), 1);
+    let work_ref = WorkRef::agent(provider, session_ref_id.clone(), 1);
     let started_at = first_timestamp(&blocks).and_then(|timestamp| normalize_timestamp(&timestamp));
     let ended_at = last_timestamp(&blocks).and_then(|timestamp| normalize_timestamp(&timestamp));
     let parts = agent_parts(&blocks);
