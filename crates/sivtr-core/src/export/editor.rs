@@ -55,13 +55,11 @@ pub fn open_in_editor(content: &str) -> Result<String> {
 
     let path = tmp.path().to_path_buf();
 
-    // Parse editor command (handles cases like "code --wait")
-    let parts: Vec<&str> = editor.split_whitespace().collect();
-    let (program, extra_args) = parts.split_first().context("Empty editor command")?;
+    let (program, extra_args) = parse_editor_command(&editor)?;
 
     // Spawn editor
-    let status = Command::new(program)
-        .args(extra_args)
+    let status = Command::new(&program)
+        .args(&extra_args)
         .arg(&path)
         .status()
         .with_context(|| format!("Failed to launch editor '{editor}'"))?;
@@ -74,6 +72,65 @@ pub fn open_in_editor(content: &str) -> Result<String> {
     let result = std::fs::read_to_string(&path).context("Failed to read back from temp file")?;
 
     Ok(result)
+}
+
+/// Parse a configured editor command while preserving quoted paths and arguments.
+pub fn parse_editor_command(command: &str) -> Result<(String, Vec<String>)> {
+    let command = command.trim();
+    let mut parts = split_editor_command(command)?;
+    if parts.is_empty() {
+        anyhow::bail!("Empty editor command");
+    }
+
+    let program = parts.remove(0);
+    if program.is_empty() {
+        anyhow::bail!("Empty editor command program");
+    }
+    Ok((program, parts))
+}
+
+#[cfg(not(windows))]
+fn split_editor_command(command: &str) -> Result<Vec<String>> {
+    shell_words::split(command)
+        .with_context(|| format!("Invalid editor command quoting: `{command}`"))
+}
+
+#[cfg(windows)]
+fn split_editor_command(command: &str) -> Result<Vec<String>> {
+    use std::{ffi::OsString, os::windows::ffi::OsStringExt, slice};
+    use winapi::um::{shellapi::CommandLineToArgvW, winbase::LocalFree};
+
+    if command.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let wide = command
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let mut count = 0;
+    let argv = unsafe { CommandLineToArgvW(wide.as_ptr(), &mut count) };
+    if argv.is_null() {
+        anyhow::bail!(
+            "Invalid editor command `{command}`: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+
+    let mut parts = Vec::with_capacity(count as usize);
+    for argument in unsafe { slice::from_raw_parts(argv, count as usize) } {
+        let mut len = 0;
+        while unsafe { *argument.add(len) } != 0 {
+            len += 1;
+        }
+        let value = unsafe { slice::from_raw_parts(*argument, len) };
+        parts.push(OsString::from_wide(value).to_string_lossy().into_owned());
+    }
+    unsafe {
+        LocalFree(argv.cast());
+    }
+
+    Ok(parts)
 }
 
 /// Check if a command exists on PATH.
@@ -93,5 +150,24 @@ fn which_exists(name: &str) -> bool {
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_editor_command;
+
+    #[test]
+    fn parses_quoted_windows_editor_path_and_arguments() {
+        let (program, args) =
+            parse_editor_command(r#"  "C:\Program Files\Neovim\bin\nvim.exe" --clean  "#).unwrap();
+
+        assert_eq!(program, r#"C:\Program Files\Neovim\bin\nvim.exe"#);
+        assert_eq!(args, vec!["--clean"]);
+    }
+
+    #[test]
+    fn rejects_an_explicitly_empty_editor_program() {
+        assert!(parse_editor_command(r#""" --clean"#).is_err());
     }
 }

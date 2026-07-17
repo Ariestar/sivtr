@@ -89,12 +89,10 @@ pulldown-cmark = { version = "0.13", default-features = false }
 unicode-width = "0.2"
 rmcp = { version = "2.2", default-features = false, features = ["server", "macros", "transport-io"] }
 schemars = "1"
+tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["fileapi", "handleapi", "processenv", "processthreadsapi", "winbase", "winnt", "winuser", "windef", "minwindef"] }
-
-[dev-dependencies]
-tempfile = "3"
