@@ -165,10 +165,10 @@ impl SourceLoadPump {
         source: &WorkspaceSource,
         states: &mut [SourceLoadState],
     ) {
-        if self.gens.len() <= idx {
-            self.gens.resize(idx + 1, 0);
-            self.last_kick.resize(idx + 1, None);
-        }
+        assert!(
+            idx < self.gens.len() && idx < states.len(),
+            "source index out of range"
+        );
         self.gens[idx] = self.gens[idx].saturating_add(1);
         let gen = self.gens[idx];
         self.last_kick[idx] = Some(Instant::now());

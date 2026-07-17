@@ -3,11 +3,15 @@
 //! This is the product surface for bare `sivtr` and pick flows. `copy` only
 //! calls in for selection, then writes the clipboard.
 
+mod content;
+mod help;
 mod load;
+mod nav;
 mod picker;
+mod selection;
 mod text;
 mod vim;
-
+mod visual;
 pub(crate) use load::{workspace_source_catalog, SourceLoadState};
 pub(crate) use picker::run as run_picker;
 pub(crate) use text::{filter_lines_by_spec, record_text_to_pair, select_lines};
