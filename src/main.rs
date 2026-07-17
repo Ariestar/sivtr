@@ -33,6 +33,7 @@ fn main() -> ExitCode {
 fn run() -> Result<()> {
     let cli = cli::parse();
     output::set_color_choice(cli.color.into());
+    let include_remotes = cli.all;
 
     match cli.command {
         Some(Commands::Run { command, args }) => {
@@ -160,7 +161,7 @@ fn run() -> Result<()> {
                 // Piped input: read stdin
                 commands::capture::pipe::execute()?;
             } else {
-                run_workspace()?;
+                run_workspace(include_remotes)?;
             }
         }
     }
@@ -168,7 +169,7 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn run_workspace() -> Result<()> {
+fn run_workspace(include_remotes: bool) -> Result<()> {
     let providers = AgentProvider::all()
         .iter()
         .map(|spec| spec.provider)
@@ -176,6 +177,7 @@ fn run_workspace() -> Result<()> {
     commands::capture::copy::execute_agent_picker(AgentPickerRequest {
         providers: &providers,
         pick_current_session: true,
+        include_remotes,
         selection_mode: AgentSelection::LastTurn,
         print_full: false,
         regex: None,

@@ -1,13 +1,18 @@
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use regex::Regex;
+use std::collections::BTreeMap;
 use std::path::Path;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::commands::capture::command_block_selector::{
     parse_selector, resolve_selector, CommandSelection,
 };
+use crate::commands::memory::filter::Filter;
 use crate::commands::memory::workset;
 use crate::output;
+use crate::remote::ipc;
+use crate::remote::protocol::{LocalRequest, LocalResponse};
 use sivtr_core::ai::{
     AgentBlockKind, AgentProvider, AgentSelection, AgentSession, AgentSessionInfo,
     AgentSessionProvider,
@@ -15,6 +20,7 @@ use sivtr_core::ai::{
 use sivtr_core::capture::scrollback;
 use sivtr_core::record::{is_real_user_block, RecordTextMode, WorkRecord, WorkRef};
 use sivtr_core::session::{self, SessionEntry};
+use sivtr_core::workspace;
 
 mod vim;
 mod workspace_picker;
@@ -22,7 +28,7 @@ mod workspace_picker;
 use crate::tui::terminal::{init as init_tui, restore as restore_tui};
 use crate::tui::workspace::{
     TextPair, WorkspaceCopyParts, WorkspaceFocus, WorkspacePickedContent, WorkspaceSession,
-    WorkspaceSessionLoad, WorkspaceSource,
+    WorkspaceSource, WorkspaceSourceKind,
 };
 use workspace_picker::run_workspace_picker_on_terminal;
 
@@ -70,18 +76,12 @@ pub struct AgentCopyRequest<'a> {
 pub struct AgentPickerRequest<'a> {
     pub providers: &'a [AgentProvider],
     pub pick_current_session: bool,
+    /// When true, also query mounted remotes (`desk:codex`, …). Default is local only.
+    pub include_remotes: bool,
     pub selection_mode: AgentSelection,
     pub print_full: bool,
     pub regex: Option<&'a str>,
     pub lines: Option<&'a str>,
-}
-
-fn agent_session_providers(providers: &[AgentProvider]) -> Vec<Box<dyn AgentSessionProvider>> {
-    providers
-        .iter()
-        .copied()
-        .map(AgentProvider::session_provider)
-        .collect()
 }
 
 #[derive(Clone, Debug)]
@@ -337,47 +337,38 @@ fn ref_text_pair(record: &WorkRecord, work_ref: &WorkRef, input_ref: &str) -> Re
 }
 
 pub fn execute_agent_picker(request: AgentPickerRequest<'_>) -> Result<()> {
-    let sources = agent_session_providers(request.providers);
-    if sources.is_empty() {
+    if request.providers.is_empty() {
         anyhow::bail!("No AI providers configured for picker");
     }
 
+    let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
+    // Unified memory surface: every source (local or remote) loads through workset::query.
+    // Default is local only; `--all` adds mounted remotes. selection_mode stays on the
+    // public picker API for single-session agent copy paths.
+    let _ = (request.pick_current_session, request.selection_mode);
+    let sessions =
+        build_workspace_sessions(request.providers, &cwd, request.include_remotes)?;
+    if sessions.is_empty() {
+        anyhow::bail!("No terminal or AI sessions found");
+    }
+
     let mut terminal = init_tui()?;
-    let result = if request.pick_current_session {
-        let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
-        pick_current_agent_sessions_content_on_terminal(
-            &sources,
-            &mut terminal,
-            &cwd,
-            request.selection_mode,
-        )
-    } else {
-        pick_agent_sessions_content_on_terminal(&sources, &mut terminal, request.selection_mode)
-    };
+    let result =
+        run_workspace_picker_on_terminal(&mut terminal, sessions, WorkspaceFocus::Sessions);
     restore_tui(&mut terminal)?;
     let picked = result?;
-    match picked.source {
-        WorkspaceSource::Agent(provider) => finish_selected_units_copy(
-            &picked.units,
-            picked.selection,
-            request.print_full,
-            request.regex,
-            request.lines,
-            false,
-            format!("selected {} content is empty", provider.name()),
-            format!("copied {} content to clipboard", provider.name()),
-        ),
-        WorkspaceSource::Terminal => finish_selected_units_copy(
-            &picked.units,
-            picked.selection,
-            request.print_full,
-            request.regex,
-            request.lines,
-            false,
-            "selected terminal content is empty".to_string(),
-            "copied terminal content to clipboard".to_string(),
-        ),
-    }
+    let empty = format!("selected {} content is empty", picked.source.label());
+    let success = format!("copied {} content to clipboard", picked.source.label());
+    finish_selected_units_copy(
+        &picked.units,
+        picked.selection,
+        request.print_full,
+        request.regex,
+        request.lines,
+        false,
+        empty,
+        success,
+    )
 }
 
 fn execute_agent_session_pick(
@@ -430,74 +421,17 @@ fn execute_current_agent_session_pick(
 fn pick_agent_session_content_on_terminal(
     source: &dyn AgentSessionProvider,
     terminal: &mut crate::tui::terminal::Tui,
-    selection_mode: AgentSelection,
+    _selection_mode: AgentSelection,
 ) -> Result<WorkspacePickedContent> {
-    let sessions = source.list_recent_sessions(None)?;
-    let choices = build_agent_session_choices(source, &sessions, selection_mode)?;
-    if choices.is_empty() {
+    let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
+    let sessions = load_source_sessions(&WorkspaceSource::agent(source.provider()), &cwd)?;
+    if sessions.is_empty() {
         anyhow::bail!(
             "No {} sessions with selectable content found",
             source.provider().name()
         );
     }
-    run_workspace_picker_on_terminal(terminal, choices, WorkspaceFocus::Sessions)
-}
-
-fn pick_agent_sessions_content_on_terminal(
-    sources: &[Box<dyn AgentSessionProvider>],
-    terminal: &mut crate::tui::terminal::Tui,
-    selection_mode: AgentSelection,
-) -> Result<WorkspacePickedContent> {
-    let mut sessions = Vec::new();
-    for source in sources {
-        sessions.extend(build_lazy_agent_session_choices(
-            source.as_ref(),
-            source.list_recent_sessions(None)?,
-            selection_mode,
-        ));
-    }
-    sessions.sort_by_key(|s| std::cmp::Reverse(s.modified));
-
-    let sessions = workspace_sessions_from_agent_choices(sessions, None)?;
-    if sessions.is_empty() {
-        anyhow::bail!("No terminal or AI sessions found");
-    }
-
     run_workspace_picker_on_terminal(terminal, sessions, WorkspaceFocus::Sessions)
-}
-
-fn pick_current_agent_sessions_content_on_terminal(
-    sources: &[Box<dyn AgentSessionProvider>],
-    terminal: &mut crate::tui::terminal::Tui,
-    cwd: &std::path::Path,
-    selection_mode: AgentSelection,
-) -> Result<WorkspacePickedContent> {
-    let sessions = build_current_lazy_agent_session_choices(sources, cwd, selection_mode)?;
-    let sessions = workspace_sessions_from_agent_choices(sessions, Some(cwd))?;
-    if sessions.is_empty() {
-        anyhow::bail!("No current terminal or AI sessions found");
-    }
-
-    run_workspace_picker_on_terminal(terminal, sessions, WorkspaceFocus::Sessions)
-}
-
-fn build_current_lazy_agent_session_choices(
-    sources: &[Box<dyn AgentSessionProvider>],
-    cwd: &std::path::Path,
-    selection_mode: AgentSelection,
-) -> Result<Vec<WorkspaceSession>> {
-    let mut choices = Vec::new();
-
-    for source in sources {
-        choices.extend(build_lazy_agent_session_choices(
-            source.as_ref(),
-            source.list_recent_sessions(Some(cwd))?,
-            selection_mode,
-        ));
-    }
-
-    choices.sort_by_key(|s| std::cmp::Reverse(s.modified));
-    Ok(choices)
 }
 
 fn pick_current_agent_session_content_on_terminal(
@@ -524,143 +458,6 @@ fn pick_current_agent_session_content_on_terminal(
     run_workspace_picker_on_terminal(terminal, vec![choice], WorkspaceFocus::Dialogues)
 }
 
-fn build_agent_session_choices(
-    source: &dyn AgentSessionProvider,
-    sessions: &[AgentSessionInfo],
-    selection_mode: AgentSelection,
-) -> Result<Vec<WorkspaceSession>> {
-    let mut choices = Vec::new();
-
-    for info in sessions {
-        let session = match source.parse_session_file(&info.path) {
-            Ok(session) => session,
-            Err(error) => {
-                output::warning(format!(
-                    "failed to parse {} session {}: {error:#}",
-                    source.provider().name(),
-                    info.path.display()
-                ));
-                continue;
-            }
-        };
-        if let Some(choice) =
-            build_agent_session_choice(source.provider(), info, session, selection_mode)
-        {
-            choices.push(choice);
-        }
-    }
-
-    Ok(choices)
-}
-
-fn build_lazy_agent_session_choices(
-    source: &dyn AgentSessionProvider,
-    sessions: Vec<AgentSessionInfo>,
-    selection_mode: AgentSelection,
-) -> Vec<WorkspaceSession> {
-    sessions
-        .into_iter()
-        .map(|info| build_lazy_agent_session_choice(source.provider(), info, selection_mode))
-        .collect()
-}
-
-fn build_lazy_agent_session_choice(
-    provider: AgentProvider,
-    info: AgentSessionInfo,
-    selection_mode: AgentSelection,
-) -> WorkspaceSession {
-    let title = agent_session_info_display_title(&info);
-    let search_title = info
-        .title
-        .clone()
-        .filter(|title| !title.trim().is_empty())
-        .unwrap_or_else(|| agent_session_info_fallback_title(&info));
-
-    WorkspaceSession {
-        source: WorkspaceSource::Agent(provider),
-        modified: info.modified,
-        title,
-        search_title,
-        records: Vec::new(),
-        load: Some(WorkspaceSessionLoad {
-            provider,
-            path: info.path,
-            id: info.id,
-            cwd: info.cwd,
-            title: info.title,
-            modified: info.modified,
-            selection_mode,
-        }),
-    }
-}
-
-fn load_workspace_session(session: &WorkspaceSession) -> Result<WorkspaceSession> {
-    let Some(load) = &session.load else {
-        return Ok(session.clone());
-    };
-
-    let info = AgentSessionInfo {
-        path: load.path.clone(),
-        id: load.id.clone(),
-        cwd: load.cwd.clone(),
-        title: load.title.clone(),
-        modified: load.modified,
-    };
-    let source = load.provider.session_provider();
-    let parsed = match source.parse_session_file(&load.path) {
-        Ok(parsed) => parsed,
-        Err(_) => {
-            // Empty session on failure — no UI notice record.
-            return Ok(WorkspaceSession {
-                source: WorkspaceSource::Agent(load.provider),
-                modified: info.modified,
-                title: agent_session_info_display_title(&info),
-                search_title: info
-                    .title
-                    .clone()
-                    .filter(|title| !title.trim().is_empty())
-                    .unwrap_or_else(|| agent_session_info_fallback_title(&info)),
-                records: Vec::new(),
-                load: None,
-            });
-        }
-    };
-
-    Ok(resolved_workspace_session(
-        load.provider,
-        &info,
-        parsed,
-        load.selection_mode,
-    ))
-}
-
-pub(super) fn load_workspace_session_at(
-    sessions: &mut [WorkspaceSession],
-    idx: usize,
-) -> Result<()> {
-    let Some(session) = sessions.get(idx) else {
-        return Ok(());
-    };
-    if session.load.is_none() {
-        return Ok(());
-    }
-    let loaded = load_workspace_session(session)?;
-    if let Some(slot) = sessions.get_mut(idx) {
-        *slot = loaded;
-    }
-    Ok(())
-}
-
-pub(super) fn load_workspace_sessions_for_indices(
-    sessions: &mut [WorkspaceSession],
-    indices: &[usize],
-) -> Result<()> {
-    for idx in indices {
-        load_workspace_session_at(sessions, *idx)?;
-    }
-    Ok(())
-}
-
 fn build_agent_session_choice(
     provider: AgentProvider,
     info: &AgentSessionInfo,
@@ -676,45 +473,149 @@ fn build_agent_session_choice(
     let search_title = agent_session_search_title(info, &session);
 
     Some(WorkspaceSession {
-        source: WorkspaceSource::Agent(provider),
+        source: WorkspaceSource::agent(provider),
         modified: info.modified,
         title,
         search_title,
         records,
-        load: None,
     })
 }
 
-fn resolved_workspace_session(
-    provider: AgentProvider,
-    info: &AgentSessionInfo,
-    session: AgentSession,
-    selection_mode: AgentSelection,
-) -> WorkspaceSession {
-    build_agent_session_choice(provider, info, session, selection_mode).unwrap_or_else(|| {
-        // Empty list — no notice/placeholder dialogue.
-        WorkspaceSession {
-            source: WorkspaceSource::Agent(provider),
-            modified: info.modified,
-            title: agent_session_info_display_title(info),
-            search_title: info
-                .title
-                .clone()
-                .filter(|title| !title.trim().is_empty())
-                .unwrap_or_else(|| agent_session_info_fallback_title(info)),
-            records: Vec::new(),
-            load: None,
-        }
-    })
-}
-
-fn workspace_sessions_from_agent_choices(
-    mut choices: Vec<WorkspaceSession>,
-    cwd: Option<&std::path::Path>,
+/// Load terminal + providers via `workset::query`.
+///
+/// With `include_remotes`, also expands each mounted alias into scoped sources
+/// (`desk/terminal`, `desk/codex`, …). Remote content is fetched live over the
+/// daemon (`RemoteQuery`); nothing is written to local disk.
+fn build_workspace_sessions(
+    providers: &[AgentProvider],
+    cwd: &Path,
+    include_remotes: bool,
 ) -> Result<Vec<WorkspaceSession>> {
-    choices.extend(build_terminal_context_sessions(cwd)?);
-    choices.sort_by_key(|s| std::cmp::Reverse(s.modified));
-    Ok(choices)
+    let mut sources = Vec::new();
+    sources.push(WorkspaceSource::terminal());
+    for provider in providers {
+        sources.push(WorkspaceSource::agent(*provider));
+    }
+
+    if include_remotes {
+        for alias in list_remote_aliases(cwd)? {
+            sources.push(WorkspaceSource::scoped(
+                &alias,
+                WorkspaceSourceKind::Terminal,
+            ));
+            for provider in providers {
+                sources.push(WorkspaceSource::scoped(
+                    &alias,
+                    WorkspaceSourceKind::Agent(*provider),
+                ));
+            }
+        }
+    }
+
+    let mut sessions = Vec::new();
+    for source in sources {
+        match load_source_sessions(&source, cwd) {
+            Ok(loaded) => sessions.extend(loaded),
+            Err(error) => {
+                // Remote may be offline; keep the TUI usable with whatever else loads.
+                if source.is_remote() {
+                    output::warning(format!("{}: {error:#}", source.label()));
+                } else {
+                    return Err(error);
+                }
+            }
+        }
+    }
+
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.modified));
+    Ok(sessions)
+}
+
+fn list_remote_aliases(cwd: &Path) -> Result<Vec<String>> {
+    let Some(ws) = workspace::resolve_workspace_for_dir(cwd)? else {
+        return Ok(Vec::new());
+    };
+    // Daemon may be down — treat as "no remotes", not a hard failure for the TUI.
+    if crate::commands::remote::serve::ensure_running().is_err() {
+        return Ok(Vec::new());
+    }
+    match ipc::call(LocalRequest::RemoteList {
+        workspace_key: ws.key,
+    }) {
+        Ok(LocalResponse::Mounts(mounts)) => Ok(mounts.into_iter().map(|m| m.alias).collect()),
+        Ok(_) | Err(_) => Ok(Vec::new()),
+    }
+}
+
+fn load_source_sessions(source: &WorkspaceSource, cwd: &Path) -> Result<Vec<WorkspaceSession>> {
+    let set = match workset::query(&source.selector(), Filter::none(), Some(cwd)) {
+        Ok(set) => set,
+        Err(error) => {
+            // Empty source is normal (no terminal logs / no sessions for a provider).
+            let message = error.to_string();
+            if message.starts_with("No record found for ref selector") {
+                return Ok(Vec::new());
+            }
+            return Err(error);
+        }
+    };
+    Ok(sessions_from_records(source, set.records))
+}
+
+/// Group flat WorkRecords into one WorkspaceSession per (scope, kind, session_id).
+fn sessions_from_records(
+    source: &WorkspaceSource,
+    records: Vec<WorkRecord>,
+) -> Vec<WorkspaceSession> {
+    let mut groups: BTreeMap<String, Vec<WorkRecord>> = BTreeMap::new();
+    for record in records {
+        let key = record.work_ref.session().to_string();
+        groups.entry(key).or_default().push(record);
+    }
+
+    let mut sessions = Vec::with_capacity(groups.len());
+    for (session_id, mut records) in groups {
+        records.sort_by_key(|record| record.work_ref.path.index());
+        let modified = records
+            .iter()
+            .filter_map(record_modified)
+            .max()
+            .unwrap_or(UNIX_EPOCH);
+        let search_title = session_search_title(&session_id, &records);
+        let title = agent_session_title_with_id(search_title.clone(), Some(session_id.as_str()));
+        sessions.push(WorkspaceSession {
+            source: source.clone(),
+            modified,
+            title,
+            search_title,
+            records,
+        });
+    }
+    sessions
+}
+
+fn session_search_title(session_id: &str, records: &[WorkRecord]) -> String {
+    records
+        .iter()
+        .find_map(|record| {
+            let title = record.title.trim();
+            if title.is_empty() {
+                None
+            } else {
+                Some(title.to_string())
+            }
+        })
+        .unwrap_or_else(|| session_id.to_string())
+}
+
+fn record_modified(record: &WorkRecord) -> Option<SystemTime> {
+    let stamp = record.time.primary_at()?;
+    let dt = DateTime::parse_from_rfc3339(stamp)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))?;
+    let secs = dt.timestamp().max(0) as u64;
+    let nanos = dt.timestamp_subsec_nanos();
+    Some(UNIX_EPOCH + Duration::from_secs(secs) + Duration::from_nanos(nanos.into()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -760,50 +661,6 @@ fn execute_terminal_workspace_pick(
     )
 }
 
-fn build_terminal_context_sessions(cwd: Option<&std::path::Path>) -> Result<Vec<WorkspaceSession>> {
-    let paths = if let Some(cwd) = cwd {
-        sivtr_core::workspace::terminal_log_paths_for_workspace(cwd)?
-    } else if let Some(path) = scrollback::session_log_path()? {
-        if path.exists() {
-            vec![path]
-        } else {
-            Vec::new()
-        }
-    } else {
-        Vec::new()
-    };
-
-    let mut sessions = Vec::new();
-    for log_path in paths {
-        let entries = session::load_entries(&log_path).context("Failed to read session log")?;
-        if entries.is_empty() {
-            continue;
-        }
-
-        let blocks = entries
-            .iter()
-            .enumerate()
-            .filter_map(|(index, entry)| {
-                IndexedCommandBlock::from_session_entry(entry, &log_path, index)
-            })
-            .collect::<Vec<_>>();
-        let modified = std::fs::metadata(&log_path)
-            .and_then(|metadata| metadata.modified())
-            .unwrap_or_else(|_| SystemTime::now());
-        if let Some(session) = build_terminal_workspace_session(
-            &blocks,
-            CopyMode::Both,
-            true,
-            None,
-            modified,
-            &sivtr_core::workspace::terminal_session_id_from_path(&log_path),
-        ) {
-            sessions.push(session);
-        }
-    }
-    Ok(sessions)
-}
-
 fn build_terminal_workspace_session(
     blocks: &[IndexedCommandBlock],
     mode: CopyMode,
@@ -828,12 +685,11 @@ fn build_terminal_workspace_session(
     let title = format!("{session_title}  [{block_count} blocks]");
 
     Some(WorkspaceSession {
-        source: WorkspaceSource::Terminal,
+        source: WorkspaceSource::terminal(),
         modified,
         search_title: title.clone(),
         title,
         records,
-        load: None,
     })
 }
 
@@ -1234,10 +1090,6 @@ fn agent_session_display_title(info: &AgentSessionInfo, session: &AgentSession) 
     agent_session_title_with_id(title, session.id.as_deref().or(info.id.as_deref()))
 }
 
-fn agent_session_info_display_title(info: &AgentSessionInfo) -> String {
-    agent_session_title_with_id(agent_session_info_fallback_title(info), info.id.as_deref())
-}
-
 fn agent_session_title_with_id(title: String, id: Option<&str>) -> String {
     let id = id.map(short_agent_id);
 
@@ -1245,20 +1097,6 @@ fn agent_session_title_with_id(title: String, id: Option<&str>) -> String {
         Some(id) if !id.is_empty() => format!("{title}  [{id}]"),
         _ => title,
     }
-}
-
-fn agent_session_info_fallback_title(info: &AgentSessionInfo) -> String {
-    info.title
-        .clone()
-        .filter(|title| !title.trim().is_empty())
-        .or_else(|| info.id.clone())
-        .or_else(|| {
-            info.path
-                .file_stem()
-                .and_then(|name| name.to_str())
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| "<AI session>".to_string())
 }
 
 fn agent_session_fallback_title(info: &AgentSessionInfo, session: &AgentSession) -> String {
@@ -1336,11 +1174,10 @@ fn record_text_mode(mode: CopyMode) -> RecordTextMode {
 mod tests {
     use super::vim::{is_vim_command, vim_single_quote};
     use super::{
-        agent_session_preview, build_agent_session_choices, filter_lines_by_regex,
-        filter_lines_by_spec, load_workspace_session, record_to_copy_parts, records_to_text_pairs,
-        ref_text_pair, resolve_agent_session_selector, resolved_workspace_session, AgentBlockKind,
-        AgentProvider, AgentSelection, AgentSession, AgentSessionInfo, AgentSessionProvider,
-        TextPair,
+        agent_session_preview, filter_lines_by_regex, filter_lines_by_spec, record_to_copy_parts,
+        records_to_text_pairs, ref_text_pair, resolve_agent_session_selector,
+        sessions_from_records, AgentBlockKind, AgentProvider, AgentSelection, AgentSession,
+        AgentSessionInfo, AgentSessionProvider, TextPair, WorkspaceSource,
     };
     use anyhow::Result;
     use sivtr_core::ai::AgentBlock;
@@ -1385,6 +1222,89 @@ mod tests {
             record.copy_text(RecordTextMode::Command, false).plain,
             "git status --all -a"
         );
+    }
+
+    #[test]
+    fn sessions_from_records_groups_by_session() {
+        let source = WorkspaceSource::agent(AgentProvider::Codex);
+        let records = vec![
+            WorkRecord {
+                schema_version: 2,
+                work_ref: WorkRef::agent(AgentProvider::Codex, "s1", 1),
+                kind: WorkRecordKind::ChatTurn,
+                source: WorkSource {
+                    channel: WorkChannel::Chat,
+                    provider: Some("codex".to_string()),
+                },
+                session: WorkSessionRef {
+                    id: "s1".to_string(),
+                    canonical_id: Some("s1".to_string()),
+                    path: None,
+                },
+                cwd: None,
+                time: WorkTime::from_components(
+                    None,
+                    Some("2026-07-17T10:00:00Z".to_string()),
+                    None,
+                ),
+                status: None,
+                title: "first".to_string(),
+                parts: vec![],
+            },
+            WorkRecord {
+                schema_version: 2,
+                work_ref: WorkRef::agent(AgentProvider::Codex, "s1", 2),
+                kind: WorkRecordKind::ChatTurn,
+                source: WorkSource {
+                    channel: WorkChannel::Chat,
+                    provider: Some("codex".to_string()),
+                },
+                session: WorkSessionRef {
+                    id: "s1".to_string(),
+                    canonical_id: Some("s1".to_string()),
+                    path: None,
+                },
+                cwd: None,
+                time: WorkTime::from_components(
+                    None,
+                    Some("2026-07-17T11:00:00Z".to_string()),
+                    None,
+                ),
+                status: None,
+                title: "second".to_string(),
+                parts: vec![],
+            },
+            WorkRecord {
+                schema_version: 2,
+                work_ref: WorkRef::agent(AgentProvider::Codex, "s2", 1),
+                kind: WorkRecordKind::ChatTurn,
+                source: WorkSource {
+                    channel: WorkChannel::Chat,
+                    provider: Some("codex".to_string()),
+                },
+                session: WorkSessionRef {
+                    id: "s2".to_string(),
+                    canonical_id: Some("s2".to_string()),
+                    path: None,
+                },
+                cwd: None,
+                time: WorkTime::from_components(
+                    None,
+                    Some("2026-07-17T12:00:00Z".to_string()),
+                    None,
+                ),
+                status: None,
+                title: "other".to_string(),
+                parts: vec![],
+            },
+        ];
+
+        let sessions = sessions_from_records(&source, records);
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0].records.len(), 2);
+        assert_eq!(sessions[0].search_title, "first");
+        assert_eq!(sessions[1].search_title, "other");
+        assert!(!sessions[0].source.is_remote());
     }
 
     #[test]
@@ -1654,40 +1574,6 @@ mod tests {
         assert_eq!(copy_units[0].block.plain, "question\n\nanswer");
         assert!(!copy_units[0].block.plain.contains("## Assistant"));
     }
-
-    #[test]
-    fn resolved_workspace_session_empty_when_no_selectable_turns() {
-        let info = AgentSessionInfo {
-            path: PathBuf::from("tool-only.jsonl"),
-            id: Some("tool-only".to_string()),
-            cwd: Some("d:\repo".to_string()),
-            title: Some("tool only".to_string()),
-            modified: SystemTime::UNIX_EPOCH,
-        };
-        let session = AgentSession {
-            path: PathBuf::from("tool-only.jsonl"),
-            id: Some("tool-only".to_string()),
-            cwd: Some("d:\repo".to_string()),
-            title: Some("tool only".to_string()),
-            blocks: vec![AgentBlock {
-                kind: AgentBlockKind::ToolOutput,
-                timestamp: None,
-                label: Some("Bash".to_string()),
-                text: "tool-only entry".to_string(),
-            }],
-        };
-
-        let resolved = resolved_workspace_session(
-            AgentProvider::Claude,
-            &info,
-            session,
-            AgentSelection::LastTurn,
-        );
-
-        assert_eq!(resolved.title, "tool only  [tool-onl]");
-        assert!(resolved.records.is_empty());
-        assert!(resolved.load.is_none());
-    }
     #[test]
     fn resolves_agent_session_selector_by_recent_index() {
         let source = FakeAgentSource {
@@ -1832,57 +1718,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn build_agent_session_choices_skips_malformed_sessions() {
-        let source = SparseSelectableSource {
-            infos: vec![
-                AgentSessionInfo {
-                    path: PathBuf::from("broken.jsonl"),
-                    id: Some("broken".to_string()),
-                    cwd: Some("d:\\repo".to_string()),
-                    title: None,
-                    modified: SystemTime::UNIX_EPOCH + Duration::from_secs(2),
-                },
-                AgentSessionInfo {
-                    path: PathBuf::from("good.jsonl"),
-                    id: Some("good".to_string()),
-                    cwd: Some("d:\\repo".to_string()),
-                    title: None,
-                    modified: SystemTime::UNIX_EPOCH + Duration::from_secs(1),
-                },
-            ],
-            sessions: HashMap::from([(
-                PathBuf::from("good.jsonl"),
-                AgentSession {
-                    path: PathBuf::from("good.jsonl"),
-                    id: Some("good".to_string()),
-                    cwd: Some("d:\\repo".to_string()),
-                    title: None,
-                    blocks: vec![
-                        AgentBlock {
-                            kind: AgentBlockKind::User,
-                            timestamp: None,
-                            label: None,
-                            text: "question".to_string(),
-                        },
-                        AgentBlock {
-                            kind: AgentBlockKind::Assistant,
-                            timestamp: None,
-                            label: None,
-                            text: "answer".to_string(),
-                        },
-                    ],
-                },
-            )]),
-        };
-
-        let choices =
-            build_agent_session_choices(&source, &source.infos, AgentSelection::LastTurn).unwrap();
-
-        assert_eq!(choices.len(), 1);
-        assert_eq!(choices[0].title, "question  [good]");
-    }
-
     struct FakeAgentSource {
         require_cwd: bool,
         infos: Vec<AgentSessionInfo>,
@@ -1951,36 +1786,6 @@ mod tests {
                 .cloned()
                 .ok_or_else(|| anyhow::anyhow!("missing session fixture: {}", path.display()))
         }
-    }
-
-    #[test]
-    fn lazy_workspace_session_with_no_selectable_content_loads_as_empty() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("empty.jsonl");
-        std::fs::write(
-            &path,
-            r#"{"timestamp":"2026-02-15T00:00:00Z","type":"session_meta","payload":{"id":"empty","cwd":"d:\\repo"}}
-{"timestamp":"2026-02-15T00:00:01Z","type":"response_item","payload":{"type":"function_call","name":"Bash","arguments":"{\"command\":\"echo hi\"}"}}
-"#,
-        )
-        .unwrap();
-        let session = super::build_lazy_agent_session_choice(
-            AgentProvider::Codex,
-            AgentSessionInfo {
-                path: path.clone(),
-                id: Some("empty".to_string()),
-                cwd: Some("d:\\repo".to_string()),
-                title: None,
-                modified: SystemTime::UNIX_EPOCH,
-            },
-            AgentSelection::LastTurn,
-        );
-
-        let loaded = load_workspace_session(&session).unwrap();
-
-        assert!(loaded.records.is_empty());
-        assert!(loaded.load.is_none());
-        assert_eq!(loaded.title, "empty  [empty]");
     }
 
     #[test]

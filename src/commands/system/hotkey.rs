@@ -60,6 +60,7 @@ pub fn pick_agent(args: &HotkeyPickAgentArgs) -> Result<()> {
         copy::execute_agent_picker(AgentPickerRequest {
             providers: &providers,
             pick_current_session: args.current_session,
+            include_remotes: args.all,
             selection_mode: AgentSelection::LastTurn,
             print_full: false,
             regex: None,

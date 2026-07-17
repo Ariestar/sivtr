@@ -3,7 +3,6 @@ use ratatui::prelude::{Color, Frame, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, ListItem, ListState, Paragraph};
 use regex::Regex;
-use std::path::PathBuf;
 use std::time::SystemTime;
 
 use crate::commands::capture::command_block_selector::CommandSelection;
@@ -17,24 +16,24 @@ use crate::tui::pane::{
 };
 use crate::tui::theme;
 use crate::tui::workspace_search::{workspace_search_regex_for_query, WorkspaceSearchScope};
-use sivtr_core::ai::{AgentProvider, AgentSelection};
+use sivtr_core::ai::AgentProvider;
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
 
+/// Kind of memory source (local path body before any `scope:` prefix).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum WorkspaceSource {
+pub(crate) enum WorkspaceSourceKind {
     Terminal,
     Agent(AgentProvider),
 }
 
-impl WorkspaceSource {
-    pub(crate) fn label(self) -> &'static str {
+impl WorkspaceSourceKind {
+    pub(crate) fn path(self) -> &'static str {
         match self {
             Self::Terminal => "terminal",
             Self::Agent(provider) => provider.command_name(),
         }
     }
 
-    /// Short badge for dense session rows.
     pub(crate) fn badge(self) -> &'static str {
         match self {
             Self::Terminal => "term",
@@ -62,6 +61,72 @@ impl WorkspaceSource {
 
     pub(crate) fn is_terminal(self) -> bool {
         matches!(self, Self::Terminal)
+    }
+}
+
+/// One selectable Source pane entry. Local and remote share the same shape —
+/// remote is only a named scope that `workset::query` already understands.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct WorkspaceSource {
+    /// Named scope (`desk`, `docs`); `None` = current local workspace.
+    pub(crate) scope: Option<String>,
+    pub(crate) kind: WorkspaceSourceKind,
+}
+
+impl WorkspaceSource {
+    pub(crate) fn local(kind: WorkspaceSourceKind) -> Self {
+        Self { scope: None, kind }
+    }
+
+    pub(crate) fn terminal() -> Self {
+        Self::local(WorkspaceSourceKind::Terminal)
+    }
+
+    pub(crate) fn agent(provider: AgentProvider) -> Self {
+        Self::local(WorkspaceSourceKind::Agent(provider))
+    }
+
+    pub(crate) fn scoped(scope: impl Into<String>, kind: WorkspaceSourceKind) -> Self {
+        Self {
+            scope: Some(scope.into()),
+            kind,
+        }
+    }
+
+    /// Selector passed to `workset::query` (`codex`, `desk:terminal`, …).
+    pub(crate) fn selector(&self) -> String {
+        match &self.scope {
+            Some(scope) => format!("{scope}:{}", self.kind.path()),
+            None => self.kind.path().to_string(),
+        }
+    }
+
+    /// Compact Source-pane label (`codex`, `desk/codex`).
+    pub(crate) fn label(&self) -> String {
+        match &self.scope {
+            Some(scope) => format!("{scope}/{}", self.kind.path()),
+            None => self.kind.path().to_string(),
+        }
+    }
+
+    pub(crate) fn badge(&self) -> &'static str {
+        self.kind.badge()
+    }
+
+    pub(crate) fn color(&self) -> Color {
+        self.kind.color()
+    }
+
+    pub(crate) fn is_remote(&self) -> bool {
+        self.scope.is_some()
+    }
+
+    pub(crate) fn is_agent(&self) -> bool {
+        self.kind.is_agent()
+    }
+
+    pub(crate) fn is_terminal(&self) -> bool {
+        self.kind.is_terminal()
     }
 }
 
@@ -98,24 +163,12 @@ pub(crate) struct WorkspacePickedContent {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct WorkspaceSessionLoad {
-    pub(crate) provider: AgentProvider,
-    pub(crate) path: PathBuf,
-    pub(crate) id: Option<String>,
-    pub(crate) cwd: Option<String>,
-    pub(crate) title: Option<String>,
-    pub(crate) modified: SystemTime,
-    pub(crate) selection_mode: AgentSelection,
-}
-
-#[derive(Clone, Debug)]
 pub(crate) struct WorkspaceSession {
     pub(crate) source: WorkspaceSource,
     pub(crate) modified: SystemTime,
     pub(crate) title: String,
     pub(crate) search_title: String,
     pub(crate) records: Vec<WorkRecord>,
-    pub(crate) load: Option<WorkspaceSessionLoad>,
 }
 
 #[derive(Clone, Debug)]
@@ -944,7 +997,7 @@ fn footer_status_spans(label: &str) -> Vec<Span<'static>> {
 
 /// Compact session row: `· cdx  title…` (origin glyph + short badge + title).
 ///
-/// `·` = local, `↗` = remote (ready for remote sessions; currently always local).
+/// `·` = local, `↗` = remote (named scope on the source or work_ref).
 fn session_row_line(
     choice: &WorkspaceSession,
     selected: bool,
@@ -952,11 +1005,11 @@ fn session_row_line(
     base_style: Style,
     highlight: Option<&Regex>,
 ) -> Line<'static> {
-    let remote = choice
-        .records
-        .first()
-        .map(|record| !record.work_ref.is_local())
-        .unwrap_or(false);
+    let remote = choice.source.is_remote()
+        || choice
+            .records
+            .first()
+            .is_some_and(|record| !record.work_ref.is_local());
     let check = if active_panel {
         if selected {
             "● "
@@ -1224,7 +1277,7 @@ fn render_source_list(
                 })
         };
         spans.push(Span::styled(format!("{marker} "), marker_style));
-        spans.push(Span::styled(source.label().to_string(), label_style));
+        spans.push(Span::styled(source.label(), label_style));
     }
     if spans.is_empty() {
         spans.push(Span::styled("<empty>", Style::default().fg(theme::dim())));
@@ -1550,7 +1603,7 @@ mod tests {
             ],
         };
         let dialogue = WorkspaceDialogue {
-            source: WorkspaceSource::Agent(AgentProvider::Codex),
+            source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(record.work_ref.clone()),
             title: "cmd".to_string(),
             record: Some(record),
@@ -1593,7 +1646,7 @@ mod tests {
             }],
         };
         let dialogue = WorkspaceDialogue {
-            source: WorkspaceSource::Agent(AgentProvider::Codex),
+            source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
             title: "cmd".to_string(),
             record: Some(record),
@@ -1645,7 +1698,7 @@ mod tests {
             }],
         };
         let dialogue = WorkspaceDialogue {
-            source: WorkspaceSource::Agent(AgentProvider::Codex),
+            source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
             title: "cmd".to_string(),
             record: Some(record),
@@ -1733,7 +1786,7 @@ mod tests {
             ],
         };
         let dialogue = WorkspaceDialogue {
-            source: WorkspaceSource::Agent(AgentProvider::Codex),
+            source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
             title: "cmd".to_string(),
             record: Some(record),
@@ -1808,14 +1861,14 @@ mod tests {
     fn current_content_dialogue_uses_single_selected_dialogue() {
         let dialogues = vec![
             WorkspaceDialogue {
-                source: WorkspaceSource::Agent(AgentProvider::Codex),
+                source: WorkspaceSource::agent(AgentProvider::Codex),
                 work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
                 title: "first".to_string(),
                 record: None,
                 copy: WorkspaceCopyParts::default(),
             },
             WorkspaceDialogue {
-                source: WorkspaceSource::Agent(AgentProvider::Codex),
+                source: WorkspaceSource::agent(AgentProvider::Codex),
                 work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 2)),
                 title: "second".to_string(),
                 record: None,
@@ -1834,7 +1887,7 @@ mod tests {
     #[test]
     fn current_content_ref_round_trips_active_part_target() {
         let dialogues = vec![WorkspaceDialogue {
-            source: WorkspaceSource::Agent(AgentProvider::Codex),
+            source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 2)),
             title: "second".to_string(),
             record: None,

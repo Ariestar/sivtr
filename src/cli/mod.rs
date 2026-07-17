@@ -648,6 +648,10 @@ pub struct Cli {
     #[arg(long, value_enum, default_value_t = ColorArg::Auto, global = true)]
     pub color: ColorArg,
 
+    /// Include mounted remotes in the workspace browser (`sivtr` / hotkey picker)
+    #[arg(long = "all", default_value_t = false, global = true)]
+    pub all: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -1536,6 +1540,10 @@ pub struct HotkeyPickAgentArgs {
     /// Restrict the picker to sessions whose cwd matches `--cwd`
     #[arg(long, default_value_t = false)]
     pub current_session: bool,
+
+    /// Include mounted remotes in the picker
+    #[arg(long = "all", default_value_t = false)]
+    pub all: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -2529,6 +2537,37 @@ mod tests {
             Some(Commands::HotkeyPickAgent(args)) => {
                 assert_eq!(args.cwd, PathBuf::from("."));
                 assert_eq!(args.provider, HotkeyProviderSelection::default());
+                assert!(!args.current_session);
+                assert!(!args.all);
+            }
+            _ => panic!("expected hotkey-pick-agent command"),
+        }
+    }
+
+    #[test]
+    fn global_all_flag_defaults_off_and_accepts_all() {
+        let default = Cli::try_parse_from(["sivtr"]).unwrap();
+        assert!(!default.all);
+
+        let with_all = Cli::try_parse_from(["sivtr", "--all"]).unwrap();
+        assert!(with_all.all);
+        assert!(with_all.command.is_none());
+    }
+
+    #[test]
+    fn hotkey_pick_agent_accepts_all_flag() {
+        let cli = Cli::try_parse_from([
+            "sivtr",
+            "hotkey-pick-agent",
+            "--cwd",
+            ".",
+            "--all",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Commands::HotkeyPickAgent(args)) => {
+                assert!(args.all);
                 assert!(!args.current_session);
             }
             _ => panic!("expected hotkey-pick-agent command"),

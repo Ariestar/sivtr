@@ -25,10 +25,7 @@ use crate::tui::workspace_search::{
 use sivtr_core::record::{WorkAt, WorkRef};
 
 use super::vim::{open_vim_view, VimBlock, VimView};
-use super::{
-    filter_lines_by_spec, load_workspace_session_at, load_workspace_sessions_for_indices,
-    record_to_copy_parts, PICK_CANCELLED_MESSAGE,
-};
+use super::{filter_lines_by_spec, record_to_copy_parts, PICK_CANCELLED_MESSAGE};
 
 const MOUSE_SCROLL_LINES: usize = 3;
 
@@ -56,7 +53,6 @@ pub(super) fn run_workspace_picker_on_terminal(
     let mut help_state = ListState::default();
     help_state.select(Some(0));
     let mut focus = initial_focus;
-    let mut all_sessions = all_sessions;
     let sources = workspace_sources(&all_sessions);
     let mut selected_sources = vec![true; sources.len()];
     let mut sessions = workspace_sessions_for_sources(&all_sessions, &sources, &selected_sources);
@@ -80,7 +76,7 @@ pub(super) fn run_workspace_picker_on_terminal(
     let mut line_filter_error: Option<String> = None;
     let mut fullscreen = None;
     let mut visual_select_mode = None;
-    let mut search_index = WorkspaceSearchIndex::new(&all_sessions);
+    let search_index = WorkspaceSearchIndex::new(&all_sessions);
 
     loop {
         if search_dirty {
@@ -97,15 +93,6 @@ pub(super) fn run_workspace_picker_on_terminal(
         } else {
             workspace_sessions_for_sources(&all_sessions, &sources, &selected_sources)
         };
-        if !search_has_query {
-            let session_idx = selected_index(&session_state).min(sessions.len().saturating_sub(1));
-            load_workspace_dialogue_sessions_with_cache(
-                &mut all_sessions,
-                &mut sessions,
-                session_idx,
-                &selected_sessions,
-            )?;
-        }
         if selected_sessions.len() != sessions.len() {
             selected_sessions.clear();
             selected_sessions.resize(sessions.len(), false);
@@ -390,22 +377,6 @@ pub(super) fn run_workspace_picker_on_terminal(
                                 .min(workspace_help_entries().len().saturating_sub(1));
                             let action = workspace_help_entries()[idx].action;
                             show_help = false;
-                            if matches!(
-                                action,
-                                WorkspaceHelpAction::OpenVim
-                                    | WorkspaceHelpAction::Copy
-                                    | WorkspaceHelpAction::CopyInput
-                                    | WorkspaceHelpAction::CopyOutput
-                                    | WorkspaceHelpAction::CopyBlock
-                                    | WorkspaceHelpAction::CopyCommand
-                            ) {
-                                load_workspace_dialogue_sessions_with_cache(
-                                    &mut all_sessions,
-                                    &mut sessions,
-                                    session_idx,
-                                    &selected_sessions,
-                                )?;
-                            }
                             let dialogues = workspace_dialogues_for_sessions(
                                 &sessions,
                                 session_idx,
@@ -459,22 +430,6 @@ pub(super) fn run_workspace_picker_on_terminal(
 
                 match key.code {
                     KeyCode::Char('/') => {
-                        if sessions.iter().any(|session| session.load.is_some()) {
-                            let indexed_sessions = workspace_sessions_for_sources(
-                                &all_sessions,
-                                &sources,
-                                &selected_sources,
-                            )
-                            .into_iter()
-                            .enumerate()
-                            .collect::<Vec<_>>();
-                            let indices = indexed_sessions
-                                .iter()
-                                .map(|(idx, _)| *idx)
-                                .collect::<Vec<_>>();
-                            load_workspace_sessions_for_indices(&mut all_sessions, &indices)?;
-                            search_index = WorkspaceSearchIndex::new(&all_sessions);
-                        }
                         show_help = false;
                         show_search = true;
                         search_query.clear();
@@ -508,12 +463,6 @@ pub(super) fn run_workspace_picker_on_terminal(
                         );
                     }
                     KeyCode::Char('i') if dialogue_count > 0 => {
-                        load_workspace_dialogue_sessions_with_cache(
-                            &mut all_sessions,
-                            &mut sessions,
-                            session_idx,
-                            &selected_sessions,
-                        )?;
                         let dialogues = workspace_dialogues_for_sessions(
                             &sessions,
                             session_idx,
@@ -537,12 +486,6 @@ pub(super) fn run_workspace_picker_on_terminal(
                         }
                     }
                     KeyCode::Char('o') if dialogue_count > 0 => {
-                        load_workspace_dialogue_sessions_with_cache(
-                            &mut all_sessions,
-                            &mut sessions,
-                            session_idx,
-                            &selected_sessions,
-                        )?;
                         let dialogues = workspace_dialogues_for_sessions(
                             &sessions,
                             session_idx,
@@ -566,12 +509,6 @@ pub(super) fn run_workspace_picker_on_terminal(
                         }
                     }
                     KeyCode::Char('y') if dialogue_count > 0 => {
-                        load_workspace_dialogue_sessions_with_cache(
-                            &mut all_sessions,
-                            &mut sessions,
-                            session_idx,
-                            &selected_sessions,
-                        )?;
                         let dialogues = workspace_dialogues_for_sessions(
                             &sessions,
                             session_idx,
@@ -595,12 +532,6 @@ pub(super) fn run_workspace_picker_on_terminal(
                         }
                     }
                     KeyCode::Char('c') if dialogue_count > 0 => {
-                        load_workspace_dialogue_sessions_with_cache(
-                            &mut all_sessions,
-                            &mut sessions,
-                            session_idx,
-                            &selected_sessions,
-                        )?;
                         let dialogues = workspace_dialogues_for_sessions(
                             &sessions,
                             session_idx,
@@ -850,12 +781,6 @@ pub(super) fn run_workspace_picker_on_terminal(
                         range_anchor = None;
                     }
                     KeyCode::Char('t') if can_open_dialogue_vim(focus, dialogue_count) => {
-                        load_workspace_dialogue_sessions_with_cache(
-                            &mut all_sessions,
-                            &mut sessions,
-                            session_idx,
-                            &selected_sessions,
-                        )?;
                         let dialogues = workspace_dialogues_for_sessions(
                             &sessions,
                             session_idx,
@@ -878,11 +803,6 @@ pub(super) fn run_workspace_picker_on_terminal(
                             set_focus(&mut focus, &mut fullscreen, WorkspaceFocus::Sessions);
                         }
                         WorkspaceFocus::Sessions => {
-                            load_workspace_session_at_with_cache(
-                                &mut all_sessions,
-                                &mut sessions,
-                                session_idx,
-                            )?;
                             let dialogues = workspace_dialogues_for_sessions(
                                 &sessions,
                                 session_idx,
@@ -893,12 +813,6 @@ pub(super) fn run_workspace_picker_on_terminal(
                             }
                         }
                         WorkspaceFocus::Dialogues => {
-                            load_workspace_dialogue_sessions_with_cache(
-                                &mut all_sessions,
-                                &mut sessions,
-                                session_idx,
-                                &selected_sessions,
-                            )?;
                             let dialogues = workspace_dialogues_for_sessions(
                                 &sessions,
                                 session_idx,
@@ -920,12 +834,6 @@ pub(super) fn run_workspace_picker_on_terminal(
                             }
                         }
                         WorkspaceFocus::Content => {
-                            load_workspace_dialogue_sessions_with_cache(
-                                &mut all_sessions,
-                                &mut sessions,
-                                session_idx,
-                                &selected_sessions,
-                            )?;
                             let dialogues = workspace_dialogues_for_sessions(
                                 &sessions,
                                 session_idx,
@@ -1018,16 +926,6 @@ pub(super) fn run_workspace_picker_on_terminal(
                             workspace_hit_test(layout, mouse.column, mouse.row)
                         {
                             set_focus(&mut focus, &mut fullscreen, clicked_focus);
-                            if clicked_focus == WorkspaceFocus::Dialogues {
-                                let session_idx = selected_index(&session_state)
-                                    .min(sessions.len().saturating_sub(1));
-                                load_workspace_dialogue_sessions_with_cache(
-                                    &mut all_sessions,
-                                    &mut sessions,
-                                    session_idx,
-                                    &selected_sessions,
-                                )?;
-                            }
                             match clicked_focus {
                                 WorkspaceFocus::Source => {
                                     if let Some(idx) = source_inline_index(
@@ -1391,54 +1289,6 @@ fn apply_workspace_mouse_scroll(
     }
 }
 
-fn load_workspace_session_at_with_cache(
-    all_sessions: &mut [WorkspaceSession],
-    sessions: &mut [WorkspaceSession],
-    idx: usize,
-) -> Result<()> {
-    let load_path = sessions
-        .get(idx)
-        .and_then(|session| session.load.as_ref())
-        .map(|load| load.path.clone());
-    load_workspace_session_at(sessions, idx)?;
-    if let (Some(load_path), Some(loaded)) = (
-        load_path,
-        sessions.get(idx).filter(|session| session.load.is_none()),
-    ) {
-        if let Some(cached) = all_sessions.iter_mut().find(|session| {
-            session
-                .load
-                .as_ref()
-                .is_some_and(|load| load.path == load_path)
-        }) {
-            *cached = loaded.clone();
-        }
-    }
-    Ok(())
-}
-
-fn load_workspace_dialogue_sessions_with_cache(
-    all_sessions: &mut [WorkspaceSession],
-    sessions: &mut [WorkspaceSession],
-    session_idx: usize,
-    selected_sessions: &[bool],
-) -> Result<()> {
-    let selected = selected_sessions
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, selected)| selected.then_some(idx))
-        .collect::<Vec<_>>();
-    let indices = if selected.is_empty() {
-        vec![session_idx]
-    } else {
-        selected
-    };
-    for idx in indices {
-        load_workspace_session_at_with_cache(all_sessions, sessions, idx)?;
-    }
-    Ok(())
-}
-
 fn open_link_target(target: &str) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
@@ -1462,7 +1312,7 @@ fn workspace_sources(sessions: &[WorkspaceSession]) -> Vec<WorkspaceSource> {
     let mut sources = Vec::new();
     for session in sessions {
         if !sources.contains(&session.source) {
-            sources.push(session.source);
+            sources.push(session.source.clone());
         }
     }
     sources
@@ -1851,7 +1701,7 @@ fn workspace_picked_content_for_copy_with_line_filter(
     let units = apply_workspace_line_filter(units, line_filter)?;
     let selection = CommandSelection::RecentExplicit((1..=units.len()).collect());
     Ok(WorkspacePickedContent {
-        source: dialogues[source_idx].source,
+        source: dialogues[source_idx].source.clone(),
         units,
         selection,
     })
@@ -2018,15 +1868,6 @@ pub(super) fn workspace_dialogues_for_sessions(
         selected_indices
     };
 
-    if session_indices
-        .iter()
-        .filter_map(|idx| sessions.get(*idx))
-        .any(|session| session.load.is_some())
-    {
-        // Not loaded yet — no fake loading dialogues. Enter loads the session first.
-        return Vec::new();
-    }
-
     session_indices
         .into_iter()
         .filter_map(|idx| sessions.get(idx))
@@ -2035,7 +1876,7 @@ pub(super) fn workspace_dialogues_for_sessions(
                 .records
                 .iter()
                 .map(|record| WorkspaceDialogue {
-                    source: session.source,
+                    source: session.source.clone(),
                     work_ref: Some(record.work_ref.clone()),
                     title: record.title.clone(),
                     record: Some(record.clone()),
@@ -2301,7 +2142,7 @@ mod tests {
     use crate::tui::content_view::ContentViewMode;
     use crate::tui::workspace::{
         TextPair, WorkspaceCopyParts, WorkspaceDialogue, WorkspaceFocus, WorkspaceSession,
-        WorkspaceSource,
+        WorkspaceSource, WorkspaceSourceKind,
     };
     use crate::tui::workspace_search::{
         workspace_search_query, workspace_search_regex, WorkspaceSearchIndex, WorkspaceSearchMatch,
@@ -2320,10 +2161,10 @@ mod tests {
     #[test]
     fn workspace_dialogues_follow_current_session_without_session_selection() {
         let sessions = vec![
-            workspace_test_session("new", WorkspaceSource::Agent(AgentProvider::Codex), &["n1"]),
+            workspace_test_session("new", WorkspaceSource::agent(AgentProvider::Codex), &["n1"]),
             workspace_test_session(
                 "old",
-                WorkspaceSource::Agent(AgentProvider::Claude),
+                WorkspaceSource::agent(AgentProvider::Claude),
                 &["o1"],
             ),
         ];
@@ -2346,12 +2187,12 @@ mod tests {
         let sessions = vec![
             workspace_test_session(
                 "codex session",
-                WorkspaceSource::Agent(AgentProvider::Codex),
+                WorkspaceSource::agent(AgentProvider::Codex),
                 &["c1", "c2"],
             ),
             workspace_test_session(
                 "claude session",
-                WorkspaceSource::Agent(AgentProvider::Claude),
+                WorkspaceSource::agent(AgentProvider::Claude),
                 &["a1"],
             ),
         ];
@@ -2383,12 +2224,12 @@ mod tests {
         let sessions = vec![
             workspace_test_session(
                 "alpha session",
-                WorkspaceSource::Agent(AgentProvider::Codex),
+                WorkspaceSource::agent(AgentProvider::Codex),
                 &["camera"],
             ),
             workspace_test_session(
                 "target session",
-                WorkspaceSource::Agent(AgentProvider::Claude),
+                WorkspaceSource::agent(AgentProvider::Claude),
                 &["lighting"],
             ),
         ];
@@ -2403,7 +2244,7 @@ mod tests {
         assert_eq!(output.sessions.len(), 1);
         assert_eq!(
             output.sessions[0].source,
-            WorkspaceSource::Agent(AgentProvider::Claude)
+            WorkspaceSource::agent(AgentProvider::Claude)
         );
         assert_eq!(output.sessions[0].title, "target session");
         assert_eq!(output.sessions[0].records[0].title, "lighting");
@@ -2420,7 +2261,7 @@ mod tests {
     fn workspace_search_prefixes_select_session_or_dialogue_scope() {
         let sessions = vec![workspace_test_session(
             "photo critique",
-            WorkspaceSource::Agent(AgentProvider::Codex),
+            WorkspaceSource::agent(AgentProvider::Codex),
             &["lighting notes"],
         )];
         let index = WorkspaceSearchIndex::new(&sessions);
@@ -2454,7 +2295,7 @@ mod tests {
     fn workspace_search_uses_case_insensitive_regex() {
         let sessions = vec![workspace_test_session(
             "Photo critique",
-            WorkspaceSource::Agent(AgentProvider::Codex),
+            WorkspaceSource::agent(AgentProvider::Codex),
             &["LIGHTING notes"],
         )];
         let index = WorkspaceSearchIndex::new(&sessions);
@@ -2472,7 +2313,7 @@ mod tests {
     fn workspace_search_invalid_regex_has_no_fallback_matches() {
         let sessions = vec![workspace_test_session(
             "photo critique",
-            WorkspaceSource::Agent(AgentProvider::Codex),
+            WorkspaceSource::agent(AgentProvider::Codex),
             &["lighting notes"],
         )];
         let index = WorkspaceSearchIndex::new(&sessions);
@@ -2488,12 +2329,12 @@ mod tests {
         let sessions = vec![
             workspace_test_session(
                 "codex session",
-                WorkspaceSource::Agent(AgentProvider::Codex),
+                WorkspaceSource::agent(AgentProvider::Codex),
                 &["needle first", "miss"],
             ),
             workspace_test_session(
                 "claude session",
-                WorkspaceSource::Agent(AgentProvider::Claude),
+                WorkspaceSource::agent(AgentProvider::Claude),
                 &["a1", "needle dialogue"],
             ),
         ];
@@ -2510,17 +2351,16 @@ mod tests {
     #[test]
     fn workspace_search_tracks_match_position_for_navigation() {
         let sessions = vec![WorkspaceSession {
-            source: WorkspaceSource::Agent(AgentProvider::Codex),
+            source: WorkspaceSource::agent(AgentProvider::Codex),
             modified: SystemTime::UNIX_EPOCH,
             title: "session".to_string(),
             search_title: "session".to_string(),
             records: vec![workspace_test_record(
-                WorkspaceSource::Agent(AgentProvider::Codex),
+                WorkspaceSource::agent(AgentProvider::Codex),
                 "dialogue",
                 "first\nneedle one\nmiddle\nneedle two",
                 0,
             )],
-            load: None,
         }];
 
         let output = WorkspaceSearchIndex::new(&sessions).search(&sessions, "needle");
@@ -2553,7 +2393,7 @@ mod tests {
     #[test]
     fn workspace_search_prefers_hidden_part_targets() {
         let mut record = workspace_test_record(
-            WorkspaceSource::Agent(AgentProvider::Codex),
+            WorkspaceSource::agent(AgentProvider::Codex),
             "dialogue",
             "visible text",
             0,
@@ -2568,12 +2408,11 @@ mod tests {
             ansi: None,
         }];
         let sessions = vec![WorkspaceSession {
-            source: WorkspaceSource::Agent(AgentProvider::Codex),
+            source: WorkspaceSource::agent(AgentProvider::Codex),
             modified: SystemTime::UNIX_EPOCH,
             title: "session".to_string(),
             search_title: "session".to_string(),
             records: vec![record],
-            load: None,
         }];
 
         let output = WorkspaceSearchIndex::new(&sessions).search(&sessions, "cargo");
@@ -2595,7 +2434,7 @@ mod tests {
     #[test]
     fn workspace_search_preserves_line_offsets_inside_part_targets() {
         let mut record = workspace_test_record(
-            WorkspaceSource::Agent(AgentProvider::Codex),
+            WorkspaceSource::agent(AgentProvider::Codex),
             "dialogue",
             "visible text",
             0,
@@ -2610,12 +2449,11 @@ mod tests {
             ansi: None,
         }];
         let sessions = vec![WorkspaceSession {
-            source: WorkspaceSource::Agent(AgentProvider::Codex),
+            source: WorkspaceSource::agent(AgentProvider::Codex),
             modified: SystemTime::UNIX_EPOCH,
             title: "session".to_string(),
             search_title: "session".to_string(),
             records: vec![record],
-            load: None,
         }];
 
         let output = WorkspaceSearchIndex::new(&sessions).search(&sessions, "needle");
@@ -2649,7 +2487,7 @@ mod tests {
     #[test]
     fn workspace_search_target_ref_round_trips_part_match() {
         let mut record = workspace_test_record(
-            WorkspaceSource::Agent(AgentProvider::Codex),
+            WorkspaceSource::agent(AgentProvider::Codex),
             "dialogue",
             "visible text",
             0,
@@ -2664,12 +2502,11 @@ mod tests {
             ansi: None,
         }];
         let sessions = vec![WorkspaceSession {
-            source: WorkspaceSource::Agent(AgentProvider::Codex),
+            source: WorkspaceSource::agent(AgentProvider::Codex),
             modified: SystemTime::UNIX_EPOCH,
             title: "session".to_string(),
             search_title: "session".to_string(),
             records: vec![record],
-            load: None,
         }];
 
         let output = WorkspaceSearchIndex::new(&sessions).search(&sessions, "cargo");
@@ -2693,7 +2530,7 @@ mod tests {
     fn move_workspace_cursor_up_uses_dialogue_count_for_dialogue_focus() {
         let sessions = vec![workspace_test_session(
             "session",
-            WorkspaceSource::Agent(AgentProvider::Codex),
+            WorkspaceSource::agent(AgentProvider::Codex),
             &["dialogue"],
         )];
         let mut source_state = ListState::default();
@@ -2708,7 +2545,7 @@ mod tests {
 
         move_workspace_cursor_up(
             WorkspaceFocus::Dialogues,
-            &[WorkspaceSource::Agent(AgentProvider::Codex)],
+            &[WorkspaceSource::agent(AgentProvider::Codex)],
             &sessions,
             0,
             &[false],
@@ -2761,7 +2598,7 @@ mod tests {
     #[test]
     fn workspace_copy_shortcuts_use_structured_chat_parts_without_headings() {
         let dialogues = vec![WorkspaceDialogue {
-            source: WorkspaceSource::Agent(AgentProvider::Codex),
+            source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
             title: "question".to_string(),
             record: None,
@@ -2908,7 +2745,7 @@ mod tests {
     #[test]
     fn workspace_command_shortcut_uses_terminal_command_without_prompt() {
         let dialogues = vec![WorkspaceDialogue {
-            source: WorkspaceSource::Terminal,
+            source: WorkspaceSource::terminal(),
             work_ref: Some(WorkRef::terminal("shell", 1)),
             title: "cargo test".to_string(),
             record: None,
@@ -2961,7 +2798,7 @@ mod tests {
     #[test]
     fn workspace_picked_content_prefers_active_part_target_for_display_copy() {
         let mut record = workspace_test_record(
-            WorkspaceSource::Agent(AgentProvider::Codex),
+            WorkspaceSource::agent(AgentProvider::Codex),
             "dialogue",
             "visible text",
             0,
@@ -2976,7 +2813,7 @@ mod tests {
             ansi: None,
         }];
         let dialogues = vec![WorkspaceDialogue {
-            source: WorkspaceSource::Agent(AgentProvider::Codex),
+            source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
             title: "question".to_string(),
             record: Some(record),
@@ -3008,7 +2845,7 @@ mod tests {
         dialogue_titles: &[&str],
     ) -> WorkspaceSession {
         WorkspaceSession {
-            source,
+            source: source.clone(),
             modified: SystemTime::UNIX_EPOCH,
             title: title.to_string(),
             search_title: title.to_string(),
@@ -3017,14 +2854,13 @@ mod tests {
                 .enumerate()
                 .map(|(idx, dialogue_title)| {
                     workspace_test_record(
-                        source,
+                        source.clone(),
                         dialogue_title,
                         &format!("{title}:{dialogue_title}"),
                         idx,
                     )
                 })
                 .collect(),
-            load: None,
         }
     }
 
@@ -3034,19 +2870,19 @@ mod tests {
         plain: &str,
         index: usize,
     ) -> WorkRecord {
-        let (channel, provider, kind) = match source {
-            WorkspaceSource::Terminal => {
+        let (channel, provider, kind) = match source.kind {
+            WorkspaceSourceKind::Terminal => {
                 (WorkChannel::Terminal, None, WorkRecordKind::TerminalCommand)
             }
-            WorkspaceSource::Agent(provider) => (
+            WorkspaceSourceKind::Agent(provider) => (
                 WorkChannel::Chat,
                 Some(provider.command_name().to_string()),
                 WorkRecordKind::ChatTurn,
             ),
         };
-        let work_ref = match source {
-            WorkspaceSource::Terminal => WorkRef::terminal("test", index + 1),
-            WorkspaceSource::Agent(provider) => WorkRef::agent(provider, "test", index + 1),
+        let work_ref = match source.kind {
+            WorkspaceSourceKind::Terminal => WorkRef::terminal("test", index + 1),
+            WorkspaceSourceKind::Agent(provider) => WorkRef::agent(provider, "test", index + 1),
         };
         WorkRecord {
             schema_version: RECORD_SCHEMA_VERSION,
@@ -3076,7 +2912,7 @@ mod tests {
 
     fn workspace_test_dialogue(title: &str, plain: &str) -> WorkspaceDialogue {
         let record = workspace_test_record(
-            WorkspaceSource::Agent(AgentProvider::Codex),
+            WorkspaceSource::agent(AgentProvider::Codex),
             title,
             plain,
             0,
@@ -3085,7 +2921,7 @@ mod tests {
             record.copy_text(sivtr_core::record::RecordTextMode::Combined, false),
         );
         WorkspaceDialogue {
-            source: WorkspaceSource::Agent(AgentProvider::Codex),
+            source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(record.work_ref.clone()),
             title: title.to_string(),
             record: Some(record),
