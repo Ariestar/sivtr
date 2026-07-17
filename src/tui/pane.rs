@@ -1,7 +1,9 @@
 use ratatui::layout::Rect;
-use ratatui::prelude::{Color, Frame, Modifier, Style};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
+use ratatui::prelude::{Frame, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState};
+
+use super::theme;
 
 pub(crate) struct Panel {
     key: &'static str,
@@ -18,15 +20,30 @@ impl Panel {
         }
     }
 
-    fn title(&self) -> String {
+    fn title_line(&self) -> Line<'static> {
         if self.key.is_empty() {
-            return self.name.clone();
+            return Line::from(Span::styled(
+                self.name.clone(),
+                theme::title_style(self.active),
+            ));
         }
+        let mut spans = vec![
+            Span::styled(
+                format!(" {} ", self.key),
+                Style::default()
+                    .fg(if self.active {
+                        theme::accent()
+                    } else {
+                        theme::muted()
+                    })
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(self.name.clone(), theme::title_style(self.active)),
+        ];
         if self.active {
-            format!("[{}] {} *", self.key, self.name)
-        } else {
-            format!("[{}] {}", self.key, self.name)
+            spans.push(Span::styled(" ●", Style::default().fg(theme::accent())));
         }
+        Line::from(spans)
     }
 
     pub(crate) fn active(&self) -> bool {
@@ -35,13 +52,18 @@ impl Panel {
 }
 
 pub(crate) fn panel_block(panel: &Panel) -> Block<'static> {
-    let active = panel.active();
-    let block = Block::default().borders(Borders::ALL).title(panel.title());
-    if active {
-        block.border_style(Style::default().fg(Color::Cyan))
+    let border = if panel.active() {
+        Style::default()
+            .fg(theme::accent())
+            .add_modifier(Modifier::BOLD)
     } else {
-        block
-    }
+        Style::default().fg(theme::muted())
+    };
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(border)
+        .title(panel.title_line())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -142,21 +164,29 @@ fn panel_scrollbar_thumb(scroll: PanelScroll, track_height: usize) -> Option<(us
 }
 
 fn scrollbar_style(active: bool) -> Style {
-    let color = if active { Color::Cyan } else { Color::DarkGray };
-    Style::default().fg(color).add_modifier(Modifier::BOLD)
+    Style::default()
+        .fg(if active {
+            theme::accent()
+        } else {
+            theme::muted()
+        })
+        .add_modifier(Modifier::BOLD)
 }
 
 fn scroll_label_style(active: bool) -> Style {
-    let color = if active { Color::Cyan } else { Color::DarkGray };
-    Style::default().fg(color)
+    Style::default().fg(if active {
+        theme::accent()
+    } else {
+        theme::muted()
+    })
 }
 
 pub(crate) fn active_item_style() -> Style {
-    Style::default().bg(Color::Blue).fg(Color::White)
+    theme::focus_row()
 }
 
 pub(crate) fn selected_item_style() -> Style {
-    Style::default().bg(Color::DarkGray).fg(Color::White)
+    theme::selected_row()
 }
 
 pub(crate) fn inactive_highlight_style() -> Style {

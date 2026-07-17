@@ -15,6 +15,7 @@ use crate::tui::pane::{
     active_item_style, panel_block, render_list_panel, render_panel_scrollbar, selected_item_style,
     Panel, PanelScroll,
 };
+use crate::tui::theme;
 use crate::tui::workspace_search::{workspace_search_regex_for_query, WorkspaceSearchScope};
 use sivtr_core::ai::{AgentProvider, AgentSelection};
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
@@ -30,6 +31,28 @@ impl WorkspaceSource {
         match self {
             Self::Terminal => "terminal",
             Self::Agent(provider) => provider.command_name(),
+        }
+    }
+
+    /// Short badge for dense session rows.
+    pub(crate) fn badge(self) -> &'static str {
+        match self {
+            Self::Terminal => "term",
+            Self::Agent(AgentProvider::Codex) => "cdx",
+            Self::Agent(AgentProvider::Claude) => "cld",
+            Self::Agent(AgentProvider::Cursor) => "cur",
+            Self::Agent(AgentProvider::OpenCode) => "opc",
+            Self::Agent(AgentProvider::OpenClaw) => "ocw",
+            Self::Agent(AgentProvider::Hermes) => "hrm",
+            Self::Agent(AgentProvider::Grok) => "grk",
+            Self::Agent(AgentProvider::Pi) => "pi",
+        }
+    }
+
+    pub(crate) fn color(self) -> Color {
+        match self {
+            Self::Terminal => theme::terminal_color(),
+            Self::Agent(provider) => theme::provider_color(provider),
         }
     }
 
@@ -809,81 +832,211 @@ fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>)
         content_selection,
         current_ref,
     } = footer;
-    let controls = if search.is_some() {
-        let suffix = search.and_then(search_position_label).unwrap_or_default();
-        let target = search_target_footer_suffix(search);
-        if search.map(|search| search.input_open).unwrap_or(false) {
-            return frame.render_widget(
-                Paragraph::new(format!(
-                    "type search  > session  # dialogue  Enter accept  Esc clear  {suffix}{target}"
-                )),
-                area,
-            );
+
+    let mut spans = if search.is_some() {
+        let mut spans = if search.map(|search| search.input_open).unwrap_or(false) {
+            footer_control_spans("type search  > session  # dialogue  Enter accept  Esc clear")
+        } else {
+            footer_control_spans("n next  N previous  Esc clear search  / edit")
+        };
+        if let Some(label) = search.and_then(search_position_label) {
+            spans.extend(footer_status_spans(&label));
         }
-        return frame.render_widget(
-            Paragraph::new(format!(
-                "n next  N previous  Esc clear search  / edit  {suffix}{target}"
-            )),
-            area,
-        );
-    } else if content_selection.is_some() {
-        "visual  h/j/k/l move  drag select  Ctrl-drag block  y/Enter copy  Esc/v return"
-    } else if show_help {
-        "j/k move  Enter execute  Esc/? close help  q cancel"
+        if let Some(target) = search
+            .and_then(|search| search.current_target.as_deref())
+            .map(|target| format!("match {target}"))
+        {
+            spans.extend(footer_status_spans(&target));
+        }
+        spans
     } else {
-        match focus {
-            WorkspaceFocus::Source => "j/k move  Space toggle  a all  g agents  t terminal  Enter sessions  z fullscreen  / search  q/Esc cancel  ? help",
-            WorkspaceFocus::Sessions => {
-                "j/k move  Space toggle  0 source  l/Right/Enter dialogues  t vim  z fullscreen  / search  q/Esc cancel  ? help"
+        let controls = if content_selection.is_some() {
+            "visual  h/j/k/l move  drag select  Ctrl-drag block  y/Enter copy  Esc/v return"
+        } else if show_help {
+            "j/k move  Enter execute  Esc/? close help  q cancel"
+        } else {
+            match focus {
+                WorkspaceFocus::Source => {
+                    "j/k move  Space toggle  a all  g agents  t terminal  Enter sessions  z fullscreen  / search  q/Esc cancel  ? help"
+                }
+                WorkspaceFocus::Sessions => {
+                    "j/k move  Space toggle  0 source  l/Right/Enter dialogues  t vim  z fullscreen  / search  q/Esc cancel  ? help"
+                }
+                WorkspaceFocus::Dialogues => {
+                    "j/k move  Space toggle  v range  a all  : lines  i/o/y copy parts  c command  l/Right content  t vim  Enter copy  z fullscreen  / search  h/Esc back  ? help"
+                }
+                WorkspaceFocus::Content => {
+                    "j/k scroll  v select  : lines  i/o/y copy  r fold/full  t vim  Enter copy  z fullscreen  / search  h/Esc back  ? help"
+                }
             }
-            WorkspaceFocus::Dialogues => {
-                "j/k move  Space toggle  v range  a all  : lines  i/o/y copy parts  c command  l/Right content  t vim  Enter copy  z fullscreen  / search  h/Esc back  ? help"
-            }
-            WorkspaceFocus::Content => {
-                "j/k scroll  v select  : lines  i/o/y copy  r fold/full  t vim  Enter copy  z fullscreen  / search  h/Esc back  ? help"
-            }
-        }
+        };
+        footer_control_spans(controls)
     };
-    let suffix = if fullscreen.is_some() {
-        "  [fullscreen]"
+
+    if fullscreen.is_some() {
+        spans.extend(footer_status_spans("fullscreen"));
+    }
+    if let Some(error) = line_filter_error {
+        spans.extend(footer_status_spans(&format!("lines invalid: {error}")));
+    } else if line_filter_input_open {
+        spans.extend(footer_status_spans(&format!(
+            "lines: {}",
+            line_filter.unwrap_or_default()
+        )));
+    } else if let Some(spec) = line_filter.filter(|spec| !spec.is_empty()) {
+        spans.extend(footer_status_spans(&format!("lines {spec}")));
+    }
+    if focus == WorkspaceFocus::Content {
+        spans.extend(footer_status_spans(content_mode.label()));
+    }
+    if matches!(focus, WorkspaceFocus::Dialogues | WorkspaceFocus::Content) {
+        if let Some(work_ref) = current_ref {
+            spans.extend(footer_status_spans(&format!("ref {work_ref}")));
+        }
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// Highlight keys in `key action  key action …` footer text (pairs split by two spaces).
+fn footer_control_spans(text: &str) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    for (idx, part) in text
+        .split("  ")
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .enumerate()
+    {
+        if idx > 0 {
+            spans.push(Span::styled("  ", theme::footer_style()));
+        }
+        match part.split_once(' ') {
+            Some((key, rest)) => {
+                spans.push(Span::styled(
+                    key.to_string(),
+                    theme::key_hint_style().add_modifier(Modifier::BOLD),
+                ));
+                spans.push(Span::styled(format!(" {rest}"), theme::footer_style()));
+            }
+            None => spans.push(Span::styled(
+                part.to_string(),
+                theme::key_hint_style().add_modifier(Modifier::BOLD),
+            )),
+        }
+    }
+    spans
+}
+
+fn footer_status_spans(label: &str) -> Vec<Span<'static>> {
+    let text = label.trim().trim_start_matches('[').trim_end_matches(']');
+    vec![
+        Span::styled("  ", theme::footer_style()),
+        Span::styled("[", Style::default().fg(theme::muted())),
+        Span::styled(
+            text.to_string(),
+            Style::default()
+                .fg(theme::accent())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("]", Style::default().fg(theme::muted())),
+    ]
+}
+
+/// Compact session row: `· cdx  title…` (origin glyph + short badge + title).
+///
+/// `·` = local, `↗` = remote (ready for remote sessions; currently always local).
+fn session_row_line(
+    choice: &WorkspaceSession,
+    selected: bool,
+    active_panel: bool,
+    base_style: Style,
+    highlight: Option<&Regex>,
+) -> Line<'static> {
+    let remote = choice
+        .records
+        .first()
+        .map(|record| !record.work_ref.is_local())
+        .unwrap_or(false);
+    let check = if active_panel {
+        if selected {
+            "● "
+        } else {
+            "○ "
+        }
     } else {
         ""
     };
-    let line_filter_status = if let Some(error) = line_filter_error {
-        format!("  [lines invalid: {error}]")
-    } else if line_filter_input_open {
-        format!("  [lines: {}]", line_filter.unwrap_or_default())
-    } else if let Some(spec) = line_filter.filter(|spec| !spec.is_empty()) {
-        format!("  [lines {spec}]")
-    } else {
-        String::new()
-    };
-    let mode = if focus == WorkspaceFocus::Content {
-        format!("  [{}]", content_mode.label())
-    } else {
-        String::new()
-    };
-    let ref_status = matches!(focus, WorkspaceFocus::Dialogues | WorkspaceFocus::Content)
-        .then_some(current_ref)
-        .flatten()
-        .map(|work_ref| format!("  [ref {work_ref}]"))
-        .unwrap_or_default();
-    let footer = Paragraph::new(format!(
-        "{controls}{suffix}{line_filter_status}{mode}{ref_status}"
+    let origin = theme::origin_glyph(remote);
+    let badge = choice.source.badge();
+    let title = compact_session_title(choice);
+    // Keep search highlighting over the full visible text, but paint origin/badge
+    // with their own colors when the row is not using a solid selection background.
+    let plain = format!("{check}{origin} {badge}  {title}");
+    if base_style.bg.is_some() {
+        return Line::from(highlight_spans(&plain, highlight, base_style));
+    }
+
+    let mut spans = Vec::new();
+    if !check.is_empty() {
+        spans.push(Span::styled(
+            check.to_string(),
+            Style::default().fg(theme::muted()),
+        ));
+    }
+    spans.push(Span::styled(
+        format!("{origin} "),
+        theme::origin_style(remote),
     ));
-    frame.render_widget(footer, area);
+    spans.push(Span::styled(
+        format!("{badge}  "),
+        Style::default()
+            .fg(choice.source.color())
+            .add_modifier(Modifier::BOLD),
+    ));
+    spans.extend(highlight_spans(
+        &title,
+        highlight,
+        Style::default().fg(Color::Rgb(226, 232, 240)),
+    ));
+    Line::from(spans)
+}
+
+fn compact_session_title(choice: &WorkspaceSession) -> String {
+    let raw = choice.search_title.trim();
+    let raw = if raw.is_empty() {
+        choice.title.trim()
+    } else {
+        raw
+    };
+    // Strip trailing `  [id]` / ` [N blocks]` noise for the list; full title stays in search_title.
+    let without_bracket = raw
+        .rsplit_once("  [")
+        .map(|(head, _)| head)
+        .unwrap_or(raw)
+        .trim();
+    let without_bracket = without_bracket
+        .rsplit_once(" [")
+        .filter(|(_, tail)| tail.ends_with(']'))
+        .map(|(head, _)| head)
+        .unwrap_or(without_bracket)
+        .trim();
+    truncate_chars(without_bracket, 64)
+}
+
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_chars {
+        return text.to_string();
+    }
+    let keep = max_chars.saturating_sub(1);
+    let mut out: String = text.chars().take(keep).collect();
+    out.push('…');
+    out
 }
 
 fn search_position_label(search: &WorkspaceSearchView<'_>) -> Option<String> {
     let current = search.current_match?;
-    Some(format!("[{}/{}]", current + 1, search.match_count))
-}
-
-fn search_target_footer_suffix(search: Option<&WorkspaceSearchView<'_>>) -> String {
-    search
-        .and_then(|search| search.current_target.as_deref())
-        .map(|target| format!("  [match {target}]"))
-        .unwrap_or_default()
+    Some(format!("{}/{}", current + 1, search.match_count))
 }
 
 fn current_content_dialogue<'a>(
@@ -945,7 +1098,7 @@ fn search_box_title(search: &WorkspaceSearchView<'_>) -> String {
     let result_label = if search.query.trim().is_empty() {
         "ready".to_string()
     } else if let Some(position) = search_position_label(search) {
-        position
+        format!("[{position}]")
     } else if search.result_count == 1 {
         "1 result".to_string()
     } else {
@@ -1016,11 +1169,11 @@ fn render_help_panel(frame: &mut Frame, area: Rect, state: &ListState) {
         .iter()
         .map(|entry| {
             ListItem::new(Line::from(vec![
+                Span::styled(format!("{:<12}", entry.key), theme::key_hint_style()),
                 Span::styled(
-                    format!("{:<12}", entry.key),
-                    Style::default().fg(Color::Cyan),
+                    entry.description.to_string(),
+                    Style::default().fg(Color::Rgb(203, 213, 225)),
                 ),
-                Span::raw(entry.description),
             ]))
         })
         .collect::<Vec<_>>();
@@ -1047,25 +1200,34 @@ fn render_source_list(
     let mut spans = Vec::new();
     for (idx, source) in sources.iter().enumerate() {
         if idx > 0 {
-            spans.push(Span::raw("  "));
+            spans.push(Span::styled("  ", Style::default().fg(theme::dim())));
         }
-        let text = {
-            let marker = if selected_sources.get(idx).copied().unwrap_or(false) {
-                "[x]"
-            } else {
-                "[ ]"
-            };
-            format!("{marker} {}", source.label())
+        let selected = selected_sources.get(idx).copied().unwrap_or(false);
+        let focused = idx == current && active;
+        let marker = if selected { "●" } else { "○" };
+        let marker_style = if focused {
+            active_item_style()
+        } else if selected {
+            Style::default().fg(source.color())
+        } else {
+            Style::default().fg(theme::muted())
         };
-        let style = if idx == current && active {
+        let label_style = if focused {
             active_item_style()
         } else {
             Style::default()
+                .fg(source.color())
+                .add_modifier(if selected {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                })
         };
-        spans.push(Span::styled(text, style));
+        spans.push(Span::styled(format!("{marker} "), marker_style));
+        spans.push(Span::styled(source.label().to_string(), label_style));
     }
     if spans.is_empty() {
-        spans.push(Span::raw("<empty>"));
+        spans.push(Span::styled("<empty>", Style::default().fg(theme::dim())));
     }
     let paragraph = Paragraph::new(Line::from(spans)).block(panel_block(&panel));
     frame.render_widget(paragraph, area);
@@ -1090,39 +1252,27 @@ fn render_session_list(
         .enumerate()
         .map(|(idx, choice)| {
             let selected = selected_sessions.get(idx).copied().unwrap_or(false);
-            let marker = if active {
-                if selected {
-                    "[x] "
-                } else {
-                    "[ ] "
-                }
-            } else {
-                ""
-            };
-            let line = format!("{marker}[{:<8}] {}", choice.source.label(), choice.title);
-            let highlight = search
-                .filter(|search| search.scope == WorkspaceSearchScope::Session)
-                .and(search_regex);
+            let focused = active && !has_selection && idx == cursor_idx;
             let base_style = if selected {
                 selected_item_style()
-            } else if !has_selection && idx == cursor_idx {
+            } else if focused {
                 active_item_style()
             } else {
                 Style::default()
             };
-            if selected || (!has_selection && idx == cursor_idx) {
-                ListItem::new(Line::from(highlight_spans(&line, highlight, base_style)))
-            } else {
-                ListItem::new(Line::from(highlight_spans(
-                    &line,
-                    highlight,
-                    Style::default(),
-                )))
-            }
+            let highlight = search
+                .filter(|search| search.scope == WorkspaceSearchScope::Session)
+                .and(search_regex);
+            ListItem::new(session_row_line(
+                choice, selected, active, base_style, highlight,
+            ))
         })
         .collect();
     if items.is_empty() {
-        items.push(ListItem::new("<empty>"));
+        items.push(ListItem::new(Span::styled(
+            "<empty>",
+            Style::default().fg(theme::dim()),
+        )));
     }
     render_list_panel(
         frame,
@@ -1165,9 +1315,9 @@ fn render_dialogue_list(
             let selected = selected_dialogues.get(idx).copied().unwrap_or(false);
             let marker = if active {
                 if selected {
-                    "[x] "
+                    "● "
                 } else {
-                    "[ ] "
+                    "○ "
                 }
             } else {
                 ""
@@ -1177,12 +1327,7 @@ fn render_dialogue_list(
                 .filter(|search| search.scope == WorkspaceSearchScope::Dialogue)
                 .and(search_regex);
             if in_range {
-                ListItem::new(Line::from(Span::styled(
-                    line,
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                )))
+                ListItem::new(Line::from(Span::styled(line, theme::range_row())))
             } else if selected {
                 ListItem::new(Line::from(highlight_spans(
                     &line,
@@ -1199,14 +1344,17 @@ fn render_dialogue_list(
                 ListItem::new(Line::from(highlight_spans(
                     &line,
                     highlight,
-                    Style::default(),
+                    Style::default().fg(Color::Rgb(203, 213, 225)),
                 )))
             }
         })
         .collect();
 
     if items.is_empty() {
-        items.push(ListItem::new("<empty>"));
+        items.push(ListItem::new(Span::styled(
+            "<empty>",
+            Style::default().fg(theme::dim()),
+        )));
     }
 
     render_list_panel(
