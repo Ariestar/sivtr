@@ -24,7 +24,7 @@ use crate::tui::workspace_search::{
 };
 use sivtr_core::record::{WorkAt, WorkRef};
 
-use super::load::{collect_ready_sessions, ensure_sources_loaded, SourceLoadState};
+use super::load::{collect_ready_sessions, SourceLoadPump, SourceLoadState};
 use super::text::{filter_lines_by_spec, record_to_copy_parts};
 use super::vim::{open_vim_view, VimBlock, VimView};
 use super::PICK_CANCELLED_MESSAGE;
@@ -69,7 +69,9 @@ pub(crate) fn run(
     if source_states.len() != sources.len() {
         source_states.resize(sources.len(), SourceLoadState::Idle);
     }
-    ensure_sources_loaded(&sources, &selected_sources, &mut source_states, &cwd)?;
+    let mut load_pump = SourceLoadPump::new(sources.len(), cwd.clone());
+    // Fire-and-forget: UI draws immediately while loads complete in the background.
+    load_pump.kick(&sources, &selected_sources, &mut source_states, true);
     let mut all_sessions = collect_ready_sessions(&sources, &selected_sources, &source_states);
     let mut sessions = all_sessions.clone();
     clamp_list_state(&mut source_state, sources.len());
@@ -93,9 +95,15 @@ pub(crate) fn run(
     let mut fullscreen = None;
     let mut visual_select_mode = None;
     let mut search_index = WorkspaceSearchIndex::new(&all_sessions);
-    let mut status_message: Option<String> = None;
+    let mut loading_tick = 0u8;
 
     loop {
+        // Non-blocking: apply completed source loads before drawing.
+        if load_pump.drain(&mut source_states) {
+            all_sessions = collect_ready_sessions(&sources, &selected_sources, &source_states);
+            search_index = WorkspaceSearchIndex::new(&all_sessions);
+            search_dirty = true;
+        }
         if search_dirty {
             search_output = search_index.search(&all_sessions, &search_query);
             if search_cursor >= search_output.matches.len() {
@@ -202,7 +210,7 @@ pub(crate) fn run(
                     sources: &sources,
                     selected_sources: &selected_sources,
                     source_markers: &source_markers,
-                    status_message: status_message.as_deref(),
+                    loading_tick,
                     source_state: &source_state,
                     sessions: &sessions,
                     selected_sessions: &selected_sessions,
@@ -243,7 +251,18 @@ pub(crate) fn run(
             terminal.show_cursor()?;
         }
 
+        // Poll so background loads can repaint without waiting for a key.
+        if !event::poll(std::time::Duration::from_millis(100))? {
+            if source_states
+                .iter()
+                .any(|state| matches!(state, SourceLoadState::Loading { .. }))
+            {
+                loading_tick = loading_tick.wrapping_add(1);
+            }
+            continue;
+        }
         match event::read()? {
+
             Event::Key(key) => {
                 if key.kind != KeyEventKind::Press {
                     continue;
@@ -598,16 +617,16 @@ pub(crate) fn run(
                             &mut selected_sources,
                             WorkspaceSourceSelection::All,
                         );
-                        reload_selected_sources(
+                        load_pump.kick(
                             &sources,
                             &selected_sources,
                             &mut source_states,
-                            &cwd,
-                            &mut all_sessions,
-                            &mut search_index,
-                            &mut search_dirty,
-                            &mut status_message,
-                        )?;
+                            true,
+                        );
+                        all_sessions =
+                            collect_ready_sessions(&sources, &selected_sources, &source_states);
+                        search_index = WorkspaceSearchIndex::new(&all_sessions);
+                        search_dirty = true;
                         reset_workspace_after_source_change(
                             &mut session_state,
                             &mut selected_sessions,
@@ -623,16 +642,16 @@ pub(crate) fn run(
                             &mut selected_sources,
                             WorkspaceSourceSelection::Agents,
                         );
-                        reload_selected_sources(
+                        load_pump.kick(
                             &sources,
                             &selected_sources,
                             &mut source_states,
-                            &cwd,
-                            &mut all_sessions,
-                            &mut search_index,
-                            &mut search_dirty,
-                            &mut status_message,
-                        )?;
+                            true,
+                        );
+                        all_sessions =
+                            collect_ready_sessions(&sources, &selected_sources, &source_states);
+                        search_index = WorkspaceSearchIndex::new(&all_sessions);
+                        search_dirty = true;
                         reset_workspace_after_source_change(
                             &mut session_state,
                             &mut selected_sessions,
@@ -648,16 +667,16 @@ pub(crate) fn run(
                             &mut selected_sources,
                             WorkspaceSourceSelection::Terminal,
                         );
-                        reload_selected_sources(
+                        load_pump.kick(
                             &sources,
                             &selected_sources,
                             &mut source_states,
-                            &cwd,
-                            &mut all_sessions,
-                            &mut search_index,
-                            &mut search_dirty,
-                            &mut status_message,
-                        )?;
+                            true,
+                        );
+                        all_sessions =
+                            collect_ready_sessions(&sources, &selected_sources, &source_states);
+                        search_index = WorkspaceSearchIndex::new(&all_sessions);
+                        search_dirty = true;
                         reset_workspace_after_source_change(
                             &mut session_state,
                             &mut selected_sessions,
@@ -669,6 +688,22 @@ pub(crate) fn run(
                     }
                     KeyCode::Char('s') => {
                         set_focus(&mut focus, &mut fullscreen, WorkspaceFocus::Source);
+                    }
+                    KeyCode::Char('R') => {
+                        refresh_next_level(
+                            focus,
+                            &sources,
+                            &selected_sources,
+                            &source_state,
+                            &sessions,
+                            &selected_sessions,
+                            &session_state,
+                            &mut source_states,
+                            &mut load_pump,
+                            &mut all_sessions,
+                            &mut search_index,
+                            &mut search_dirty,
+                        );
                     }
                     KeyCode::Char(ch) if ch.is_ascii_digit() => {
                         if let Some(next_focus) =
@@ -792,16 +827,16 @@ pub(crate) fn run(
                             if let Some(selected) = selected_sources.get_mut(source_idx) {
                                 *selected = !*selected;
                             }
-                            reload_selected_sources(
+                            load_pump.kick(
                                 &sources,
                                 &selected_sources,
                                 &mut source_states,
-                                &cwd,
-                                &mut all_sessions,
-                                &mut search_index,
-                                &mut search_dirty,
-                                &mut status_message,
-                            )?;
+                                true,
+                            );
+                            all_sessions =
+                                collect_ready_sessions(&sources, &selected_sources, &source_states);
+                            search_index = WorkspaceSearchIndex::new(&all_sessions);
+                            search_dirty = true;
                             reset_workspace_after_source_change(
                                 &mut session_state,
                                 &mut selected_sessions,
@@ -1352,6 +1387,107 @@ fn apply_workspace_mouse_scroll(
     }
 }
 
+
+fn effective_selected(selected: &[bool], focus_idx: usize, len: usize) -> Vec<bool> {
+    if selected.iter().any(|s| *s) {
+        let mut out = selected.to_vec();
+        out.resize(len, false);
+        out
+    } else if len == 0 {
+        Vec::new()
+    } else {
+        let mut out = vec![false; len];
+        let idx = focus_idx.min(len.saturating_sub(1));
+        out[idx] = true;
+        out
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn refresh_next_level(
+    focus: WorkspaceFocus,
+    sources: &[WorkspaceSource],
+    selected_sources: &[bool],
+    source_state: &ListState,
+    sessions: &[WorkspaceSession],
+    selected_sessions: &[bool],
+    session_state: &ListState,
+    source_states: &mut [SourceLoadState],
+    load_pump: &mut SourceLoadPump,
+    all_sessions: &mut Vec<WorkspaceSession>,
+    search_index: &mut WorkspaceSearchIndex,
+    search_dirty: &mut bool,
+) {
+    match focus {
+        WorkspaceFocus::Source | WorkspaceFocus::Content => {
+            // Content has no deeper load level in this model; treat like source refresh
+            // only when focus is Source. Content falls through to no-op below.
+        }
+        _ => {}
+    }
+    match focus {
+        WorkspaceFocus::Source => {
+            let mask = effective_selected(
+                selected_sources,
+                selected_index(source_state),
+                sources.len(),
+            );
+            load_pump.refresh_selected(sources, &mask, source_states);
+            *all_sessions = collect_ready_sessions(sources, selected_sources, source_states);
+            *search_index = WorkspaceSearchIndex::new(all_sessions);
+            *search_dirty = true;
+        }
+        WorkspaceFocus::Sessions => {
+            // Refresh the parent sources of active sessions (next level = dialogues/records).
+            let mask_sessions = effective_selected(
+                selected_sessions,
+                selected_index(session_state),
+                sessions.len(),
+            );
+            let mut parent = vec![false; sources.len()];
+            for (sidx, session) in sessions.iter().enumerate() {
+                if !mask_sessions.get(sidx).copied().unwrap_or(false) {
+                    continue;
+                }
+                if let Some(src_idx) = sources.iter().position(|src| src == &session.source) {
+                    parent[src_idx] = true;
+                }
+            }
+            if parent.iter().any(|s| *s) {
+                load_pump.refresh_selected(sources, &parent, source_states);
+                *all_sessions = collect_ready_sessions(sources, selected_sources, source_states);
+                *search_index = WorkspaceSearchIndex::new(all_sessions);
+                *search_dirty = true;
+            }
+        }
+        WorkspaceFocus::Dialogues => {
+            // Dialogues are derived from session records; refresh parent sources of
+            // active sessions so new dialogues can appear.
+            let mask_sessions = effective_selected(
+                selected_sessions,
+                selected_index(session_state),
+                sessions.len(),
+            );
+            let mut parent = vec![false; sources.len()];
+            for (sidx, session) in sessions.iter().enumerate() {
+                if !mask_sessions.get(sidx).copied().unwrap_or(false) {
+                    continue;
+                }
+                if let Some(src_idx) = sources.iter().position(|src| src == &session.source) {
+                    parent[src_idx] = true;
+                }
+            }
+            if parent.iter().any(|s| *s) {
+                load_pump.refresh_selected(sources, &parent, source_states);
+                *all_sessions = collect_ready_sessions(sources, selected_sources, source_states);
+                *search_index = WorkspaceSearchIndex::new(all_sessions);
+                *search_dirty = true;
+            }
+        }
+        WorkspaceFocus::Content => {}
+    }
+}
+
 fn open_link_target(target: &str) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
@@ -1371,28 +1507,6 @@ fn open_link_target(target: &str) -> Result<()> {
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn reload_selected_sources(
-    sources: &[WorkspaceSource],
-    selected_sources: &[bool],
-    source_states: &mut [SourceLoadState],
-    cwd: &std::path::Path,
-    all_sessions: &mut Vec<WorkspaceSession>,
-    search_index: &mut WorkspaceSearchIndex,
-    search_dirty: &mut bool,
-    status_message: &mut Option<String>,
-) -> Result<()> {
-    ensure_sources_loaded(sources, selected_sources, source_states, cwd)?;
-    *all_sessions = collect_ready_sessions(sources, selected_sources, source_states);
-    *search_index = WorkspaceSearchIndex::new(all_sessions);
-    *search_dirty = true;
-    *status_message = source_states.iter().zip(sources.iter()).find_map(|(state, source)| {
-        state
-            .error_message()
-            .map(|message| format!("{}: {message}", source.label()))
-    });
-    Ok(())
-}
 
 #[allow(clippy::too_many_arguments)]
 fn apply_workspace_help_action(
@@ -1650,6 +1764,9 @@ fn apply_workspace_help_action(
             );
         }
         WorkspaceHelpAction::Cancel => anyhow::bail!(PICK_CANCELLED_MESSAGE),
+        WorkspaceHelpAction::Refresh => {
+            // Help path cannot refresh without the load pump; keyboard R handles it.
+        }
         _ => {}
     }
 

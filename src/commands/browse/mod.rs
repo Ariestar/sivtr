@@ -8,9 +8,7 @@ mod picker;
 mod text;
 mod vim;
 
-pub(crate) use load::{
-    collect_ready_sessions, ensure_sources_loaded, workspace_source_catalog, SourceLoadState,
-};
+pub(crate) use load::{workspace_source_catalog, SourceLoadState};
 pub(crate) use picker::run as run_picker;
 pub(crate) use text::{filter_lines_by_spec, record_text_to_pair, select_lines};
 
@@ -31,6 +29,7 @@ use crate::tui::workspace::{WorkspaceFocus, WorkspacePickedContent, WorkspaceSou
 /// Run the workspace browser.
 ///
 /// Catalog = local + mounts. `select_remotes` only sets the initial selection mask.
+/// Loads run in the background; the picker draws immediately.
 pub fn run(
     providers: &[AgentProvider],
     select_remotes: bool,
@@ -46,27 +45,8 @@ pub fn run(
         .iter()
         .map(|source| select_remotes || !source.is_remote())
         .collect();
-    let mut source_states: Vec<SourceLoadState> =
+    let source_states: Vec<SourceLoadState> =
         sources.iter().map(|_| SourceLoadState::Idle).collect();
-    ensure_sources_loaded(&sources, &selected_sources, &mut source_states, &cwd)?;
-
-    // Empty only when every *selected* source is Ready and still has no sessions.
-    // Failed remotes do not count as "no sessions".
-    let selected_ready_empty = selected_sources.iter().enumerate().all(|(idx, selected)| {
-        if !selected {
-            return true;
-        }
-        match &source_states[idx] {
-            SourceLoadState::Ready(sessions) => sessions.is_empty(),
-            SourceLoadState::Failed(_) | SourceLoadState::Idle => false,
-        }
-    });
-    if selected_ready_empty
-        && selected_sources.iter().any(|selected| *selected)
-        && collect_ready_sessions(&sources, &selected_sources, &source_states).is_empty()
-    {
-        anyhow::bail!("No terminal or AI sessions found");
-    }
 
     let mut terminal = init_tui()?;
     let result = run_picker(

@@ -1,13 +1,15 @@
-//! Source catalog and session grouping for the workspace browser.
+//! Source catalog, session grouping, and non-blocking source loads for browse.
 //!
-//! Multi-source schedule (parallel remotes + timeout) lives in
-//! `workset::query_many`. This module only maps catalog ↔ TUI sessions.
+//! Multi-source schedule lives in `workset::query_many`. This module maps catalog
+//! ↔ TUI sessions and owns background load jobs so the event loop never blocks.
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
-use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::commands::memory::filter::Filter;
 use crate::commands::memory::workset::{self, QuerySource, QuerySourceResult, REMOTE_QUERY_TIMEOUT};
@@ -20,28 +22,233 @@ use sivtr_core::ai::AgentProvider;
 use sivtr_core::record::WorkRecord;
 use sivtr_core::workspace;
 
-/// Per-source load state shown in the Source pane.
+/// Per-source load state. Sessions only appear when Ready (or stale Ready while Loading).
 #[derive(Clone, Debug)]
 pub enum SourceLoadState {
     Idle,
+    Loading {
+        /// Previous good snapshot, if any (stale-while-revalidate).
+        stale: Option<Vec<WorkspaceSession>>,
+        gen: u64,
+    },
     Ready(Vec<WorkspaceSession>),
-    Failed(String),
+    Failed {
+        #[allow(dead_code)]
+        message: String,
+        /// Keep last good sessions when a refresh fails.
+        stale: Option<Vec<WorkspaceSession>>,
+    },
 }
 
 impl SourceLoadState {
     pub fn marker(&self) -> SourceLoadMarker {
         match self {
             Self::Idle => SourceLoadMarker::Idle,
+            Self::Loading { .. } => SourceLoadMarker::Loading,
             Self::Ready(_) => SourceLoadMarker::Ready,
-            Self::Failed(_) => SourceLoadMarker::Failed,
+            Self::Failed { .. } => SourceLoadMarker::Failed,
         }
     }
 
-    pub fn error_message(&self) -> Option<&str> {
+    /// Sessions that may be shown (Ready, or stale while Loading/Failed).
+    pub fn visible_sessions(&self) -> &[WorkspaceSession] {
         match self {
-            Self::Failed(message) => Some(message.as_str()),
-            _ => None,
+            Self::Ready(sessions) => sessions,
+            Self::Loading {
+                stale: Some(sessions),
+                ..
+            }
+            | Self::Failed {
+                stale: Some(sessions),
+                ..
+            } => sessions,
+            _ => &[],
         }
+    }
+
+    fn take_stale(&self) -> Option<Vec<WorkspaceSession>> {
+        match self {
+            Self::Ready(sessions) => Some(sessions.clone()),
+            Self::Loading { stale, .. } | Self::Failed { stale, .. } => stale.clone(),
+            Self::Idle => None,
+        }
+    }
+}
+
+/// Background job completion for one source load.
+#[derive(Debug)]
+pub struct SourceLoadEvent {
+    pub index: usize,
+    pub gen: u64,
+    pub result: std::result::Result<Vec<WorkspaceSession>, String>,
+}
+
+/// Owns the channel from load workers into the TUI loop.
+pub struct SourceLoadPump {
+    tx: Sender<SourceLoadEvent>,
+    rx: Receiver<SourceLoadEvent>,
+    cwd: PathBuf,
+    /// Monotonic generation per source index.
+    gens: Vec<u64>,
+    /// Debounce select-to-refresh for Ready sources.
+    last_kick: Vec<Option<Instant>>,
+}
+
+impl SourceLoadPump {
+    pub fn new(source_count: usize, cwd: PathBuf) -> Self {
+        let (tx, rx) = mpsc::channel();
+        Self {
+            tx,
+            rx,
+            cwd,
+            gens: vec![0; source_count],
+            last_kick: vec![None; source_count],
+        }
+    }
+
+    /// Kick loads for selected sources that need work.
+    ///
+    /// - Idle / Failed → always load
+    /// - Ready → refresh if `refresh_ready` and debounce elapsed
+    /// - Loading → skip (already in flight)
+    pub fn kick(
+        &mut self,
+        sources: &[WorkspaceSource],
+        selected: &[bool],
+        states: &mut [SourceLoadState],
+        refresh_ready: bool,
+    ) {
+        const READY_DEBOUNCE: Duration = Duration::from_millis(800);
+        let now = Instant::now();
+        for (idx, source) in sources.iter().enumerate() {
+            if !selected.get(idx).copied().unwrap_or(false) {
+                continue;
+            }
+            let needs = match &states[idx] {
+                SourceLoadState::Loading { .. } => false,
+                SourceLoadState::Idle | SourceLoadState::Failed { .. } => true,
+                SourceLoadState::Ready(_) => {
+                    refresh_ready
+                        && self.last_kick.get(idx).and_then(|t| *t).is_none_or(|t| {
+                            now.duration_since(t) >= READY_DEBOUNCE
+                        })
+                }
+            };
+            if !needs {
+                continue;
+            }
+            self.spawn_one(idx, source, states);
+        }
+    }
+
+    /// Force-refresh selected sources (manual `R`), ignoring debounce.
+    pub fn refresh_selected(
+        &mut self,
+        sources: &[WorkspaceSource],
+        selected: &[bool],
+        states: &mut [SourceLoadState],
+    ) {
+        for (idx, source) in sources.iter().enumerate() {
+            if !selected.get(idx).copied().unwrap_or(false) {
+                continue;
+            }
+            if matches!(states.get(idx), Some(SourceLoadState::Loading { .. })) {
+                continue;
+            }
+            self.spawn_one(idx, source, states);
+        }
+    }
+
+    fn spawn_one(
+        &mut self,
+        idx: usize,
+        source: &WorkspaceSource,
+        states: &mut [SourceLoadState],
+    ) {
+        if self.gens.len() <= idx {
+            self.gens.resize(idx + 1, 0);
+            self.last_kick.resize(idx + 1, None);
+        }
+        self.gens[idx] = self.gens[idx].saturating_add(1);
+        let gen = self.gens[idx];
+        self.last_kick[idx] = Some(Instant::now());
+
+        let stale = states[idx].take_stale();
+        states[idx] = SourceLoadState::Loading {
+            stale,
+            gen,
+        };
+
+        let selector = source.selector();
+        let remote = source.is_remote();
+        let cwd = self.cwd.clone();
+        let tx = self.tx.clone();
+        let source = source.clone();
+        thread::spawn(move || {
+            let query_source = if remote {
+                QuerySource::remote(selector)
+            } else {
+                QuerySource::local(selector)
+            };
+            let result = match workset::query_many(
+                &[query_source],
+                Filter::none(),
+                Some(&cwd),
+                REMOTE_QUERY_TIMEOUT,
+            ) {
+                Ok(mut results) => match results.pop() {
+                    Some(QuerySourceResult::Ok(set)) => {
+                        Ok(sessions_from_records(&source, set.records))
+                    }
+                    Some(QuerySourceResult::Err(message)) => Err(message),
+                    None => Err("empty query result".to_string()),
+                },
+                Err(error) => Err(format!("{error:#}")),
+            };
+            let _ = tx.send(SourceLoadEvent {
+                index: idx,
+                gen,
+                result,
+            });
+        });
+    }
+
+    /// Apply all completed jobs. Returns true if UI should redraw.
+    pub fn drain(&mut self, states: &mut [SourceLoadState]) -> bool {
+        let mut changed = false;
+        loop {
+            match self.rx.try_recv() {
+                Ok(event) => {
+                    if self.apply(event, states) {
+                        changed = true;
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => break,
+            }
+        }
+        changed
+    }
+
+    fn apply(&self, event: SourceLoadEvent, states: &mut [SourceLoadState]) -> bool {
+        let Some(state) = states.get_mut(event.index) else {
+            return false;
+        };
+        // Drop stale completions.
+        if let SourceLoadState::Loading { gen, .. } = state {
+            if *gen != event.gen {
+                return false;
+            }
+        } else {
+            // Source was reset; ignore.
+            return false;
+        }
+        let stale = state.take_stale();
+        *state = match event.result {
+            Ok(sessions) => SourceLoadState::Ready(sessions),
+            Err(message) => SourceLoadState::Failed { message, stale },
+        };
+        true
     }
 }
 
@@ -75,7 +282,6 @@ fn list_remote_aliases(cwd: &Path) -> Result<Vec<String>> {
     let Some(ws) = workspace::resolve_workspace_for_dir(cwd)? else {
         return Ok(Vec::new());
     };
-    // Daemon may be down — treat as "no remotes", not a hard failure for the TUI.
     if crate::commands::remote::serve::ensure_running().is_err() {
         return Ok(Vec::new());
     }
@@ -85,57 +291,6 @@ fn list_remote_aliases(cwd: &Path) -> Result<Vec<String>> {
         Ok(LocalResponse::Mounts(mounts)) => Ok(mounts.into_iter().map(|m| m.alias).collect()),
         Ok(_) | Err(_) => Ok(Vec::new()),
     }
-}
-
-/// Load every selected source that is still Idle/Failed via `workset::query_many`.
-pub fn ensure_sources_loaded(
-    sources: &[WorkspaceSource],
-    selected: &[bool],
-    states: &mut [SourceLoadState],
-    cwd: &Path,
-) -> Result<()> {
-    let need: Vec<usize> = sources
-        .iter()
-        .enumerate()
-        .filter(|(idx, _)| selected.get(*idx).copied().unwrap_or(false))
-        .filter(|(idx, _)| !matches!(states.get(*idx), Some(SourceLoadState::Ready(_))))
-        .map(|(idx, _)| idx)
-        .collect();
-    if need.is_empty() {
-        return Ok(());
-    }
-
-    let batch: Vec<QuerySource> = need
-        .iter()
-        .map(|&idx| {
-            let source = &sources[idx];
-            if source.is_remote() {
-                QuerySource::remote(source.selector())
-            } else {
-                QuerySource::local(source.selector())
-            }
-        })
-        .collect();
-
-    let results = workset::query_many(&batch, Filter::none(), Some(cwd), REMOTE_QUERY_TIMEOUT)?;
-    for (slot, result) in need.into_iter().zip(results) {
-        states[slot] = match result {
-            QuerySourceResult::Ok(set) => {
-                SourceLoadState::Ready(sessions_from_records(&sources[slot], set.records))
-            }
-            QuerySourceResult::Err(message) => {
-                if sources[slot].is_remote() {
-                    SourceLoadState::Failed(message)
-                } else {
-                    // Local hard-fail: surface as Failed so the pane stays up, but
-                    // empty local is already Ok(empty) from query_many.
-                    SourceLoadState::Failed(message)
-                }
-            }
-        };
-    }
-    // Local hard errors already returned Err from query_many; remotes are Failed.
-    Ok(())
 }
 
 pub fn collect_ready_sessions(
@@ -148,9 +303,7 @@ pub fn collect_ready_sessions(
         if !selected.get(idx).copied().unwrap_or(false) {
             continue;
         }
-        if let SourceLoadState::Ready(loaded) = &states[idx] {
-            sessions.extend(loaded.iter().cloned());
-        }
+        sessions.extend(states[idx].visible_sessions().iter().cloned());
     }
     sessions.sort_by_key(|s| std::cmp::Reverse(s.modified));
     sessions

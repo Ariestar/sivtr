@@ -130,20 +130,31 @@ impl WorkspaceSource {
     }
 }
 
-/// Compact load indicator for the Source pane (idle remote / ready / failed).
+/// Compact load indicator for the Source pane selection/status column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SourceLoadMarker {
     Idle,
+    Loading,
     Ready,
     Failed,
 }
 
 impl SourceLoadMarker {
-    pub(crate) fn glyph(self) -> Option<&'static str> {
+    /// Leading status/selection glyph. `tick` animates Loading as a circle.
+    pub(crate) fn status_glyph(self, selected: bool, tick: u8) -> &'static str {
         match self {
-            Self::Idle => Some("·"),
-            Self::Ready => None,
-            Self::Failed => Some("!"),
+            Self::Loading => {
+                const FRAMES: [&str; 4] = ["◐", "◓", "◑", "◒"];
+                FRAMES[(tick as usize) % FRAMES.len()]
+            }
+            Self::Failed => "!",
+            Self::Idle | Self::Ready => {
+                if selected {
+                    "●"
+                } else {
+                    "○"
+                }
+            }
         }
     }
 }
@@ -438,6 +449,8 @@ pub(crate) enum WorkspaceHelpAction {
     CloseHelp,
     OpenSearch,
     Cancel,
+    /// Refresh next level under active rows (source→sessions, session→dialogues).
+    Refresh,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -445,6 +458,10 @@ pub(crate) struct WorkspaceHelpEntry {
     pub(crate) key: &'static str,
     pub(crate) description: &'static str,
     pub(crate) action: WorkspaceHelpAction,
+    /// Short label for the footer (`refresh`). `None` = help-only, not in footer.
+    pub(crate) footer_label: Option<&'static str>,
+    /// Footer panes; empty = every focus pane.
+    pub(crate) footer_panes: &'static [WorkspaceFocus],
 }
 
 pub(crate) struct WorkspaceView<'a> {
@@ -452,8 +469,7 @@ pub(crate) struct WorkspaceView<'a> {
     pub(crate) selected_sources: &'a [bool],
     /// Per-source load marker (idle remote / ready / failed).
     pub(crate) source_markers: &'a [SourceLoadMarker],
-    /// Optional status line (e.g. remote timeout).
-    pub(crate) status_message: Option<&'a str>,
+    pub(crate) loading_tick: u8,
     pub(crate) source_state: &'a ListState,
     pub(crate) sessions: &'a [WorkspaceSession],
     pub(crate) selected_sessions: &'a [bool],
@@ -497,7 +513,6 @@ struct WorkspaceFooterView<'a> {
     content_mode: ContentViewMode,
     content_selection: Option<ContentSelection>,
     current_ref: Option<&'a WorkRef>,
-    status_message: Option<&'a str>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -619,154 +634,246 @@ fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
 }
 
 pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
+    use WorkspaceFocus::*;
+    const ALL: &[WorkspaceFocus] = &[];
+    const SRC: &[WorkspaceFocus] = &[Source];
+    const DIA: &[WorkspaceFocus] = &[Dialogues];
+    const CNT: &[WorkspaceFocus] = &[Content];
+    const NAV: &[WorkspaceFocus] = &[Source, Sessions, Dialogues, Content];
+    const SD: &[WorkspaceFocus] = &[Sessions, Dialogues];
+    const DC: &[WorkspaceFocus] = &[Dialogues, Content];
+
     &[
         WorkspaceHelpEntry {
             key: "0",
             description: "focus Source pane",
             action: WorkspaceHelpAction::FocusSource,
+            footer_label: None,
+            footer_panes: ALL,
         },
         WorkspaceHelpEntry {
             key: "1",
             description: "focus Sessions pane",
             action: WorkspaceHelpAction::FocusSessions,
+            footer_label: None,
+            footer_panes: ALL,
         },
         WorkspaceHelpEntry {
             key: "2",
             description: "focus Dialogues pane",
             action: WorkspaceHelpAction::FocusDialogues,
+            footer_label: None,
+            footer_panes: ALL,
         },
         WorkspaceHelpEntry {
             key: "3",
             description: "focus Content pane",
             action: WorkspaceHelpAction::FocusContent,
+            footer_label: None,
+            footer_panes: ALL,
         },
         WorkspaceHelpEntry {
-            key: "j / Down",
-            description: "move down in current pane",
+            key: "j",
+            description: "move down",
             action: WorkspaceHelpAction::MoveDown,
+            footer_label: Some("move"),
+            footer_panes: NAV,
         },
         WorkspaceHelpEntry {
-            key: "k / Up",
-            description: "move up in current pane",
+            key: "k",
+            description: "move up",
             action: WorkspaceHelpAction::MoveUp,
+            footer_label: None,
+            footer_panes: ALL,
         },
         WorkspaceHelpEntry {
-            key: "h / Left",
-            description: "focus previous pane",
+            key: "h",
+            description: "previous pane",
             action: WorkspaceHelpAction::PreviousPane,
+            footer_label: None,
+            footer_panes: ALL,
         },
         WorkspaceHelpEntry {
-            key: "l / Right",
-            description: "focus next pane",
+            key: "l",
+            description: "next pane",
             action: WorkspaceHelpAction::NextPane,
+            footer_label: Some("pane"),
+            footer_panes: NAV,
         },
         WorkspaceHelpEntry {
             key: "Space",
-            description: "toggle current source/session/dialogue",
+            description: "toggle selection",
             action: WorkspaceHelpAction::ToggleSelection,
+            footer_label: Some("toggle"),
+            footer_panes: &[Source, Sessions, Dialogues],
         },
         WorkspaceHelpEntry {
-            key: "a (Source)",
+            key: "a",
             description: "select all sources",
             action: WorkspaceHelpAction::SelectAllSources,
+            footer_label: Some("all"),
+            footer_panes: SRC,
         },
         WorkspaceHelpEntry {
-            key: "g (Source)",
+            key: "g",
             description: "select agent sources",
             action: WorkspaceHelpAction::SelectAgentSources,
+            footer_label: Some("agents"),
+            footer_panes: SRC,
         },
         WorkspaceHelpEntry {
-            key: "t (Source)",
+            key: "t",
             description: "select terminal source",
             action: WorkspaceHelpAction::SelectTerminalSource,
+            footer_label: Some("terminal"),
+            footer_panes: SRC,
+        },
+        WorkspaceHelpEntry {
+            key: "R",
+            description: "refresh next level under active rows",
+            action: WorkspaceHelpAction::Refresh,
+            footer_label: Some("refresh"),
+            footer_panes: &[Source, Sessions, Dialogues],
         },
         WorkspaceHelpEntry {
             key: "v",
             description: "range select dialogues",
             action: WorkspaceHelpAction::RangeSelect,
+            footer_label: Some("range"),
+            footer_panes: DIA,
         },
         WorkspaceHelpEntry {
             key: "a",
             description: "toggle all dialogues",
             action: WorkspaceHelpAction::ToggleAllDialogues,
+            footer_label: Some("all"),
+            footer_panes: DIA,
         },
         WorkspaceHelpEntry {
             key: "t",
-            description: "open current content in Vim",
+            description: "open in Vim",
             action: WorkspaceHelpAction::OpenVim,
+            footer_label: Some("vim"),
+            footer_panes: SD,
         },
         WorkspaceHelpEntry {
             key: "Ctrl-d",
-            description: "scroll Content down",
+            description: "scroll content down",
             action: WorkspaceHelpAction::ScrollDown,
+            footer_label: None,
+            footer_panes: CNT,
         },
         WorkspaceHelpEntry {
             key: "Ctrl-u",
-            description: "scroll Content up",
+            description: "scroll content up",
             action: WorkspaceHelpAction::ScrollUp,
+            footer_label: None,
+            footer_panes: CNT,
         },
         WorkspaceHelpEntry {
-            key: "r (Content)",
-            description:
-                "toggle fold/full structure display (read folds tools/skills/thinking; raw expands)",
+            key: "r",
+            description: "toggle fold/full content",
             action: WorkspaceHelpAction::ToggleContentMode,
+            footer_label: Some("fold/full"),
+            footer_panes: CNT,
         },
         WorkspaceHelpEntry {
-            key: "v (Content)",
-            description: "start visual text selection",
+            key: "v",
+            description: "visual text select",
             action: WorkspaceHelpAction::VisualTextSelect,
+            footer_label: Some("select"),
+            footer_panes: CNT,
         },
         WorkspaceHelpEntry {
-            key: ":",
-            description: "start line filter for next copy",
+            key: "Esc",
+            description: "close help / back / cancel",
             action: WorkspaceHelpAction::CloseHelp,
+            footer_label: None,
+            footer_panes: ALL,
         },
         WorkspaceHelpEntry {
             key: "i",
-            description: "copy current input/question",
+            description: "copy input",
             action: WorkspaceHelpAction::CopyInput,
+            footer_label: Some("in"),
+            footer_panes: DC,
         },
         WorkspaceHelpEntry {
             key: "o",
-            description: "copy current output/answer",
+            description: "copy output",
             action: WorkspaceHelpAction::CopyOutput,
+            footer_label: Some("out"),
+            footer_panes: DC,
         },
         WorkspaceHelpEntry {
             key: "y",
-            description: "copy current input + output",
+            description: "copy block",
             action: WorkspaceHelpAction::CopyBlock,
+            footer_label: Some("copy"),
+            footer_panes: DC,
         },
         WorkspaceHelpEntry {
             key: "c",
-            description: "copy terminal command without prompt",
+            description: "copy command",
             action: WorkspaceHelpAction::CopyCommand,
+            footer_label: Some("cmd"),
+            footer_panes: DIA,
         },
         WorkspaceHelpEntry {
             key: "Enter",
-            description: "enter pane or copy selection",
+            description: "confirm / open next / copy",
             action: WorkspaceHelpAction::Copy,
+            footer_label: Some("enter"),
+            footer_panes: NAV,
         },
         WorkspaceHelpEntry {
             key: "z",
-            description: "toggle current pane fullscreen",
+            description: "toggle fullscreen",
             action: WorkspaceHelpAction::ToggleFullscreen,
+            footer_label: Some("full"),
+            footer_panes: NAV,
         },
         WorkspaceHelpEntry {
             key: "?",
-            description: "close Help",
+            description: "toggle help",
             action: WorkspaceHelpAction::CloseHelp,
+            footer_label: Some("help"),
+            footer_panes: NAV,
         },
         WorkspaceHelpEntry {
             key: "/",
-            description: "search all sessions",
+            description: "search",
             action: WorkspaceHelpAction::OpenSearch,
+            footer_label: Some("search"),
+            footer_panes: NAV,
         },
         WorkspaceHelpEntry {
             key: "q",
-            description: "cancel picker",
+            description: "cancel",
             action: WorkspaceHelpAction::Cancel,
+            footer_label: Some("quit"),
+            footer_panes: NAV,
         },
     ]
+}
+
+/// Footer hotkeys for the focused pane, built from the help registry.
+pub(crate) fn workspace_footer_hotkeys(focus: WorkspaceFocus) -> String {
+    let mut parts = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for entry in workspace_help_entries() {
+        let Some(label) = entry.footer_label else {
+            continue;
+        };
+        if !entry.footer_panes.is_empty() && !entry.footer_panes.contains(&focus) {
+            continue;
+        }
+        if !seen.insert(label) {
+            continue;
+        }
+        parts.push(format!("{} {label}", entry.key));
+    }
+    parts.join("  ")
 }
 
 pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
@@ -798,6 +905,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         view.sources,
         view.selected_sources,
         view.source_markers,
+        view.loading_tick,
         view.source_state,
         view.focus == WorkspaceFocus::Source,
     );
@@ -866,7 +974,6 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
             content_mode: view.content_mode,
             content_selection: view.content_selection,
             current_ref: current_ref.as_ref(),
-            status_message: view.status_message,
         },
     );
 
@@ -909,7 +1016,6 @@ fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>)
         content_mode,
         content_selection,
         current_ref,
-        status_message,
     } = footer;
 
     let mut spans = if search.is_some() {
@@ -931,25 +1037,13 @@ fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>)
     } else {
         let controls = if content_selection.is_some() {
             "visual  h/j/k/l move  drag select  Ctrl-drag block  y/Enter copy  Esc/v return"
+                .to_string()
         } else if show_help {
-            "j/k move  Enter execute  Esc/? close help  q cancel"
+            "j/k move  Enter execute  Esc/? close help  q cancel".to_string()
         } else {
-            match focus {
-                WorkspaceFocus::Source => {
-                    "j/k move  Space toggle  a all  g agents  t terminal  Enter sessions  z fullscreen  / search  q/Esc cancel  ? help"
-                }
-                WorkspaceFocus::Sessions => {
-                    "j/k move  Space toggle  0 source  l/Right/Enter dialogues  t vim  z fullscreen  / search  q/Esc cancel  ? help"
-                }
-                WorkspaceFocus::Dialogues => {
-                    "j/k move  Space toggle  v range  a all  : lines  i/o/y copy parts  c command  l/Right content  t vim  Enter copy  z fullscreen  / search  h/Esc back  ? help"
-                }
-                WorkspaceFocus::Content => {
-                    "j/k scroll  v select  : lines  i/o/y copy  r fold/full  t vim  Enter copy  z fullscreen  / search  h/Esc back  ? help"
-                }
-            }
+            workspace_footer_hotkeys(focus)
         };
-        footer_control_spans(controls)
+        footer_control_spans(&controls)
     };
 
     if fullscreen.is_some() {
@@ -973,14 +1067,10 @@ fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>)
             spans.extend(footer_status_spans(&format!("ref {work_ref}")));
         }
     }
-    if let Some(status) = status_message.filter(|message| !message.is_empty()) {
-        spans.extend(footer_status_spans(status));
-    }
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// Highlight keys in `key action  key action …` footer text (pairs split by two spaces).
 fn footer_control_spans(text: &str) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     for (idx, part) in text
@@ -1269,12 +1359,14 @@ fn render_help_panel(frame: &mut Frame, area: Rect, state: &ListState) {
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_source_list(
     frame: &mut Frame,
     area: Rect,
     sources: &[WorkspaceSource],
     selected_sources: &[bool],
     source_markers: &[SourceLoadMarker],
+    loading_tick: u8,
     state: &ListState,
     active: bool,
 ) {
@@ -1287,13 +1379,21 @@ fn render_source_list(
         }
         let selected = selected_sources.get(idx).copied().unwrap_or(false);
         let focused = idx == current && active;
-        let marker = if selected { "●" } else { "○" };
+        let load = source_markers
+            .get(idx)
+            .copied()
+            .unwrap_or(SourceLoadMarker::Idle);
+        let marker = load.status_glyph(selected, loading_tick);
         let marker_style = if focused {
             active_item_style()
-        } else if selected {
-            Style::default().fg(source.color())
         } else {
-            Style::default().fg(theme::muted())
+            match load {
+                SourceLoadMarker::Failed => Style::default().fg(Color::Rgb(248, 113, 113)),
+                SourceLoadMarker::Loading => Style::default().fg(theme::accent()),
+                SourceLoadMarker::Ready if selected => Style::default().fg(source.color()),
+                SourceLoadMarker::Idle if selected => Style::default().fg(theme::muted()),
+                _ => Style::default().fg(theme::muted()),
+            }
         };
         let label_style = if focused {
             active_item_style()
@@ -1308,16 +1408,6 @@ fn render_source_list(
         };
         spans.push(Span::styled(format!("{marker} "), marker_style));
         spans.push(Span::styled(source.label(), label_style));
-        if let Some(load_glyph) = source_markers.get(idx).and_then(|marker| marker.glyph()) {
-            let load_style = match source_markers.get(idx) {
-                Some(SourceLoadMarker::Failed) => Style::default().fg(Color::Rgb(248, 113, 113)),
-                Some(SourceLoadMarker::Idle) if source.is_remote() => {
-                    Style::default().fg(theme::dim())
-                }
-                _ => Style::default().fg(theme::muted()),
-            };
-            spans.push(Span::styled(format!(" {load_glyph}"), load_style));
-        }
     }
     if spans.is_empty() {
         spans.push(Span::styled("<empty>", Style::default().fg(theme::dim())));
