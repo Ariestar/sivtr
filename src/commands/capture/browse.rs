@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 use sivtr_core::config::SivtrConfig;
 use sivtr_core::export::editor;
 use sivtr_core::history::{store::CaptureSource, HistoryStore};
@@ -9,66 +9,59 @@ use crate::tui;
 /// Shared TUI event loop with external editor support.
 /// Used by both `pipe` and `run` commands.
 pub fn run_tui(app: &mut App, start_at_bottom: bool) -> Result<()> {
-    ensure_tui_stdout()?;
-
     let mut terminal = tui::terminal::init()?;
-    let size = terminal.size()?;
-    app.buffer
-        .resize(size.width as usize, size.height.saturating_sub(2) as usize);
-    if start_at_bottom {
-        app.buffer.cursor_bottom();
-    }
-
-    loop {
-        terminal.draw(|frame| {
-            let area = frame.area();
-            app.buffer
-                .resize(area.width as usize, area.height.saturating_sub(2) as usize);
-            tui::render::render(app, frame);
-        })?;
-
-        tui::event::handle_event(app)?;
-
-        if app.should_quit {
-            break;
+    let result = (|| -> Result<()> {
+        let size = terminal.size()?;
+        app.buffer
+            .resize(size.width as usize, size.height.saturating_sub(2) as usize);
+        if start_at_bottom {
+            app.buffer.cursor_bottom();
         }
 
-        // Handle pending editor request: suspend TUI 鈫?launch editor 鈫?resume TUI
-        if app.pending_editor {
-            app.pending_editor = false;
+        loop {
+            tui::terminal::draw(&mut terminal, |frame| {
+                let area = frame.area();
+                app.buffer
+                    .resize(area.width as usize, area.height.saturating_sub(2) as usize);
+                tui::render::render(app, frame);
+            })?;
 
-            let content = app.get_content_for_editor();
+            tui::event::handle_event(app)?;
 
-            // Suspend TUI
-            tui::terminal::restore(&mut terminal)?;
-
-            // Launch editor
-            match editor::open_in_editor(&content) {
-                Ok(_) => {
-                    app.status = Some(StatusMessage {
-                        text: "Editor closed".to_string(),
-                        is_error: false,
-                    });
-                }
-                Err(e) => {
-                    eprintln!("sivtr: editor error: {e}");
-                    app.status = Some(StatusMessage {
-                        text: format!("Editor error: {e}"),
-                        is_error: true,
-                    });
-                }
+            if app.should_quit {
+                break;
             }
 
-            // Exit visual mode if we were in one
-            app.exit_visual();
+            if app.pending_editor {
+                app.pending_editor = false;
+                let content = app.get_content_for_editor();
 
-            // Resume TUI
-            terminal = tui::terminal::init()?;
+                match tui::terminal::with_suspended(&mut terminal, || {
+                    editor::open_in_editor(&content)
+                })? {
+                    Ok(_) => {
+                        app.status = Some(StatusMessage {
+                            text: "Editor closed".to_string(),
+                            is_error: false,
+                        });
+                    }
+                    Err(error) => {
+                        eprintln!("sivtr: editor error: {error}");
+                        app.status = Some(StatusMessage {
+                            text: format!("Editor error: {error}"),
+                            is_error: true,
+                        });
+                    }
+                }
+
+                app.exit_visual();
+            }
         }
-    }
 
-    tui::terminal::restore(&mut terminal)?;
-    Ok(())
+        Ok(())
+    })();
+
+    tui::terminal::finish(&mut terminal, result)
 }
 
 pub(crate) fn record_history(
@@ -80,16 +73,6 @@ pub(crate) fn record_history(
     if let Err(error) = try_record_history(config, content, command, source) {
         eprintln!("sivtr: failed to save history: {error:#}");
     }
-}
-
-fn ensure_tui_stdout() -> Result<()> {
-    if atty::is(atty::Stream::Stdout) {
-        return Ok(());
-    }
-
-    bail!(
-        "sivtr: TUI mode requires an interactive terminal\n  hint: run inside a terminal or set `general.open_mode = \"editor\"` in config"
-    )
 }
 
 fn try_record_history(
@@ -123,7 +106,7 @@ fn try_record_history_with_store(
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_tui_stdout, try_record_history_with_store};
+    use super::try_record_history_with_store;
     use sivtr_core::config::SivtrConfig;
     use sivtr_core::history::{store::CaptureSource, HistoryStore};
 
@@ -164,14 +147,5 @@ mod tests {
 
         let entries = store.list_recent(10).unwrap();
         assert!(entries.is_empty());
-    }
-
-    #[test]
-    fn rejects_non_interactive_tui_stdout() {
-        let error = ensure_tui_stdout().unwrap_err();
-
-        assert!(error
-            .to_string()
-            .contains("TUI mode requires an interactive terminal"));
     }
 }
