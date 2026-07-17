@@ -428,10 +428,8 @@ async fn observed_endpoint(
 ) -> EndpointAddr {
     let remote_id = connection.remote_id();
     if let Some(info) = endpoint.remote_info(remote_id).await {
-        let observed = EndpointAddr::from_parts(
-            info.id(),
-            info.into_addrs().map(|addr| addr.into_addr()),
-        );
+        let observed =
+            EndpointAddr::from_parts(info.id(), info.into_addrs().map(|addr| addr.into_addr()));
         if !observed.is_empty() {
             return observed;
         }

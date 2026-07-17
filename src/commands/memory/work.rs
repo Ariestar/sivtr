@@ -55,11 +55,7 @@ pub fn execute(command: &WorkCommand) -> Result<()> {
 fn execute_sessions(args: &WorkSessionsArgs) -> Result<()> {
     let cwd = resolve_cwd(args.cwd.as_deref())?;
     let (display_cwd, records) = if let Some(source) = args.source.as_deref() {
-        let set = workset::query(
-            source,
-            filter::Filter::none(),
-            Some(&cwd),
-        )?;
+        let set = workset::query(source, filter::Filter::none(), Some(&cwd))?;
         (set.cwd, set.records)
     } else {
         let providers = args.provider.providers();

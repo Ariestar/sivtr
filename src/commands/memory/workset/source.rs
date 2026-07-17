@@ -88,22 +88,13 @@ fn run_local(source: &str, root: &Path, filter: Filter) -> Result<WorkSet> {
     let result = load_workspace_source(root, source)?;
     warn_skipped(&result.skipped);
     apply_loaded(
-        WorkSet::with_anchors(
-            root.display().to_string(),
-            result.records,
-            result.anchors,
-        ),
+        WorkSet::with_anchors(root.display().to_string(), result.records, result.anchors),
         filter,
     )
 }
 
 fn apply_loaded(set: WorkSet, filter: Filter) -> Result<WorkSet> {
-    filter::apply(
-        PathBuf::from(&set.cwd),
-        set.records,
-        set.anchors,
-        filter,
-    )
+    filter::apply(PathBuf::from(&set.cwd), set.records, set.anchors, filter)
 }
 
 fn try_remote(

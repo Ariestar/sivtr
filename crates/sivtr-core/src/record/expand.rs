@@ -50,9 +50,7 @@ pub fn resolve_scope_token(token: &str) -> Result<String> {
         bail!("empty scope");
     }
     if token.starts_with('&') {
-        bail!(
-            "scope shortcuts (`&name`) were removed; use a remote name from `sivtr remote list`"
-        );
+        bail!("scope shortcuts (`&name`) were removed; use a remote name from `sivtr remote list`");
     }
     if token.eq_ignore_ascii_case("local") {
         return Ok("local".to_string());

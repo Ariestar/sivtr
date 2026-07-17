@@ -32,8 +32,7 @@ pub fn run(args: &ZoomArgs) -> Result<WorkSet> {
     let expanded = if source.records.is_empty() || source.anchors.is_empty() {
         Vec::new()
     } else {
-        let all_records =
-            workset::load_context_records(&source.records, &source.anchors, &cwd)?;
+        let all_records = workset::load_context_records(&source.records, &source.anchors, &cwd)?;
         expand_around(
             &source.records,
             &source.anchors,
