@@ -73,7 +73,7 @@ AgentSession
    `- ToolOutput
 ```
 
-This lets copy, picker, search, and show logic work across Codex, Claude Code, Hermes, OpenCode, and Pi without hard-coding one transcript format into the UI. The result is a provider-neutral memory layer rather than a one-off transcript reader.
+This lets copy, picker, search, and show logic work across registered providers (Codex, Claude Code, Cursor, Hermes, OpenCode, OpenClaw, Grok, Pi, …) without hard-coding one transcript format into the UI. The result is a provider-neutral memory layer rather than a one-off transcript reader.
 
 ## Current workspace resolution
 

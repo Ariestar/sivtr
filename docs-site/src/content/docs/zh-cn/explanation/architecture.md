@@ -31,20 +31,15 @@ sivtr/
 `- crates/
    `- sivtr-core/
       `- src/
-         |- ai.rs
+         |- agents/          # AgentProvider registry + per-provider parsers
          |- buffer/
          |- capture/
-         |- claude.rs
-         |- codex.rs
          |- config/
          |- export/
-         |- hermes.rs
          |- history/
-         |- opencode.rs
          |- parse/
-         |- pi.rs
          |- query/
-         |- record/
+         |- record/          # WorkRecord / WorkRef (scope + path + at)
          |- search/
          |- selection/
          |- session/
@@ -58,7 +53,7 @@ sivtr/
 | `cli/` | clap 命令定义和 help text（`mod.rs` + `remote.rs`） |
 | `commands/capture/` | run、pipe、copy、init、flush、import、diff、clear、browse |
 | `commands/memory/` | search、filter、var、nav、zoom、show、work、WorkSet store |
-| `commands/remote/` | serve、share、remote mounts、peer、workspace list |
+| `commands/remote/` | serve、share、remote（git-remote 风格命名）、peer、workspace list |
 | `commands/system/` | config、doctor、history、hotkey、codex export、migrate、version |
 | `remote/` | 设备 daemon、identity、SQLite state、protocol、本地 IPC |
 | `app.rs` | 捕获输出 browser 状态机 |
@@ -71,9 +66,8 @@ sivtr/
 
 | 模块 | 责任 |
 | --- | --- |
-| `ai` | provider-neutral session、block、metadata 和 parser helpers |
-| `codex`、`claude`、`hermes`、`opencode`、`pi` | provider-specific session 发现与解析 |
-| `record` | `WorkRecord`、`WorkPart`、`WorkRef`（`Local` body + `Remote` `origin:body`） |
+| `agents` | `AgentProvider` registry 以及各 provider 发现/解析（Codex、Claude、Cursor、OpenCode、OpenClaw、Hermes、Grok、Pi…） |
+| `record` | `WorkRecord`、`WorkPart`、`WorkRef` = `WorkScope` + `WorkPath` + `WorkAt`（`[scope:]path[/at]`） |
 | `query` | 为 CLI 和 daemon 加载 workspace records 与 local-shaped sources |
 | `capture` | stdin、subprocess、scrollback/session capture helpers |
 | `parse` | ANSI 剥离、Unicode display width、行解析 |

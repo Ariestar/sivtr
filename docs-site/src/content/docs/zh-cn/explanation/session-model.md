@@ -73,7 +73,7 @@ AgentSession
    `- ToolOutput
 ```
 
-这让 copy、picker、search 和 show 逻辑可以跨 Codex、Claude Code、Hermes、OpenCode 和 Pi 工作，而不需要在 UI 中硬编码某一种 transcript 格式。结果是一层 provider-neutral memory，而不是一次性的 transcript reader。
+这让 copy、picker、search 和 show 逻辑可以跨已注册 provider（Codex、Claude Code、Cursor、Hermes、OpenCode、OpenClaw、Grok、Pi…）工作，而不需要在 UI 中硬编码某一种 transcript 格式。结果是一层 provider-neutral memory，而不是一次性的 transcript reader。
 
 ## 当前 workspace 解析
 

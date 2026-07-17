@@ -103,7 +103,7 @@ sivtr codex export --dest /srv/sivtr/root-codex
 sivtr codex export --dest /srv/sivtr/root-codex --watch
 ```
 
-Only Codex currently has first-class shared mirror configuration. Other agent providers are read from their local provider-specific locations. See [Data Locations](/reference/data-locations/).
+Only Codex currently has first-class shared mirror configuration. Other registered providers are read from their local provider-specific locations. See [Data Locations](/reference/data-locations/).
 
 ## Hotkey chord
 

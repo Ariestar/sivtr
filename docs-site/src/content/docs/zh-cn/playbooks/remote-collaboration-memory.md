@@ -1,6 +1,6 @@
 ---
 title: 远程协作记忆
-description: 通过挂载别名读取队友终端或 Agent 记忆的场景玩法。
+description: 通过命名 remote 读取队友终端或 Agent 记忆的场景玩法。
 ---
 
 ## 场景
@@ -23,13 +23,14 @@ Alice 的 Agent 在这个 bug 上试过什么？
 在拥有 workspace 的设备上：
 
 ```bash
-sivtr share                   # 交互选择 workspace（Enter = 当前），打印 bare invite key
+sivtr share                   # 交互选择 workspace（Enter = 当前）；只创建 share
+sivtr share invite <name>     # 签发单次 invite（stdout = bare key）
 ```
 
 在另一台设备的目标 workspace 里：
 
 ```bash
-sivtr remote add desk <invite-key>
+sivtr remote add desk <invite>
 sivtr remote test desk
 ```
 
@@ -62,4 +63,4 @@ sivtr remote remove desk
 
 ## 视频演示大纲
 
-两台机器：所有者跑 `sivtr share`，消费者把 invite 挂成 `desk`，搜索 `desk:terminal` 找到失败，zoom 命中，再从队友的证据继续修。
+两台机器：所有者跑 `sivtr share` 再 `share invite`，消费者把 invite 兑换为 remote `desk`，搜索 `desk:terminal` 找到失败，zoom 命中，再从队友的证据继续修。

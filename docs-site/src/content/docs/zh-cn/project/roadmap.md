@@ -54,9 +54,8 @@ Reliable CLI
 
 Agent session 是一等 memory source。产品目标是让 Agent transcript 像普通 `sivtr` source 一样工作,而不是特殊功能。
 
-- [x] 解析 Codex session 记录。
-- [x] 解析 Claude-style session 记录。
-- [x] 解析 Hermes、OpenCode 和 Pi session 记录。
+- [x] Registry 驱动的 `AgentProvider` 表面（Codex、Claude、Cursor、OpenCode、OpenClaw、Hermes、Grok、Pi…）。
+- [x] 通过共享 helpers（JSONL / SQLite）解析 provider session 记录。
 - [x] 复制最新 user、assistant、tool、turn 或完整 session block。
 - [x] 通过 picker 浏览本地和镜像 session 目录。
 - [ ] 在共享 session-provider 接口后支持更多 agent provider。

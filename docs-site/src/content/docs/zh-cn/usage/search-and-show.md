@@ -29,8 +29,11 @@ sivtr search terminal
 sivtr search agent
 sivtr search codex
 sivtr search claude
+sivtr search cursor
 sivtr search hermes
 sivtr search opencode
+sivtr search openclaw
+sivtr search grok
 sivtr search pi
 ```
 
@@ -47,7 +50,7 @@ record/turn 和 line segment 都是 1-based，支持 `3`、`3-5`、`3,7` 或 `3-
 
 使用 `agent` 搜索所有受支持 AI provider，或使用 provider 名只搜一个 provider。
 
-Target 也可以带 origin 前缀（`origin:body`），用于本机另一个 workspace 名或已挂载的远端别名：
+Target 也可以带 origin 前缀（`origin:body`），用于本机另一个 workspace 名或已登记的 remote 名：
 
 ```bash
 sivtr search desk:terminal --status failure --latest 5 --refs

@@ -76,9 +76,9 @@ When the user wants a summary of what happened:
 
 ## Remote Teammate Memory
 
-When the user asks what another machine, teammate, or mounted alias already tried:
+When the user asks what another machine, teammate, or named remote already tried:
 
-- Check mounts and local workspace labels first: `sivtr remote list`, `sivtr ws list`.
+- Check remotes and local workspace labels first: `sivtr remote list`, `sivtr ws list`.
 - Search the origin-prefixed source, not local defaults: `sivtr s desk:agent -m "<topic>" --latest 20 --save remote_hits --refs`.
 - Expand only the strongest hits with `zoom` / `show`.
 - Treat remote results as evidence from another device; verify current local files before acting.

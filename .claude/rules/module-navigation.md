@@ -53,12 +53,10 @@ src/
 
 crates/sivtr-core/src/
 ├── lib.rs                     ← Core library root
-├── ai.rs                      ← AgentProvider, session parsing, block selection
-├── claude.rs                  ← Claude Code JSONL parser
-├── codex.rs                   ← Codex rollout JSONL parser
-├── hermes.rs                  ← Hermes session parser
-├── opencode.rs                ← OpenCode session parser
-├── pi.rs                      ← Pi session parser
+├── agents/                    ← AgentProvider registry + per-provider parsers
+│   ├── mod.rs / model.rs / jsonl.rs / sqlite.rs
+│   ├── claude.rs / codex.rs / cursor.rs / grok.rs
+│   ├── hermes.rs / openclaw.rs / opencode.rs / pi.rs
 ├── record/
 │   ├── model.rs               ← WorkRecord, WorkPart, WorkTime (data model center)
 │   ├── refs.rs                ← WorkRef = WorkScope + WorkPath + WorkAt ([scope:]path[/at])

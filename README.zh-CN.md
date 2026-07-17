@@ -64,7 +64,7 @@
 
 - **MCP 优先的 Agent 记忆**：一次 `sivtr mcp install`，Agent 直接调用 `sivtr_search` / `sivtr_show` / `sivtr_zoom` / `sivtr_filter` / `sivtr_status`，不用你粘贴日志。
 - **带输出的 shell history**：记录 Bash、Zsh、PowerShell、Nushell 里的命令、stdout/stderr、退出码、目录和耗时。
-- **一个搜索面覆盖本地工作**：终端输出 + 所有已注册 Agent provider（Codex / Claude Code / Cursor / Hermes / OpenCode / OpenClaw / Pi …）——MCP 或 CLI 都能用。
+- **一个搜索面覆盖本地工作**：终端输出 + 所有已注册 Agent provider（Codex / Claude Code / Cursor / Hermes / OpenCode / OpenClaw / Grok / Pi …）——MCP 或 CLI 都能用。
 - **精确证据，而不是摘要**：每个命中都落到稳定 ref，可 show / zoom / filter，或交给下一个 Agent。
 - **命名记忆变量**：把结果保存成 `@failures`，复用 `@last`，管道用 `@`，也可 `@failures[1,3..5]` 取子集。
 - **跨设备访问**：只读分享 workspace，用 `desk:...` ref 像读本地一样浏览另一台设备。
@@ -118,7 +118,7 @@ sivtr doctor
 | `sivtr_show` | 打开命中背后的精确 record/part |
 | `sivtr_zoom` | 展开前后上下文 |
 | `sivtr_filter` | 缩小结果集 |
-| `sivtr_status` | workspace / mount / origin 状态 |
+| `sivtr_status` | workspace / remote / origin 状态 |
 
 可选 skill（教 Agent 何时调用这些工具）：
 
@@ -178,7 +178,7 @@ sivtr s agent -m "TODO|decision|failed" --since today -f timeline
 | `sivtr` / `sivtr pipe` | 读取 stdin 并打开输出浏览器。 |
 | `sivtr run <command>` | 执行命令、捕获输出并浏览。 |
 | `sivtr copy` | 复制最近终端命令块。 |
-| `sivtr copy <provider>` | 从任意已注册 Agent provider 复制内容（registry 驱动：Codex、Claude、Cursor、OpenCode、OpenClaw、Hermes、Pi…）。 |
+| `sivtr copy <provider>` | 从任意已注册 Agent provider 复制内容（registry 驱动：Codex、Claude、Cursor、OpenCode、OpenClaw、Hermes、Grok、Pi…）。 |
 | `sivtr search` / `sivtr s` | 搜索终端和 Agent memory；命中结果保存为 `@last`。 |
 | `sivtr filter <source>` | 对 source 或管道传入的 WorkSet 应用统一过滤。 |
 | `sivtr var` | 列出、保存、删除、合并、移除或清空命名 WorkSet 变量。 |
@@ -209,21 +209,22 @@ ref 统一为 `origin:body`：
 ```text
 codex/4                 # 本机当前 workspace
 docs:codex/4            # 本机另一个 workspace（按目录名）
-desk:terminal/...       # 已挂载的远端别名
+desk:terminal/...       # remote add 得到的远端名
 alice/sivtr:hermes/...  # device/workspace 坐标
 ```
 
 在持有 workspace 的设备上：
 
 ```bash
-sivtr share                   # 交互选择 workspace（Enter = 当前），打印 invite key
+sivtr share                   # 交互选择 workspace（Enter = 当前）；只创建 share
+sivtr share invite <name>     # 签发单次 invite（stdout = bare key）
 sivtr ws list                 # 查看本机 workspace origin 标签
 ```
 
 在另一台设备上：
 
 ```bash
-sivtr remote add desk <invite-key>   # 直接粘贴 `sivtr share` 输出的 bare key
+sivtr remote add desk <invite>   # 粘贴 `sivtr share invite` 输出的 bare key
 sivtr s desk:terminal --status failure --latest 5 --refs
 sivtr show desk:terminal/session_42/3/o/1
 sivtr zoom desk:terminal/session_42/3 -C 2
@@ -231,7 +232,7 @@ sivtr nav desk:terminal/session_42/3 +1 --refs
 sivtr copy ref desk:terminal/session_42/3/o/1 --print
 ```
 
-分享是 opt-in、只读，默认在数据离开本机前脱敏常见密钥。远程传输走加密 iroh；需要时会自动启动 daemon。未登记的 origin 会报错——用 `sivtr remote add` 挂载，或用 `sivtr ws` 查看本机 workspace。
+分享是 opt-in、只读，默认在数据离开本机前脱敏常见密钥。远程传输走加密 iroh；需要时会自动启动 daemon。未登记的 origin 会报错——用 `sivtr remote add` 登记 remote，或用 `sivtr ws` 查看本机 workspace。
 
 ## 支持来源
 
@@ -240,10 +241,11 @@ sivtr copy ref desk:terminal/session_42/3/o/1 --print
 | Terminal | Bash、Zsh、PowerShell、Nushell shell hooks；pipe 和 run capture。 |
 | Codex | 本地 rollout/session JSONL files。 |
 | Claude Code | 本地 transcript/session files。 |
-| Hermes | 本地 Hermes `state.db`（`sessions/` 下 JSONL 为 residual）。 |
-| OpenCode | 本地 session 数据库。 |
 | Cursor | 本地 Cursor agent transcript JSONL。 |
+| OpenCode | 本地 session 数据库。 |
 | OpenClaw | 本地 OpenClaw agent SQLite（+ legacy JSONL）。 |
+| Hermes | 本地 Hermes `state.db`（`sessions/` 下 JSONL 为 residual）。 |
+| Grok | 本地 Grok agent sessions（`~/.grok`，可用 `GROK_HOME`）。 |
 | Pi | 本地 Pi agent session logs。 |
 
 ## 文档

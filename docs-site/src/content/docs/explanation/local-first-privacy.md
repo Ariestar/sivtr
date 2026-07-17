@@ -28,11 +28,12 @@ After export, normal file-system permissions and your sharing setup control who 
 
 ## Explicit remote share
 
-Cross-device memory access is also opt-in. Nothing leaves the machine until you run `sivtr share` (or `share add`) and a peer redeems a single-use invite:
+Cross-device memory access is also opt-in. Nothing leaves the machine until you create a share (`sivtr share` / `share add`), issue an invite (`share invite`), and a peer redeems it:
 
 ```bash
-sivtr share                   # interactive; prints bare invite key
-sivtr remote add desk <key>   # peer mounts under a local alias
+sivtr share                   # interactive; create share only
+sivtr share invite alice-desk # single-use invite (stdout = bare key)
+sivtr remote add desk <invite> # peer names the remote in their workspace
 ```
 
 Remote access is read-only. Secret redaction is on by default before records leave the device (`--no-redact` to disable for a share). Invites expire (default `10m`). Transport between daemons is encrypted iroh. Local-first remains the default: unregistered origins error.

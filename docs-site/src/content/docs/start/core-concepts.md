@@ -45,10 +45,7 @@ A source is where memory originates.
 | Source | Content | Examples |
 | --- | --- | --- |
 | Terminal | Recent commands and output | `bun run build`, `cargo test` |
-| Claude | Local Claude Code sessions | user messages, assistant replies, tool results |
-| Codex | Local Codex sessions | rollouts / transcripts |
-| OpenCode | Local OpenCode sessions | dialogues and tool calls |
-| Pi | Local Pi sessions | dialogues, tool calls, execution records |
+| Agent providers | Registered local agent sessions | Codex, Claude Code, Cursor, OpenCode, OpenClaw, Hermes, Grok, Pi, … |
 | Pipe / run | One captured output | `cargo test 2>&1 \| sivtr`, `sivtr run cargo test` |
 
 These sources have different native formats. `sivtr` makes them available through the same workspace TUI and search interface.
@@ -94,7 +91,7 @@ sivtr
 
 The TUI puts terminal and agent sessions together. You can:
 
-- switch between terminal, Claude, Codex, Hermes, OpenCode, and Pi in the Source pane;
+- switch between terminal and registered agent providers in the Source pane;
 - select a work record in the Sessions pane;
 - select a command block or dialogue turn in the Dialogues pane;
 - inspect exact content in the Content pane;
@@ -156,7 +153,7 @@ sivtr show desk:terminal/session_42/3
 sivtr show docs:codex/4
 ```
 
-`search --format refs` / `--format workset` returns refs, so humans and agents can search first and then expand the same evidence. Origins come from mounted remote aliases (`sivtr remote add`) or local workspace names (`sivtr ws list`).
+`search --format refs` / `--format workset` returns refs, so humans and agents can search first and then expand the same evidence. Origins come from remote names (`sivtr remote add`) or local workspace names (`sivtr ws list`).
 
 ## WorkSet: pipeable memory selections
 
@@ -203,7 +200,7 @@ Shared workspace memory can be opened, searched, copied, expanded, compared, or 
 | `sivtr var` | Save, list, merge, drop, or remove named WorkSet variables |
 | `sivtr nav` | Move anchors with deterministic parent/child/sibling/session motion |
 | `sivtr show` | Expand exact content by ref or WorkSet |
-| `sivtr share` / `remote` | Opt-in read-only cross-device memory mounts |
+| `sivtr share` / `remote` | Opt-in read-only cross-device memory remotes |
 | `sivtr diff` | Compare two recent terminal command blocks |
 | `sivtr run` / pipe | Temporarily capture and browse one command output |
 

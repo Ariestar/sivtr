@@ -29,8 +29,11 @@ sivtr search terminal
 sivtr search agent
 sivtr search codex
 sivtr search claude
+sivtr search cursor
 sivtr search hermes
 sivtr search opencode
+sivtr search openclaw
+sivtr search grok
 sivtr search pi
 ```
 

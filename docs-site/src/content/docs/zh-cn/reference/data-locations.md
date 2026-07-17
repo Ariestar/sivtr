@@ -63,6 +63,7 @@ max_entries = 0
 | OpenCode | OpenCode 本地数据库 |
 | Cursor | `~/.cursor/projects/**/agent-transcripts/**/*.jsonl`（可用 `CURSOR_HOME` 覆盖） |
 | OpenClaw | `~/.openclaw/agents/<id>/agent/openclaw-agent.sqlite`（legacy JSONL 在 `sessions/`） |
+| Grok | `~/.grok/sessions/**`（`summary.json` + `chat_history.jsonl`；可用 `GROK_HOME` 覆盖） |
 | Pi | Pi agent session JSONL 文件 |
 
 各 provider 格式不同；`sivtr` 会把它们归一化为 session 和 dialogue unit，用于 copy、picker、search 和 show 工作流。
@@ -124,4 +125,4 @@ sivtr peer list
 sivtr ws list
 ```
 
-远程访问是 opt-in。只有 `sivtr share`（或 `share add`）之后才会分享。mount 是用 `sivtr remote add` 登记的 workspace 本地别名。功能指南见 [远程访问](/zh-cn/usage/remote-access/)。
+远程访问是 opt-in。只有 `sivtr share`（或 `share add`）之后才会分享；邀请用 `share invite` 签发。remote 是用 `sivtr remote add` 登记的 workspace 本地名。功能指南见 [远程访问](/zh-cn/usage/remote-access/)。

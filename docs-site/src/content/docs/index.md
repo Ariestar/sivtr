@@ -23,7 +23,7 @@ For the full workflow, install both pieces: the `sivtr` CLI/TUI and the bundled 
 - **Keep the output, not just the command** from pipes, subprocesses, shell integration, and local agent transcripts.
 - **Browse long logs comfortably** in a keyboard-first Vim-style TUI.
 - **Copy the last useful thing** as input, output, bare command, or full block.
-- **Search local agent conversations** from Codex, Claude Code, Hermes, OpenCode, or Pi when you need an old decision or explanation.
+- **Search local agent conversations** from registered providers (Codex, Claude Code, Cursor, Hermes, OpenCode, OpenClaw, Grok, Pi, …) when you need an old decision or explanation.
 - **Let agents start from evidence** so "fix the terminal error" can begin with the latest captured failure instead of a paste request.
 - **Jump back to the source** behind a summary, search hit, or handoff note.
 - **Save search results as variables** like `@last` and `@failures`, then reuse them in follow-up commands.
@@ -45,8 +45,8 @@ sivtr copy out
 # Copy the latest assistant answer from an agent provider.
 sivtr copy claude out
 sivtr copy codex out
-sivtr copy opencode out
-sivtr copy pi out
+sivtr copy cursor out
+sivtr copy grok out
 
 # Search current workspace memory.
 sivtr search agent --match "panic" --format timeline
@@ -65,7 +65,7 @@ sivtr search agent --match "panic" --format timeline
 | Teach agents the memory workflow | [Skills and Reusable Procedures](/usage/skills/) |
 | See practical community workflows | [Playbooks](/playbooks/) |
 | Search and dereference memory | [Search and Show Results](/usage/search-and-show/) |
-| Share and mount remote memory | [Remote Access](/usage/remote-access/) |
+| Share and add remote memory | [Remote Access](/usage/remote-access/) |
 | Open pickers quickly | [Launch Pickers and Hotkeys](/usage/launchers-and-hotkeys/) |
 | Check exact syntax | [CLI Reference](/reference/cli/) |
 
@@ -76,7 +76,7 @@ sivtr search agent --match "panic" --format timeline
 | Layer | What it describes |
 | --- | --- |
 | What happened | Terminal output, command blocks, agent conversations, tool results, and local history. |
-| How you reuse it | TUI browsing, search, copy, show, diff, skills, playbooks, remote mounts, and memory variables like `@last`. |
+| How you reuse it | TUI browsing, search, copy, show, diff, skills, playbooks, named remotes, and memory variables like `@last`. |
 
 Terminal sources produce command blocks. Agent providers produce conversation blocks. Selectors like `1` and `2..4` pick recent items for copy commands. Search results can be saved as variables such as `@failures`, then shown, expanded, or piped into the next command.
 

@@ -31,20 +31,15 @@ sivtr/
 `- crates/
    `- sivtr-core/
       `- src/
-         |- ai.rs
+         |- agents/          # AgentProvider registry + per-provider parsers
          |- buffer/
          |- capture/
-         |- claude.rs
-         |- codex.rs
          |- config/
          |- export/
-         |- hermes.rs
          |- history/
-         |- opencode.rs
          |- parse/
-         |- pi.rs
          |- query/
-         |- record/
+         |- record/          # WorkRecord / WorkRef (scope + path + at)
          |- search/
          |- selection/
          |- session/
@@ -58,7 +53,7 @@ sivtr/
 | `cli/` | clap command definitions and help text (`mod.rs` + `remote.rs`) |
 | `commands/capture/` | run, pipe, copy, init, flush, import, diff, clear, browse |
 | `commands/memory/` | search, filter, var, nav, zoom, show, work, WorkSet store |
-| `commands/remote/` | serve, share, remote mounts, peer, workspace list |
+| `commands/remote/` | serve, share, remote (git-remote style names), peer, workspace list |
 | `commands/system/` | config, doctor, history, hotkey, codex export, migrate, version |
 | `remote/` | device daemon, identity, SQLite state, protocol, local IPC |
 | `app.rs` | captured-output browser state machine |
@@ -71,9 +66,8 @@ This layer can depend on terminal UI libraries, platform APIs, process spawning,
 
 | Module | Responsibility |
 | --- | --- |
-| `ai` | provider-neutral session, block, metadata, and parser helpers |
-| `codex`, `claude`, `hermes`, `opencode`, `pi` | provider-specific session discovery and parsing |
-| `record` | `WorkRecord`, `WorkPart`, `WorkRef` (`Local` body + `Remote` `origin:body`) |
+| `agents` | `AgentProvider` registry plus per-provider discovery/parsing (Codex, Claude, Cursor, OpenCode, OpenClaw, Hermes, Grok, Pi, …) |
+| `record` | `WorkRecord`, `WorkPart`, `WorkRef` as `WorkScope` + `WorkPath` + `WorkAt` (`[scope:]path[/at]`) |
 | `query` | load workspace records and local-shaped sources for CLI and daemon |
 | `capture` | stdin, subprocess, and scrollback/session capture helpers |
 | `parse` | ANSI stripping, Unicode display width, and line parsing |

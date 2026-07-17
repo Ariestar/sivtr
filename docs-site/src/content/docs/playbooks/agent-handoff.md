@@ -45,7 +45,7 @@ Both tasks complete. Build passes, 69 pages generated.
 
 ## Decisions made
 - Playbooks moved to a separate top-level section for future video demos.
-- Remote collaboration uses explicit share + mount; handoffs stay local by default.
+- Remote collaboration uses explicit share + invite + remote; handoffs stay local by default.
 
 ## Risks
 - Sitemap warning (non-blocking, needs `site` config in astro.config.mjs).

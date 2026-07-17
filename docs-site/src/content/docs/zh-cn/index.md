@@ -23,7 +23,7 @@ description: 面向人和 Agent 的 shared memory workspace。
 - **保留输出，而不只是命令**：来自管道、子进程、shell 集成和本地 Agent transcript。
 - **舒服地浏览长日志**：提供键盘优先的 Vim 风格 TUI。
 - **复制最近有用内容**：可复制输入、输出、裸命令或完整块。
-- **搜索本地 Agent 对话**：从 Codex、Claude Code、OpenCode 或 Pi 找回旧决策和解释。
+- **搜索本地 Agent 对话**：从已注册 provider（Codex、Claude Code、Cursor、Hermes、OpenCode、OpenClaw、Grok、Pi…）找回旧决策和解释。
 - **让 Agent 从证据开始**：让"解决终端报错"从最近捕获的失败输出开始，而不是先让你粘贴日志。
 - **从摘要跳回原文**：搜索命中、交接说明和时间线都能继续追到原始上下文。
 - **把搜索结果保存成变量**：例如 `@last`、`@failures`，后续命令可以继续复用。
@@ -45,8 +45,8 @@ sivtr copy out
 # 复制某个 Agent provider 的最近回复。
 sivtr copy claude out
 sivtr copy codex out
-sivtr copy opencode out
-sivtr copy pi out
+sivtr copy cursor out
+sivtr copy grok out
 
 # 搜索当前 workspace memory。
 sivtr search agent --match "panic" --format timeline
@@ -65,7 +65,7 @@ sivtr search agent --match "panic" --format timeline
 | 让 Agent 学会 memory workflow | [Skill 与可复用流程](/zh-cn/usage/skills/) |
 | 查看社区玩法 | [玩法实例](/zh-cn/playbooks/) |
 | 搜索和按 ref 展示记忆 | [搜索和展示结果](/zh-cn/usage/search-and-show/) |
-| 分享并挂载远端记忆 | [远程访问](/zh-cn/usage/remote-access/) |
+| 分享并添加远端记忆 | [远程访问](/zh-cn/usage/remote-access/) |
 | 快速打开 picker | [启动器和热键](/zh-cn/usage/launchers-and-hotkeys/) |
 | 查询精确语法 | [CLI 参考](/zh-cn/reference/cli/) |
 
@@ -76,7 +76,7 @@ sivtr search agent --match "panic" --format timeline
 | 层 | 说明 |
 | --- | --- |
 | 发生过什么 | 终端输出、命令块、Agent 对话、工具结果和本地 history。 |
-| 怎么复用 | TUI 浏览、search、copy、show、diff、skill、playbook、remote mount，以及 `@last` 这类记忆变量。 |
+| 怎么复用 | TUI 浏览、search、copy、show、diff、skill、playbook、命名 remote，以及 `@last` 这类记忆变量。 |
 
 终端 source 产生命令块，Agent provider 产生对话块。`1`、`2..4` 这样的 selector 用来选择最近条目。搜索结果可以保存成 `@failures` 这样的变量，再展示、扩展或管道传给下一条命令。
 

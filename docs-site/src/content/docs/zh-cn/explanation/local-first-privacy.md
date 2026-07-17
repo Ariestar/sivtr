@@ -28,11 +28,12 @@ sivtr codex export --dest /srv/sivtr/root-codex
 
 ## 显式远程分享
 
-跨设备记忆访问同样是 opt-in。只有你运行 `sivtr share`（或 `share add`），并且 peer 兑换了单次使用 invite 之后，数据才会离开本机：
+跨设备记忆访问同样是 opt-in。只有你创建 share（`sivtr share` / `share add`）、签发 invite（`share invite`），并且 peer 兑换之后，数据才会离开本机：
 
 ```bash
-sivtr share                   # 交互式；打印 bare invite key
-sivtr remote add desk <key>   # peer 用本地别名挂载
+sivtr share                   # 交互式；只创建 share
+sivtr share invite alice-desk # 单次 invite（stdout = bare key）
+sivtr remote add desk <invite> # peer 在其 workspace 里给 remote 起名
 ```
 
 远程访问是只读的。数据离开本机前默认脱敏（`--no-redact` 可关闭）。邀请会过期（默认 `10m`）。daemon 之间走加密 iroh。默认仍然本地优先：未登记的 origin 会报错。

@@ -168,7 +168,7 @@ sivtr s desk:terminal --status failure --latest 5 --refs
 
 origin 来自：
 
-- 用 `sivtr remote add <alias> <invite>` 创建的远端挂载别名；
+- 用 `sivtr remote add <name> <invite>` 创建的远端名；
 - `sivtr ws list` 列出的本机 workspace 目录名。
 
 Dialogue 和 line 索引都是 1-based。

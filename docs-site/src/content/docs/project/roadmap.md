@@ -54,9 +54,8 @@ The near-term priority is to make the command-line surface complete, predictable
 
 Agent sessions are a first-class memory source. The product goal is for agent transcripts to behave like normal `sivtr` sources rather than special-case features.
 
-- [x] Parse Codex session records.
-- [x] Parse Claude-style session records.
-- [x] Parse Hermes, OpenCode, and Pi session records.
+- [x] Registry-driven `AgentProvider` surface (Codex, Claude, Cursor, OpenCode, OpenClaw, Hermes, Grok, Pi, …).
+- [x] Parse provider session records through shared helpers (JSONL / SQLite).
 - [x] Copy the latest user, assistant, tool, turn, or full session block.
 - [x] Browse local and mirrored session directories through picker workflows.
 - [ ] Support more agent providers behind the shared session-provider interface.

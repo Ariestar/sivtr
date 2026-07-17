@@ -109,7 +109,7 @@ session_dirs = []
 
 在 macOS 上，典型共享路径是 `/Users/Shared/sivtr/root-codex/sessions`。
 
-目前只有 Codex mirror 在这里配置。Claude、Hermes、OpenCode 和 Pi 使用各自 provider 的本地位置和环境信号发现。
+目前只有 Codex mirror 在这里配置。其他已注册 provider（Claude、Cursor、OpenCode、OpenClaw、Hermes、Grok、Pi…）使用各自本地位置和环境信号。
 
 ## hotkey
 

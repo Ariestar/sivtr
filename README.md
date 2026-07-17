@@ -64,7 +64,7 @@ With `sivtr`, you can:
 
 - **MCP-first agent memory**: install once with `sivtr mcp install`, then agents call `sivtr_search` / `sivtr_show` / `sivtr_zoom` / `sivtr_filter` / `sivtr_status` instead of asking you to paste logs.
 - **Shell history that keeps the output**: capture commands from Bash, Zsh, PowerShell, and Nushell, including stdout, stderr, exit code, cwd, and timing.
-- **One search surface for local work**: terminal output plus all registered agent providers (Codex, Claude Code, Cursor, Hermes, OpenCode, OpenClaw, Pi, …) from the current repo — via MCP or CLI.
+- **One search surface for local work**: terminal output plus all registered agent providers (Codex, Claude Code, Cursor, Hermes, OpenCode, OpenClaw, Grok, Pi, …) from the current repo — via MCP or CLI.
 - **Exact evidence, not summaries**: every hit resolves to a stable ref you can show, zoom, filter, or hand to the next agent.
 - **Named memory variables**: save result sets as `@failures`, reuse `@last`, pipe with `@`, and slice with `@failures[1,3..5]`.
 - **Cross-device access**: share a workspace read-only and browse another device with a `desk:...` ref.
@@ -118,7 +118,7 @@ This is the main path. After `sivtr mcp install`, agents get structured tools ov
 | `sivtr_show` | Open the exact record/part behind a hit |
 | `sivtr_zoom` | Expand surrounding context |
 | `sivtr_filter` | Narrow a result set |
-| `sivtr_status` | Workspace / mount / origin health |
+| `sivtr_status` | Workspace / remote / origin health |
 
 Optional skill (teaches the agent when to call those tools):
 
@@ -178,7 +178,7 @@ Memory variables:
 | `sivtr` / `sivtr pipe` | Read stdin and open the output browser. |
 | `sivtr run <command>` | Execute a command, capture output, then browse it. |
 | `sivtr copy` | Copy recent terminal command blocks. |
-| `sivtr copy <provider>` | Copy content from any registered agent provider (registry-driven: Codex, Claude, Cursor, OpenCode, OpenClaw, Hermes, Pi, …). |
+| `sivtr copy <provider>` | Copy content from any registered agent provider (registry-driven: Codex, Claude, Cursor, OpenCode, OpenClaw, Hermes, Grok, Pi, …). |
 | `sivtr search` / `sivtr s` | Search terminal and agent memory; saves matches as `@last`. |
 | `sivtr filter <source>` | Apply the shared WorkSet filters to a source or piped WorkSet. |
 | `sivtr var` | List, save, remove, merge, drop, or clean up named WorkSet variables. |
@@ -216,14 +216,15 @@ alice/sivtr:hermes/...  # device/workspace coordinate
 On the device that owns the workspace:
 
 ```bash
-sivtr share                   # pick workspace (Enter = current), print invite key
+sivtr share                   # pick workspace (Enter = current); create share only
+sivtr share invite <name>     # single-use invite (stdout = bare key)
 sivtr ws list                 # see local workspace origin labels
 ```
 
 On the other device:
 
 ```bash
-sivtr remote add desk <invite-key>   # bare key from `sivtr share` stdout
+sivtr remote add desk <invite>   # bare key from `sivtr share invite` stdout
 sivtr s desk:terminal --status failure --latest 5 --refs
 sivtr show desk:terminal/session_42/3/o/1
 sivtr zoom desk:terminal/session_42/3 -C 2
@@ -231,7 +232,7 @@ sivtr nav desk:terminal/session_42/3 +1 --refs
 sivtr copy ref desk:terminal/session_42/3/o/1 --print
 ```
 
-Sharing is opt-in and read-only. Secrets are redacted by default before data leaves the machine. Remote access uses encrypted iroh transport; the daemon auto-starts when needed. Unregistered origins error — register mounts with `sivtr remote add`, or list local workspaces with `sivtr ws`.
+Sharing is opt-in and read-only. Secrets are redacted by default before data leaves the machine. Remote access uses encrypted iroh transport; the daemon auto-starts when needed. Unregistered origins error — register remotes with `sivtr remote add`, or list local workspaces with `sivtr ws`.
 
 ## Supported sources
 
@@ -240,10 +241,11 @@ Sharing is opt-in and read-only. Secrets are redacted by default before data lea
 | Terminal | Bash, Zsh, PowerShell, Nushell shell hooks; pipe and run capture. |
 | Codex | Local rollout/session JSONL files. |
 | Claude Code | Local transcript/session files. |
-| Hermes | Local Hermes `state.db` (JSONL under `sessions/` as residual). |
-| OpenCode | Local session database. |
 | Cursor | Local Cursor agent transcript JSONL. |
+| OpenCode | Local session database. |
 | OpenClaw | Local OpenClaw agent SQLite (+ legacy JSONL). |
+| Hermes | Local Hermes `state.db` (JSONL under `sessions/` as residual). |
+| Grok | Local Grok agent sessions under `~/.grok` (`GROK_HOME`). |
 | Pi | Local Pi agent session logs. |
 
 ## Documentation

@@ -10,10 +10,10 @@ Source forms:
 
 - `terminal`: terminal command records
 - `agent`: AI/agent conversation records from all providers
-- `codex`, `claude`, `hermes`, `pi`, `opencode`: one provider's conversation records
+- `codex`, `claude`, `cursor`, `hermes`, `openclaw`, `opencode`, `grok`, `pi`: one provider's conversation records
 - `terminal/<session>/<record>/<line>` or `<provider>/<session>/<turn>/<line>` with optional trailing segments
 - `<provider>/<session>/<turn>/<i|o>/<part>` for input/output part refs
-- `origin:body` for another local workspace name or a mounted remote alias, for example `desk:terminal`, `docs:codex/4`
+- `origin:body` for another local workspace name or a named remote, for example `desk:terminal`, `docs:codex/4`
 - `@last`, `@name`, `@name[1]`, `@name[1,3]`, `@name[1..5]`, `@name[1..3,8]`
 - `@` to read a WorkSet from stdin
 
@@ -173,7 +173,7 @@ sivtr var list
 
 ## Search Remote / Other-Workspace Origins
 
-When the user refers to a teammate machine, a mounted alias, or another local workspace by name:
+When the user refers to a teammate machine, a named remote, or another local workspace by name:
 
 ```bash
 sivtr ws list
@@ -184,7 +184,7 @@ sivtr show desk:terminal/session_42/3/o/1 --full
 sivtr show docs:codex/4 --full
 ```
 
-If the origin is unknown, say so and stop. Do not invent mounts. Sharing/mounting (`sivtr share`, `sivtr remote add`) is an explicit user action, not a retrieval default.
+If the origin is unknown, say so and stop. Do not invent remotes. Sharing/adding remotes (`sivtr share`, `sivtr share invite`, `sivtr remote add`) is an explicit user action, not a retrieval default.
 
 ## General Search
 

@@ -122,14 +122,17 @@ sivtr copy cmd --pick
 sivtr copy <PROVIDER> [MODE] [SELECTOR] [OPTIONS]
 ```
 
-Provider：
+Provider 来自 `AgentProvider` registry（CLI 不手写列表）：
 
 | Provider | 命令 |
 | --- | --- |
 | Codex | `sivtr copy codex` |
 | Claude Code | `sivtr copy claude` |
-| Hermes | `sivtr copy hermes` |
+| Cursor | `sivtr copy cursor` |
 | OpenCode | `sivtr copy opencode` |
+| OpenClaw | `sivtr copy openclaw` |
+| Hermes | `sivtr copy hermes` |
+| Grok | `sivtr copy grok` |
 | Pi | `sivtr copy pi` |
 
 Mode：
@@ -205,15 +208,11 @@ Targets：
 | Target | 含义 |
 | --- | --- |
 | `terminal[/<session>[/<record>[/<line>]]]` | 终端命令记录 |
-| `agent[/<session>[/<turn>[/<line>]]]` | 所有受支持 AI / Agent 记录 |
-| `codex[/<session>[/<turn>[/<line>]]]` | Codex 记录 |
-| `claude[/<session>[/<turn>[/<line>]]]` | Claude Code 记录 |
-| `hermes[/<session>[/<turn>[/<line>]]]` | Hermes 记录 |
-| `opencode[/<session>[/<turn>[/<line>]]]` | OpenCode 记录 |
-| `pi[/<session>[/<turn>[/<line>]]]` | Pi 记录 |
-| `<origin>:<target>` | 远端或其他 workspace origin，例如 `desk:terminal` 或 `docs:codex/4` |
+| `agent[/<session>[/<turn>[/<line>]]]` | 所有已注册 AI / Agent 记录 |
+| `codex` / `claude` / `cursor` / `opencode` / `openclaw` / `hermes` / `grok` / `pi` `[/<session>[/<turn>[/<line>]]]` | 单个 provider 的记录 |
+| `<origin>:<target>` | 命名 remote 或其他本机 workspace origin，例如 `desk:terminal` 或 `docs:codex/4` |
 
-可以用 `*` 作为 path segment 通配符，例如 `terminal/*/3` 或 `pi/*/*`。origin 来自 `sivtr remote add <alias> ...` 挂载，或 `sivtr ws list` 列出的本机 workspace 名。
+可以用 `*` 作为 path segment 通配符，例如 `terminal/*/3` 或 `pi/*/*`。origin 来自 `sivtr remote add <alias> ...`，或 `sivtr ws list` 列出的本机 workspace 名。
 
 选项：
 
@@ -495,7 +494,7 @@ sivtr peer <COMMAND>
 | 命令 | 含义 |
 | --- | --- |
 | `list` | 列出已知 peer 身份 |
-| `forget <PEER>` | 忘记 peer，并删除所有涉及它的本地 mounts 和 grants |
+| `forget <PEER>` | 忘记 peer，并删除所有涉及它的本地 remotes 和 grants |
 
 ```bash
 sivtr peer list
@@ -544,7 +543,7 @@ sivtr mcp serve
 | `sivtr_show` | 展开 ref 或 WorkSet handle |
 | `sivtr_zoom` | 邻近 record 上下文 |
 | `sivtr_filter` | 缩小 `@last` / `@name` / source |
-| `sivtr_status` | 版本、hooks、providers、daemon、`ws` 本机 origin、mounts、vars |
+| `sivtr_status` | 版本、hooks、providers、daemon、`ws` 本机 origin、remotes、vars |
 
 ### install / uninstall
 
@@ -559,17 +558,22 @@ sivtr mcp uninstall -p all -y
 
 | 选项 | 含义 |
 | --- | --- |
-| `-p, --provider` | `claude`、`cursor`、`codex`、`auto` 或 `all` |
+| `-p, --provider` | Provider 宿主：`claude`、`cursor`、`codex`、`opencode`、`openclaw`、`grok`、`pi`、`hermes` 或 `all`。省略则自动检测已安装宿主。 |
 | `-l, --location` | `global`（默认）或 `local` |
 | `-y, --yes` | 非交互 |
 
-安装位置：
+安装位置（registry 驱动；路径为主机默认）：
 
 | 目标 | Global 路径 |
 | --- | --- |
 | Claude Code | `~/.claude.json` → `mcpServers.sivtr` |
 | Cursor | `~/.cursor/mcp.json` → `mcpServers.sivtr` |
 | Codex | `~/.codex/config.toml` → `[mcp_servers.sivtr]` |
+| OpenCode | OpenCode MCP config → `mcp.sivtr` |
+| OpenClaw | OpenClaw config → `mcp.servers.sivtr` |
+| Grok | Grok config TOML → MCP entry |
+| Hermes | Hermes YAML → `mcp_servers.sivtr` |
+| Pi | Pi config → `mcpServers.sivtr` |
 
 注册命令始终为：
 
@@ -585,6 +589,7 @@ sivtr mcp serve
 sivtr mcp print-config claude
 sivtr mcp print-config cursor
 sivtr mcp print-config codex
+sivtr mcp print-config grok
 ```
 
 MCP 不是完整 CLI 镜像。交互、写入和捕获命令仍走 CLI。策略仍在 `sivtr-memory` skill。

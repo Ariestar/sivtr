@@ -63,6 +63,7 @@ max_entries = 0
 | OpenCode | OpenCode local database |
 | Cursor | `~/.cursor/projects/**/agent-transcripts/**/*.jsonl` (override home with `CURSOR_HOME`) |
 | OpenClaw | `~/.openclaw/agents/<id>/agent/openclaw-agent.sqlite` (legacy JSONL under `sessions/`) |
+| Grok | `~/.grok/sessions/**` (`summary.json` + `chat_history.jsonl`; override home with `GROK_HOME`) |
 | Pi | Pi agent session JSONL files |
 
 Provider formats differ; `sivtr` normalizes them into sessions and dialogue units for copy, picker, search, and show workflows.

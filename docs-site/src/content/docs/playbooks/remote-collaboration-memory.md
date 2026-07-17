@@ -1,6 +1,6 @@
 ---
 title: Remote Collaboration Memory
-description: Scenario playbook for reading a teammate's terminal or agent memory through a mounted alias.
+description: Scenario playbook for reading a teammate's terminal or agent memory through a named remote.
 ---
 
 ## The scenario
@@ -23,13 +23,14 @@ Both devices need `sivtr` installed. The daemon auto-starts when share/remote co
 On the device that owns the workspace:
 
 ```bash
-sivtr share                   # pick workspace (Enter = current), print bare invite key
+sivtr share                   # pick workspace (Enter = current); create share only
+sivtr share invite <name>     # single-use invite (stdout = bare key)
 ```
 
-On the other device, from the workspace where you want the mount:
+On the other device, from the workspace where you want the remote:
 
 ```bash
-sivtr remote add desk <invite-key>
+sivtr remote add desk <invite>
 sivtr remote test desk
 ```
 
@@ -62,4 +63,4 @@ sivtr remote remove desk
 
 ## Demo video outline
 
-Show two machines: owner runs `sivtr share`, consumer mounts the invite as `desk`, searches `desk:terminal` for a failure, zooms the hit, and continues the fix from the teammate's evidence.
+Show two machines: owner runs `sivtr share` then `share invite`, consumer redeems the invite as remote `desk`, searches `desk:terminal` for a failure, zooms the hit, and continues the fix from the teammate's evidence.

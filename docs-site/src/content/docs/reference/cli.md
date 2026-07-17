@@ -122,14 +122,17 @@ sivtr copy cmd --pick
 sivtr copy <PROVIDER> [MODE] [SELECTOR] [OPTIONS]
 ```
 
-Providers:
+Providers come from the `AgentProvider` registry (not a hand-written CLI list):
 
 | Provider | Command |
 | --- | --- |
 | Codex | `sivtr copy codex` |
 | Claude Code | `sivtr copy claude` |
-| Hermes | `sivtr copy hermes` |
+| Cursor | `sivtr copy cursor` |
 | OpenCode | `sivtr copy opencode` |
+| OpenClaw | `sivtr copy openclaw` |
+| Hermes | `sivtr copy hermes` |
+| Grok | `sivtr copy grok` |
 | Pi | `sivtr copy pi` |
 
 Modes:
@@ -153,7 +156,9 @@ Examples:
 ```bash
 sivtr copy claude
 sivtr copy claude out --print
+sivtr copy cursor out --print
 sivtr copy hermes out --print
+sivtr copy grok out --print
 sivtr copy claude --session 2
 sivtr copy codex 2..4
 sivtr copy codex out --pick
@@ -205,15 +210,11 @@ Targets:
 | Target | Meaning |
 | --- | --- |
 | `terminal[/<session>[/<record>[/<line>]]]` | Terminal command records |
-| `agent[/<session>[/<turn>[/<line>]]]` | All supported AI/agent records |
-| `codex[/<session>[/<turn>[/<line>]]]` | Codex records |
-| `claude[/<session>[/<turn>[/<line>]]]` | Claude Code records |
-| `hermes[/<session>[/<turn>[/<line>]]]` | Hermes records |
-| `opencode[/<session>[/<turn>[/<line>]]]` | OpenCode records |
-| `pi[/<session>[/<turn>[/<line>]]]` | Pi records |
-| `<origin>:<target>` | Remote or other-workspace origin, for example `desk:terminal` or `docs:codex/4` |
+| `agent[/<session>[/<turn>[/<line>]]]` | All registered AI/agent records |
+| `codex` / `claude` / `cursor` / `opencode` / `openclaw` / `hermes` / `grok` / `pi` `[/<session>[/<turn>[/<line>]]]` | One provider's records |
+| `<origin>:<target>` | Named remote or other local workspace origin, for example `desk:terminal` or `docs:codex/4` |
 
-Use `*` for wildcard path segments, for example `terminal/*/3` or `pi/*/*`. Origins come from `sivtr remote add <alias> ...` mounts or local workspace names listed by `sivtr ws list`.
+Use `*` for wildcard path segments, for example `terminal/*/3` or `pi/*/*`. Origins come from `sivtr remote add <alias> ...` or local workspace names listed by `sivtr ws list`.
 
 Options:
 
@@ -495,7 +496,7 @@ sivtr peer <COMMAND>
 | Command | Meaning |
 | --- | --- |
 | `list` | List known peer identities |
-| `forget <PEER>` | Forget a peer and remove all local mounts and grants involving it |
+| `forget <PEER>` | Forget a peer and remove all local remotes and grants involving it |
 
 ```bash
 sivtr peer list
@@ -544,7 +545,7 @@ Tools:
 | `sivtr_show` | Expand a ref or WorkSet handle |
 | `sivtr_zoom` | Neighboring record context |
 | `sivtr_filter` | Narrow `@last` / `@name` / a source |
-| `sivtr_status` | Version, hooks, providers, daemon, `ws` local origins, mounts, vars |
+| `sivtr_status` | Version, hooks, providers, daemon, `ws` local origins, remotes, vars |
 
 ### install / uninstall
 
@@ -559,17 +560,22 @@ sivtr mcp uninstall -p all -y
 
 | Flag | Meaning |
 | --- | --- |
-| `-p, --provider` | Provider host(s): `claude`, `cursor`, `codex`, `opencode`, `openclaw`, `pi`, `hermes`, or `all`. Omit to detect installed hosts. |
+| `-p, --provider` | Provider host(s): `claude`, `cursor`, `codex`, `opencode`, `openclaw`, `grok`, `pi`, `hermes`, or `all`. Omit to detect installed hosts. |
 | `-l, --location` | `global` (default) or `local` |
 | `-y, --yes` | Non-interactive |
 
-Install locations:
+Install locations (registry-driven; paths are host defaults):
 
 | Target | Global path |
 | --- | --- |
 | Claude Code | `~/.claude.json` → `mcpServers.sivtr` |
 | Cursor | `~/.cursor/mcp.json` → `mcpServers.sivtr` |
 | Codex | `~/.codex/config.toml` → `[mcp_servers.sivtr]` |
+| OpenCode | OpenCode MCP config → `mcp.sivtr` |
+| OpenClaw | OpenClaw config → `mcp.servers.sivtr` |
+| Grok | Grok config TOML → MCP entry |
+| Hermes | Hermes YAML → `mcp_servers.sivtr` |
+| Pi | Pi config → `mcpServers.sivtr` |
 
 Registered command is always:
 
@@ -585,6 +591,7 @@ Print a snippet without writing files:
 sivtr mcp print-config claude
 sivtr mcp print-config cursor
 sivtr mcp print-config codex
+sivtr mcp print-config grok
 ```
 
 MCP is not a full CLI mirror. Interactive, write, and capture commands stay on the CLI. Strategy still lives in the `sivtr-memory` skill.

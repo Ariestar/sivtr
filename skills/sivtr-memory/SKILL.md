@@ -27,7 +27,7 @@ sivtr mcp install -y
 | `sivtr_show` | Expand a ref or `@last` / `@name` |
 | `sivtr_zoom` | Neighboring record context |
 | `sivtr_filter` | Narrow `@last` or a saved set |
-| `sivtr_status` | Hooks, providers, daemon, local workspace origins (`ws`), mounts, vars |
+| `sivtr_status` | Hooks, providers, daemon, local workspace origins (`ws`), remotes, vars |
 
 Fall back to CLI commands below when MCP is not configured.
 
@@ -94,7 +94,7 @@ Source forms:
 
 - `terminal`, `agent`, `pi`, `codex`, `claude`, `hermes`, `opencode`
 - `terminal/<session>/<record>`, `<provider>/<session>/<turn>`, `<provider>/<session>/<turn>/<i|o>/<part>`, and selector variants
-- `origin:body` for another local workspace or mounted remote, for example `desk:terminal/...`, `docs:codex/4`
+- `origin:body` for another local workspace or named remote, for example `desk:terminal/...`, `docs:codex/4`
 - `@last`, `@name`, `@name[1]`, `@name[1,3]`, `@name[1..5]`, `@name[1..3,8]`
 - `@` reads a WorkSet from stdin in shell pipelines
 

@@ -36,7 +36,7 @@ cargo test
 git status --short
 ```
 
-这一步会让最近命令和输出出现在 workspace 里。Agent 会话（Claude、Codex、Hermes、OpenCode、Pi）会从各自的本地 session 目录读取。
+这一步会让最近命令和输出出现在 workspace 里。Agent 会话会从各已注册 provider 的本地 session 数据读取。
 
 ## 3. 打开统一 workspace TUI
 
@@ -52,7 +52,7 @@ Workspace TUI 有四个面板：
 
 | 面板 | 用途 |
 | --- | --- |
-| Source | 选择来源，比如 terminal、Claude、Codex、Hermes、OpenCode、Pi |
+| Source | 选择来源，比如 terminal 或某个已注册的 Agent provider |
 | Sessions | 选择某个终端记录或 Agent session |
 | Dialogues | 选择某轮对话或命令块 |
 | Content | 查看具体输入、输出、工具结果或正文 |

@@ -45,10 +45,7 @@ Source 是记忆从哪里来。
 | Source | 内容 | 示例 |
 | --- | --- | --- |
 | Terminal | 最近终端命令和输出 | `bun run build`、`cargo test` |
-| Claude | Claude Code 本地 session | 用户消息、助手回复、工具结果 |
-| Codex | Codex 本地 session | rollout / transcript |
-| OpenCode | OpenCode 本地 session | 对话和工具调用 |
-| Pi | Pi 本地 session | 对话、工具调用、执行记录 |
+| Agent providers | 已注册的本地 Agent session | Codex、Claude Code、Cursor、OpenCode、OpenClaw、Hermes、Grok、Pi… |
 | Pipe / run | 单次捕获输出 | `cargo test 2>&1 \| sivtr`、`sivtr run cargo test` |
 
 这些 source 的格式各不相同，但在 workspace TUI 和搜索结果里会被放到同一个入口下。
@@ -94,7 +91,7 @@ sivtr
 
 这个 TUI 把 terminal 和 Agent sessions 放在一起。你可以：
 
-- 在 Source 面板切换 terminal、Claude、Codex、Hermes、OpenCode、Pi；
+- 在 Source 面板切换 terminal 与已注册的 Agent provider；
 - 在 Sessions 面板选择某次工作记录；
 - 在 Dialogues 面板选择某条命令块或某轮对话；
 - 在 Content 面板查看具体内容；
@@ -156,7 +153,7 @@ sivtr show desk:terminal/session_42/3
 sivtr show docs:codex/4
 ```
 
-`search --format refs` / `--format workset` 会输出 ref，所以人和 Agent 都可以先搜索，再用 ref 展开同一份证据。origin 来自挂载的远端别名（`sivtr remote add`）或本机 workspace 名（`sivtr ws list`）。
+`search --format refs` / `--format workset` 会输出 ref，所以人和 Agent 都可以先搜索，再用 ref 展开同一份证据。origin 来自 remote 名（`sivtr remote add`）或本机 workspace 名（`sivtr ws list`）。
 
 ## WorkSet：可管道传递的记忆选择
 
@@ -203,7 +200,7 @@ sivtr nav @hit '~' --refs          # 所属 session records
 | `sivtr var` | 保存、列出、合并、移除或删除命名 WorkSet 变量 |
 | `sivtr nav` | 用确定性的 parent / child / sibling / session motion 移动 anchors |
 | `sivtr show` | 用 ref 或 WorkSet 展开精确内容 |
-| `sivtr share` / `remote` | 显式 opt-in 的只读跨设备记忆挂载 |
+| `sivtr share` / `remote` | 显式 opt-in 的只读跨设备记忆 remote |
 | `sivtr diff` | 比较两个最近终端命令块 |
 | `sivtr run` / pipe | 临时捕获并浏览单次命令输出 |
 
