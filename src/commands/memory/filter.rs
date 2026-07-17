@@ -2,8 +2,9 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use sivtr_core::ai::{AgentProvider, AgentSessionProvider};
 use sivtr_core::record::{
     WorkAt, WorkOutcome, WorkPart, WorkPartIo, WorkPartKind, WorkRecord, WorkRecordKind, WorkRef,
@@ -15,7 +16,7 @@ use crate::cli::{
 };
 use crate::commands::memory::show;
 use crate::commands::memory::time_filter::{build_time_range, TimeRange};
-use crate::commands::memory::workset::{self, WorkSet, WorkSetSource};
+use crate::commands::memory::workset::{self, WorkSet};
 
 /// Default search bound when neither `--latest` nor `--limit` is set.
 const SEARCH_DEFAULT_LATEST: usize = 5;
@@ -26,109 +27,119 @@ struct MatchedAnchor<'a> {
     sort_ref: String,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 enum FilterMode {
+    #[default]
     Anchors,
     Parts,
 }
 
-pub(crate) struct FilterSpec {
+/// Unified filter for local and remote query. One type for CLI and wire.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Filter {
+    #[serde(default)]
     mode: FilterMode,
-    regex: Option<Regex>,
-    exclude_regex: Option<Regex>,
+    /// Uncompiled pattern; applied with `(?i)` when matching.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    match_regex: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exclude_regex: Option<String>,
+    #[serde(default)]
     in_field: SearchFieldArg,
+    #[serde(default)]
     io: WorkPartFilterArg,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     kind: Option<crate::cli::WorkPartKindArg>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     status: Option<SearchStatusArg>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     min_duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     max_duration_ms: Option<u64>,
-    time_range: Option<TimeRange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    since: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    until: Option<String>,
+    /// Client-only; forced false when applied on a remote peer.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     exclude_current: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pre_sort: Option<SearchSortArg>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     latest: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     post_sort: Option<SearchSortArg>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     limit: Option<usize>,
 }
 
-impl FilterSpec {
-    pub(crate) fn from_search_args(args: &SearchArgs) -> Result<Self> {
-        let min_duration_ms =
-            parse_duration_ms_filter(args.min_duration.as_deref(), "--min-duration")?;
-        let max_duration_ms =
-            parse_duration_ms_filter(args.max_duration.as_deref(), "--max-duration")?;
-        validate_duration_bounds(min_duration_ms, max_duration_ms)?;
-        let (time_range, _) = build_time_range(
+impl Filter {
+    pub fn from_search_args(args: &SearchArgs) -> Result<Self> {
+        let mut filter = common_bounds(
+            args.match_.as_deref(),
+            args.exclude.as_deref(),
+            args.in_field,
+            args.kind,
+            args.status,
+            args.exit_code,
+            args.min_duration.as_deref(),
+            args.max_duration.as_deref(),
             args.since.as_deref(),
             args.until.as_deref(),
             args.last.as_deref(),
-            Utc::now(),
+            args.exclude_current,
+            args.latest,
+            Some(args.sort),
+            args.limit,
         )?;
-        // Always bound search: explicit latest/limit win; otherwise default latest=5.
-        let (latest, limit) = match (args.latest, args.limit) {
-            (None, None) => (Some(SEARCH_DEFAULT_LATEST), None),
-            bounds => bounds,
+        // Search always bounds: default latest=5 when neither latest nor limit set.
+        if filter.latest.is_none() && filter.limit.is_none() {
+            filter.latest = Some(SEARCH_DEFAULT_LATEST);
+        }
+        filter.mode = FilterMode::Anchors;
+        filter.io = WorkPartFilterArg::All;
+        filter.pre_sort = Some(SearchSortArg::Newest);
+        if filter.post_sort.is_none() {
+            filter.post_sort = Some(args.sort);
+        }
+        Ok(filter)
+    }
+
+    pub fn from_filter_args(args: &FilterArgs) -> Result<Self> {
+        let mut filter = common_bounds(
+            args.match_.as_deref(),
+            args.exclude.as_deref(),
+            args.in_field,
+            args.kind,
+            args.status,
+            args.exit_code,
+            args.min_duration.as_deref(),
+            args.max_duration.as_deref(),
+            args.since.as_deref(),
+            args.until.as_deref(),
+            args.last.as_deref(),
+            args.exclude_current,
+            args.latest,
+            args.sort,
+            args.limit,
+        )?;
+        filter.mode = if args.parts {
+            FilterMode::Parts
+        } else {
+            FilterMode::Anchors
         };
-        Ok(Self {
-            mode: FilterMode::Anchors,
-            regex: compile_regex(args.match_.as_deref())?,
-            exclude_regex: compile_regex(args.exclude.as_deref())?,
-            in_field: args.in_field,
-            io: WorkPartFilterArg::All,
-            kind: args.kind,
-            status: args.status,
-            exit_code: args.exit_code,
-            min_duration_ms,
-            max_duration_ms,
-            time_range,
-            exclude_current: args.exclude_current,
-            pre_sort: Some(SearchSortArg::Newest),
-            latest,
-            post_sort: Some(args.sort),
-            limit,
-        })
+        filter.io = args.io;
+        filter.pre_sort = args.latest.map(|_| SearchSortArg::Newest);
+        Ok(filter)
     }
 
-    pub(crate) fn from_filter_args(args: &FilterArgs) -> Result<Self> {
-        let min_duration_ms =
-            parse_duration_ms_filter(args.min_duration.as_deref(), "--min-duration")?;
-        let max_duration_ms =
-            parse_duration_ms_filter(args.max_duration.as_deref(), "--max-duration")?;
-        validate_duration_bounds(min_duration_ms, max_duration_ms)?;
-        let (time_range, _) = build_time_range(
-            args.since.as_deref(),
-            args.until.as_deref(),
-            args.last.as_deref(),
-            Utc::now(),
-        )?;
-        Ok(Self {
-            mode: if args.parts {
-                FilterMode::Parts
-            } else {
-                FilterMode::Anchors
-            },
-            regex: compile_regex(args.match_.as_deref())?,
-            exclude_regex: compile_regex(args.exclude.as_deref())?,
-            in_field: args.in_field,
-            io: args.io,
-            kind: args.kind,
-            status: args.status,
-            exit_code: args.exit_code,
-            min_duration_ms,
-            max_duration_ms,
-            time_range,
-            exclude_current: args.exclude_current,
-            pre_sort: args.latest.map(|_| SearchSortArg::Newest),
-            latest: args.latest,
-            post_sort: args.sort,
-            limit: args.limit,
-        })
-    }
-
-    pub(crate) fn from_work_parts_args(args: &WorkPartsArgs) -> Result<Self> {
+    pub fn from_work_parts_args(args: &WorkPartsArgs) -> Result<Self> {
         Ok(Self {
             mode: FilterMode::Parts,
-            regex: compile_regex(args.match_.as_deref())?,
+            match_regex: args.match_.clone(),
             exclude_regex: None,
             in_field: SearchFieldArg::Content,
             io: args.io,
@@ -137,7 +148,8 @@ impl FilterSpec {
             exit_code: None,
             min_duration_ms: None,
             max_duration_ms: None,
-            time_range: None,
+            since: None,
+            until: None,
             exclude_current: false,
             pre_sort: None,
             latest: None,
@@ -145,6 +157,92 @@ impl FilterSpec {
             limit: None,
         })
     }
+
+    /// Keep every loaded anchor (show/nav/zoom).
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// Drop client-only flags before applying on a remote peer.
+    pub fn for_remote_peer(&self) -> Self {
+        let mut f = self.clone();
+        f.exclude_current = false;
+        f
+    }
+
+    fn time_range(&self) -> Result<Option<TimeRange>> {
+        match (&self.since, &self.until) {
+            (None, None) => Ok(None),
+            (since, until) => {
+                let since = since
+                    .as_deref()
+                    .map(|s| {
+                        DateTime::parse_from_rfc3339(s)
+                            .map(|dt| dt.with_timezone(&Utc))
+                            .with_context(|| format!("Invalid filter.since: {s}"))
+                    })
+                    .transpose()?;
+                let until = until
+                    .as_deref()
+                    .map(|s| {
+                        DateTime::parse_from_rfc3339(s)
+                            .map(|dt| dt.with_timezone(&Utc))
+                            .with_context(|| format!("Invalid filter.until: {s}"))
+                    })
+                    .transpose()?;
+                Ok(Some(TimeRange { since, until }))
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn common_bounds(
+    match_: Option<&str>,
+    exclude: Option<&str>,
+    in_field: SearchFieldArg,
+    kind: Option<crate::cli::WorkPartKindArg>,
+    status: Option<SearchStatusArg>,
+    exit_code: Option<i32>,
+    min_duration: Option<&str>,
+    max_duration: Option<&str>,
+    since: Option<&str>,
+    until: Option<&str>,
+    last: Option<&str>,
+    exclude_current: bool,
+    latest: Option<usize>,
+    sort: Option<SearchSortArg>,
+    limit: Option<usize>,
+) -> Result<Filter> {
+    let min_duration_ms = parse_duration_ms_filter(min_duration, "--min-duration")?;
+    let max_duration_ms = parse_duration_ms_filter(max_duration, "--max-duration")?;
+    validate_duration_bounds(min_duration_ms, max_duration_ms)?;
+    let (time_range, _) = build_time_range(since, until, last, Utc::now())?;
+    Ok(Filter {
+        mode: FilterMode::Anchors,
+        match_regex: match_.map(str::to_string),
+        exclude_regex: exclude.map(str::to_string),
+        in_field,
+        io: WorkPartFilterArg::All,
+        kind,
+        status,
+        exit_code,
+        min_duration_ms,
+        max_duration_ms,
+        since: time_range
+            .as_ref()
+            .and_then(|r| r.since)
+            .map(|t| t.to_rfc3339()),
+        until: time_range
+            .as_ref()
+            .and_then(|r| r.until)
+            .map(|t| t.to_rfc3339()),
+        exclude_current,
+        pre_sort: None,
+        latest,
+        post_sort: sort,
+        limit,
+    })
 }
 
 pub fn execute(args: &FilterArgs) -> Result<()> {
@@ -157,8 +255,11 @@ pub fn execute(args: &FilterArgs) -> Result<()> {
 
 /// Load, filter, and optionally save a WorkSet without printing.
 pub fn run(args: &FilterArgs) -> Result<WorkSet> {
-    let source = workset::load_source(&args.source, args.cwd.as_deref())?;
-    let mut set = apply_source(source, FilterSpec::from_filter_args(args)?)?;
+    let mut set = workset::query(
+        &args.source,
+        Filter::from_filter_args(args)?,
+        args.cwd.as_deref(),
+    )?;
     set.save_last()?;
     if let Some(name) = args.save.as_deref() {
         set.save_as(name)?;
@@ -166,20 +267,17 @@ pub fn run(args: &FilterArgs) -> Result<WorkSet> {
     Ok(set)
 }
 
-pub(crate) fn apply_source(source: WorkSetSource, spec: FilterSpec) -> Result<WorkSet> {
-    let cwd = source.cwd();
-    let (records, anchors) = source.into_parts();
-    apply_parts(cwd, records, anchors, spec)
-}
-
-pub(crate) fn apply_parts(
+pub(crate) fn apply(
     cwd: PathBuf,
     records: Vec<WorkRecord>,
     anchors: Vec<WorkRef>,
-    spec: FilterSpec,
+    filter: Filter,
 ) -> Result<WorkSet> {
+    let regex = compile_regex(filter.match_regex.as_deref())?;
+    let exclude_regex = compile_regex(filter.exclude_regex.as_deref())?;
+    let time_range = filter.time_range()?;
     let providers = providers_for_records(&records);
-    let excluded_sessions = if spec.exclude_current {
+    let excluded_sessions = if filter.exclude_current {
         current_agent_session_paths(&providers, &cwd)?
     } else {
         HashSet::new()
@@ -191,22 +289,24 @@ pub(crate) fn apply_parts(
             let record = workset::record_for_anchor(&records, anchor)?;
             Some((record, anchor))
         })
-        .filter(|(record, _)| record_matches_metadata(record, &spec, &excluded_sessions))
-        .flat_map(|(record, anchor)| matching_anchors(record, anchor, &spec))
-        .filter(|matched| !match_excluded(matched, spec.exclude_regex.as_ref()))
+        .filter(|(record, _)| {
+            record_matches_metadata(record, &filter, time_range.as_ref(), &excluded_sessions)
+        })
+        .flat_map(|(record, anchor)| matching_anchors(record, anchor, &filter, regex.as_ref()))
+        .filter(|matched| !match_excluded(matched, exclude_regex.as_ref()))
         .collect::<Vec<_>>();
 
-    if let Some(sort) = spec.pre_sort {
+    if let Some(sort) = filter.pre_sort {
         sort_results(&mut matches, sort);
     }
     let mut anchors = dedup_matches(matches);
-    if let Some(latest) = spec.latest {
+    if let Some(latest) = filter.latest {
         anchors.truncate(latest);
     }
-    if let Some(sort) = spec.post_sort {
+    if let Some(sort) = filter.post_sort {
         sort_anchor_results(&mut anchors, &records, sort);
     }
-    if let Some(limit) = spec.limit {
+    if let Some(limit) = filter.limit {
         anchors.truncate(limit);
     }
 
@@ -232,12 +332,13 @@ fn providers_for_records(records: &[WorkRecord]) -> Vec<AgentProvider> {
 
 fn record_matches_metadata(
     record: &WorkRecord,
-    spec: &FilterSpec,
+    filter: &Filter,
+    time_range: Option<&TimeRange>,
     excluded_sessions: &HashSet<PathBuf>,
 ) -> bool {
     !excluded_session_matches(record, excluded_sessions)
         && status_matches(
-            spec.status,
+            filter.status,
             record
                 .status
                 .as_ref()
@@ -245,18 +346,15 @@ fn record_matches_metadata(
                 .unwrap_or(WorkOutcome::Unknown),
         )
         && exit_code_matches(
-            spec.exit_code,
+            filter.exit_code,
             record.status.as_ref().and_then(|status| status.exit_code),
         )
         && duration_matches(
-            spec.min_duration_ms,
-            spec.max_duration_ms,
+            filter.min_duration_ms,
+            filter.max_duration_ms,
             record.time.duration_ms,
         )
-        && spec
-            .time_range
-            .as_ref()
-            .is_none_or(|range| range.contains_record_time(record.time.primary_at()))
+        && time_range.is_none_or(|range| range.contains_record_time(record.time.primary_at()))
 }
 
 fn status_matches(status: Option<SearchStatusArg>, outcome: WorkOutcome) -> bool {
@@ -337,40 +435,42 @@ fn parse_duration_ms(value: &str) -> Result<u64> {
 fn matching_anchors<'a>(
     record: &'a WorkRecord,
     anchor: &WorkRef,
-    spec: &FilterSpec,
+    filter: &Filter,
+    regex: Option<&Regex>,
 ) -> Vec<MatchedAnchor<'a>> {
-    match spec.mode {
+    match filter.mode {
         FilterMode::Anchors => match anchor.at {
-            WorkAt::Whole => record_anchor_matches(record, anchor, spec),
-            WorkAt::Line(line) => line_anchor_matches(record, anchor, spec, line),
-            WorkAt::Part { .. } => part_anchor_matches(record, anchor, spec),
+            WorkAt::Whole => record_anchor_matches(record, anchor, filter, regex),
+            WorkAt::Line(line) => line_anchor_matches(record, anchor, filter, regex, line),
+            WorkAt::Part { .. } => part_anchor_matches(record, anchor, filter, regex),
         },
-        FilterMode::Parts => part_anchors_for(record, anchor, spec),
+        FilterMode::Parts => part_anchors_for(record, anchor, filter, regex),
     }
 }
 
 fn record_anchor_matches<'a>(
     record: &'a WorkRecord,
     anchor: &WorkRef,
-    spec: &FilterSpec,
+    filter: &Filter,
+    regex: Option<&Regex>,
 ) -> Vec<MatchedAnchor<'a>> {
     if matches!(
-        spec.in_field,
+        filter.in_field,
         SearchFieldArg::Title | SearchFieldArg::Session
     ) {
-        return (spec.kind.is_none() && meta_matches(record, spec.in_field, spec.regex.as_ref()))
+        return (filter.kind.is_none() && meta_matches(record, filter.in_field, regex))
             .then(|| matched(record, anchor.clone()))
             .into_iter()
             .collect();
     }
 
-    let matched_meta = spec.kind.is_none()
-        && spec.in_field == SearchFieldArg::All
-        && meta_matches(record, SearchFieldArg::All, spec.regex.as_ref());
+    let matched_meta = filter.kind.is_none()
+        && filter.in_field == SearchFieldArg::All
+        && meta_matches(record, SearchFieldArg::All, regex);
     let matched_part = record
         .parts
         .iter()
-        .any(|part| part_matches_filters(part, spec));
+        .any(|part| part_matches_filters(part, filter, regex));
     (matched_meta || matched_part)
         .then(|| matched(record, anchor.clone()))
         .into_iter()
@@ -380,23 +480,23 @@ fn record_anchor_matches<'a>(
 fn line_anchor_matches<'a>(
     record: &'a WorkRecord,
     anchor: &WorkRef,
-    spec: &FilterSpec,
+    filter: &Filter,
+    regex: Option<&Regex>,
     line: usize,
 ) -> Vec<MatchedAnchor<'a>> {
     let Some(text) = record.content_for_at(WorkAt::Line(line)) else {
         return Vec::new();
     };
     if matches!(
-        spec.in_field,
+        filter.in_field,
         SearchFieldArg::Title | SearchFieldArg::Session
     ) {
-        return (spec.kind.is_none() && meta_matches(record, spec.in_field, spec.regex.as_ref()))
+        return (filter.kind.is_none() && meta_matches(record, filter.in_field, regex))
             .then(|| matched(record, anchor.clone()))
             .into_iter()
             .collect();
     }
-    spec.regex
-        .as_ref()
+    regex
         .is_none_or(|regex| regex.is_match(&text))
         .then(|| matched(record, anchor.clone()))
         .into_iter()
@@ -406,12 +506,13 @@ fn line_anchor_matches<'a>(
 fn part_anchor_matches<'a>(
     record: &'a WorkRecord,
     anchor: &WorkRef,
-    spec: &FilterSpec,
+    filter: &Filter,
+    regex: Option<&Regex>,
 ) -> Vec<MatchedAnchor<'a>> {
     let Some(part) = record.part_for_at(anchor.at) else {
         return Vec::new();
     };
-    part_matches_filters(part, spec)
+    part_matches_filters(part, filter, regex)
         .then(|| matched(record, anchor.clone()))
         .into_iter()
         .collect()
@@ -420,14 +521,15 @@ fn part_anchor_matches<'a>(
 fn part_anchors_for<'a>(
     record: &'a WorkRecord,
     anchor: &WorkRef,
-    spec: &FilterSpec,
+    filter: &Filter,
+    regex: Option<&Regex>,
 ) -> Vec<MatchedAnchor<'a>> {
     match anchor.at {
-        WorkAt::Part { .. } => part_anchor_matches(record, anchor, spec),
+        WorkAt::Part { .. } => part_anchor_matches(record, anchor, filter, regex),
         WorkAt::Whole | WorkAt::Line(_) => record
             .parts
             .iter()
-            .filter(|part| part_matches_filters(part, spec))
+            .filter(|part| part_matches_filters(part, filter, regex))
             .map(|part| matched(record, record.work_ref.with_part(part.io, part.index)))
             .collect(),
     }
@@ -441,27 +543,25 @@ fn matched(record: &WorkRecord, anchor: WorkRef) -> MatchedAnchor<'_> {
     }
 }
 
-fn part_matches_filters(part: &WorkPart, spec: &FilterSpec) -> bool {
-    if !spec.io.matches(part.io) {
+fn part_matches_filters(part: &WorkPart, filter: &Filter, regex: Option<&Regex>) -> bool {
+    if !filter.io.matches(part.io) {
         return false;
     }
-    if spec.kind.is_some_and(|kind| !kind.matches(part.kind)) {
+    if filter.kind.is_some_and(|kind| !kind.matches(part.kind)) {
         return false;
     }
-    if !part_field_matches(part, spec.in_field) {
+    if !part_field_matches(part, filter.in_field) {
         return false;
     }
     // Default content search is dialogue-only so tools/skills/thinking don't pollute hits.
     // Opt in with `-i all`, or target them with `--kind tool_call|skill|thinking|…`.
-    if matches!(spec.in_field, SearchFieldArg::Content)
-        && spec.kind.is_none()
+    if matches!(filter.in_field, SearchFieldArg::Content)
+        && filter.kind.is_none()
         && part.kind.is_structure()
     {
         return false;
     }
-    spec.regex
-        .as_ref()
-        .is_none_or(|regex| regex.is_match(&part.text))
+    regex.is_none_or(|regex| regex.is_match(&part.text))
 }
 
 fn part_field_matches(part: &WorkPart, field: SearchFieldArg) -> bool {
@@ -721,7 +821,7 @@ mod tests {
             refs: false,
             save: None,
         };
-        let spec = FilterSpec::from_search_args(&args).expect("spec");
+        let spec = Filter::from_search_args(&args).expect("spec");
         assert_eq!(spec.latest, Some(SEARCH_DEFAULT_LATEST));
         assert_eq!(spec.limit, None);
     }
@@ -751,7 +851,7 @@ mod tests {
             refs: false,
             save: None,
         };
-        let spec = FilterSpec::from_search_args(&args).expect("spec");
+        let spec = Filter::from_search_args(&args).expect("spec");
         assert_eq!(spec.latest, None);
         assert_eq!(spec.limit, Some(12));
     }
@@ -781,7 +881,7 @@ mod tests {
             refs: false,
             save: None,
         };
-        let spec = FilterSpec::from_search_args(&args).expect("spec");
+        let spec = Filter::from_search_args(&args).expect("spec");
         assert_eq!(spec.latest, Some(3));
         assert_eq!(spec.limit, Some(10));
     }

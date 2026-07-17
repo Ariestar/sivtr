@@ -7,61 +7,21 @@ use sivtr_core::query::load_workspace_source;
 use sivtr_core::record::{expand_source, WorkPath, WorkRecord, WorkRef};
 use sivtr_core::workspace;
 
+use crate::commands::memory::filter::{self, Filter};
 use crate::commands::memory::records::warn_skipped;
 
 use super::WorkSet;
 
-#[derive(Debug, Clone)]
-pub enum WorkSetSource {
-    Reference(WorkSet),
-    Records {
-        cwd: PathBuf,
-        records: Vec<WorkRecord>,
-        anchors: Vec<WorkRef>,
-    },
-}
-
-impl WorkSetSource {
-    pub fn cwd(&self) -> PathBuf {
-        match self {
-            Self::Reference(set) => PathBuf::from(&set.cwd),
-            Self::Records { cwd, .. } => cwd.clone(),
-        }
-    }
-
-    pub fn into_parts(self) -> (Vec<WorkRecord>, Vec<WorkRef>) {
-        match self {
-            Self::Reference(mut set) => {
-                set.ensure_anchors();
-                (set.records, set.anchors)
-            }
-            Self::Records {
-                records, anchors, ..
-            } => (records, anchors),
-        }
-    }
-
-    pub fn into_workset(self) -> WorkSet {
-        match self {
-            Self::Reference(mut set) => {
-                set.ensure_anchors();
-                set
-            }
-            Self::Records {
-                cwd,
-                records,
-                anchors,
-            } => WorkSet::with_anchors(cwd.display().to_string(), records, anchors),
-        }
-    }
-}
-
-pub fn load_source(source: &str, cwd: Option<&Path>) -> Result<WorkSetSource> {
+/// Unified query: local and remote share one shape.
+///
+/// Remote is only transport: same `Filter` is sent, peer runs the same local path
+/// on the share root, result comes back.
+pub fn query(source: &str, filter: Filter, cwd: Option<&Path>) -> Result<WorkSet> {
     if source == "@" {
-        return Ok(WorkSetSource::Reference(read_stdin()?));
+        return apply_loaded(read_stdin()?, filter);
     }
     if source.starts_with('@') {
-        return Ok(WorkSetSource::Reference(super::load_reference(source)?));
+        return apply_loaded(super::load_reference(source)?, filter);
     }
 
     let cwd = cwd
@@ -70,8 +30,6 @@ pub fn load_source(source: &str, cwd: Option<&Path>) -> Result<WorkSetSource> {
 
     let source = expand_source(source)?;
 
-    // `scope:path` — scope is a remote name (`remote add`) or local workspace name.
-    // Bare path is local current workspace.
     if let Some((scope, path)) = source.split_once(':') {
         if path.is_empty() {
             anyhow::bail!("source `{source}` is missing a selector after `:`");
@@ -82,27 +40,21 @@ pub fn load_source(source: &str, cwd: Option<&Path>) -> Result<WorkSetSource> {
             );
         }
         if scope.eq_ignore_ascii_case("local") {
-            return load_local_source(path, &cwd);
+            return run_local(path, &cwd, filter);
         }
         let scope = scope.to_ascii_lowercase();
 
-        // 1. Workspace-local remote name (`sivtr remote add desk …`).
         if let Some(ws) = workspace::resolve_workspace_for_dir(&cwd)? {
-            if let Some(response) = try_remote_mount(&ws.key, &scope, path)? {
-                return Ok(WorkSetSource::Records {
-                    cwd,
-                    records: response.records,
-                    anchors: response.anchors,
-                });
+            if let Some(set) = try_remote(&ws.key, &scope, path, filter.clone(), &cwd)? {
+                return Ok(set);
             }
         }
 
-        // 2. Local workspace by directory basename (e.g. `docs:terminal`).
         if !scope.contains('/') {
             if let Some(root) =
                 crate::commands::remote::workspace::resolve_local_workspace_by_name(&scope)?
             {
-                return load_local_source(path, &root);
+                return run_local(path, &root, filter);
             }
         }
 
@@ -110,41 +62,85 @@ pub fn load_source(source: &str, cwd: Option<&Path>) -> Result<WorkSetSource> {
             "unknown scope `{scope}`; use `sivtr remote list` for remotes or `sivtr ws list` for local workspaces"
         );
     }
-    load_local_source(&source, &cwd)
+
+    run_local(&source, &cwd, filter)
 }
 
-fn try_remote_mount(
+/// Peer-side: same local query on share root, optional redact.
+pub fn run_on_share(
+    root: &Path,
+    source: &str,
+    filter: Filter,
+    redact: bool,
+) -> Result<(Vec<WorkRecord>, Vec<WorkRef>)> {
+    let mut set = run_local(source, root, filter.for_remote_peer())?;
+    if redact {
+        set.records = set
+            .records
+            .iter()
+            .map(crate::remote::redact::redact_record)
+            .collect();
+    }
+    Ok((set.records, set.anchors))
+}
+
+fn run_local(source: &str, root: &Path, filter: Filter) -> Result<WorkSet> {
+    let result = load_workspace_source(root, source)?;
+    warn_skipped(&result.skipped);
+    apply_loaded(
+        WorkSet::with_anchors(
+            root.display().to_string(),
+            result.records,
+            result.anchors,
+        ),
+        filter,
+    )
+}
+
+fn apply_loaded(set: WorkSet, filter: Filter) -> Result<WorkSet> {
+    filter::apply(
+        PathBuf::from(&set.cwd),
+        set.records,
+        set.anchors,
+        filter,
+    )
+}
+
+fn try_remote(
     workspace_key: &str,
-    scope: &str,
+    remote_name: &str,
     path: &str,
-) -> Result<Option<crate::remote::protocol::SourceResponse>> {
+    filter: Filter,
+    cwd: &Path,
+) -> Result<Option<WorkSet>> {
     use crate::remote::ipc;
     use crate::remote::protocol::{LocalRequest, LocalResponse};
 
-    // Auto-start daemon when reading remote scopes, then check mounts.
     crate::commands::remote::serve::ensure_running()?;
-    // Only treat scope as a mount if it is registered; other errors (network,
-    // auth) must surface instead of being mistaken for a local workspace name.
     let mounts = match ipc::call(LocalRequest::RemoteList {
         workspace_key: workspace_key.to_string(),
-    }) {
-        Ok(LocalResponse::Mounts(mounts)) => mounts,
-        Ok(_) => return Ok(None),
-        Err(error) => return Err(error),
+    })? {
+        LocalResponse::Mounts(mounts) => mounts,
+        _ => return Ok(None),
     };
     if !mounts
         .iter()
-        .any(|mount| mount.alias.eq_ignore_ascii_case(scope))
+        .any(|mount| mount.alias.eq_ignore_ascii_case(remote_name))
     {
         return Ok(None);
     }
 
-    match ipc::call(LocalRequest::RemoteSource {
+    match ipc::call(LocalRequest::RemoteQuery {
         workspace_key: workspace_key.to_string(),
-        alias: scope.to_ascii_lowercase(),
+        alias: remote_name.to_ascii_lowercase(),
         source: path.to_string(),
+        filter,
     })? {
-        LocalResponse::Source(response) => Ok(Some(response)),
+        LocalResponse::Query(response) => Ok(Some(WorkSet::with_anchors(
+            cwd.display().to_string(),
+            response.records,
+            response.anchors,
+        ))),
         response => anyhow::bail!("Unexpected daemon response: {response:?}"),
     }
 }
@@ -158,16 +154,6 @@ fn read_stdin() -> Result<WorkSet> {
         serde_json::from_str(&input).context("Failed to parse WorkSet from stdin")?;
     set.ensure_anchors();
     Ok(set)
-}
-
-fn load_local_source(source: &str, cwd: &Path) -> Result<WorkSetSource> {
-    let result = load_workspace_source(cwd, source)?;
-    warn_skipped(&result.skipped);
-    Ok(WorkSetSource::Records {
-        cwd: cwd.to_path_buf(),
-        records: result.records,
-        anchors: result.anchors,
-    })
 }
 
 pub fn load_context_records(
@@ -198,9 +184,8 @@ pub fn load_context_records(
     let mut records = Vec::new();
     let mut seen_records = HashSet::new();
     for source in sources {
-        let loaded = load_source(&source, Some(cwd))?;
-        let (loaded_records, _) = loaded.into_parts();
-        for record in loaded_records {
+        let set = query(&source, Filter::none(), Some(cwd))?;
+        for record in set.records {
             let key = record.work_ref.whole().to_string();
             if seen_records.insert(key) {
                 records.push(record);

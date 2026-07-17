@@ -18,28 +18,32 @@ pub fn execute(args: &ZoomArgs) -> Result<()> {
 
 /// Expand neighboring records and optionally save without printing.
 pub fn run(args: &ZoomArgs) -> Result<WorkSet> {
-    let source = workset::load_source(&args.source, args.cwd.as_deref())?;
-    let cwd = source.cwd();
-    let (source_records, source_anchors) = source.into_parts();
+    let source = workset::query(
+        &args.source,
+        crate::commands::memory::filter::Filter::none(),
+        args.cwd.as_deref(),
+    )?;
+    let cwd = std::path::PathBuf::from(&source.cwd);
 
     let base_context = args.context.unwrap_or(3);
     let before = args.before.unwrap_or(base_context);
     let after = args.after.unwrap_or(base_context);
 
-    let expanded = if source_records.is_empty() || source_anchors.is_empty() {
+    let expanded = if source.records.is_empty() || source.anchors.is_empty() {
         Vec::new()
     } else {
-        let all_records = workset::load_context_records(&source_records, &source_anchors, &cwd)?;
+        let all_records =
+            workset::load_context_records(&source.records, &source.anchors, &cwd)?;
         expand_around(
-            &source_records,
-            &source_anchors,
+            &source.records,
+            &source.anchors,
             &all_records,
             before,
             after,
         )?
     };
 
-    let mut workset = WorkSet::new(cwd.display().to_string(), expanded);
+    let mut workset = WorkSet::new(source.cwd, expanded);
     workset.save_last()?;
     if let Some(name) = args.save.as_deref() {
         workset.save_as(name)?;

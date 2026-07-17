@@ -302,9 +302,12 @@ pub fn execute_ref(
     let work_ref: WorkRef = expanded
         .parse()
         .with_context(|| format!("Invalid work ref `{reference}`"))?;
-    let source = workset::load_source(&expanded, Some(&dir))?;
-    let (records, _) = source.into_parts();
-    let record = workset::record_for_anchor(&records, &work_ref)
+    let set = workset::query(
+        &expanded,
+        crate::commands::memory::filter::Filter::none(),
+        Some(&dir),
+    )?;
+    let record = workset::record_for_anchor(&set.records, &work_ref)
         .with_context(|| format!("No record found for ref `{reference}`"))?;
     let mut text = ref_text_pair(record, &work_ref, reference)?;
 

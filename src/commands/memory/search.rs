@@ -12,10 +12,13 @@ pub fn execute(args: &SearchArgs) -> Result<()> {
     )
 }
 
-/// Load, filter, and optionally save a search WorkSet without printing.
+/// Unified query for search: local and remote both run load+filter at the data owner.
 pub fn run(args: &SearchArgs) -> Result<WorkSet> {
-    let source = workset::load_source(&args.source, args.cwd.as_deref())?;
-    let mut workset = filter::apply_source(source, filter::FilterSpec::from_search_args(args)?)?;
+    let mut workset = workset::query(
+        &args.source,
+        filter::Filter::from_search_args(args)?,
+        args.cwd.as_deref(),
+    )?;
     workset.save_last()?;
     if let Some(name) = args.save.as_deref() {
         workset.save_as(name)?;

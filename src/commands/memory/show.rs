@@ -93,7 +93,11 @@ pub fn execute(args: &ShowArgs) -> Result<()> {
 
 /// Resolve a show source into a WorkSet without printing.
 pub fn run(args: &ShowArgs) -> Result<workset::WorkSet> {
-    Ok(workset::load_source(&args.source, args.cwd.as_deref())?.into_workset())
+    workset::query(
+        &args.source,
+        crate::commands::memory::filter::Filter::none(),
+        args.cwd.as_deref(),
+    )
 }
 
 pub fn print_workset(set: &workset::WorkSet, format: WorkSetOutputFormat) -> Result<()> {

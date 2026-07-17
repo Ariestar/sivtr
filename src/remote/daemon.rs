@@ -14,13 +14,11 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 
-use sivtr_core::query::load_workspace_source;
-
 use super::identity::Identity;
 use super::ipc;
 use super::protocol::{
     DaemonInfo, DaemonStatus, InviteTicket, LocalEnvelope, LocalRequest, LocalResponse,
-    RemoteRequest, RemoteResponse, SourceResponse, MAX_MESSAGE_SIZE, REMOTE_ALPN,
+    QueryResponse, RemoteRequest, RemoteResponse, MAX_MESSAGE_SIZE, REMOTE_ALPN,
 };
 use super::state::{MountInfo, StateStore};
 
@@ -287,25 +285,27 @@ async fn process_local(
                 response => bail!("Unexpected remote response: {response:?}"),
             }
         }
-        LocalRequest::RemoteSource {
+        LocalRequest::RemoteQuery {
             workspace_key,
             alias,
             source,
+            filter,
         } => {
             let mount = context.store.mount(&workspace_key, &alias)?;
             let response = exchange_with_peer(
                 context,
                 &mount.peer_id,
-                RemoteRequest::Source {
+                RemoteRequest::Query {
                     share_id: mount.share_id.clone(),
                     source,
+                    filter,
                 },
             )
             .await?;
             match response {
-                RemoteResponse::Source(mut source) => {
-                    qualify_source_scope(&mount.alias, &mut source);
-                    LocalResponse::Source(source)
+                RemoteResponse::Query(mut query) => {
+                    qualify_query_scope(&mount.alias, &mut query);
+                    LocalResponse::Query(query)
                 }
                 response => bail!("Unexpected remote response: {response:?}"),
             }
@@ -477,26 +477,23 @@ async fn process_remote(
                 share_name: redeemed.share_name,
             })
         }
-        RemoteRequest::Source { share_id, source } => {
-            let share = context.store.authorize(peer_id, &share_id, "source")?;
+        RemoteRequest::Query {
+            share_id,
+            source,
+            filter,
+        } => {
+            let share = context.store.authorize(peer_id, &share_id, "query")?;
             let response = tokio::task::spawn_blocking(move || {
-                let result = load_workspace_source(std::path::Path::new(&share.root), &source)?;
-                let records = if share.redact {
-                    result
-                        .records
-                        .iter()
-                        .map(super::redact::redact_record)
-                        .collect()
-                } else {
-                    result.records
-                };
-                Ok::<_, anyhow::Error>(SourceResponse {
-                    records,
-                    anchors: result.anchors,
-                })
+                let (records, anchors) = crate::commands::memory::workset::run_on_share(
+                    std::path::Path::new(&share.root),
+                    &source,
+                    filter,
+                    share.redact,
+                )?;
+                Ok::<_, anyhow::Error>(QueryResponse { records, anchors })
             })
             .await??;
-            Ok(RemoteResponse::Source(response))
+            Ok(RemoteResponse::Query(response))
         }
         RemoteRequest::Probe { share_id } => {
             let share = context.store.authorize(peer_id, &share_id, "probe")?;
@@ -508,7 +505,7 @@ async fn process_remote(
     }
 }
 
-fn qualify_source_scope(scope: &str, response: &mut SourceResponse) {
+fn qualify_query_scope(scope: &str, response: &mut QueryResponse) {
     let scope = scope.to_ascii_lowercase();
     for record in &mut response.records {
         record.work_ref = record.work_ref.with_named_scope(scope.clone());

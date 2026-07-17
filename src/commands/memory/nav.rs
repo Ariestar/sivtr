@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use sivtr_core::record::{WorkAt, WorkPartIo, WorkPath, WorkRecord, WorkRef};
+use std::path::PathBuf;
 
 use crate::cli::NavArgs;
 use crate::commands::memory::show;
@@ -16,13 +17,17 @@ enum Step {
 }
 
 pub fn execute(args: &NavArgs) -> Result<()> {
-    let source = workset::load_source(&args.source, args.cwd.as_deref())?;
-    let cwd = source.cwd();
-    let (source_records, source_anchors) = source.into_parts();
-    let all_records = workset::load_context_records(&source_records, &source_anchors, &cwd)?;
-    let anchors = navigate(&source_records, &source_anchors, &all_records, &args.motion)?;
+    let source = workset::query(
+        &args.source,
+        crate::commands::memory::filter::Filter::none(),
+        args.cwd.as_deref(),
+    )?;
+    let cwd = PathBuf::from(&source.cwd);
+    let all_records =
+        workset::load_context_records(&source.records, &source.anchors, &cwd)?;
+    let anchors = navigate(&source.records, &source.anchors, &all_records, &args.motion)?;
     let records = workset::records_for_anchors(&all_records, &anchors);
-    let set = WorkSet::with_anchors(cwd.display().to_string(), records, anchors);
+    let set = WorkSet::with_anchors(source.cwd, records, anchors);
     set.save_last()?;
     show::print_workset(
         &set,

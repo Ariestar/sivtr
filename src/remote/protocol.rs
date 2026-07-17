@@ -4,6 +4,8 @@ use iroh::EndpointAddr;
 use serde::{Deserialize, Serialize};
 use sivtr_core::record::{WorkRecord, WorkRef};
 
+use crate::commands::memory::filter::Filter;
+
 pub use super::state::ShareInfo;
 use super::state::{GrantInfo, MountInfo, PeerInfo};
 
@@ -49,9 +51,12 @@ pub enum RemoteRequest {
         secret: String,
         peer_name: String,
     },
-    Source {
+    /// Run the same local query the peer would run: load `source` then apply `filter`.
+    Query {
         share_id: String,
+        /// Local-shaped body only (`agent`, `terminal`, `codex/…`), never `remote:path`.
         source: String,
+        filter: Filter,
     },
     Probe {
         share_id: String,
@@ -65,7 +70,7 @@ pub enum RemoteResponse {
         share_id: String,
         share_name: String,
     },
-    Source(SourceResponse),
+    Query(QueryResponse),
     Probe {
         server_name: String,
         share_name: String,
@@ -76,7 +81,7 @@ pub enum RemoteResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SourceResponse {
+pub struct QueryResponse {
     pub records: Vec<WorkRecord>,
     pub anchors: Vec<WorkRef>,
 }
@@ -161,10 +166,12 @@ pub enum LocalRequest {
         workspace_key: String,
         alias: String,
     },
-    RemoteSource {
+    /// Client → local daemon → peer: full query (source + filter) on a remote share.
+    RemoteQuery {
         workspace_key: String,
         alias: String,
         source: String,
+        filter: Filter,
     },
 }
 
@@ -192,7 +199,7 @@ pub enum LocalResponse {
         peer_name: String,
         share_name: String,
     },
-    Source(SourceResponse),
+    Query(QueryResponse),
     Error {
         message: String,
     },

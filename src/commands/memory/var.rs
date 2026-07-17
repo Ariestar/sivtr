@@ -29,7 +29,11 @@ fn set(name: &str, source: Option<&str>) -> Result<()> {
             );
         }
     };
-    let mut set = workset::load_source(source, None)?.into_workset();
+    let mut set = workset::query(
+        source,
+        crate::commands::memory::filter::Filter::none(),
+        None,
+    )?;
     set = dedup(set);
     set.save_as(name)?;
     output::success(format!("saved @{name} ({} items)", set.anchors().len()));
@@ -61,7 +65,11 @@ fn merge(name: &str, sources: &[String]) -> Result<()> {
     let before_len = before.anchors().len();
     let mut result = before;
     for source in sources {
-        let addition = workset::load_source(source, None)?.into_workset();
+        let addition = workset::query(
+            source,
+            crate::commands::memory::filter::Filter::none(),
+            None,
+        )?;
         result = merge_sets(result, addition);
     }
     result.name = Some(name.to_string());
@@ -79,7 +87,11 @@ fn drop(name: &str, sources: &[String]) -> Result<()> {
     let before_len = before.anchors().len();
     let mut remove = HashSet::new();
     for source in sources {
-        let set = workset::load_source(source, None)?.into_workset();
+        let set = workset::query(
+            source,
+            crate::commands::memory::filter::Filter::none(),
+            None,
+        )?;
         remove.extend(set.anchors().into_iter().map(|anchor| anchor.to_string()));
     }
     let mut result = remove_anchors(before, &remove);

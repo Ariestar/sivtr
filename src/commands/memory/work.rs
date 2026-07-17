@@ -55,10 +55,12 @@ pub fn execute(command: &WorkCommand) -> Result<()> {
 fn execute_sessions(args: &WorkSessionsArgs) -> Result<()> {
     let cwd = resolve_cwd(args.cwd.as_deref())?;
     let (display_cwd, records) = if let Some(source) = args.source.as_deref() {
-        let loaded = workset::load_source(source, Some(&cwd))?;
-        let display_cwd = loaded.cwd().display().to_string();
-        let (records, _) = loaded.into_parts();
-        (display_cwd, records)
+        let set = workset::query(
+            source,
+            filter::Filter::none(),
+            Some(&cwd),
+        )?;
+        (set.cwd, set.records)
     } else {
         let providers = args.provider.providers();
         let records = current_work_record_index(&providers, &cwd, None)?;
@@ -88,10 +90,11 @@ fn execute_sessions(args: &WorkSessionsArgs) -> Result<()> {
 
 fn execute_records(args: &WorkRecordsArgs) -> Result<()> {
     let cwd = resolve_cwd(args.cwd.as_deref())?;
-    let source = workset::load_source(&args.source, Some(&cwd))?;
-    let display_cwd = source.cwd().display().to_string();
-    let (records, anchors) = source.into_parts();
-    let record_anchors = anchors
+    let set = workset::query(&args.source, filter::Filter::none(), Some(&cwd))?;
+    let display_cwd = set.cwd;
+    let records = set.records;
+    let record_anchors = set
+        .anchors
         .into_iter()
         .map(|anchor| anchor.whole())
         .collect::<Vec<_>>();
@@ -112,14 +115,12 @@ fn execute_records(args: &WorkRecordsArgs) -> Result<()> {
 
 fn execute_parts(args: &WorkPartsArgs) -> Result<()> {
     let cwd = resolve_cwd(args.cwd.as_deref())?;
-    let source = workset::load_source(&args.source, Some(&cwd))?;
-    let (records, anchors) = source.into_parts();
-    let mut set = filter::apply_parts(
-        cwd,
-        records,
-        anchors,
-        filter::FilterSpec::from_work_parts_args(args)?,
+    let set = workset::query(
+        &args.source,
+        filter::Filter::from_work_parts_args(args)?,
+        Some(&cwd),
     )?;
+    let mut set = set;
     set.save_last()?;
     if let Some(name) = args.save.as_deref() {
         set.save_as(name)?;
