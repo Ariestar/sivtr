@@ -98,8 +98,8 @@ Device-scoped daemon auto-starts when share/remote commands need it.
 
 ```bash
 sivtr share                   # interactive: pick workspace, create share only
-sivtr share pass <name>       # issue single-use pass (stdout = bare key)
-sivtr remote add desk <pass>  # name a peer share in this workspace (git-remote style)
+sivtr share invite <name>       # issue single-use invite (stdout = bare key)
+sivtr remote add desk <invite>  # name a peer share in this workspace (git-remote style)
 sivtr s desk:terminal --status failure --latest 5 --refs
 sivtr serve status            # daemon identity + share/peer counts
 sivtr ws list                 # local workspace origin labels

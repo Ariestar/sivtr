@@ -13,8 +13,8 @@ If you want the teammate scenario first, see [Remote collaboration memory](/play
 | --- | --- |
 | Device daemon | One per machine. Started by `sivtr serve`, auto-started by share/remote commands when needed. |
 | Share | An explicitly exposed local workspace (a remote “repo”). |
-| Pass | Single-use key with a short TTL. Printed as a bare key on stdout (`share pass`). |
-| Grant | Peer permission after redeeming a pass. |
+| Invite | Single-use invitation key with a short TTL. Printed as a bare key on stdout (`share invite`). |
+| Grant | Peer permission after redeeming an invite. |
 | Remote | Workspace-local name for a peer+share pair — the left side of `name:path` refs (like `git remote`). |
 
 Refs use one form:
@@ -33,14 +33,14 @@ On the machine that owns the workspace:
 
 ```bash
 sivtr share                   # pick workspace (Enter = current); creates share only
-sivtr share pass <name>       # issue a single-use pass (stdout = bare key)
+sivtr share invite <name>       # issue a single-use invite (stdout = bare key)
 ```
 
 Non-interactive:
 
 ```bash
 sivtr share add --name alice-desk
-sivtr share pass alice-desk --expires 10m
+sivtr share invite alice-desk --expires 10m
 ```
 
 Useful owner commands:
@@ -59,7 +59,7 @@ sivtr serve status
 In the git workspace where you want the remote:
 
 ```bash
-sivtr remote add desk <pass>
+sivtr remote add desk <invite>
 sivtr remote test desk
 sivtr remote list
 ```
@@ -92,7 +92,7 @@ sivtr copy ref desk:terminal/session_42/3/o/1 --print
 - Nothing is shared until `sivtr share` or `share add` runs.
 - Access is read-only. Peers cannot write sessions or run commands on the owner machine.
 - Secret redaction is on by default (`--no-redact` disables it for a share).
-- Passes are single-use and short-lived (default `10m`).
+- Invites are single-use and short-lived (default `10m`).
 - Transport between daemons is encrypted iroh.
 - Local-first remains default: unknown scopes fail instead of probing the network.
 
@@ -110,7 +110,7 @@ State lives under `data_dir()` (`SIVTR_DATA_DIR` override, else the platform con
 | File | Purpose |
 | --- | --- |
 | `identity.key` | Stable device identity |
-| `remote-state.db` | Peers, shares, grants, passes, remotes |
+| `remote-state.db` | Peers, shares, grants, invites, remotes |
 | `daemon.json` / `daemon.lock` / `daemon.log` | Runtime control and logs |
 
 See [Data Locations](/reference/data-locations/) and [Local-first and Privacy](/explanation/local-first-privacy/).
@@ -119,8 +119,8 @@ See [Data Locations](/reference/data-locations/) and [Local-first and Privacy](/
 
 | Command | Purpose |
 | --- | --- |
-| `sivtr share` | Interactive share (no pass) |
-| `sivtr share add\|list\|pass\|grants\|revoke...` | Manage shares |
+| `sivtr share` | Interactive share (no invite) |
+| `sivtr share add\|list\|invite\|grants\|revoke...` | Manage shares |
 | `sivtr remote add\|list\|remove\|rename\|test` | Manage remotes in the current workspace |
 | `sivtr peer list\|forget` | Manage known peer identities |
 | `sivtr serve ...` | Manage the device daemon |

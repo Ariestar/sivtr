@@ -429,7 +429,7 @@ sivtr share [OPTIONS]
 sivtr share <COMMAND>
 ```
 
-显式分享本机 workspace 给远端。裸 `sivtr share` 是交互入口：选择 workspace（Enter = 当前）并确保 share 存在（不出 pass）。出 pass 请用 `sivtr share pass <name>`。
+显式分享本机 workspace 给远端。裸 `sivtr share` 是交互入口：选择 workspace（Enter = 当前）并确保 share 存在（不出 invite）。出 invite 请用 `sivtr share invite <name>`。
 
 默认交互选项：
 
@@ -445,16 +445,16 @@ sivtr share <COMMAND>
 | --- | --- |
 | `add [PATH] [--name NAME] [--no-redact]` | 通过 daemon 暴露一个 workspace |
 | `list` | 列出本机 shares |
-| `remove <SHARE>` | 删除 share 及其 grants 和 passes |
+| `remove <SHARE>` | 删除 share 及其 grants 和 invitations |
 | `enable <SHARE>` / `disable <SHARE>` | 启用/禁用 share，不删除 |
-| `pass <SHARE> [--expires DURATION]` | 签发单次 pass；bare key 打印到 stdout |
+| `invite <SHARE> [--expires DURATION]` | 签发单次 invite；bare key 打印到 stdout |
 | `grants <SHARE>` | 列出 share 的活跃 peer grants |
 | `revoke <SHARE> <PEER>` | 撤销某 peer 对该 share 的访问 |
 
 ```bash
 sivtr share
 sivtr share add --name alice-desk
-sivtr share pass alice-desk --expires 10m
+sivtr share invite alice-desk --expires 10m
 sivtr share list
 sivtr share grants alice-desk
 sivtr share revoke alice-desk <peer>
@@ -471,7 +471,7 @@ sivtr remote <COMMAND>
 | 命令 | 含义 |
 | --- | --- |
 | `list` | 列出当前 workspace 的 remotes |
-| `add <NAME> <PASS>` | 兑换 pass 并添加 remote |
+| `add <NAME> <INVITE>` | 兑换 invite 并添加 remote |
 | `remove <NAME>` | 删除本地 remote 名（grant 仍在，需所有者 revoke） |
 | `rename <NAME> <NEW>` | 重命名本 workspace 的 remote |
 | `test <NAME>` | 可达性 + 授权探测 |

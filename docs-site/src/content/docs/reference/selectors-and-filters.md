@@ -168,7 +168,7 @@ sivtr s desk:terminal --status failure --latest 5 --refs
 
 Origins come from:
 
-- remote names created with `sivtr remote add <name> <pass>`;
+- remote names created with `sivtr remote add <name> <invite>`;
 - local workspace directory names listed by `sivtr ws list`.
 
 Dialogue and line indices are 1-based.

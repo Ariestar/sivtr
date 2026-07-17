@@ -429,7 +429,7 @@ sivtr share [OPTIONS]
 sivtr share <COMMAND>
 ```
 
-Explicitly shares a local workspace for remote peers. Bare `sivtr share` is interactive: pick a workspace (Enter = current) and ensure the share exists (no pass). Issue a pass with `sivtr share pass <name>`.
+Explicitly shares a local workspace for remote peers. Bare `sivtr share` is interactive: pick a workspace (Enter = current) and ensure the share exists (no invite). Create an invite with `sivtr share invite <name>`.
 
 Default interactive options:
 
@@ -445,16 +445,16 @@ Subcommands:
 | --- | --- |
 | `add [PATH] [--name NAME] [--no-redact]` | Expose a workspace through the daemon |
 | `list` | List local shares |
-| `remove <SHARE>` | Remove a share and all grants and passes attached to it |
+| `remove <SHARE>` | Remove a share and all grants and invitations attached to it |
 | `enable <SHARE>` / `disable <SHARE>` | Toggle a share without deleting it |
-| `pass <SHARE> [--expires DURATION]` | Issue a single-use pass; prints the bare key on stdout |
+| `invite <SHARE> [--expires DURATION]` | Create a single-use invite; prints the bare key on stdout |
 | `grants <SHARE>` | List active peer grants for a share |
 | `revoke <SHARE> <PEER>` | Revoke a peer's access to a share |
 
 ```bash
 sivtr share
 sivtr share add --name alice-desk
-sivtr share pass alice-desk --expires 10m
+sivtr share invite alice-desk --expires 10m
 sivtr share list
 sivtr share grants alice-desk
 sivtr share revoke alice-desk <peer>
@@ -471,7 +471,7 @@ Names a peer share in the current git workspace (like `git remote`). The name is
 | Command | Meaning |
 | --- | --- |
 | `list` | List remotes in the current workspace |
-| `add <NAME> <PASS>` | Redeem a pass and add the remote |
+| `add <NAME> <INVITE>` | Redeem an invite and add the remote |
 | `remove <NAME>` | Remove a local remote name (grant remains until the owner revokes it) |
 | `rename <NAME> <NEW>` | Rename a remote in this workspace |
 | `test <NAME>` | Reachability + authorization probe |

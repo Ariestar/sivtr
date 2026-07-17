@@ -56,16 +56,16 @@ pub enum ShareAction {
     },
     /// List local shares
     List,
-    /// Remove a share and all grants and passes attached to it
+    /// Remove a share and all grants and invitations attached to it
     Remove { share: String },
     /// Enable a disabled share
     Enable { share: String },
     /// Disable a share without deleting it
     Disable { share: String },
-    /// Issue a single-use pass peers redeem with `remote add`
-    Pass {
+    /// Create a single-use invitation peers redeem with `remote add`
+    Invite {
         share: String,
-        /// Pass lifetime, such as 10m, 2h, or 1d
+        /// Invitation lifetime, such as 10m, 2h, or 1d
         #[arg(long, default_value = "10m")]
         expires: String,
     },
@@ -99,11 +99,11 @@ pub struct RemoteCommand {
 pub enum RemoteAction {
     /// List remotes in the current workspace (like `git remote -v`)
     List,
-    /// Redeem a pass and name a remote share in this workspace (like `git remote add`)
+    /// Redeem an invitation and name a remote share in this workspace (like `git remote add`)
     Add {
         /// Local remote name used in refs, e.g. `desk:terminal/...`
         alias: String,
-        /// Single-use pass from `sivtr share pass` (bare key only)
+        /// Single-use invite key from `sivtr share invite` (bare key only)
         invite: String,
     },
     /// Remove a remote name from the current workspace
