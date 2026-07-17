@@ -84,7 +84,7 @@ fn resolve_vim_editor() -> Result<String> {
     anyhow::bail!("No Vim-compatible editor found. Set `editor.command` to nvim/vim/vi.")
 }
 
-pub(super) fn is_vim_command(command: &str) -> bool {
+pub fn is_vim_command(command: &str) -> bool {
     let Some(program) = command.split_whitespace().next() else {
         return false;
     };
@@ -96,7 +96,7 @@ pub(super) fn is_vim_command(command: &str) -> bool {
     name == "vi" || name.contains("vim")
 }
 
-pub(super) fn vim_single_quote(value: &str) -> String {
+pub fn vim_single_quote(value: &str) -> String {
     value.replace('\'', "''")
 }
 

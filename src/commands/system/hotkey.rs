@@ -9,7 +9,7 @@ use crate::cli::{
     HotkeyAction, HotkeyCommand, HotkeyPickAgentArgs, HotkeyProviderSelection, HotkeyServeArgs,
     HotkeyStartArgs,
 };
-use crate::commands::capture::copy::{self, AgentPickerRequest};
+use crate::commands::capture::copy;
 use sivtr_core::ai::AgentSelection;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,10 +57,10 @@ pub fn pick_agent(args: &HotkeyPickAgentArgs) -> Result<()> {
 
     let result = std::panic::catch_unwind(|| {
         let providers = args.provider.providers();
-        copy::execute_agent_picker(AgentPickerRequest {
+        copy::execute_agent_picker(copy::AgentPickerRequest {
             providers: &providers,
             pick_current_session: args.current_session,
-            include_remotes: args.all,
+            select_remotes: args.all,
             selection_mode: AgentSelection::LastTurn,
             print_full: false,
             regex: None,

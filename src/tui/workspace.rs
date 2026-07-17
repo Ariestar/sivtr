@@ -130,6 +130,24 @@ impl WorkspaceSource {
     }
 }
 
+/// Compact load indicator for the Source pane (idle remote / ready / failed).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SourceLoadMarker {
+    Idle,
+    Ready,
+    Failed,
+}
+
+impl SourceLoadMarker {
+    pub(crate) fn glyph(self) -> Option<&'static str> {
+        match self {
+            Self::Idle => Some("·"),
+            Self::Ready => None,
+            Self::Failed => Some("!"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TextPair {
     pub(crate) plain: String,
@@ -432,6 +450,10 @@ pub(crate) struct WorkspaceHelpEntry {
 pub(crate) struct WorkspaceView<'a> {
     pub(crate) sources: &'a [WorkspaceSource],
     pub(crate) selected_sources: &'a [bool],
+    /// Per-source load marker (idle remote / ready / failed).
+    pub(crate) source_markers: &'a [SourceLoadMarker],
+    /// Optional status line (e.g. remote timeout).
+    pub(crate) status_message: Option<&'a str>,
     pub(crate) source_state: &'a ListState,
     pub(crate) sessions: &'a [WorkspaceSession],
     pub(crate) selected_sessions: &'a [bool],
@@ -475,6 +497,7 @@ struct WorkspaceFooterView<'a> {
     content_mode: ContentViewMode,
     content_selection: Option<ContentSelection>,
     current_ref: Option<&'a WorkRef>,
+    status_message: Option<&'a str>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -774,6 +797,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         layout.source,
         view.sources,
         view.selected_sources,
+        view.source_markers,
         view.source_state,
         view.focus == WorkspaceFocus::Source,
     );
@@ -842,6 +866,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
             content_mode: view.content_mode,
             content_selection: view.content_selection,
             current_ref: current_ref.as_ref(),
+            status_message: view.status_message,
         },
     );
 
@@ -884,6 +909,7 @@ fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>)
         content_mode,
         content_selection,
         current_ref,
+        status_message,
     } = footer;
 
     let mut spans = if search.is_some() {
@@ -946,6 +972,9 @@ fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>)
         if let Some(work_ref) = current_ref {
             spans.extend(footer_status_spans(&format!("ref {work_ref}")));
         }
+    }
+    if let Some(status) = status_message.filter(|message| !message.is_empty()) {
+        spans.extend(footer_status_spans(status));
     }
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
@@ -1245,6 +1274,7 @@ fn render_source_list(
     area: Rect,
     sources: &[WorkspaceSource],
     selected_sources: &[bool],
+    source_markers: &[SourceLoadMarker],
     state: &ListState,
     active: bool,
 ) {
@@ -1278,6 +1308,16 @@ fn render_source_list(
         };
         spans.push(Span::styled(format!("{marker} "), marker_style));
         spans.push(Span::styled(source.label(), label_style));
+        if let Some(load_glyph) = source_markers.get(idx).and_then(|marker| marker.glyph()) {
+            let load_style = match source_markers.get(idx) {
+                Some(SourceLoadMarker::Failed) => Style::default().fg(Color::Rgb(248, 113, 113)),
+                Some(SourceLoadMarker::Idle) if source.is_remote() => {
+                    Style::default().fg(theme::dim())
+                }
+                _ => Style::default().fg(theme::muted()),
+            };
+            spans.push(Span::styled(format!(" {load_glyph}"), load_style));
+        }
     }
     if spans.is_empty() {
         spans.push(Span::styled("<empty>", Style::default().fg(theme::dim())));

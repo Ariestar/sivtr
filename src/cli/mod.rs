@@ -648,7 +648,7 @@ pub struct Cli {
     #[arg(long, value_enum, default_value_t = ColorArg::Auto, global = true)]
     pub color: ColorArg,
 
-    /// Include mounted remotes in the workspace browser (`sivtr` / hotkey picker)
+    /// Select mounted remotes in the workspace browser
     #[arg(long = "all", default_value_t = false, global = true)]
     pub all: bool,
 
@@ -1541,7 +1541,7 @@ pub struct HotkeyPickAgentArgs {
     #[arg(long, default_value_t = false)]
     pub current_session: bool,
 
-    /// Include mounted remotes in the picker
+    /// Select mounted remotes in the picker
     #[arg(long = "all", default_value_t = false)]
     pub all: bool,
 }

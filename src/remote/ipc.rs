@@ -50,11 +50,31 @@ pub fn call(request: LocalRequest) -> Result<LocalResponse> {
     call_with_info(&info, request)
 }
 
+/// Like [`call`], but caps how long we wait for the daemon response.
+///
+/// Useful for interactive multi-source loads: a stuck peer should fail this
+/// source without blocking the whole browser for the default 30s read timeout.
+pub fn call_with_read_timeout(
+    request: LocalRequest,
+    read_timeout: Duration,
+) -> Result<LocalResponse> {
+    let info = read_daemon_info()?;
+    call_with_info_and_read_timeout(&info, request, read_timeout)
+}
+
 pub fn call_with_info(info: &DaemonInfo, request: LocalRequest) -> Result<LocalResponse> {
+    call_with_info_and_read_timeout(info, request, Duration::from_secs(30))
+}
+
+fn call_with_info_and_read_timeout(
+    info: &DaemonInfo,
+    request: LocalRequest,
+    read_timeout: Duration,
+) -> Result<LocalResponse> {
     let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), info.port);
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))
         .with_context(|| "sivtr daemon is not responding; run `sivtr serve restart`")?;
-    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+    stream.set_read_timeout(Some(read_timeout))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     let envelope = LocalEnvelope {
         token: info.token.clone(),

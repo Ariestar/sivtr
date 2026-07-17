@@ -1,9 +1,10 @@
 //! Command modules grouped by product domain.
 //!
 //! Call sites should use domain paths:
-//! `commands::memory::show`, `commands::capture::copy`, `commands::remote::serve`,
-//! `commands::system::doctor`.
+//! `commands::memory::show`, `commands::capture::copy`, `commands::browse`,
+//! `commands::remote::serve`, `commands::system::doctor`.
 
+pub mod browse;
 pub mod capture;
 pub mod interactive;
 pub mod memory;

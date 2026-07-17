@@ -24,8 +24,11 @@ use crate::tui::workspace_search::{
 };
 use sivtr_core::record::{WorkAt, WorkRef};
 
+use super::load::{collect_ready_sessions, ensure_sources_loaded, SourceLoadState};
+use super::text::{filter_lines_by_spec, record_to_copy_parts};
 use super::vim::{open_vim_view, VimBlock, VimView};
-use super::{filter_lines_by_spec, record_to_copy_parts, PICK_CANCELLED_MESSAGE};
+use super::PICK_CANCELLED_MESSAGE;
+use std::path::PathBuf;
 
 const MOUSE_SCROLL_LINES: usize = 3;
 
@@ -42,20 +45,33 @@ struct VisualContentContext<'a> {
     scroll: usize,
 }
 
-pub(super) fn run_workspace_picker_on_terminal(
+pub(crate) fn run(
     terminal: &mut crate::tui::terminal::Tui,
-    all_sessions: Vec<WorkspaceSession>,
+    sources: Vec<WorkspaceSource>,
+    mut source_states: Vec<SourceLoadState>,
+    selected_sources: Vec<bool>,
+    cwd: PathBuf,
     initial_focus: WorkspaceFocus,
 ) -> Result<WorkspacePickedContent> {
+    debug_assert_eq!(sources.len(), selected_sources.len());
+    debug_assert_eq!(sources.len(), source_states.len());
+    let mut selected_sources = selected_sources;
     let mut session_state = ListState::default();
     let mut source_state = ListState::default();
     let mut dialogue_state = ListState::default();
     let mut help_state = ListState::default();
     help_state.select(Some(0));
     let mut focus = initial_focus;
-    let sources = workspace_sources(&all_sessions);
-    let mut selected_sources = vec![true; sources.len()];
-    let mut sessions = workspace_sessions_for_sources(&all_sessions, &sources, &selected_sources);
+    // Caller owns the selection mask; only pad if lengths drifted (shouldn't).
+    if selected_sources.len() != sources.len() {
+        selected_sources.resize(sources.len(), false);
+    }
+    if source_states.len() != sources.len() {
+        source_states.resize(sources.len(), SourceLoadState::Idle);
+    }
+    ensure_sources_loaded(&sources, &selected_sources, &mut source_states, &cwd)?;
+    let mut all_sessions = collect_ready_sessions(&sources, &selected_sources, &source_states);
+    let mut sessions = all_sessions.clone();
     clamp_list_state(&mut source_state, sources.len());
     clamp_list_state(&mut session_state, sessions.len());
     clamp_list_state(&mut dialogue_state, 0);
@@ -76,7 +92,8 @@ pub(super) fn run_workspace_picker_on_terminal(
     let mut line_filter_error: Option<String> = None;
     let mut fullscreen = None;
     let mut visual_select_mode = None;
-    let search_index = WorkspaceSearchIndex::new(&all_sessions);
+    let mut search_index = WorkspaceSearchIndex::new(&all_sessions);
+    let mut status_message: Option<String> = None;
 
     loop {
         if search_dirty {
@@ -91,7 +108,7 @@ pub(super) fn run_workspace_picker_on_terminal(
         sessions = if search_has_query {
             search_output.sessions.clone()
         } else {
-            workspace_sessions_for_sources(&all_sessions, &sources, &selected_sources)
+            all_sessions.clone()
         };
         if selected_sessions.len() != sessions.len() {
             selected_sessions.clear();
@@ -174,12 +191,18 @@ pub(super) fn run_workspace_picker_on_terminal(
             dialogue_idx,
         );
 
+        let source_markers = source_states
+            .iter()
+            .map(SourceLoadState::marker)
+            .collect::<Vec<_>>();
         terminal.draw(|frame| {
             render_workspace(
                 frame,
                 WorkspaceView {
                     sources: &sources,
                     selected_sources: &selected_sources,
+                    source_markers: &source_markers,
+                    status_message: status_message.as_deref(),
                     source_state: &source_state,
                     sessions: &sessions,
                     selected_sessions: &selected_sessions,
@@ -575,6 +598,16 @@ pub(super) fn run_workspace_picker_on_terminal(
                             &mut selected_sources,
                             WorkspaceSourceSelection::All,
                         );
+                        reload_selected_sources(
+                            &sources,
+                            &selected_sources,
+                            &mut source_states,
+                            &cwd,
+                            &mut all_sessions,
+                            &mut search_index,
+                            &mut search_dirty,
+                            &mut status_message,
+                        )?;
                         reset_workspace_after_source_change(
                             &mut session_state,
                             &mut selected_sessions,
@@ -590,6 +623,16 @@ pub(super) fn run_workspace_picker_on_terminal(
                             &mut selected_sources,
                             WorkspaceSourceSelection::Agents,
                         );
+                        reload_selected_sources(
+                            &sources,
+                            &selected_sources,
+                            &mut source_states,
+                            &cwd,
+                            &mut all_sessions,
+                            &mut search_index,
+                            &mut search_dirty,
+                            &mut status_message,
+                        )?;
                         reset_workspace_after_source_change(
                             &mut session_state,
                             &mut selected_sessions,
@@ -605,6 +648,16 @@ pub(super) fn run_workspace_picker_on_terminal(
                             &mut selected_sources,
                             WorkspaceSourceSelection::Terminal,
                         );
+                        reload_selected_sources(
+                            &sources,
+                            &selected_sources,
+                            &mut source_states,
+                            &cwd,
+                            &mut all_sessions,
+                            &mut search_index,
+                            &mut search_dirty,
+                            &mut status_message,
+                        )?;
                         reset_workspace_after_source_change(
                             &mut session_state,
                             &mut selected_sessions,
@@ -739,6 +792,16 @@ pub(super) fn run_workspace_picker_on_terminal(
                             if let Some(selected) = selected_sources.get_mut(source_idx) {
                                 *selected = !*selected;
                             }
+                            reload_selected_sources(
+                                &sources,
+                                &selected_sources,
+                                &mut source_states,
+                                &cwd,
+                                &mut all_sessions,
+                                &mut search_index,
+                                &mut search_dirty,
+                                &mut status_message,
+                            )?;
                             reset_workspace_after_source_change(
                                 &mut session_state,
                                 &mut selected_sessions,
@@ -1308,14 +1371,27 @@ fn open_link_target(target: &str) -> Result<()> {
     Ok(())
 }
 
-fn workspace_sources(sessions: &[WorkspaceSession]) -> Vec<WorkspaceSource> {
-    let mut sources = Vec::new();
-    for session in sessions {
-        if !sources.contains(&session.source) {
-            sources.push(session.source.clone());
-        }
-    }
-    sources
+#[allow(clippy::too_many_arguments)]
+fn reload_selected_sources(
+    sources: &[WorkspaceSource],
+    selected_sources: &[bool],
+    source_states: &mut [SourceLoadState],
+    cwd: &std::path::Path,
+    all_sessions: &mut Vec<WorkspaceSession>,
+    search_index: &mut WorkspaceSearchIndex,
+    search_dirty: &mut bool,
+    status_message: &mut Option<String>,
+) -> Result<()> {
+    ensure_sources_loaded(sources, selected_sources, source_states, cwd)?;
+    *all_sessions = collect_ready_sessions(sources, selected_sources, source_states);
+    *search_index = WorkspaceSearchIndex::new(all_sessions);
+    *search_dirty = true;
+    *status_message = source_states.iter().zip(sources.iter()).find_map(|(state, source)| {
+        state
+            .error_message()
+            .map(|message| format!("{}: {message}", source.label()))
+    });
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1802,27 +1878,6 @@ fn apply_dialogue_range_selection(
     } else {
         *range_anchor = Some(dialogue_idx);
     }
-}
-
-fn workspace_sessions_for_sources(
-    all_sessions: &[WorkspaceSession],
-    sources: &[WorkspaceSource],
-    selected_sources: &[bool],
-) -> Vec<WorkspaceSession> {
-    let mut sessions = all_sessions
-        .iter()
-        .filter(|session| {
-            sources
-                .iter()
-                .position(|source| *source == session.source)
-                .and_then(|idx| selected_sources.get(idx))
-                .copied()
-                .unwrap_or(false)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    sessions.sort_by_key(|s| std::cmp::Reverse(s.modified));
-    sessions
 }
 
 #[derive(Clone, Copy)]
@@ -2917,7 +2972,7 @@ mod tests {
             plain,
             0,
         );
-        let pair = crate::commands::capture::copy::record_text_to_pair(
+        let pair = crate::commands::browse::text::record_text_to_pair(
             record.copy_text(sivtr_core::record::RecordTextMode::Combined, false),
         );
         WorkspaceDialogue {
