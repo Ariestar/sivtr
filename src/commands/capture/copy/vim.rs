@@ -1,8 +1,12 @@
 use anyhow::{Context, Result};
 use serde::Serialize;
 use std::io::Write;
+use std::path::Path;
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+
+const TEMP_CLEANUP_ATTEMPTS: usize = 3;
+const TEMP_CLEANUP_RETRY_DELAY: Duration = Duration::from_millis(50);
 
 #[derive(Clone, Debug)]
 pub(super) struct VimView {
@@ -26,53 +30,110 @@ pub(super) struct VimBlock {
 
 pub(super) fn open_vim_view(view: &VimView) -> Result<()> {
     let editor = resolve_vim_editor()?;
-    let dir = std::env::temp_dir();
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or_default();
-    let content_path = dir.join(format!("sivtr-view-{}-{nonce}.txt", std::process::id()));
-    let vimrc_path = dir.join(format!("sivtr-view-{}-{nonce}.vim", std::process::id()));
-    let blocks_path = dir.join(format!(
-        "sivtr-view-{}-{nonce}.blocks.json",
-        std::process::id()
-    ));
+    // A securely randomized directory prevents predictable-name collisions and is deleted on
+    // every return path, including write, spawn, and non-zero-exit failures.
+    let temp_dir = tempfile::Builder::new()
+        .prefix("sivtr-view-")
+        .tempdir()
+        .context("Failed to create temporary Vim view directory")?;
+    let content_path = temp_dir.path().join("content.txt");
+    let vimrc_path = temp_dir.path().join("view.vim");
+    let blocks_path = temp_dir.path().join("blocks.json");
 
-    std::fs::write(&content_path, &view.raw).context("Failed to write Vim view file")?;
-    let blocks_json =
-        serde_json::to_string(&view.blocks).context("Failed to encode Vim block data")?;
-    std::fs::write(&blocks_path, blocks_json).context("Failed to write Vim block data")?;
-    write_vimrc(&vimrc_path, &blocks_path)?;
+    let operation = (|| -> Result<()> {
+        std::fs::write(&content_path, &view.raw).context("Failed to write Vim view file")?;
+        let blocks_json =
+            serde_json::to_string(&view.blocks).context("Failed to encode Vim block data")?;
+        std::fs::write(&blocks_path, blocks_json).context("Failed to write Vim block data")?;
+        write_vimrc(&vimrc_path, &blocks_path)?;
 
-    let parts: Vec<&str> = editor.split_whitespace().collect();
-    let (program, extra_args) = parts
-        .split_first()
-        .ok_or_else(|| anyhow::anyhow!("Empty Vim editor command"))?;
+        let (program, extra_args) = sivtr_core::export::editor::parse_editor_command(&editor)?;
 
-    let status = Command::new(program)
-        .args(extra_args)
-        .arg("-u")
-        .arg(&vimrc_path)
-        .arg("-n")
-        .arg("-R")
-        .arg(&content_path)
-        .status()
-        .with_context(|| format!("Failed to launch Vim editor `{editor}`"))?;
+        let status = Command::new(&program)
+            .args(&extra_args)
+            .arg("-u")
+            .arg(&vimrc_path)
+            .arg("-n")
+            .arg("-R")
+            .arg(&content_path)
+            .status()
+            .with_context(|| format!("Failed to launch Vim editor `{editor}`"))?;
 
-    let _ = std::fs::remove_file(&content_path);
-    let _ = std::fs::remove_file(&vimrc_path);
-    let _ = std::fs::remove_file(&blocks_path);
+        if !status.success() {
+            anyhow::bail!("Vim editor `{editor}` exited with {status}");
+        }
+        Ok(())
+    })();
+    let cleanup = cleanup_temp_dir(temp_dir);
 
-    if !status.success() {
-        anyhow::bail!("Vim editor `{editor}` exited with {status}");
+    finish_vim_view(operation, cleanup)
+}
+
+fn cleanup_temp_dir(temp_dir: tempfile::TempDir) -> Result<()> {
+    let path = temp_dir.path().to_path_buf();
+    let cleanup = remove_dir_all_with_retry(
+        &path,
+        TEMP_CLEANUP_ATTEMPTS,
+        TEMP_CLEANUP_RETRY_DELAY,
+        |path| std::fs::remove_dir_all(path),
+    );
+    // Keep TempDir's destructor as a final best-effort attempt if all reported retries fail.
+    drop(temp_dir);
+    if cleanup.is_err() && matches!(path.try_exists(), Ok(false)) {
+        return Ok(());
     }
-    Ok(())
+    cleanup.with_context(|| {
+        format!(
+            "Failed to securely remove temporary Vim view files from {}",
+            path.display()
+        )
+    })
+}
+
+fn remove_dir_all_with_retry(
+    path: &Path,
+    attempts: usize,
+    retry_delay: Duration,
+    mut remove: impl FnMut(&Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    if attempts == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "cleanup attempts must be greater than zero",
+        ));
+    }
+    let mut last_error = None;
+
+    for attempt in 0..attempts {
+        match remove(path) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => last_error = Some(error),
+        }
+
+        if attempt + 1 < attempts {
+            std::thread::sleep(retry_delay);
+        }
+    }
+
+    Err(last_error.expect("cleanup attempts must be greater than zero"))
+}
+
+fn finish_vim_view(operation: Result<()>, cleanup: Result<()>) -> Result<()> {
+    match (operation, cleanup) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Err(error), Err(cleanup_error)) => Err(anyhow::anyhow!(
+            "{error:#}; additionally failed to remove temporary Vim view files: {cleanup_error:#}"
+        )),
+    }
 }
 
 fn resolve_vim_editor() -> Result<String> {
     let config = sivtr_core::config::SivtrConfig::load().unwrap_or_default();
-    if is_vim_command(&config.editor.command) {
-        return Ok(config.editor.command);
+    if let Some(editor) = resolve_configured_vim_editor(&config.editor.command)? {
+        return Ok(editor);
     }
 
     for candidate in ["nvim", "vim", "vi"] {
@@ -84,10 +145,24 @@ fn resolve_vim_editor() -> Result<String> {
     anyhow::bail!("No Vim-compatible editor found. Set `editor.command` to nvim/vim/vi.")
 }
 
+fn resolve_configured_vim_editor(command: &str) -> Result<Option<String>> {
+    if command.is_empty() {
+        return Ok(None);
+    }
+
+    let (program, _) = sivtr_core::export::editor::parse_editor_command(command)?;
+    Ok(is_vim_program(&program).then(|| command.to_string()))
+}
+
+#[cfg(test)]
 pub(super) fn is_vim_command(command: &str) -> bool {
-    let Some(program) = command.split_whitespace().next() else {
+    let Ok((program, _)) = sivtr_core::export::editor::parse_editor_command(command) else {
         return false;
     };
+    is_vim_program(&program)
+}
+
+fn is_vim_program(program: &str) -> bool {
     let name = std::path::Path::new(program)
         .file_stem()
         .and_then(|name| name.to_str())
@@ -224,4 +299,103 @@ autocmd VimEnter * echo "sivtr: [[/]] jump blocks, myy/myi/myo/myc copy, mvv/mvi
     file.write_all(script.as_bytes())
         .context("Failed to write temporary Vim config")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        finish_vim_view, is_vim_command, remove_dir_all_with_retry, resolve_configured_vim_editor,
+    };
+    use std::path::Path;
+    use std::time::Duration;
+
+    #[test]
+    fn detects_quoted_windows_vim_path() {
+        assert!(is_vim_command(
+            r#""C:\Program Files\Neovim\bin\nvim.exe" --clean"#
+        ));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn rejects_invalid_configured_vim_command_instead_of_falling_back() {
+        let error = resolve_configured_vim_editor("nvim --cmd 'set nowrap")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("Invalid editor command quoting"));
+    }
+
+    #[test]
+    fn valid_non_vim_command_can_still_fall_back() {
+        assert_eq!(resolve_configured_vim_editor("code --wait").unwrap(), None);
+    }
+
+    #[test]
+    fn retries_temporary_directory_cleanup_before_succeeding() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().to_path_buf();
+        let mut calls = 0;
+
+        remove_dir_all_with_retry(&path, 3, Duration::ZERO, |path| {
+            calls += 1;
+            if calls < 3 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "temporary lock",
+                ));
+            }
+            std::fs::remove_dir_all(path)
+        })
+        .unwrap();
+
+        assert_eq!(calls, 3);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn temporary_directory_cleanup_retries_are_bounded() {
+        let mut calls = 0;
+        let error = remove_dir_all_with_retry(Path::new("unused"), 3, Duration::ZERO, |_| {
+            calls += 1;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "still locked",
+            ))
+        })
+        .unwrap_err();
+
+        assert_eq!(calls, 3);
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn zero_cleanup_attempts_are_rejected_without_reporting_success() {
+        let mut calls = 0;
+        let error = remove_dir_all_with_retry(Path::new("unused"), 0, Duration::ZERO, |_| {
+            calls += 1;
+            Ok(())
+        })
+        .unwrap_err();
+
+        assert_eq!(calls, 0);
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(
+            error.to_string(),
+            "cleanup attempts must be greater than zero"
+        );
+    }
+
+    #[test]
+    fn reports_both_editor_and_sensitive_temp_cleanup_failures() {
+        let error = finish_vim_view(
+            Err(anyhow::anyhow!("editor failed")),
+            Err(anyhow::anyhow!("cleanup failed")),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("editor failed"));
+        assert!(error.contains("cleanup failed"));
+    }
 }
