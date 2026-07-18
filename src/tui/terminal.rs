@@ -28,7 +28,9 @@ pub struct Tui {
     terminal: InnerTui,
     drawing_active: bool,
     state: TerminalState,
+    #[cfg(windows)]
     previous_frame_had_wide_cells: bool,
+    #[cfg(windows)]
     synchronized_updates_supported: bool,
 }
 
@@ -79,6 +81,7 @@ pub fn init() -> Result<Tui> {
         Ok(modes) => setup.state.modes = Some(modes),
         Err(error) => return setup.fail(error),
     }
+    #[cfg(windows)]
     let synchronized_updates_supported = setup
         .state
         .modes
@@ -116,7 +119,9 @@ pub fn init() -> Result<Tui> {
         terminal,
         drawing_active: true,
         state: setup.commit(),
+        #[cfg(windows)]
         previous_frame_had_wide_cells: false,
+        #[cfg(windows)]
         synchronized_updates_supported,
     })
 }
@@ -178,6 +183,7 @@ where
     }
 }
 
+#[cfg(any(windows, test))]
 fn synchronize_terminal_size<B, F>(
     terminal: &mut Terminal<B>,
     create_backend: F,
@@ -740,10 +746,6 @@ impl TerminalModes {
 
     fn restore_output(&mut self) -> Result<()> {
         Ok(())
-    }
-
-    fn enable_virtual_terminal_processing(&self) -> bool {
-        false
     }
 
     fn is_restored(&self) -> bool {
