@@ -410,14 +410,14 @@ impl TerminalState {
 
 struct TerminalSetup {
     state: TerminalState,
-    armed: bool,
+    retry_cleanup_on_drop: bool,
 }
 
 impl Default for TerminalSetup {
     fn default() -> Self {
         Self {
             state: TerminalState::default(),
-            armed: true,
+            retry_cleanup_on_drop: true,
         }
     }
 }
@@ -425,21 +425,21 @@ impl Default for TerminalSetup {
 impl TerminalSetup {
     fn fail<T>(&mut self, error: anyhow::Error) -> Result<T> {
         let cleanup = rollback_setup(&mut self.state);
-        if !self.state.has_pending_cleanup() {
-            self.armed = false;
-        }
+        // Successful rollback steps clear their own state flags. Keep Drop armed only for failed
+        // steps so it makes one final best-effort retry instead of abandoning terminal state.
+        self.retry_cleanup_on_drop = self.state.has_pending_cleanup();
         setup_failure(error, cleanup)
     }
 
     fn commit(mut self) -> TerminalState {
-        self.armed = false;
+        self.retry_cleanup_on_drop = false;
         mem::take(&mut self.state)
     }
 }
 
 impl Drop for TerminalSetup {
     fn drop(&mut self) {
-        if self.armed && self.state.has_pending_cleanup() {
+        if self.retry_cleanup_on_drop && self.state.has_pending_cleanup() {
             let _ = rollback_setup(&mut self.state);
         }
     }
@@ -1036,6 +1036,41 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("failure: still pending"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn setup_failure_keeps_only_pending_cleanup_armed_for_drop_retry() {
+        use winapi::um::handleapi::INVALID_HANDLE_VALUE;
+
+        let mut setup = super::TerminalSetup {
+            state: super::TerminalState {
+                modes: Some(super::TerminalModes {
+                    input_handle: INVALID_HANDLE_VALUE,
+                    input_mode: 0,
+                    output_handle: INVALID_HANDLE_VALUE,
+                    output_mode: 0,
+                    input_restore: super::InputModeRestoreState::pending(),
+                    output_pending: false,
+                }),
+                ..super::TerminalState::default()
+            },
+            retry_cleanup_on_drop: true,
+        };
+
+        let error = setup
+            .fail::<()>(anyhow::anyhow!("setup failed"))
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("setup failed"));
+        assert!(error.contains("restore console input mode"));
+        assert!(setup.retry_cleanup_on_drop);
+        assert!(setup.state.has_pending_cleanup());
+
+        // Avoid a second Win32 call from this test's own Drop; the assertion above verifies that
+        // production Drop would perform the intended final best-effort retry.
+        setup.retry_cleanup_on_drop = false;
     }
 
     #[cfg(windows)]
