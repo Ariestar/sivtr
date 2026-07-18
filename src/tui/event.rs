@@ -11,11 +11,38 @@ use sivtr_core::selection::SelectionMode;
 
 const LINE_NUMBER_WIDTH: usize = 6;
 
+/// Read the next event that can affect the rendered interface.
+///
+/// Windows Terminal reports passive pointer movement while mouse capture is active. Those events
+/// do not change application state, so returning them would only cause unnecessary redraws.
+pub fn read_interaction() -> Result<Event> {
+    loop {
+        let event = event::read()?;
+        if !is_passive_mouse_motion(&event) {
+            return Ok(event);
+        }
+    }
+}
+
+fn is_passive_mouse_motion(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            ..
+        })
+    )
+}
+
 /// Handle a single crossterm event, updating the App state.
 pub fn handle_event(app: &mut App) -> Result<()> {
-    match event::read()? {
+    match read_interaction()? {
         Event::Key(key) => {
             if key.kind != KeyEventKind::Press {
+                return Ok(());
+            }
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                app.should_quit = true;
                 return Ok(());
             }
             match app.mode {
@@ -303,4 +330,36 @@ fn current_anchor(app: &App) -> Cursor {
         .as_ref()
         .map(|selection| selection.anchor)
         .unwrap_or(app.buffer.cursor)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mouse_event(kind: MouseEventKind) -> Event {
+        Event::Mouse(MouseEvent {
+            kind,
+            column: 12,
+            row: 8,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    #[test]
+    fn passive_mouse_movement_does_not_request_a_redraw() {
+        assert!(is_passive_mouse_motion(&mouse_event(MouseEventKind::Moved)));
+    }
+
+    #[test]
+    fn mouse_actions_still_reach_the_interface() {
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+            MouseEventKind::ScrollUp,
+            MouseEventKind::ScrollDown,
+        ] {
+            assert!(!is_passive_mouse_motion(&mouse_event(kind)));
+        }
+    }
 }

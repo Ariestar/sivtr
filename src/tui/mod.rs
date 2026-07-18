@@ -8,3 +8,6 @@ pub mod theme;
 pub mod views;
 pub mod workspace;
 pub mod workspace_search;
+
+#[cfg(all(test, windows))]
+mod conpty_tests;

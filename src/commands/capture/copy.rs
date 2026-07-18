@@ -19,7 +19,7 @@ use sivtr_core::session::{self, SessionEntry};
 mod vim;
 mod workspace_picker;
 
-use crate::tui::terminal::{init as init_tui, restore as restore_tui};
+use crate::tui::terminal::{finish as finish_tui, init as init_tui};
 use crate::tui::workspace::{
     TextPair, WorkspaceCopyParts, WorkspaceFocus, WorkspacePickedContent, WorkspaceSession,
     WorkspaceSessionLoad, WorkspaceSource,
@@ -261,8 +261,7 @@ pub fn execute_agent(request: AgentCopyRequest<'_>) -> Result<()> {
             vec![choice],
             WorkspaceFocus::Dialogues,
         );
-        restore_tui(&mut terminal)?;
-        let picked = result?;
+        let picked = finish_tui(&mut terminal, result)?;
         return finish_selected_units_copy(
             &picked.units,
             picked.selection,
@@ -354,8 +353,7 @@ pub fn execute_agent_picker(request: AgentPickerRequest<'_>) -> Result<()> {
     } else {
         pick_agent_sessions_content_on_terminal(&sources, &mut terminal, request.selection_mode)
     };
-    restore_tui(&mut terminal)?;
-    let picked = result?;
+    let picked = finish_tui(&mut terminal, result)?;
     match picked.source {
         WorkspaceSource::Agent(provider) => finish_selected_units_copy(
             &picked.units,
@@ -387,8 +385,7 @@ fn execute_agent_session_pick(
     let mut terminal = init_tui()?;
     let result =
         pick_agent_session_content_on_terminal(source, &mut terminal, request.selection_mode);
-    restore_tui(&mut terminal)?;
-    let picked = result?;
+    let picked = finish_tui(&mut terminal, result)?;
     finish_selected_units_copy(
         &picked.units,
         picked.selection,
@@ -413,8 +410,7 @@ fn execute_current_agent_session_pick(
         path,
         request.selection_mode,
     );
-    restore_tui(&mut terminal)?;
-    let picked = result?;
+    let picked = finish_tui(&mut terminal, result)?;
     finish_selected_units_copy(
         &picked.units,
         picked.selection,
@@ -745,8 +741,7 @@ fn execute_terminal_workspace_pick(
     let mut terminal = init_tui()?;
     let result =
         run_workspace_picker_on_terminal(&mut terminal, vec![session], WorkspaceFocus::Dialogues);
-    restore_tui(&mut terminal)?;
-    let picked = result?;
+    let picked = finish_tui(&mut terminal, result)?;
 
     finish_selected_units_copy(
         &picked.units,

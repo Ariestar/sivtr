@@ -1,7 +1,5 @@
 use anyhow::Result;
-use crossterm::event::{
-    self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
-};
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::widgets::ListState;
 use std::process::Command;
 
@@ -11,7 +9,8 @@ use crate::tui::content_view::{
     content_view_line_count, line_count, selected_content_text, ContentPosition, ContentSelection,
     ContentSelectionKind, ContentViewMode,
 };
-use crate::tui::terminal::{init as init_tui, restore as restore_tui};
+use crate::tui::event::read_interaction;
+use crate::tui::terminal::{draw as draw_tui, with_suspended};
 use crate::tui::workspace::{
     can_open_dialogue_vim, render_workspace, selected_index, workspace_content_text,
     workspace_help_entries, workspace_hit_test, workspace_layout, WorkspaceDialogue,
@@ -187,7 +186,7 @@ pub(super) fn run_workspace_picker_on_terminal(
             dialogue_idx,
         );
 
-        terminal.draw(|frame| {
+        draw_tui(terminal, |frame| {
             render_workspace(
                 frame,
                 WorkspaceView {
@@ -233,10 +232,13 @@ pub(super) fn run_workspace_picker_on_terminal(
             terminal.show_cursor()?;
         }
 
-        match event::read()? {
+        match read_interaction()? {
             Event::Key(key) => {
                 if key.kind != KeyEventKind::Press {
                     continue;
+                }
+                if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    anyhow::bail!(PICK_CANCELLED_MESSAGE);
                 }
 
                 if let Some(mode) = visual_select_mode.as_mut() {
@@ -869,9 +871,7 @@ pub(super) fn run_workspace_picker_on_terminal(
                             content_mode,
                             active_content_at,
                         ));
-                        restore_tui(terminal)?;
-                        open_vim_view(&view)?;
-                        *terminal = init_tui()?;
+                        with_suspended(terminal, || open_vim_view(&view))??;
                     }
                     KeyCode::Enter => match focus {
                         WorkspaceFocus::Source => {
@@ -1625,9 +1625,7 @@ fn apply_workspace_help_action(
                 *content_mode,
                 content_at,
             ));
-            restore_tui(terminal)?;
-            open_vim_view(&view)?;
-            *terminal = init_tui()?;
+            with_suspended(terminal, || open_vim_view(&view))??;
         }
         WorkspaceHelpAction::ScrollDown if *focus == WorkspaceFocus::Content => {
             *content_scroll = (*content_scroll).saturating_add(10);
