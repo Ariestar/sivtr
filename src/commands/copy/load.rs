@@ -1,13 +1,16 @@
-//! Load dialogues for a copy plan from the shared workset / session path.
+//! Load dialogues for a copy plan exclusively via workset/query.
+//!
+//! Default address (omitted) resolves to the current terminal session source
+//! `terminal/<session_id>`, same read path as `sivtr s terminal/...`.
 
 use anyhow::{Context, Result};
 use sivtr_core::capture::scrollback;
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
-use sivtr_core::session;
+use sivtr_core::workspace::terminal_session_id_from_path;
 
-use crate::commands::select::resolve_selector;
 use crate::commands::memory::filter::Filter;
 use crate::commands::memory::workset;
+use crate::commands::select::resolve_selector;
 use crate::output;
 
 use super::plan::{CopyPlan, DialogueSelect, Projection};
@@ -27,51 +30,48 @@ pub(super) fn load_for_plan(plan: &CopyPlan) -> Result<Option<LoadedCopy>> {
         .clone()
         .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
 
-    match plan.address.as_deref() {
-        None => load_current_terminal(plan),
-        Some(address) => load_address(address, plan, &cwd),
-    }
+    let address = match plan.address.as_deref() {
+        Some(address) => address.to_string(),
+        None => match current_terminal_source()? {
+            Some(source) => source,
+            None => {
+                warn_no_session_log();
+                return Ok(None);
+            }
+        },
+    };
+
+    load_address(&address, plan, &cwd)
 }
 
-fn load_current_terminal(plan: &CopyPlan) -> Result<Option<LoadedCopy>> {
+/// Current shell session as a workset source: `terminal/<session_id>`.
+pub(crate) fn current_terminal_source() -> Result<Option<String>> {
     let Some(log_path) = scrollback::session_log_path()? else {
-        warn_no_session_log();
         return Ok(None);
     };
     if !log_path.exists() {
-        warn_no_session_log();
         return Ok(None);
     }
+    let session_id = terminal_session_id_from_path(&log_path);
+    Ok(Some(format!("terminal/{session_id}")))
+}
 
-    let entries = session::load_entries(&log_path).context("Failed to read session log")?;
-    if entries.is_empty() {
-        output::warning("no commands recorded yet");
-        output::hint("run a few commands first, then try `sivtr copy` again");
-        return Ok(None);
+/// Load dialogues for a source via workset, oldest → newest within the active session.
+pub(crate) fn load_dialogues(
+    source: &str,
+    cwd: Option<&std::path::Path>,
+) -> Result<Vec<WorkRecord>> {
+    let expanded = sivtr_core::record::expand_source(source)?;
+    let set = workset::query(&expanded, Filter::none(), cwd)?;
+    if set.records.is_empty() {
+        return Ok(Vec::new());
     }
 
-    let records: Vec<WorkRecord> = entries
-        .iter()
-        .enumerate()
-        .filter_map(|(index, entry)| WorkRecord::terminal(entry, &log_path, index))
-        .collect();
-    if records.is_empty() {
-        output::warning("no commands recorded yet");
-        output::hint("run a command first, then try `sivtr copy` again");
-        return Ok(None);
-    }
-
-    let selected = select_relative(&records, &plan.dialogues)?;
-    if selected.is_empty() {
-        output::warning("nothing selected");
-        return Ok(None);
-    }
-
-    Ok(Some(LoadedCopy {
-        records: selected,
-        projection: plan.projection,
-        label: "terminal".to_string(),
-    }))
+    let mut records = set.records;
+    // Oldest → newest so relative select (from end) matches historical terminal semantics.
+    records.sort_by_key(|r| (r.session.id.clone(), r.work_ref.index()));
+    // Bare sources (e.g. `codex`, multi-session terminal) → newest session only.
+    Ok(newest_session_only(records))
 }
 
 fn load_address(address: &str, plan: &CopyPlan, cwd: &std::path::Path) -> Result<Option<LoadedCopy>> {
@@ -82,19 +82,7 @@ fn load_address(address: &str, plan: &CopyPlan, cwd: &std::path::Path) -> Result
         return load_pinned_ref(&expanded, &work_ref, plan, cwd);
     }
 
-    // Source-level address: terminal | codex | desk:codex | provider/session …
-    let set = workset::query(&expanded, Filter::none(), Some(cwd))?;
-    if set.records.is_empty() {
-        output::warning(format!("no records found for `{address}`"));
-        return Ok(None);
-    }
-
-    let mut records = set.records;
-    // Oldest → newest so resolve_selector (from end) matches terminal semantics.
-    records.sort_by_key(|r| (r.session.id.clone(), r.work_ref.index()));
-    // Bare provider sources may span sessions; keep the newest session only.
-    records = newest_session_only(records);
-
+    let records = load_dialogues(&expanded, Some(cwd))?;
     if records.is_empty() {
         output::warning(format!("no records found for `{address}`"));
         return Ok(None);
@@ -119,7 +107,6 @@ fn load_pinned_ref(
     plan: &CopyPlan,
     cwd: &std::path::Path,
 ) -> Result<Option<LoadedCopy>> {
-    // Absolute address: relative dialogue select is not applied.
     if !matches!(plan.dialogues, DialogueSelect::RecentSingle(1)) {
         anyhow::bail!(
             "address `{expanded}` already pins a record; do not pass a relative dialogue selector"

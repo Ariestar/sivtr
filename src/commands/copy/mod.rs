@@ -5,7 +5,7 @@
 //! the current terminal session; default dialogues is `1` (newest).
 
 mod export;
-mod load;
+pub(crate) mod load;
 mod plan;
 mod project;
 
@@ -17,8 +17,6 @@ use sivtr_core::ai::AgentProvider;
 use sivtr_core::record::WorkRecord;
 
 use crate::commands::browse;
-use crate::commands::memory::filter::Filter;
-use crate::commands::memory::workset;
 use crate::output;
 use crate::tui::workspace::{WorkspaceFocus, WorkspaceSession, WorkspaceSource};
 
@@ -82,15 +80,10 @@ fn execute_pick(plan: &CopyPlan) -> Result<()> {
                 .cwd
                 .clone()
                 .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
-            let set = workset::query(&expanded, Filter::none(), Some(&cwd))?;
-            if set.records.is_empty() {
+            let records = load::load_dialogues(&expanded, Some(&cwd))?;
+            if records.is_empty() {
                 output::warning(format!("no records found for `{address}`"));
                 return Ok(());
-            }
-            let mut records = set.records;
-            records.sort_by_key(|r| (r.session.id.clone(), r.work_ref.index()));
-            if let Some(last) = records.last().map(|r| r.session.id.clone()) {
-                records.retain(|r| r.session.id == last);
             }
             let source =
                 session_source_from_records(&records).unwrap_or_else(WorkspaceSource::terminal);
