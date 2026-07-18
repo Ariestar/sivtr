@@ -1,7 +1,7 @@
 //! Workspace browser: source catalog, on-demand load, and TUI picker.
 //!
-//! This is the product surface for bare `sivtr` and pick flows. `copy` only
-//! calls in for selection, then writes the clipboard.
+//! Product surface for bare `sivtr`, hotkey, and `copy --pick`. Returns
+//! [`WorkspacePickedContent`]; callers decide how to export (clipboard, etc.).
 
 mod content;
 mod help;
@@ -16,16 +16,8 @@ pub(crate) use load::{workspace_source_catalog, SourceLoadState};
 pub(crate) use picker::run as run_picker;
 pub(crate) use text::{filter_lines_by_spec, record_text_to_pair, select_lines};
 
-// Test-facing re-exports (copy unit tests + picker tests).
-#[cfg(test)]
-pub use load::sessions_from_records;
-#[cfg(test)]
-pub use text::record_to_copy_parts;
-#[cfg(test)]
-pub use vim::{is_vim_command, vim_single_quote};
-
 use anyhow::{Context, Result};
-use sivtr_core::ai::{AgentProvider, AgentSelection};
+use sivtr_core::ai::AgentProvider;
 
 use crate::tui::terminal::{init as init_tui, restore as restore_tui};
 use crate::tui::workspace::{WorkspaceFocus, WorkspacePickedContent, WorkspaceSource};
@@ -83,14 +75,6 @@ pub fn run_with_sessions(
     );
     restore_tui(&mut terminal)?;
     result
-}
-
-/// Convenience for agent single-provider pick (loads that local source only).
-pub fn run_for_agent(
-    provider: AgentProvider,
-    _selection_mode: AgentSelection,
-) -> Result<WorkspacePickedContent> {
-    run(&[provider], false, WorkspaceFocus::Sessions)
 }
 
 /// Shared cancel sentinel for picker Esc/q.

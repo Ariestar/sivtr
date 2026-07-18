@@ -3,7 +3,7 @@
 use anyhow::Result;
 use crossterm::event::KeyCode;
 
-use crate::commands::capture::command_block_selector::CommandSelection;
+use crate::commands::select::CommandSelection;
 use crate::tui::content_view::{content_view_line_count, line_count, ContentViewMode};
 use crate::tui::workspace::{
     workspace_content_text, WorkspaceDialogue, WorkspacePickedContent, WorkspaceSession,

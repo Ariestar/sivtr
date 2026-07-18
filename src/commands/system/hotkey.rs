@@ -9,8 +9,9 @@ use crate::cli::{
     HotkeyAction, HotkeyCommand, HotkeyPickAgentArgs, HotkeyProviderSelection, HotkeyServeArgs,
     HotkeyStartArgs,
 };
-use crate::commands::capture::copy;
-use sivtr_core::ai::AgentSelection;
+use crate::commands::browse;
+use crate::commands::copy;
+use crate::tui::workspace::WorkspaceFocus;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct HotkeyState {
@@ -57,21 +58,16 @@ pub fn pick_agent(args: &HotkeyPickAgentArgs) -> Result<()> {
 
     let result = std::panic::catch_unwind(|| {
         let providers = args.provider.providers();
-        copy::execute_agent_picker(copy::AgentPickerRequest {
-            providers: &providers,
-            pick_current_session: args.current_session,
-            select_remotes: args.all,
-            selection_mode: AgentSelection::LastTurn,
-            print_full: false,
-            regex: None,
-            lines: None,
-        })
+        // Hotkey owns the browse product surface; copy only exports the pick.
+        let _ = args.current_session;
+        let picked = browse::run(&providers, args.all, WorkspaceFocus::Sessions)?;
+        copy::export_picked(&picked, false, None, None, false)
     });
 
     match result {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
-            if !copy::is_pick_cancelled(&error) {
+            if !browse::is_pick_cancelled(&error) {
                 show_pick_error_and_wait(&error);
             }
         }

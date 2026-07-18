@@ -2,10 +2,57 @@ use anyhow::{Context, Result};
 use crossterm::terminal;
 use similar::{ChangeTag, TextDiff};
 use sivtr_core::capture::scrollback;
-use sivtr_core::session;
+use sivtr_core::session::{self, SessionEntry};
 
-use crate::command_blocks::{CommandBlockTextMode, ParsedCommandBlock};
-use crate::commands::capture::command_block_selector::{parse_selector, resolve_selector};
+use crate::commands::select::{parse_selector, resolve_selector};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffTextMode {
+    Output,
+    Block,
+    Input,
+    Command,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedCommandBlock {
+    input_with_prompt: String,
+    input_without_prompt: String,
+    output: String,
+    command: String,
+}
+
+impl ParsedCommandBlock {
+    fn from_session_entry(entry: &SessionEntry) -> Self {
+        let input_with_prompt = entry.render_input();
+        let input_without_prompt = entry.command.replace("\r\n", "\n").trim_end().to_string();
+        let output = entry
+            .output
+            .replace("\r\n", "\n")
+            .trim_end_matches('\n')
+            .to_string();
+        Self {
+            input_with_prompt,
+            input_without_prompt: input_without_prompt.clone(),
+            output,
+            command: input_without_prompt,
+        }
+    }
+
+    fn text_for_mode(&self, mode: DiffTextMode) -> String {
+        match mode {
+            DiffTextMode::Output => self.output.clone(),
+            DiffTextMode::Block => match (self.input_with_prompt.is_empty(), self.output.is_empty()) {
+                (false, false) => format!("{}\n{}", self.input_with_prompt, self.output),
+                (false, true) => self.input_with_prompt.clone(),
+                (true, false) => self.output.clone(),
+                (true, true) => String::new(),
+            },
+            DiffTextMode::Input => self.input_with_prompt.clone(),
+            DiffTextMode::Command => self.command.clone(),
+        }
+    }
+}
 
 const MIN_SIDE_BY_SIDE_WIDTH: usize = 20;
 const SIDE_BY_SIDE_OVERHEAD: usize = 7;
@@ -14,7 +61,7 @@ const SIDE_BY_SIDE_OVERHEAD: usize = 7;
 pub struct DiffRequest<'a> {
     pub left_selector: &'a str,
     pub right_selector: &'a str,
-    pub mode: CommandBlockTextMode,
+    pub mode: DiffTextMode,
     pub side_by_side: bool,
 }
 
@@ -70,7 +117,7 @@ pub fn execute(request: DiffRequest<'_>) -> Result<()> {
 
 fn resolve_single_selector(selector: &str, total: usize) -> Result<usize> {
     let parsed = parse_selector(selector)?;
-    let indices = resolve_selector(parsed, total)?;
+    let indices = resolve_selector(&parsed, total)?;
     match indices.as_slice() {
         [idx] => Ok(*idx),
         [] => anyhow::bail!("Selector `{selector}` did not match any command block."),

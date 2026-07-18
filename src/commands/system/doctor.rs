@@ -231,7 +231,7 @@ impl Report {
             });
         } else if fix {
             let shell = detect_current_shell();
-            match crate::commands::capture::init::execute(&shell) {
+            match crate::commands::terminal::init::execute(&shell) {
                 Ok(()) => self.add(Check {
                     name: "shell_hooks",
                     label: "shell hooks",

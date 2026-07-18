@@ -26,23 +26,8 @@ pub struct SivtrConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GeneralConfig {
-    /// How to open captured output: "tui" or "editor".
-    /// - "tui": open in built-in TUI browser (default)
-    /// - "editor": open directly in external editor
-    pub open_mode: OpenMode,
-    /// Preserve original ANSI colors in TUI display.
+    /// Preserve original ANSI colors in content views when available.
     pub preserve_colors: bool,
-}
-
-/// How sivtr opens captured output.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum OpenMode {
-    /// Built-in TUI browser (default).
-    #[default]
-    Tui,
-    /// Open directly in external editor.
-    Editor,
 }
 
 /// Editor configuration.
@@ -99,7 +84,6 @@ pub struct HotkeyConfig {
 impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
-            open_mode: OpenMode::Tui,
             preserve_colors: true,
         }
     }

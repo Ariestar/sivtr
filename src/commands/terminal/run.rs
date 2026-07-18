@@ -1,15 +1,14 @@
+//! Run a command, capture output, save history, open in editor.
+
 use anyhow::Result;
-use sivtr_core::buffer::Buffer;
 use sivtr_core::capture::subprocess;
-use sivtr_core::config::{OpenMode, SivtrConfig};
+use sivtr_core::config::SivtrConfig;
 use sivtr_core::export::editor;
 use sivtr_core::history::CaptureSource;
-use sivtr_core::parse;
 
-use super::{browse, capture_history};
-use crate::app::App;
+use super::history;
 
-/// Execute a command, capture its output, then open based on config.
+/// Execute a command, capture its output, optionally save history, open editor.
 pub fn execute(command: &str, args: &[String]) -> Result<()> {
     let command_line = render_command_line(command, args);
     eprintln!("sivtr: running `{command_line}`");
@@ -28,7 +27,7 @@ pub fn execute(command: &str, args: &[String]) -> Result<()> {
     }
 
     let config = SivtrConfig::load().unwrap_or_default();
-    if let Err(error) = capture_history::maybe_save_default(
+    if let Err(error) = history::maybe_save_default(
         &config,
         &result.combined,
         Some(command_line.as_str()),
@@ -37,21 +36,10 @@ pub fn execute(command: &str, args: &[String]) -> Result<()> {
         eprintln!("sivtr: failed to save history: {error:#}");
     }
 
-    match config.general.open_mode {
-        OpenMode::Editor => {
-            let ed = editor::resolve_editor_with_config(&config)?;
-            eprintln!("sivtr: opening in {ed}");
-            editor::open_in_editor(&result.combined)?;
-            Ok(())
-        }
-        OpenMode::Tui => {
-            let lines = parse::parse_lines(&result.combined);
-            let buffer = Buffer::new(lines);
-            let mut app = App::new(buffer);
-            app.config = config;
-            browse::run_tui(&mut app, false)
-        }
-    }
+    let ed = editor::resolve_editor_with_config(&config)?;
+    eprintln!("sivtr: opening in {ed}");
+    editor::open_in_editor(&result.combined)?;
+    Ok(())
 }
 
 fn render_command_line(command: &str, args: &[String]) -> String {
@@ -66,8 +54,7 @@ fn quote_shell_token(value: &str) -> String {
     if !value.is_empty() && value.chars().all(is_shell_safe_char) {
         return value.to_string();
     }
-
-    format!("'{}'", value.replace('\'', "'\\''"))
+    format!("'{}'", value.replace('\'', "'\''"))
 }
 
 fn is_shell_safe_char(ch: char) -> bool {
@@ -97,14 +84,12 @@ mod tests {
     fn quotes_arguments_with_spaces() {
         let rendered =
             render_command_line("echo", &["hello world".to_string(), "plain".to_string()]);
-
         assert_eq!(rendered, "echo 'hello world' plain");
     }
 
     #[test]
     fn escapes_single_quotes_inside_arguments() {
         let rendered = render_command_line("printf", &["it's fine".to_string()]);
-
-        assert_eq!(rendered, "printf 'it'\\''s fine'");
+        assert_eq!(rendered, "printf 'it'\''s fine'");
     }
 }

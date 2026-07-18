@@ -1,6 +1,4 @@
-mod app;
 mod cli;
-mod command_blocks;
 mod commands;
 mod mcp;
 mod output;
@@ -8,21 +6,22 @@ mod remote;
 mod tui;
 
 use anyhow::Result;
+use clap::Parser;
 use cli::{
-    AgentCopyArgs, AgentCopyCommand, AgentCopyMode, Commands, CopyArgs, CopyFlagArgs, CopyRefArgs,
-    CopySimpleArgs, CopySubcommand, DiffArgs, HotkeyPickAgentArgs, HotkeyServeArgs,
+    Commands, CopyCommand, CopyFlagArgs, CopyInvocation, CopySubcommand, DiffArgs,
+    HotkeyPickAgentArgs, HotkeyServeArgs,
 };
-use command_blocks::CommandBlockTextMode;
-use commands::capture::copy::{AgentCopyRequest, AgentPickerRequest, CopyMode, CopyRequest};
-use commands::capture::diff::DiffRequest;
-use sivtr_core::ai::{AgentProvider, AgentSelection};
+use commands::copy::{plan_from_cli, CopyFilters, Projection};
+use commands::diff::{DiffRequest, DiffTextMode};
+use tui::workspace::WorkspaceFocus;
 
+use sivtr_core::ai::AgentProvider;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
-        Err(error) if commands::capture::copy::is_pick_cancelled(&error) => ExitCode::SUCCESS,
+        Err(error) if commands::browse::is_pick_cancelled(&error) => ExitCode::SUCCESS,
         Err(error) => {
             output::error(format!("{error:#}"));
             ExitCode::FAILURE
@@ -37,13 +36,13 @@ fn run() -> Result<()> {
 
     match cli.command {
         Some(Commands::Run { command, args }) => {
-            commands::capture::run::execute(&command, &args)?;
+            commands::terminal::run::execute(&command, &args)?;
         }
         Some(Commands::Pipe) => {
-            commands::capture::pipe::execute()?;
+            commands::terminal::pipe::execute()?;
         }
         Some(Commands::Import) => {
-            commands::capture::import::execute()?;
+            commands::terminal::import::execute()?;
         }
         Some(Commands::History(hist_cmd)) => {
             commands::system::history::execute(hist_cmd)?;
@@ -103,38 +102,12 @@ fn run() -> Result<()> {
             commands::system::setup::execute()?;
         }
         Some(Commands::Init { target }) => {
-            commands::capture::init::execute(&target)?;
+            commands::terminal::init::execute(&target)?;
         }
-        Some(Commands::Copy(args)) => match args.mode {
-            Some(CopySubcommand::In(sub_args)) => run_copy(&sub_args, CopyMode::InputOnly, true)?,
-            Some(CopySubcommand::Out(sub_args)) => {
-                run_copy_simple(&sub_args, CopyMode::OutputOnly, false)?
-            }
-            Some(CopySubcommand::Cmd(sub_args)) => {
-                run_copy_simple(&sub_args, CopyMode::CommandOnly, false)?
-            }
-            Some(CopySubcommand::Ref(sub_args)) => run_copy_ref(&sub_args)?,
-            Some(CopySubcommand::External(tokens)) => match cli::resolve_copy_external(&tokens)
-                .map_err(|message| anyhow::anyhow!(message))?
-            {
-                cli::CopyExternal::Agent { provider, command } => {
-                    run_agent_copy(provider, command)?;
-                }
-                cli::CopyExternal::Terminal {
-                    selector,
-                    trailing_flags,
-                } => {
-                    // Parent flags apply when only a selector was given without extra flags;
-                    // merge parent flags with trailing (trailing wins if both set).
-                    let flags = merge_copy_flags(&args.flags, &trailing_flags);
-                    run_terminal_copy(selector.as_deref(), &flags, CopyMode::Both, true)?;
-                }
-            },
-            None => run_terminal_copy(None, &args.flags, CopyMode::Both, true)?,
-        },
-        Some(Commands::Ci(args)) => run_copy(&args, CopyMode::InputOnly, true)?,
-        Some(Commands::Co(args)) => run_copy_simple(&args, CopyMode::OutputOnly, false)?,
-        Some(Commands::Cc(args)) => run_copy_simple(&args, CopyMode::CommandOnly, false)?,
+        Some(Commands::Copy(cmd)) => run_copy_command(*cmd)?,
+        Some(Commands::Ci(inv)) => run_copy_invocation(Projection::Input, &inv)?,
+        Some(Commands::Co(inv)) => run_copy_invocation(Projection::Output, &inv)?,
+        Some(Commands::Cc(inv)) => run_copy_invocation(Projection::Command, &inv)?,
         Some(Commands::Diff(args)) => {
             run_diff(&args)?;
         }
@@ -142,10 +115,10 @@ fn run() -> Result<()> {
             commands::system::version::execute(args.verbose)?;
         }
         Some(Commands::Clear(args)) => {
-            commands::capture::clear::execute(args.all)?;
+            commands::terminal::clear::execute(args.all)?;
         }
         Some(Commands::Flush) => {
-            commands::capture::flush::execute()?;
+            commands::terminal::flush::execute()?;
         }
         Some(Commands::HotkeyServe(args)) => {
             run_hotkey_serve(&args)?;
@@ -158,8 +131,7 @@ fn run() -> Result<()> {
         }
         None => {
             if atty::isnt(atty::Stream::Stdin) {
-                // Piped input: read stdin
-                commands::capture::pipe::execute()?;
+                commands::terminal::pipe::execute()?;
             } else {
                 run_workspace(select_remotes)?;
             }
@@ -174,48 +146,43 @@ fn run_workspace(select_remotes: bool) -> Result<()> {
         .iter()
         .map(|spec| spec.provider)
         .collect::<Vec<_>>();
-    commands::capture::copy::execute_agent_picker(AgentPickerRequest {
-        providers: &providers,
-        pick_current_session: true,
-        select_remotes,
-        selection_mode: AgentSelection::LastTurn,
-        print_full: false,
-        regex: None,
-        lines: None,
-    })
+    let picked = commands::browse::run(&providers, select_remotes, WorkspaceFocus::Sessions)?;
+    commands::copy::export_picked(&picked, false, None, None, false)
 }
 
-fn run_copy(args: &CopyArgs, mode: CopyMode, include_prompt: bool) -> Result<()> {
-    commands::capture::copy::execute(CopyRequest {
-        selector: args.common.selector.as_deref(),
-        pick: args.common.pick,
-        mode,
-        include_prompt,
-        prompt_override: args.prompt.as_deref(),
-        print_full: args.common.print,
-        ansi: args.common.ansi,
-        regex: args.common.regex.as_deref(),
-        lines: args.common.lines.as_deref(),
-    })
+fn run_copy_command(cmd: CopyCommand) -> Result<()> {
+    match cmd.mode {
+        Some(CopySubcommand::In(inv)) => run_copy_invocation(Projection::Input, &inv),
+        Some(CopySubcommand::Out(inv)) => run_copy_invocation(Projection::Output, &inv),
+        Some(CopySubcommand::Cmd(inv)) => run_copy_invocation(Projection::Command, &inv),
+        Some(CopySubcommand::External(tokens)) => {
+            let (free, trailing) = split_external_tokens(&tokens)?;
+            let flags = merge_copy_flags(&cmd.flags, &trailing);
+            run_copy_tokens(Projection::Both, &free, &flags)
+        }
+        None => run_copy_tokens(Projection::Both, &[], &cmd.flags),
+    }
 }
 
-fn run_terminal_copy(
-    selector: Option<&str>,
-    flags: &CopyFlagArgs,
-    mode: CopyMode,
-    include_prompt: bool,
-) -> Result<()> {
-    commands::capture::copy::execute(CopyRequest {
-        selector,
-        pick: flags.pick,
-        mode,
-        include_prompt,
-        prompt_override: flags.prompt.as_deref(),
-        print_full: flags.print,
+fn run_copy_invocation(projection: Projection, inv: &CopyInvocation) -> Result<()> {
+    run_copy_tokens(projection, &inv.tokens, &inv.flags)
+}
+
+fn run_copy_tokens(projection: Projection, tokens: &[String], flags: &CopyFlagArgs) -> Result<()> {
+    let plan = plan_from_cli(projection, tokens, flags.pick, filters_from_flags(flags))
+        .map_err(|message| anyhow::anyhow!(message))?;
+    commands::copy::execute(plan)
+}
+
+fn filters_from_flags(flags: &CopyFlagArgs) -> CopyFilters {
+    CopyFilters {
+        print: flags.print,
         ansi: flags.ansi,
-        regex: flags.regex.as_deref(),
-        lines: flags.lines.as_deref(),
-    })
+        regex: flags.regex.clone(),
+        lines: flags.lines.clone(),
+        prompt: flags.prompt.clone(),
+        cwd: None,
+    }
 }
 
 fn merge_copy_flags(parent: &CopyFlagArgs, trailing: &CopyFlagArgs) -> CopyFlagArgs {
@@ -229,76 +196,36 @@ fn merge_copy_flags(parent: &CopyFlagArgs, trailing: &CopyFlagArgs) -> CopyFlagA
     }
 }
 
-fn run_copy_simple(args: &CopySimpleArgs, mode: CopyMode, include_prompt: bool) -> Result<()> {
-    commands::capture::copy::execute(CopyRequest {
-        selector: args.common.selector.as_deref(),
-        pick: args.common.pick,
-        mode,
-        include_prompt,
-        prompt_override: None,
-        print_full: args.common.print,
-        ansi: args.common.ansi,
-        regex: args.common.regex.as_deref(),
-        lines: args.common.lines.as_deref(),
-    })
-}
-
-fn run_copy_ref(args: &CopyRefArgs) -> Result<()> {
-    commands::capture::copy::execute_ref(
-        &args.reference,
-        args.cwd.as_deref(),
-        args.print,
-        args.regex.as_deref(),
-        args.lines.as_deref(),
-    )
-}
-
-fn run_agent_copy(provider: AgentProvider, cmd: AgentCopyCommand) -> Result<()> {
-    match cmd.mode {
-        Some(AgentCopyMode::In(args)) => {
-            run_agent_copy_args(provider, &args, AgentSelection::LastUser)
-        }
-        Some(AgentCopyMode::Out(args)) => {
-            run_agent_copy_args(provider, &args, AgentSelection::LastAssistant)
-        }
-        Some(AgentCopyMode::Tool(args)) => {
-            run_agent_copy_args(provider, &args, AgentSelection::LastTool)
-        }
-        Some(AgentCopyMode::All(args)) => run_agent_copy_args(provider, &args, AgentSelection::All),
-        None => run_agent_copy_args(provider, &cmd.args, AgentSelection::LastTurn),
+fn split_external_tokens(tokens: &[String]) -> Result<(Vec<String>, CopyFlagArgs)> {
+    let flag_start = tokens
+        .iter()
+        .position(|t| t.starts_with('-'))
+        .unwrap_or(tokens.len());
+    let free = tokens[..flag_start].to_vec();
+    let flag_tokens = &tokens[flag_start..];
+    let flags = if flag_tokens.is_empty() {
+        CopyFlagArgs::default()
+    } else {
+        CopyFlagArgs::try_parse_from(flag_tokens).unwrap_or_else(|error| error.exit())
+    };
+    if free.len() > 2 {
+        anyhow::bail!("too many arguments; expected `copy [address] [dialogues]`");
     }
-}
-
-fn run_agent_copy_args(
-    provider: AgentProvider,
-    args: &AgentCopyArgs,
-    selection_mode: AgentSelection,
-) -> Result<()> {
-    commands::capture::copy::execute_agent(AgentCopyRequest {
-        provider,
-        selector: args.common.common.selector.as_deref(),
-        session_selector: args.session.as_deref(),
-        pick: args.common.common.pick,
-        pick_current_session: false,
-        selection_mode,
-        print_full: args.common.common.print,
-        regex: args.common.common.regex.as_deref(),
-        lines: args.common.common.lines.as_deref(),
-    })
+    Ok((free, flags))
 }
 
 fn run_diff(args: &DiffArgs) -> Result<()> {
     let mode = if args.block {
-        CommandBlockTextMode::Block
+        DiffTextMode::Block
     } else if args.input {
-        CommandBlockTextMode::Input
+        DiffTextMode::Input
     } else if args.cmd {
-        CommandBlockTextMode::Command
+        DiffTextMode::Command
     } else {
-        CommandBlockTextMode::Output
+        DiffTextMode::Output
     };
 
-    commands::capture::diff::execute(DiffRequest {
+    commands::diff::execute(DiffRequest {
         left_selector: &args.left,
         right_selector: &args.right,
         mode,

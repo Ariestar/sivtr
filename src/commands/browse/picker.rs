@@ -1132,7 +1132,7 @@ mod tests {
         workspace_search_target_ref, WorkspaceCopyShortcut,
     };
     use super::super::nav::{clamp_list_state, move_workspace_cursor_up};
-    use crate::commands::capture::command_block_selector::CommandSelection;
+    use crate::commands::select::CommandSelection;
     use crate::tui::content_view::ContentViewMode;
     use crate::tui::workspace::{
         TextPair, WorkspaceCopyParts, WorkspaceDialogue, WorkspaceFocus, WorkspaceSession,

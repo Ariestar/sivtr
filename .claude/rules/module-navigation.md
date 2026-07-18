@@ -15,70 +15,55 @@ src/
 ├── cli/
 │   ├── mod.rs                 ← Top-level Clap definitions
 │   └── remote.rs              ← Serve/Share/Peer/Remote/Workspace Clap types
-├── app.rs                     ← Application state
-├── command_blocks.rs          ← Command block parsing and selection
 ├── commands/
-│   ├── capture/               ← Shell capture + copy/diff/import/init/flush/browse
-│   │   ├── copy.rs            ← Copy command + workspace picker
-│   │   ├── copy/workspace_picker.rs
-│   │   ├── copy/vim.rs
+│   ├── terminal/              ← Write terminal memory
 │   │   ├── init.rs            ← Shell hook injection + show/uninstall
-│   │   ├── run.rs / pipe.rs   ← Run and pipe commands
-│   │   ├── flush.rs           ← Internal: shell hook callback
-│   │   ├── import.rs / clear.rs / diff.rs / browse.rs
-│   │   └── command_block_selector.rs
+│   │   ├── flush.rs           ← Hook callback: write session log
+│   │   ├── clear.rs           ← Clear session logs
+│   │   ├── run.rs / pipe.rs / import.rs  ← One-shot ingest → history + editor
+│   │   └── history.rs         ← Optional history auto-save helper
+│   ├── copy/                  ← Export to clipboard (plan/load/project/export)
+│   ├── select.rs              ← Relative dialogue select (1 / A..B)
+│   ├── diff.rs                ← Compare two terminal dialogues
+│   ├── browse/                ← Product TUI (bare `sivtr` / hotkey / pick)
+│   │   ├── mod.rs / load.rs / picker.rs / selection.rs / content.rs
+│   │   └── help.rs / nav / vim / visual / text
 │   ├── memory/                ← WorkSet / search / show surface
 │   │   ├── search.rs / filter.rs / var.rs / nav.rs / zoom.rs
 │   │   ├── show.rs / work.rs / work_json.rs / records.rs
 │   │   ├── time_filter.rs
 │   │   └── workset/           ← WorkSet source resolution + store
 │   ├── remote/                ← Device daemon CLI surface
-│   │   ├── serve.rs           ← start/stop/restart/status/logs/foreground
-│   │   ├── share.rs           ← interactive share + add/list/invite/grants/revoke
-│   │   ├── mounts.rs          ← remote add/list/remove/rename/test
-│   │   ├── peer.rs            ← peer list/forget
-│   │   └── workspace.rs       ← ws list + local origin name resolution
-│   └── system/                ← config, doctor, history, hotkey, codex, migrate, version
+│   │   ├── serve.rs / share.rs / mounts.rs / peer.rs / workspace.rs
+│   └── system/                ← config, doctor, history, hotkey, codex, …
 ├── remote/                    ← Daemon runtime (not CLI handlers)
-│   ├── daemon.rs              ← iroh remote + localhost control plane
-│   ├── state.rs               ← SQLite peers/shares/grants/invites/mounts
-│   ├── identity.rs            ← stable device key
-│   ├── protocol.rs            ← LocalRequest/RemoteRequest types + InviteTicket
-│   └── ipc.rs                 ← CLI → daemon control IPC
-└── tui/                       ← Terminal UI framework
-    ├── mod.rs / terminal.rs   ← TUI core
-    ├── views/                 ← Browse, search, status views
-    ├── workspace.rs           ← Workspace data model for TUI
-    └── workspace_search.rs    ← Workspace search in TUI
+│   ├── daemon.rs / state.rs / identity.rs / protocol.rs / ipc.rs
+└── tui/                       ← Workspace browser rendering (not product entry)
+    ├── terminal.rs / theme.rs / pane.rs
+    ├── content_view.rs / content_markdown.rs
+    ├── workspace.rs / workspace_search.rs
 
 crates/sivtr-core/src/
 ├── lib.rs                     ← Core library root
 ├── agents/                    ← AgentProvider registry + per-provider parsers
-│   ├── mod.rs / model.rs / jsonl.rs / sqlite.rs
-│   ├── claude.rs / codex.rs / cursor.rs / grok.rs
-│   ├── hermes.rs / openclaw.rs / opencode.rs / pi.rs
-├── record/
-│   ├── model.rs               ← WorkRecord, WorkPart, WorkTime (data model center)
-│   ├── refs.rs                ← WorkRef = WorkScope + WorkPath + WorkAt ([scope:]path[/at])
-│   ├── index.rs               ← Record indexing
-│   └── mod.rs                 ← Re-exports
-├── query/                     ← load_workspace_records / load_workspace_source
-├── search/
-│   ├── mod.rs                 ← Search types and orchestration
-│   ├── matcher.rs             ← Content matching logic
-│   └── navigator.rs           ← Workspace navigation for search
+├── record/                    ← WorkRecord, WorkRef, index
+├── query/                     ← load_workspace_records / load_workspace_source (terminal+agent)
+├── search/                    ← Search matcher / navigator
 ├── workspace.rs               ← Workspace resolution + data_dir()
-├── config/                    ← SivtrConfig, key bindings
-├── session.rs                 ← Session log reading
-├── session/                   ← Session entry types and capture
-├── history/                   ← SQLite command history store
+├── config/                    ← SivtrConfig
+├── session.rs / session/      ← Session log types
+├── history/                   ← SQLite history store
 ├── export/                    ← Clipboard, editor, file export
-├── capture/                   ← Terminal capture (scrollback, pipe, subprocess)
-├── buffer/                    ← Text buffer with cursor and viewport
-├── selection/                 ← Text selection and extraction
-├── parse/                     ← ANSI stripping, unicode width
-└── time.rs                    ← Timestamp parsing and normalization
+├── capture/                   ← Low-level terminal capture (scrollback, pipe, subprocess)
+├── buffer/ / selection/ / parse/  ← Text primitives (shared)
+└── time.rs
 ```
+
+**Read vs write:**
+- Write terminal memory → `commands/terminal`
+- Read any source (terminal + agents) → `memory/workset` + `sivtr-core::query`
+- Interactive pick → `commands/browse`
+- Clipboard export → `commands/copy`
 
 ## Common Search Patterns
 

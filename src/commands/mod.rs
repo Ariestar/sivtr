@@ -1,12 +1,22 @@
 //! Command modules grouped by product domain.
 //!
-//! Call sites should use domain paths:
-//! `commands::memory::show`, `commands::capture::copy`, `commands::browse`,
-//! `commands::remote::serve`, `commands::system::doctor`.
+//! ```text
+//! terminal/  write terminal memory (init/flush/clear + run/pipe/import ingest)
+//! memory/    read/search/filter/show via workset
+//! browse/    workspace TUI product surface
+//! copy/      export to clipboard
+//! diff       compare two terminal dialogues
+//! select     relative dialogue selection (1 / A..B)
+//! remote/    share/mount/serve CLI
+//! system/    doctor/hotkey/mcp/…
+//! ```
 
 pub mod browse;
-pub mod capture;
+pub mod copy;
+pub mod diff;
 pub mod interactive;
 pub mod memory;
 pub mod remote;
+pub mod select;
 pub mod system;
+pub mod terminal;

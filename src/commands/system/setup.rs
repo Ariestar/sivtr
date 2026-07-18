@@ -25,7 +25,7 @@ pub fn execute() -> Result<()> {
         &format!("installing hooks for {}", shells.join(", ")),
         || {
             for shell in &shells {
-                crate::commands::capture::init::execute(shell)?;
+                crate::commands::terminal::init::execute(shell)?;
             }
             Ok(format!("installed for {}", shells.join(", ")))
         },

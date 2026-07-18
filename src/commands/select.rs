@@ -24,9 +24,10 @@ pub fn parse_selector(value: &str) -> Result<CommandSelection> {
     Ok(CommandSelection::RecentSingle(parse_positive(value)?))
 }
 
-pub fn resolve_selector(selection: CommandSelection, total: usize) -> Result<Vec<usize>> {
+pub fn resolve_selector(selection: &CommandSelection, total: usize) -> Result<Vec<usize>> {
     match selection {
         CommandSelection::RecentSingle(recent) => {
+            let recent = *recent;
             if recent == 0 {
                 anyhow::bail!("Selector values are 1-based. Use `1` for the last command.");
             }
@@ -38,6 +39,8 @@ pub fn resolve_selector(selection: CommandSelection, total: usize) -> Result<Vec
             Ok(vec![total - recent])
         }
         CommandSelection::RecentRange { newer, older } => {
+            let newer = *newer;
+            let older = *older;
             if newer == 0 || older == 0 {
                 anyhow::bail!("Range selectors are 1-based. Example: `2..5`.");
             }
@@ -55,6 +58,7 @@ pub fn resolve_selector(selection: CommandSelection, total: usize) -> Result<Vec
 
             let mut indices = Vec::with_capacity(selected.len());
             for recent in selected {
+                let recent = *recent;
                 if recent == 0 {
                     anyhow::bail!("Selector values are 1-based. Use `1` for the last command.");
                 }
@@ -98,7 +102,7 @@ mod tests {
     #[test]
     fn resolves_single_selection_as_exact_recent_command() {
         assert_eq!(
-            resolve_selector(CommandSelection::RecentSingle(3), 10).unwrap(),
+            resolve_selector(&CommandSelection::RecentSingle(3), 10).unwrap(),
             vec![7]
         );
     }
@@ -114,7 +118,7 @@ mod tests {
     #[test]
     fn resolves_selection_range() {
         assert_eq!(
-            resolve_selector(CommandSelection::RecentRange { newer: 2, older: 5 }, 10).unwrap(),
+            resolve_selector(&CommandSelection::RecentRange { newer: 2, older: 5 }, 10).unwrap(),
             vec![5, 6, 7, 8]
         );
     }
@@ -122,7 +126,7 @@ mod tests {
     #[test]
     fn resolves_explicit_selection_as_disjoint_commands() {
         assert_eq!(
-            resolve_selector(CommandSelection::RecentExplicit(vec![1, 4, 7]), 10).unwrap(),
+            resolve_selector(&CommandSelection::RecentExplicit(vec![1, 4, 7]), 10).unwrap(),
             vec![3, 6, 9]
         );
     }
