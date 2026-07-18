@@ -118,12 +118,12 @@ fn split_editor_command(command: &str) -> Result<Vec<String>> {
     }
 
     let mut parts = Vec::with_capacity(count as usize);
-    for argument in unsafe { slice::from_raw_parts(argv, count as usize) } {
+    for &argument in unsafe { slice::from_raw_parts(argv, count as usize) } {
         let mut len = 0;
         while unsafe { *argument.add(len) } != 0 {
             len += 1;
         }
-        let value = unsafe { slice::from_raw_parts(*argument, len) };
+        let value = unsafe { slice::from_raw_parts(argument, len) };
         parts.push(OsString::from_wide(value).to_string_lossy().into_owned());
     }
     unsafe {

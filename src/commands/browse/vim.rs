@@ -96,7 +96,12 @@ fn remove_dir_all_with_retry(
     retry_delay: Duration,
     mut remove: impl FnMut(&Path) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
-    debug_assert!(attempts > 0);
+    if attempts == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "cleanup attempts must be greater than zero",
+        ));
+    }
     let mut last_error = None;
 
     for attempt in 0..attempts {
@@ -362,6 +367,23 @@ mod tests {
 
         assert_eq!(calls, 3);
         assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn zero_cleanup_attempts_are_rejected_without_reporting_success() {
+        let mut calls = 0;
+        let error = remove_dir_all_with_retry(Path::new("unused"), 0, Duration::ZERO, |_| {
+            calls += 1;
+            Ok(())
+        })
+        .unwrap_err();
+
+        assert_eq!(calls, 0);
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(
+            error.to_string(),
+            "cleanup attempts must be greater than zero"
+        );
     }
 
     #[test]
