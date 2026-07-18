@@ -22,6 +22,7 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use crossterm::event::{Event, KeyCode, KeyEventKind};
+use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders, Paragraph};
 use winapi::{
     shared::{
@@ -48,6 +49,7 @@ use winapi::{
             CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT, STARTUPINFOEXW,
             STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, WAIT_FAILED, WAIT_OBJECT_0,
         },
+        wincon::ReadConsoleOutputCharacterW,
         wincontypes::{COORD, HPCON},
         winnt::{
             FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, GENERIC_READ, GENERIC_WRITE,
@@ -63,9 +65,14 @@ const CHILD_TEST: &str = "tui::conpty_tests::conpty_child_entry";
 const STARTED_MARKER: &[u8] = b"SIVTR_CONPTY_CHILD_STARTED";
 const READY_MARKER: &[u8] = b"SIVTR_CONPTY_READY";
 const RESIZED_MARKER: &[u8] = b"SIVTR_CONPTY_RESIZED";
+const SUSPENDED_SUCCESS_MARKER: &[u8] = b"SIVTR_CONPTY_SUSPENDED_SUCCESS";
+const SUSPENDED_ERROR_MARKER: &[u8] = b"SIVTR_CONPTY_SUSPENDED_ERROR";
+const WIDE_CLEARED_MARKER: &[u8] = b"SIVTR_CONPTY_WIDE_CLEARED";
 const RESTORED_MARKER: &[u8] = b"SIVTR_CONPTY_RESTORED";
 const INITIAL_SIZE: COORD = COORD { X: 80, Y: 25 };
 const RESIZED_SIZE: COORD = COORD { X: 100, Y: 30 };
+const WIDE_TEXT_COORD: COORD = COORD { X: 2, Y: 2 };
+const RESUME_TEXT_COORD: COORD = COORD { X: 2, Y: 4 };
 const START_TIMEOUT: Duration = Duration::from_secs(15);
 const RESIZE_TIMEOUT: Duration = Duration::from_secs(10);
 const EXIT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -163,6 +170,21 @@ fn run_parent_smoke() -> Result<()> {
     assert_output(&captured, "中文", "UTF-8 CJK frame content")?;
     assert_output(&captured, "😀", "UTF-8 emoji frame content")?;
     assert_bytes(&captured, RESIZED_MARKER, "resize handling marker")?;
+    assert_bytes(
+        &captured,
+        SUSPENDED_SUCCESS_MARKER,
+        "successful suspend marker",
+    )?;
+    assert_bytes(
+        &captured,
+        SUSPENDED_ERROR_MARKER,
+        "failing operation suspend marker",
+    )?;
+    assert_bytes(
+        &captured,
+        WIDE_CLEARED_MARKER,
+        "wide-character tail cleanup marker",
+    )?;
     assert_bytes(&captured, RESTORED_MARKER, "terminal restoration marker")?;
     // ConPTY consumes alternate-screen and mouse-mode commands and emits their resulting buffer
     // changes, so their original bytes are not a stable observable contract. Cursor restoration
@@ -191,12 +213,74 @@ fn run_child_smoke() -> Result<()> {
                     .block(Block::default().borders(Borders::ALL).title("sivtr")),
                 frame.area(),
             );
+            frame.render_widget(
+                Paragraph::new("\u{754c}"),
+                Rect::new(WIDE_TEXT_COORD.X as u16, WIDE_TEXT_COORD.Y as u16, 2, 1),
+            );
         })?;
+
+        // Replace a double-width glyph with a single-width one in the same two-cell area. Reading
+        // the real console buffer catches a stale trailing cell instead of merely proving that the
+        // UTF-8 bytes passed through ConPTY.
+        terminal::draw(&mut tui, |frame| {
+            frame.render_widget(
+                Paragraph::new("X"),
+                Rect::new(WIDE_TEXT_COORD.X as u16, WIDE_TEXT_COORD.Y as u16, 2, 1),
+            );
+        })?;
+        assert_console_text_at(bindings.console_output_handle(), WIDE_TEXT_COORD, "X ")
+            .context("verify that the wide-character trailing cell was cleared")?;
+        child_marker(WIDE_CLEARED_MARKER)?;
+
+        let suspended = terminal::with_suspended(&mut tui, || {
+            assert_console_snapshot(&before, bindings.pipe_input_handle(), "successful suspend")?;
+            Ok(())
+        })?;
+        suspended?;
+        terminal::draw(&mut tui, |frame| {
+            frame.render_widget(
+                Paragraph::new("S"),
+                Rect::new(RESUME_TEXT_COORD.X as u16, RESUME_TEXT_COORD.Y as u16, 1, 1),
+            );
+        })?;
+        assert_console_text_at(bindings.console_output_handle(), RESUME_TEXT_COORD, "S")
+            .context("verify redraw after a successful suspended operation")?;
+
+        let suspended_error = terminal::with_suspended(&mut tui, || -> Result<()> {
+            assert_console_snapshot(
+                &before,
+                bindings.pipe_input_handle(),
+                "failing operation suspend",
+            )?;
+            bail!("expected suspended operation failure")
+        })?;
+        let error = suspended_error.expect_err("the suspended operation should fail");
+        if !error
+            .to_string()
+            .contains("expected suspended operation failure")
+        {
+            bail!("with_suspended lost the operation error: {error:#}");
+        }
+        terminal::draw(&mut tui, |frame| {
+            frame.render_widget(
+                Paragraph::new("E"),
+                Rect::new(RESUME_TEXT_COORD.X as u16, RESUME_TEXT_COORD.Y as u16, 1, 1),
+            );
+        })?;
+        assert_console_text_at(bindings.console_output_handle(), RESUME_TEXT_COORD, "E")
+            .context("verify redraw after a failing suspended operation")?;
+        // Emit both markers only after both suspend/resume cycles. A later alternate-screen switch
+        // can otherwise coalesce away text written to the preceding screen before the parent sees
+        // it, even though the child-side state and redraw assertions succeeded.
+        child_marker(SUSPENDED_SUCCESS_MARKER)?;
+        child_marker(SUSPENDED_ERROR_MARKER)?;
         child_marker(READY_MARKER)?;
 
         loop {
             match read_interaction()? {
-                Event::Resize(width, height) => {
+                Event::Resize(width, height)
+                    if width == RESIZED_SIZE.X as u16 && height == RESIZED_SIZE.Y as u16 =>
+                {
                     terminal::draw(&mut tui, |frame| {
                         frame.render_widget(
                             Paragraph::new(format!(
@@ -226,6 +310,51 @@ fn run_child_smoke() -> Result<()> {
     }
     child_marker(RESTORED_MARKER)?;
     Ok(())
+}
+
+fn assert_console_snapshot(
+    expected: &ConsoleSnapshot,
+    expected_standard_input: HANDLE,
+    operation: &str,
+) -> Result<()> {
+    let actual = ConsoleSnapshot::capture(expected_standard_input)?;
+    if &actual == expected {
+        Ok(())
+    } else {
+        bail!(
+            "console state was not restored during {operation}: expected={expected:?}, actual={actual:?}"
+        )
+    }
+}
+
+fn assert_console_text_at(handle: HANDLE, coordinate: COORD, expected: &str) -> Result<()> {
+    let expected = expected.encode_utf16().collect::<Vec<_>>();
+    let mut actual = vec![0; expected.len()];
+    let mut read = 0;
+    if unsafe {
+        ReadConsoleOutputCharacterW(
+            handle,
+            actual.as_mut_ptr(),
+            actual.len() as DWORD,
+            coordinate,
+            &mut read,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error()).context("ReadConsoleOutputCharacterW failed");
+    }
+    actual.truncate(read as usize);
+    if actual == expected {
+        Ok(())
+    } else {
+        bail!(
+            "unexpected console text at ({}, {}): expected {:?}, actual {:?}",
+            coordinate.X,
+            coordinate.Y,
+            String::from_utf16_lossy(&expected),
+            String::from_utf16_lossy(&actual)
+        )
+    }
 }
 
 fn child_marker(marker: &[u8]) -> Result<()> {
@@ -404,6 +533,10 @@ impl ChildConsoleBindings {
 
     fn pipe_input_handle(&self) -> HANDLE {
         self.pipe_input.as_raw()
+    }
+
+    fn console_output_handle(&self) -> HANDLE {
+        self._console_output.as_raw()
     }
 }
 

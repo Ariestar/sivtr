@@ -37,7 +37,11 @@ pub fn run_tui(app: &mut App, start_at_bottom: bool) -> Result<()> {
                 let content = app.get_content_for_editor();
 
                 match tui::terminal::with_suspended(&mut terminal, || {
-                    editor::open_in_editor(&content)
+                    let result = editor::open_in_editor(&content);
+                    if let Err(error) = &result {
+                        eprintln!("sivtr: editor error: {error}");
+                    }
+                    result
                 })? {
                     Ok(_) => {
                         app.status = Some(StatusMessage {
@@ -46,7 +50,6 @@ pub fn run_tui(app: &mut App, start_at_bottom: bool) -> Result<()> {
                         });
                     }
                     Err(error) => {
-                        eprintln!("sivtr: editor error: {error}");
                         app.status = Some(StatusMessage {
                             text: format!("Editor error: {error}"),
                             is_error: true,

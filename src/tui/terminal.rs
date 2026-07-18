@@ -239,8 +239,9 @@ fn apply_full_redraw_policy(buffer: &mut Buffer) {
 
 /// Restore the terminal to its original state.
 ///
-/// Each resource is tracked separately. Successful cleanup steps are immediately disarmed, so a
-/// later retry only touches operations that previously failed.
+/// Each resource is tracked separately. Successful cleanup steps are disarmed once later cleanup
+/// cannot invalidate them. On Windows, the exact input-mode restore remains armed while mouse
+/// cleanup is pending because crossterm can write its cached raw mode during a retry.
 pub fn restore(terminal: &mut Tui) -> Result<()> {
     terminal.drawing_active = false;
     restore_terminal_state(&mut terminal.terminal, &mut terminal.state)
@@ -345,7 +346,7 @@ fn restore_owned_state(failures: &mut CleanupFailures, state: &mut TerminalState
     let mut input_mode_restored = true;
 
     if let Some(modes) = state.modes.as_mut() {
-        let input_result = modes.restore_input();
+        let input_result = modes.restore_input(state.mouse_capture);
         failures.record("restore console input mode", input_result);
         input_mode_restored = modes.is_input_restored();
 
@@ -633,12 +634,38 @@ impl ConsoleInputHandle {
 }
 
 #[cfg(windows)]
+struct InputModeRestoreState {
+    pending: bool,
+}
+
+#[cfg(windows)]
+impl InputModeRestoreState {
+    fn pending() -> Self {
+        Self { pending: true }
+    }
+
+    fn is_pending(&self) -> bool {
+        self.pending
+    }
+
+    fn record_success(&mut self, mouse_capture_pending: bool) {
+        // DisableMouseCapture restores the input mode cached by crossterm when capture was
+        // enabled. That cached mode is raw, so a later mouse-cleanup retry can invalidate an exact
+        // mode restore that already succeeded. Keep the restore armed until mouse cleanup has
+        // completed, then replay it once more before releasing CONIN$.
+        if !mouse_capture_pending {
+            self.pending = false;
+        }
+    }
+}
+
+#[cfg(windows)]
 struct TerminalModes {
     input_handle: winapi::um::winnt::HANDLE,
     input_mode: u32,
     output_handle: winapi::um::winnt::HANDLE,
     output_mode: u32,
-    input_pending: bool,
+    input_restore: InputModeRestoreState,
     output_pending: bool,
 }
 
@@ -676,19 +703,19 @@ impl TerminalModes {
             input_mode,
             output_handle,
             output_mode,
-            input_pending: true,
+            input_restore: InputModeRestoreState::pending(),
             output_pending: true,
         })
     }
 
-    fn restore_input(&mut self) -> Result<()> {
+    fn restore_input(&mut self, mouse_capture_pending: bool) -> Result<()> {
         use winapi::um::consoleapi::SetConsoleMode;
 
-        if self.input_pending {
+        if self.input_restore.is_pending() {
             win32_console_call("restore console input mode", unsafe {
                 SetConsoleMode(self.input_handle, self.input_mode)
             })?;
-            self.input_pending = false;
+            self.input_restore.record_success(mouse_capture_pending);
         }
         Ok(())
     }
@@ -717,11 +744,11 @@ impl TerminalModes {
     }
 
     fn is_restored(&self) -> bool {
-        !self.input_pending && !self.output_pending
+        !self.input_restore.is_pending() && !self.output_pending
     }
 
     fn is_input_restored(&self) -> bool {
-        !self.input_pending
+        !self.input_restore.is_pending()
     }
 }
 
@@ -736,7 +763,7 @@ impl TerminalModes {
         Ok(Self { pending: true })
     }
 
-    fn restore_input(&mut self) -> Result<()> {
+    fn restore_input(&mut self, _mouse_capture_pending: bool) -> Result<()> {
         if self.pending {
             disable_raw_mode()?;
             self.pending = false;
@@ -1013,6 +1040,21 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn exact_input_restore_stays_armed_until_mouse_cleanup_succeeds() {
+        let mut input_restore = super::InputModeRestoreState::pending();
+
+        // The first mouse cleanup fails. Restoring the exact input mode protects the current shell
+        // state, but it must remain armed because crossterm's retry can write cached raw mode.
+        input_restore.record_success(true);
+        assert!(input_restore.is_pending());
+
+        // Once mouse cleanup succeeds, replaying the exact mode is final and can be disarmed.
+        input_restore.record_success(false);
+        assert!(!input_restore.is_pending());
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn pending_display_commands_keep_vt_mode_and_code_page_available_for_retry() {
         use winapi::um::handleapi::INVALID_HANDLE_VALUE;
 
@@ -1023,7 +1065,7 @@ mod tests {
                 input_mode: 0,
                 output_handle: INVALID_HANDLE_VALUE,
                 output_mode: 0,
-                input_pending: false,
+                input_restore: super::InputModeRestoreState { pending: false },
                 output_pending: true,
             }),
             code_pages: Some(super::ConsoleCodePages {
@@ -1052,7 +1094,7 @@ mod tests {
                 input_mode: 0,
                 output_handle: INVALID_HANDLE_VALUE,
                 output_mode: 0,
-                input_pending: true,
+                input_restore: super::InputModeRestoreState::pending(),
                 output_pending: false,
             }),
             console_input: Some(super::ConsoleInputHandle {
