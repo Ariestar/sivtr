@@ -149,6 +149,7 @@ fn resolve_configured_vim_editor(command: &str) -> Result<Option<String>> {
     Ok(is_vim_program(&program).then(|| command.to_string()))
 }
 
+#[cfg(test)]
 pub(super) fn is_vim_command(command: &str) -> bool {
     let Ok((program, _)) = sivtr_core::export::editor::parse_editor_command(command) else {
         return false;
