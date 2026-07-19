@@ -89,10 +89,12 @@ fn execute_pick(plan: &CopyPlan) -> Result<()> {
                 session_source_from_records(&records).unwrap_or_else(WorkspaceSource::terminal);
             let session = WorkspaceSession {
                 source: source.clone(),
+                session_id: records.first().map(|r| r.work_ref.session().to_string()).unwrap_or_else(|| expanded.clone()),
                 modified: std::time::SystemTime::now(),
                 title: expanded.clone(),
                 search_title: expanded,
                 records,
+                body_loaded: true,
             };
             let picked =
                 browse::run_with_sessions(source, vec![session], WorkspaceFocus::Dialogues)?;

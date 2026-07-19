@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use crate::tui::content_view::{content_link_at, ContentViewMode};
 use crate::tui::terminal::{init as init_tui, restore as restore_tui};
 use crate::tui::workspace::{
-    can_open_dialogue_vim, render_workspace, selected_index, workspace_content_text,
+    can_open_dialogue_vim, panel_inner_rows, render_workspace, selected_index, workspace_content_text,
     workspace_help_entries, workspace_hit_test, workspace_layout, WorkspaceFocus,
     WorkspacePickedContent, WorkspaceSearchView, WorkspaceSource, WorkspaceView,
 };
@@ -24,7 +24,9 @@ use super::content::{
 };
 
 use super::help::{apply_workspace_help_action, set_focus, toggle_fullscreen};
-use super::load::{collect_ready_sessions, SourceLoadPump, SourceLoadState};
+use super::load::{
+    body_keep_set, collect_ready_sessions, SessionViewport, SourceLoadPump, SourceLoadState,
+};
 use super::nav::{
     clamp_list_state, move_workspace_cursor_down, move_workspace_cursor_up, open_link_target,
     reset_workspace_after_source_change, reset_workspace_dialogue_state,
@@ -60,8 +62,18 @@ pub(crate) fn run(
     help_state.select(Some(0));
     let mut focus = initial_focus;
     let mut load_pump = SourceLoadPump::new(sources.len(), cwd.clone());
-    // Fire-and-forget: UI draws immediately while loads complete in the background.
-    load_pump.kick(&sources, &selected_sources, &mut source_states, true);
+    // Bootstrap with a conservative viewport; first draw refines from layout.
+    let bootstrap = SessionViewport {
+        first_visible: 0,
+        visible_rows: 24,
+    };
+    load_pump.kick(
+        &sources,
+        &selected_sources,
+        &mut source_states,
+        bootstrap,
+        true,
+    );
     let mut all_sessions = collect_ready_sessions(&sources, &selected_sources, &source_states);
     let mut sessions = all_sessions.clone();
     clamp_list_state(&mut source_state, sources.len());
@@ -126,6 +138,55 @@ pub(crate) fn run(
         }
         let session_idx = selected_index(&session_state).min(sessions.len().saturating_sub(1));
         session_state.select((!sessions.is_empty()).then_some(session_idx));
+
+        // Viewport from current terminal size (sessions panel inner rows).
+        let size = terminal.size()?;
+        let layout = workspace_layout(
+            ratatui::layout::Rect::new(0, 0, size.width, size.height),
+            focus,
+            fullscreen,
+        );
+        let session_viewport = SessionViewport::from_panel(
+            session_state.offset(),
+            panel_inner_rows(layout.sessions),
+        );
+
+        // Drop caches for unselected sources; grow meta to cover the viewport.
+        load_pump.drop_unselected(&selected_sources, &mut source_states);
+        if !search_has_query {
+            load_pump.ensure_meta_window(
+                &sources,
+                &selected_sources,
+                &mut source_states,
+                session_viewport,
+                sessions.len(),
+            );
+        }
+
+        // Sliding body window: hydrate keep-set, evict everything else.
+        let keep = body_keep_set(
+            &sources,
+            &sessions,
+            session_idx,
+            &selected_sessions,
+            1, // one neighbor each side for smooth j/k
+        );
+        load_pump.sync_bodies(&sources, &mut source_states, &keep);
+
+        // Refresh merged list after possible meta/body updates applied next drain;
+        // re-collect so dialogues see just-evicted/hydrated state from prior frame.
+        all_sessions = collect_ready_sessions(&sources, &selected_sources, &source_states);
+        sessions = if search_has_query {
+            search_output.sessions.clone()
+        } else {
+            all_sessions.clone()
+        };
+        if selected_sessions.len() != sessions.len() {
+            selected_sessions.resize(sessions.len(), false);
+        }
+        let session_idx = selected_index(&session_state).min(sessions.len().saturating_sub(1));
+        session_state.select((!sessions.is_empty()).then_some(session_idx));
+
         let dialogues =
             workspace_dialogues_for_sessions(&sessions, session_idx, &selected_sessions);
         let dialogue_count = dialogues.len();
@@ -607,12 +668,25 @@ pub(crate) fn run(
                             &mut selected_sources,
                             WorkspaceSourceSelection::All,
                         );
-                        load_pump.kick(
-                            &sources,
-                            &selected_sources,
-                            &mut source_states,
-                            true,
-                        );
+                        {
+                            let size = terminal.size()?;
+                            let layout = workspace_layout(
+                                ratatui::layout::Rect::new(0, 0, size.width, size.height),
+                                focus,
+                                fullscreen,
+                            );
+                            let viewport = SessionViewport::from_panel(
+                                session_state.offset(),
+                                panel_inner_rows(layout.sessions),
+                            );
+                            load_pump.kick(
+                                &sources,
+                                &selected_sources,
+                                &mut source_states,
+                                viewport,
+                                true,
+                            );
+                        };
                         all_sessions =
                             collect_ready_sessions(&sources, &selected_sources, &source_states);
                         search_index = WorkspaceSearchIndex::new(&all_sessions);
@@ -632,12 +706,25 @@ pub(crate) fn run(
                             &mut selected_sources,
                             WorkspaceSourceSelection::Agents,
                         );
-                        load_pump.kick(
-                            &sources,
-                            &selected_sources,
-                            &mut source_states,
-                            true,
-                        );
+                        {
+                            let size = terminal.size()?;
+                            let layout = workspace_layout(
+                                ratatui::layout::Rect::new(0, 0, size.width, size.height),
+                                focus,
+                                fullscreen,
+                            );
+                            let viewport = SessionViewport::from_panel(
+                                session_state.offset(),
+                                panel_inner_rows(layout.sessions),
+                            );
+                            load_pump.kick(
+                                &sources,
+                                &selected_sources,
+                                &mut source_states,
+                                viewport,
+                                true,
+                            );
+                        };
                         all_sessions =
                             collect_ready_sessions(&sources, &selected_sources, &source_states);
                         search_index = WorkspaceSearchIndex::new(&all_sessions);
@@ -657,12 +744,25 @@ pub(crate) fn run(
                             &mut selected_sources,
                             WorkspaceSourceSelection::Terminal,
                         );
-                        load_pump.kick(
-                            &sources,
-                            &selected_sources,
-                            &mut source_states,
-                            true,
-                        );
+                        {
+                            let size = terminal.size()?;
+                            let layout = workspace_layout(
+                                ratatui::layout::Rect::new(0, 0, size.width, size.height),
+                                focus,
+                                fullscreen,
+                            );
+                            let viewport = SessionViewport::from_panel(
+                                session_state.offset(),
+                                panel_inner_rows(layout.sessions),
+                            );
+                            load_pump.kick(
+                                &sources,
+                                &selected_sources,
+                                &mut source_states,
+                                viewport,
+                                true,
+                            );
+                        };
                         all_sessions =
                             collect_ready_sessions(&sources, &selected_sources, &source_states);
                         search_index = WorkspaceSearchIndex::new(&all_sessions);
@@ -680,6 +780,16 @@ pub(crate) fn run(
                         set_focus(&mut focus, &mut fullscreen, WorkspaceFocus::Source);
                     }
                     KeyCode::Char('R') => {
+                        let size = terminal.size()?;
+                        let layout = workspace_layout(
+                            ratatui::layout::Rect::new(0, 0, size.width, size.height),
+                            focus,
+                            fullscreen,
+                        );
+                        let viewport = SessionViewport::from_panel(
+                            session_state.offset(),
+                            panel_inner_rows(layout.sessions),
+                        );
                         refresh_next_level(
                             focus,
                             &sources,
@@ -693,6 +803,7 @@ pub(crate) fn run(
                             &mut all_sessions,
                             &mut search_index,
                             &mut search_dirty,
+                            viewport,
                         );
                     }
                     KeyCode::Char(ch) if ch.is_ascii_digit() => {
@@ -817,12 +928,25 @@ pub(crate) fn run(
                             if let Some(selected) = selected_sources.get_mut(source_idx) {
                                 *selected = !*selected;
                             }
+                            {
+                            let size = terminal.size()?;
+                            let layout = workspace_layout(
+                                ratatui::layout::Rect::new(0, 0, size.width, size.height),
+                                focus,
+                                fullscreen,
+                            );
+                            let viewport = SessionViewport::from_panel(
+                                session_state.offset(),
+                                panel_inner_rows(layout.sessions),
+                            );
                             load_pump.kick(
                                 &sources,
                                 &selected_sources,
                                 &mut source_states,
+                                viewport,
                                 true,
                             );
+                        };
                             all_sessions =
                                 collect_ready_sessions(&sources, &selected_sources, &source_states);
                             search_index = WorkspaceSearchIndex::new(&all_sessions);
@@ -1346,6 +1470,7 @@ mod tests {
     fn workspace_search_tracks_match_position_for_navigation() {
         let sessions = vec![WorkspaceSession {
             source: WorkspaceSource::agent(AgentProvider::Codex),
+            session_id: "session".to_string(),
             modified: SystemTime::UNIX_EPOCH,
             title: "session".to_string(),
             search_title: "session".to_string(),
@@ -1355,6 +1480,7 @@ mod tests {
                 "first\nneedle one\nmiddle\nneedle two",
                 0,
             )],
+            body_loaded: true,
         }];
 
         let output = WorkspaceSearchIndex::new(&sessions).search(&sessions, "needle");
@@ -1403,10 +1529,12 @@ mod tests {
         }];
         let sessions = vec![WorkspaceSession {
             source: WorkspaceSource::agent(AgentProvider::Codex),
+            session_id: "session".to_string(),
             modified: SystemTime::UNIX_EPOCH,
             title: "session".to_string(),
             search_title: "session".to_string(),
             records: vec![record],
+            body_loaded: true,
         }];
 
         let output = WorkspaceSearchIndex::new(&sessions).search(&sessions, "cargo");
@@ -1444,10 +1572,12 @@ mod tests {
         }];
         let sessions = vec![WorkspaceSession {
             source: WorkspaceSource::agent(AgentProvider::Codex),
+            session_id: "session".to_string(),
             modified: SystemTime::UNIX_EPOCH,
             title: "session".to_string(),
             search_title: "session".to_string(),
             records: vec![record],
+            body_loaded: true,
         }];
 
         let output = WorkspaceSearchIndex::new(&sessions).search(&sessions, "needle");
@@ -1497,10 +1627,12 @@ mod tests {
         }];
         let sessions = vec![WorkspaceSession {
             source: WorkspaceSource::agent(AgentProvider::Codex),
+            session_id: "session".to_string(),
             modified: SystemTime::UNIX_EPOCH,
             title: "session".to_string(),
             search_title: "session".to_string(),
             records: vec![record],
+            body_loaded: true,
         }];
 
         let output = WorkspaceSearchIndex::new(&sessions).search(&sessions, "cargo");
@@ -1840,6 +1972,7 @@ mod tests {
     ) -> WorkspaceSession {
         WorkspaceSession {
             source: source.clone(),
+            session_id: title.to_string(),
             modified: SystemTime::UNIX_EPOCH,
             title: title.to_string(),
             search_title: title.to_string(),
@@ -1855,6 +1988,7 @@ mod tests {
                     )
                 })
                 .collect(),
+            body_loaded: true,
         }
     }
 

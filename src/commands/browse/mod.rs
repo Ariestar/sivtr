@@ -22,6 +22,8 @@ use sivtr_core::ai::AgentProvider;
 use crate::tui::terminal::{init as init_tui, restore as restore_tui};
 use crate::tui::workspace::{WorkspaceFocus, WorkspacePickedContent, WorkspaceSource};
 
+use load::SourceSessionStore;
+
 /// Run the workspace browser.
 ///
 /// Catalog = local + mounts. `select_remotes` only sets the initial selection mask.
@@ -64,11 +66,16 @@ pub fn run_with_sessions(
     initial_focus: WorkspaceFocus,
 ) -> Result<WorkspacePickedContent> {
     let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
+    let loaded = sessions.len().max(1);
     let mut terminal = init_tui()?;
     let result = run_picker(
         &mut terminal,
         vec![source],
-        vec![SourceLoadState::Ready(sessions)],
+        vec![SourceLoadState::Ready(SourceSessionStore::ready(
+            sessions,
+            loaded,
+            true,
+        ))],
         vec![true],
         cwd,
         initial_focus,

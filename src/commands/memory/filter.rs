@@ -163,6 +163,20 @@ impl Filter {
         Self::default()
     }
 
+    /// Browse session list: newest-first, bounded by `latest` sessions/records after sort.
+    ///
+    /// Used only as a first-page / expand window for TUI catalog loads. Full-text
+    /// search still uses [`Filter::from_search_args`] and remains WorkRecord-based.
+    pub fn browse_session_page(latest: usize) -> Self {
+        Self {
+            mode: FilterMode::Anchors,
+            pre_sort: Some(SearchSortArg::Newest),
+            latest: Some(latest.max(1)),
+            post_sort: Some(SearchSortArg::Newest),
+            ..Self::default()
+        }
+    }
+
     /// Drop client-only flags before applying on a remote peer.
     pub fn for_remote_peer(&self) -> Self {
         let mut f = self.clone();

@@ -283,5 +283,6 @@ fn filter_workspace_session_dialogues(
         .iter()
         .filter_map(|idx| session.records.get(*idx).cloned())
         .collect();
+    filtered.body_loaded = !filtered.records.is_empty();
     filtered
 }

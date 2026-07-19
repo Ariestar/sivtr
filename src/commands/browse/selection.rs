@@ -8,7 +8,7 @@ use ratatui::widgets::ListState;
 use crate::tui::workspace::{selected_index, WorkspaceFocus, WorkspaceSession, WorkspaceSource};
 use crate::tui::workspace_search::WorkspaceSearchIndex;
 
-use super::load::{collect_ready_sessions, SourceLoadPump, SourceLoadState};
+use super::load::{collect_ready_sessions, SessionViewport, SourceLoadPump, SourceLoadState};
 
 /// Active rows: multi-select if any, otherwise the focused row.
 pub(super) fn active_mask(selected: &[bool], focus_idx: usize, len: usize) -> Vec<bool> {
@@ -53,6 +53,7 @@ pub(super) fn refresh_next_level(
     all_sessions: &mut Vec<WorkspaceSession>,
     search_index: &mut WorkspaceSearchIndex,
     search_dirty: &mut bool,
+    viewport: SessionViewport,
 ) {
     let sources_to_reload = match focus {
         WorkspaceFocus::Source => active_mask(
@@ -76,7 +77,7 @@ pub(super) fn refresh_next_level(
         return;
     }
 
-    load_pump.refresh_selected(sources, &sources_to_reload, source_states);
+    load_pump.refresh_selected(sources, &sources_to_reload, source_states, viewport);
     *all_sessions = collect_ready_sessions(sources, selected_sources, source_states);
     *search_index = WorkspaceSearchIndex::new(all_sessions);
     *search_dirty = true;

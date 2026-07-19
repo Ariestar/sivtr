@@ -194,10 +194,15 @@ pub(crate) struct WorkspacePickedContent {
 #[derive(Clone, Debug)]
 pub(crate) struct WorkspaceSession {
     pub(crate) source: WorkspaceSource,
+    /// Stable session identity for hydrate / selection (not display title).
+    pub(crate) session_id: String,
     pub(crate) modified: SystemTime,
     pub(crate) title: String,
     pub(crate) search_title: String,
+    /// Dialogue bodies. Empty until the session is focused/selected and hydrated.
     pub(crate) records: Vec<WorkRecord>,
+    /// True when `records` holds full dialogue bodies for this session.
+    pub(crate) body_loaded: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1571,6 +1576,11 @@ fn render_list_scrollbar(
 
 fn panel_viewport_height(area: Rect) -> usize {
     area.height.saturating_sub(2) as usize
+}
+
+/// Inner row count for a panel rect (borders already accounted).
+pub(crate) fn panel_inner_rows(area: Rect) -> usize {
+    panel_viewport_height(area).max(1)
 }
 
 #[allow(clippy::too_many_arguments)]

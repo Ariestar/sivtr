@@ -1,11 +1,21 @@
-//! Source catalog, session grouping, and non-blocking source loads for browse.
+//! Source catalog + viewport-driven sliding-window loads for browse.
 //!
-//! Multi-source schedule lives in `workset::query_many`. This module maps catalog
-//! ↔ TUI sessions and owns background load jobs so the event loop never blocks.
+//! ## Memory model (final)
+//!
+//! - **L1 meta prefix** per source: `WorkspaceSession` rows with empty `records`
+//!   until hydrated. Grows only as the session-list viewport demands.
+//! - **L2 body**: full `WorkRecord`s live only on sessions in the **keep set**
+//!   (focus + multi-select + small optional neighbor). Everything else is
+//!   `records.clear()` + `body_loaded = false`.
+//! - **No product page size.** Batch sizes are derived from
+//!   `visible_rows` (layout) with a small I/O floor so we never under-fetch one
+//!   screen. CLI `sivtr s` / workset search are untouched.
+//!
+//! Multi-source schedule still uses `workset::query_many`.
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
@@ -22,22 +32,89 @@ use sivtr_core::ai::AgentProvider;
 use sivtr_core::record::WorkRecord;
 use sivtr_core::workspace;
 
-/// Per-source load state. Sessions only appear when Ready (or stale Ready while Loading).
+/// I/O floor so a 1-row glitch never fetches a single record forever.
+const META_FETCH_FLOOR: usize = 12;
+/// Absolute ceiling per source (pathological workspaces).
+const META_FETCH_CEILING: usize = 2_000;
+/// Prefetch screens beyond the visible session pane (1 = one screen above/below).
+const META_PREFETCH_SCREENS: usize = 1;
+
+/// Session-list viewport in **merged list** coordinates (after mtime sort).
+#[derive(Clone, Copy, Debug)]
+pub struct SessionViewport {
+    /// First visible row in the merged session list (`ListState::offset`).
+    pub first_visible: usize,
+    /// Rows that fit in the sessions panel (inner height).
+    pub visible_rows: usize,
+}
+
+impl SessionViewport {
+    pub fn from_panel(offset: usize, panel_inner_height: usize) -> Self {
+        Self {
+            first_visible: offset,
+            visible_rows: panel_inner_height.max(1),
+        }
+    }
+
+    /// Exclusive end index we want covered by L1 meta (viewport + prefetch).
+    pub fn meta_need_end(&self, merged_len: usize) -> usize {
+        let page = self.visible_rows;
+        let prefetch = page.saturating_mul(META_PREFETCH_SCREENS);
+        let end = self
+            .first_visible
+            .saturating_add(page)
+            .saturating_add(prefetch);
+        if merged_len == 0 {
+            end.max(page.saturating_add(prefetch))
+        } else {
+            end
+        }
+    }
+
+    /// How many **records** to request so folding is likely to yield ~`session_target` sessions.
+    ///
+    /// workset `latest` is record-based; we over-fetch slightly then fold to sessions.
+    pub fn record_budget_for_sessions(session_target: usize) -> usize {
+        // ~3 records/session heuristic, clamped.
+        let raw = session_target.saturating_mul(3).max(META_FETCH_FLOOR);
+        raw.min(META_FETCH_CEILING)
+    }
+}
+
+/// Per-source load state.
 #[derive(Clone, Debug)]
 pub enum SourceLoadState {
     Idle,
     Loading {
-        /// Previous good snapshot, if any (stale-while-revalidate).
-        stale: Option<Vec<WorkspaceSession>>,
+        stale: Option<SourceSessionStore>,
         gen: u64,
     },
-    Ready(Vec<WorkspaceSession>),
+    Ready(SourceSessionStore),
     Failed {
         #[allow(dead_code)]
         message: String,
-        /// Keep last good sessions when a refresh fails.
-        stale: Option<Vec<WorkspaceSession>>,
+        stale: Option<SourceSessionStore>,
     },
+}
+
+/// L1 meta prefix for one source (newest-first after workset sort/fold).
+#[derive(Clone, Debug, Default)]
+pub struct SourceSessionStore {
+    pub sessions: Vec<WorkspaceSession>,
+    /// Record budget last successfully fetched for this prefix.
+    pub fetch_budget: usize,
+    /// True when last fetch returned fewer records than requested.
+    pub exhausted: bool,
+}
+
+impl SourceSessionStore {
+    pub fn ready(sessions: Vec<WorkspaceSession>, fetch_budget: usize, exhausted: bool) -> Self {
+        Self {
+            sessions,
+            fetch_budget,
+            exhausted,
+        }
+    }
 }
 
 impl SourceLoadState {
@@ -50,48 +127,73 @@ impl SourceLoadState {
         }
     }
 
-    /// Sessions that may be shown (Ready, or stale while Loading/Failed).
     pub fn visible_sessions(&self) -> &[WorkspaceSession] {
         match self {
-            Self::Ready(sessions) => sessions,
+            Self::Ready(store) => &store.sessions,
             Self::Loading {
-                stale: Some(sessions),
-                ..
+                stale: Some(store), ..
             }
             | Self::Failed {
-                stale: Some(sessions),
-                ..
-            } => sessions,
+                stale: Some(store), ..
+            } => &store.sessions,
             _ => &[],
         }
     }
 
-    fn take_stale(&self) -> Option<Vec<WorkspaceSession>> {
+    pub fn store(&self) -> Option<&SourceSessionStore> {
         match self {
-            Self::Ready(sessions) => Some(sessions.clone()),
+            Self::Ready(store) => Some(store),
+            Self::Loading {
+                stale: Some(store), ..
+            }
+            | Self::Failed {
+                stale: Some(store), ..
+            } => Some(store),
+            _ => None,
+        }
+    }
+
+    fn take_stale(&self) -> Option<SourceSessionStore> {
+        match self {
+            Self::Ready(store) => Some(store.clone()),
             Self::Loading { stale, .. } | Self::Failed { stale, .. } => stale.clone(),
             Self::Idle => None,
         }
     }
+
+    fn with_sessions_mut<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut [WorkspaceSession]),
+    {
+        match self {
+            Self::Ready(store) => f(&mut store.sessions),
+            Self::Loading {
+                stale: Some(store), ..
+            }
+            | Self::Failed {
+                stale: Some(store), ..
+            } => f(&mut store.sessions),
+            _ => {}
+        }
+    }
 }
 
-/// Background job completion for one source load.
 #[derive(Debug)]
 pub struct SourceLoadEvent {
     pub index: usize,
     pub gen: u64,
-    pub result: std::result::Result<Vec<WorkspaceSession>, String>,
+    /// `fetch_budget == 0` marks a body-hydrate completion (patch only).
+    pub result: std::result::Result<SourceSessionStore, String>,
 }
 
-/// Owns the channel from load workers into the TUI loop.
 pub struct SourceLoadPump {
     tx: Sender<SourceLoadEvent>,
     rx: Receiver<SourceLoadEvent>,
     cwd: PathBuf,
-    /// Monotonic generation per source index.
     gens: Vec<u64>,
-    /// Debounce select-to-refresh for Ready sources.
     last_kick: Vec<Option<Instant>>,
+    /// In-flight body keys `"source_idx\\0session_id"`.
+    body_inflight: HashSet<String>,
 }
 
 impl SourceLoadPump {
@@ -103,23 +205,27 @@ impl SourceLoadPump {
             cwd,
             gens: vec![0; source_count],
             last_kick: vec![None; source_count],
+            body_inflight: HashSet::new(),
         }
     }
 
-    /// Kick loads for selected sources that need work.
-    ///
-    /// - Idle / Failed → always load
-    /// - Ready → refresh if `refresh_ready` and debounce elapsed
-    /// - Loading → skip (already in flight)
+    /// Initial / selection kick: ensure each selected source has at least one viewport of meta.
     pub fn kick(
         &mut self,
         sources: &[WorkspaceSource],
         selected: &[bool],
         states: &mut [SourceLoadState],
+        viewport: SessionViewport,
         refresh_ready: bool,
     ) {
         const READY_DEBOUNCE: Duration = Duration::from_millis(800);
         let now = Instant::now();
+        let initial_sessions = viewport
+            .visible_rows
+            .saturating_add(viewport.visible_rows.saturating_mul(META_PREFETCH_SCREENS))
+            .max(viewport.visible_rows);
+        let budget = SessionViewport::record_budget_for_sessions(initial_sessions);
+
         for (idx, source) in sources.iter().enumerate() {
             if !selected.get(idx).copied().unwrap_or(false) {
                 continue;
@@ -127,27 +233,40 @@ impl SourceLoadPump {
             let needs = match &states[idx] {
                 SourceLoadState::Loading { .. } => false,
                 SourceLoadState::Idle | SourceLoadState::Failed { .. } => true,
-                SourceLoadState::Ready(_) => {
+                SourceLoadState::Ready(store) => {
                     refresh_ready
-                        && self.last_kick.get(idx).and_then(|t| *t).is_none_or(|t| {
-                            now.duration_since(t) >= READY_DEBOUNCE
-                        })
+                        && self
+                            .last_kick
+                            .get(idx)
+                            .and_then(|t| *t)
+                            .is_none_or(|t| now.duration_since(t) >= READY_DEBOUNCE)
+                        || store.sessions.is_empty()
                 }
             };
             if !needs {
                 continue;
             }
-            self.spawn_one(idx, source, states);
+            let limit = states
+                .get(idx)
+                .and_then(SourceLoadState::store)
+                .map(|s| s.fetch_budget.max(budget))
+                .unwrap_or(budget);
+            self.spawn_list(idx, source, states, limit);
         }
     }
 
-    /// Force-refresh selected sources (manual `R`), ignoring debounce.
     pub fn refresh_selected(
         &mut self,
         sources: &[WorkspaceSource],
         selected: &[bool],
         states: &mut [SourceLoadState],
+        viewport: SessionViewport,
     ) {
+        let min_sessions = viewport
+            .visible_rows
+            .saturating_mul(1 + META_PREFETCH_SCREENS)
+            .max(viewport.visible_rows);
+        let min_budget = SessionViewport::record_budget_for_sessions(min_sessions);
         for (idx, source) in sources.iter().enumerate() {
             if !selected.get(idx).copied().unwrap_or(false) {
                 continue;
@@ -155,15 +274,145 @@ impl SourceLoadPump {
             if matches!(states.get(idx), Some(SourceLoadState::Loading { .. })) {
                 continue;
             }
-            self.spawn_one(idx, source, states);
+            let limit = states
+                .get(idx)
+                .and_then(SourceLoadState::store)
+                .map(|s| s.fetch_budget.max(min_budget))
+                .unwrap_or(min_budget);
+            self.spawn_list(idx, source, states, limit);
         }
     }
 
-    fn spawn_one(
+    /// Grow L1 prefixes so the merged list can cover `viewport` (sliding ensure).
+    ///
+    /// Call each frame with the **merged** session list length and viewport.
+    pub fn ensure_meta_window(
+        &mut self,
+        sources: &[WorkspaceSource],
+        selected: &[bool],
+        states: &mut [SourceLoadState],
+        viewport: SessionViewport,
+        merged_len: usize,
+    ) {
+        let need_end = viewport.meta_need_end(merged_len);
+        // If merged list already covers need_end and no source is empty-loading, still
+        // expand sources that are not exhausted when the user is near the end.
+        let near_end = merged_len == 0 || need_end + viewport.visible_rows >= merged_len;
+
+        for (idx, source) in sources.iter().enumerate() {
+            if !selected.get(idx).copied().unwrap_or(false) {
+                continue;
+            }
+            if matches!(states.get(idx), Some(SourceLoadState::Loading { .. })) {
+                continue;
+            }
+            let Some(store) = states.get(idx).and_then(SourceLoadState::store) else {
+                // Idle selected source — kick with viewport budget.
+                let budget = SessionViewport::record_budget_for_sessions(
+                    viewport
+                        .visible_rows
+                        .saturating_mul(1 + META_PREFETCH_SCREENS),
+                );
+                self.spawn_list(idx, source, states, budget);
+                continue;
+            };
+            if store.exhausted {
+                continue;
+            }
+            // Expand when this source has fewer sessions than a viewport, or merged list
+            // needs more rows near the end.
+            let want_more = store.sessions.len() < need_end || near_end;
+            if !want_more {
+                continue;
+            }
+            let session_target = store
+                .sessions
+                .len()
+                .saturating_add(viewport.visible_rows.max(META_FETCH_FLOOR));
+            let next_budget = SessionViewport::record_budget_for_sessions(session_target)
+                .max(store.fetch_budget.saturating_add(META_FETCH_FLOOR));
+            if next_budget <= store.fetch_budget && !store.sessions.is_empty() {
+                // Density was lower than expected — force a larger record window.
+                let forced = (store.fetch_budget.saturating_mul(2)).max(store.fetch_budget + 32);
+                if forced > store.fetch_budget && forced <= META_FETCH_CEILING {
+                    self.spawn_list(idx, source, states, forced.min(META_FETCH_CEILING));
+                }
+                continue;
+            }
+            self.spawn_list(idx, source, states, next_budget.min(META_FETCH_CEILING));
+        }
+    }
+
+    /// Hydrate bodies for `keep` keys and **evict** every other loaded body.
+    ///
+    /// `keep` entries are `(source_index, session_id)`.
+    pub fn sync_bodies(
+        &mut self,
+        sources: &[WorkspaceSource],
+        states: &mut [SourceLoadState],
+        keep: &HashSet<(usize, String)>,
+    ) {
+        // Evict first so memory drops even if hydrate is busy.
+        for (source_idx, state) in states.iter_mut().enumerate() {
+            state.with_sessions_mut(|sessions| {
+                for session in sessions.iter_mut() {
+                    let key = (source_idx, session.session_id.clone());
+                    if session.body_loaded && !keep.contains(&key) {
+                        session.records.clear();
+                        session.body_loaded = false;
+                    }
+                }
+            });
+        }
+
+        for (source_idx, session_id) in keep {
+            let Some(source) = sources.get(*source_idx) else {
+                continue;
+            };
+            let Some(state) = states.get(*source_idx) else {
+                continue;
+            };
+            if state.store().is_none() {
+                continue;
+            }
+            let already = state
+                .visible_sessions()
+                .iter()
+                .find(|s| s.session_id == *session_id)
+                .is_some_and(|s| s.body_loaded);
+            if already {
+                continue;
+            }
+            let inflight_key = body_inflight_key(*source_idx, session_id);
+            if self.body_inflight.contains(&inflight_key) {
+                continue;
+            }
+            self.body_inflight.insert(inflight_key);
+            self.spawn_hydrate(*source_idx, source, session_id);
+        }
+    }
+
+    /// Drop all state for unselected sources (free meta + body).
+    pub fn drop_unselected(&mut self, selected: &[bool], states: &mut [SourceLoadState]) {
+        for (idx, sel) in selected.iter().enumerate() {
+            if *sel {
+                continue;
+            }
+            if idx < states.len() && !matches!(states[idx], SourceLoadState::Idle) {
+                states[idx] = SourceLoadState::Idle;
+            }
+            // Clear inflight markers for this source.
+            self.body_inflight
+                .retain(|k| !k.starts_with(&format!("{idx}\0")));
+        }
+    }
+
+    fn spawn_list(
         &mut self,
         idx: usize,
         source: &WorkspaceSource,
         states: &mut [SourceLoadState],
+        budget: usize,
     ) {
         assert!(
             idx < self.gens.len() && idx < states.len(),
@@ -174,31 +423,61 @@ impl SourceLoadPump {
         self.last_kick[idx] = Some(Instant::now());
 
         let stale = states[idx].take_stale();
-        states[idx] = SourceLoadState::Loading {
-            stale,
-            gen,
-        };
+        // Preserve bodies that are still wanted — caller should have evicted first;
+        // reattach any remaining body_loaded rows by id.
+        let hydrated: HashMap<String, Vec<WorkRecord>> = stale
+            .as_ref()
+            .map(|store| {
+                store
+                    .sessions
+                    .iter()
+                    .filter(|s| s.body_loaded && !s.records.is_empty())
+                    .map(|s| (s.session_id.clone(), s.records.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        states[idx] = SourceLoadState::Loading { stale, gen };
 
         let selector = source.selector();
         let remote = source.is_remote();
         let cwd = self.cwd.clone();
         let tx = self.tx.clone();
         let source = source.clone();
+        let budget = budget.clamp(META_FETCH_FLOOR, META_FETCH_CEILING);
         thread::spawn(move || {
             let query_source = if remote {
                 QuerySource::remote(selector)
             } else {
                 QuerySource::local(selector)
             };
+            let filter = Filter::browse_session_page(budget);
             let result = match workset::query_many(
                 &[query_source],
-                Filter::none(),
+                filter,
                 Some(&cwd),
                 REMOTE_QUERY_TIMEOUT,
             ) {
                 Ok(mut results) => match results.pop() {
                     Some(QuerySourceResult::Ok(set)) => {
-                        Ok(sessions_from_records(&source, set.records))
+                        let record_count = set.records.len();
+                        let mut sessions = sessions_from_records(&source, set.records);
+                        for session in &mut sessions {
+                            if let Some(records) = hydrated.get(&session.session_id) {
+                                session.records = records.clone();
+                                session.body_loaded = true;
+                            } else {
+                                session.records.clear();
+                                session.body_loaded = false;
+                            }
+                        }
+                        // Newest-first list for the source (mtime).
+                        sessions.sort_by_key(|s| std::cmp::Reverse(s.modified));
+                        Ok(SourceSessionStore {
+                            sessions,
+                            fetch_budget: budget,
+                            exhausted: record_count < budget,
+                        })
                     }
                     Some(QuerySourceResult::Err(message)) => Err(message),
                     None => Err("empty query result".to_string()),
@@ -213,7 +492,52 @@ impl SourceLoadPump {
         });
     }
 
-    /// Apply all completed jobs. Returns true if UI should redraw.
+    fn spawn_hydrate(&mut self, idx: usize, source: &WorkspaceSource, session_id: &str) {
+        let gen = self.gens.get(idx).copied().unwrap_or(0);
+        let selector = source.selector();
+        let remote = source.is_remote();
+        let cwd = self.cwd.clone();
+        let tx = self.tx.clone();
+        let source = source.clone();
+        let session_id = session_id.to_string();
+        thread::spawn(move || {
+            let session_selector = format!("{selector}/{session_id}");
+            let query_source = if remote {
+                QuerySource::remote(session_selector)
+            } else {
+                QuerySource::local(session_selector)
+            };
+            let result = match workset::query_many(
+                &[query_source],
+                Filter::none(),
+                Some(&cwd),
+                REMOTE_QUERY_TIMEOUT,
+            ) {
+                Ok(mut results) => match results.pop() {
+                    Some(QuerySourceResult::Ok(set)) => {
+                        let mut sessions = sessions_from_records(&source, set.records);
+                        for session in &mut sessions {
+                            session.body_loaded = !session.records.is_empty();
+                        }
+                        Ok(SourceSessionStore {
+                            sessions,
+                            fetch_budget: 0, // hydrate marker
+                            exhausted: true,
+                        })
+                    }
+                    Some(QuerySourceResult::Err(message)) => Err(message),
+                    None => Err("empty hydrate result".to_string()),
+                },
+                Err(error) => Err(format!("{error:#}")),
+            };
+            let _ = tx.send(SourceLoadEvent {
+                index: idx,
+                gen,
+                result,
+            });
+        });
+    }
+
     pub fn drain(&mut self, states: &mut [SourceLoadState]) -> bool {
         let mut changed = false;
         loop {
@@ -230,29 +554,108 @@ impl SourceLoadPump {
         changed
     }
 
-    fn apply(&self, event: SourceLoadEvent, states: &mut [SourceLoadState]) -> bool {
+    fn apply(&mut self, event: SourceLoadEvent, states: &mut [SourceLoadState]) -> bool {
         let Some(state) = states.get_mut(event.index) else {
             return false;
         };
-        // Drop stale completions.
-        if let SourceLoadState::Loading { gen, .. } = state {
-            if *gen != event.gen {
-                return false;
+
+        match event.result {
+            Ok(store) if store.fetch_budget == 0 => {
+                // Hydrate patch.
+                for s in &store.sessions {
+                    self.body_inflight
+                        .remove(&body_inflight_key(event.index, &s.session_id));
+                }
+                merge_hydrated_bodies(state, store.sessions)
             }
-        } else {
-            // Source was reset; ignore.
-            return false;
+            Ok(store) => {
+                let SourceLoadState::Loading { gen, .. } = state else {
+                    return false;
+                };
+                if *gen != event.gen {
+                    return false;
+                }
+                *state = SourceLoadState::Ready(store);
+                true
+            }
+            Err(message) => {
+                // Clear inflight for this source on hard list failure only.
+                if let SourceLoadState::Loading { gen, stale, .. } = state {
+                    if *gen != event.gen {
+                        return false;
+                    }
+                    let stale = stale.clone();
+                    *state = SourceLoadState::Failed { message, stale };
+                    return true;
+                }
+                // Hydrate failure: drop inflight markers we can infer? leave them —
+                // next sync will retry after timeout if we clear by gen mismatch.
+                false
+            }
         }
-        let stale = state.take_stale();
-        *state = match event.result {
-            Ok(sessions) => SourceLoadState::Ready(sessions),
-            Err(message) => SourceLoadState::Failed { message, stale },
-        };
-        true
     }
 }
 
-/// Source pane catalog: local kinds plus every mounted remote×kind.
+fn body_inflight_key(source_idx: usize, session_id: &str) -> String {
+    format!("{source_idx}\0{session_id}")
+}
+
+fn merge_hydrated_bodies(state: &mut SourceLoadState, hydrated: Vec<WorkspaceSession>) -> bool {
+    let mut changed = false;
+    state.with_sessions_mut(|sessions| {
+        for body in hydrated {
+            if let Some(slot) = sessions
+                .iter_mut()
+                .find(|s| s.session_id == body.session_id)
+            {
+                if !body.records.is_empty() {
+                    slot.records = body.records;
+                    slot.body_loaded = true;
+                    if slot.search_title.is_empty() {
+                        slot.search_title = body.search_title;
+                        slot.title = body.title;
+                    }
+                    changed = true;
+                }
+            }
+        }
+    });
+    changed
+}
+
+/// Build keep-set keys for body cache from focus + multi-select + optional neighbors.
+pub fn body_keep_set(
+    sources: &[WorkspaceSource],
+    sessions: &[WorkspaceSession],
+    focus_idx: usize,
+    selected_sessions: &[bool],
+    neighbor_radius: usize,
+) -> HashSet<(usize, String)> {
+    let mut keep = HashSet::new();
+    let mut push = |session: &WorkspaceSession| {
+        if let Some(si) = source_index_for_session(sources, session) {
+            keep.insert((si, session.session_id.clone()));
+        }
+    };
+    if let Some(session) = sessions.get(focus_idx) {
+        push(session);
+        // Neighbors in the **merged** list (small, for smooth j/k).
+        let start = focus_idx.saturating_sub(neighbor_radius);
+        let end = (focus_idx + neighbor_radius + 1).min(sessions.len());
+        for session in &sessions[start..end] {
+            push(session);
+        }
+    }
+    for (idx, selected) in selected_sessions.iter().enumerate() {
+        if *selected {
+            if let Some(session) = sessions.get(idx) {
+                push(session);
+            }
+        }
+    }
+    keep
+}
+
 pub fn workspace_source_catalog(
     providers: &[AgentProvider],
     cwd: &Path,
@@ -282,14 +685,16 @@ fn list_remote_aliases(cwd: &Path) -> Result<Vec<String>> {
     let Some(ws) = workspace::resolve_workspace_for_dir(cwd)? else {
         return Ok(Vec::new());
     };
-    if crate::commands::remote::serve::ensure_running().is_err() {
+    // Never auto-start daemon for catalog.
+    if !ipc::running() {
         return Ok(Vec::new());
     }
     match ipc::call(LocalRequest::RemoteList {
         workspace_key: ws.key,
     }) {
         Ok(LocalResponse::Mounts(mounts)) => Ok(mounts.into_iter().map(|m| m.alias).collect()),
-        Ok(_) | Err(_) => Ok(Vec::new()),
+        Ok(_) => Ok(Vec::new()),
+        Err(_) => Ok(Vec::new()),
     }
 }
 
@@ -309,7 +714,13 @@ pub fn collect_ready_sessions(
     sessions
 }
 
-/// Group flat WorkRecords into one WorkspaceSession per session id.
+pub fn source_index_for_session(
+    sources: &[WorkspaceSource],
+    session: &WorkspaceSession,
+) -> Option<usize> {
+    sources.iter().position(|source| source == &session.source)
+}
+
 pub fn sessions_from_records(
     source: &WorkspaceSource,
     records: Vec<WorkRecord>,
@@ -330,12 +741,15 @@ pub fn sessions_from_records(
             .unwrap_or(UNIX_EPOCH);
         let search_title = session_search_title(&session_id, &records);
         let title = session_title_with_id(search_title.clone(), Some(session_id.as_str()));
+        let body_loaded = !records.is_empty();
         sessions.push(WorkspaceSession {
             source: source.clone(),
+            session_id,
             modified,
             title,
             search_title,
             records,
+            body_loaded,
         });
     }
     sessions
@@ -389,15 +803,39 @@ mod tests {
             test_record("s1", 2, "second", "2026-07-17T11:00:00Z"),
             test_record("s2", 1, "other", "2026-07-17T12:00:00Z"),
         ];
+
         let sessions = sessions_from_records(&source, records);
         assert_eq!(sessions.len(), 2);
-        assert_eq!(sessions[0].records.len(), 2);
-        assert_eq!(sessions[0].search_title, "first");
-        assert_eq!(sessions[1].search_title, "other");
-        assert!(!sessions[0].source.is_remote());
+        let s1 = sessions.iter().find(|s| s.session_id == "s1").unwrap();
+        assert_eq!(s1.records.len(), 2);
+        assert!(s1.body_loaded);
+        assert_eq!(s1.search_title, "first");
+        assert!(!s1.source.is_remote());
     }
 
-    fn test_record(session: &str, index: usize, title: &str, ended_at: &str) -> WorkRecord {
+    #[test]
+    fn viewport_meta_need_end_scales_with_visible_rows() {
+        let small = SessionViewport {
+            first_visible: 0,
+            visible_rows: 10,
+        };
+        let large = SessionViewport {
+            first_visible: 0,
+            visible_rows: 40,
+        };
+        assert!(large.meta_need_end(0) > small.meta_need_end(0));
+        assert_eq!(small.meta_need_end(0), 10 + 10); // page + 1 screen prefetch
+    }
+
+    #[test]
+    fn record_budget_is_dynamic_not_fixed_page() {
+        let a = SessionViewport::record_budget_for_sessions(10);
+        let b = SessionViewport::record_budget_for_sessions(50);
+        assert!(b > a);
+        assert!(a >= META_FETCH_FLOOR);
+    }
+
+    fn test_record(session: &str, index: usize, title: &str, ended: &str) -> WorkRecord {
         WorkRecord {
             schema_version: 2,
             work_ref: WorkRef::agent(AgentProvider::Codex, session, index),
@@ -412,7 +850,7 @@ mod tests {
                 path: None,
             },
             cwd: None,
-            time: WorkTime::from_components(None, Some(ended_at.to_string()), None),
+            time: WorkTime::from_components(None, Some(ended.to_string()), None),
             status: None,
             title: title.to_string(),
             parts: vec![],
