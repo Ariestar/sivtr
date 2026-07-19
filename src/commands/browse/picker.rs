@@ -304,10 +304,7 @@ pub(crate) fn run(
 
         // Poll so background loads can repaint without waiting for a key.
         if !event::poll(std::time::Duration::from_millis(100))? {
-            if source_states
-                .iter()
-                .any(|state| matches!(state, SourceLoadState::Loading { .. }))
-            {
+            if source_states.iter().any(SourceLoadState::is_fetching) {
                 loading_tick = loading_tick.wrapping_add(1);
             }
             continue;
