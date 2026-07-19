@@ -8,7 +8,8 @@ use ratatui::widgets::ListState;
 use crate::tui::workspace::{selected_index, WorkspaceFocus, WorkspaceSession, WorkspaceSource};
 use crate::tui::workspace_search::WorkspaceSearchIndex;
 
-use super::load::{collect_ready_sessions, SessionViewport, SourceLoadPump, SourceLoadState};
+use super::load::SessionColumn;
+use crate::pane::Viewport;
 
 /// Active rows: multi-select if any, otherwise the focused row.
 pub(super) fn active_mask(selected: &[bool], focus_idx: usize, len: usize) -> Vec<bool> {
@@ -42,19 +43,18 @@ pub(super) fn active_mask(selected: &[bool], focus_idx: usize, len: usize) -> Ve
 #[allow(clippy::too_many_arguments)]
 pub(super) fn refresh_next_level(
     focus: WorkspaceFocus,
-    sources: &[WorkspaceSource],
     selected_sources: &[bool],
     source_state: &ListState,
     sessions: &[WorkspaceSession],
     selected_sessions: &[bool],
     session_state: &ListState,
-    source_states: &mut [SourceLoadState],
-    load_pump: &mut SourceLoadPump,
+    sessions_pane: &mut SessionColumn,
     all_sessions: &mut Vec<WorkspaceSession>,
     search_index: &mut WorkspaceSearchIndex,
     search_dirty: &mut bool,
-    viewport: SessionViewport,
+    viewport: Viewport,
 ) {
+    let sources = sessions_pane.sources();
     let sources_to_reload = match focus {
         WorkspaceFocus::Source => active_mask(
             selected_sources,
@@ -77,8 +77,8 @@ pub(super) fn refresh_next_level(
         return;
     }
 
-    load_pump.refresh_selected(sources, &sources_to_reload, source_states, viewport);
-    *all_sessions = collect_ready_sessions(sources, selected_sources, source_states);
+    sessions_pane.refresh(&sources_to_reload, viewport);
+    *all_sessions = sessions_pane.collect(selected_sources);
     *search_index = WorkspaceSearchIndex::new(all_sessions);
     *search_dirty = true;
 }

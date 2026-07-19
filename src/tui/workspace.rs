@@ -270,15 +270,6 @@ impl WorkspaceDialogue {
         Some(work_ref.with_at(target))
     }
 
-    /// Line count for scroll/search, from the same source as content_text.
-    pub(crate) fn content_line_count(
-        &self,
-        mode: ContentViewMode,
-        target: Option<WorkAt>,
-    ) -> usize {
-        line_count_of(&self.content_text(mode, target))
-    }
-
     fn targeted_plain_text(&self, target: WorkAt) -> Option<String> {
         let WorkAt::Part { .. } = target else {
             return None;
@@ -300,13 +291,6 @@ impl WorkspaceDialogue {
     }
 }
 
-fn line_count_of(text: &str) -> usize {
-    if text.is_empty() {
-        1
-    } else {
-        text.lines().count().max(1)
-    }
-}
 
 /// Reading mode: structure channels are collapsed to a single marker line (fold).
 /// Expand with Raw mode (`r`) to see full payloads.

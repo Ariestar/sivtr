@@ -11,7 +11,7 @@ use crate::tui::workspace::{
 use crate::tui::workspace_search::{WorkspaceSearchMatch, WorkspaceSearchOutput};
 use sivtr_core::record::{WorkAt, WorkRef};
 
-use super::text::{filter_lines_by_spec, record_to_copy_parts};
+use super::text::filter_lines_by_spec;
 use super::vim::{VimBlock, VimView};
 
 #[derive(Clone, Copy)]
@@ -214,42 +214,6 @@ pub(super) fn apply_dialogue_range_selection(
     } else {
         *range_anchor = Some(dialogue_idx);
     }
-}
-
-pub(super) fn workspace_dialogues_for_sessions(
-    sessions: &[WorkspaceSession],
-    session_idx: usize,
-    selected_sessions: &[bool],
-) -> Vec<WorkspaceDialogue> {
-    let selected_indices = selected_sessions
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, selected)| selected.then_some(idx))
-        .collect::<Vec<_>>();
-    let session_indices = if selected_indices.is_empty() {
-        vec![session_idx]
-    } else {
-        selected_indices
-    };
-
-    session_indices
-        .into_iter()
-        .filter_map(|idx| sessions.get(idx))
-        .flat_map(|session| {
-            session
-                .records
-                .iter()
-                .map(|record| WorkspaceDialogue {
-                    source: session.source.clone(),
-                    work_ref: Some(record.work_ref.clone()),
-                    title: record.title.clone(),
-                    record: Some(record.clone()),
-                    copy: record_to_copy_parts(record, sivtr_core::ai::AgentSelection::LastTurn),
-                })
-                .collect::<Vec<_>>()
-                .into_iter()
-        })
-        .collect()
 }
 
 pub(super) fn workspace_search_target_ref(

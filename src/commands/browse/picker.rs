@@ -19,14 +19,16 @@ use crate::tui::workspace_search::{
 use super::content::{
     active_workspace_content_at, apply_dialogue_range_selection, dialogue_text_vim_view,
     handle_line_filter_key, line_filter_spec, workspace_content_line_count,
-    workspace_dialogues_for_sessions, workspace_picked_content_for_copy_with_line_filter,
+    workspace_picked_content_for_copy_with_line_filter,
     workspace_picked_content_with_line_filter, workspace_search_target_ref, WorkspaceCopyShortcut,
 };
 
 use super::help::{apply_workspace_help_action, set_focus, toggle_fullscreen};
-use super::load::{
-    body_keep_set, collect_ready_sessions, SessionViewport, SourceLoadPump, SourceLoadState,
+use super::load::{SessionColumn, SessionCtx, SourceLoadState};
+use super::panes::{
+    ContentCtx, ContentPane, DialogueCtx, DialoguePane, SourcePane,
 };
+use crate::pane::{Pane, PaneInput, Viewport};
 use super::nav::{
     clamp_list_state, move_workspace_cursor_down, move_workspace_cursor_up, open_link_target,
     reset_workspace_after_source_change, reset_workspace_dialogue_state,
@@ -47,7 +49,7 @@ use super::PICK_CANCELLED_MESSAGE;
 pub(crate) fn run(
     terminal: &mut crate::tui::terminal::Tui,
     sources: Vec<WorkspaceSource>,
-    mut source_states: Vec<SourceLoadState>,
+    source_states: Vec<SourceLoadState>,
     selected_sources: Vec<bool>,
     cwd: PathBuf,
     initial_focus: WorkspaceFocus,
@@ -61,22 +63,20 @@ pub(crate) fn run(
     let mut help_state = ListState::default();
     help_state.select(Some(0));
     let mut focus = initial_focus;
-    let mut load_pump = SourceLoadPump::new(sources.len(), cwd.clone());
-    // Bootstrap with a conservative viewport; first draw refines from layout.
-    let bootstrap = SessionViewport {
-        first_visible: 0,
-        visible_rows: 24,
+    // Unified Pane stack — each implements crate::pane::Pane.
+    // New panes: construct + poll/ensure with PaneInput; no special picker branches.
+    let mut source_pane = SourcePane::from_catalog(&sources);
+    let mut sessions_pane = SessionColumn::new(sources.clone(), source_states, cwd.clone());
+    let mut dialogue_pane = DialoguePane::default();
+    let mut content_pane = ContentPane::default();
+    let bootstrap = Viewport {
+        first: 0,
+        visible: 24,
     };
-    load_pump.kick(
-        &sources,
-        &selected_sources,
-        &mut source_states,
-        bootstrap,
-        true,
-    );
-    let mut all_sessions = collect_ready_sessions(&sources, &selected_sources, &source_states);
+    sessions_pane.kick(&selected_sources, bootstrap, true);
+    let mut all_sessions = sessions_pane.collect(&selected_sources);
     let mut sessions = all_sessions.clone();
-    clamp_list_state(&mut source_state, sources.len());
+    clamp_list_state(&mut source_state, source_pane.len());
     clamp_list_state(&mut session_state, sessions.len());
     clamp_list_state(&mut dialogue_state, 0);
     let mut selected_sessions = vec![false; sessions.len()];
@@ -100,9 +100,9 @@ pub(crate) fn run(
     let mut loading_tick = 0u8;
 
     loop {
-        // Non-blocking: apply completed source loads before drawing.
-        if load_pump.drain(&mut source_states) {
-            all_sessions = collect_ready_sessions(&sources, &selected_sources, &source_states);
+        // ── Unified pane poll/ensure (same contract for every pane) ─────────
+        if sessions_pane.poll() {
+            all_sessions = sessions_pane.collect(&selected_sources);
             search_index = WorkspaceSearchIndex::new(&all_sessions);
             search_dirty = true;
         }
@@ -139,43 +139,40 @@ pub(crate) fn run(
         let session_idx = selected_index(&session_state).min(sessions.len().saturating_sub(1));
         session_state.select((!sessions.is_empty()).then_some(session_idx));
 
-        // Viewport from current terminal size (sessions panel inner rows).
         let size = terminal.size()?;
         let layout = workspace_layout(
             ratatui::layout::Rect::new(0, 0, size.width, size.height),
             focus,
             fullscreen,
         );
-        let session_viewport = SessionViewport::from_panel(
-            session_state.offset(),
-            panel_inner_rows(layout.sessions),
+
+        // Source: static — ensure is a no-op (keeps the same call shape).
+        let _ = source_pane.ensure(
+            (),
+            &PaneInput::new(
+                Viewport::from_panel(source_state.offset(), panel_inner_rows(layout.source)),
+                selected_index(&source_state),
+            )
+            .with_selected(selected_sources.clone())
+            .with_neighbors(1),
         );
 
-        // Drop caches for unselected sources; grow meta to cover the viewport.
-        load_pump.drop_unselected(&selected_sources, &mut source_states);
-        if !search_has_query {
-            load_pump.ensure_meta_window(
-                &sources,
-                &selected_sources,
-                &mut source_states,
-                session_viewport,
-                sessions.len(),
-            );
-        }
-
-        // Sliding body window: hydrate keep-set, evict everything else.
-        let keep = body_keep_set(
-            &sources,
-            &sessions,
-            session_idx,
-            &selected_sessions,
-            1, // one neighbor each side for smooth j/k
+        // Sessions column.
+        sessions_pane.ensure(
+            SessionCtx {
+                selected_sources: &selected_sources,
+                sessions: &sessions,
+                selected_sessions: &selected_sessions,
+                search_active: search_has_query,
+            },
+            &PaneInput::new(
+                Viewport::from_panel(session_state.offset(), panel_inner_rows(layout.sessions)),
+                session_idx,
+            )
+            .with_selected(selected_sessions.clone())
+            .with_neighbors(1),
         );
-        load_pump.sync_bodies(&sources, &mut source_states, &keep);
-
-        // Refresh merged list after possible meta/body updates applied next drain;
-        // re-collect so dialogues see just-evicted/hydrated state from prior frame.
-        all_sessions = collect_ready_sessions(&sources, &selected_sources, &source_states);
+        all_sessions = sessions_pane.collect(&selected_sources);
         sessions = if search_has_query {
             search_output.sessions.clone()
         } else {
@@ -187,60 +184,66 @@ pub(crate) fn run(
         let session_idx = selected_index(&session_state).min(sessions.len().saturating_sub(1));
         session_state.select((!sessions.is_empty()).then_some(session_idx));
 
-        let dialogues =
-            workspace_dialogues_for_sessions(&sessions, session_idx, &selected_sessions);
-        let dialogue_count = dialogues.len();
-        let dialogue_idx = pending_match
+        // Dialogues.
+        let dialogue_focus_hint = pending_match
             .as_ref()
             .map(|matched| matched.dialogue_index)
-            .unwrap_or_else(|| selected_index(&dialogue_state))
-            .min(dialogue_count.saturating_sub(1));
-        dialogue_state.select((dialogue_count > 0).then_some(dialogue_idx));
-        if pending_match.is_some() || selected_dialogues.len() != dialogue_count {
+            .unwrap_or_else(|| selected_index(&dialogue_state));
+        if selected_dialogues.len() != dialogue_pane.len() {
             resize_workspace_dialogue_selection(
-                dialogue_count,
+                dialogue_pane.len(),
                 &mut selected_dialogues,
                 &mut range_anchor,
             );
         }
-        if let Some(matched) = pending_match {
-            if let Some(dialogue) = dialogues.get(dialogue_idx) {
-                content_scroll = matched.content_scroll_index().min(
-                    dialogue
-                        .content_line_count(content_mode, None)
-                        .saturating_sub(1),
-                );
-            } else {
-                content_scroll = 0;
-            }
-            search_apply_pending = false;
-        } else {
-            let size = terminal.size()?;
-            let layout = workspace_layout(
-                ratatui::layout::Rect::new(0, 0, size.width, size.height),
-                focus,
-                fullscreen,
-            );
-            let content_at = active_workspace_content_at(
-                search_has_query,
-                &search_output,
-                search_cursor,
+        dialogue_pane.ensure(
+            DialogueCtx {
+                sessions: &sessions,
                 session_idx,
-                &selected_dialogues,
-                dialogue_idx,
+                selected_sessions: &selected_sessions,
+            },
+            &PaneInput::new(
+                Viewport::from_panel(
+                    dialogue_state.offset(),
+                    panel_inner_rows(layout.dialogues),
+                ),
+                dialogue_focus_hint,
+            )
+            .with_selected(selected_dialogues.clone())
+            .with_neighbors(1),
+        );
+        if selected_dialogues.len() != dialogue_pane.len() {
+            resize_workspace_dialogue_selection(
+                dialogue_pane.len(),
+                &mut selected_dialogues,
+                &mut range_anchor,
             );
-            content_scroll = content_scroll.min(
-                workspace_content_line_count(
-                    &dialogues,
-                    &selected_dialogues,
-                    dialogue_idx,
-                    content_at,
-                    layout.content,
-                    content_mode,
+            // Mask grew with meta — re-ensure bodies under the new mask.
+            dialogue_pane.ensure(
+                DialogueCtx {
+                    sessions: &sessions,
+                    session_idx,
+                    selected_sessions: &selected_sessions,
+                },
+                &PaneInput::new(
+                    Viewport::from_panel(
+                        dialogue_state.offset(),
+                        panel_inner_rows(layout.dialogues),
+                    ),
+                    dialogue_focus_hint.min(dialogue_pane.len().saturating_sub(1)),
                 )
-                .saturating_sub(1),
+                .with_selected(selected_dialogues.clone())
+                .with_neighbors(1),
             );
         }
+        let dialogues = dialogue_pane.dialogues();
+        let dialogue_count = dialogues.len();
+        let dialogue_idx = dialogue_focus_hint.min(dialogue_count.saturating_sub(1));
+        dialogue_state.select((dialogue_count > 0).then_some(dialogue_idx));
+        if pending_match.is_some() {
+            range_anchor = None;
+        }
+
         let active_content_at = active_workspace_content_at(
             search_has_query,
             &search_output,
@@ -249,11 +252,31 @@ pub(crate) fn run(
             &selected_dialogues,
             dialogue_idx,
         );
+        content_pane.ensure(
+            ContentCtx {
+                dialogues: &dialogues,
+                selected_dialogues: &selected_dialogues,
+                highlighted_idx: dialogue_idx,
+                mode: content_mode,
+                target: active_content_at,
+                area: layout.content,
+            },
+            &PaneInput::new(
+                Viewport::from_panel(content_scroll, panel_inner_rows(layout.content)),
+                content_scroll,
+            ),
+        );
+        let content_total = content_pane.line_count();
+        if let Some(matched) = pending_match {
+            content_scroll = matched
+                .content_scroll_index()
+                .min(content_total.saturating_sub(1));
+            search_apply_pending = false;
+        } else {
+            content_scroll = content_scroll.min(content_total.saturating_sub(1));
+        }
 
-        let source_markers = source_states
-            .iter()
-            .map(SourceLoadState::marker)
-            .collect::<Vec<_>>();
+        let source_markers = sessions_pane.markers();
         terminal.draw(|frame| {
             render_workspace(
                 frame,
@@ -304,7 +327,7 @@ pub(crate) fn run(
 
         // Poll so background loads can repaint without waiting for a key.
         if !event::poll(std::time::Duration::from_millis(100))? {
-            if source_states.iter().any(SourceLoadState::is_fetching) {
+            if sessions_pane.is_fetching() {
                 loading_tick = loading_tick.wrapping_add(1);
             }
             continue;
@@ -467,13 +490,6 @@ pub(crate) fn run(
                                 .min(workspace_help_entries().len().saturating_sub(1));
                             let action = workspace_help_entries()[idx].action;
                             show_help = false;
-                            let dialogues = workspace_dialogues_for_sessions(
-                                &sessions,
-                                session_idx,
-                                &selected_sessions,
-                            );
-                            let dialogue_count = dialogues.len();
-                            let dialogue_idx = dialogue_idx.min(dialogue_count.saturating_sub(1));
                             if let Some(picked) = apply_workspace_help_action(
                                 action,
                                 &mut focus,
@@ -553,12 +569,6 @@ pub(crate) fn run(
                         );
                     }
                     KeyCode::Char('i') if dialogue_count > 0 => {
-                        let dialogues = workspace_dialogues_for_sessions(
-                            &sessions,
-                            session_idx,
-                            &selected_sessions,
-                        );
-                        let dialogue_idx = dialogue_idx.min(dialogues.len().saturating_sub(1));
                         match workspace_picked_content_for_copy_with_line_filter(
                             &dialogues,
                             &selected_dialogues,
@@ -576,12 +586,6 @@ pub(crate) fn run(
                         }
                     }
                     KeyCode::Char('o') if dialogue_count > 0 => {
-                        let dialogues = workspace_dialogues_for_sessions(
-                            &sessions,
-                            session_idx,
-                            &selected_sessions,
-                        );
-                        let dialogue_idx = dialogue_idx.min(dialogues.len().saturating_sub(1));
                         match workspace_picked_content_for_copy_with_line_filter(
                             &dialogues,
                             &selected_dialogues,
@@ -599,12 +603,6 @@ pub(crate) fn run(
                         }
                     }
                     KeyCode::Char('y') if dialogue_count > 0 => {
-                        let dialogues = workspace_dialogues_for_sessions(
-                            &sessions,
-                            session_idx,
-                            &selected_sessions,
-                        );
-                        let dialogue_idx = dialogue_idx.min(dialogues.len().saturating_sub(1));
                         match workspace_picked_content_for_copy_with_line_filter(
                             &dialogues,
                             &selected_dialogues,
@@ -622,12 +620,6 @@ pub(crate) fn run(
                         }
                     }
                     KeyCode::Char('c') if dialogue_count > 0 => {
-                        let dialogues = workspace_dialogues_for_sessions(
-                            &sessions,
-                            session_idx,
-                            &selected_sessions,
-                        );
-                        let dialogue_idx = dialogue_idx.min(dialogues.len().saturating_sub(1));
                         match workspace_picked_content_for_copy_with_line_filter(
                             &dialogues,
                             &selected_dialogues,
@@ -672,20 +664,13 @@ pub(crate) fn run(
                                 focus,
                                 fullscreen,
                             );
-                            let viewport = SessionViewport::from_panel(
+                            let viewport = Viewport::from_panel(
                                 session_state.offset(),
                                 panel_inner_rows(layout.sessions),
                             );
-                            load_pump.kick(
-                                &sources,
-                                &selected_sources,
-                                &mut source_states,
-                                viewport,
-                                true,
-                            );
-                        };
-                        all_sessions =
-                            collect_ready_sessions(&sources, &selected_sources, &source_states);
+                            sessions_pane.kick(&selected_sources, viewport, true);
+                        }
+                        all_sessions = sessions_pane.collect(&selected_sources);
                         search_index = WorkspaceSearchIndex::new(&all_sessions);
                         search_dirty = true;
                         reset_workspace_after_source_change(
@@ -710,20 +695,13 @@ pub(crate) fn run(
                                 focus,
                                 fullscreen,
                             );
-                            let viewport = SessionViewport::from_panel(
+                            let viewport = Viewport::from_panel(
                                 session_state.offset(),
                                 panel_inner_rows(layout.sessions),
                             );
-                            load_pump.kick(
-                                &sources,
-                                &selected_sources,
-                                &mut source_states,
-                                viewport,
-                                true,
-                            );
-                        };
-                        all_sessions =
-                            collect_ready_sessions(&sources, &selected_sources, &source_states);
+                            sessions_pane.kick(&selected_sources, viewport, true);
+                        }
+                        all_sessions = sessions_pane.collect(&selected_sources);
                         search_index = WorkspaceSearchIndex::new(&all_sessions);
                         search_dirty = true;
                         reset_workspace_after_source_change(
@@ -748,20 +726,13 @@ pub(crate) fn run(
                                 focus,
                                 fullscreen,
                             );
-                            let viewport = SessionViewport::from_panel(
+                            let viewport = Viewport::from_panel(
                                 session_state.offset(),
                                 panel_inner_rows(layout.sessions),
                             );
-                            load_pump.kick(
-                                &sources,
-                                &selected_sources,
-                                &mut source_states,
-                                viewport,
-                                true,
-                            );
-                        };
-                        all_sessions =
-                            collect_ready_sessions(&sources, &selected_sources, &source_states);
+                            sessions_pane.kick(&selected_sources, viewport, true);
+                        }
+                        all_sessions = sessions_pane.collect(&selected_sources);
                         search_index = WorkspaceSearchIndex::new(&all_sessions);
                         search_dirty = true;
                         reset_workspace_after_source_change(
@@ -783,20 +754,18 @@ pub(crate) fn run(
                             focus,
                             fullscreen,
                         );
-                        let viewport = SessionViewport::from_panel(
+                        let viewport = Viewport::from_panel(
                             session_state.offset(),
                             panel_inner_rows(layout.sessions),
                         );
                         refresh_next_level(
                             focus,
-                            &sources,
                             &selected_sources,
                             &source_state,
                             &sessions,
                             &selected_sessions,
                             &session_state,
-                            &mut source_states,
-                            &mut load_pump,
+                            &mut sessions_pane,
                             &mut all_sessions,
                             &mut search_index,
                             &mut search_dirty,
@@ -932,20 +901,13 @@ pub(crate) fn run(
                                 focus,
                                 fullscreen,
                             );
-                            let viewport = SessionViewport::from_panel(
+                            let viewport = Viewport::from_panel(
                                 session_state.offset(),
                                 panel_inner_rows(layout.sessions),
                             );
-                            load_pump.kick(
-                                &sources,
-                                &selected_sources,
-                                &mut source_states,
-                                viewport,
-                                true,
-                            );
-                        };
-                            all_sessions =
-                                collect_ready_sessions(&sources, &selected_sources, &source_states);
+                            sessions_pane.kick(&selected_sources, viewport, true);
+                        }
+                        all_sessions = sessions_pane.collect(&selected_sources);
                             search_index = WorkspaceSearchIndex::new(&all_sessions);
                             search_dirty = true;
                             reset_workspace_after_source_change(
@@ -990,12 +952,6 @@ pub(crate) fn run(
                         range_anchor = None;
                     }
                     KeyCode::Char('t') if can_open_dialogue_vim(focus, dialogue_count) => {
-                        let dialogues = workspace_dialogues_for_sessions(
-                            &sessions,
-                            session_idx,
-                            &selected_sessions,
-                        );
-                        let dialogue_idx = dialogue_idx.min(dialogues.len().saturating_sub(1));
                         let view = dialogue_text_vim_view(workspace_content_text(
                             &dialogues,
                             &selected_dialogues,
@@ -1012,22 +968,11 @@ pub(crate) fn run(
                             set_focus(&mut focus, &mut fullscreen, WorkspaceFocus::Sessions);
                         }
                         WorkspaceFocus::Sessions => {
-                            let dialogues = workspace_dialogues_for_sessions(
-                                &sessions,
-                                session_idx,
-                                &selected_sessions,
-                            );
                             if !dialogues.is_empty() {
                                 set_focus(&mut focus, &mut fullscreen, WorkspaceFocus::Dialogues);
                             }
                         }
                         WorkspaceFocus::Dialogues => {
-                            let dialogues = workspace_dialogues_for_sessions(
-                                &sessions,
-                                session_idx,
-                                &selected_sessions,
-                            );
-                            let dialogue_idx = dialogue_idx.min(dialogues.len().saturating_sub(1));
                             match workspace_picked_content_with_line_filter(
                                 &dialogues,
                                 &selected_dialogues,
@@ -1043,12 +988,6 @@ pub(crate) fn run(
                             }
                         }
                         WorkspaceFocus::Content => {
-                            let dialogues = workspace_dialogues_for_sessions(
-                                &sessions,
-                                session_idx,
-                                &selected_sessions,
-                            );
-                            let dialogue_idx = dialogue_idx.min(dialogues.len().saturating_sub(1));
                             match workspace_picked_content_with_line_filter(
                                 &dialogues,
                                 &selected_dialogues,
@@ -1247,12 +1186,13 @@ pub(crate) fn run(
 #[cfg(test)]
 mod tests {
     use super::super::content::{
-        handle_line_filter_key, workspace_dialogue_vim_view, workspace_dialogues_for_sessions,
-        workspace_picked_content, workspace_picked_content_for_copy,
-        workspace_picked_content_for_copy_with_line_filter, workspace_picked_content_with_line_filter,
-        workspace_search_target_ref, WorkspaceCopyShortcut,
+        handle_line_filter_key, workspace_dialogue_vim_view, workspace_picked_content,
+        workspace_picked_content_for_copy, workspace_picked_content_for_copy_with_line_filter,
+        workspace_picked_content_with_line_filter, workspace_search_target_ref, WorkspaceCopyShortcut,
     };
     use super::super::nav::{clamp_list_state, move_workspace_cursor_up};
+    use super::super::panes::{DialogueCtx, DialoguePane};
+    use crate::pane::{Pane, PaneInput, Viewport};
     use crate::commands::select::CommandSelection;
     use crate::tui::content_view::ContentViewMode;
     use crate::tui::workspace::{
@@ -1273,6 +1213,43 @@ mod tests {
     };
     use std::time::SystemTime;
 
+    fn dialogues_for_test(
+        sessions: &[WorkspaceSession],
+        session_idx: usize,
+        selected_sessions: &[bool],
+    ) -> Vec<WorkspaceDialogue> {
+        let mut pane = DialoguePane::default();
+        let total: usize = sessions.iter().map(|s| s.records.len()).sum::<usize>().max(1);
+        let vp = Viewport {
+            first: 0,
+            visible: total.max(40),
+        };
+        let selected_dialogues = vec![true; total];
+        pane.ensure(
+            DialogueCtx {
+                sessions,
+                session_idx,
+                selected_sessions,
+            },
+            &PaneInput::new(vp, 0)
+                .with_selected(selected_dialogues)
+                .with_neighbors(total),
+        );
+        let n = pane.len();
+        let selected_dialogues = vec![true; n];
+        pane.ensure(
+            DialogueCtx {
+                sessions,
+                session_idx,
+                selected_sessions,
+            },
+            &PaneInput::new(vp, 0)
+                .with_selected(selected_dialogues)
+                .with_neighbors(n),
+        );
+        pane.dialogues()
+    }
+
     #[test]
     fn workspace_dialogues_follow_current_session_without_session_selection() {
         let sessions = vec![
@@ -1284,7 +1261,7 @@ mod tests {
             ),
         ];
 
-        let dialogues = workspace_dialogues_for_sessions(&sessions, 1, &[false, false]);
+        let dialogues = dialogues_for_test(&sessions, 1, &[false, false]);
 
         assert_eq!(dialogues.len(), 1);
         assert_eq!(dialogues[0].title, "o1");
@@ -1312,7 +1289,7 @@ mod tests {
             ),
         ];
 
-        let dialogues = workspace_dialogues_for_sessions(&sessions, 0, &[true, true]);
+        let dialogues = dialogues_for_test(&sessions, 0, &[true, true]);
 
         assert_eq!(dialogues.len(), 3);
         assert_eq!(dialogues[0].title, "c1");

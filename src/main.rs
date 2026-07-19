@@ -2,6 +2,7 @@ mod cli;
 mod commands;
 mod mcp;
 mod output;
+mod pane;
 mod remote;
 mod tui;
 

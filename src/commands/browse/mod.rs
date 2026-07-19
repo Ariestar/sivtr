@@ -2,16 +2,21 @@
 //!
 //! Product surface for bare `sivtr`, hotkey, and `copy --pick`. Returns
 //! [`WorkspacePickedContent`]; callers decide how to export (clipboard, etc.).
+//!
+//! Pane data capability lives in [`crate::pane`] (`SlidingPane`). This module
+//! owns loaders + picker orchestration only. `tui::pane` is chrome only.
 
 mod content;
 mod help;
 mod load;
 mod nav;
+mod panes;
 mod picker;
 mod selection;
 mod text;
 mod vim;
 mod visual;
+
 pub(crate) use load::{workspace_source_catalog, SourceLoadState};
 pub(crate) use picker::run as run_picker;
 pub(crate) use text::{filter_lines_by_spec, record_text_to_pair, select_lines};
@@ -21,8 +26,6 @@ use sivtr_core::ai::AgentProvider;
 
 use crate::tui::terminal::{init as init_tui, restore as restore_tui};
 use crate::tui::workspace::{WorkspaceFocus, WorkspacePickedContent, WorkspaceSource};
-
-use load::SourceSessionStore;
 
 /// Run the workspace browser.
 ///
@@ -44,7 +47,7 @@ pub fn run(
         .map(|source| select_remotes || !source.is_remote())
         .collect();
     let source_states: Vec<SourceLoadState> =
-        sources.iter().map(|_| SourceLoadState::Idle).collect();
+        sources.iter().map(|_| SourceLoadState::idle()).collect();
 
     let mut terminal = init_tui()?;
     let result = run_picker(
@@ -71,11 +74,7 @@ pub fn run_with_sessions(
     let result = run_picker(
         &mut terminal,
         vec![source],
-        vec![SourceLoadState::Ready(SourceSessionStore::ready(
-            sessions,
-            loaded,
-            true,
-        ))],
+        vec![SourceLoadState::ready_from_sessions(sessions, loaded)],
         vec![true],
         cwd,
         initial_focus,
