@@ -1,3 +1,5 @@
+pub mod copy;
+pub mod diff;
 pub mod filter;
 pub mod nav;
 pub mod records;

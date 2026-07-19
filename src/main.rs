@@ -11,8 +11,8 @@ use cli::{
     Commands, CopyCommand, CopyFlagArgs, CopyInvocation, CopySubcommand, DiffArgs,
     HotkeyPickAgentArgs, HotkeyServeArgs,
 };
-use commands::copy::{plan_from_cli, CopyFilters, Projection};
-use commands::diff::{DiffRequest, DiffTextMode};
+use commands::memory::copy::{plan_from_cli, CopyFilters, Projection};
+use commands::memory::diff::{DiffRequest, DiffTextMode};
 use tui::workspace::WorkspaceFocus;
 
 use sivtr_core::ai::AgentProvider;
@@ -147,7 +147,7 @@ fn run_workspace(select_remotes: bool) -> Result<()> {
         .map(|spec| spec.provider)
         .collect::<Vec<_>>();
     let picked = commands::browse::run(&providers, select_remotes, WorkspaceFocus::Sessions)?;
-    commands::copy::export_picked(&picked, false, None, None, false)
+    commands::memory::copy::export_picked(&picked, false, None, None, false)
 }
 
 fn run_copy_command(cmd: CopyCommand) -> Result<()> {
@@ -171,7 +171,7 @@ fn run_copy_invocation(projection: Projection, inv: &CopyInvocation) -> Result<(
 fn run_copy_tokens(projection: Projection, tokens: &[String], flags: &CopyFlagArgs) -> Result<()> {
     let plan = plan_from_cli(projection, tokens, flags.pick, filters_from_flags(flags))
         .map_err(|message| anyhow::anyhow!(message))?;
-    commands::copy::execute(plan)
+    commands::memory::copy::execute(plan)
 }
 
 fn filters_from_flags(flags: &CopyFlagArgs) -> CopyFilters {
@@ -225,7 +225,7 @@ fn run_diff(args: &DiffArgs) -> Result<()> {
         DiffTextMode::Output
     };
 
-    commands::diff::execute(DiffRequest {
+    commands::memory::diff::execute(DiffRequest {
         left_selector: &args.left,
         right_selector: &args.right,
         mode,

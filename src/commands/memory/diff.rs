@@ -1,11 +1,14 @@
-//! Compare two dialogues from the current terminal session (workset load path).
+//! Compare two dialogues from the current terminal session.
+//!
+//! Terminal-only product surface: load goes through workset, but the address is
+//! always the current terminal session (not agent sources).
 
 use anyhow::{Context, Result};
 use crossterm::terminal;
 use similar::{ChangeTag, TextDiff};
 use sivtr_core::record::{RecordTextMode, WorkRecord};
 
-use crate::commands::copy::load::{current_terminal_source, load_dialogues};
+use crate::commands::memory::copy::load::{current_terminal_source, load_dialogues};
 use crate::commands::select::{parse_selector, resolve_selector};
 
 const MIN_SIDE_BY_SIDE_WIDTH: usize = 20;

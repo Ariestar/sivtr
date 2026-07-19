@@ -10,7 +10,7 @@ use crate::cli::{
     HotkeyStartArgs,
 };
 use crate::commands::browse;
-use crate::commands::copy;
+use crate::commands::memory::copy;
 use crate::tui::workspace::WorkspaceFocus;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

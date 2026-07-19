@@ -22,17 +22,17 @@ src/
 │   │   ├── clear.rs           ← Clear session logs
 │   │   ├── run.rs / pipe.rs / import.rs  ← One-shot ingest → history + editor
 │   │   └── history.rs         ← Optional history auto-save helper
-│   ├── copy/                  ← Export to clipboard (plan/load/project/export)
-│   ├── select.rs              ← Relative dialogue select (1 / A..B)
-│   ├── diff.rs                ← Compare two terminal dialogues
-│   ├── browse/                ← Product TUI (bare `sivtr` / hotkey / pick)
-│   │   ├── mod.rs / load.rs / picker.rs / selection.rs / content.rs
-│   │   └── help.rs / nav / vim / visual / text
-│   ├── memory/                ← WorkSet / search / show surface
+│   ├── memory/                ← WorkSet / search / show / copy / diff
+│   │   ├── copy/              ← Export to clipboard (plan/load/project/export)
+│   │   ├── diff.rs            ← Terminal-only dialogue compare (workset load)
 │   │   ├── search.rs / filter.rs / var.rs / nav.rs / zoom.rs
 │   │   ├── show.rs / work.rs / work_json.rs / records.rs
 │   │   ├── time_filter.rs
 │   │   └── workset/           ← WorkSet source resolution + store
+│   ├── select.rs              ← Relative dialogue select (1 / A..B)
+│   ├── browse/                ← Product TUI (bare `sivtr` / hotkey / pick)
+│   │   ├── mod.rs / load.rs / picker.rs / selection.rs / content.rs
+│   │   └── help.rs / nav / vim / visual / text
 │   ├── remote/                ← Device daemon CLI surface
 │   │   ├── serve.rs / share.rs / mounts.rs / peer.rs / workspace.rs
 │   └── system/                ← config, doctor, history, hotkey, codex, …
@@ -63,7 +63,8 @@ crates/sivtr-core/src/
 - Write terminal memory → `commands/terminal`
 - Read any source (terminal + agents) → `memory/workset` + `sivtr-core::query`
 - Interactive pick → `commands/browse`
-- Clipboard export → `commands/copy`
+- Clipboard export → `commands/memory/copy`
+- Terminal dialogue diff → `commands/memory/diff` (terminal-only)
 
 ## Common Search Patterns
 
