@@ -145,8 +145,8 @@ impl WorkspaceSearchIndex {
                     .filter(|entry| regex.is_match(&entry.session_title))
                 {
                     let filtered_session_index = sessions.len();
-                    if let Some(session) = all_sessions.get(entry.session_index).cloned() {
-                        sessions.push(session);
+                    if let Some(session) = all_sessions.get(entry.session_index) {
+                        sessions.push(session_meta_shell(session));
                         matches.push(WorkspaceSearchMatch {
                             session_index: filtered_session_index,
                             dialogue_index: 0,
@@ -167,49 +167,38 @@ impl WorkspaceSearchIndex {
         all_sessions: &[WorkspaceSession],
         regex: &Regex,
     ) -> WorkspaceSearchOutput {
-        let mut grouped: Vec<(usize, Vec<usize>)> = Vec::new();
+        // Hit sessions are meta shells; dialogue_index is the original turn
+        // index in the session body (read later via SessionColumn::body_for).
+        let mut sessions = Vec::new();
+        let mut matches = Vec::new();
+        let mut session_map: Vec<(usize, usize)> = Vec::new(); // corpus idx -> hit idx
         for entry in self
             .dialogues
             .iter()
             .filter(|entry| regex.is_match(&entry.dialogue_title))
         {
-            if let Some((_, dialogue_indices)) = grouped
-                .iter_mut()
-                .find(|(session_index, _)| *session_index == entry.session_index)
+            let hit_idx = if let Some((_, hit)) = session_map
+                .iter()
+                .find(|(corpus, _)| *corpus == entry.session_index)
             {
-                dialogue_indices.push(entry.dialogue_index);
+                *hit
             } else {
-                grouped.push((entry.session_index, vec![entry.dialogue_index]));
-            }
+                let session = match all_sessions.get(entry.session_index) {
+                    Some(s) => s,
+                    None => continue,
+                };
+                let hit = sessions.len();
+                sessions.push(session_meta_shell(session));
+                session_map.push((entry.session_index, hit));
+                hit
+            };
+            matches.push(WorkspaceSearchMatch {
+                session_index: hit_idx,
+                dialogue_index: entry.dialogue_index,
+                at: WorkAt::Whole,
+                matched_line: 1,
+            });
         }
-
-        let sessions = grouped
-            .into_iter()
-            .filter_map(|(session_index, dialogue_indices)| {
-                let session = all_sessions.get(session_index)?;
-                Some(filter_workspace_session_dialogues(
-                    session,
-                    &dialogue_indices,
-                ))
-            })
-            .collect::<Vec<_>>();
-        let matches = sessions
-            .iter()
-            .enumerate()
-            .flat_map(|(session_index, session)| {
-                session
-                    .records
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, record)| regex.is_match(&record.title))
-                    .map(move |(dialogue_index, _)| WorkspaceSearchMatch {
-                        session_index,
-                        dialogue_index,
-                        at: WorkAt::Whole,
-                        matched_line: 1,
-                    })
-            })
-            .collect();
         WorkspaceSearchOutput { sessions, matches }
     }
 
@@ -218,7 +207,9 @@ impl WorkspaceSearchIndex {
         all_sessions: &[WorkspaceSession],
         regex: &Regex,
     ) -> WorkspaceSearchOutput {
-        let mut grouped: Vec<(usize, Vec<usize>)> = Vec::new();
+        let mut sessions = Vec::new();
+        let mut matches = Vec::new();
+        let mut session_map: Vec<(usize, usize)> = Vec::new();
         for entry in &self.dialogues {
             let Some(record) = all_sessions
                 .get(entry.session_index)
@@ -226,63 +217,41 @@ impl WorkspaceSearchIndex {
             else {
                 continue;
             };
-            if work_record_content_matches(record, regex).is_empty() {
+            let line_matches = work_record_content_matches(record, regex);
+            if line_matches.is_empty() {
                 continue;
             }
-            if let Some((_, dialogue_indices)) = grouped
-                .iter_mut()
-                .find(|(session_index, _)| *session_index == entry.session_index)
+            let hit_idx = if let Some((_, hit)) = session_map
+                .iter()
+                .find(|(corpus, _)| *corpus == entry.session_index)
             {
-                dialogue_indices.push(entry.dialogue_index);
+                *hit
             } else {
-                grouped.push((entry.session_index, vec![entry.dialogue_index]));
+                let session = match all_sessions.get(entry.session_index) {
+                    Some(s) => s,
+                    None => continue,
+                };
+                let hit = sessions.len();
+                sessions.push(session_meta_shell(session));
+                session_map.push((entry.session_index, hit));
+                hit
+            };
+            for matched in line_matches {
+                matches.push(WorkspaceSearchMatch {
+                    session_index: hit_idx,
+                    dialogue_index: entry.dialogue_index,
+                    at: matched.at,
+                    matched_line: matched.matched_line,
+                });
             }
         }
-
-        let sessions = grouped
-            .into_iter()
-            .filter_map(|(session_index, dialogue_indices)| {
-                let session = all_sessions.get(session_index)?;
-                Some(filter_workspace_session_dialogues(
-                    session,
-                    &dialogue_indices,
-                ))
-            })
-            .collect::<Vec<_>>();
-        let matches = sessions
-            .iter()
-            .enumerate()
-            .flat_map(|(session_index, session)| {
-                session
-                    .records
-                    .iter()
-                    .enumerate()
-                    .flat_map(move |(dialogue_index, record)| {
-                        work_record_content_matches(record, regex)
-                            .into_iter()
-                            .map(move |matched| WorkspaceSearchMatch {
-                                session_index,
-                                dialogue_index,
-                                at: matched.at,
-                                matched_line: matched.matched_line,
-                            })
-                            .collect::<Vec<_>>()
-                    })
-            })
-            .collect();
         WorkspaceSearchOutput { sessions, matches }
     }
 }
 
-fn filter_workspace_session_dialogues(
-    session: &WorkspaceSession,
-    dialogue_indices: &[usize],
-) -> WorkspaceSession {
-    let mut filtered = session.clone();
-    filtered.records = dialogue_indices
-        .iter()
-        .filter_map(|idx| session.records.get(*idx).cloned())
-        .collect();
-    filtered.body_loaded = !filtered.records.is_empty();
-    filtered
+/// Search hit list row: meta only. Bodies stay in SessionColumn.
+fn session_meta_shell(session: &WorkspaceSession) -> WorkspaceSession {
+    let mut out = session.clone();
+    out.records = Vec::new();
+    out
 }

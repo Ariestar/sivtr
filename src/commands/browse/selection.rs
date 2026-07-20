@@ -6,7 +6,6 @@
 use ratatui::widgets::ListState;
 
 use crate::tui::workspace::{selected_index, WorkspaceFocus, WorkspaceSession, WorkspaceSource};
-use crate::tui::workspace_search::WorkspaceSearchIndex;
 
 use super::load::SessionColumn;
 use crate::pane::Viewport;
@@ -50,7 +49,6 @@ pub(super) fn refresh_next_level(
     session_state: &ListState,
     sessions_pane: &mut SessionColumn,
     all_sessions: &mut Vec<WorkspaceSession>,
-    search_index: &mut WorkspaceSearchIndex,
     search_dirty: &mut bool,
     viewport: Viewport,
 ) {
@@ -78,8 +76,8 @@ pub(super) fn refresh_next_level(
     }
 
     sessions_pane.refresh(&sources_to_reload, viewport);
+    // Meta list only; search rebuild (with bodies) happens on search_dirty in picker.
     *all_sessions = sessions_pane.collect(selected_sources);
-    *search_index = WorkspaceSearchIndex::new(all_sessions);
     *search_dirty = true;
 }
 

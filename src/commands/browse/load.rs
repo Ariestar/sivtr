@@ -93,16 +93,26 @@ impl SourceLoadState {
         self.pane.is_fetching()
     }
 
-    pub fn visible_sessions(&self) -> Vec<WorkspaceSession> {
+    /// List projection: meta only — never clones dialogue bodies.
+    pub fn visible_session_metas(&self) -> Vec<WorkspaceSession> {
         self.pane
             .rows()
             .iter()
-            .map(row_to_workspace_session)
+            .map(row_to_workspace_session_meta)
             .collect()
+    }
+
+    /// Borrow records for a session id if the body is loaded in this pane.
+    pub fn body(&self, session_id: &str) -> Option<&[WorkRecord]> {
+        self.pane
+            .rows()
+            .iter()
+            .find(|r| r.key == session_id && r.body_loaded)
+            .and_then(|r| r.body.as_deref())
     }
 }
 
-fn row_to_workspace_session(
+fn row_to_workspace_session_meta(
     row: &WindowRow<SessionKey, SessionMeta, SessionBody>,
 ) -> WorkspaceSession {
     WorkspaceSession {
@@ -111,7 +121,7 @@ fn row_to_workspace_session(
         modified: row.meta.modified,
         title: row.meta.title.clone(),
         search_title: row.meta.search_title.clone(),
-        records: row.body.clone().unwrap_or_default(),
+        records: Vec::new(),
         body_loaded: row.body_loaded,
     }
 }
@@ -480,7 +490,14 @@ impl SessionColumn {
     }
 
     pub fn collect(&self, selected: &[bool]) -> Vec<WorkspaceSession> {
+        // Meta-only list projection — bodies stay in SlidingPane.
         collect_ready_sessions(&self.sources, selected, &self.states)
+    }
+
+    /// Records for a session if loaded (source resolved via session.source).
+    pub fn body_for(&self, session: &WorkspaceSession) -> Option<&[WorkRecord]> {
+        let idx = source_index_for_session(&self.sources, session)?;
+        self.states.get(idx)?.body(&session.session_id)
     }
 
     /// Bootstrap / force-load selected sources.
@@ -606,6 +623,7 @@ fn list_remote_aliases(cwd: &Path) -> Result<Vec<String>> {
     }
 }
 
+/// Meta-only merge of ready sources (bodies remain in each source pane).
 pub fn collect_ready_sessions(
     sources: &[WorkspaceSource],
     selected: &[bool],
@@ -616,7 +634,7 @@ pub fn collect_ready_sessions(
         if !selected.get(idx).copied().unwrap_or(false) {
             continue;
         }
-        sessions.extend(states[idx].visible_sessions());
+        sessions.extend(states[idx].visible_session_metas());
     }
     sessions.sort_by_key(|s| std::cmp::Reverse(s.modified));
     sessions

@@ -6,7 +6,7 @@
 //! ```
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use sivtr::commands::browse::perf::{run_ensure_growth, HotPane};
+use sivtr::commands::browse::perf::{run_ensure_growth, HotPane, HydratedStore};
 
 fn bench_materialize(c: &mut Criterion) {
     let mut group = c.benchmark_group("dialogue_materialize");
@@ -40,10 +40,27 @@ fn bench_titles_iter(c: &mut Criterion) {
     });
 }
 
+/// Session list projection: meta-only collect vs full body clone.
+///
+/// Fixture: 40 sessions × 50 fat turns (4KiB each) — mimics a hydrated keep set.
+fn bench_session_list_project(c: &mut Criterion) {
+    let store = HydratedStore::new(40, 50);
+    let mut group = c.benchmark_group("session_list_project");
+    group.throughput(Throughput::Elements(40));
+    group.bench_function("meta_only_collect", |b| {
+        b.iter(|| black_box(store.project_meta()))
+    });
+    group.bench_function("full_body_collect", |b| {
+        b.iter(|| black_box(store.project_full()))
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_materialize,
     bench_ensure_growth,
-    bench_titles_iter
+    bench_titles_iter,
+    bench_session_list_project
 );
 criterion_main!(benches);

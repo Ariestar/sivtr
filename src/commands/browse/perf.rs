@@ -69,11 +69,19 @@ fn primed_dialogue_pane(n: usize) -> DialoguePane {
         first: 0,
         visible: n.max(40),
     };
+    let records = |s: &WorkspaceSession| {
+        sessions
+            .iter()
+            .find(|x| x.session_id == s.session_id && x.source == s.source)
+            .filter(|x| x.body_loaded)
+            .map(|x| x.records.as_slice())
+    };
     pane.ensure(
         DialogueCtx {
             sessions: &sessions,
             session_idx: 0,
             selected_sessions: &selected_sessions,
+            records: &records,
         },
         &PaneInput::new(vp, 0)
             .with_selected(&selected)
@@ -134,11 +142,19 @@ pub fn run_ensure_growth() -> (usize, usize) {
     let selected_sessions = [true];
     let mut pane = DialoguePane::default();
     let empty = [];
+    let records = |s: &WorkspaceSession| {
+        sessions
+            .iter()
+            .find(|x| x.session_id == s.session_id && x.source == s.source)
+            .filter(|x| x.body_loaded)
+            .map(|x| x.records.as_slice())
+    };
     pane.ensure(
         DialogueCtx {
             sessions: &sessions,
             session_idx: 0,
             selected_sessions: &selected_sessions,
+            records: &records,
         },
         &PaneInput::new(
             Viewport {
@@ -155,6 +171,7 @@ pub fn run_ensure_growth() -> (usize, usize) {
             sessions: &sessions,
             session_idx: 0,
             selected_sessions: &selected_sessions,
+            records: &records,
         },
         &PaneInput::new(
             Viewport {
@@ -166,4 +183,59 @@ pub fn run_ensure_growth() -> (usize, usize) {
         .with_selected(&empty),
     );
     (len1, pane.len())
+}
+
+/// Opaque store of hydrated sessions (avoids leaking private TUI types at the crate boundary).
+pub struct HydratedStore {
+    sessions: Vec<WorkspaceSession>,
+}
+
+impl HydratedStore {
+    /// `n_sessions` × `records_each` fat turns (~4KiB text each).
+    pub fn new(n_sessions: usize, records_each: usize) -> Self {
+        let source = WorkspaceSource::agent(AgentProvider::Codex);
+        let sessions = (0..n_sessions)
+            .map(|i| {
+                let id = format!("s{i}");
+                let records: Vec<_> = (0..records_each)
+                    .map(|j| fat_record(&id, j + 1, &format!("turn-{j}")))
+                    .collect();
+                WorkspaceSession {
+                    source: source.clone(),
+                    session_id: id.clone(),
+                    modified: UNIX_EPOCH,
+                    title: id.clone(),
+                    search_title: id,
+                    records,
+                    body_loaded: true,
+                }
+            })
+            .collect();
+        Self { sessions }
+    }
+
+    /// New list path: meta only (what `collect()` returns).
+    pub fn project_meta(&self) -> usize {
+        let out: Vec<_> = self
+            .sessions
+            .iter()
+            .map(|s| WorkspaceSession {
+                source: s.source.clone(),
+                session_id: s.session_id.clone(),
+                modified: s.modified,
+                title: s.title.clone(),
+                search_title: s.search_title.clone(),
+                records: Vec::new(),
+                body_loaded: s.body_loaded,
+            })
+            .collect();
+        std::hint::black_box(out.len())
+    }
+
+    /// Old list path: clone every hydrated body into the list vec.
+    pub fn project_full(&self) -> usize {
+        let out = self.sessions.clone();
+        let bodies: usize = out.iter().map(|s| s.records.len()).sum();
+        std::hint::black_box((out.len(), bodies)).0
+    }
 }

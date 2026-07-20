@@ -157,17 +157,23 @@ fn shell_from_row(
 }
 
 /// Domain context for dialogue ensure (one frame).
+///
+/// `sessions` is the **meta** list (titles/ids/body_loaded). Turn bodies are
+/// read through `records` (product: `SessionColumn::body_for`).
 pub struct DialogueCtx<'a> {
     pub sessions: &'a [WorkspaceSession],
     pub session_idx: usize,
     pub selected_sessions: &'a [bool],
+    /// Body lookup; returned slice lives as long as the storage behind the
+    /// callback (`SessionColumn` / fixture table), not the `&session` arg.
+    pub records: &'a dyn Fn(&WorkspaceSession) -> Option<&'a [WorkRecord]>,
 }
 
 impl Pane for DialoguePane {
     type Ctx<'a> = DialogueCtx<'a>;
 
     fn ensure(&mut self, ctx: DialogueCtx<'_>, input: &PaneInput<'_>) -> bool {
-        let next = fingerprint(ctx.sessions, ctx.session_idx, ctx.selected_sessions);
+        let next = fingerprint(ctx.sessions, ctx.session_idx, ctx.selected_sessions, ctx.records);
         let force = if next != self.fingerprint {
             self.engine.clear();
             self.fingerprint = next;
@@ -182,6 +188,7 @@ impl Pane for DialoguePane {
                 ctx.sessions,
                 ctx.session_idx,
                 ctx.selected_sessions,
+                ctx.records,
                 budget,
             )
         });
@@ -194,6 +201,7 @@ impl Pane for DialoguePane {
                 ctx.sessions,
                 ctx.session_idx,
                 ctx.selected_sessions,
+                ctx.records,
                 key,
             )
         });
@@ -248,31 +256,34 @@ fn active_session_indices(
     }
 }
 
-fn fingerprint(
+fn fingerprint<'a>(
     sessions: &[WorkspaceSession],
     session_idx: usize,
     selected_sessions: &[bool],
+    records: &dyn Fn(&WorkspaceSession) -> Option<&'a [WorkRecord]>,
 ) -> DialogueFingerprint {
     DialogueFingerprint {
         sessions: active_session_indices(sessions, session_idx, selected_sessions)
             .into_iter()
             .filter_map(|i| {
                 let s = sessions.get(i)?;
+                let n = records(s).map(|r| r.len()).unwrap_or(0);
                 Some((
                     s.source.selector(),
                     s.session_id.clone(),
                     s.body_loaded,
-                    s.records.len(),
+                    n,
                 ))
             })
             .collect(),
     }
 }
 
-fn meta_prefix(
+fn meta_prefix<'a>(
     sessions: &[WorkspaceSession],
     session_idx: usize,
     selected_sessions: &[bool],
+    records: &dyn Fn(&WorkspaceSession) -> Option<&'a [WorkRecord]>,
     budget: usize,
 ) -> (
     Vec<WindowRow<DialogueKey, DialogueMeta, WorkspaceDialogue>>,
@@ -284,29 +295,42 @@ fn meta_prefix(
     }
     let mut all_ready = true;
     let mut total = 0usize;
+    let mut bodies: Vec<Option<&'a [WorkRecord]>> = Vec::with_capacity(indices.len());
     for &i in &indices {
         let Some(session) = sessions.get(i) else {
             all_ready = false;
+            bodies.push(None);
             continue;
         };
         if session.body_loaded {
-            total += session.records.len();
+            match records(session) {
+                Some(recs) => {
+                    total += recs.len();
+                    bodies.push(Some(recs));
+                }
+                None => {
+                    // Flagged loaded but body not yet in pane (async gap).
+                    all_ready = false;
+                    bodies.push(None);
+                }
+            }
         } else {
             all_ready = false;
+            bodies.push(None);
         }
     }
 
     let end = budget.min(total);
     let mut rows = Vec::with_capacity(end);
     let mut taken = 0usize;
-    'outer: for &i in &indices {
+    'outer: for (pos, &i) in indices.iter().enumerate() {
         let Some(session) = sessions.get(i) else {
             continue;
         };
-        if !session.body_loaded {
+        let Some(recs) = bodies[pos] else {
             continue;
-        }
-        for record in &session.records {
+        };
+        for record in recs {
             if taken >= end {
                 break 'outer;
             }
@@ -324,18 +348,24 @@ fn meta_prefix(
     (rows, all_ready && end >= total)
 }
 
-fn body_for_key(
+fn body_for_key<'a>(
     sessions: &[WorkspaceSession],
     session_idx: usize,
     selected_sessions: &[bool],
+    records: &dyn Fn(&WorkspaceSession) -> Option<&'a [WorkRecord]>,
     key: &DialogueKey,
 ) -> Option<WorkspaceDialogue> {
     for i in active_session_indices(sessions, session_idx, selected_sessions) {
-        let session = sessions.get(i)?;
+        let Some(session) = sessions.get(i) else {
+            continue;
+        };
         if !session.body_loaded {
             continue;
         }
-        for record in &session.records {
+        let Some(recs) = records(session) else {
+            continue;
+        };
+        for record in recs {
             if dialogue_key(&session.source, &session.session_id, record) == *key {
                 return Some(dialogue_from_record(session, record));
             }
@@ -455,11 +485,20 @@ mod tests {
         focus: usize,
         selected: &[bool],
     ) {
+        // Fixture table owns bodies; lookup by key (not reborrow of arg).
+        let records = |s: &WorkspaceSession| {
+            sessions
+                .iter()
+                .find(|x| x.session_id == s.session_id && x.source == s.source)
+                .filter(|x| x.body_loaded)
+                .map(|x| x.records.as_slice())
+        };
         pane.ensure(
             DialogueCtx {
                 sessions,
                 session_idx: 0,
                 selected_sessions: &[true],
+                records: &records,
             },
             &PaneInput::new(viewport, focus).with_selected(selected),
         );
@@ -589,11 +628,19 @@ mod tests {
             &[],
         );
         assert!(pane.len() > 0);
+        let empty: &[WorkspaceSession] = &[];
+        let records = |s: &WorkspaceSession| {
+            empty
+                .iter()
+                .find(|x| x.session_id == s.session_id)
+                .map(|x| x.records.as_slice())
+        };
         pane.ensure(
             DialogueCtx {
-                sessions: &[],
+                sessions: empty,
                 session_idx: 0,
                 selected_sessions: &[],
+                records: &records,
             },
             &PaneInput::new(
                 Viewport {

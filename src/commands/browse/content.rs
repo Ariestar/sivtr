@@ -216,13 +216,13 @@ pub(super) fn apply_dialogue_range_selection(
     }
 }
 
-pub(super) fn workspace_search_target_ref(
-    sessions: &[WorkspaceSession],
+pub(super) fn workspace_search_target_ref<'a>(
+    sessions: &'a [WorkspaceSession],
     matched: &WorkspaceSearchMatch,
+    records: &dyn Fn(&WorkspaceSession) -> Option<&'a [sivtr_core::record::WorkRecord]>,
 ) -> Option<WorkRef> {
-    sessions
-        .get(matched.session_index)?
-        .records
+    let session = sessions.get(matched.session_index)?;
+    records(session)?
         .get(matched.dialogue_index)
         .map(|record| record.work_ref.with_at(matched.at))
 }

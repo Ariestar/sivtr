@@ -74,6 +74,7 @@ pub(crate) fn run(
         visible: 24,
     };
     sessions_pane.kick(&selected_sources, bootstrap, true);
+    // Meta-only list — dialogue bodies live in SessionColumn, not here.
     let mut all_sessions = sessions_pane.collect(&selected_sources);
     let mut sessions = all_sessions.clone();
     let mut sessions_dirty = false;
@@ -97,7 +98,6 @@ pub(crate) fn run(
     let mut line_filter_error: Option<String> = None;
     let mut fullscreen = None;
     let mut visual_select_mode = None;
-    let mut search_index = WorkspaceSearchIndex::new(&all_sessions);
     let mut loading_tick = 0u8;
 
     loop {
@@ -109,12 +109,27 @@ pub(crate) fn run(
         }
         if sessions_dirty {
             all_sessions = sessions_pane.collect(&selected_sources);
-            search_index = WorkspaceSearchIndex::new(&all_sessions);
             sessions_dirty = false;
             reproject = true;
         }
         if search_dirty {
-            search_output = search_index.search(&all_sessions, &search_query);
+            if workspace_search_has_query(&search_query) {
+                // Temporary corpus for matching only — not the UI list.
+                let corpus: Vec<_> = all_sessions
+                    .iter()
+                    .map(|s| {
+                        let mut full = s.clone();
+                        if let Some(recs) = sessions_pane.body_for(s) {
+                            full.records = recs.to_vec();
+                        }
+                        full
+                    })
+                    .collect();
+                let index = WorkspaceSearchIndex::new(&corpus);
+                search_output = index.search(&corpus, &search_query);
+            } else {
+                search_output = WorkspaceSearchOutput::default();
+            }
             if search_cursor >= search_output.matches.len() {
                 search_cursor = 0;
             }
@@ -196,11 +211,14 @@ pub(crate) fn run(
                 &mut range_anchor,
             );
         }
+        // Body always from SessionColumn — list is meta-only in both browse and search.
+        let records = |s: &crate::tui::workspace::WorkspaceSession| sessions_pane.body_for(s);
         dialogue_pane.ensure(
             DialogueCtx {
                 sessions: &sessions,
                 session_idx,
                 selected_sessions: &selected_sessions,
+                records: &records,
             },
             &PaneInput::new(
                 Viewport::from_panel(
@@ -223,6 +241,7 @@ pub(crate) fn run(
                     sessions: &sessions,
                     session_idx,
                     selected_sessions: &selected_sessions,
+                    records: &records,
                 },
                 &PaneInput::new(
                     Viewport::from_panel(
@@ -312,7 +331,13 @@ pub(crate) fn run(
                         current_target: search_output
                             .matches
                             .get(search_cursor)
-                            .and_then(|matched| workspace_search_target_ref(&sessions, matched))
+                            .and_then(|matched| {
+                                workspace_search_target_ref(
+                                    &sessions,
+                                    matched,
+                                    &|s| sessions_pane.body_for(s),
+                                )
+                            })
                             .map(|work_ref| work_ref.to_string()),
                         input_open: show_search,
                     }),
@@ -675,7 +700,6 @@ pub(crate) fn run(
                             sessions_pane.kick(&selected_sources, viewport, true);
                         }
                         all_sessions = sessions_pane.collect(&selected_sources);
-                        search_index = WorkspaceSearchIndex::new(&all_sessions);
                         sessions_dirty = true;
                         search_dirty = true;
                         reset_workspace_after_source_change(
@@ -707,7 +731,6 @@ pub(crate) fn run(
                             sessions_pane.kick(&selected_sources, viewport, true);
                         }
                         all_sessions = sessions_pane.collect(&selected_sources);
-                        search_index = WorkspaceSearchIndex::new(&all_sessions);
                         sessions_dirty = true;
                         search_dirty = true;
                         reset_workspace_after_source_change(
@@ -739,7 +762,6 @@ pub(crate) fn run(
                             sessions_pane.kick(&selected_sources, viewport, true);
                         }
                         all_sessions = sessions_pane.collect(&selected_sources);
-                        search_index = WorkspaceSearchIndex::new(&all_sessions);
                         sessions_dirty = true;
                         search_dirty = true;
                         reset_workspace_after_source_change(
@@ -774,7 +796,6 @@ pub(crate) fn run(
                             &session_state,
                             &mut sessions_pane,
                             &mut all_sessions,
-                            &mut search_index,
                             &mut search_dirty,
                             viewport,
                         );
@@ -915,7 +936,6 @@ pub(crate) fn run(
                             sessions_pane.kick(&selected_sources, viewport, true);
                         }
                         all_sessions = sessions_pane.collect(&selected_sources);
-                            search_index = WorkspaceSearchIndex::new(&all_sessions);
                             search_dirty = true;
                             reset_workspace_after_source_change(
                                 &mut session_state,
@@ -1226,6 +1246,13 @@ mod tests {
         selected_sessions: &[bool],
     ) -> Vec<WorkspaceDialogue> {
         let mut pane = DialoguePane::default();
+        let records = |s: &WorkspaceSession| {
+            sessions
+                .iter()
+                .find(|x| x.session_id == s.session_id && x.source == s.source)
+                .filter(|x| x.body_loaded)
+                .map(|x| x.records.as_slice())
+        };
         let total: usize = sessions.iter().map(|s| s.records.len()).sum::<usize>().max(1);
         let vp = Viewport {
             first: 0,
@@ -1237,6 +1264,7 @@ mod tests {
                 sessions,
                 session_idx,
                 selected_sessions,
+                records: &records,
             },
             &PaneInput::new(vp, 0)
                 .with_selected(&selected_dialogues)
@@ -1249,6 +1277,7 @@ mod tests {
                 sessions,
                 session_idx,
                 selected_sessions,
+                records: &records,
             },
             &PaneInput::new(vp, 0)
                 .with_selected(&selected_dialogues)
@@ -1346,14 +1375,16 @@ mod tests {
             WorkspaceSource::agent(AgentProvider::Claude)
         );
         assert_eq!(output.sessions[0].title, "target session");
-        assert_eq!(output.sessions[0].records[0].title, "lighting");
+        // Hit list is meta-only; body stays on the corpus / SessionColumn.
+        assert!(output.sessions[0].records.is_empty());
+        assert_eq!(output.matches.len(), 1);
+        assert_eq!(output.matches[0].dialogue_index, 0);
         assert_eq!(
-            output.sessions[0].records[0]
+            sessions[1].records[0]
                 .copy_text(sivtr_core::record::RecordTextMode::Combined, false)
                 .plain,
             "target session:lighting"
         );
-        assert_eq!(output.matches.len(), 1);
     }
 
     #[test]
@@ -1379,14 +1410,9 @@ mod tests {
         );
         assert_eq!(session_results.sessions.len(), 1);
         assert_eq!(dialogue_results.sessions.len(), 1);
-        assert_eq!(
-            dialogue_results.sessions[0]
-                .records
-                .iter()
-                .map(|record| record.title.as_str())
-                .collect::<Vec<_>>(),
-            vec!["lighting notes"]
-        );
+        assert!(dialogue_results.sessions[0].records.is_empty());
+        assert_eq!(dialogue_results.matches.len(), 1);
+        assert_eq!(dialogue_results.matches[0].dialogue_index, 0);
         assert!(content_results.sessions.is_empty());
     }
 
@@ -1441,10 +1467,26 @@ mod tests {
 
         assert_eq!(output.sessions.len(), 2);
         assert_eq!(output.sessions[0].title, "codex session");
-        assert_eq!(output.sessions[0].records[0].title, "needle first");
         assert_eq!(output.sessions[1].title, "claude session");
-        assert_eq!(output.sessions[1].records[0].title, "needle dialogue");
-        assert_eq!(output.matches.len(), 2);
+        assert!(output.sessions.iter().all(|s| s.records.is_empty()));
+        // dialogue_index is the original turn index in the full body.
+        assert_eq!(
+            output.matches,
+            vec![
+                WorkspaceSearchMatch {
+                    session_index: 0,
+                    dialogue_index: 0,
+                    at: WorkAt::Whole,
+                    matched_line: 1,
+                },
+                WorkspaceSearchMatch {
+                    session_index: 1,
+                    dialogue_index: 1,
+                    at: WorkAt::Whole,
+                    matched_line: 1,
+                },
+            ]
+        );
     }
 
     #[test]
@@ -1617,8 +1659,17 @@ mod tests {
         }];
 
         let output = WorkspaceSearchIndex::new(&sessions).search(&sessions, "cargo");
-        let work_ref =
-            workspace_search_target_ref(&output.sessions, &output.matches[0]).expect("work ref");
+        let work_ref = workspace_search_target_ref(
+            &output.sessions,
+            &output.matches[0],
+            &|s| {
+                sessions
+                    .iter()
+                    .find(|x| x.session_id == s.session_id && x.source == s.source)
+                    .map(|x| x.records.as_slice())
+            },
+        )
+        .expect("work ref");
 
         assert_eq!(work_ref.to_string(), "codex/test/1/i/1");
     }
