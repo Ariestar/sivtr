@@ -1,0 +1,169 @@
+//! Fixtures and opaque hot-path kernels for criterion / dhat (`perf-benches`).
+//!
+//! Benches must not name `pub(crate)` TUI types at the crate boundary.
+
+use crate::pane::{Pane, PaneInput, Viewport};
+use crate::tui::workspace::{WorkspaceSession, WorkspaceSource};
+use sivtr_core::ai::AgentProvider;
+use sivtr_core::record::{
+    WorkChannel, WorkPart, WorkPartIo, WorkPartKind, WorkRecord, WorkRecordKind, WorkRef,
+    WorkSessionRef, WorkSource, WorkTime, RECORD_SCHEMA_VERSION,
+};
+use std::time::UNIX_EPOCH;
+
+use super::panes::{DialogueCtx, DialoguePane};
+
+fn fat_record(session: &str, index: usize, title: &str) -> WorkRecord {
+    let blob = "x".repeat(4096);
+    WorkRecord {
+        schema_version: RECORD_SCHEMA_VERSION,
+        work_ref: WorkRef::agent(AgentProvider::Codex, session, index),
+        kind: WorkRecordKind::ChatTurn,
+        source: WorkSource {
+            channel: WorkChannel::Chat,
+            provider: Some("codex".to_string()),
+        },
+        session: WorkSessionRef {
+            id: session.to_string(),
+            canonical_id: Some(session.to_string()),
+            path: None,
+        },
+        cwd: None,
+        time: WorkTime::from_components(None, Some("2026-07-17T10:00:00Z".into()), None),
+        status: None,
+        title: title.to_string(),
+        parts: vec![WorkPart {
+            io: WorkPartIo::Output,
+            kind: WorkPartKind::AssistantMessage,
+            index: 0,
+            occurred_at: None,
+            label: None,
+            text: blob,
+            ansi: None,
+        }],
+    }
+}
+
+fn session_with_n(n: usize) -> WorkspaceSession {
+    let source = WorkspaceSource::agent(AgentProvider::Codex);
+    let records: Vec<_> = (0..n)
+        .map(|i| fat_record("s", i + 1, &format!("turn-{i}")))
+        .collect();
+    WorkspaceSession {
+        source,
+        session_id: "s".into(),
+        modified: UNIX_EPOCH,
+        title: "s".into(),
+        search_title: "s".into(),
+        records,
+        body_loaded: true,
+    }
+}
+
+fn primed_dialogue_pane(n: usize) -> DialoguePane {
+    let sessions = vec![session_with_n(n)];
+    let mut pane = DialoguePane::default();
+    let selected_sessions = [true];
+    let selected = vec![true; n];
+    let vp = Viewport {
+        first: 0,
+        visible: n.max(40),
+    };
+    pane.ensure(
+        DialogueCtx {
+            sessions: &sessions,
+            session_idx: 0,
+            selected_sessions: &selected_sessions,
+        },
+        &PaneInput::new(vp, 0)
+            .with_selected(&selected)
+            .with_neighbors(n),
+    );
+    pane
+}
+
+/// Opaque prepared pane for repeated hot-path calls (setup outside the timer).
+pub struct HotPane {
+    inner: DialoguePane,
+    n: usize,
+}
+
+impl HotPane {
+    pub fn prepare(n: usize) -> Self {
+        Self {
+            inner: primed_dialogue_pane(n),
+            n,
+        }
+    }
+
+    pub fn n(&self) -> usize {
+        self.n
+    }
+
+    /// Old path: clone every hydrated body.
+    pub fn naive_full_clone(&self) -> usize {
+        let mut bodies = 0usize;
+        for row in self.inner.engine_rows_for_perf() {
+            if let Some(body) = row.body.clone() {
+                bodies = bodies.saturating_add(1);
+                std::hint::black_box(body);
+            }
+        }
+        bodies
+    }
+
+    /// New path: titles borrow + materialize focus only.
+    pub fn sparse_focus_materialize(&self) -> (usize, usize) {
+        let titles: Vec<&str> = self.inner.titles().collect();
+        let selected = vec![false; self.inner.len()];
+        let focus = self.n / 2;
+        let rows = self.inner.materialize(&selected, focus);
+        let bodies = rows.iter().filter(|d| d.record.is_some()).count();
+        std::hint::black_box(titles.len());
+        (titles.len(), bodies)
+    }
+
+    pub fn titles_count(&self) -> usize {
+        self.inner.titles().count()
+    }
+}
+
+/// Grow meta twice (includes setup; measures ensure path).
+pub fn run_ensure_growth() -> (usize, usize) {
+    let sessions = vec![session_with_n(500)];
+    let selected_sessions = [true];
+    let mut pane = DialoguePane::default();
+    let empty = [];
+    pane.ensure(
+        DialogueCtx {
+            sessions: &sessions,
+            session_idx: 0,
+            selected_sessions: &selected_sessions,
+        },
+        &PaneInput::new(
+            Viewport {
+                first: 0,
+                visible: 10,
+            },
+            0,
+        )
+        .with_selected(&empty),
+    );
+    let len1 = pane.len();
+    pane.ensure(
+        DialogueCtx {
+            sessions: &sessions,
+            session_idx: 0,
+            selected_sessions: &selected_sessions,
+        },
+        &PaneInput::new(
+            Viewport {
+                first: 40,
+                visible: 10,
+            },
+            45,
+        )
+        .with_selected(&empty),
+    );
+    (len1, pane.len())
+}

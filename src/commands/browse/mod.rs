@@ -11,6 +11,8 @@ mod help;
 mod load;
 mod nav;
 mod panes;
+#[cfg(feature = "perf-benches")]
+pub mod perf;
 mod picker;
 mod selection;
 mod text;

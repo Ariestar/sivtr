@@ -29,9 +29,23 @@ exclude = [
 ]
 default-run = "sivtr"
 
+[lib]
+name = "sivtr"
+path = "src/lib.rs"
+
 [[bin]]
 name = "sivtr"
 path = "src/main.rs"
+
+[[bench]]
+name = "browse_hot"
+harness = false
+required-features = ["perf-benches"]
+
+[[bench]]
+name = "browse_dhat"
+harness = false
+required-features = ["perf-benches", "dhat-heap"]
 
 # cargo-binstall — lets `cargo binstall sivtr` download a prebuilt binary from
 # GitHub Releases instead of compiling from source. Asset names mirror the build
@@ -98,3 +112,11 @@ winapi = { version = "0.3", features = ["fileapi", "handleapi", "processenv", "p
 
 [dev-dependencies]
 tempfile = "3"
+criterion = { version = "0.5", features = ["html_reports"] }
+dhat = "0.3"
+
+[features]
+# Benches only: `cargo bench -p sivtr --features perf-benches`
+perf-benches = []
+# Heap profiling: `cargo bench -p sivtr --bench browse_dhat --features "perf-benches,dhat-heap"`
+dhat-heap = []

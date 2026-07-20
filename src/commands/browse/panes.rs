@@ -129,6 +129,14 @@ impl DialoguePane {
         let selected = vec![true; n];
         self.materialize(&selected, 0)
     }
+
+    /// Bench-only: inspect engine rows without cloning the pane.
+    #[cfg(any(test, feature = "perf-benches"))]
+    pub(crate) fn engine_rows_for_perf(
+        &self,
+    ) -> &[crate::pane::WindowRow<DialogueKey, DialogueMeta, WorkspaceDialogue>] {
+        self.engine.rows()
+    }
 }
 
 fn shell_from_row(
@@ -596,5 +604,38 @@ mod tests {
             ),
         );
         assert_eq!(pane.len(), 0);
+    }
+
+    #[test]
+    fn materialize_clones_body_only_for_focus() {
+        let sessions = vec![session_with_n(40, true)];
+        let mut pane = DialoguePane::default();
+        let empty = vec![false; 40];
+        tick(
+            &mut pane,
+            &sessions,
+            Viewport {
+                first: 0,
+                visible: 20,
+            },
+            5,
+            &empty,
+        );
+        let sel = vec![false; pane.len()];
+        tick(
+            &mut pane,
+            &sessions,
+            Viewport {
+                first: 0,
+                visible: 20,
+            },
+            5,
+            &sel,
+        );
+        assert_eq!(pane.titles().count(), pane.len());
+        let rows = pane.materialize(&sel, 5);
+        let with_body = rows.iter().filter(|d| d.record.is_some()).count();
+        assert_eq!(with_body, 1);
+        assert!(rows[5].record.is_some());
     }
 }
