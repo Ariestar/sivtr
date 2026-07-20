@@ -76,6 +76,7 @@ pub(crate) fn run(
     sessions_pane.kick(&selected_sources, bootstrap, true);
     let mut all_sessions = sessions_pane.collect(&selected_sources);
     let mut sessions = all_sessions.clone();
+    let mut sessions_dirty = false;
     clamp_list_state(&mut source_state, source_pane.len());
     clamp_list_state(&mut session_state, sessions.len());
     clamp_list_state(&mut dialogue_state, 0);
@@ -100,11 +101,17 @@ pub(crate) fn run(
     let mut loading_tick = 0u8;
 
     loop {
-        // ── Unified pane poll/ensure (same contract for every pane) ─────────
+        // ── Unified pane poll/ensure ───────────────────────────────────────
+        let mut reproject = false;
         if sessions_pane.poll() {
+            sessions_dirty = true;
+            search_dirty = true;
+        }
+        if sessions_dirty {
             all_sessions = sessions_pane.collect(&selected_sources);
             search_index = WorkspaceSearchIndex::new(&all_sessions);
-            search_dirty = true;
+            sessions_dirty = false;
+            reproject = true;
         }
         if search_dirty {
             search_output = search_index.search(&all_sessions, &search_query);
@@ -113,13 +120,14 @@ pub(crate) fn run(
             }
             search_apply_pending = true;
             search_dirty = false;
+            reproject = true;
         }
         let search_has_query = workspace_search_has_query(&search_query);
-        sessions = if search_has_query {
-            search_output.sessions.clone()
-        } else {
-            all_sessions.clone()
-        };
+        if search_has_query {
+            sessions = search_output.sessions.clone();
+        } else if reproject {
+            sessions = all_sessions.clone();
+        }
         if selected_sessions.len() != sessions.len() {
             selected_sessions.clear();
             selected_sessions.resize(sessions.len(), false);
@@ -146,19 +154,17 @@ pub(crate) fn run(
             fullscreen,
         );
 
-        // Source: static — ensure is a no-op (keeps the same call shape).
         let _ = source_pane.ensure(
             (),
             &PaneInput::new(
                 Viewport::from_panel(source_state.offset(), panel_inner_rows(layout.source)),
                 selected_index(&source_state),
             )
-            .with_selected(selected_sources.clone())
+            .with_selected(&selected_sources)
             .with_neighbors(1),
         );
 
-        // Sessions column.
-        sessions_pane.ensure(
+        let _ = sessions_pane.ensure(
             SessionCtx {
                 selected_sources: &selected_sources,
                 sessions: &sessions,
@@ -169,22 +175,16 @@ pub(crate) fn run(
                 Viewport::from_panel(session_state.offset(), panel_inner_rows(layout.sessions)),
                 session_idx,
             )
-            .with_selected(selected_sessions.clone())
+            .with_selected(&selected_sessions)
             .with_neighbors(1),
         );
-        all_sessions = sessions_pane.collect(&selected_sources);
-        sessions = if search_has_query {
-            search_output.sessions.clone()
-        } else {
-            all_sessions.clone()
-        };
+        // Body hydrate is async — list updates when poll sets sessions_dirty.
         if selected_sessions.len() != sessions.len() {
             selected_sessions.resize(sessions.len(), false);
         }
         let session_idx = selected_index(&session_state).min(sessions.len().saturating_sub(1));
         session_state.select((!sessions.is_empty()).then_some(session_idx));
 
-        // Dialogues.
         let dialogue_focus_hint = pending_match
             .as_ref()
             .map(|matched| matched.dialogue_index)
@@ -209,7 +209,7 @@ pub(crate) fn run(
                 ),
                 dialogue_focus_hint,
             )
-            .with_selected(selected_dialogues.clone())
+            .with_selected(&selected_dialogues)
             .with_neighbors(1),
         );
         if selected_dialogues.len() != dialogue_pane.len() {
@@ -218,7 +218,6 @@ pub(crate) fn run(
                 &mut selected_dialogues,
                 &mut range_anchor,
             );
-            // Mask grew with meta — re-ensure bodies under the new mask.
             dialogue_pane.ensure(
                 DialogueCtx {
                     sessions: &sessions,
@@ -232,17 +231,21 @@ pub(crate) fn run(
                     ),
                     dialogue_focus_hint.min(dialogue_pane.len().saturating_sub(1)),
                 )
-                .with_selected(selected_dialogues.clone())
+                .with_selected(&selected_dialogues)
                 .with_neighbors(1),
             );
         }
-        let dialogues = dialogue_pane.dialogues();
-        let dialogue_count = dialogues.len();
+
+        let dialogue_count = dialogue_pane.len();
         let dialogue_idx = dialogue_focus_hint.min(dialogue_count.saturating_sub(1));
         dialogue_state.select((dialogue_count > 0).then_some(dialogue_idx));
         if pending_match.is_some() {
             range_anchor = None;
         }
+
+        // List: title borrows. Content/copy: materialize (body only for focus∪select).
+        let dialogue_titles: Vec<&str> = dialogue_pane.titles().collect();
+        let dialogues = dialogue_pane.materialize(&selected_dialogues, dialogue_idx);
 
         let active_content_at = active_workspace_content_at(
             search_has_query,
@@ -289,6 +292,7 @@ pub(crate) fn run(
                     sessions: &sessions,
                     selected_sessions: &selected_sessions,
                     session_state: &session_state,
+                    dialogue_titles: &dialogue_titles,
                     dialogues: &dialogues,
                     dialogue_state: &dialogue_state,
                     selected_dialogues: &selected_dialogues,
@@ -672,6 +676,7 @@ pub(crate) fn run(
                         }
                         all_sessions = sessions_pane.collect(&selected_sources);
                         search_index = WorkspaceSearchIndex::new(&all_sessions);
+                        sessions_dirty = true;
                         search_dirty = true;
                         reset_workspace_after_source_change(
                             &mut session_state,
@@ -703,6 +708,7 @@ pub(crate) fn run(
                         }
                         all_sessions = sessions_pane.collect(&selected_sources);
                         search_index = WorkspaceSearchIndex::new(&all_sessions);
+                        sessions_dirty = true;
                         search_dirty = true;
                         reset_workspace_after_source_change(
                             &mut session_state,
@@ -734,6 +740,7 @@ pub(crate) fn run(
                         }
                         all_sessions = sessions_pane.collect(&selected_sources);
                         search_index = WorkspaceSearchIndex::new(&all_sessions);
+                        sessions_dirty = true;
                         search_dirty = true;
                         reset_workspace_after_source_change(
                             &mut session_state,
@@ -1232,7 +1239,7 @@ mod tests {
                 selected_sessions,
             },
             &PaneInput::new(vp, 0)
-                .with_selected(selected_dialogues)
+                .with_selected(&selected_dialogues)
                 .with_neighbors(total),
         );
         let n = pane.len();
@@ -1244,7 +1251,7 @@ mod tests {
                 selected_sessions,
             },
             &PaneInput::new(vp, 0)
-                .with_selected(selected_dialogues)
+                .with_selected(&selected_dialogues)
                 .with_neighbors(n),
         );
         pane.dialogues()

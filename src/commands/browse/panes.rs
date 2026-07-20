@@ -47,7 +47,7 @@ impl SourcePane {
 impl Pane for SourcePane {
     type Ctx<'a> = ();
 
-    fn ensure(&mut self, _ctx: (), _input: &PaneInput) -> bool {
+    fn ensure(&mut self, _ctx: (), _input: &PaneInput<'_>) -> bool {
         false
     }
 
@@ -82,26 +82,36 @@ pub struct DialoguePane {
 }
 
 impl DialoguePane {
-    pub fn dialogues(&self) -> Vec<WorkspaceDialogue> {
-        self.engine
-            .rows()
-            .iter()
-            .map(|row| {
-                if let Some(body) = row.body.clone() {
-                    body
+    /// List paint: titles only (no body clone).
+    pub fn titles(&self) -> impl Iterator<Item = &str> + '_ {
+        self.engine.rows().iter().map(|r| r.meta.title.as_str())
+    }
+
+    /// Index-stable rows for content/copy/vim.
+    /// Clones **body only** for focus ∪ multi-select; other rows are title shells.
+    pub fn materialize(&self, selected: &[bool], focus: usize) -> Vec<WorkspaceDialogue> {
+        let rows = self.engine.rows();
+        if rows.is_empty() {
+            return Vec::new();
+        }
+        let any = selected.iter().any(|s| *s);
+        let focus = focus.min(rows.len() - 1);
+        rows.iter()
+            .enumerate()
+            .map(|(i, row)| {
+                let need_body = if any {
+                    selected.get(i).copied().unwrap_or(false)
                 } else {
-                    WorkspaceDialogue {
-                        source: row.meta.source.clone(),
-                        work_ref: row.meta.work_ref.clone(),
-                        title: row.meta.title.clone(),
-                        record: None,
-                        copy: crate::tui::workspace::WorkspaceCopyParts::from_block(
-                            crate::tui::workspace::TextPair {
-                                plain: String::new(),
-                                ansi: String::new(),
-                            },
-                        ),
+                    i == focus
+                };
+                if need_body {
+                    if let Some(body) = row.body.clone() {
+                        body
+                    } else {
+                        shell_from_row(row)
                     }
+                } else {
+                    shell_from_row(row)
                 }
             })
             .collect()
@@ -110,6 +120,31 @@ impl DialoguePane {
     #[cfg(test)]
     pub fn exhausted(&self) -> bool {
         self.engine.exhausted()
+    }
+
+    #[cfg(test)]
+    pub fn dialogues(&self) -> Vec<WorkspaceDialogue> {
+        // Tests want full bodies when present.
+        let n = self.engine.len();
+        let selected = vec![true; n];
+        self.materialize(&selected, 0)
+    }
+}
+
+fn shell_from_row(
+    row: &crate::pane::WindowRow<DialogueKey, DialogueMeta, WorkspaceDialogue>,
+) -> WorkspaceDialogue {
+    WorkspaceDialogue {
+        source: row.meta.source.clone(),
+        work_ref: row.meta.work_ref.clone(),
+        title: row.meta.title.clone(),
+        record: None,
+        copy: crate::tui::workspace::WorkspaceCopyParts::from_block(
+            crate::tui::workspace::TextPair {
+                plain: String::new(),
+                ansi: String::new(),
+            },
+        ),
     }
 }
 
@@ -123,7 +158,7 @@ pub struct DialogueCtx<'a> {
 impl Pane for DialoguePane {
     type Ctx<'a> = DialogueCtx<'a>;
 
-    fn ensure(&mut self, ctx: DialogueCtx<'_>, input: &PaneInput) -> bool {
+    fn ensure(&mut self, ctx: DialogueCtx<'_>, input: &PaneInput<'_>) -> bool {
         let next = fingerprint(ctx.sessions, ctx.session_idx, ctx.selected_sessions);
         let force = if next != self.fingerprint {
             self.engine.clear();
@@ -145,7 +180,7 @@ impl Pane for DialoguePane {
 
         let keep = self
             .engine
-            .keep_for_focus(input.focus, &input.selected, input.neighbor_radius);
+            .keep_for_focus(input.focus, input.selected, input.neighbor_radius);
         self.engine.ensure_bodies_sync(keep, |key| {
             body_for_key(
                 ctx.sessions,
@@ -330,7 +365,7 @@ impl ContentPane {
 impl Pane for ContentPane {
     type Ctx<'a> = ContentCtx<'a>;
 
-    fn ensure(&mut self, ctx: ContentCtx<'_>, _input: &PaneInput) -> bool {
+    fn ensure(&mut self, ctx: ContentCtx<'_>, _input: &PaneInput<'_>) -> bool {
         let text = workspace_content_text(
             ctx.dialogues,
             ctx.selected_dialogues,
@@ -418,7 +453,7 @@ mod tests {
                 session_idx: 0,
                 selected_sessions: &[true],
             },
-            &PaneInput::new(viewport, focus).with_selected(selected.to_vec()),
+            &PaneInput::new(viewport, focus).with_selected(selected),
         );
     }
 

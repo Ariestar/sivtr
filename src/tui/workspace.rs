@@ -209,6 +209,8 @@ pub(crate) struct WorkspaceSession {
 pub(crate) struct WorkspaceDialogue {
     pub(crate) source: WorkspaceSource,
     pub(crate) work_ref: Option<WorkRef>,
+    /// Display title; list paint prefers `WorkspaceView::dialogue_titles`.
+    #[allow(dead_code)]
     pub(crate) title: String,
     pub(crate) record: Option<WorkRecord>,
     pub(crate) copy: WorkspaceCopyParts,
@@ -463,6 +465,9 @@ pub(crate) struct WorkspaceView<'a> {
     pub(crate) sessions: &'a [WorkspaceSession],
     pub(crate) selected_sessions: &'a [bool],
     pub(crate) session_state: &'a ListState,
+    /// Dialogue list titles only (no body materialize on paint).
+    pub(crate) dialogue_titles: &'a [&'a str],
+    /// Materialized dialogues for content/copy (focus ∪ multi-select bodies).
     pub(crate) dialogues: &'a [WorkspaceDialogue],
     pub(crate) dialogue_state: &'a ListState,
     pub(crate) selected_dialogues: &'a [bool],
@@ -875,8 +880,8 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         .split(area);
     let layout = workspace_layout(area, view.focus, view.fullscreen);
 
-    let dialogue_idx =
-        selected_index(view.dialogue_state).min(view.dialogues.len().saturating_sub(1));
+    let dialogue_idx = selected_index(view.dialogue_state)
+        .min(view.dialogue_titles.len().saturating_sub(1));
     let current_ref = current_content_ref(
         view.dialogues,
         view.selected_dialogues,
@@ -912,7 +917,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
     render_dialogue_list(
         frame,
         layout.dialogues,
-        view.dialogues,
+        view.dialogue_titles,
         view.dialogue_state,
         view.selected_sessions,
         view.selected_dialogues,
@@ -1464,7 +1469,7 @@ fn render_session_list(
 fn render_dialogue_list(
     frame: &mut Frame,
     area: Rect,
-    dialogues: &[WorkspaceDialogue],
+    titles: &[&str],
     state: &ListState,
     selected_sessions: &[bool],
     selected_dialogues: &[bool],
@@ -1475,10 +1480,10 @@ fn render_dialogue_list(
 ) {
     let highlighted_idx = selected_index(state);
     let has_selection = selected_dialogues.iter().any(|selected| *selected);
-    let mut items: Vec<ListItem> = dialogues
+    let mut items: Vec<ListItem> = titles
         .iter()
         .enumerate()
-        .map(|(idx, dialogue)| {
+        .map(|(idx, title)| {
             let in_range = range_anchor
                 .map(|anchor| {
                     idx >= anchor.min(highlighted_idx) && idx <= anchor.max(highlighted_idx)
@@ -1494,7 +1499,7 @@ fn render_dialogue_list(
             } else {
                 ""
             };
-            let line = format!("{marker}{}", dialogue.title);
+            let line = format!("{marker}{title}");
             let highlight = search
                 .filter(|search| search.scope == WorkspaceSearchScope::Dialogue)
                 .and(search_regex);
@@ -1540,7 +1545,7 @@ fn render_dialogue_list(
         items,
         state,
     );
-    render_list_scrollbar(frame, area, highlighted_idx, dialogues.len(), active);
+    render_list_scrollbar(frame, area, highlighted_idx, titles.len(), active);
 }
 
 fn render_list_scrollbar(

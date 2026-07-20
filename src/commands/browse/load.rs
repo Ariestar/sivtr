@@ -503,7 +503,7 @@ impl Pane for SessionColumn {
         self.pump.drain(&mut self.states)
     }
 
-    fn ensure(&mut self, ctx: SessionCtx<'_>, input: &PaneInput) -> bool {
+    fn ensure(&mut self, ctx: SessionCtx<'_>, input: &PaneInput<'_>) -> bool {
         self.pump
             .drop_unselected(ctx.selected_sources, &mut self.states);
         if !ctx.search_active {
