@@ -131,7 +131,7 @@ impl DialoguePane {
     }
 
     /// Bench-only: inspect engine rows without cloning the pane.
-    #[cfg(any(test, feature = "perf-benches"))]
+    #[cfg(feature = "perf-benches")]
     pub(crate) fn engine_rows_for_perf(
         &self,
     ) -> &[crate::pane::WindowRow<DialogueKey, DialogueMeta, WorkspaceDialogue>] {

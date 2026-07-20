@@ -40,8 +40,8 @@ use super::selection::{
 };
 use super::vim::open_vim_view;
 use super::visual::{
-    apply_workspace_mouse_scroll, enter_visual_select_mode, handle_visual_select_key,
-    handle_visual_select_mouse, scroll_list_state_down, scroll_list_state_up, VisualContentContext,
+    apply_workspace_mouse_scroll, enter_visual_select_mode, handle_content_mouse_select,
+    handle_visual_select_key, scroll_list_state_down, scroll_list_state_up, VisualContentContext,
     VisualSelectMode,
 };
 use super::PICK_CANCELLED_MESSAGE;
@@ -1033,34 +1033,6 @@ pub(crate) fn run(
                     _ => {}
                 }
             }
-            Event::Mouse(mouse) if visual_select_mode.is_some() => {
-                let size = terminal.size()?;
-                let layout = workspace_layout(
-                    ratatui::layout::Rect::new(0, 0, size.width, size.height),
-                    focus,
-                    fullscreen,
-                );
-                let text = workspace_content_text(
-                    &dialogues,
-                    &selected_dialogues,
-                    dialogue_idx,
-                    content_mode,
-                    active_content_at,
-                );
-                handle_visual_select_mouse(
-                    visual_select_mode.as_mut().expect("checked above"),
-                    mouse.kind,
-                    mouse.modifiers,
-                    mouse.column,
-                    mouse.row,
-                    VisualContentContext {
-                        area: layout.content,
-                        text: &text,
-                        mode: content_mode,
-                        scroll: content_scroll,
-                    },
-                );
-            }
             Event::Mouse(mouse) if show_help && !show_search => match mouse.kind {
                 MouseEventKind::ScrollUp => scroll_list_state_up(&mut help_state),
                 MouseEventKind::ScrollDown => {
@@ -1075,6 +1047,56 @@ pub(crate) fn run(
                     focus,
                     fullscreen,
                 );
+                // Content drag-select (free mouse / Ctrl-block) before list hit-tests.
+                {
+                    let text = workspace_content_text(
+                        &dialogues,
+                        &selected_dialogues,
+                        dialogue_idx,
+                        content_mode,
+                        active_content_at,
+                    );
+                    let content_ctx = VisualContentContext {
+                        area: layout.content,
+                        text: &text,
+                        mode: content_mode,
+                        scroll: content_scroll,
+                    };
+                    let hit_content = workspace_hit_test(layout, mouse.column, mouse.row)
+                        == Some(WorkspaceFocus::Content);
+                    // Links only on pure click (no active drag selection).
+                    if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+                        && hit_content
+                        && visual_select_mode.is_none()
+                    {
+                        if let Some(target) = content_link_at(
+                            layout.content,
+                            &text,
+                            content_scroll,
+                            content_mode,
+                            mouse.column,
+                            mouse.row,
+                        ) {
+                            let _ = open_link_target(&target);
+                            continue;
+                        }
+                    }
+                    let allow_start = hit_content || visual_select_mode.is_some();
+                    if handle_content_mouse_select(
+                        &mut visual_select_mode,
+                        mouse.kind,
+                        mouse.modifiers,
+                        mouse.column,
+                        mouse.row,
+                        content_ctx,
+                        allow_start,
+                    ) {
+                        if visual_select_mode.is_some() {
+                            set_focus(&mut focus, &mut fullscreen, WorkspaceFocus::Content);
+                        }
+                        continue;
+                    }
+                }
                 match mouse.kind {
                     MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                         if let Some(scroll_focus) =
@@ -1100,6 +1122,8 @@ pub(crate) fn run(
                         if let Some(clicked_focus) =
                             workspace_hit_test(layout, mouse.column, mouse.row)
                         {
+                            // Clicking another pane clears free selection.
+                            visual_select_mode = None;
                             set_focus(&mut focus, &mut fullscreen, clicked_focus);
                             match clicked_focus {
                                 WorkspaceFocus::Source => {
@@ -1136,27 +1160,7 @@ pub(crate) fn run(
                                         content_scroll = 0;
                                     }
                                 }
-                                WorkspaceFocus::Content => {
-                                    let dialogue_idx = selected_index(&dialogue_state)
-                                        .min(dialogues.len().saturating_sub(1));
-                                    let text = workspace_content_text(
-                                        &dialogues,
-                                        &selected_dialogues,
-                                        dialogue_idx,
-                                        content_mode,
-                                        active_content_at,
-                                    );
-                                    if let Some(target) = content_link_at(
-                                        layout.content,
-                                        &text,
-                                        content_scroll,
-                                        content_mode,
-                                        mouse.column,
-                                        mouse.row,
-                                    ) {
-                                        let _ = open_link_target(&target);
-                                    }
-                                }
+                                WorkspaceFocus::Content => {}
                             }
                         }
                     }

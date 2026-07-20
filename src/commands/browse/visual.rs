@@ -84,6 +84,17 @@ pub(super) fn handle_visual_select_key(
                 mode.selection,
             )));
         }
+        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+            return Ok(Some(workspace_picked_content_for_visual_selection(
+                dialogues,
+                selected_dialogues,
+                dialogue_idx,
+                content_area,
+                text,
+                content_mode,
+                mode.selection,
+            )));
+        }
         KeyCode::Left | KeyCode::Char('h') => move_visual_cursor(
             mode,
             content_area,
@@ -195,45 +206,105 @@ pub(super) fn ensure_visual_cursor_visible(
     }
 }
 
-pub(super) fn handle_visual_select_mouse(
-    mode: &mut VisualSelectMode,
+/// Start or update content mouse selection.
+///
+/// Free drag works without first pressing `v`. Ctrl+drag forces block selection.
+/// Returns `true` when the event was consumed by selection handling.
+pub(super) fn handle_content_mouse_select(
+    visual_select_mode: &mut Option<VisualSelectMode>,
     kind: MouseEventKind,
     modifiers: KeyModifiers,
     column: u16,
     row: u16,
     content: VisualContentContext<'_>,
-) {
-    let Some(position) = content_position_in_text_row(
+    // When true, left-down on content may start a selection even if mode is None.
+    allow_start: bool,
+) -> bool {
+    let in_content = content_position_in_text_row(
         content.area,
         content.text,
         content.scroll,
         content.mode,
         column,
         row,
-    ) else {
-        return;
-    };
+    )
+    .is_some();
 
     match kind {
-        MouseEventKind::Down(MouseButton::Left) => {
-            mode.selection = ContentSelection {
-                anchor: position,
-                cursor: position,
-                kind: mouse_selection_kind(modifiers),
-            };
-            mode.dragging = true;
-        }
-        MouseEventKind::Drag(MouseButton::Left) if mode.dragging => {
-            mode.selection.cursor = position;
-            if modifiers.contains(KeyModifiers::CONTROL) {
-                mode.selection.kind = ContentSelectionKind::Block;
+        MouseEventKind::Down(MouseButton::Left) if allow_start || visual_select_mode.is_some() => {
+            if !in_content {
+                // Outside content: drop free selection so list panes can take the click.
+                // Keep consuming only while a drag is in progress.
+                if visual_select_mode.as_ref().is_some_and(|m| m.dragging) {
+                    return true;
+                }
+                *visual_select_mode = None;
+                return false;
             }
+            let Some(position) = content_position_in_text_row(
+                content.area,
+                content.text,
+                content.scroll,
+                content.mode,
+                column,
+                row,
+            ) else {
+                return false;
+            };
+            *visual_select_mode = Some(VisualSelectMode {
+                selection: ContentSelection {
+                    anchor: position,
+                    cursor: position,
+                    kind: mouse_selection_kind(modifiers),
+                },
+                dragging: true,
+            });
+            true
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            let Some(mode) = visual_select_mode.as_mut() else {
+                return false;
+            };
+            if !mode.dragging {
+                return true;
+            }
+            if let Some(position) = content_position_in_text_row(
+                content.area,
+                content.text,
+                content.scroll,
+                content.mode,
+                column,
+                row,
+            ) {
+                mode.selection.cursor = position;
+                if modifiers.contains(KeyModifiers::CONTROL) {
+                    mode.selection.kind = ContentSelectionKind::Block;
+                }
+            }
+            true
         }
         MouseEventKind::Up(MouseButton::Left) => {
-            mode.selection.cursor = position;
+            let Some(mode) = visual_select_mode.as_mut() else {
+                return false;
+            };
+            if let Some(position) = content_position_in_text_row(
+                content.area,
+                content.text,
+                content.scroll,
+                content.mode,
+                column,
+                row,
+            ) {
+                mode.selection.cursor = position;
+            }
             mode.dragging = false;
+            // Pure click (no drag range) clears selection so list clicks stay light.
+            if mode.selection.anchor == mode.selection.cursor {
+                *visual_select_mode = None;
+            }
+            true
         }
-        _ => {}
+        _ => false,
     }
 }
 

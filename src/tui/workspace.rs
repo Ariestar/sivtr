@@ -294,26 +294,80 @@ impl WorkspaceDialogue {
 }
 
 
-/// Reading mode: structure channels are collapsed to a single marker line (fold).
-/// Expand with Raw mode (`r`) to see full payloads.
+/// Reading mode: Input / Output sections; structure channels folded (and adjacent
+/// structure runs collapsed to `<:tool:> xN <:skill:> xM`). Raw expands payloads.
 fn structured_record_text(record: &WorkRecord) -> String {
     debug_assert!(
         !record.parts.is_empty(),
         "structured_record_text requires parts"
     );
-    record
-        .parts
-        .iter()
-        .map(|part| structured_part_text(record, part))
-        .collect::<Vec<_>>()
-        .join("\n\n")
+    format_record_by_io(record, true)
 }
 
-/// Raw mode: every part fully expanded, structure with open/close markers.
+/// Raw mode: Input / Output sections; every part fully expanded with markers.
 fn raw_record_text(record: &WorkRecord) -> String {
     debug_assert!(!record.parts.is_empty(), "raw_record_text requires parts");
-    record
-        .parts
+    format_record_by_io(record, false)
+}
+
+fn format_record_by_io(record: &WorkRecord, reading: bool) -> String {
+    use sivtr_core::record::WorkPartIo;
+
+    let mut sections = Vec::new();
+    for io in [WorkPartIo::Input, WorkPartIo::Output] {
+        let parts: Vec<&sivtr_core::record::WorkPart> =
+            record.parts.iter().filter(|part| part.io == io).collect();
+        if parts.is_empty() {
+            continue;
+        }
+        let body = if reading {
+            structured_parts_text(record, &parts)
+        } else {
+            raw_parts_text(record, &parts)
+        };
+        if body.trim().is_empty() {
+            continue;
+        }
+        sections.push(format!("## {}\n\n{body}", io_section_label(io)));
+    }
+    if sections.is_empty() {
+        "<empty>".to_string()
+    } else {
+        sections.join("\n\n")
+    }
+}
+
+fn io_section_label(io: sivtr_core::record::WorkPartIo) -> &'static str {
+    match io {
+        sivtr_core::record::WorkPartIo::Input => "Input",
+        sivtr_core::record::WorkPartIo::Output => "Output",
+    }
+}
+
+/// Reading: dialogue text as-is; structure folded; consecutive structure runs merge.
+fn structured_parts_text(
+    record: &WorkRecord,
+    parts: &[&sivtr_core::record::WorkPart],
+) -> String {
+    let mut chunks = Vec::new();
+    let mut idx = 0usize;
+    while idx < parts.len() {
+        if parts[idx].kind.is_structure() {
+            let start = idx;
+            while idx < parts.len() && parts[idx].kind.is_structure() {
+                idx += 1;
+            }
+            chunks.push(collapse_structure_run(&parts[start..idx]));
+        } else {
+            chunks.push(structured_part_text(record, parts[idx]));
+            idx += 1;
+        }
+    }
+    chunks.join("\n\n")
+}
+
+fn raw_parts_text(record: &WorkRecord, parts: &[&sivtr_core::record::WorkPart]) -> String {
+    parts
         .iter()
         .map(|part| raw_part_text(record, part))
         .collect::<Vec<_>>()
@@ -353,6 +407,52 @@ fn structure_fold_label(part: &sivtr_core::record::WorkPart) -> String {
         .as_agent_block_kind()
         .and_then(|kind| kind.open_marker(part.label.as_deref()))
         .unwrap_or_else(|| "<:structure:>".to_string())
+}
+
+/// Collapse a consecutive structure run.
+///
+/// Single part keeps the detailed open marker (`<:tool:Bash call:>`).
+/// Multiple parts merge by kind tag: `<:tool:> x3 <:skill:> x2`.
+fn collapse_structure_run(run: &[&sivtr_core::record::WorkPart]) -> String {
+    if run.is_empty() {
+        return String::new();
+    }
+    if run.len() == 1 {
+        return structure_fold_label(run[0]);
+    }
+
+    let mut order: Vec<&'static str> = Vec::new();
+    let mut counts: Vec<(&'static str, usize)> = Vec::new();
+    for part in run {
+        let tag = structure_kind_tag(part.kind);
+        if let Some((_, count)) = counts.iter_mut().find(|(t, _)| *t == tag) {
+            *count += 1;
+        } else {
+            order.push(tag);
+            counts.push((tag, 1));
+        }
+    }
+    counts
+        .into_iter()
+        .map(|(tag, count)| {
+            if count == 1 {
+                format!("<:{tag}:>")
+            } else {
+                format!("<:{tag}:> x{count}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn structure_kind_tag(kind: sivtr_core::record::WorkPartKind) -> &'static str {
+    use sivtr_core::record::WorkPartKind;
+    match kind {
+        WorkPartKind::ToolCall | WorkPartKind::ToolOutput => "tool",
+        WorkPartKind::Skill => "skill",
+        WorkPartKind::Thinking => "thinking",
+        _ => "structure",
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1030,7 +1130,7 @@ fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>)
         spans
     } else {
         let controls = if content_selection.is_some() {
-            "visual  h/j/k/l move  drag select  Ctrl-drag block  y/Enter copy  Esc/v return"
+            "select  drag / Ctrl-drag block  y/Enter/Ctrl-c copy  Esc/v clear"
                 .to_string()
         } else if show_help {
             "j/k move  Enter execute  Esc/? close help  q cancel".to_string()
@@ -1740,6 +1840,8 @@ mod tests {
         };
 
         let text = workspace_content_text(&[dialogue], &[false], 0, ContentViewMode::Raw, None);
+        assert!(text.contains("## Input"));
+        assert!(text.contains("## Output"));
         assert!(text.contains("alpha"));
         assert!(text.contains("omega"));
         assert!(!text.contains("[r expand]"));
@@ -1929,7 +2031,10 @@ mod tests {
             ContentViewMode::Reading,
             None,
         );
+        assert!(reading.contains("## Input"));
+        assert!(reading.contains("## Output"));
         assert!(reading.contains("question"));
+        // Single structure part keeps the detailed open marker.
         assert!(reading.contains("<:tool:Bash call:>"));
         assert!(reading.contains("<:tool:Bash result:>"));
         assert!(reading.contains("answer"));
@@ -1939,6 +2044,8 @@ mod tests {
         assert!(!reading.contains("[r expand]"));
 
         let raw = workspace_content_text(&[dialogue], &[false], 0, ContentViewMode::Raw, None);
+        assert!(raw.contains("## Input"));
+        assert!(raw.contains("## Output"));
         assert!(raw.contains("question"));
         assert!(raw.contains("cargo test"));
         assert!(raw.contains("<:tool:Bash call:>"));
@@ -1948,6 +2055,107 @@ mod tests {
         assert!(raw.contains("answer"));
         assert!(!raw.contains("codex/session"));
         assert!(!raw.contains("## User"));
+    }
+
+    #[test]
+    fn reading_mode_collapses_adjacent_structure_runs() {
+        let record = WorkRecord {
+            schema_version: 2,
+            work_ref: WorkRef::agent(AgentProvider::Codex, "session", 1),
+            kind: sivtr_core::record::WorkRecordKind::ChatTurn,
+            source: sivtr_core::record::WorkSource {
+                channel: sivtr_core::record::WorkChannel::Chat,
+                provider: Some("codex".to_string()),
+            },
+            session: sivtr_core::record::WorkSessionRef {
+                id: "session".to_string(),
+                canonical_id: None,
+                path: None,
+            },
+            cwd: None,
+            time: sivtr_core::record::WorkTime::default(),
+            status: None,
+            title: "cmd".to_string(),
+            parts: vec![
+                sivtr_core::record::WorkPart {
+                    io: sivtr_core::record::WorkPartIo::Input,
+                    kind: sivtr_core::record::WorkPartKind::UserMessage,
+                    index: 1,
+                    occurred_at: None,
+                    label: None,
+                    text: "do it".to_string(),
+                    ansi: None,
+                },
+                sivtr_core::record::WorkPart {
+                    io: sivtr_core::record::WorkPartIo::Input,
+                    kind: sivtr_core::record::WorkPartKind::ToolCall,
+                    index: 2,
+                    occurred_at: None,
+                    label: Some("Bash".to_string()),
+                    text: "ls".to_string(),
+                    ansi: None,
+                },
+                sivtr_core::record::WorkPart {
+                    io: sivtr_core::record::WorkPartIo::Input,
+                    kind: sivtr_core::record::WorkPartKind::ToolCall,
+                    index: 3,
+                    occurred_at: None,
+                    label: Some("Read".to_string()),
+                    text: "file".to_string(),
+                    ansi: None,
+                },
+                sivtr_core::record::WorkPart {
+                    io: sivtr_core::record::WorkPartIo::Input,
+                    kind: sivtr_core::record::WorkPartKind::Skill,
+                    index: 4,
+                    occurred_at: None,
+                    label: Some("review".to_string()),
+                    text: "skill body".to_string(),
+                    ansi: None,
+                },
+                sivtr_core::record::WorkPart {
+                    io: sivtr_core::record::WorkPartIo::Input,
+                    kind: sivtr_core::record::WorkPartKind::Skill,
+                    index: 5,
+                    occurred_at: None,
+                    label: Some("deploy".to_string()),
+                    text: "skill body 2".to_string(),
+                    ansi: None,
+                },
+                sivtr_core::record::WorkPart {
+                    io: sivtr_core::record::WorkPartIo::Output,
+                    kind: sivtr_core::record::WorkPartKind::AssistantMessage,
+                    index: 1,
+                    occurred_at: None,
+                    label: None,
+                    text: "done".to_string(),
+                    ansi: None,
+                },
+            ],
+        };
+        let dialogue = WorkspaceDialogue {
+            source: WorkspaceSource::agent(AgentProvider::Codex),
+            work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
+            title: "cmd".to_string(),
+            record: Some(record),
+            copy: WorkspaceCopyParts::default(),
+        };
+
+        let reading = workspace_content_text(
+            std::slice::from_ref(&dialogue),
+            &[false],
+            0,
+            ContentViewMode::Reading,
+            None,
+        );
+        assert!(reading.contains("## Input"));
+        assert!(reading.contains("do it"));
+        assert!(reading.contains("<:tool:> x2"));
+        assert!(reading.contains("<:skill:> x2"));
+        assert!(reading.contains("## Output"));
+        assert!(reading.contains("done"));
+        assert!(!reading.contains("ls"));
+        assert!(!reading.contains("skill body"));
     }
 
     #[test]
