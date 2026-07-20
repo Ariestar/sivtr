@@ -42,6 +42,7 @@ impl<'a> PaneInput<'a> {
 }
 
 /// Product pane contract.
+#[allow(clippy::len_without_is_empty)]
 pub trait Pane {
     type Ctx<'a>;
 
