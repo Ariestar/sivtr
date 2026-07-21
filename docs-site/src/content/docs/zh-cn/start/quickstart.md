@@ -48,34 +48,33 @@ sivtr
 
 这是最重要的入口。它不是只看 terminal，也不是只看某一个 Agent，而是把当前机器上的本地工作记忆合在一个界面里。
 
-Workspace TUI 有四个面板：
+Workspace TUI 有四个面板。Content 拆成 Input / Output 半窗。
 
 | 面板 | 用途 |
 | --- | --- |
 | Source | 选择来源，比如 terminal 或某个已注册的 Agent provider |
 | Sessions | 选择某个终端记录或 Agent session |
 | Dialogues | 选择某轮对话或命令块 |
-| Content | 查看具体输入、输出、工具结果或正文 |
+| Content | 查看输入与输出（独立半窗） |
 
 常用按键：
 
 | 按键 | 动作 |
 | --- | --- |
-| `0` / `1` / `2` / `3` | 聚焦 Source、Sessions、Dialogues、Content 面板 |
-| `j` / `k` | 在当前面板上下移动 |
-| `h` / `l` | 切换到前一个 / 后一个面板 |
+| `0` / `1` / `2` / `3` | 聚焦 Source、Sessions、Dialogues、Content |
+| `j` / `k` | 当前面板上下移动 |
+| `h` / `l` | 前一个 / 后一个面板 |
 | `Space` | 切换当前 source、session 或 dialogue |
+| `Tab` | Content 半窗 Input ↔ Output |
+| `r` | 折叠结构标记 / 展开完整载荷 |
+| `R` | 刷新活动行下一级 |
 | `/` | 搜索 workspace |
-| `n` / `N` | 下一个 / 上一个搜索结果 |
-| `i` | 复制输入或问题 |
-| `o` | 复制输出或回答 |
-| `y` | 复制输入 + 输出 |
-| `c` | 复制裸命令（可用时） |
-| `:` | 给下一次复制设置行过滤 |
-| `t` | 打开当前内容的 full view |
+| `i` / `o` / `y` / `c` | 复制输入 / 输出 / 块 / 裸命令 |
 | `z` | 当前面板全屏 |
 | `?` | 帮助 |
 | `q` / `Esc` | 返回或退出 |
+
+完整表见[浏览和选择](/zh-cn/usage/browse-and-select/)。
 
 Workspace 搜索支持前缀：
 

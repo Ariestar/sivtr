@@ -56,8 +56,8 @@ Mental model to keep in mind:
 - In shell pipelines, `@` means "read the WorkSet JSON from stdin". Do not pipe `--refs` text into `@`; either omit `--refs` in intermediate commands or use `@last` / `@name`.
 
 1. Convert the user's vague reference into a small query.
-2. Choose a source: `terminal`, `agent`, `pi`, `codex`, `claude`, `hermes`, `opencode`, a WorkRef selector, an origin-prefixed source such as `desk:terminal` / `docs:agent`, or a WorkSet variable such as `@last` / `@name[1,3]`.
-3. Search with a small limit. Put content terms in `-m` / `--match`. Use `--last` / `--since` for time windows, `-i` / `--in` for part candidate filters, and `--kind` for part kind filters.
+2. Choose a source: `terminal`, `agent`, or a provider (`codex`, `claude`, `cursor`, `opencode`, `openclaw`, `hermes`, `grok`, `pi`), a WorkRef selector, an origin-prefixed source such as `desk:terminal` / `docs:agent`, or a WorkSet variable such as `@last` / `@name[1,3]`.
+3. Search with a small limit. Put content terms in `-m` / `--match`. Use `--last` / `--since` for time windows, `-i` / `--in` for part candidate filters, and `--kind` for part kinds (`prompt`, `command`, `user_message`, `assistant_message`, `tool_call`, `tool_output`, `skill`, `thinking`, `text`, `error`).
    - Latest terminal error: `sivtr s terminal --status fail --latest 1 --save latest_failure --refs`
    - Broader terminal error scan: `sivtr s terminal -m "Error|error|failed|fatal|not found|External command failed" --latest 20 --save error_hits --refs`
    - Mounted remote memory: `sivtr s desk:agent -m "decision|failed" --latest 20 --save remote_hits --refs`
@@ -92,11 +92,13 @@ Core semantics:
 
 Source forms:
 
-- `terminal`, `agent`, `pi`, `codex`, `claude`, `hermes`, `opencode`
+- `terminal`, `agent`, `codex`, `claude`, `cursor`, `opencode`, `openclaw`, `hermes`, `grok`, `pi`
 - `terminal/<session>/<record>`, `<provider>/<session>/<turn>`, `<provider>/<session>/<turn>/<i|o>/<part>`, and selector variants
 - `origin:body` for another local workspace or named remote, for example `desk:terminal/...`, `docs:codex/4`
 - `@last`, `@name`, `@name[1]`, `@name[1,3]`, `@name[1..5]`, `@name[1..3,8]`
 - `@` reads a WorkSet from stdin in shell pipelines
+
+Search defaults to dialogue parts. Structure channels (tool / skill / thinking) appear as `<:channel:…:>` markers in reading mode; expand with `show --full` or the TUI `r` toggle when you need payloads.
 
 Output behavior:
 
@@ -147,12 +149,12 @@ sivtr show @ctx --full
 
 ## Non-Interactive Safety Rules
 
-- Prefer non-interactive commands: `sivtr s ... --refs`, `sivtr s ... -f <timeline|compact|md>`, `sivtr show ... --full`, `sivtr show ... --json`.
+- Prefer non-interactive commands: `sivtr s ... --refs`, `sivtr s ... -f <timeline|compact|md>`, `sivtr show ... --full`, `sivtr show ... --json`. Prefer MCP tools when the host exposes them.
 - Use WorkSet variables (`@last`, `@name`) and `@` pipelines for chaining; save reusable intermediate sets with `--save <name>` or `sivtr var set <name> <source>`.
-- Do not open TUI pickers (`--pick`, hotkey picker) unless the user explicitly wants interactive selection.
-- Do not run `sivtr clear`, hotkey start/stop, shell init, or config mutation unless the user explicitly asks.
+- Bare `sivtr` (no subcommand) opens the interactive workspace browser — human-only. Do not open TUI pickers (`--pick`, hotkey, bare `sivtr`) unless the user explicitly wants interactive selection.
+- Do not run `sivtr clear`, hotkey start/stop, shell init, share/remote mutations, or config mutation unless the user explicitly asks.
 - Avoid clipboard-oriented workflows in agent retrieval. Use refs from `search` and expand them with `show` / `zoom`.
-- Avoid dumping huge histories into the model. Search narrowly first, then expand only the relevant records.
+- Avoid dumping huge histories into the model. Search narrowly first (default bound is `--latest 5` when neither `--latest` nor `--limit` is set), then expand only the relevant records.
 - If `sivtr` is not installed or no session log exists, say so briefly and continue with normal tools. Do not invent memory results.
 
 ## Load References as Needed

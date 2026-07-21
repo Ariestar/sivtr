@@ -3,12 +3,13 @@ title: Release Notes
 description: User-facing release notes for sivtr.
 ---
 
-`sivtr` is in early `0.2.x` development. The CLI and configuration format may still change during this series.
+`sivtr` is in early `0.3.x` development. The CLI and configuration format may still change during this series.
 
 Full release notes live in the repository under [`changelogs/`](https://github.com/Ariestar/sivtr/tree/main/changelogs). The index is [`CHANGELOG.md`](https://github.com/Ariestar/sivtr/blob/main/CHANGELOG.md).
 
 ## Releases
 
+- [0.3.0 - 2026-07-21](https://github.com/Ariestar/sivtr/blob/main/changelogs/0.3.0.md)
 - [0.2.6 - 2026-07-13](https://github.com/Ariestar/sivtr/blob/main/changelogs/0.2.6.md)
 - [0.2.5 - 2026-07-12](https://github.com/Ariestar/sivtr/blob/main/changelogs/0.2.5.md)
 - [0.2.4 - 2026-06-10](https://github.com/Ariestar/sivtr/blob/main/changelogs/0.2.4.md)

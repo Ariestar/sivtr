@@ -69,21 +69,23 @@ skills/sivtr-memory/
 
 在非交互式 Agent 流程中，优先使用打印结果的命令，而不是打开选择器或修改剪贴板。Search format 按任务选择：`timeline` / `compact` / `md` 往往更适合理解和总结；`json` 更适合另一个程序解析 ref 和字段。
 
+有 MCP 时优先用工具。CLI 等价：
+
 ```bash
-sivtr search terminal --match "error|failed|panic|Traceback|Exception|exit code|FAILED" --format timeline --limit 20
-sivtr search terminal --status failure --latest 1 --format json
+sivtr s terminal -m "error|failed|panic|Traceback|Exception|exit code|FAILED" -f timeline --latest 20
+sivtr s terminal --status failure --latest 1 --json
+sivtr s agent -m "decision|TODO|next step" --latest 20 --save hits --refs
+sivtr filter @hits -m "<topic>" --save narrowed --refs
+sivtr show @narrowed[1] --full
 sivtr copy out 1 --print
-sivtr copy cmd 1..10 --print
-sivtr show terminal/current/2 --json
 ```
 
 除非用户明确要求，否则避免：
 
-- 在自主运行中使用 `--pick`（会打开交互式选择器）；
-- 启停热键服务；
-- 修改配置；
-- 倾倒巨大的完整会话；
-- 取内容时忘记加 `--print`（默认会写入剪贴板）。
+- 裸 `sivtr` 与 `--pick` 会开 TUI（Agent 自主运行时只给人用）；
+- 启停热键、改 share/remote、改配置；
+- 倾倒巨大会话——未设边界时 search 默认 `--latest 5`；
+- 取内容时加 `--print`（默认写剪贴板）。
 
 ## Skill 的结构
 

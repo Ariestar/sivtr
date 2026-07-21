@@ -117,7 +117,7 @@ curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh
 指定版本：
 
 ```bash
-SIVTR_VERSION=v0.2.6 curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh
+SIVTR_VERSION=v0.3.0 curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh
 ```
 
 安装静态 musl 二进制到 `~/.local/bin/sivtr`（或 `$SIVTR_INSTALL_DIR`）。无需 Rust 工具链。

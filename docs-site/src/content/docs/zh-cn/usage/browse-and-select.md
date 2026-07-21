@@ -1,106 +1,71 @@
 ---
 title: 浏览和选择
-description: 导航浏览器和 workspace picker，搜索输出，选择文本，并交给编辑器。
+description: 导航 workspace 浏览器与单缓冲浏览器，选择文本并复制。
 ---
 
 `sivtr` 有两个交互界面：
 
-- **browser**：用于单个捕获输出缓冲区；
-- **workspace picker**：用于命令块和 Agent session。
+- **workspace 浏览器**（TTY 下裸 `sivtr`，或 `sivtr copy --pick` / 热键）：多源 Source → Sessions → Dialogues → Content；
+- **单缓冲浏览器**（管道 stdin 或 `sivtr run` / `sivtr pipe`）：单个捕获输出缓冲区。
 
-## Browser 导航
-
-内置 browser 是只读的、Vim 风格的界面，用来扫描大型终端输出并提取有用片段。
-
-| 按键 | 动作 |
-| --- | --- |
-| `j` / `Down` | 下移 |
-| `k` / `Up` | 上移 |
-| `h` / `Left` | 左移 |
-| `l` / `Right` | 右移 |
-| `0` / `Home` | 行首 |
-| `^` | 第一个非空白列 |
-| `$` / `End` | 行尾 |
-| `Ctrl-D` | 下翻半页 |
-| `Ctrl-U` | 上翻半页 |
-| `Ctrl-F` / `PageDown` | 下翻页 |
-| `Ctrl-B` / `PageUp` | 上翻页 |
-| `gg` | 顶部 |
-| `G` | 底部 |
-| `H` / `M` / `L` | 视图顶部/中间/底部 |
-
-## Browser 搜索
-
-按 `/`，输入模式，然后按 `Enter`。
-
-| 按键 | 动作 |
-| --- | --- |
-| `/` | 开始搜索 |
-| `Enter` | 执行搜索 |
-| `Esc` | 取消搜索输入 |
-| `n` | 下一个匹配 |
-| `N` | 上一个匹配 |
-
-搜索会跳转到匹配行，并在状态栏显示匹配数量。
-
-## Browser 选择
-
-| 按键 | 动作 |
-| --- | --- |
-| `v` | 字符选择 |
-| `V` | 行选择 |
-| `Ctrl-V` | 块选择 |
-| `o` | 交换选择锚点 |
-| `y` | 复制选择到剪贴板 |
-| `Esc` | 取消选择 |
-
-也支持鼠标选择。左键拖动开始选择；按住 `Ctrl` 拖动为块模式。
-
-## Browser 中的命令块快捷键
-
-浏览结构化 session log 时，`sivtr` 可以跳转、复制或选择当前命令块。
-
-| 按键 | 动作 |
-| --- | --- |
-| `[[` | 上一个命令块 |
-| `]]` | 下一个命令块 |
-| `myy` | 复制当前命令块 |
-| `myi` | 复制当前命令输入 |
-| `myo` | 复制当前命令输出 |
-| `myc` | 复制当前裸命令 |
-| `mvv` | 选择当前命令块 |
-| `mvi` | 选择当前命令输入 |
-| `mvo` | 选择当前命令输出 |
-
-## Workspace picker 基础
-
-用以下命令打开 picker：
+## 打开 workspace 浏览器
 
 ```bash
-sivtr copy --pick
+sivtr                     # TTY：多源 workspace 浏览器
+sivtr --all               # 打开时也选中 remote mount
+sivtr copy --pick         # 同一浏览器，面向复制
 sivtr copy claude --pick
-sivtr copy codex --pick
-sivtr copy hermes --pick
 ```
 
-Picker 包含 Source、Sessions、Dialogues 和 Content 面板。
+布局：Source · Sessions · Dialogues · Content。Content 拆成独立滚动的 **Input** / **Output** 半窗。
+
+### Workspace 导航
 
 | 按键 | 动作 |
 | --- | --- |
 | `0` / `1` / `2` / `3` | 聚焦 Source、Sessions、Dialogues 或 Content |
-| `Space` | 切换当前 source、session 或 dialogue |
-| `i` / `o` / `y` / `c` | 复制输入、输出、块或命令 |
-| `/` | 搜索所有 session |
-| `:` | 设置下一次复制用的一次性行过滤 |
-| `t` | 打开 Vim 风格 full view |
-| `z` | 当前面板全屏切换 |
+| `h` / `l` | 上一 / 下一面板 |
+| `j` / `k` | 下移 / 上移 |
+| `Space` | 切换选择（source / session / dialogue） |
+| `a` | 全选 source（Source）· 切换全部 dialogue（Dialogues） |
+| `g` / `t` | 选 agent 源 / terminal 源（Source） |
+| `R` | 刷新活动行下一级 |
+| `v` | Dialogue 范围选择 · Content 视觉选字 |
+| `Tab` | Content 半窗 Input ↔ Output |
+| `r` | 折叠 / 展开结构标记与完整载荷 |
+| `Ctrl-d` / `Ctrl-u` · `PgDn` / `PgUp` | 滚动 Content |
+| `g` / `G` | Content 顶 / 底 |
+| `i` / `o` / `y` / `c` | 复制输入 / 输出 / 块 / 命令 |
+| `Enter` | 确认 / 打开下一级 / 复制 |
+| `/` | 搜索 |
+| `z` | 当前面板全屏 |
+| `t` | Vim 风格 full view（Sessions/Dialogues） |
 | `?` | 帮助 |
+| `q` / `Esc` | 退出 / 返回 |
+
+鼠标：Content 上拖选文本；`Ctrl`-拖为块选。Source 聚焦时纵向展开，失焦为紧凑条。Content 半窗高度偏向当前焦点半窗。
+
+结构 part（tool / skill / thinking）在折叠模式显示为 `<:channel:…:>` 标记；`r` 展开完整载荷。
 
 完整按键见[快捷键](/zh-cn/reference/keybindings/)。
 
-## 交给编辑器
+## 单缓冲浏览器
 
-在 browser 中按 `e`，会把当前选择内容（如果没有选择则是整个缓冲区）交给配置的编辑器。
+管道捕获或 `sivtr run` 打开 Vim 风格只读浏览器，浏览单个缓冲区。
+
+| 按键 | 动作 |
+| --- | --- |
+| `j` / `k` · 方向键 | 移动 |
+| `Ctrl-D` / `Ctrl-U` | 半页 |
+| `Ctrl-F` / `Ctrl-B` · Page 键 | 整页 |
+| `gg` / `G` | 顶 / 底 |
+| `/` · `n` / `N` | 搜索 · 下一 / 上一匹配 |
+| `v` / `V` / `Ctrl-V` | 字符 / 行 / 块选择 |
+| `y` | 复制选择 |
+| 鼠标拖 · `Ctrl`-拖 | 选字 · 块选 |
+| `e` | 把选择（或整缓冲）交给配置的编辑器 |
+| `[[` / `]]` | 上一 / 下一命令块（session log） |
+| `myy` / `myi` / `myo` / `myc` | 复制块 / 输入 / 输出 / 裸命令 |
 
 配置编辑器：
 

@@ -9,9 +9,13 @@ This page documents the public CLI surface. The source of truth is `src/cli/`; r
 
 ```bash
 sivtr [COMMAND]
+sivtr --all              # with bare TTY: also select remote mounts on open
 ```
 
-If no command is provided, `sivtr` reads from stdin, matching pipe mode.
+With no command:
+
+- **TTY** → multi-source workspace browser (Source / Sessions / Dialogues / Content).
+- **Piped stdin** → single-buffer browser (same as `sivtr pipe`).
 
 ## run
 

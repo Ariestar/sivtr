@@ -48,14 +48,14 @@ sivtr
 
 This is the most important entry point. It is not terminal-only, and it is not tied to one agent provider. It puts local workspace memory into one interface.
 
-The workspace TUI has four panes:
+The workspace TUI has four panes. Content splits into Input / Output halves.
 
 | Pane | Purpose |
 | --- | --- |
 | Source | Choose a source, such as terminal or a registered agent provider. |
 | Sessions | Choose a terminal record or agent session. |
 | Dialogues | Choose a dialogue turn or command block. |
-| Content | Inspect input, output, tool results, or message content. |
+| Content | Inspect input and output (independent halves). |
 
 Common keys:
 
@@ -65,17 +65,16 @@ Common keys:
 | `j` / `k` | Move inside the focused pane |
 | `h` / `l` | Move to the previous / next pane |
 | `Space` | Toggle the current source, session, or dialogue |
+| `Tab` | Switch Content Input ↔ Output half |
+| `r` | Fold structure markers / expand full payloads |
+| `R` | Refresh next level under active rows |
 | `/` | Search the workspace |
-| `n` / `N` | Next / previous search result |
-| `i` | Copy input or question |
-| `o` | Copy output or answer |
-| `y` | Copy input + output |
-| `c` | Copy bare command when available |
-| `:` | Set a line filter for the next copy |
-| `t` | Open the current content in full view |
+| `i` / `o` / `y` / `c` | Copy input / output / block / bare command |
 | `z` | Toggle focused pane fullscreen |
 | `?` | Help |
 | `q` / `Esc` | Back or quit |
+
+Full table: [Browse and Select](/usage/browse-and-select/).
 
 Workspace search supports prefixes:
 

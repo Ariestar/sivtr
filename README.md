@@ -5,11 +5,11 @@
 <h1 align="center">sivtr</h1>
 
 <p align="center">
-  A unified agent memory workspace for human and agent
+  一个面相智能体和人的统一的记忆空间
   <br>
-  agents and terminals share one context to use
+  让智能体和终端共享同一个上下文
   <br>
-  <strong>Your agent memory doesn’t need to be a heavyweight knowledge system.</strong>
+  <strong>你的 Agent 记忆，不必是一套笨重的知识系统。</strong>
 </p>
 
 <p align="center">
@@ -22,9 +22,9 @@
 </p>
 
 <p align="center">
-  <strong>English</strong>
+  <strong>简体中文</strong>
   ·
-  <a href="README.zh-CN.md">简体中文</a>
+  <a href="README.en.md">English</a>
   ·
   <a href="https://sivtr.pages.dev/">Docs</a>
   ·
@@ -32,199 +32,200 @@
 </p>
 
 <p align="center">
-  <a href="https://sivtr.pages.dev/playbooks/">
-    <img src="docs-site/public/demo/4.gif" alt="sivtr demo: save search results as variables and keep narrowing" width="820">
+  <a href="https://sivtr.pages.dev/zh-cn/playbooks/">
+    <img src="docs-site/public/demo/4.gif" alt="sivtr demo：把搜索结果保存成变量并继续缩小范围" width="820">
   </a>
   <br>
   <sub>
-    Save matches as memory variables and keep narrowing ·
-    <a href="https://sivtr.pages.dev/playbooks/fix-terminal-error/">Fix terminal errors</a> ·
-    <a href="https://sivtr.pages.dev/playbooks/recent-work-timeline/">Build timelines</a> ·
-    <a href="https://sivtr.pages.dev/playbooks/agent-handoff/">Handoff with evidence</a>
+    把命中结果保存成记忆变量，再继续缩小范围 ·
+    <a href="https://sivtr.pages.dev/zh-cn/playbooks/fix-terminal-error/">修复终端报错</a> ·
+    <a href="https://sivtr.pages.dev/zh-cn/playbooks/recent-work-timeline/">生成时间线</a> ·
+    <a href="https://sivtr.pages.dev/zh-cn/playbooks/agent-handoff/">带证据交接</a>
   </sub>
 </p>
 
 ---
 
-## Why sivtr?
+## 为什么需要 sivtr？
 
-Developers and agents lose time reconstructing context that already exists locally: terminal failures, test output, tool logs, and previous AI sessions. `sivtr` turns that work into searchable memory without asking you to adopt a heavyweight knowledge system.
+开发者和 Agent 经常浪费时间重建已经存在的上下文：终端报错、测试输出、工具日志、之前的 AI 会话。`sivtr` 把这些本地工作变成可搜索的记忆，但不要求你引入一套很重的知识系统。
 
-With `sivtr`, you can:
+有了 `sivtr`，你可以：
 
-- ask an agent to fix the latest failure without pasting the log;
-- find yesterday's test output, build error, or decision in seconds;
-- reopen the exact command output or agent reply behind a summary;
-- save useful search results as named variables like `@failures` and reuse them in the next command.
+- 让 Agent 修复最近一次失败，而不用自己粘贴日志；
+- 几秒钟找回昨天的测试输出、构建报错或关键决策；
+- 从摘要跳回当时那条命令输出或 Agent 回复；
+- 把一组有用结果保存成 `@failures` 这样的变量，在下一条命令里继续用。
 
 > [!IMPORTANT]
-> For agent workflows, install the `sivtr` CLI, register the MCP server with `sivtr mcp install`, and optionally add the bundled `sivtr-memory` skill. MCP is the main way agents read local evidence; the skill teaches when and how to use it.
+> Agent 工作流建议安装 `sivtr` CLI，用 `sivtr mcp install` 注册 MCP，并可选用内置 `sivtr-memory` skill。MCP 是 Agent 读取本地证据的主路径；skill 负责教它何时、如何调用。
 
-## Features
+## 特性
 
-- **MCP-first agent memory**: install once with `sivtr mcp install`, then agents call `sivtr_search` / `sivtr_show` / `sivtr_zoom` / `sivtr_filter` / `sivtr_status` instead of asking you to paste logs.
-- **Shell history that keeps the output**: capture commands from Bash, Zsh, PowerShell, and Nushell, including stdout, stderr, exit code, cwd, and timing.
-- **One search surface for local work**: terminal output plus all registered agent providers (Codex, Claude Code, Cursor, Hermes, OpenCode, OpenClaw, Grok, Pi, …) from the current repo — via MCP or CLI.
-- **Exact evidence, not summaries**: every hit resolves to a stable ref you can show, zoom, filter, or hand to the next agent.
-- **Named memory variables**: save result sets as `@failures`, reuse `@last`, pipe with `@`, and slice with `@failures[1,3..5]`.
-- **Cross-device access**: share a workspace read-only and browse another device with a `desk:...` ref.
-- **One-command setup**: `sivtr setup` for hooks + MCP host install; `sivtr doctor --fix` to repair.
-- **CLI still there when you want it**: search, show, filter, nav, and a TUI browser for humans — useful, not the main product story.
+- **MCP 优先的 Agent 记忆**：一次 `sivtr mcp install`，Agent 直接调用 `sivtr_search` / `sivtr_show` / `sivtr_zoom` / `sivtr_filter` / `sivtr_status`，不用你粘贴日志。
+- **带输出的 shell history**：记录 Bash、Zsh、PowerShell、Nushell 里的命令、stdout/stderr、退出码、目录和耗时。
+- **一个搜索面覆盖本地工作**：终端输出 + 所有已注册 Agent provider（Codex / Claude Code / Cursor / Hermes / OpenCode / OpenClaw / Grok / Pi …）——MCP 或 CLI 都能用。
+- **精确证据，而不是摘要**：每个命中都落到稳定 ref，可 show / zoom / filter，或交给下一个 Agent。
+- **命名记忆变量**：把结果保存成 `@failures`，复用 `@last`，管道用 `@`，也可 `@failures[1,3..5]` 取子集。
+- **跨设备访问**：只读分享 workspace，用 `desk:...` ref 像读本地一样浏览另一台设备。
+- **一键安装与诊断**：`sivtr setup` 装 hooks + MCP；`sivtr doctor --fix` 自动修复。
+- **人用 CLI 仍然在**：search / show / filter / nav，以及 TUI 浏览器——有用，但不是主叙事。
 
-## Quick start
+## 快速开始
 
-Install the prebuilt CLI (no Rust toolchain needed):
+安装预编译 CLI（无需 Rust 工具链）：
 
 ```bash
 cargo binstall sivtr
 ```
 
-On Linux, `cargo binstall` installs the static musl build by default (no GLIBC version requirement). Same asset as `install.sh`.
+Linux 上 `cargo binstall` 默认安装静态 musl 构建（不依赖系统 GLIBC 版本），与 `install.sh` 同源。
 
-Other ways:
+其它方式：
 
 ```bash
-cargo install sivtr                  # build from source (needs Rust)
-curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh   # Linux/macOS/WSL one-liner
+cargo install sivtr                  # 从源码编译（需要 Rust）
+curl -fsSL https://raw.githubusercontent.com/Ariestar/sivtr/main/install.sh | sh   # Linux/macOS/WSL 一行安装
 ```
 
-Windows (PowerShell):
+Windows（PowerShell）：
 
 ```powershell
 irm https://raw.githubusercontent.com/Ariestar/sivtr/main/install.ps1 | iex
 ```
 
-First-time setup (hooks + MCP hosts):
+首次安装（hooks + MCP 宿主）：
 
 ```bash
-sivtr setup             # hooks + MCP hosts + sivtr-memory skill (if missing)
-# or step by step:
-sivtr init powershell   # or bash, zsh, nushell
-sivtr mcp install       # Claude Code, Cursor, Codex, OpenCode, Pi, Hermes
+sivtr setup             # hooks + MCP 宿主 + sivtr-memory skill（缺失时安装）
+# 或分步：
+sivtr init powershell   # 或 bash、zsh、nushell
+sivtr mcp install       # 检测已装宿主；或 -p claude,cursor,codex,opencode,openclaw,grok,hermes,pi
 npx skills add Ariestar/sivtr --skill sivtr-memory -g -y
 sivtr doctor
 ```
 
 > [!NOTE]
-> On Windows, if `sivtr init powershell` reports that the profile did not load, raise the current-user execution policy once with `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`. sivtr never edits the registry — the hook lives only in your PowerShell profile.
+> 在 Windows 上，如果 `sivtr init powershell` 提示 profile 没有加载，执行一次 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` 把当前用户的执行策略调高即可。sivtr 不会修改注册表——hook 只写在你的 PowerShell profile 里。
 
-## Agent memory (MCP)
+## Agent 记忆（MCP）
 
-This is the main path. After `sivtr mcp install`, agents get structured tools over local terminal + AI session memory:
+这是主路径。`sivtr mcp install` 之后，Agent 通过结构化工具读写本地终端与 AI session 记忆：
 
-| Tool | Use |
+| 工具 | 用途 |
 | --- | --- |
-| `sivtr_search` | Find recent failures, decisions, or commands |
-| `sivtr_show` | Open the exact record/part behind a hit |
-| `sivtr_zoom` | Expand surrounding context |
-| `sivtr_filter` | Narrow a result set |
-| `sivtr_status` | Workspace / remote / origin health |
+| `sivtr_search` | 找最近失败、决策、命令 |
+| `sivtr_show` | 打开命中背后的精确 record/part |
+| `sivtr_zoom` | 展开前后上下文 |
+| `sivtr_filter` | 缩小结果集 |
+| `sivtr_status` | workspace / remote / origin 状态 |
 
-Optional skill (teaches the agent when to call those tools):
+可选 skill（教 Agent 何时调用这些工具）：
 
 ```bash
 npx skills add Ariestar/sivtr --skill sivtr-memory -g
 ```
 
-Then ask:
+然后直接说：
 
 ```text
-Fix the latest terminal error. Use sivtr first.
+修复最近的终端报错。先用 sivtr。
 ```
 
-The agent should search local evidence, open the matching output, patch, and verify — without you pasting logs.
+Agent 应先搜本地证据、打开原文、改代码并验证——而不是让你粘贴日志。
 
-CLI search is still available when you want it yourself:
+需要自己查时，CLI 仍然可用：
 
 ```bash
 sivtr s terminal --status failure --latest 5 --refs
 sivtr s agent -m "TODO|decision|failed" --since today -f timeline
 ```
 
-## Examples
+## 示例
 
-More end-to-end walkthroughs live in the [Playbooks](https://sivtr.pages.dev/playbooks/).
+更多完整玩法见 [Playbooks / 玩法实例](https://sivtr.pages.dev/zh-cn/playbooks/)。
 
-| Workflow | What you do | Demo |
+| 场景 | 你怎么用 | 演示 |
 | --- | --- | --- |
-| Fix the latest terminal error | Ask your agent (MCP): <br><code>Fix the latest terminal error. Use sivtr first.</code> | <img src="docs-site/public/demo/1.gif" alt="Fix the latest terminal error with sivtr" width="320"> |
-| Continue after interruption | Ask your agent: <br><code>Continue. Use sivtr memory first.</code> | <img src="docs-site/public/demo/5.gif" alt="Continue after interruption with sivtr memory" width="320"> |
-| Prepare a handoff for the next agent | Ask your agent: <br><code>Give the next agent a handoff with evidence.</code> | <img src="docs-site/public/demo/6.gif" alt="Prepare an evidence-backed handoff" width="320"> |
-| Turn recent work into a timeline | <code>sivtr s agent --since today --sort oldest -f timeline</code><br><code>sivtr s terminal --since today --sort oldest -f timeline</code> | <img src="docs-site/public/demo/3.gif" alt="Build a recent work timeline" width="320"> |
-| Save results as variables and chain them | <code>sivtr s terminal -m "panic" --save failures</code><br><code>sivtr filter @failures --status failure --refs</code> | <img src="docs-site/public/demo/4.gif" alt="Chain saved memory variables" width="320"> |
+| 修复最近的终端报错 | 对 Agent 说（MCP）：<br><code>修复最近的终端报错。先用 sivtr。</code> | <img src="docs-site/public/demo/1.gif" alt="用 sivtr 修复最近终端报错" width="320"> |
+| 中断后继续 | 对 Agent 说：<br><code>继续。先用 sivtr memory。</code> | <img src="docs-site/public/demo/5.gif" alt="中断后用 sivtr 记忆继续" width="320"> |
+| 给下一个 Agent 写交接 | 对 Agent 说：<br><code>给下一个 Agent 写一份带证据的交接。</code> | <img src="docs-site/public/demo/6.gif" alt="生成有证据的 Agent 交接" width="320"> |
+| 生成最近工作时间线 | <code>sivtr s agent --since today --sort oldest -f timeline</code><br><code>sivtr s terminal --since today --sort oldest -f timeline</code> | <img src="docs-site/public/demo/3.gif" alt="生成最近工作时间线" width="320"> |
+| 把结果保存成变量并继续处理 | <code>sivtr s terminal -m "panic" --save failures</code><br><code>sivtr filter @failures --status failure --refs</code> | <img src="docs-site/public/demo/4.gif" alt="链式使用已保存的记忆变量" width="320"> |
 
-## Core concepts
+## 核心概念
 
-| Concept | Meaning |
+| 概念 | 含义 |
 | --- | --- |
-| WorkRecord | One useful work event: a terminal command, agent turn, tool call, or captured output block. |
-| WorkPart | The command, output, assistant reply, tool output, or error inside a record. Use this when you only need the useful part, not the whole event. |
-| WorkRef | A stable address for one exact piece of memory, for example `pi/<session>/3/o/1`. Good for citations and reproducible handoffs. |
-| WorkSet | The data behind memory variables such as `@last` and `@failures`: an ordered list of refs you can filter, save, slice, pipe, navigate, expand, and show. |
+| WorkRecord | 一个有用的工作事件：终端命令、Agent turn、工具调用或捕获输出块。 |
+| WorkPart | Record 里的命令、输出、assistant 回复、tool output 或 error。只想拿有用片段而不是整个事件时用它。 |
+| WorkRef | 某段精确记忆的稳定地址，例如 `pi/<session>/3/o/1`。适合引用、复现和交接。 |
+| WorkSet | `@last`、`@failures` 这类记忆变量背后的数据：一组有顺序的 refs，可以筛选、保存、切片、管道传递、导航、扩展和展示。 |
 
-Memory variables:
+记忆变量：
 
-| Handle | Use |
+| 句柄 | 用途 |
 | --- | --- |
-| `@last` | The latest search or projection result. |
-| `@name` | A named variable created with `--save name` or `sivtr var set name`, for example `@failures`. |
-| `@name[1,3..5]` | Pick only a few items from a saved variable. |
-| `@` | Use the result coming from the previous command in a pipeline. |
+| `@last` | 最近一次搜索或投影结果。 |
+| `@name` | 通过 `--save name` 或 `sivtr var set name` 创建的命名变量，例如 `@failures`。 |
+| `@name[1,3..5]` | 从已保存变量中只取几项。 |
+| `@` | 使用管道里上一条命令传来的结果。 |
 
-## Command overview
+## 命令概览
 
-| Command | Purpose |
+| 命令 | 用途 |
 | --- | --- |
-| `sivtr` / `sivtr pipe` | Read stdin and open the output browser. |
-| `sivtr run <command>` | Execute a command, capture output, then browse it. |
-| `sivtr copy` | Copy recent terminal command blocks. |
-| `sivtr copy <provider>` | Copy content from any registered agent provider (registry-driven: Codex, Claude, Cursor, OpenCode, OpenClaw, Hermes, Grok, Pi, …). |
-| `sivtr search` / `sivtr s` | Search terminal and agent memory; saves matches as `@last`. |
-| `sivtr filter <source>` | Apply the shared WorkSet filters to a source or piped WorkSet. |
-| `sivtr var` | List, save, remove, merge, drop, or clean up named WorkSet variables. |
-| `sivtr nav <source> <motion>` | Move anchors deterministically with `<`, `>N`, `+N`, `-N`, `[A..B]`, and `~`. |
-| `sivtr work sessions` | List terminal and agent sessions in the current workspace. |
-| `sivtr work records <source>` | Turn sessions or saved variables into event-level refs. |
-| `sivtr work parts <source>` | Extract only useful inputs/outputs from matching events. |
-| `sivtr show <ref-or-workset>` | Print the content behind refs, `@last`, `@name`, or piped results. Also accepts remote refs like `desk:terminal/...`. |
-| `sivtr zoom <source>` | Add surrounding record context around search hits. |
-| `sivtr diff <left> <right>` | Compare recent command blocks. |
-| `sivtr serve` | Start/stop the local remote-memory daemon. |
-| `sivtr share` | Explicitly share a local workspace for remote peers. |
-| `sivtr remote` | Name peer shares in the current workspace (`add`/`list`/`remove`/`test`, like `git remote`). |
-| `sivtr workspace` / `sivtr ws` | List known local workspaces (origin labels for `name:body` refs). |
-| `sivtr mcp` | MCP server + host install (`serve` / `install` / `uninstall` / `print-config`). |
-| `sivtr doctor` | Diagnose binary, config, session logs, hooks, providers, and clipboard. |
-| `sivtr init <shell>` | Install shell integration; also supports `show` and `uninstall`. |
-| `sivtr config` | Manage the TOML config file. |
-| `sivtr history` | List, search, and show captured output history. |
-| `sivtr hotkey` | Manage the Windows AI session picker hotkey daemon. |
+| `sivtr` | TTY 打开 workspace 浏览器；管道 stdin 打开单缓冲浏览器。 |
+| `sivtr pipe` | 读取 stdin 并打开输出浏览器。 |
+| `sivtr run <command>` | 执行命令、捕获输出并浏览。 |
+| `sivtr copy` | 复制最近终端命令块。 |
+| `sivtr copy <provider>` | 从任意已注册 Agent provider 复制内容（registry 驱动：Codex、Claude、Cursor、OpenCode、OpenClaw、Hermes、Grok、Pi…）。 |
+| `sivtr search` / `sivtr s` | 搜索终端和 Agent memory；命中结果保存为 `@last`。 |
+| `sivtr filter <source>` | 对 source 或管道传入的 WorkSet 应用统一过滤。 |
+| `sivtr var` | 列出、保存、删除、合并、移除或清空命名 WorkSet 变量。 |
+| `sivtr nav <source> <motion>` | 用 `<`、`>N`、`+N`、`-N`、`[A..B]`、`~` 确定性移动 anchors。 |
+| `sivtr work sessions` | 列出当前 workspace 的 terminal 和 Agent sessions。 |
+| `sivtr work records <source>` | 把 sessions 或已保存变量转成事件级 refs。 |
+| `sivtr work parts <source>` | 从匹配事件里抽出真正有用的输入/输出片段。 |
+| `sivtr show <ref-or-workset>` | 打印 refs、`@last`、`@name` 或管道结果背后的内容。也支持远程 ref，如 `desk:terminal/...`。 |
+| `sivtr zoom <source>` | 给搜索命中补上前后 record 上下文。 |
+| `sivtr diff <left> <right>` | 对比最近命令块。 |
+| `sivtr serve` | 启动/停止本机 remote-memory daemon。 |
+| `sivtr share` | 显式分享本机 workspace 给远端。 |
+| `sivtr remote` | 把远端 share 挂到当前 workspace（`add`/`list`/`remove`/`test`）。 |
+| `sivtr workspace` / `sivtr ws` | 列出本机已知 workspace（`name:body` 的 origin 标签）。 |
+| `sivtr mcp` | MCP server 与宿主安装（`serve` / `install` / `uninstall` / `print-config`）。 |
+| `sivtr doctor` | 诊断 binary、config、session logs、hooks、providers、clipboard。 |
+| `sivtr init <shell>` | 安装 shell integration；也支持 `show` 和 `uninstall`。 |
+| `sivtr config` | 管理 TOML 配置文件。 |
+| `sivtr history` | 列出、搜索、查看捕获输出历史。 |
+| `sivtr hotkey` | 管理 Windows AI session picker 全局热键守护进程。 |
 
-## Remote access
+## 远程访问
 
-Two devices running sivtr can read each other's workspace sessions like reading local — for collaborative work where you want to see a teammate's terminal output or AI session without leaving your machine.
+两台装了 sivtr 的设备可以像读本地一样互相读取 workspace 的 session——用于协同开发：想看队友的终端输出或 AI 会话时，不用离开自己的机器。
 
-Refs use a single form: `origin:body`.
+ref 统一为 `origin:body`：
 
 ```text
-codex/4                 # local current workspace
-docs:codex/4            # another local workspace by name
-desk:terminal/...       # remote name from `remote add`
-alice/sivtr:hermes/...  # device/workspace coordinate
+codex/4                 # 本机当前 workspace
+docs:codex/4            # 本机另一个 workspace（按目录名）
+desk:terminal/...       # remote add 得到的远端名
+alice/sivtr:hermes/...  # device/workspace 坐标
 ```
 
-On the device that owns the workspace:
+在持有 workspace 的设备上：
 
 ```bash
-sivtr share                   # pick workspace (Enter = current); create share only
-sivtr share invite <name>     # single-use invite (stdout = bare key)
-sivtr ws list                 # see local workspace origin labels
+sivtr share                   # 交互选择 workspace（Enter = 当前）；只创建 share
+sivtr share invite <name>     # 签发单次 invite（stdout = bare key）
+sivtr ws list                 # 查看本机 workspace origin 标签
 ```
 
-On the other device:
+在另一台设备上：
 
 ```bash
-sivtr remote add desk <invite>   # bare key from `sivtr share invite` stdout
+sivtr remote add desk <invite>   # 粘贴 `sivtr share invite` 输出的 bare key
 sivtr s desk:terminal --status failure --latest 5 --refs
 sivtr show desk:terminal/session_42/3/o/1
 sivtr zoom desk:terminal/session_42/3 -C 2
@@ -232,33 +233,33 @@ sivtr nav desk:terminal/session_42/3 +1 --refs
 sivtr copy ref desk:terminal/session_42/3/o/1 --print
 ```
 
-Sharing is opt-in and read-only. Secrets are redacted by default before data leaves the machine. Remote access uses encrypted iroh transport; the daemon auto-starts when needed. Unregistered origins error — register remotes with `sivtr remote add`, or list local workspaces with `sivtr ws`.
+分享是 opt-in、只读，默认在数据离开本机前脱敏常见密钥。远程传输走加密 iroh；需要时会自动启动 daemon。未登记的 origin 会报错——用 `sivtr remote add` 登记 remote，或用 `sivtr ws` 查看本机 workspace。
 
-## Supported sources
+## 支持来源
 
-| Source | Support |
+| Source | 支持内容 |
 | --- | --- |
-| Terminal | Bash, Zsh, PowerShell, Nushell shell hooks; pipe and run capture. |
-| Codex | Local rollout/session JSONL files. |
-| Claude Code | Local transcript/session files. |
-| Cursor | Local Cursor agent transcript JSONL. |
-| OpenCode | Local session database. |
-| OpenClaw | Local OpenClaw agent SQLite (+ legacy JSONL). |
-| Hermes | Local Hermes `state.db` (JSONL under `sessions/` as residual). |
-| Grok | Local Grok agent sessions under `~/.grok` (`GROK_HOME`). |
-| Pi | Local Pi agent session logs. |
+| Terminal | Bash、Zsh、PowerShell、Nushell shell hooks；pipe 和 run capture。 |
+| Codex | 本地 rollout/session JSONL files。 |
+| Claude Code | 本地 transcript/session files。 |
+| Cursor | 本地 Cursor agent transcript JSONL。 |
+| OpenCode | 本地 session 数据库。 |
+| OpenClaw | 本地 OpenClaw agent SQLite（+ legacy JSONL）。 |
+| Hermes | 本地 Hermes `state.db`（`sessions/` 下 JSONL 为 residual）。 |
+| Grok | 本地 Grok agent sessions（`~/.grok`，可用 `GROK_HOME`）。 |
+| Pi | 本地 Pi agent session logs。 |
 
-## Documentation
+## 文档
 
-- Documentation: [https://sivtr.pages.dev/](https://sivtr.pages.dev/)
-- 中文文档: [https://sivtr.pages.dev/zh-cn/](https://sivtr.pages.dev/zh-cn/)
-- Playbooks: [https://sivtr.pages.dev/playbooks/](https://sivtr.pages.dev/playbooks/)
-- CLI reference: [docs-site/src/content/docs/reference/cli.md](docs-site/src/content/docs/reference/cli.md)
-- Memory skill: [skills/sivtr-memory](skills/sivtr-memory)
+- 文档：[https://sivtr.pages.dev/](https://sivtr.pages.dev/)
+- 中文文档：[https://sivtr.pages.dev/zh-cn/](https://sivtr.pages.dev/zh-cn/)
+- Playbooks：[https://sivtr.pages.dev/zh-cn/playbooks/](https://sivtr.pages.dev/zh-cn/playbooks/)
+- CLI Reference：[docs-site/src/content/docs/reference/cli.md](docs-site/src/content/docs/reference/cli.md)
+- Memory skill：[skills/sivtr-memory](skills/sivtr-memory)
 
-## Development
+## 开发
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, PR expectations, and coding guidelines.
+环境、PR 约定与编码指南见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ```bash
 cargo fmt --all -- --check
@@ -266,7 +267,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-Docs site:
+文档站：
 
 ```bash
 cd docs-site
@@ -274,12 +275,12 @@ bun install --frozen-lockfile
 bun run build
 ```
 
-Repository layout:
+仓库结构：
 
 ```text
-crates/sivtr-core/  core model, provider parsers, search, history, config
-src/                CLI commands, TUI, shell hooks, hotkey integration
+crates/sivtr-core/  core model、provider parsers、search、history、config
+src/                CLI commands、TUI、shell hooks、hotkey integration
 docs-site/          Astro/Starlight documentation site
-editors/vscode/     VS Code bridge for the AI session picker
+editors/vscode/     AI session picker 的 VS Code bridge
 skills/             bundled agent skills
 ```

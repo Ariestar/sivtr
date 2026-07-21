@@ -3,12 +3,13 @@ title: Release Notes
 description: sivtr 面向用户的发布说明。
 ---
 
-`sivtr` 仍处在早期 `0.2.x` 开发阶段。本系列中 CLI 和配置格式仍可能变化。
+`sivtr` 仍处在早期 `0.3.x` 开发阶段。本系列中 CLI 和配置格式仍可能变化。
 
 完整发布说明在仓库 [`changelogs/`](https://github.com/Ariestar/sivtr/tree/main/changelogs) 中；索引见 [`CHANGELOG.md`](https://github.com/Ariestar/sivtr/blob/main/CHANGELOG.md)。
 
 ## Releases
 
+- [0.3.0 - 2026-07-21](https://github.com/Ariestar/sivtr/blob/main/changelogs/0.3.0.md)
 - [0.2.6 - 2026-07-13](https://github.com/Ariestar/sivtr/blob/main/changelogs/0.2.6.md)
 - [0.2.5 - 2026-07-12](https://github.com/Ariestar/sivtr/blob/main/changelogs/0.2.5.md)
 - [0.2.4 - 2026-06-10](https://github.com/Ariestar/sivtr/blob/main/changelogs/0.2.4.md)

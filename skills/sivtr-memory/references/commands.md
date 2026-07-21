@@ -10,7 +10,7 @@ Source forms:
 
 - `terminal`: terminal command records
 - `agent`: AI/agent conversation records from all providers
-- `codex`, `claude`, `cursor`, `hermes`, `openclaw`, `opencode`, `grok`, `pi`: one provider's conversation records
+- `codex`, `claude`, `cursor`, `opencode`, `openclaw`, `hermes`, `grok`, `pi`: one provider's conversation records
 - `terminal/<session>/<record>/<line>` or `<provider>/<session>/<turn>/<line>` with optional trailing segments
 - `<provider>/<session>/<turn>/<i|o>/<part>` for input/output part refs
 - `origin:body` for another local workspace name or a named remote, for example `desk:terminal`, `docs:codex/4`
@@ -36,7 +36,7 @@ sivtr s <source> \
   -m <case-insensitive-regex> \
   -i <content|title|session|input|output|command|all> \
   -v <case-insensitive-regex> \
-  --kind <prompt|command|user_message|assistant_message|tool_call|tool_output|text|error> \
+  --kind <prompt|command|user_message|assistant_message|tool_call|tool_output|skill|thinking|text|error> \
   --status <success|failure|unknown|fail> \
   --exit-code <code> \
   --min-duration <duration> \
@@ -96,7 +96,7 @@ sivtr filter <source> \
   -i <content|title|session|input|output|command|all> \
   --parts \
   --io <all|input|output> \
-  --kind <prompt|command|user_message|assistant_message|tool_call|tool_output|text|error> \
+  --kind <prompt|command|user_message|assistant_message|tool_call|tool_output|skill|thinking|text|error> \
   --status <success|failure|unknown|fail> \
   --exit-code <code> \
   --last <duration> \
@@ -257,10 +257,15 @@ sivtr s terminal -m "cargo test" -i title --latest 20 --refs
 ```bash
 sivtr s codex -m "<query>" --latest 20 --refs
 sivtr s claude -m "<query>" --latest 20 --refs
-sivtr s hermes -m "<query>" --latest 20 --refs
-sivtr s pi -m "<query>" --latest 20 --refs
+sivtr s cursor -m "<query>" --latest 20 --refs
 sivtr s opencode -m "<query>" --latest 20 --refs
+sivtr s openclaw -m "<query>" --latest 20 --refs
+sivtr s hermes -m "<query>" --latest 20 --refs
+sivtr s grok -m "<query>" --latest 20 --refs
+sivtr s pi -m "<query>" --latest 20 --refs
 ```
+
+Part kinds include dialogue (`user_message`, `assistant_message`, `tool_call`, `tool_output`, …) and structure (`skill`, `thinking`). Search defaults to dialogue; use `--kind skill` / `--kind thinking` when you need those channels.
 
 ## Compose Filters from the Request
 
@@ -354,7 +359,7 @@ The `dialogue` / `line` segments may be concrete numbers or selector lists/range
 
 ## Token Budget
 
-- Start with `--latest 20`.
+- Search defaults to `--latest 5` when neither `--latest` nor `--limit` is set. Raise intentionally (`--latest 20`) when scanning.
 - Use `--refs` or `-f timeline` for first-pass inspection.
 - Expand at most 1-3 records before answering unless the task requires a timeline.
 - Prefer exact refs and WorkSet selectors over broad repeated searches.

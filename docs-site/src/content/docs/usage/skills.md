@@ -69,20 +69,22 @@ This is the agent-facing expression of `sivtr`'s product model: local evidence f
 
 For non-interactive agent workflows, prefer commands that print results instead of opening pickers or mutating the clipboard. Choose the search format for the job: `timeline`/`compact`/`md` are often easier to reason over, while `json` is best when a program will parse refs and fields.
 
+Prefer MCP tools when registered. CLI equivalents:
+
 ```bash
-sivtr search terminal --match "error|failed|panic|Traceback|Exception|exit code|FAILED" --format timeline --limit 20
-sivtr search terminal --status failure --latest 1 --format json
+sivtr s terminal -m "error|failed|panic|Traceback|Exception|exit code|FAILED" -f timeline --latest 20
+sivtr s terminal --status failure --latest 1 --json
+sivtr s agent -m "decision|TODO|next step" --latest 20 --save hits --refs
+sivtr filter @hits -m "<topic>" --save narrowed --refs
+sivtr show @narrowed[1] --full
 sivtr copy out 1 --print
-sivtr copy cmd 1..10 --print
-sivtr show terminal/current/2 --json
 ```
 
 Avoid interactive or state-changing commands unless the human explicitly asked for them:
 
-- avoid `--pick` in autonomous agent runs;
-- avoid hotkey start/stop commands;
-- avoid config mutation;
-- avoid huge transcript dumps;
+- bare `sivtr` and `--pick` open the TUI (human-only in agent runs);
+- hotkey start/stop, share/remote mutations, config mutation;
+- huge transcript dumps — search defaults to `--latest 5` when unbounded;
 - use `--print` when copying content for the agent itself.
 
 ## Skill shape
