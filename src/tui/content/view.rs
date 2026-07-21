@@ -6,7 +6,7 @@ use regex::Regex;
 use std::rc::Rc;
 use unicode_width::UnicodeWidthChar;
 
-use crate::tui::content_markdown::{render_markdown_lines, MarkdownLineKind};
+use crate::tui::content::markdown::{render_markdown_lines, MarkdownLineKind};
 use crate::tui::pane::{panel_block, render_panel_scrollbar, Panel, PanelScroll};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1483,3 +1483,4 @@ mod tests {
         assert!(backend_row(backend, 2).contains("2|beta"));
     }
 }
+

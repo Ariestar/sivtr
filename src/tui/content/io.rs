@@ -6,7 +6,7 @@
 use ratatui::layout::Rect;
 use sivtr_core::record::{WorkAt, WorkPartIo};
 
-use crate::tui::content_view::{content_view_line_count, ContentViewMode};
+use crate::tui::content::view::{content_view_line_count, ContentViewMode};
 
 const EMPTY: &str = "<empty>";
 /// Min pane height: top border + 1 content row + bottom border.
@@ -386,3 +386,4 @@ mod tests {
         assert_eq!(scroll, 0);
     }
 }
+

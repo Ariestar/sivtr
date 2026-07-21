@@ -4,11 +4,15 @@
 //! (sliding window / ensure) lives in [`crate::pane`]. This area only renders
 //! workspace models and chrome (`pane` module here = borders / titles / lists).
 
-pub mod content_io;
-pub mod content_markdown;
-pub mod content_view;
+pub mod content;
 pub mod pane;
+pub mod search;
 pub mod terminal;
 pub mod theme;
 pub mod workspace;
-pub mod workspace_search;
+
+// Historical paths kept for browse imports.
+pub use content::io as content_io;
+pub use content::markdown as content_markdown;
+pub use content::view as content_view;
+pub use search as workspace_search;
