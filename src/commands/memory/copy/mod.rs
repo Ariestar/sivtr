@@ -75,11 +75,10 @@ fn execute_pick(plan: &CopyPlan) -> Result<()> {
         }
         Some(address) => {
             let expanded = sivtr_core::record::expand_source(address)?;
-            let cwd = plan
-                .filters
-                .cwd
-                .clone()
-                .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
+            let cwd =
+                plan.filters.cwd.clone().unwrap_or(
+                    std::env::current_dir().context("Failed to resolve current directory")?,
+                );
             let records = load::load_dialogues(&expanded, Some(&cwd))?;
             if records.is_empty() {
                 output::warning(format!("no records found for `{address}`"));
@@ -89,7 +88,10 @@ fn execute_pick(plan: &CopyPlan) -> Result<()> {
                 session_source_from_records(&records).unwrap_or_else(WorkspaceSource::terminal);
             let session = WorkspaceSession {
                 source: source.clone(),
-                session_id: records.first().map(|r| r.work_ref.session().to_string()).unwrap_or_else(|| expanded.clone()),
+                session_id: records
+                    .first()
+                    .map(|r| r.work_ref.session().to_string())
+                    .unwrap_or_else(|| expanded.clone()),
                 modified: std::time::SystemTime::now(),
                 title: expanded.clone(),
                 search_title: expanded,
@@ -134,4 +136,3 @@ pub fn plan_from_cli(
         filters,
     })
 }
-

@@ -589,11 +589,19 @@ fn help_action_for_key_is_focus_scoped() {
     );
     // Source-only binding does not fire on Content.
     assert_eq!(
-        help_action_for_key(KeyCode::Char('g'), KeyModifiers::NONE, WorkspaceFocus::Source),
+        help_action_for_key(
+            KeyCode::Char('g'),
+            KeyModifiers::NONE,
+            WorkspaceFocus::Source
+        ),
         Some(WorkspaceHelpAction::SelectAgentSources)
     );
     assert_eq!(
-        help_action_for_key(KeyCode::Char('g'), KeyModifiers::NONE, WorkspaceFocus::Content),
+        help_action_for_key(
+            KeyCode::Char('g'),
+            KeyModifiers::NONE,
+            WorkspaceFocus::Content
+        ),
         Some(WorkspaceHelpAction::ScrollContentTop)
     );
     // Ctrl-d is scroll, bare d is not.
@@ -606,7 +614,11 @@ fn help_action_for_key_is_focus_scoped() {
         Some(WorkspaceHelpAction::ScrollDown)
     );
     assert_eq!(
-        help_action_for_key(KeyCode::Char('d'), KeyModifiers::NONE, WorkspaceFocus::Content),
+        help_action_for_key(
+            KeyCode::Char('d'),
+            KeyModifiers::NONE,
+            WorkspaceFocus::Content
+        ),
         None
     );
 }
@@ -677,5 +689,3 @@ fn search_box_body_includes_current_target_ref() {
         "needle\n\nTarget: codex/session/1/4"
     );
 }
-
-

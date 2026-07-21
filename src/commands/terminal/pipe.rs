@@ -18,9 +18,7 @@ pub fn execute() -> Result<()> {
     }
 
     let config = SivtrConfig::load().unwrap_or_default();
-    if let Err(error) =
-        history::maybe_save_default(&config, &raw, None, CaptureSource::Pipe)
-    {
+    if let Err(error) = history::maybe_save_default(&config, &raw, None, CaptureSource::Pipe) {
         eprintln!("sivtr: failed to save history: {error:#}");
     }
 

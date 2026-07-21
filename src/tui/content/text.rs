@@ -14,11 +14,7 @@ pub(crate) fn content_io_from_record(record: &WorkRecord, reading: bool) -> Cont
     }
 }
 
-fn io_body_text(
-    record: &WorkRecord,
-    reading: bool,
-    io: sivtr_core::record::WorkPartIo,
-) -> String {
+fn io_body_text(record: &WorkRecord, reading: bool, io: sivtr_core::record::WorkPartIo) -> String {
     let parts: Vec<&sivtr_core::record::WorkPart> =
         record.parts.iter().filter(|part| part.io == io).collect();
     if parts.is_empty() {

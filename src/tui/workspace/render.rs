@@ -36,8 +36,8 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         .split(area);
     let layout = workspace_layout(area, view.focus, view.fullscreen);
 
-    let dialogue_idx = selected_index(view.dialogue_state)
-        .min(view.dialogue_titles.len().saturating_sub(1));
+    let dialogue_idx =
+        selected_index(view.dialogue_state).min(view.dialogue_titles.len().saturating_sub(1));
     let current_ref = current_content_ref(
         view.dialogues,
         view.selected_dialogues,
@@ -90,8 +90,12 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         view.content_mode,
         view.content_at,
     );
-    let frame_io =
-        ContentIoFrame::build(layout.content, &io_texts, view.content_mode, view.content_io_focus);
+    let frame_io = ContentIoFrame::build(
+        layout.content,
+        &io_texts,
+        view.content_mode,
+        view.content_io_focus,
+    );
     let content_active = view.focus == WorkspaceFocus::Content;
     let content_search = view
         .search
@@ -203,8 +207,7 @@ fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>)
         spans
     } else {
         let controls = if content_selection.is_some() {
-            "select  drag / Ctrl-drag block  y/Enter/Ctrl-c copy  Esc/v clear"
-                .to_string()
+            "select  drag / Ctrl-drag block  y/Enter/Ctrl-c copy  Esc/v clear".to_string()
         } else if show_help {
             "j/k move  Enter execute  Esc/? close help  q cancel".to_string()
         } else {
@@ -860,10 +863,7 @@ fn selected_parent_title(
     }
 }
 
-fn content_title_suffix(
-    selected_dialogues: &[bool],
-    current_ref: Option<&WorkRef>,
-) -> String {
+fn content_title_suffix(selected_dialogues: &[bool], current_ref: Option<&WorkRef>) -> String {
     let count = selected_dialogues.iter().filter(|s| **s).count();
     let select = match count {
         0 => String::new(),
@@ -890,6 +890,3 @@ pub(crate) fn content_title(
         content_title_suffix(selected_dialogues, current_ref)
     )
 }
-
-
-

@@ -1483,4 +1483,3 @@ mod tests {
         assert!(backend_row(backend, 2).contains("2|beta"));
     }
 }
-

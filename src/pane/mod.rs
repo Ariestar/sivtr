@@ -14,6 +14,4 @@ mod store;
 
 pub use model::{Pane, PaneInput};
 pub use sliding::{MetaNeed, SlidingPane};
-pub use store::{
-    keep_keys, StorePhase, Viewport, WindowRow, FETCH_CEILING, FETCH_FLOOR,
-};
+pub use store::{keep_keys, StorePhase, Viewport, WindowRow, FETCH_CEILING, FETCH_FLOOR};

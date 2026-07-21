@@ -82,11 +82,7 @@ pub(super) fn finish_text(
     if let Some(spec) = filters.lines.as_deref() {
         text = filter_lines_by_spec(&text, spec)?;
     }
-    let body = if filters.ansi {
-        text.ansi
-    } else {
-        text.plain
-    };
+    let body = if filters.ansi { text.ansi } else { text.plain };
     let body = body.trim();
     if body.is_empty() {
         output::warning("filters removed everything");

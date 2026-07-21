@@ -128,4 +128,3 @@ fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
         && row >= area.y
         && row < area.y.saturating_add(area.height)
 }
-

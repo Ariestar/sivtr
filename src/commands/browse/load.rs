@@ -13,7 +13,9 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::commands::memory::filter::Filter;
-use crate::commands::memory::workset::{self, QuerySource, QuerySourceResult, REMOTE_QUERY_TIMEOUT};
+use crate::commands::memory::workset::{
+    self, QuerySource, QuerySourceResult, REMOTE_QUERY_TIMEOUT,
+};
 use crate::pane::{
     keep_keys, MetaNeed, Pane, PaneInput, SlidingPane, StorePhase, Viewport, WindowRow,
     FETCH_CEILING, FETCH_FLOOR,
@@ -433,9 +435,7 @@ impl SourceLoadPump {
                             )
                         })
                         .collect();
-                    state
-                        .pane
-                        .apply_meta_ok(ev.gen, budget, ev.exhausted, rows)
+                    state.pane.apply_meta_ok(ev.gen, budget, ev.exhausted, rows)
                 }
                 Err(message) => state.pane.apply_meta_err(ev.gen, message),
             },

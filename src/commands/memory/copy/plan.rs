@@ -72,19 +72,22 @@ pub fn parse_address_dialogues(
     match tokens.as_slice() {
         [] => Ok((None, DialogueSelect::RecentSingle(1))),
         [only] if is_dialogues_token(only) => {
-            let select = crate::commands::select::parse_selector(only)
-                .map_err(|e| e.to_string())?;
+            let select =
+                crate::commands::select::parse_selector(only).map_err(|e| e.to_string())?;
             Ok((None, select))
         }
-        [address] => Ok((Some((*address).to_string()), DialogueSelect::RecentSingle(1))),
+        [address] => Ok((
+            Some((*address).to_string()),
+            DialogueSelect::RecentSingle(1),
+        )),
         [address, dialogues] => {
             if !is_dialogues_token(dialogues) {
                 return Err(format!(
                     "second argument `{dialogues}` is not a dialogue selector; use `N` or `A..B` (address first: `copy <address> <dialogues>`)"
                 ));
             }
-            let select = crate::commands::select::parse_selector(dialogues)
-                .map_err(|e| e.to_string())?;
+            let select =
+                crate::commands::select::parse_selector(dialogues).map_err(|e| e.to_string())?;
             Ok((Some((*address).to_string()), select))
         }
         _ => Err(
@@ -126,13 +129,7 @@ mod tests {
 
         let (addr, sel) = parse_address_dialogues(&["codex".into(), "2..4".into()]).unwrap();
         assert_eq!(addr.as_deref(), Some("codex"));
-        assert_eq!(
-            sel,
-            DialogueSelect::RecentRange {
-                newer: 2,
-                older: 4
-            }
-        );
+        assert_eq!(sel, DialogueSelect::RecentRange { newer: 2, older: 4 });
     }
 
     #[test]

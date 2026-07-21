@@ -171,8 +171,8 @@ impl<'a> ContentIoFrame<'a> {
         focus: ContentIoFocus,
     ) -> Self {
         let areas = content_io_layout(area, texts, mode, focus);
-        let input_lines = content_view_line_count(areas.input, texts.display(ContentIoFocus::Input), mode)
-            .max(1);
+        let input_lines =
+            content_view_line_count(areas.input, texts.display(ContentIoFocus::Input), mode).max(1);
         let output_lines =
             content_view_line_count(areas.output, texts.display(ContentIoFocus::Output), mode)
                 .max(1);
@@ -345,11 +345,7 @@ pub(crate) fn search_match_half(
             if out_blank && !in_blank {
                 return (ContentIoFocus::Input, line0);
             }
-            let in_n = texts
-                .display(ContentIoFocus::Input)
-                .lines()
-                .count()
-                .max(1);
+            let in_n = texts.display(ContentIoFocus::Input).lines().count().max(1);
             if line0 < in_n {
                 (ContentIoFocus::Input, line0)
             } else {
@@ -393,7 +389,7 @@ mod tests {
         // Output has far more lines; Input focused → still ≥ 55% floor.
         let top = weighted_top_height(40, 1, 20, ContentIoFocus::Input);
         assert!(top >= 22); // 55% of 40
-        // Flip focus → Output gets the floor (Input top ≤ 45%).
+                            // Flip focus → Output gets the floor (Input top ≤ 45%).
         let top_out = weighted_top_height(40, 1, 20, ContentIoFocus::Output);
         assert!(top_out <= 18);
         assert!(top_out < top);
@@ -432,4 +428,3 @@ mod tests {
         assert_eq!(scroll, 0);
     }
 }
-

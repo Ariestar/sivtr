@@ -315,7 +315,9 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
 }
 
 /// Parse a help-table key spec into crossterm key identity.
-pub(crate) fn parse_help_key(spec: &str) -> Option<(crossterm::event::KeyCode, crossterm::event::KeyModifiers)> {
+pub(crate) fn parse_help_key(
+    spec: &str,
+) -> Option<(crossterm::event::KeyCode, crossterm::event::KeyModifiers)> {
     use crossterm::event::{KeyCode, KeyModifiers};
     let spec = spec.trim();
     if spec.is_empty() {
@@ -402,4 +404,3 @@ pub(crate) fn workspace_footer_hotkeys(focus: WorkspaceFocus) -> String {
     }
     parts.join("  ")
 }
-

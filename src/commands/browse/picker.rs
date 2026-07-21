@@ -6,14 +6,14 @@ use ratatui::widgets::ListState;
 use std::path::PathBuf;
 
 use crate::tui::content::view::{content_link_at, ContentViewMode};
+use crate::tui::search::{
+    workspace_search_has_query, workspace_search_scope, WorkspaceSearchIndex, WorkspaceSearchOutput,
+};
 use crate::tui::workspace::{
     help_action_for_key, panel_inner_rows, render_workspace, search_match_half, selected_index,
     workspace_help_entries, workspace_hit_test, workspace_layout, ContentIoFocus, ContentIoFrame,
     ContentScrolls, WorkspaceFocus, WorkspacePickedContent, WorkspaceSearchView, WorkspaceSource,
     WorkspaceView,
-};
-use crate::tui::search::{
-    workspace_search_has_query, workspace_search_scope, WorkspaceSearchIndex, WorkspaceSearchOutput,
 };
 
 use super::content::{
@@ -22,19 +22,19 @@ use super::content::{
 };
 use super::help::{apply_workspace_help_action, set_focus, HelpDispatch};
 use super::load::{SessionColumn, SessionCtx, SourceLoadState};
-use super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane, SourcePane};
-use crate::pane::{Pane, PaneInput, Viewport};
 use super::nav::{
     clamp_list_state, move_workspace_cursor_down, move_workspace_cursor_up, open_link_target,
     reset_workspace_dialogue_state, reset_workspace_search_state,
     resize_workspace_dialogue_selection, row_list_index, source_list_index,
 };
+use super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane, SourcePane};
 use super::selection::{has_selected_sessions, refresh_next_level};
 use super::visual::{
     apply_workspace_mouse_scroll, handle_content_mouse_select, handle_visual_select_key,
     scroll_list_state_down, scroll_list_state_up, VisualContentContext, VisualSelectMode,
 };
 use super::PICK_CANCELLED_MESSAGE;
+use crate::pane::{Pane, PaneInput, Viewport};
 
 pub(crate) fn run(
     terminal: &mut crate::tui::terminal::Tui,
@@ -212,10 +212,7 @@ pub(crate) fn run(
                 records: &records,
             },
             &PaneInput::new(
-                Viewport::from_panel(
-                    dialogue_state.offset(),
-                    panel_inner_rows(layout.dialogues),
-                ),
+                Viewport::from_panel(dialogue_state.offset(), panel_inner_rows(layout.dialogues)),
                 dialogue_focus_hint,
             )
             .with_selected(&selected_dialogues)
@@ -279,8 +276,7 @@ pub(crate) fn run(
             ContentIoFrame::build(layout.content, &io_texts, content_mode, content_io_focus);
         content_scrolls.clamp_to(content_frame.input_lines, content_frame.output_lines);
         if let Some(matched) = pending_match {
-            let (half, scroll) =
-                search_match_half(matched.at, matched.matched_line, &io_texts);
+            let (half, scroll) = search_match_half(matched.at, matched.matched_line, &io_texts);
             content_io_focus = half;
             let total = content_frame.line_count(half);
             content_scrolls.set(half, scroll.min(total.saturating_sub(1)));
@@ -322,11 +318,9 @@ pub(crate) fn run(
                             .matches
                             .get(search_cursor)
                             .and_then(|matched| {
-                                workspace_search_target_ref(
-                                    &sessions,
-                                    matched,
-                                    &|s| sessions_pane.body_for(s),
-                                )
+                                workspace_search_target_ref(&sessions, matched, &|s| {
+                                    sessions_pane.body_for(s)
+                                })
                             })
                             .map(|work_ref| work_ref.to_string()),
                         input_open: show_search,
@@ -352,7 +346,6 @@ pub(crate) fn run(
             continue;
         }
         match event::read()? {
-
             Event::Key(key) => {
                 if key.kind != KeyEventKind::Press {
                     continue;
@@ -611,9 +604,7 @@ pub(crate) fn run(
                 }
 
                 // Table-driven bindings: help registry is the only key declaration.
-                if let Some(action) =
-                    help_action_for_key(key.code, key.modifiers, focus)
-                {
+                if let Some(action) = help_action_for_key(key.code, key.modifiers, focus) {
                     match apply_workspace_help_action(
                         action,
                         &mut focus,
@@ -841,69 +832,27 @@ pub(crate) fn run(
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #[cfg(test)]
 mod tests {
 
     use super::super::content::{
         handle_line_filter_key, workspace_dialogue_vim_view, workspace_picked_content,
         workspace_picked_content_for_copy, workspace_picked_content_for_copy_with_line_filter,
-        workspace_picked_content_with_line_filter, workspace_search_target_ref, WorkspaceCopyShortcut,
+        workspace_picked_content_with_line_filter, workspace_search_target_ref,
+        WorkspaceCopyShortcut,
     };
     use super::super::nav::{clamp_list_state, move_workspace_cursor_up};
     use super::super::panes::{DialogueCtx, DialoguePane};
-    use crate::pane::{Pane, PaneInput, Viewport};
     use crate::commands::select::CommandSelection;
+    use crate::pane::{Pane, PaneInput, Viewport};
     use crate::tui::content::view::ContentViewMode;
-    use crate::tui::workspace::{
-        ContentIoFocus, ContentScrolls, TextPair, WorkspaceCopyParts, WorkspaceDialogue,
-        WorkspaceFocus, WorkspaceSession, WorkspaceSource, WorkspaceSourceKind,
-    };
     use crate::tui::search::{
         workspace_search_query, workspace_search_regex, WorkspaceSearchIndex, WorkspaceSearchMatch,
         WorkspaceSearchScope,
+    };
+    use crate::tui::workspace::{
+        ContentIoFocus, ContentScrolls, TextPair, WorkspaceCopyParts, WorkspaceDialogue,
+        WorkspaceFocus, WorkspaceSession, WorkspaceSource, WorkspaceSourceKind,
     };
     use crossterm::event::KeyCode;
     use ratatui::widgets::ListState;
@@ -928,7 +877,11 @@ mod tests {
                 .filter(|x| x.body_loaded)
                 .map(|x| x.records.as_slice())
         };
-        let total: usize = sessions.iter().map(|s| s.records.len()).sum::<usize>().max(1);
+        let total: usize = sessions
+            .iter()
+            .map(|s| s.records.len())
+            .sum::<usize>()
+            .max(1);
         let vp = Viewport {
             first: 0,
             visible: total.max(40),
@@ -1339,16 +1292,12 @@ mod tests {
         }];
 
         let output = WorkspaceSearchIndex::new(&sessions).search(&sessions, "cargo");
-        let work_ref = workspace_search_target_ref(
-            &output.sessions,
-            &output.matches[0],
-            &|s| {
-                sessions
-                    .iter()
-                    .find(|x| x.session_id == s.session_id && x.source == s.source)
-                    .map(|x| x.records.as_slice())
-            },
-        )
+        let work_ref = workspace_search_target_ref(&output.sessions, &output.matches[0], &|s| {
+            sessions
+                .iter()
+                .find(|x| x.session_id == s.session_id && x.source == s.source)
+                .map(|x| x.records.as_slice())
+        })
         .expect("work ref");
 
         assert_eq!(work_ref.to_string(), "codex/test/1/i/1");

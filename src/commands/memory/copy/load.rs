@@ -74,7 +74,11 @@ pub(crate) fn load_dialogues(
     Ok(newest_session_only(records))
 }
 
-fn load_address(address: &str, plan: &CopyPlan, cwd: &std::path::Path) -> Result<Option<LoadedCopy>> {
+fn load_address(
+    address: &str,
+    plan: &CopyPlan,
+    cwd: &std::path::Path,
+) -> Result<Option<LoadedCopy>> {
     let expanded = sivtr_core::record::expand_source(address)?;
 
     // Full WorkRef (session + index [+ at]) → absolute pin.

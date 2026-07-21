@@ -329,9 +329,7 @@ mod tests {
     #[test]
     fn needs_meta_only_on_deficit() {
         let mut store = SlidingStore::<u32, &str, String>::ready(
-            (0..30)
-                .map(|i| WindowRow::meta_only(i, "x"))
-                .collect(),
+            (0..30).map(|i| WindowRow::meta_only(i, "x")).collect(),
             90,
             false,
         );

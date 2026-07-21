@@ -173,7 +173,12 @@ impl Pane for DialoguePane {
     type Ctx<'a> = DialogueCtx<'a>;
 
     fn ensure(&mut self, ctx: DialogueCtx<'_>, input: &PaneInput<'_>) -> bool {
-        let next = fingerprint(ctx.sessions, ctx.session_idx, ctx.selected_sessions, ctx.records);
+        let next = fingerprint(
+            ctx.sessions,
+            ctx.session_idx,
+            ctx.selected_sessions,
+            ctx.records,
+        );
         let force = if next != self.fingerprint {
             self.engine.clear();
             self.fingerprint = next;
@@ -183,15 +188,17 @@ impl Pane for DialoguePane {
         };
 
         let before = self.engine.len();
-        let grown = self.engine.ensure_meta_sync(input.viewport, force, |budget| {
-            meta_prefix(
-                ctx.sessions,
-                ctx.session_idx,
-                ctx.selected_sessions,
-                ctx.records,
-                budget,
-            )
-        });
+        let grown = self
+            .engine
+            .ensure_meta_sync(input.viewport, force, |budget| {
+                meta_prefix(
+                    ctx.sessions,
+                    ctx.session_idx,
+                    ctx.selected_sessions,
+                    ctx.records,
+                    budget,
+                )
+            });
 
         let keep = self
             .engine
@@ -267,12 +274,7 @@ fn fingerprint<'a>(
             .filter_map(|i| {
                 let s = sessions.get(i)?;
                 let n = records(s).map(|r| r.len()).unwrap_or(0);
-                Some((
-                    s.source.selector(),
-                    s.session_id.clone(),
-                    s.body_loaded,
-                    n,
-                ))
+                Some((s.source.selector(), s.session_id.clone(), s.body_loaded, n))
             })
             .collect(),
     }
@@ -504,7 +506,16 @@ mod tests {
         let mut pane = SourcePane::from_catalog(&sources);
         assert!(pane.exhausted());
         assert_eq!(pane.len(), 2);
-        assert!(!pane.ensure((), &PaneInput::new(Viewport { first: 0, visible: 40 }, 0)));
+        assert!(!pane.ensure(
+            (),
+            &PaneInput::new(
+                Viewport {
+                    first: 0,
+                    visible: 40
+                },
+                0
+            )
+        ));
     }
 
     #[test]

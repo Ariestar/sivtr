@@ -400,4 +400,3 @@ pub(super) fn apply_workspace_mouse_scroll(
         }
     }
 }
-

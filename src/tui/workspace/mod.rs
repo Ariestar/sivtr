@@ -18,4 +18,3 @@ pub(crate) use crate::tui::content::text::{workspace_content_io_texts, workspace
 
 #[cfg(test)]
 mod tests;
-

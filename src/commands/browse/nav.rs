@@ -217,7 +217,6 @@ pub(super) fn source_list_index(
     None
 }
 
-
 pub(super) fn reset_workspace_dialogue_state(
     dialogue_count: usize,
     dialogue_state: &mut ListState,

@@ -266,6 +266,8 @@ mod tests {
     fn builds_side_by_side_rows_with_replace_marks() {
         let diff = TextDiff::from_lines("old\n", "new\n");
         let rows = build_side_by_side_rows(&diff);
-        assert!(rows.iter().any(|row| row.left_mark == '~' || row.left_mark == '-'));
+        assert!(rows
+            .iter()
+            .any(|row| row.left_mark == '~' || row.left_mark == '-'));
     }
 }

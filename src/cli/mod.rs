@@ -777,7 +777,6 @@ pub struct CopyFlagArgs {
     pub prompt: Option<String>,
 }
 
-
 #[derive(Args, Debug, Clone)]
 #[command(group(
     ArgGroup::new("diff_content_mode")
@@ -1641,7 +1640,11 @@ mod tests {
         let tokens = copy_external_tokens(cli);
         assert_eq!(
             tokens,
-            vec!["codex".to_string(), "2..4".to_string(), "--print".to_string()]
+            vec![
+                "codex".to_string(),
+                "2..4".to_string(),
+                "--print".to_string()
+            ]
         );
     }
 
@@ -2265,14 +2268,8 @@ mod tests {
 
     #[test]
     fn hotkey_pick_agent_accepts_all_flag() {
-        let cli = Cli::try_parse_from([
-            "sivtr",
-            "hotkey-pick-agent",
-            "--cwd",
-            ".",
-            "--all",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["sivtr", "hotkey-pick-agent", "--cwd", ".", "--all"]).unwrap();
 
         match cli.command {
             Some(Commands::HotkeyPickAgent(args)) => {

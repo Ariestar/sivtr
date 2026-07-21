@@ -163,9 +163,10 @@ pub fn query_many(
     }
 
     if remote_idxs.is_empty() {
-        return Ok(results.into_iter().map(|slot| {
-            slot.expect("local result filled")
-        }).collect());
+        return Ok(results
+            .into_iter()
+            .map(|slot| slot.expect("local result filled"))
+            .collect());
     }
 
     let (tx, rx) = mpsc::channel();

@@ -60,4 +60,3 @@ pub fn multi_select(prompt: &str, items: &[String], defaults: &[usize]) -> Resul
         .defaults(&bool_defaults)
         .interact()?)
 }
-

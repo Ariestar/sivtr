@@ -249,7 +249,8 @@ pub(super) fn apply_workspace_help_action(
                 *content_mode,
                 content_at,
             );
-            let frame = ContentIoFrame::build(layout.content, &io, *content_mode, *content_io_focus);
+            let frame =
+                ContentIoFrame::build(layout.content, &io, *content_mode, *content_io_focus);
             let active = frame.active(*content_io_focus, content_scrolls);
             enter_visual_select_mode(
                 visual_select_mode,

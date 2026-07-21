@@ -5,10 +5,8 @@ use crossterm::event::KeyCode;
 
 use crate::commands::select::CommandSelection;
 use crate::tui::content::view::{line_count, ContentViewMode};
-use crate::tui::workspace::{
-    WorkspaceDialogue, WorkspacePickedContent, WorkspaceSession,
-};
 use crate::tui::search::{WorkspaceSearchMatch, WorkspaceSearchOutput};
+use crate::tui::workspace::{WorkspaceDialogue, WorkspacePickedContent, WorkspaceSession};
 use sivtr_core::record::{WorkAt, WorkRef};
 
 use super::text::filter_lines_by_spec;

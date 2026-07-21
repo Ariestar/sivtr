@@ -217,7 +217,7 @@ mod tests {
         let need = pane
             .ensure_meta(Viewport {
                 first: 25,
-                visible: 10
+                visible: 10,
             })
             .expect("deficit");
         assert!(need.budget >= 12);
@@ -316,10 +316,7 @@ mod tests {
     #[test]
     fn ensure_bodies_sync_fills_missing() {
         let mut pane: SlidingPane<u32, &str, String> = SlidingPane::ready(
-            vec![
-                WindowRow::meta_only(1, "a"),
-                WindowRow::meta_only(2, "b"),
-            ],
+            vec![WindowRow::meta_only(1, "a"), WindowRow::meta_only(2, "b")],
             2,
             true,
         );
@@ -327,7 +324,12 @@ mod tests {
         keep.insert(1);
         pane.ensure_bodies_sync(keep, |k| Some(format!("B{k}")));
         assert_eq!(
-            pane.rows().iter().find(|r| r.key == 1).unwrap().body.as_deref(),
+            pane.rows()
+                .iter()
+                .find(|r| r.key == 1)
+                .unwrap()
+                .body
+                .as_deref(),
             Some("B1")
         );
         assert!(!pane.rows().iter().find(|r| r.key == 2).unwrap().body_loaded);
