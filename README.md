@@ -32,16 +32,7 @@
 </p>
 
 <p align="center">
-  <a href="https://sivtr.pages.dev/zh-cn/playbooks/">
-    <img src="docs-site/public/demo/4.gif" alt="sivtr demo：把搜索结果保存成变量并继续缩小范围" width="820">
-  </a>
-  <br>
-  <sub>
-    把命中结果保存成记忆变量，再继续缩小范围 ·
-    <a href="https://sivtr.pages.dev/zh-cn/playbooks/fix-terminal-error/">修复终端报错</a> ·
-    <a href="https://sivtr.pages.dev/zh-cn/playbooks/recent-work-timeline/">生成时间线</a> ·
-    <a href="https://sivtr.pages.dev/zh-cn/playbooks/agent-handoff/">带证据交接</a>
-  </sub>
+  <img width="1671" height="833" alt="image" src="https://github.com/user-attachments/assets/4a7ce0b4-c0f6-49dc-94f9-1b4a6ded4b90" />
 </p>
 
 ---
