@@ -66,7 +66,6 @@ fn content_preview_text_preserves_raw_text_without_line_number_prefixes() {
     let dialogue = WorkspaceDialogue {
         source: WorkspaceSource::agent(AgentProvider::Codex),
         work_ref: Some(record.work_ref.clone()),
-        title: "cmd".to_string(),
         record: Some(record),
         copy: WorkspaceCopyParts::default(),
     };
@@ -119,7 +118,6 @@ fn content_preview_text_uses_targeted_part_text_in_raw_mode() {
     let dialogue = WorkspaceDialogue {
         source: WorkspaceSource::agent(AgentProvider::Codex),
         work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
-        title: "cmd".to_string(),
         record: Some(record),
         copy: WorkspaceCopyParts::default(),
     };
@@ -171,7 +169,6 @@ fn content_preview_text_uses_structured_targeted_part_text_in_reading_mode() {
     let dialogue = WorkspaceDialogue {
         source: WorkspaceSource::agent(AgentProvider::Codex),
         work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
-        title: "cmd".to_string(),
         record: Some(record),
         copy: WorkspaceCopyParts::default(),
     };
@@ -259,7 +256,6 @@ fn reading_mode_folds_structure_and_raw_expands() {
     let dialogue = WorkspaceDialogue {
         source: WorkspaceSource::agent(AgentProvider::Codex),
         work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
-        title: "cmd".to_string(),
         record: Some(record),
         copy: WorkspaceCopyParts::default(),
     };
@@ -388,7 +384,6 @@ fn reading_mode_collapses_adjacent_structure_runs() {
     let dialogue = WorkspaceDialogue {
         source: WorkspaceSource::agent(AgentProvider::Codex),
         work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
-        title: "cmd".to_string(),
         record: Some(record),
         copy: WorkspaceCopyParts::default(),
     };
@@ -499,7 +494,6 @@ fn reading_mode_counts_identical_structure_markers_regardless_of_order() {
     let dialogue = WorkspaceDialogue {
         source: WorkspaceSource::agent(AgentProvider::Codex),
         work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
-        title: "cmd".to_string(),
         record: Some(record),
         copy: WorkspaceCopyParts::default(),
     };
@@ -623,14 +617,12 @@ fn current_content_dialogue_uses_single_selected_dialogue() {
         WorkspaceDialogue {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
-            title: "first".to_string(),
             record: None,
             copy: WorkspaceCopyParts::default(),
         },
         WorkspaceDialogue {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 2)),
-            title: "second".to_string(),
             record: None,
             copy: WorkspaceCopyParts::default(),
         },
@@ -649,7 +641,6 @@ fn current_content_ref_round_trips_active_part_target() {
     let dialogues = vec![WorkspaceDialogue {
         source: WorkspaceSource::agent(AgentProvider::Codex),
         work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 2)),
-        title: "second".to_string(),
         record: None,
         copy: WorkspaceCopyParts::default(),
     }];

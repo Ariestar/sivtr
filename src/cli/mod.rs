@@ -15,6 +15,24 @@ pub use remote::*;
 
 pub(crate) const TIME_FILTER_HELP: &str = "Accepts RFC3339 timestamps, Unix seconds/milliseconds, relative durations like 30m, 2h, 7d, or aliases like today, yesterday, tomorrow, this morning, this afternoon, this evening, tonight, and now.";
 
+/// Serialize/Deserialize via Display + FromStr (keeps clap aliases in one place).
+macro_rules! impl_serde_via_str {
+    ($ty:ty) => {
+        impl Serialize for $ty {
+            fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serializer.serialize_str(&self.to_string())
+            }
+        }
+        impl<'de> Deserialize<'de> for $ty {
+            fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                String::deserialize(deserializer)?
+                    .parse()
+                    .map_err(serde::de::Error::custom)
+            }
+        }
+    };
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SearchFieldArg {
     #[default]
@@ -27,22 +45,38 @@ pub enum SearchFieldArg {
     All,
 }
 
-impl Serialize for SearchFieldArg {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&self.to_string())
+impl_serde_via_str!(SearchFieldArg);
+
+impl FromStr for SearchFieldArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "content" => Ok(Self::Content),
+            "title" | "dialogue" | "dialog" => Ok(Self::Title),
+            "session" => Ok(Self::Session),
+            "input" => Ok(Self::Input),
+            "output" => Ok(Self::Output),
+            "command" | "cmd" => Ok(Self::Command),
+            "all" => Ok(Self::All),
+            _ => Err(format!(
+                "unknown search field `{value}`; expected content, title, session, input, output, command, or all"
+            )),
+        }
     }
 }
 
-impl<'de> Deserialize<'de> for SearchFieldArg {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        value.parse().map_err(serde::de::Error::custom)
+impl std::fmt::Display for SearchFieldArg {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Content => "content",
+            Self::Title => "title",
+            Self::Session => "session",
+            Self::Input => "input",
+            Self::Output => "output",
+            Self::Command => "command",
+            Self::All => "all",
+        })
     }
 }
 
@@ -59,6 +93,8 @@ pub enum WorkPartKindArg {
     Text,
     Error,
 }
+
+impl_serde_via_str!(WorkPartKindArg);
 
 impl WorkPartKindArg {
     pub fn matches(self, kind: WorkPartKind) -> bool {
@@ -122,58 +158,6 @@ impl std::fmt::Display for WorkPartKindArg {
     }
 }
 
-impl Serialize for WorkPartKindArg {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&self.to_string())
-    }
-}
-
-impl<'de> Deserialize<'de> for WorkPartKindArg {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        value.parse().map_err(serde::de::Error::custom)
-    }
-}
-
-impl FromStr for SearchFieldArg {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value.to_ascii_lowercase().as_str() {
-            "content" => Ok(Self::Content),
-            "title" | "dialogue" | "dialog" => Ok(Self::Title),
-            "session" => Ok(Self::Session),
-            "input" => Ok(Self::Input),
-            "output" => Ok(Self::Output),
-            "command" | "cmd" => Ok(Self::Command),
-            "all" => Ok(Self::All),
-            _ => Err(format!(
-                "unknown search field `{value}`; expected content, title, session, input, output, command, or all"
-            )),
-        }
-    }
-}
-
-impl std::fmt::Display for SearchFieldArg {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Content => "content",
-            Self::Title => "title",
-            Self::Session => "session",
-            Self::Input => "input",
-            Self::Output => "output",
-            Self::Command => "command",
-            Self::All => "all",
-        })
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SearchStatusArg {
     Success,
@@ -181,24 +165,7 @@ pub enum SearchStatusArg {
     Unknown,
 }
 
-impl Serialize for SearchStatusArg {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&self.to_string())
-    }
-}
-
-impl<'de> Deserialize<'de> for SearchStatusArg {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        value.parse().map_err(serde::de::Error::custom)
-    }
-}
+impl_serde_via_str!(SearchStatusArg);
 
 impl FromStr for SearchStatusArg {
     type Err = String;
@@ -236,24 +203,7 @@ pub enum SearchSortArg {
     ExitCodeAsc,
 }
 
-impl Serialize for SearchSortArg {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&self.to_string())
-    }
-}
-
-impl<'de> Deserialize<'de> for SearchSortArg {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        value.parse().map_err(serde::de::Error::custom)
-    }
-}
+impl_serde_via_str!(SearchSortArg);
 
 impl FromStr for SearchSortArg {
     type Err = String;
@@ -294,24 +244,7 @@ pub enum WorkPartFilterArg {
     All,
 }
 
-impl Serialize for WorkPartFilterArg {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for WorkPartFilterArg {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        value.parse().map_err(serde::de::Error::custom)
-    }
-}
+impl_serde_via_str!(WorkPartFilterArg);
 
 impl WorkPartFilterArg {
     pub fn matches(self, io: WorkPartIo) -> bool {

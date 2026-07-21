@@ -7,6 +7,8 @@ use crate::cli::{
     FilterArgs, SearchArgs, SearchFieldArg, SearchSortArg, SearchStatusArg, ShowArgs,
     WorkPartFilterArg, WorkPartKindArg, ZoomArgs,
 };
+
+// MCP JSON schema exposes these as strings; serde still uses FromStr aliases.
 use crate::commands::memory::show::{self, WorkSetOutputFormat};
 use crate::commands::memory::workset::WorkSet;
 
@@ -22,13 +24,16 @@ pub struct SearchParams {
     pub exclude: Option<String>,
     /// Field to match: content, title, session, input, output, command, all
     #[serde(default)]
-    pub in_field: Option<String>,
+    #[schemars(with = "Option<String>")]
+    pub in_field: Option<SearchFieldArg>,
     /// Part kind filter
     #[serde(default)]
-    pub kind: Option<String>,
+    #[schemars(with = "Option<String>")]
+    pub kind: Option<WorkPartKindArg>,
     /// success | failure | unknown
     #[serde(default)]
-    pub status: Option<String>,
+    #[schemars(with = "Option<String>")]
+    pub status: Option<SearchStatusArg>,
     #[serde(default)]
     pub exit_code: Option<i32>,
     #[serde(default)]
@@ -67,13 +72,17 @@ pub struct FilterParams {
     #[serde(default)]
     pub exclude: Option<String>,
     #[serde(default)]
-    pub in_field: Option<String>,
+    #[schemars(with = "Option<String>")]
+    pub in_field: Option<SearchFieldArg>,
     #[serde(default)]
-    pub io: Option<String>,
+    #[schemars(with = "Option<String>")]
+    pub io: Option<WorkPartFilterArg>,
     #[serde(default)]
-    pub kind: Option<String>,
+    #[schemars(with = "Option<String>")]
+    pub kind: Option<WorkPartKindArg>,
     #[serde(default)]
-    pub status: Option<String>,
+    #[schemars(with = "Option<String>")]
+    pub status: Option<SearchStatusArg>,
     #[serde(default)]
     pub exit_code: Option<i32>,
     #[serde(default)]
@@ -222,26 +231,6 @@ pub struct VarStatus {
     pub created_at: String,
 }
 
-fn parse_field(value: Option<&str>) -> Result<SearchFieldArg, String> {
-    value.unwrap_or("content").parse().map_err(|e: String| e)
-}
-
-fn parse_kind(value: Option<&str>) -> Result<Option<WorkPartKindArg>, String> {
-    value.map(|v| v.parse()).transpose()
-}
-
-fn parse_status(value: Option<&str>) -> Result<Option<SearchStatusArg>, String> {
-    value.map(|v| v.parse()).transpose()
-}
-
-fn parse_io(value: Option<&str>) -> Result<WorkPartFilterArg, String> {
-    value.unwrap_or("all").parse()
-}
-
-fn parse_sort(value: Option<&str>) -> Result<SearchSortArg, String> {
-    value.unwrap_or("newest").parse()
-}
-
 fn cwd_path(cwd: Option<&str>) -> Option<PathBuf> {
     cwd.map(PathBuf::from)
 }
@@ -251,13 +240,13 @@ pub fn to_search_args(params: &SearchParams) -> Result<SearchArgs, String> {
         source: params.source.clone(),
         match_: params.match_regex.clone(),
         exclude: params.exclude.clone(),
-        in_field: parse_field(params.in_field.as_deref())?,
-        kind: parse_kind(params.kind.as_deref())?,
-        status: parse_status(params.status.as_deref())?,
+        in_field: params.in_field.unwrap_or_default(),
+        kind: params.kind,
+        status: params.status,
         exit_code: params.exit_code,
         min_duration: None,
         max_duration: None,
-        sort: parse_sort(None)?,
+        sort: SearchSortArg::default(),
         cwd: cwd_path(params.cwd.as_deref()),
         since: params.since.clone(),
         until: params.until.clone(),
@@ -278,10 +267,10 @@ pub fn to_filter_args(params: &FilterParams) -> Result<FilterArgs, String> {
         parts: params.parts.unwrap_or(false),
         match_: params.match_regex.clone(),
         exclude: params.exclude.clone(),
-        in_field: parse_field(params.in_field.as_deref())?,
-        io: parse_io(params.io.as_deref())?,
-        kind: parse_kind(params.kind.as_deref())?,
-        status: parse_status(params.status.as_deref())?,
+        in_field: params.in_field.unwrap_or_default(),
+        io: params.io.unwrap_or_default(),
+        kind: params.kind,
+        status: params.status,
         exit_code: params.exit_code,
         min_duration: None,
         max_duration: None,
@@ -446,9 +435,9 @@ mod tests {
             source: "terminal".into(),
             match_regex: Some("panic".into()),
             exclude: None,
-            in_field: Some("content".into()),
+            in_field: Some(SearchFieldArg::Content),
             kind: None,
-            status: Some("failure".into()),
+            status: Some(SearchStatusArg::Failure),
             exit_code: Some(1),
             since: None,
             until: None,

@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-use dialoguer::{Confirm, Input, MultiSelect, Select};
+use dialoguer::{Confirm, MultiSelect, Select};
 
 /// Returns true if stdin is a TTY (interactive terminal).
 pub fn is_interactive() -> bool {
@@ -61,16 +61,3 @@ pub fn multi_select(prompt: &str, items: &[String], defaults: &[usize]) -> Resul
         .interact()?)
 }
 
-/// Prompt for text input. Returns the entered string.
-/// Returns `Ok(default.to_string())` if stdin is not interactive.
-#[allow(dead_code)] // shared helper; ready for future prompts (share name, aliases)
-pub fn input(prompt: &str, default: &str) -> Result<String> {
-    if !is_interactive() {
-        return Ok(default.to_string());
-    }
-    Ok(Input::new()
-        .with_prompt(prompt)
-        .default(default.to_string())
-        .show_default(true)
-        .interact()?)
-}

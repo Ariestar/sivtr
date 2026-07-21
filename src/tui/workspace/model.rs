@@ -203,9 +203,6 @@ pub(crate) struct WorkspaceSession {
 pub(crate) struct WorkspaceDialogue {
     pub(crate) source: WorkspaceSource,
     pub(crate) work_ref: Option<WorkRef>,
-    /// Display title; list paint prefers `WorkspaceView::dialogue_titles`.
-    #[allow(dead_code)]
-    pub(crate) title: String,
     pub(crate) record: Option<WorkRecord>,
     pub(crate) copy: WorkspaceCopyParts,
 }

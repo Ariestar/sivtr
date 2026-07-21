@@ -146,7 +146,6 @@ fn shell_from_row(
     WorkspaceDialogue {
         source: row.meta.source.clone(),
         work_ref: row.meta.work_ref.clone(),
-        title: row.meta.title.clone(),
         record: None,
         copy: crate::tui::workspace::WorkspaceCopyParts::from_block(
             crate::tui::workspace::TextPair {
@@ -231,7 +230,6 @@ fn dialogue_from_record(session: &WorkspaceSession, record: &WorkRecord) -> Work
     WorkspaceDialogue {
         source: session.source.clone(),
         work_ref: Some(record.work_ref.clone()),
-        title: record.title.clone(),
         record: Some(record.clone()),
         copy: record_to_copy_parts(record, AgentSelection::LastTurn),
     }

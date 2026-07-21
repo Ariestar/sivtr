@@ -975,7 +975,10 @@ mod tests {
         let dialogues = dialogues_for_test(&sessions, 1, &[false, false]);
 
         assert_eq!(dialogues.len(), 1);
-        assert_eq!(dialogues[0].title, "o1");
+        assert_eq!(
+            dialogues[0].record.as_ref().map(|r| r.title.as_str()),
+            Some("o1")
+        );
         assert!(dialogues[0]
             .content_text(ContentViewMode::Reading, None)
             .contains("old:o1"));
@@ -1003,9 +1006,11 @@ mod tests {
         let dialogues = dialogues_for_test(&sessions, 0, &[true, true]);
 
         assert_eq!(dialogues.len(), 3);
-        assert_eq!(dialogues[0].title, "c1");
-        assert_eq!(dialogues[1].title, "c2");
-        assert_eq!(dialogues[2].title, "a1");
+        let titles: Vec<_> = dialogues
+            .iter()
+            .map(|d| d.record.as_ref().map(|r| r.title.as_str()))
+            .collect();
+        assert_eq!(titles, [Some("c1"), Some("c2"), Some("a1")]);
         let texts: Vec<_> = dialogues
             .iter()
             .map(|dialogue| dialogue.content_text(ContentViewMode::Reading, None))
@@ -1434,7 +1439,6 @@ mod tests {
         let dialogues = vec![WorkspaceDialogue {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
-            title: "question".to_string(),
             record: None,
             copy: WorkspaceCopyParts {
                 input: TextPair {
@@ -1581,7 +1585,6 @@ mod tests {
         let dialogues = vec![WorkspaceDialogue {
             source: WorkspaceSource::terminal(),
             work_ref: Some(WorkRef::terminal("shell", 1)),
-            title: "cargo test".to_string(),
             record: None,
             copy: WorkspaceCopyParts {
                 input: TextPair {
@@ -1649,7 +1652,6 @@ mod tests {
         let dialogues = vec![WorkspaceDialogue {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
-            title: "question".to_string(),
             record: Some(record),
             copy: WorkspaceCopyParts::from_block(TextPair {
                 plain: "visible text".to_string(),
@@ -1759,7 +1761,6 @@ mod tests {
         WorkspaceDialogue {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(record.work_ref.clone()),
-            title: title.to_string(),
             record: Some(record),
             copy: WorkspaceCopyParts::from_block(pair),
         }
