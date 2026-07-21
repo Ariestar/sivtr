@@ -295,7 +295,8 @@ impl WorkspaceDialogue {
 
 
 /// Reading mode: Input / Output sections; structure channels folded (and adjacent
-/// structure runs collapsed to `<:tool:> xN <:skill:> xM`). Raw expands payloads.
+/// structure runs collapsed onto one line of original markers, with identical
+/// markers counted as `xN`). Raw expands payloads.
 fn structured_record_text(record: &WorkRecord) -> String {
     debug_assert!(
         !record.parts.is_empty(),
@@ -409,50 +410,35 @@ fn structure_fold_label(part: &sivtr_core::record::WorkPart) -> String {
         .unwrap_or_else(|| "<:structure:>".to_string())
 }
 
-/// Collapse a consecutive structure run.
+/// Collapse a consecutive structure run onto one line.
 ///
-/// Single part keeps the detailed open marker (`<:tool:Bash call:>`).
-/// Multiple parts merge by kind tag: `<:tool:> x3 <:skill:> x2`.
+/// Keeps each part's original open marker (`<:tool:Bash call:>`, `<:skill:review:>`,
+/// `<:thinking:>`, …). Identical markers in the run are counted: `<:tool:Bash call:> x3`.
 fn collapse_structure_run(run: &[&sivtr_core::record::WorkPart]) -> String {
     if run.is_empty() {
         return String::new();
     }
-    if run.len() == 1 {
-        return structure_fold_label(run[0]);
-    }
 
-    let mut order: Vec<&'static str> = Vec::new();
-    let mut counts: Vec<(&'static str, usize)> = Vec::new();
+    let mut counts: Vec<(String, usize)> = Vec::new();
     for part in run {
-        let tag = structure_kind_tag(part.kind);
-        if let Some((_, count)) = counts.iter_mut().find(|(t, _)| *t == tag) {
+        let label = structure_fold_label(part);
+        if let Some((_, count)) = counts.iter_mut().find(|(existing, _)| *existing == label) {
             *count += 1;
         } else {
-            order.push(tag);
-            counts.push((tag, 1));
+            counts.push((label, 1));
         }
     }
     counts
         .into_iter()
-        .map(|(tag, count)| {
+        .map(|(label, count)| {
             if count == 1 {
-                format!("<:{tag}:>")
+                label
             } else {
-                format!("<:{tag}:> x{count}")
+                format!("{label} x{count}")
             }
         })
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-fn structure_kind_tag(kind: sivtr_core::record::WorkPartKind) -> &'static str {
-    use sivtr_core::record::WorkPartKind;
-    match kind {
-        WorkPartKind::ToolCall | WorkPartKind::ToolOutput => "tool",
-        WorkPartKind::Skill => "skill",
-        WorkPartKind::Thinking => "thinking",
-        _ => "structure",
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2150,12 +2136,92 @@ mod tests {
         );
         assert!(reading.contains("## Input"));
         assert!(reading.contains("do it"));
-        assert!(reading.contains("<:tool:> x2"));
-        assert!(reading.contains("<:skill:> x2"));
+        // Original open markers kept (not generic <:tool:> / <:skill:>).
+        assert!(reading.contains("<:tool:Bash call:>"));
+        assert!(reading.contains("<:tool:Read call:>"));
+        assert!(reading.contains("<:skill:review:>"));
+        assert!(reading.contains("<:skill:deploy:>"));
+        // Adjacent structure parts share one line.
+        let fold_line = reading
+            .lines()
+            .find(|line| line.contains("<:tool:Bash call:>"))
+            .expect("collapsed structure line");
+        assert!(fold_line.contains("<:tool:Read call:>"));
+        assert!(fold_line.contains("<:skill:review:>"));
+        assert!(fold_line.contains("<:skill:deploy:>"));
         assert!(reading.contains("## Output"));
         assert!(reading.contains("done"));
         assert!(!reading.contains("ls"));
         assert!(!reading.contains("skill body"));
+    }
+
+    #[test]
+    fn reading_mode_counts_identical_structure_markers() {
+        let record = WorkRecord {
+            schema_version: 2,
+            work_ref: WorkRef::agent(AgentProvider::Codex, "session", 1),
+            kind: sivtr_core::record::WorkRecordKind::ChatTurn,
+            source: sivtr_core::record::WorkSource {
+                channel: sivtr_core::record::WorkChannel::Chat,
+                provider: Some("codex".to_string()),
+            },
+            session: sivtr_core::record::WorkSessionRef {
+                id: "session".to_string(),
+                canonical_id: None,
+                path: None,
+            },
+            cwd: None,
+            time: sivtr_core::record::WorkTime::default(),
+            status: None,
+            title: "cmd".to_string(),
+            parts: vec![
+                sivtr_core::record::WorkPart {
+                    io: sivtr_core::record::WorkPartIo::Input,
+                    kind: sivtr_core::record::WorkPartKind::ToolCall,
+                    index: 1,
+                    occurred_at: None,
+                    label: Some("Bash".to_string()),
+                    text: "ls".to_string(),
+                    ansi: None,
+                },
+                sivtr_core::record::WorkPart {
+                    io: sivtr_core::record::WorkPartIo::Input,
+                    kind: sivtr_core::record::WorkPartKind::ToolCall,
+                    index: 2,
+                    occurred_at: None,
+                    label: Some("Bash".to_string()),
+                    text: "pwd".to_string(),
+                    ansi: None,
+                },
+                sivtr_core::record::WorkPart {
+                    io: sivtr_core::record::WorkPartIo::Input,
+                    kind: sivtr_core::record::WorkPartKind::ToolCall,
+                    index: 3,
+                    occurred_at: None,
+                    label: Some("Bash".to_string()),
+                    text: "date".to_string(),
+                    ansi: None,
+                },
+            ],
+        };
+        let dialogue = WorkspaceDialogue {
+            source: WorkspaceSource::agent(AgentProvider::Codex),
+            work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
+            title: "cmd".to_string(),
+            record: Some(record),
+            copy: WorkspaceCopyParts::default(),
+        };
+
+        let reading = workspace_content_text(
+            std::slice::from_ref(&dialogue),
+            &[false],
+            0,
+            ContentViewMode::Reading,
+            None,
+        );
+        assert!(reading.contains("<:tool:Bash call:> x3"));
+        assert!(!reading.contains("ls"));
+        assert!(!reading.contains("pwd"));
     }
 
     #[test]
