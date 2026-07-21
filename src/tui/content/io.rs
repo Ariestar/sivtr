@@ -168,8 +168,9 @@ impl<'a> ContentIoFrame<'a> {
         area: Rect,
         texts: &'a ContentIoTexts,
         mode: ContentViewMode,
+        focus: ContentIoFocus,
     ) -> Self {
-        let areas = content_io_layout(area, texts, mode);
+        let areas = content_io_layout(area, texts, mode, focus);
         let input_lines = content_view_line_count(areas.input, texts.display(ContentIoFocus::Input), mode)
             .max(1);
         let output_lines =
@@ -203,14 +204,21 @@ impl<'a> ContentIoFrame<'a> {
     }
 }
 
-/// Split content column by **display line weight** (dynamic pane heights).
+/// Focus bias: active half weight multiplier (on top of line-count weight).
+const FOCUS_WEIGHT: u32 = 3;
+/// Focused half always gets at least this share of total height (percent).
+const FOCUS_MIN_SHARE_PCT: u16 = 55;
+
+/// Split content column by display-line weight **and** active-half focus bias.
 ///
-/// Measures with a provisional 50/50 split (same width), then assigns height
-/// proportional to each half's line count, with a shared minimum.
+/// Provisional 50/50 measures line counts at shared width; final heights use
+/// `weight = lines * (FOCUS_WEIGHT if focused else 1)`, then clamp so the
+/// focused half is never below `FOCUS_MIN_SHARE_PCT` of total height.
 pub(crate) fn content_io_layout(
     area: Rect,
     texts: &ContentIoTexts,
     mode: ContentViewMode,
+    focus: ContentIoFocus,
 ) -> ContentIoAreas {
     if area.height == 0 || area.width == 0 {
         return ContentIoAreas::default();
@@ -230,34 +238,61 @@ pub(crate) fn content_io_layout(
     )
     .max(1);
 
+    let top = weighted_top_height(area.height, in_lines, out_lines, focus);
     ContentIoAreas {
-        input: split_top(area, weighted_top_height(area.height, in_lines, out_lines)),
-        output: split_bottom(area, weighted_top_height(area.height, in_lines, out_lines)),
+        input: split_top(area, top),
+        output: split_bottom(area, top),
     }
 }
 
-fn weighted_top_height(total: u16, in_lines: usize, out_lines: usize) -> u16 {
+fn half_weight(lines: usize, half: ContentIoFocus, focus: ContentIoFocus) -> u32 {
+    let base = lines.max(1) as u32;
+    if half == focus {
+        base.saturating_mul(FOCUS_WEIGHT)
+    } else {
+        base
+    }
+}
+
+fn weighted_top_height(
+    total: u16,
+    in_lines: usize,
+    out_lines: usize,
+    focus: ContentIoFocus,
+) -> u16 {
     if total == 0 {
         return 0;
     }
-    if total < MIN_PANE_H {
-        return total / 2;
+    let in_w = half_weight(in_lines, ContentIoFocus::Input, focus);
+    let out_w = half_weight(out_lines, ContentIoFocus::Output, focus);
+    let sum = in_w.saturating_add(out_w).max(1);
+
+    let mut top = if total < MIN_PANE_H.saturating_mul(2) {
+        ((total as u32) * in_w / sum)
+            .max(1)
+            .min(total.saturating_sub(1).max(1) as u32) as u16
+    } else {
+        let rem = total.saturating_sub(MIN_PANE_H.saturating_mul(2));
+        let extra = (rem as u32) * in_w / sum;
+        MIN_PANE_H.saturating_add(extra as u16)
+    };
+
+    // Floor: focused half always gets a usable share (Tab to Input never leaves 1 row).
+    if total >= MIN_PANE_H.saturating_mul(2) {
+        let focus_min = ((total as u32) * (FOCUS_MIN_SHARE_PCT as u32) / 100) as u16;
+        let focus_min = focus_min
+            .max(MIN_PANE_H)
+            .min(total.saturating_sub(MIN_PANE_H));
+        top = match focus {
+            ContentIoFocus::Input => top.max(focus_min),
+            ContentIoFocus::Output => top.min(total.saturating_sub(focus_min)),
+        };
     }
-    if total < MIN_PANE_H.saturating_mul(2) {
-        // Not enough for two mins: give the heavier half more of what we have.
-        let in_w = in_lines.max(1) as u32;
-        let out_w = out_lines.max(1) as u32;
-        return ((total as u32) * in_w / (in_w + out_w)).max(1) as u16;
-    }
-    let rem = total.saturating_sub(MIN_PANE_H.saturating_mul(2));
-    let in_w = in_lines.max(1) as u32;
-    let out_w = out_lines.max(1) as u32;
-    let extra = (rem as u32) * in_w / (in_w + out_w);
-    MIN_PANE_H.saturating_add(extra as u16)
+    top
 }
 
 fn split_vertical_equal(area: Rect) -> ContentIoAreas {
-    let mid = weighted_top_height(area.height, 1, 1);
+    let mid = weighted_top_height(area.height, 1, 1, ContentIoFocus::Input);
     ContentIoAreas {
         input: split_top(area, mid),
         output: split_bottom(area, mid),
@@ -348,9 +383,20 @@ mod tests {
 
     #[test]
     fn weighted_height_gives_more_to_heavier_half() {
-        let h = weighted_top_height(40, 10, 2);
+        let h = weighted_top_height(40, 10, 2, ContentIoFocus::Input);
         assert!(h > 20);
         assert!(h <= 40 - MIN_PANE_H);
+    }
+
+    #[test]
+    fn focused_half_gets_bias_over_line_weight() {
+        // Output has far more lines; Input focused → still ≥ 55% floor.
+        let top = weighted_top_height(40, 1, 20, ContentIoFocus::Input);
+        assert!(top >= 22); // 55% of 40
+        // Flip focus → Output gets the floor (Input top ≤ 45%).
+        let top_out = weighted_top_height(40, 1, 20, ContentIoFocus::Output);
+        assert!(top_out <= 18);
+        assert!(top_out < top);
     }
 
     #[test]

@@ -385,6 +385,7 @@ pub struct ContentCtx<'a> {
     pub mode: ContentViewMode,
     pub target: Option<WorkAt>,
     pub area: ratatui::layout::Rect,
+    pub io_focus: ContentIoFocus,
 }
 
 /// Tracks layout line counts for Input / Output halves separately.
@@ -411,7 +412,7 @@ impl ContentPane {
             ctx.mode,
             ctx.target,
         );
-        let frame = ContentIoFrame::build(ctx.area, &texts, ctx.mode);
+        let frame = ContentIoFrame::build(ctx.area, &texts, ctx.mode, ctx.io_focus);
         self.input_lines = frame.input_lines;
         self.output_lines = frame.output_lines;
         texts

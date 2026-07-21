@@ -27,7 +27,7 @@ use crate::pane::{Pane, PaneInput, Viewport};
 use super::nav::{
     clamp_list_state, move_workspace_cursor_down, move_workspace_cursor_up, open_link_target,
     reset_workspace_dialogue_state, reset_workspace_search_state,
-    resize_workspace_dialogue_selection, row_list_index, source_inline_index,
+    resize_workspace_dialogue_selection, row_list_index, source_list_index,
 };
 use super::selection::{has_selected_sessions, refresh_next_level};
 use super::visual::{
@@ -272,9 +272,11 @@ pub(crate) fn run(
             mode: content_mode,
             target: active_content_at,
             area: layout.content,
+            io_focus: content_io_focus,
         });
         // One frame geometry/metrics for handlers below (same texts/layout as ensure).
-        let content_frame = ContentIoFrame::build(layout.content, &io_texts, content_mode);
+        let content_frame =
+            ContentIoFrame::build(layout.content, &io_texts, content_mode, content_io_focus);
         content_scrolls.clamp_to(content_frame.input_lines, content_frame.output_lines);
         if let Some(matched) = pending_match {
             let (half, scroll) =
@@ -792,11 +794,13 @@ pub(crate) fn run(
                             set_focus(&mut focus, &mut fullscreen, clicked_focus);
                             match clicked_focus {
                                 WorkspaceFocus::Source => {
-                                    if let Some(idx) = source_inline_index(
+                                    let vertical = layout.source.height > 3;
+                                    if let Some(idx) = source_list_index(
                                         layout.source,
                                         mouse.column,
                                         mouse.row,
                                         &sources,
+                                        vertical,
                                     ) {
                                         source_state.select(Some(idx));
                                     }

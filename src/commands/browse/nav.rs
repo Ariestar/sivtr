@@ -185,19 +185,24 @@ pub(super) fn row_list_index(area: ratatui::layout::Rect, row: u16, len: usize) 
     (row < len).then_some(row)
 }
 
-pub(super) fn source_inline_index(
+pub(super) fn source_list_index(
     area: ratatui::layout::Rect,
     column: u16,
     row: u16,
     sources: &[WorkspaceSource],
+    vertical: bool,
 ) -> Option<usize> {
+    if vertical {
+        // List panel: one source per row (same as sessions/dialogues).
+        return row_list_index(area, row, sources.len());
+    }
+    // Compact strip: single content row, labels laid out left→right.
     if row != area.y.saturating_add(1)
         || column <= area.x
         || column >= area.x.saturating_add(area.width)
     {
         return None;
     }
-
     let mut cursor = area.x.saturating_add(1);
     for (idx, source) in sources.iter().enumerate() {
         if idx > 0 {
@@ -209,9 +214,9 @@ pub(super) fn source_inline_index(
         }
         cursor = cursor.saturating_add(width);
     }
-
     None
 }
+
 
 pub(super) fn reset_workspace_dialogue_state(
     dialogue_count: usize,

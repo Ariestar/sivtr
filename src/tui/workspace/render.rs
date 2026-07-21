@@ -90,7 +90,8 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         view.content_mode,
         view.content_at,
     );
-    let frame_io = ContentIoFrame::build(layout.content, &io_texts, view.content_mode);
+    let frame_io =
+        ContentIoFrame::build(layout.content, &io_texts, view.content_mode, view.content_io_focus);
     let content_active = view.focus == WorkspaceFocus::Content;
     let content_search = view
         .search
@@ -537,6 +538,69 @@ fn render_source_list(
     active: bool,
 ) {
     let panel = Panel::new(WorkspaceFocus::Source.key(), "Source", active);
+    // Compact strip when not focused; vertical list (scrollable) when focused.
+    if !active || area.height <= 3 {
+        render_source_strip(
+            frame,
+            area,
+            panel,
+            sources,
+            selected_sources,
+            source_markers,
+            loading_tick,
+            state,
+            active,
+        );
+        return;
+    }
+
+    let cursor_idx = selected_index(state).min(sources.len().saturating_sub(1));
+    let mut items: Vec<ListItem> = sources
+        .iter()
+        .enumerate()
+        .map(|(idx, source)| {
+            let selected = selected_sources.get(idx).copied().unwrap_or(false);
+            let focused = idx == cursor_idx;
+            let load = source_markers
+                .get(idx)
+                .copied()
+                .unwrap_or(SourceLoadMarker::Idle);
+            let marker = load.status_glyph(selected, loading_tick);
+            let style = if focused {
+                active_item_style()
+            } else if selected {
+                selected_item_style()
+            } else {
+                Style::default().fg(source.color())
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{marker} "), style),
+                Span::styled(source.label(), style),
+            ]))
+        })
+        .collect();
+    if items.is_empty() {
+        items.push(ListItem::new(Span::styled(
+            "<empty>",
+            Style::default().fg(theme::dim()),
+        )));
+    }
+    render_list_panel(frame, area, panel, items, state);
+    render_list_scrollbar(frame, area, cursor_idx, sources.len(), active);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_source_strip(
+    frame: &mut Frame,
+    area: Rect,
+    panel: Panel,
+    sources: &[WorkspaceSource],
+    selected_sources: &[bool],
+    source_markers: &[SourceLoadMarker],
+    loading_tick: u8,
+    state: &ListState,
+    active: bool,
+) {
     let current = selected_index(state).min(sources.len().saturating_sub(1));
     let mut spans = Vec::new();
     for (idx, source) in sources.iter().enumerate() {

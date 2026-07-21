@@ -85,9 +85,15 @@ pub(crate) fn workspace_layout(
         .direction(Direction::Horizontal)
         .constraints(constraints)
         .split(chunks[0]);
+    // Source expands when focused: enough rows for a vertical list + scroll.
+    let source_h = if focus == WorkspaceFocus::Source {
+        Constraint::Percentage(40)
+    } else {
+        Constraint::Length(3)
+    };
     let left_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(1)])
+        .constraints([source_h, Constraint::Min(1)])
         .split(main_chunks[0]);
 
     WorkspaceLayout {
