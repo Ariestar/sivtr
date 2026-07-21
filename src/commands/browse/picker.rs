@@ -5,14 +5,14 @@ use crossterm::event::{
 use ratatui::widgets::ListState;
 use std::path::PathBuf;
 
-use crate::tui::content_view::{content_link_at, ContentViewMode};
+use crate::tui::content::view::{content_link_at, ContentViewMode};
 use crate::tui::workspace::{
     help_action_for_key, panel_inner_rows, render_workspace, search_match_half, selected_index,
     workspace_help_entries, workspace_hit_test, workspace_layout, ContentIoFocus, ContentIoFrame,
     ContentScrolls, WorkspaceFocus, WorkspacePickedContent, WorkspaceSearchView, WorkspaceSource,
     WorkspaceView,
 };
-use crate::tui::workspace_search::{
+use crate::tui::search::{
     workspace_search_has_query, workspace_search_scope, WorkspaceSearchIndex, WorkspaceSearchOutput,
 };
 
@@ -892,12 +892,12 @@ mod tests {
     use super::super::panes::{DialogueCtx, DialoguePane};
     use crate::pane::{Pane, PaneInput, Viewport};
     use crate::commands::select::CommandSelection;
-    use crate::tui::content_view::ContentViewMode;
+    use crate::tui::content::view::ContentViewMode;
     use crate::tui::workspace::{
         ContentIoFocus, ContentScrolls, TextPair, WorkspaceCopyParts, WorkspaceDialogue,
         WorkspaceFocus, WorkspaceSession, WorkspaceSource, WorkspaceSourceKind,
     };
-    use crate::tui::workspace_search::{
+    use crate::tui::search::{
         workspace_search_query, workspace_search_regex, WorkspaceSearchIndex, WorkspaceSearchMatch,
         WorkspaceSearchScope,
     };

@@ -8,7 +8,7 @@
 //! Do **not** reimplement viewport growth, keep/evict, or blanking rules.
 
 use crate::pane::{Pane, PaneInput, SlidingPane, WindowRow};
-use crate::tui::content_view::ContentViewMode;
+use crate::tui::content::view::ContentViewMode;
 use crate::tui::workspace::{
     workspace_content_io_texts, ContentIoFocus, ContentIoFrame, ContentIoTexts, WorkspaceDialogue,
     WorkspaceSession, WorkspaceSource,

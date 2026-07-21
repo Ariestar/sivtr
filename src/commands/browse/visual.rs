@@ -5,7 +5,7 @@ use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::widgets::ListState;
 
 use crate::commands::select::CommandSelection;
-use crate::tui::content_view::{
+use crate::tui::content::view::{
     clamp_content_position, content_position_in_text_row, content_text_area, selected_content_text,
     ContentPosition, ContentSelection, ContentSelectionKind, ContentViewMode,
 };

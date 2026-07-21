@@ -5,7 +5,7 @@
 use anyhow::Result;
 use ratatui::widgets::ListState;
 
-use crate::tui::content_view::ContentViewMode;
+use crate::tui::content::view::ContentViewMode;
 use crate::tui::terminal::{init as init_tui, restore as restore_tui};
 use crate::tui::workspace::{
     can_open_dialogue_vim, selected_index, workspace_content_io_texts, workspace_content_text,
