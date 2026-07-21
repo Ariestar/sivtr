@@ -6,44 +6,33 @@ use ratatui::widgets::ListState;
 use std::path::PathBuf;
 
 use crate::tui::content_view::{content_link_at, ContentViewMode};
-use crate::tui::terminal::{init as init_tui, restore as restore_tui};
 use crate::tui::workspace::{
-    can_open_dialogue_vim, panel_inner_rows, render_workspace, search_match_half, selected_index,
-    workspace_content_text, workspace_help_entries, workspace_hit_test, workspace_layout,
-    ContentIoFocus, ContentIoFrame, ContentScrolls, WorkspaceFocus, WorkspacePickedContent,
-    WorkspaceSearchView, WorkspaceSource, WorkspaceView,
+    help_action_for_key, panel_inner_rows, render_workspace, search_match_half, selected_index,
+    workspace_help_entries, workspace_hit_test, workspace_layout, ContentIoFocus, ContentIoFrame,
+    ContentScrolls, WorkspaceFocus, WorkspacePickedContent, WorkspaceSearchView, WorkspaceSource,
+    WorkspaceView,
 };
 use crate::tui::workspace_search::{
     workspace_search_has_query, workspace_search_scope, WorkspaceSearchIndex, WorkspaceSearchOutput,
 };
 
 use super::content::{
-    active_workspace_content_at, apply_dialogue_range_selection, dialogue_text_vim_view,
-    handle_line_filter_key, line_filter_spec,
-    workspace_picked_content_for_copy_with_line_filter,
-    workspace_picked_content_with_line_filter, workspace_search_target_ref, WorkspaceCopyShortcut,
+    active_workspace_content_at, handle_line_filter_key, line_filter_spec,
+    workspace_search_target_ref,
 };
-
-use super::help::{apply_workspace_help_action, set_focus, toggle_fullscreen};
+use super::help::{apply_workspace_help_action, set_focus, HelpDispatch};
 use super::load::{SessionColumn, SessionCtx, SourceLoadState};
-use super::panes::{
-    ContentCtx, ContentPane, DialogueCtx, DialoguePane, SourcePane,
-};
+use super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane, SourcePane};
 use crate::pane::{Pane, PaneInput, Viewport};
 use super::nav::{
     clamp_list_state, move_workspace_cursor_down, move_workspace_cursor_up, open_link_target,
-    reset_workspace_after_source_change, reset_workspace_dialogue_state,
-    reset_workspace_search_state, resize_workspace_dialogue_selection, row_list_index,
-    source_inline_index,
+    reset_workspace_dialogue_state, reset_workspace_search_state,
+    resize_workspace_dialogue_selection, row_list_index, source_inline_index,
 };
-use super::selection::{
-    has_selected_sessions, refresh_next_level, select_sources, WorkspaceSourceSelection,
-};
-use super::vim::open_vim_view;
+use super::selection::{has_selected_sessions, refresh_next_level};
 use super::visual::{
-    apply_workspace_mouse_scroll, enter_visual_select_mode, handle_content_mouse_select,
-    handle_visual_select_key, scroll_list_state_down, scroll_list_state_up, VisualContentContext,
-    VisualSelectMode,
+    apply_workspace_mouse_scroll, handle_content_mouse_select, handle_visual_select_key,
+    scroll_list_state_down, scroll_list_state_up, VisualContentContext, VisualSelectMode,
 };
 use super::PICK_CANCELLED_MESSAGE;
 
@@ -508,7 +497,7 @@ pub(crate) fn run(
                                 .min(workspace_help_entries().len().saturating_sub(1));
                             let action = workspace_help_entries()[idx].action;
                             show_help = false;
-                            if let Some(picked) = apply_workspace_help_action(
+                            match apply_workspace_help_action(
                                 action,
                                 &mut focus,
                                 &mut fullscreen,
@@ -523,11 +512,15 @@ pub(crate) fn run(
                                 &mut content_scrolls,
                                 &mut content_io_focus,
                                 &mut content_mode,
+                                content_pane.line_count(ContentIoFocus::Input),
+                                content_pane.line_count(ContentIoFocus::Output),
+                                &mut show_help,
                                 &mut show_search,
                                 &mut search_query,
                                 &mut search_dirty,
                                 &mut visual_select_mode,
                                 active_content_at,
+                                line_filter_spec(&line_filter),
                                 &sessions,
                                 &dialogues,
                                 session_idx,
@@ -535,7 +528,33 @@ pub(crate) fn run(
                                 dialogue_count,
                                 terminal,
                             )? {
-                                return Ok(picked);
+                                HelpDispatch::Continue => {}
+                                HelpDispatch::Picked(picked) => return Ok(picked),
+                                HelpDispatch::Refresh => {
+                                    let size = terminal.size()?;
+                                    let layout = workspace_layout(
+                                        ratatui::layout::Rect::new(0, 0, size.width, size.height),
+                                        focus,
+                                        fullscreen,
+                                    );
+                                    let viewport = Viewport::from_panel(
+                                        session_state.offset(),
+                                        panel_inner_rows(layout.sessions),
+                                    );
+                                    refresh_next_level(
+                                        focus,
+                                        &selected_sources,
+                                        &source_state,
+                                        &sessions,
+                                        &selected_sessions,
+                                        &session_state,
+                                        &mut sessions_pane,
+                                        &mut all_sessions,
+                                        &mut search_dirty,
+                                        viewport,
+                                    );
+                                    sessions_dirty = true;
+                                }
                             }
                         }
                         _ => {}
@@ -553,364 +572,29 @@ pub(crate) fn run(
                     continue;
                 }
 
-                match key.code {
-                    KeyCode::Char('/') => {
-                        show_help = false;
-                        show_search = true;
-                        search_query.clear();
-                        search_dirty = true;
-                        search_cursor = 0;
-                        search_apply_pending = true;
-                        reset_workspace_search_state(
-                            &mut session_state,
-                            &mut selected_sessions,
-                            &mut dialogue_state,
-                            &mut selected_dialogues,
-                            &mut range_anchor,
-                            &mut content_scrolls,
-                        );
-                    }
-                    KeyCode::Char('?') => {
-                        show_help = true;
-                    }
-                    KeyCode::Esc if search_has_query => {
-                        search_query.clear();
-                        search_dirty = true;
-                        search_cursor = 0;
-                        search_apply_pending = false;
-                        reset_workspace_search_state(
-                            &mut session_state,
-                            &mut selected_sessions,
-                            &mut dialogue_state,
-                            &mut selected_dialogues,
-                            &mut range_anchor,
-                            &mut content_scrolls,
-                        );
-                    }
-                    KeyCode::Char('i') if dialogue_count > 0 => {
-                        match workspace_picked_content_for_copy_with_line_filter(
-                            &dialogues,
-                            &selected_dialogues,
-                            dialogue_idx,
-                            WorkspaceCopyShortcut::Input,
-                            line_filter_spec(&line_filter),
-                            None,
-                            content_mode,
-                        ) {
-                            Ok(picked) => return Ok(picked),
-                            Err(err) => {
-                                line_filter_input_open = true;
-                                line_filter_error = Some(err.to_string());
-                            }
+                // Search-result navigation (not in help table — needs match list state).
+                if search_has_query && !search_output.matches.is_empty() {
+                    match key.code {
+                        KeyCode::Char('n') => {
+                            search_cursor = (search_cursor + 1) % search_output.matches.len();
+                            content_scrolls.clear();
+                            search_apply_pending = true;
+                            continue;
                         }
-                    }
-                    KeyCode::Char('o') if dialogue_count > 0 => {
-                        match workspace_picked_content_for_copy_with_line_filter(
-                            &dialogues,
-                            &selected_dialogues,
-                            dialogue_idx,
-                            WorkspaceCopyShortcut::Output,
-                            line_filter_spec(&line_filter),
-                            None,
-                            content_mode,
-                        ) {
-                            Ok(picked) => return Ok(picked),
-                            Err(err) => {
-                                line_filter_input_open = true;
-                                line_filter_error = Some(err.to_string());
-                            }
+                        KeyCode::Char('N') => {
+                            search_cursor = search_cursor
+                                .checked_sub(1)
+                                .unwrap_or_else(|| search_output.matches.len().saturating_sub(1));
+                            content_scrolls.clear();
+                            search_apply_pending = true;
+                            continue;
                         }
-                    }
-                    KeyCode::Char('y') if dialogue_count > 0 => {
-                        match workspace_picked_content_for_copy_with_line_filter(
-                            &dialogues,
-                            &selected_dialogues,
-                            dialogue_idx,
-                            WorkspaceCopyShortcut::Block,
-                            line_filter_spec(&line_filter),
-                            None,
-                            content_mode,
-                        ) {
-                            Ok(picked) => return Ok(picked),
-                            Err(err) => {
-                                line_filter_input_open = true;
-                                line_filter_error = Some(err.to_string());
-                            }
-                        }
-                    }
-                    KeyCode::Char('c') if dialogue_count > 0 => {
-                        match workspace_picked_content_for_copy_with_line_filter(
-                            &dialogues,
-                            &selected_dialogues,
-                            dialogue_idx,
-                            WorkspaceCopyShortcut::Command,
-                            line_filter_spec(&line_filter),
-                            None,
-                            content_mode,
-                        ) {
-                            Ok(picked) => return Ok(picked),
-                            Err(err) => {
-                                line_filter_input_open = true;
-                                line_filter_error = Some(err.to_string());
-                            }
-                        }
-                    }
-                    KeyCode::Char('z') => {
-                        fullscreen = toggle_fullscreen(fullscreen, focus);
-                    }
-                    KeyCode::Char('n') if search_has_query && !search_output.matches.is_empty() => {
-                        search_cursor = (search_cursor + 1) % search_output.matches.len();
-                        content_scrolls.clear();
-                        search_apply_pending = true;
-                    }
-                    KeyCode::Char('N') if search_has_query && !search_output.matches.is_empty() => {
-                        search_cursor = search_cursor
-                            .checked_sub(1)
-                            .unwrap_or_else(|| search_output.matches.len().saturating_sub(1));
-                        content_scrolls.clear();
-                        search_apply_pending = true;
-                    }
-                    KeyCode::Char('a') if focus == WorkspaceFocus::Source => {
-                        select_sources(
-                            &sources,
-                            &mut selected_sources,
-                            WorkspaceSourceSelection::All,
-                        );
-                        {
-                            let size = terminal.size()?;
-                            let layout = workspace_layout(
-                                ratatui::layout::Rect::new(0, 0, size.width, size.height),
-                                focus,
-                                fullscreen,
-                            );
-                            let viewport = Viewport::from_panel(
-                                session_state.offset(),
-                                panel_inner_rows(layout.sessions),
-                            );
-                            sessions_pane.kick(&selected_sources, viewport, true);
-                        }
-                        all_sessions = sessions_pane.collect(&selected_sources);
-                        sessions_dirty = true;
-                        search_dirty = true;
-                        reset_workspace_after_source_change(
-                            &mut session_state,
-                            &mut selected_sessions,
-                            &mut dialogue_state,
-                            &mut selected_dialogues,
-                            &mut range_anchor,
-                            &mut content_scrolls,
-                        );
-                    }
-                    KeyCode::Char('g') if focus == WorkspaceFocus::Source => {
-                        select_sources(
-                            &sources,
-                            &mut selected_sources,
-                            WorkspaceSourceSelection::Agents,
-                        );
-                        {
-                            let size = terminal.size()?;
-                            let layout = workspace_layout(
-                                ratatui::layout::Rect::new(0, 0, size.width, size.height),
-                                focus,
-                                fullscreen,
-                            );
-                            let viewport = Viewport::from_panel(
-                                session_state.offset(),
-                                panel_inner_rows(layout.sessions),
-                            );
-                            sessions_pane.kick(&selected_sources, viewport, true);
-                        }
-                        all_sessions = sessions_pane.collect(&selected_sources);
-                        sessions_dirty = true;
-                        search_dirty = true;
-                        reset_workspace_after_source_change(
-                            &mut session_state,
-                            &mut selected_sessions,
-                            &mut dialogue_state,
-                            &mut selected_dialogues,
-                            &mut range_anchor,
-                            &mut content_scrolls,
-                        );
-                    }
-                    KeyCode::Char('t') if focus == WorkspaceFocus::Source => {
-                        select_sources(
-                            &sources,
-                            &mut selected_sources,
-                            WorkspaceSourceSelection::Terminal,
-                        );
-                        {
-                            let size = terminal.size()?;
-                            let layout = workspace_layout(
-                                ratatui::layout::Rect::new(0, 0, size.width, size.height),
-                                focus,
-                                fullscreen,
-                            );
-                            let viewport = Viewport::from_panel(
-                                session_state.offset(),
-                                panel_inner_rows(layout.sessions),
-                            );
-                            sessions_pane.kick(&selected_sources, viewport, true);
-                        }
-                        all_sessions = sessions_pane.collect(&selected_sources);
-                        sessions_dirty = true;
-                        search_dirty = true;
-                        reset_workspace_after_source_change(
-                            &mut session_state,
-                            &mut selected_sessions,
-                            &mut dialogue_state,
-                            &mut selected_dialogues,
-                            &mut range_anchor,
-                            &mut content_scrolls,
-                        );
-                    }
-                    KeyCode::Char('s') => {
-                        set_focus(&mut focus, &mut fullscreen, WorkspaceFocus::Source);
-                    }
-                    KeyCode::Char('R') => {
-                        let size = terminal.size()?;
-                        let layout = workspace_layout(
-                            ratatui::layout::Rect::new(0, 0, size.width, size.height),
-                            focus,
-                            fullscreen,
-                        );
-                        let viewport = Viewport::from_panel(
-                            session_state.offset(),
-                            panel_inner_rows(layout.sessions),
-                        );
-                        refresh_next_level(
-                            focus,
-                            &selected_sources,
-                            &source_state,
-                            &sessions,
-                            &selected_sessions,
-                            &session_state,
-                            &mut sessions_pane,
-                            &mut all_sessions,
-                            &mut search_dirty,
-                            viewport,
-                        );
-                    }
-                    KeyCode::Char(ch) if ch.is_ascii_digit() => {
-                        if let Some(next_focus) =
-                            WorkspaceFocus::from_number_key(ch, dialogue_count)
-                        {
-                            set_focus(&mut focus, &mut fullscreen, next_focus);
-                        }
-                    }
-                    KeyCode::Char('q') => anyhow::bail!(PICK_CANCELLED_MESSAGE),
-                    KeyCode::Esc => match focus {
-                        WorkspaceFocus::Source => anyhow::bail!(PICK_CANCELLED_MESSAGE),
-                        WorkspaceFocus::Sessions => anyhow::bail!(PICK_CANCELLED_MESSAGE),
-                        WorkspaceFocus::Dialogues => {
-                            set_focus(&mut focus, &mut fullscreen, WorkspaceFocus::Sessions)
-                        }
-                        WorkspaceFocus::Content => {
-                            set_focus(&mut focus, &mut fullscreen, WorkspaceFocus::Dialogues)
-                        }
-                    },
-                    KeyCode::Left | KeyCode::Char('h') => {
-                        if let Some(next_focus) = focus.previous(dialogue_count) {
-                            set_focus(&mut focus, &mut fullscreen, next_focus);
-                        }
-                    }
-                    KeyCode::Right | KeyCode::Char('l') => {
-                        if let Some(next_focus) = focus.next(dialogue_count) {
-                            set_focus(&mut focus, &mut fullscreen, next_focus);
-                        }
-                    }
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        move_workspace_cursor_up(
-                            focus,
-                            &sources,
-                            &sessions,
-                            dialogue_count,
-                            &selected_sessions,
-                            &mut source_state,
-                            &mut session_state,
-                            &mut dialogue_state,
-                            &mut selected_dialogues,
-                            &mut range_anchor,
-                            &mut content_scrolls,
-                                content_io_focus,
-                        );
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        move_workspace_cursor_down(
-                            focus,
-                            &sources,
-                            &sessions,
-                            dialogue_count,
-                            &selected_sessions,
-                            &mut source_state,
-                            &mut session_state,
-                            &mut dialogue_state,
-                            &mut selected_dialogues,
-                            &mut range_anchor,
-                            &mut content_scrolls,
-                                content_io_focus,
-                        );
-                    }
-                    KeyCode::PageDown | KeyCode::Char('d')
-                        if focus == WorkspaceFocus::Content
-                            && (key.code == KeyCode::PageDown
-                                || key.modifiers.contains(KeyModifiers::CONTROL)) =>
-                    {
-                        content_scrolls.set(content_io_focus, content_scrolls.get(content_io_focus).saturating_add(10));
-                    }
-                    KeyCode::PageUp | KeyCode::Char('u')
-                        if focus == WorkspaceFocus::Content
-                            && (key.code == KeyCode::PageUp
-                                || key.modifiers.contains(KeyModifiers::CONTROL)) =>
-                    {
-                        content_scrolls.set(content_io_focus, content_scrolls.get(content_io_focus).saturating_sub(10));
-                    }
-                    KeyCode::Char('g') if focus == WorkspaceFocus::Content => {
-                        content_scrolls.clear_half(content_io_focus);
-                    }
-                    KeyCode::Char('G') if focus == WorkspaceFocus::Content => {
-                        content_scrolls.set(
-                            content_io_focus,
-                            content_pane.line_count(content_io_focus).saturating_sub(1),
-                        );
-                    }
-                    KeyCode::Tab if focus == WorkspaceFocus::Content => {
-                        content_io_focus = content_io_focus.toggle();
-                    }
-                    KeyCode::Char('r') if focus == WorkspaceFocus::Content => {
-                        content_mode = content_mode.toggle();
-                    }
-                    KeyCode::Char('v') if focus == WorkspaceFocus::Content => {
-                        let active = content_frame.active(content_io_focus, &mut content_scrolls);
-                        enter_visual_select_mode(
-                            &mut visual_select_mode,
-                            active.scroll,
-                            active.area,
-                            active.text,
-                            content_mode,
-                        );
-                    }
-                    KeyCode::Char(' ') => match focus {
-                        WorkspaceFocus::Source => {
-                            let source_idx = selected_index(&source_state);
-                            if let Some(selected) = selected_sources.get_mut(source_idx) {
-                                *selected = !*selected;
-                            }
-                            {
-                            let size = terminal.size()?;
-                            let layout = workspace_layout(
-                                ratatui::layout::Rect::new(0, 0, size.width, size.height),
-                                focus,
-                                fullscreen,
-                            );
-                            let viewport = Viewport::from_panel(
-                                session_state.offset(),
-                                panel_inner_rows(layout.sessions),
-                            );
-                            sessions_pane.kick(&selected_sources, viewport, true);
-                        }
-                        all_sessions = sessions_pane.collect(&selected_sources);
+                        KeyCode::Esc => {
+                            search_query.clear();
                             search_dirty = true;
-                            reset_workspace_after_source_change(
+                            search_cursor = 0;
+                            search_apply_pending = false;
+                            reset_workspace_search_state(
                                 &mut session_state,
                                 &mut selected_sessions,
                                 &mut dialogue_state,
@@ -918,92 +602,87 @@ pub(crate) fn run(
                                 &mut range_anchor,
                                 &mut content_scrolls,
                             );
-                        }
-                        WorkspaceFocus::Sessions => {
-                            if let Some(selected) = selected_sessions.get_mut(session_idx) {
-                                *selected = !*selected;
-                            }
-                            reset_workspace_dialogue_state(
-                                0,
-                                &mut dialogue_state,
-                                &mut selected_dialogues,
-                                &mut range_anchor,
-                            );
-                            content_scrolls.clear();
-                        }
-                        WorkspaceFocus::Dialogues => {
-                            if let Some(selected) = selected_dialogues.get_mut(dialogue_idx) {
-                                *selected = !*selected;
-                            }
-                            range_anchor = None;
+                            continue;
                         }
                         _ => {}
-                    },
-                    KeyCode::Char('v') if focus == WorkspaceFocus::Dialogues => {
-                        apply_dialogue_range_selection(
-                            &mut range_anchor,
-                            &mut selected_dialogues,
-                            dialogue_idx,
-                        );
                     }
-                    KeyCode::Char('a') if focus == WorkspaceFocus::Dialogues => {
-                        let select_all = selected_dialogues.iter().any(|selected| !selected);
-                        selected_dialogues.fill(select_all);
-                        range_anchor = None;
+                }
+
+                // Table-driven bindings: help registry is the only key declaration.
+                if let Some(action) =
+                    help_action_for_key(key.code, key.modifiers, focus)
+                {
+                    match apply_workspace_help_action(
+                        action,
+                        &mut focus,
+                        &mut fullscreen,
+                        &sources,
+                        &mut source_state,
+                        &mut selected_sources,
+                        &mut selected_sessions,
+                        &mut session_state,
+                        &mut dialogue_state,
+                        &mut selected_dialogues,
+                        &mut range_anchor,
+                        &mut content_scrolls,
+                        &mut content_io_focus,
+                        &mut content_mode,
+                        content_pane.line_count(ContentIoFocus::Input),
+                        content_pane.line_count(ContentIoFocus::Output),
+                        &mut show_help,
+                        &mut show_search,
+                        &mut search_query,
+                        &mut search_dirty,
+                        &mut visual_select_mode,
+                        active_content_at,
+                        line_filter_spec(&line_filter),
+                        &sessions,
+                        &dialogues,
+                        session_idx,
+                        dialogue_idx,
+                        dialogue_count,
+                        terminal,
+                    )? {
+                        HelpDispatch::Continue => {}
+                        HelpDispatch::Picked(picked) => return Ok(picked),
+                        HelpDispatch::Refresh => {
+                            let size = terminal.size()?;
+                            let layout = workspace_layout(
+                                ratatui::layout::Rect::new(0, 0, size.width, size.height),
+                                focus,
+                                fullscreen,
+                            );
+                            let viewport = Viewport::from_panel(
+                                session_state.offset(),
+                                panel_inner_rows(layout.sessions),
+                            );
+                            refresh_next_level(
+                                focus,
+                                &selected_sources,
+                                &source_state,
+                                &sessions,
+                                &selected_sessions,
+                                &session_state,
+                                &mut sessions_pane,
+                                &mut all_sessions,
+                                &mut search_dirty,
+                                viewport,
+                            );
+                            sessions_dirty = true;
+                        }
                     }
-                    KeyCode::Char('t') if can_open_dialogue_vim(focus, dialogue_count) => {
-                        let view = dialogue_text_vim_view(workspace_content_text(
-                            &dialogues,
-                            &selected_dialogues,
-                            dialogue_idx,
-                            content_mode,
-                            active_content_at,
-                        ));
-                        restore_tui(terminal)?;
-                        open_vim_view(&view)?;
-                        *terminal = init_tui()?;
+                    continue;
+                }
+
+                // Focus number keys (0-3) — derived from WorkspaceFocus, not the help table.
+                if let KeyCode::Char(ch) = key.code {
+                    if ch.is_ascii_digit() {
+                        if let Some(next_focus) =
+                            WorkspaceFocus::from_number_key(ch, dialogue_count)
+                        {
+                            set_focus(&mut focus, &mut fullscreen, next_focus);
+                        }
                     }
-                    KeyCode::Enter => match focus {
-                        WorkspaceFocus::Source => {
-                            set_focus(&mut focus, &mut fullscreen, WorkspaceFocus::Sessions);
-                        }
-                        WorkspaceFocus::Sessions => {
-                            if !dialogues.is_empty() {
-                                set_focus(&mut focus, &mut fullscreen, WorkspaceFocus::Dialogues);
-                            }
-                        }
-                        WorkspaceFocus::Dialogues => {
-                            match workspace_picked_content_with_line_filter(
-                                &dialogues,
-                                &selected_dialogues,
-                                dialogue_idx,
-                                line_filter_spec(&line_filter),
-                                active_content_at,
-                            ) {
-                                Ok(picked) => return Ok(picked),
-                                Err(err) => {
-                                    line_filter_input_open = true;
-                                    line_filter_error = Some(err.to_string());
-                                }
-                            }
-                        }
-                        WorkspaceFocus::Content => {
-                            match workspace_picked_content_with_line_filter(
-                                &dialogues,
-                                &selected_dialogues,
-                                dialogue_idx,
-                                line_filter_spec(&line_filter),
-                                active_content_at,
-                            ) {
-                                Ok(picked) => return Ok(picked),
-                                Err(err) => {
-                                    line_filter_input_open = true;
-                                    line_filter_error = Some(err.to_string());
-                                }
-                            }
-                        }
-                    },
-                    _ => {}
                 }
             }
             Event::Mouse(mouse) if show_help && !show_search => match mouse.kind {

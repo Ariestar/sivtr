@@ -519,11 +519,17 @@ pub(crate) enum WorkspaceHelpAction {
     CopyBlock,
     CopyCommand,
     ToggleFullscreen,
-    CloseHelp,
+    /// Toggle the help overlay.
+    ToggleHelp,
     OpenSearch,
+    /// Esc in the main UI: cancel from Source/Sessions, else step focus left.
+    BackOrCancel,
     Cancel,
     /// Refresh next level under active rows (source→sessions, session→dialogues).
     Refresh,
+    /// Content half: jump scroll to top / bottom.
+    ScrollContentTop,
+    ScrollContentBottom,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -869,9 +875,37 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
             footer_panes: CNT,
         },
         WorkspaceHelpEntry {
+            key: "g",
+            description: "scroll content to top",
+            action: WorkspaceHelpAction::ScrollContentTop,
+            footer_label: None,
+            footer_panes: CNT,
+        },
+        WorkspaceHelpEntry {
+            key: "G",
+            description: "scroll content to bottom",
+            action: WorkspaceHelpAction::ScrollContentBottom,
+            footer_label: None,
+            footer_panes: CNT,
+        },
+        WorkspaceHelpEntry {
+            key: "PgDn",
+            description: "scroll content page down",
+            action: WorkspaceHelpAction::ScrollDown,
+            footer_label: None,
+            footer_panes: CNT,
+        },
+        WorkspaceHelpEntry {
+            key: "PgUp",
+            description: "scroll content page up",
+            action: WorkspaceHelpAction::ScrollUp,
+            footer_label: None,
+            footer_panes: CNT,
+        },
+        WorkspaceHelpEntry {
             key: "Esc",
-            description: "close help / back / cancel",
-            action: WorkspaceHelpAction::CloseHelp,
+            description: "back / cancel",
+            action: WorkspaceHelpAction::BackOrCancel,
             footer_label: None,
             footer_panes: ALL,
         },
@@ -920,7 +954,7 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
         WorkspaceHelpEntry {
             key: "?",
             description: "toggle help",
-            action: WorkspaceHelpAction::CloseHelp,
+            action: WorkspaceHelpAction::ToggleHelp,
             footer_label: Some("help"),
             footer_panes: NAV,
         },
@@ -939,6 +973,76 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
             footer_panes: NAV,
         },
     ]
+}
+
+/// Parse a help-table key spec into crossterm key identity.
+pub(crate) fn parse_help_key(spec: &str) -> Option<(crossterm::event::KeyCode, crossterm::event::KeyModifiers)> {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return None;
+    }
+    if let Some(rest) = spec.strip_prefix("Ctrl-") {
+        let (code, _) = parse_help_key(rest)?;
+        return Some((code, KeyModifiers::CONTROL));
+    }
+    let code = match spec {
+        "Tab" => KeyCode::Tab,
+        "Enter" => KeyCode::Enter,
+        "Esc" => KeyCode::Esc,
+        "Space" => KeyCode::Char(' '),
+        "PgDn" | "PageDown" => KeyCode::PageDown,
+        "PgUp" | "PageUp" => KeyCode::PageUp,
+        s if s.chars().count() == 1 => KeyCode::Char(s.chars().next()?),
+        _ => return None,
+    };
+    Some((code, KeyModifiers::NONE))
+}
+
+fn key_matches(
+    spec: &str,
+    code: crossterm::event::KeyCode,
+    modifiers: crossterm::event::KeyModifiers,
+) -> bool {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    let Some((want_code, want_mods)) = parse_help_key(spec) else {
+        return false;
+    };
+    // Ctrl bindings require CONTROL; bare keys ignore extra shift on letters via equality.
+    if want_mods.contains(KeyModifiers::CONTROL) {
+        return code == want_code && modifiers.contains(KeyModifiers::CONTROL);
+    }
+    // PageDown/Up may arrive without modifiers.
+    if matches!(want_code, KeyCode::PageDown | KeyCode::PageUp) {
+        return code == want_code;
+    }
+    // Bare char: no CONTROL (so Ctrl-d doesn't also fire MoveDown on 'd').
+    if modifiers.contains(KeyModifiers::CONTROL) {
+        return false;
+    }
+    match (want_code, code) {
+        (KeyCode::Char(a), KeyCode::Char(b)) => a == b,
+        (a, b) => a == b,
+    }
+}
+
+/// Resolve a pressed key through the help registry for the current focus.
+///
+/// First matching entry whose `footer_panes` allows `focus` wins (empty panes = all).
+pub(crate) fn help_action_for_key(
+    code: crossterm::event::KeyCode,
+    modifiers: crossterm::event::KeyModifiers,
+    focus: WorkspaceFocus,
+) -> Option<WorkspaceHelpAction> {
+    for entry in workspace_help_entries() {
+        if !entry.footer_panes.is_empty() && !entry.footer_panes.contains(&focus) {
+            continue;
+        }
+        if key_matches(entry.key, code, modifiers) {
+            return Some(entry.action);
+        }
+    }
+    None
 }
 
 /// Footer hotkeys for the focused pane, built from the help registry.
@@ -1836,8 +1940,9 @@ pub(crate) fn workspace_content_io_texts(
 mod tests {
     use super::WorkspaceFocus;
     use super::{
-        can_open_dialogue_vim, content_title, current_content_dialogue, line_filter_prompt_text,
-        search_box_body, search_box_title, workspace_content_io_texts, workspace_content_text,
+        can_open_dialogue_vim, content_title, current_content_dialogue, help_action_for_key,
+        line_filter_prompt_text, parse_help_key, search_box_body, search_box_title,
+        workspace_content_io_texts, workspace_content_text, WorkspaceHelpAction,
     };
     use crate::tui::content_view::ContentViewMode;
     use crate::tui::workspace::{
@@ -2391,6 +2496,62 @@ mod tests {
         let prompt = line_filter_prompt_text(Some("23"), Some("Invalid line number"), false);
         assert!(prompt.contains("Invalid line number"));
         assert!(prompt.contains("Current: 23"));
+    }
+
+    #[test]
+    fn parse_help_key_recognizes_named_and_ctrl_specs() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        assert_eq!(
+            parse_help_key("Tab"),
+            Some((KeyCode::Tab, KeyModifiers::NONE))
+        );
+        assert_eq!(
+            parse_help_key("Ctrl-d"),
+            Some((KeyCode::Char('d'), KeyModifiers::CONTROL))
+        );
+        assert_eq!(
+            parse_help_key("Space"),
+            Some((KeyCode::Char(' '), KeyModifiers::NONE))
+        );
+        assert_eq!(
+            parse_help_key("PgDn"),
+            Some((KeyCode::PageDown, KeyModifiers::NONE))
+        );
+    }
+
+    #[test]
+    fn help_action_for_key_is_focus_scoped() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        assert_eq!(
+            help_action_for_key(KeyCode::Tab, KeyModifiers::NONE, WorkspaceFocus::Content),
+            Some(WorkspaceHelpAction::ToggleContentIo)
+        );
+        assert_eq!(
+            help_action_for_key(KeyCode::Tab, KeyModifiers::NONE, WorkspaceFocus::Source),
+            None
+        );
+        // Source-only binding does not fire on Content.
+        assert_eq!(
+            help_action_for_key(KeyCode::Char('g'), KeyModifiers::NONE, WorkspaceFocus::Source),
+            Some(WorkspaceHelpAction::SelectAgentSources)
+        );
+        assert_eq!(
+            help_action_for_key(KeyCode::Char('g'), KeyModifiers::NONE, WorkspaceFocus::Content),
+            Some(WorkspaceHelpAction::ScrollContentTop)
+        );
+        // Ctrl-d is scroll, bare d is not.
+        assert_eq!(
+            help_action_for_key(
+                KeyCode::Char('d'),
+                KeyModifiers::CONTROL,
+                WorkspaceFocus::Content
+            ),
+            Some(WorkspaceHelpAction::ScrollDown)
+        );
+        assert_eq!(
+            help_action_for_key(KeyCode::Char('d'), KeyModifiers::NONE, WorkspaceFocus::Content),
+            None
+        );
     }
 
     #[test]

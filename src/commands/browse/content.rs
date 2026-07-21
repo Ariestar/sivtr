@@ -67,6 +67,7 @@ pub(super) fn workspace_picked_content_for_copy_with_line_filter(
     })
 }
 
+#[cfg(test)]
 pub(super) fn workspace_picked_content_for_copy(
     dialogues: &[WorkspaceDialogue],
     selected_dialogues: &[bool],
