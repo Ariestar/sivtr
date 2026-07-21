@@ -294,9 +294,9 @@ impl WorkspaceDialogue {
 }
 
 
-/// Reading mode: Input / Output sections; structure channels folded (and adjacent
-/// structure runs collapsed onto one line of original markers, with identical
-/// markers counted as `xN`). Raw expands payloads.
+/// Reading mode: Input / Output sections; structure channels folded. Within each
+/// IO section, identical original markers are counted (`xN`) regardless of order
+/// or adjacency; distinct markers stay as themselves. Raw expands payloads.
 fn structured_record_text(record: &WorkRecord) -> String {
     debug_assert!(
         !record.parts.is_empty(),
@@ -345,24 +345,35 @@ fn io_section_label(io: sivtr_core::record::WorkPartIo) -> &'static str {
     }
 }
 
-/// Reading: dialogue text as-is; structure folded; consecutive structure runs merge.
+/// Reading: dialogue text in order; structure folded.
+///
+/// Within one IO section ("一块"), every structure part contributes its original
+/// open marker. Identical markers are counted (`xN`) — no adjacency / order
+/// requirement. The fold line is emitted once, at the first structure position.
 fn structured_parts_text(
     record: &WorkRecord,
     parts: &[&sivtr_core::record::WorkPart],
 ) -> String {
+    let structure: Vec<&sivtr_core::record::WorkPart> = parts
+        .iter()
+        .copied()
+        .filter(|part| part.kind.is_structure())
+        .collect();
+    let fold = (!structure.is_empty()).then(|| collapse_structure_markers(&structure));
+
     let mut chunks = Vec::new();
-    let mut idx = 0usize;
-    while idx < parts.len() {
-        if parts[idx].kind.is_structure() {
-            let start = idx;
-            while idx < parts.len() && parts[idx].kind.is_structure() {
-                idx += 1;
+    let mut fold_emitted = false;
+    for part in parts {
+        if part.kind.is_structure() {
+            if !fold_emitted {
+                if let Some(fold) = fold.as_ref() {
+                    chunks.push(fold.clone());
+                }
+                fold_emitted = true;
             }
-            chunks.push(collapse_structure_run(&parts[start..idx]));
-        } else {
-            chunks.push(structured_part_text(record, parts[idx]));
-            idx += 1;
+            continue;
         }
+        chunks.push(structured_part_text(record, part));
     }
     chunks.join("\n\n")
 }
@@ -410,17 +421,19 @@ fn structure_fold_label(part: &sivtr_core::record::WorkPart) -> String {
         .unwrap_or_else(|| "<:structure:>".to_string())
 }
 
-/// Collapse a consecutive structure run onto one line.
+/// Collapse structure parts onto one line of original markers.
 ///
-/// Keeps each part's original open marker (`<:tool:Bash call:>`, `<:skill:review:>`,
-/// `<:thinking:>`, …). Identical markers in the run are counted: `<:tool:Bash call:> x3`.
-fn collapse_structure_run(run: &[&sivtr_core::record::WorkPart]) -> String {
-    if run.is_empty() {
+/// Keeps each part's open marker (`<:tool:Bash call:>`, `<:skill:review:>`,
+/// `<:thinking:>`, …). Identical markers anywhere in the set are counted:
+/// `<:tool:Bash call:> x3` — order of first appearance only affects display order
+/// of *distinct* markers, not whether they merge.
+fn collapse_structure_markers(parts: &[&sivtr_core::record::WorkPart]) -> String {
+    if parts.is_empty() {
         return String::new();
     }
 
     let mut counts: Vec<(String, usize)> = Vec::new();
-    for part in run {
+    for part in parts {
         let label = structure_fold_label(part);
         if let Some((_, count)) = counts.iter_mut().find(|(existing, _)| *existing == label) {
             *count += 1;
@@ -2141,7 +2154,7 @@ mod tests {
         assert!(reading.contains("<:tool:Read call:>"));
         assert!(reading.contains("<:skill:review:>"));
         assert!(reading.contains("<:skill:deploy:>"));
-        // Adjacent structure parts share one line.
+        // Same IO section: all structure markers share one fold line.
         let fold_line = reading
             .lines()
             .find(|line| line.contains("<:tool:Bash call:>"))
@@ -2156,7 +2169,7 @@ mod tests {
     }
 
     #[test]
-    fn reading_mode_counts_identical_structure_markers() {
+    fn reading_mode_counts_identical_structure_markers_regardless_of_order() {
         let record = WorkRecord {
             schema_version: 2,
             work_ref: WorkRef::agent(AgentProvider::Codex, "session", 1),
@@ -2175,6 +2188,7 @@ mod tests {
             status: None,
             title: "cmd".to_string(),
             parts: vec![
+                // Interleaved with dialogue — still one IO-section fold, same markers count.
                 sivtr_core::record::WorkPart {
                     io: sivtr_core::record::WorkPartIo::Input,
                     kind: sivtr_core::record::WorkPartKind::ToolCall,
@@ -2186,8 +2200,26 @@ mod tests {
                 },
                 sivtr_core::record::WorkPart {
                     io: sivtr_core::record::WorkPartIo::Input,
-                    kind: sivtr_core::record::WorkPartKind::ToolCall,
+                    kind: sivtr_core::record::WorkPartKind::UserMessage,
                     index: 2,
+                    occurred_at: None,
+                    label: None,
+                    text: "middle note".to_string(),
+                    ansi: None,
+                },
+                sivtr_core::record::WorkPart {
+                    io: sivtr_core::record::WorkPartIo::Input,
+                    kind: sivtr_core::record::WorkPartKind::ToolCall,
+                    index: 3,
+                    occurred_at: None,
+                    label: Some("Read".to_string()),
+                    text: "file".to_string(),
+                    ansi: None,
+                },
+                sivtr_core::record::WorkPart {
+                    io: sivtr_core::record::WorkPartIo::Input,
+                    kind: sivtr_core::record::WorkPartKind::ToolCall,
+                    index: 4,
                     occurred_at: None,
                     label: Some("Bash".to_string()),
                     text: "pwd".to_string(),
@@ -2196,7 +2228,7 @@ mod tests {
                 sivtr_core::record::WorkPart {
                     io: sivtr_core::record::WorkPartIo::Input,
                     kind: sivtr_core::record::WorkPartKind::ToolCall,
-                    index: 3,
+                    index: 5,
                     occurred_at: None,
                     label: Some("Bash".to_string()),
                     text: "date".to_string(),
@@ -2219,9 +2251,18 @@ mod tests {
             ContentViewMode::Reading,
             None,
         );
+        // Identical markers in the same IO section merge even when not adjacent.
         assert!(reading.contains("<:tool:Bash call:> x3"));
+        assert!(reading.contains("<:tool:Read call:>"));
+        assert!(reading.contains("middle note"));
         assert!(!reading.contains("ls"));
         assert!(!reading.contains("pwd"));
+        // Single fold line for the section (not split by the dialogue part).
+        let fold_hits = reading
+            .lines()
+            .filter(|line| line.contains("<:tool:Bash call:>"))
+            .count();
+        assert_eq!(fold_hits, 1);
     }
 
     #[test]
