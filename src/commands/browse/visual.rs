@@ -10,8 +10,8 @@ use crate::tui::content_view::{
     ContentPosition, ContentSelection, ContentSelectionKind, ContentViewMode,
 };
 use crate::tui::workspace::{
-    selected_index, WorkspaceDialogue, WorkspaceFocus, WorkspacePickedContent, WorkspaceSession,
-    WorkspaceSource,
+    selected_index, ContentIoFocus, ContentScrolls, WorkspaceDialogue, WorkspaceFocus,
+    WorkspacePickedContent, WorkspaceSession, WorkspaceSource,
 };
 
 use super::content::workspace_picked_content;
@@ -363,7 +363,8 @@ pub(super) fn apply_workspace_mouse_scroll(
     dialogue_state: &mut ListState,
     selected_dialogues: &mut Vec<bool>,
     range_anchor: &mut Option<usize>,
-    content_scroll: &mut usize,
+    content_scrolls: &mut ContentScrolls,
+    content_io_focus: ContentIoFocus,
 ) {
     for _ in 0..MOUSE_SCROLL_LINES {
         if scroll_up {
@@ -378,7 +379,8 @@ pub(super) fn apply_workspace_mouse_scroll(
                 dialogue_state,
                 selected_dialogues,
                 range_anchor,
-                content_scroll,
+                content_scrolls,
+                content_io_focus,
             );
         } else {
             move_workspace_cursor_down(
@@ -392,7 +394,8 @@ pub(super) fn apply_workspace_mouse_scroll(
                 dialogue_state,
                 selected_dialogues,
                 range_anchor,
-                content_scroll,
+                content_scrolls,
+                content_io_focus,
             );
         }
     }

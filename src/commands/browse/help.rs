@@ -6,9 +6,9 @@ use ratatui::widgets::ListState;
 use crate::tui::content_view::ContentViewMode;
 use crate::tui::terminal::{init as init_tui, restore as restore_tui};
 use crate::tui::workspace::{
-    can_open_dialogue_vim, selected_index, workspace_content_text, workspace_layout,
-    WorkspaceDialogue, WorkspaceFocus, WorkspaceHelpAction, WorkspacePickedContent,
-    WorkspaceSession, WorkspaceSource,
+    can_open_dialogue_vim, content_io_layout, selected_index, workspace_content_io_texts,
+    workspace_content_text, workspace_layout, ContentIoFocus, ContentScrolls, WorkspaceDialogue,
+    WorkspaceFocus, WorkspaceHelpAction, WorkspacePickedContent, WorkspaceSession, WorkspaceSource,
 };
 use sivtr_core::record::WorkAt;
 
@@ -39,7 +39,8 @@ pub(super) fn apply_workspace_help_action(
     dialogue_state: &mut ListState,
     selected_dialogues: &mut Vec<bool>,
     range_anchor: &mut Option<usize>,
-    content_scroll: &mut usize,
+    content_scrolls: &mut ContentScrolls,
+    content_io_focus: &mut ContentIoFocus,
     content_mode: &mut ContentViewMode,
     show_search: &mut bool,
     search_query: &mut String,
@@ -75,7 +76,8 @@ pub(super) fn apply_workspace_help_action(
             dialogue_state,
             selected_dialogues,
             range_anchor,
-            content_scroll,
+            content_scrolls,
+            *content_io_focus,
         ),
         WorkspaceHelpAction::MoveDown => move_workspace_cursor_down(
             *focus,
@@ -88,7 +90,8 @@ pub(super) fn apply_workspace_help_action(
             dialogue_state,
             selected_dialogues,
             range_anchor,
-            content_scroll,
+            content_scrolls,
+            *content_io_focus,
         ),
         WorkspaceHelpAction::PreviousPane => {
             if let Some(next_focus) = focus.previous(dialogue_count) {
@@ -112,7 +115,7 @@ pub(super) fn apply_workspace_help_action(
                     dialogue_state,
                     selected_dialogues,
                     range_anchor,
-                    content_scroll,
+                    content_scrolls,
                 );
             }
             WorkspaceFocus::Sessions => {
@@ -120,7 +123,7 @@ pub(super) fn apply_workspace_help_action(
                     *selected = !*selected;
                 }
                 reset_workspace_dialogue_state(0, dialogue_state, selected_dialogues, range_anchor);
-                *content_scroll = 0;
+                content_scrolls.clear();
             }
             WorkspaceFocus::Dialogues => {
                 if let Some(selected) = selected_dialogues.get_mut(dialogue_idx) {
@@ -138,7 +141,7 @@ pub(super) fn apply_workspace_help_action(
                 dialogue_state,
                 selected_dialogues,
                 range_anchor,
-                content_scroll,
+                content_scrolls,
             );
         }
         WorkspaceHelpAction::SelectAgentSources => {
@@ -149,7 +152,7 @@ pub(super) fn apply_workspace_help_action(
                 dialogue_state,
                 selected_dialogues,
                 range_anchor,
-                content_scroll,
+                content_scrolls,
             );
         }
         WorkspaceHelpAction::SelectTerminalSource => {
@@ -164,7 +167,7 @@ pub(super) fn apply_workspace_help_action(
                 dialogue_state,
                 selected_dialogues,
                 range_anchor,
-                content_scroll,
+                content_scrolls,
             );
         }
         WorkspaceHelpAction::RangeSelect if *focus == WorkspaceFocus::Dialogues => {
@@ -188,10 +191,16 @@ pub(super) fn apply_workspace_help_action(
             *terminal = init_tui()?;
         }
         WorkspaceHelpAction::ScrollDown if *focus == WorkspaceFocus::Content => {
-            *content_scroll = (*content_scroll).saturating_add(10);
+            content_scrolls.set(
+                *content_io_focus,
+                content_scrolls.get(*content_io_focus).saturating_add(10),
+            );
         }
         WorkspaceHelpAction::ScrollUp if *focus == WorkspaceFocus::Content => {
-            *content_scroll = (*content_scroll).saturating_sub(10);
+            content_scrolls.set(
+                *content_io_focus,
+                content_scrolls.get(*content_io_focus).saturating_sub(10),
+            );
         }
         WorkspaceHelpAction::ToggleContentMode if *focus == WorkspaceFocus::Content => {
             *content_mode = content_mode.toggle();
@@ -203,19 +212,43 @@ pub(super) fn apply_workspace_help_action(
                 *focus,
                 *fullscreen,
             );
-            enter_visual_select_mode(
-                visual_select_mode,
-                content_scroll,
-                layout.content,
-                &workspace_content_text(
+            {
+                let io = workspace_content_io_texts(
                     dialogues,
                     selected_dialogues,
                     dialogue_idx,
                     *content_mode,
                     content_at,
-                ),
-                *content_mode,
-            );
+                );
+                let (input_area, output_area) = content_io_layout(layout.content);
+                let (half_area, half_text, half_scroll) = match *content_io_focus {
+                    ContentIoFocus::Input => (
+                        input_area,
+                        if io.input.is_empty() {
+                            "<empty>".to_string()
+                        } else {
+                            io.input
+                        },
+                        &mut content_scrolls.input,
+                    ),
+                    ContentIoFocus::Output => (
+                        output_area,
+                        if io.output.is_empty() {
+                            "<empty>".to_string()
+                        } else {
+                            io.output
+                        },
+                        &mut content_scrolls.output,
+                    ),
+                };
+                enter_visual_select_mode(
+                    visual_select_mode,
+                    half_scroll,
+                    half_area,
+                    &half_text,
+                    *content_mode,
+                );
+            }
         }
         WorkspaceHelpAction::Copy => match *focus {
             WorkspaceFocus::Source => set_focus(focus, fullscreen, WorkspaceFocus::Sessions),
@@ -278,7 +311,7 @@ pub(super) fn apply_workspace_help_action(
                 dialogue_state,
                 selected_dialogues,
                 range_anchor,
-                content_scroll,
+                content_scrolls,
             );
         }
         WorkspaceHelpAction::Cancel => anyhow::bail!(PICK_CANCELLED_MESSAGE),

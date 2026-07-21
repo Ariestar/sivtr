@@ -10,7 +10,8 @@
 use crate::pane::{Pane, PaneInput, SlidingPane, WindowRow};
 use crate::tui::content_view::{content_view_line_count, ContentViewMode};
 use crate::tui::workspace::{
-    workspace_content_text, WorkspaceDialogue, WorkspaceSession, WorkspaceSource,
+    content_io_layout, workspace_content_io_texts, ContentIoFocus, ContentIoTexts,
+    WorkspaceDialogue, WorkspaceSession, WorkspaceSource,
 };
 use sivtr_core::ai::AgentSelection;
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
@@ -376,14 +377,7 @@ fn body_for_key<'a>(
 
 // ── Content ─────────────────────────────────────────────────────────────
 
-pub type ContentEngine = SlidingPane<usize, (), ()>;
-
-#[derive(Default)]
-pub struct ContentPane {
-    engine: ContentEngine,
-}
-
-/// Domain context for content line-count catalog.
+/// Domain context for dual IO content line-count catalogs.
 pub struct ContentCtx<'a> {
     pub dialogues: &'a [WorkspaceDialogue],
     pub selected_dialogues: &'a [bool],
@@ -393,36 +387,51 @@ pub struct ContentCtx<'a> {
     pub area: ratatui::layout::Rect,
 }
 
-impl ContentPane {
-    /// Layout line count last ensured (at least 1).
-    pub fn line_count(&self) -> usize {
-        self.engine.len().max(1)
-    }
+/// Tracks layout line counts for Input / Output halves separately.
+#[derive(Default)]
+pub struct ContentPane {
+    input_lines: usize,
+    output_lines: usize,
 }
 
-impl Pane for ContentPane {
-    type Ctx<'a> = ContentCtx<'a>;
+impl ContentPane {
+    pub fn line_count(&self, half: ContentIoFocus) -> usize {
+        match half {
+            ContentIoFocus::Input => self.input_lines.max(1),
+            ContentIoFocus::Output => self.output_lines.max(1),
+        }
+    }
 
-    fn ensure(&mut self, ctx: ContentCtx<'_>, _input: &PaneInput<'_>) -> bool {
-        let text = workspace_content_text(
+    pub fn ensure(&mut self, ctx: ContentCtx<'_>) -> ContentIoTexts {
+        let texts = workspace_content_io_texts(
             ctx.dialogues,
             ctx.selected_dialogues,
             ctx.highlighted_idx,
             ctx.mode,
             ctx.target,
         );
-        let total = content_view_line_count(ctx.area, &text, ctx.mode).max(1);
-        if self.engine.len() == total && self.engine.exhausted() {
-            return false;
-        }
-        let incoming: Vec<WindowRow<usize, (), ()>> =
-            (0..total).map(|i| WindowRow::meta_only(i, ())).collect();
-        self.engine.set_catalog(incoming, true);
-        true
-    }
-
-    fn len(&self) -> usize {
-        self.engine.len()
+        let (input_area, output_area) = content_io_layout(ctx.area);
+        self.input_lines = content_view_line_count(
+            input_area,
+            if texts.input.is_empty() {
+                "<empty>"
+            } else {
+                &texts.input
+            },
+            ctx.mode,
+        )
+        .max(1);
+        self.output_lines = content_view_line_count(
+            output_area,
+            if texts.output.is_empty() {
+                "<empty>"
+            } else {
+                &texts.output
+            },
+            ctx.mode,
+        )
+        .max(1);
+        texts
     }
 }
 

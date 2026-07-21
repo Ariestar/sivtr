@@ -8,9 +8,10 @@ use std::path::PathBuf;
 use crate::tui::content_view::{content_link_at, ContentViewMode};
 use crate::tui::terminal::{init as init_tui, restore as restore_tui};
 use crate::tui::workspace::{
-    can_open_dialogue_vim, panel_inner_rows, render_workspace, selected_index, workspace_content_text,
-    workspace_help_entries, workspace_hit_test, workspace_layout, WorkspaceFocus,
-    WorkspacePickedContent, WorkspaceSearchView, WorkspaceSource, WorkspaceView,
+    can_open_dialogue_vim, content_io_layout, panel_inner_rows, render_workspace, selected_index,
+    workspace_content_io_texts, workspace_content_text, workspace_help_entries, workspace_hit_test,
+    workspace_layout, ContentIoFocus, ContentScrolls, WorkspaceFocus, WorkspacePickedContent,
+    WorkspaceSearchView, WorkspaceSource, WorkspaceView,
 };
 use crate::tui::workspace_search::{
     workspace_search_has_query, workspace_search_scope, WorkspaceSearchIndex, WorkspaceSearchOutput,
@@ -18,7 +19,7 @@ use crate::tui::workspace_search::{
 
 use super::content::{
     active_workspace_content_at, apply_dialogue_range_selection, dialogue_text_vim_view,
-    handle_line_filter_key, line_filter_spec, workspace_content_line_count,
+    handle_line_filter_key, line_filter_spec,
     workspace_picked_content_for_copy_with_line_filter,
     workspace_picked_content_with_line_filter, workspace_search_target_ref, WorkspaceCopyShortcut,
 };
@@ -84,7 +85,8 @@ pub(crate) fn run(
     let mut selected_sessions = vec![false; sessions.len()];
     let mut selected_dialogues = Vec::new();
     let mut range_anchor = None;
-    let mut content_scroll = 0usize;
+    let mut content_scrolls = ContentScrolls::default();
+    let mut content_io_focus = ContentIoFocus::Input;
     let mut content_mode = ContentViewMode::Reading;
     let mut show_help = false;
     let mut show_search = false;
@@ -274,29 +276,40 @@ pub(crate) fn run(
             &selected_dialogues,
             dialogue_idx,
         );
-        content_pane.ensure(
-            ContentCtx {
-                dialogues: &dialogues,
-                selected_dialogues: &selected_dialogues,
-                highlighted_idx: dialogue_idx,
-                mode: content_mode,
-                target: active_content_at,
-                area: layout.content,
-            },
-            &PaneInput::new(
-                Viewport::from_panel(content_scroll, panel_inner_rows(layout.content)),
-                content_scroll,
-            ),
-        );
-        let content_total = content_pane.line_count();
+        let io_texts = content_pane.ensure(ContentCtx {
+            dialogues: &dialogues,
+            selected_dialogues: &selected_dialogues,
+            highlighted_idx: dialogue_idx,
+            mode: content_mode,
+            target: active_content_at,
+            area: layout.content,
+        });
+        let (input_area, output_area) = content_io_layout(layout.content);
+        // Clamp each half independently.
+        content_scrolls.input = content_scrolls
+            .input
+            .min(content_pane.line_count(ContentIoFocus::Input).saturating_sub(1));
+        content_scrolls.output = content_scrolls
+            .output
+            .min(content_pane.line_count(ContentIoFocus::Output).saturating_sub(1));
         if let Some(matched) = pending_match {
-            content_scroll = matched
-                .content_scroll_index()
-                .min(content_total.saturating_sub(1));
+            // Search match lands in the half that owns the part IO when known.
+            let half = match matched.at {
+                sivtr_core::record::WorkAt::Part {
+                    io: sivtr_core::record::WorkPartIo::Output,
+                    ..
+                } => ContentIoFocus::Output,
+                _ => ContentIoFocus::Input,
+            };
+            content_io_focus = half;
+            let total = content_pane.line_count(half);
+            content_scrolls.set(
+                half,
+                matched.content_scroll_index().min(total.saturating_sub(1)),
+            );
             search_apply_pending = false;
-        } else {
-            content_scroll = content_scroll.min(content_total.saturating_sub(1));
         }
+        let _ = (input_area, output_area, &io_texts); // used by mouse/key handlers below via recompute
 
         let source_markers = sessions_pane.markers();
         terminal.draw(|frame| {
@@ -317,7 +330,8 @@ pub(crate) fn run(
                     selected_dialogues: &selected_dialogues,
                     range_anchor,
                     focus,
-                    content_scroll,
+                    content_scrolls,
+                    content_io_focus,
                     content_mode,
                     content_at: active_content_at,
                     show_help,
@@ -375,21 +389,34 @@ pub(crate) fn run(
                         focus,
                         fullscreen,
                     );
-                    let text = workspace_content_text(
+                    let io = workspace_content_io_texts(
                         &dialogues,
                         &selected_dialogues,
                         dialogue_idx,
                         content_mode,
                         active_content_at,
                     );
+                    let (input_area, output_area) = content_io_layout(layout.content);
+                    let (half_area, half_text, half_scroll) = match content_io_focus {
+                        ContentIoFocus::Input => (
+                            input_area,
+                            if io.input.is_empty() { "<empty>" } else { io.input.as_str() },
+                            &mut content_scrolls.input,
+                        ),
+                        ContentIoFocus::Output => (
+                            output_area,
+                            if io.output.is_empty() { "<empty>" } else { io.output.as_str() },
+                            &mut content_scrolls.output,
+                        ),
+                    };
                     if let Some(picked) = handle_visual_select_key(
                         key.code,
                         key.modifiers,
                         mode,
-                        layout.content,
-                        &text,
+                        half_area,
+                        half_text,
                         content_mode,
-                        &mut content_scroll,
+                        half_scroll,
                         &dialogues,
                         &selected_dialogues,
                         dialogue_idx,
@@ -417,7 +444,7 @@ pub(crate) fn run(
                                 &mut dialogue_state,
                                 &mut selected_dialogues,
                                 &mut range_anchor,
-                                &mut content_scroll,
+                                &mut content_scrolls,
                             );
                         }
                         KeyCode::Enter => {
@@ -435,7 +462,8 @@ pub(crate) fn run(
                                 &mut dialogue_state,
                                 &mut selected_dialogues,
                                 &mut range_anchor,
-                                &mut content_scroll,
+                                &mut content_scrolls,
+                                content_io_focus,
                             );
                         }
                         KeyCode::Down => {
@@ -450,7 +478,8 @@ pub(crate) fn run(
                                 &mut dialogue_state,
                                 &mut selected_dialogues,
                                 &mut range_anchor,
-                                &mut content_scroll,
+                                &mut content_scrolls,
+                                content_io_focus,
                             );
                         }
                         KeyCode::Backspace => {
@@ -464,7 +493,7 @@ pub(crate) fn run(
                                 &mut dialogue_state,
                                 &mut selected_dialogues,
                                 &mut range_anchor,
-                                &mut content_scroll,
+                                &mut content_scrolls,
                             );
                         }
                         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -478,7 +507,7 @@ pub(crate) fn run(
                                 &mut dialogue_state,
                                 &mut selected_dialogues,
                                 &mut range_anchor,
-                                &mut content_scroll,
+                                &mut content_scrolls,
                             );
                         }
                         KeyCode::Char(ch) => {
@@ -492,7 +521,7 @@ pub(crate) fn run(
                                 &mut dialogue_state,
                                 &mut selected_dialogues,
                                 &mut range_anchor,
-                                &mut content_scroll,
+                                &mut content_scrolls,
                             );
                         }
                         _ => {}
@@ -531,7 +560,8 @@ pub(crate) fn run(
                                 &mut dialogue_state,
                                 &mut selected_dialogues,
                                 &mut range_anchor,
-                                &mut content_scroll,
+                                &mut content_scrolls,
+                                &mut content_io_focus,
                                 &mut content_mode,
                                 &mut show_search,
                                 &mut search_query,
@@ -577,7 +607,7 @@ pub(crate) fn run(
                             &mut dialogue_state,
                             &mut selected_dialogues,
                             &mut range_anchor,
-                            &mut content_scroll,
+                            &mut content_scrolls,
                         );
                     }
                     KeyCode::Char('?') => {
@@ -594,7 +624,7 @@ pub(crate) fn run(
                             &mut dialogue_state,
                             &mut selected_dialogues,
                             &mut range_anchor,
-                            &mut content_scroll,
+                            &mut content_scrolls,
                         );
                     }
                     KeyCode::Char('i') if dialogue_count > 0 => {
@@ -670,14 +700,14 @@ pub(crate) fn run(
                     }
                     KeyCode::Char('n') if search_has_query && !search_output.matches.is_empty() => {
                         search_cursor = (search_cursor + 1) % search_output.matches.len();
-                        content_scroll = 0;
+                        content_scrolls.clear();
                         search_apply_pending = true;
                     }
                     KeyCode::Char('N') if search_has_query && !search_output.matches.is_empty() => {
                         search_cursor = search_cursor
                             .checked_sub(1)
                             .unwrap_or_else(|| search_output.matches.len().saturating_sub(1));
-                        content_scroll = 0;
+                        content_scrolls.clear();
                         search_apply_pending = true;
                     }
                     KeyCode::Char('a') if focus == WorkspaceFocus::Source => {
@@ -708,7 +738,7 @@ pub(crate) fn run(
                             &mut dialogue_state,
                             &mut selected_dialogues,
                             &mut range_anchor,
-                            &mut content_scroll,
+                            &mut content_scrolls,
                         );
                     }
                     KeyCode::Char('g') if focus == WorkspaceFocus::Source => {
@@ -739,7 +769,7 @@ pub(crate) fn run(
                             &mut dialogue_state,
                             &mut selected_dialogues,
                             &mut range_anchor,
-                            &mut content_scroll,
+                            &mut content_scrolls,
                         );
                     }
                     KeyCode::Char('t') if focus == WorkspaceFocus::Source => {
@@ -770,7 +800,7 @@ pub(crate) fn run(
                             &mut dialogue_state,
                             &mut selected_dialogues,
                             &mut range_anchor,
-                            &mut content_scroll,
+                            &mut content_scrolls,
                         );
                     }
                     KeyCode::Char('s') => {
@@ -840,7 +870,8 @@ pub(crate) fn run(
                             &mut dialogue_state,
                             &mut selected_dialogues,
                             &mut range_anchor,
-                            &mut content_scroll,
+                            &mut content_scrolls,
+                                content_io_focus,
                         );
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
@@ -855,7 +886,8 @@ pub(crate) fn run(
                             &mut dialogue_state,
                             &mut selected_dialogues,
                             &mut range_anchor,
-                            &mut content_scroll,
+                            &mut content_scrolls,
+                                content_io_focus,
                         );
                     }
                     KeyCode::PageDown | KeyCode::Char('d')
@@ -863,34 +895,26 @@ pub(crate) fn run(
                             && (key.code == KeyCode::PageDown
                                 || key.modifiers.contains(KeyModifiers::CONTROL)) =>
                     {
-                        content_scroll = content_scroll.saturating_add(10);
+                        content_scrolls.set(content_io_focus, content_scrolls.get(content_io_focus).saturating_add(10));
                     }
                     KeyCode::PageUp | KeyCode::Char('u')
                         if focus == WorkspaceFocus::Content
                             && (key.code == KeyCode::PageUp
                                 || key.modifiers.contains(KeyModifiers::CONTROL)) =>
                     {
-                        content_scroll = content_scroll.saturating_sub(10);
+                        content_scrolls.set(content_io_focus, content_scrolls.get(content_io_focus).saturating_sub(10));
                     }
                     KeyCode::Char('g') if focus == WorkspaceFocus::Content => {
-                        content_scroll = 0;
+                        content_scrolls.clear();
                     }
                     KeyCode::Char('G') if focus == WorkspaceFocus::Content => {
-                        let size = terminal.size()?;
-                        let layout = workspace_layout(
-                            ratatui::layout::Rect::new(0, 0, size.width, size.height),
-                            focus,
-                            fullscreen,
+                        content_scrolls.set(
+                            content_io_focus,
+                            content_pane.line_count(content_io_focus).saturating_sub(1),
                         );
-                        content_scroll = workspace_content_line_count(
-                            &dialogues,
-                            &selected_dialogues,
-                            dialogue_idx,
-                            active_content_at,
-                            layout.content,
-                            content_mode,
-                        )
-                        .saturating_sub(1);
+                    }
+                    KeyCode::Tab if focus == WorkspaceFocus::Content => {
+                        content_io_focus = content_io_focus.toggle();
                     }
                     KeyCode::Char('r') if focus == WorkspaceFocus::Content => {
                         content_mode = content_mode.toggle();
@@ -902,19 +926,35 @@ pub(crate) fn run(
                             focus,
                             fullscreen,
                         );
-                        enter_visual_select_mode(
-                            &mut visual_select_mode,
-                            &mut content_scroll,
-                            layout.content,
-                            &workspace_content_text(
+                        {
+                            let io = workspace_content_io_texts(
                                 &dialogues,
                                 &selected_dialogues,
                                 dialogue_idx,
                                 content_mode,
                                 active_content_at,
-                            ),
-                            content_mode,
-                        );
+                            );
+                            let (input_area, output_area) = content_io_layout(layout.content);
+                            let (half_area, half_text, half_scroll) = match content_io_focus {
+                                ContentIoFocus::Input => (
+                                    input_area,
+                                    if io.input.is_empty() { "<empty>".to_string() } else { io.input },
+                                    &mut content_scrolls.input,
+                                ),
+                                ContentIoFocus::Output => (
+                                    output_area,
+                                    if io.output.is_empty() { "<empty>".to_string() } else { io.output },
+                                    &mut content_scrolls.output,
+                                ),
+                            };
+                            enter_visual_select_mode(
+                                &mut visual_select_mode,
+                                half_scroll,
+                                half_area,
+                                &half_text,
+                                content_mode,
+                            );
+                        }
                     }
                     KeyCode::Char(' ') => match focus {
                         WorkspaceFocus::Source => {
@@ -943,7 +983,7 @@ pub(crate) fn run(
                                 &mut dialogue_state,
                                 &mut selected_dialogues,
                                 &mut range_anchor,
-                                &mut content_scroll,
+                                &mut content_scrolls,
                             );
                         }
                         WorkspaceFocus::Sessions => {
@@ -956,7 +996,7 @@ pub(crate) fn run(
                                 &mut selected_dialogues,
                                 &mut range_anchor,
                             );
-                            content_scroll = 0;
+                            content_scrolls.clear();
                         }
                         WorkspaceFocus::Dialogues => {
                             if let Some(selected) = selected_dialogues.get_mut(dialogue_idx) {
@@ -1049,52 +1089,120 @@ pub(crate) fn run(
                 );
                 // Content drag-select (free mouse / Ctrl-block) before list hit-tests.
                 {
-                    let text = workspace_content_text(
+                    let io = workspace_content_io_texts(
                         &dialogues,
                         &selected_dialogues,
                         dialogue_idx,
                         content_mode,
                         active_content_at,
                     );
-                    let content_ctx = VisualContentContext {
-                        area: layout.content,
-                        text: &text,
-                        mode: content_mode,
-                        scroll: content_scroll,
+                    let (input_area, output_area) = content_io_layout(layout.content);
+                    let hit_half = if rect_contains_point(input_area, mouse.column, mouse.row) {
+                        Some(ContentIoFocus::Input)
+                    } else if rect_contains_point(output_area, mouse.column, mouse.row) {
+                        Some(ContentIoFocus::Output)
+                    } else {
+                        None
                     };
-                    let hit_content = workspace_hit_test(layout, mouse.column, mouse.row)
-                        == Some(WorkspaceFocus::Content);
-                    // Links only on pure click (no active drag selection).
-                    if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
-                        && hit_content
-                        && visual_select_mode.is_none()
-                    {
-                        if let Some(target) = content_link_at(
-                            layout.content,
-                            &text,
-                            content_scroll,
-                            content_mode,
+                    if let Some(half) = hit_half {
+                        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                            content_io_focus = half;
+                        }
+                        let (half_area, half_text, half_scroll) = match half {
+                            ContentIoFocus::Input => (
+                                input_area,
+                                if io.input.is_empty() {
+                                    "<empty>"
+                                } else {
+                                    io.input.as_str()
+                                },
+                                content_scrolls.input,
+                            ),
+                            ContentIoFocus::Output => (
+                                output_area,
+                                if io.output.is_empty() {
+                                    "<empty>"
+                                } else {
+                                    io.output.as_str()
+                                },
+                                content_scrolls.output,
+                            ),
+                        };
+                        // Links only on pure click (no active drag selection).
+                        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+                            && visual_select_mode.is_none()
+                        {
+                            if let Some(target) = content_link_at(
+                                half_area,
+                                half_text,
+                                half_scroll,
+                                content_mode,
+                                mouse.column,
+                                mouse.row,
+                            ) {
+                                let _ = open_link_target(&target);
+                                continue;
+                            }
+                        }
+                        let content_ctx = VisualContentContext {
+                            area: half_area,
+                            text: half_text,
+                            mode: content_mode,
+                            scroll: half_scroll,
+                        };
+                        let allow_start = true;
+                        if handle_content_mouse_select(
+                            &mut visual_select_mode,
+                            mouse.kind,
+                            mouse.modifiers,
                             mouse.column,
                             mouse.row,
+                            content_ctx,
+                            allow_start,
                         ) {
-                            let _ = open_link_target(&target);
+                            if visual_select_mode.is_some() {
+                                set_focus(&mut focus, &mut fullscreen, WorkspaceFocus::Content);
+                            }
                             continue;
                         }
-                    }
-                    let allow_start = hit_content || visual_select_mode.is_some();
-                    if handle_content_mouse_select(
-                        &mut visual_select_mode,
-                        mouse.kind,
-                        mouse.modifiers,
-                        mouse.column,
-                        mouse.row,
-                        content_ctx,
-                        allow_start,
-                    ) {
-                        if visual_select_mode.is_some() {
-                            set_focus(&mut focus, &mut fullscreen, WorkspaceFocus::Content);
+                    } else if visual_select_mode.is_some() {
+                        // Drag may leave the half; still route to active focus half.
+                        let (half_area, half_text, half_scroll) = match content_io_focus {
+                            ContentIoFocus::Input => (
+                                input_area,
+                                if io.input.is_empty() {
+                                    "<empty>"
+                                } else {
+                                    io.input.as_str()
+                                },
+                                content_scrolls.input,
+                            ),
+                            ContentIoFocus::Output => (
+                                output_area,
+                                if io.output.is_empty() {
+                                    "<empty>"
+                                } else {
+                                    io.output.as_str()
+                                },
+                                content_scrolls.output,
+                            ),
+                        };
+                        if handle_content_mouse_select(
+                            &mut visual_select_mode,
+                            mouse.kind,
+                            mouse.modifiers,
+                            mouse.column,
+                            mouse.row,
+                            VisualContentContext {
+                                area: half_area,
+                                text: half_text,
+                                mode: content_mode,
+                                scroll: half_scroll,
+                            },
+                            true,
+                        ) {
+                            continue;
                         }
-                        continue;
                     }
                 }
                 match mouse.kind {
@@ -1114,7 +1222,8 @@ pub(crate) fn run(
                                 &mut dialogue_state,
                                 &mut selected_dialogues,
                                 &mut range_anchor,
-                                &mut content_scroll,
+                                &mut content_scrolls,
+                                content_io_focus,
                             );
                         }
                     }
@@ -1149,7 +1258,7 @@ pub(crate) fn run(
                                                 &mut range_anchor,
                                             );
                                         }
-                                        content_scroll = 0;
+                                        content_scrolls.clear();
                                     }
                                 }
                                 WorkspaceFocus::Dialogues => {
@@ -1157,7 +1266,7 @@ pub(crate) fn run(
                                         row_list_index(layout.dialogues, mouse.row, dialogue_count)
                                     {
                                         dialogue_state.select(Some(idx));
-                                        content_scroll = 0;
+                                        content_scrolls.clear();
                                     }
                                 }
                                 WorkspaceFocus::Content => {}
@@ -1214,8 +1323,16 @@ pub(crate) fn run(
 
 
 
+fn rect_contains_point(area: ratatui::layout::Rect, column: u16, row: u16) -> bool {
+    column >= area.x
+        && column < area.x.saturating_add(area.width)
+        && row >= area.y
+        && row < area.y.saturating_add(area.height)
+}
+
 #[cfg(test)]
 mod tests {
+
     use super::super::content::{
         handle_line_filter_key, workspace_dialogue_vim_view, workspace_picked_content,
         workspace_picked_content_for_copy, workspace_picked_content_for_copy_with_line_filter,
@@ -1227,8 +1344,8 @@ mod tests {
     use crate::commands::select::CommandSelection;
     use crate::tui::content_view::ContentViewMode;
     use crate::tui::workspace::{
-        TextPair, WorkspaceCopyParts, WorkspaceDialogue, WorkspaceFocus, WorkspaceSession,
-        WorkspaceSource, WorkspaceSourceKind,
+        ContentIoFocus, ContentScrolls, TextPair, WorkspaceCopyParts, WorkspaceDialogue,
+        WorkspaceFocus, WorkspaceSession, WorkspaceSource, WorkspaceSourceKind,
     };
     use crate::tui::workspace_search::{
         workspace_search_query, workspace_search_regex, WorkspaceSearchIndex, WorkspaceSearchMatch,
@@ -1703,7 +1820,7 @@ mod tests {
         dialogue_state.select(Some(0));
         let mut selected_dialogues = Vec::new();
         let mut range_anchor = None;
-        let mut content_scroll = 0;
+        let mut content_scrolls = ContentScrolls::default();
 
         move_workspace_cursor_up(
             WorkspaceFocus::Dialogues,
@@ -1716,7 +1833,8 @@ mod tests {
             &mut dialogue_state,
             &mut selected_dialogues,
             &mut range_anchor,
-            &mut content_scroll,
+            &mut content_scrolls,
+            ContentIoFocus::Input,
         );
 
         assert_eq!(dialogue_state.selected(), None);

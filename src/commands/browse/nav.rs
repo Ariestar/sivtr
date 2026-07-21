@@ -4,7 +4,10 @@ use anyhow::Result;
 use ratatui::widgets::ListState;
 use std::process::Command;
 
-use crate::tui::workspace::{selected_index, WorkspaceFocus, WorkspaceSession, WorkspaceSource};
+use crate::tui::workspace::{
+    selected_index, ContentIoFocus, ContentScrolls, WorkspaceFocus, WorkspaceSession,
+    WorkspaceSource,
+};
 
 use super::selection::has_selected_sessions;
 
@@ -33,14 +36,14 @@ pub(super) fn reset_workspace_after_source_change(
     dialogue_state: &mut ListState,
     selected_dialogues: &mut Vec<bool>,
     range_anchor: &mut Option<usize>,
-    content_scroll: &mut usize,
+    content_scrolls: &mut ContentScrolls,
 ) {
     session_state.select(None);
     selected_sessions.clear();
     dialogue_state.select(None);
     selected_dialogues.clear();
     *range_anchor = None;
-    *content_scroll = 0;
+    content_scrolls.clear();
 }
 
 pub(super) fn reset_workspace_search_state(
@@ -49,14 +52,16 @@ pub(super) fn reset_workspace_search_state(
     dialogue_state: &mut ListState,
     selected_dialogues: &mut Vec<bool>,
     range_anchor: &mut Option<usize>,
-    content_scroll: &mut usize,
+    content_scrolls: &mut ContentScrolls,
 ) {
-    session_state.select(None);
-    selected_sessions.clear();
-    dialogue_state.select(None);
-    selected_dialogues.clear();
-    *range_anchor = None;
-    *content_scroll = 0;
+    reset_workspace_after_source_change(
+        session_state,
+        selected_sessions,
+        dialogue_state,
+        selected_dialogues,
+        range_anchor,
+        content_scrolls,
+    );
 }
 
 pub(super) fn resize_workspace_dialogue_selection(
@@ -90,7 +95,8 @@ pub(super) fn move_workspace_cursor_up(
     dialogue_state: &mut ListState,
     selected_dialogues: &mut Vec<bool>,
     range_anchor: &mut Option<usize>,
-    content_scroll: &mut usize,
+    content_scrolls: &mut ContentScrolls,
+    content_io_focus: ContentIoFocus,
 ) {
     match focus {
         WorkspaceFocus::Source => {
@@ -109,16 +115,17 @@ pub(super) fn move_workspace_cursor_up(
                         range_anchor,
                     );
                 }
-                *content_scroll = 0;
+                content_scrolls.clear();
             }
         }
         WorkspaceFocus::Dialogues => {
             let next = selected_index(dialogue_state).saturating_sub(1);
             dialogue_state.select((dialogue_count > 0).then_some(next));
-            *content_scroll = 0;
+            content_scrolls.clear();
         }
         WorkspaceFocus::Content => {
-            *content_scroll = content_scroll.saturating_sub(1);
+            let next = content_scrolls.get(content_io_focus).saturating_sub(1);
+            content_scrolls.set(content_io_focus, next);
         }
     }
 }
@@ -135,7 +142,8 @@ pub(super) fn move_workspace_cursor_down(
     dialogue_state: &mut ListState,
     selected_dialogues: &mut Vec<bool>,
     range_anchor: &mut Option<usize>,
-    content_scroll: &mut usize,
+    content_scrolls: &mut ContentScrolls,
+    content_io_focus: ContentIoFocus,
 ) {
     match focus {
         WorkspaceFocus::Source => {
@@ -156,17 +164,18 @@ pub(super) fn move_workspace_cursor_down(
                         range_anchor,
                     );
                 }
-                *content_scroll = 0;
+                content_scrolls.clear();
             }
         }
         WorkspaceFocus::Dialogues => {
             let current = selected_index(dialogue_state);
             let next = (current + 1).min(dialogue_count.saturating_sub(1));
             dialogue_state.select((dialogue_count > 0).then_some(next));
-            *content_scroll = 0;
+            content_scrolls.clear();
         }
         WorkspaceFocus::Content => {
-            *content_scroll = content_scroll.saturating_add(1);
+            let next = content_scrolls.get(content_io_focus).saturating_add(1);
+            content_scrolls.set(content_io_focus, next);
         }
     }
 }

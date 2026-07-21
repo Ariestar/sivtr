@@ -4,9 +4,9 @@ use anyhow::Result;
 use crossterm::event::KeyCode;
 
 use crate::commands::select::CommandSelection;
-use crate::tui::content_view::{content_view_line_count, line_count, ContentViewMode};
+use crate::tui::content_view::{line_count, ContentViewMode};
 use crate::tui::workspace::{
-    workspace_content_text, WorkspaceDialogue, WorkspacePickedContent, WorkspaceSession,
+    WorkspaceDialogue, WorkspacePickedContent, WorkspaceSession,
 };
 use crate::tui::workspace_search::{WorkspaceSearchMatch, WorkspaceSearchOutput};
 use sivtr_core::record::{WorkAt, WorkRef};
@@ -180,18 +180,6 @@ pub(super) fn handle_line_filter_key(
         }
         _ => false,
     }
-}
-
-pub(super) fn workspace_content_line_count(
-    dialogues: &[WorkspaceDialogue],
-    selected_dialogues: &[bool],
-    highlighted_idx: usize,
-    target: Option<WorkAt>,
-    content_area: ratatui::layout::Rect,
-    mode: ContentViewMode,
-) -> usize {
-    let text = workspace_content_text(dialogues, selected_dialogues, highlighted_idx, mode, target);
-    content_view_line_count(content_area, &text, mode)
 }
 
 pub(super) fn apply_dialogue_range_selection(

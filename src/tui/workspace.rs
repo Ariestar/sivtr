@@ -228,39 +228,60 @@ impl WorkspaceDialogue {
     }
 
     pub(crate) fn content_text(&self, mode: ContentViewMode, target: Option<WorkAt>) -> String {
+        self.content_io_texts(mode, target).join_displayed()
+    }
+
+    /// Input / Output bodies for the dual content panes (no section headers).
+    pub(crate) fn content_io_texts(
+        &self,
+        mode: ContentViewMode,
+        target: Option<WorkAt>,
+    ) -> ContentIoTexts {
         if let Some(target @ WorkAt::Part { .. }) = target {
-            return match mode {
-                ContentViewMode::Raw => self
-                    .targeted_plain_text(target)
-                    .unwrap_or_else(|| "<empty>".to_string()),
-                ContentViewMode::Reading => self
-                    .targeted_structured_text(target)
-                    .unwrap_or_else(|| "<empty>".to_string()),
+            let text = match mode {
+                ContentViewMode::Raw => self.targeted_plain_text(target),
+                ContentViewMode::Reading => self.targeted_structured_text(target),
+            }
+            .unwrap_or_else(|| "<empty>".to_string());
+            // Targeted part lives in its own IO half; the other stays empty.
+            let Some(record) = self.record.as_ref() else {
+                return ContentIoTexts {
+                    input: text,
+                    output: String::new(),
+                };
+            };
+            let Some(part) = record.part_for_at(target) else {
+                return ContentIoTexts {
+                    input: text,
+                    output: String::new(),
+                };
+            };
+            return match part.io {
+                sivtr_core::record::WorkPartIo::Input => ContentIoTexts {
+                    input: text,
+                    output: String::new(),
+                },
+                sivtr_core::record::WorkPartIo::Output => ContentIoTexts {
+                    input: String::new(),
+                    output: text,
+                },
             };
         }
-        if matches!(target, Some(WorkAt::Line(_))) {
-            return self
-                .record
-                .as_ref()
-                .map(|record| match mode {
-                    ContentViewMode::Raw => raw_record_text(record),
-                    ContentViewMode::Reading => structured_record_text(record),
-                })
-                .filter(|text| !text.trim().is_empty())
-                .unwrap_or_else(|| "<empty>".to_string());
-        }
 
-        // Single source of truth: record.parts.
         let Some(record) = self.record.as_ref() else {
-            return "<empty>".to_string();
+            return ContentIoTexts {
+                input: "<empty>".to_string(),
+                output: String::new(),
+            };
         };
         if record.parts.is_empty() {
-            return "<empty>".to_string();
+            return ContentIoTexts {
+                input: "<empty>".to_string(),
+                output: String::new(),
+            };
         }
-        match mode {
-            ContentViewMode::Raw => raw_record_text(record),
-            ContentViewMode::Reading => structured_record_text(record),
-        }
+        let reading = matches!(mode, ContentViewMode::Reading);
+        ContentIoTexts::from_record(record, reading)
     }
 
     pub(crate) fn content_ref(&self, target: Option<WorkAt>) -> Option<WorkRef> {
@@ -276,10 +297,9 @@ impl WorkspaceDialogue {
         let WorkAt::Part { .. } = target else {
             return None;
         };
-        let record = self.record.as_ref()?;
-        let part = record.part_for_at(target)?;
+        let part = self.record.as_ref()?.part_for_at(target)?;
         if part.kind.is_structure() {
-            return Some(raw_part_text(record, part));
+            return Some(raw_part_text(part));
         }
         Some(part.text.clone())
     }
@@ -289,71 +309,57 @@ impl WorkspaceDialogue {
             return None;
         };
         let part = self.record.as_ref()?.part_for_at(target)?;
-        Some(structured_part_text(self.record.as_ref()?, part))
+        Some(structured_part_text(part))
     }
 }
 
 
-/// Reading mode: Input / Output sections; structure channels folded. Within each
-/// IO section, identical original markers are counted (`xN`) regardless of order
-/// or adjacency; distinct markers stay as themselves. Raw expands payloads.
-fn structured_record_text(record: &WorkRecord) -> String {
-    debug_assert!(
-        !record.parts.is_empty(),
-        "structured_record_text requires parts"
-    );
-    format_record_by_io(record, true)
+/// Body text for one IO half (no section headers — panes own titles).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ContentIoTexts {
+    pub(crate) input: String,
+    pub(crate) output: String,
 }
 
-/// Raw mode: Input / Output sections; every part fully expanded with markers.
-fn raw_record_text(record: &WorkRecord) -> String {
-    debug_assert!(!record.parts.is_empty(), "raw_record_text requires parts");
-    format_record_by_io(record, false)
-}
-
-fn format_record_by_io(record: &WorkRecord, reading: bool) -> String {
-    use sivtr_core::record::WorkPartIo;
-
-    let mut sections = Vec::new();
-    for io in [WorkPartIo::Input, WorkPartIo::Output] {
-        let parts: Vec<&sivtr_core::record::WorkPart> =
-            record.parts.iter().filter(|part| part.io == io).collect();
-        if parts.is_empty() {
-            continue;
+impl ContentIoTexts {
+    pub(crate) fn join_displayed(&self) -> String {
+        match (self.input.trim().is_empty(), self.output.trim().is_empty()) {
+            (true, true) => "<empty>".to_string(),
+            (false, true) => self.input.clone(),
+            (true, false) => self.output.clone(),
+            (false, false) => format!("{}\n\n{}", self.input, self.output),
         }
-        let body = if reading {
-            structured_parts_text(record, &parts)
-        } else {
-            raw_parts_text(record, &parts)
-        };
-        if body.trim().is_empty() {
-            continue;
+    }
+
+    fn from_record(record: &WorkRecord, reading: bool) -> Self {
+        use sivtr_core::record::WorkPartIo;
+        Self {
+            input: io_body_text(record, reading, WorkPartIo::Input),
+            output: io_body_text(record, reading, WorkPartIo::Output),
         }
-        sections.push(format!("## {}\n\n{body}", io_section_label(io)));
-    }
-    if sections.is_empty() {
-        "<empty>".to_string()
-    } else {
-        sections.join("\n\n")
     }
 }
 
-fn io_section_label(io: sivtr_core::record::WorkPartIo) -> &'static str {
-    match io {
-        sivtr_core::record::WorkPartIo::Input => "Input",
-        sivtr_core::record::WorkPartIo::Output => "Output",
-    }
-}
-
-/// Reading: dialogue text in order; structure folded.
-///
-/// Within one IO section ("一块"), every structure part contributes its original
-/// open marker. Identical markers are counted (`xN`) — no adjacency / order
-/// requirement. The fold line is emitted once, at the first structure position.
-fn structured_parts_text(
+fn io_body_text(
     record: &WorkRecord,
-    parts: &[&sivtr_core::record::WorkPart],
+    reading: bool,
+    io: sivtr_core::record::WorkPartIo,
 ) -> String {
+    let parts: Vec<&sivtr_core::record::WorkPart> =
+        record.parts.iter().filter(|part| part.io == io).collect();
+    if parts.is_empty() {
+        return String::new();
+    }
+    if reading {
+        structured_parts_text(&parts)
+    } else {
+        raw_parts_text(&parts)
+    }
+}
+
+/// Reading: dialogue in order; structure folded.
+/// Identical markers in this IO half count as `xN` (no adjacency requirement).
+fn structured_parts_text(parts: &[&sivtr_core::record::WorkPart]) -> String {
     let structure: Vec<&sivtr_core::record::WorkPart> = parts
         .iter()
         .copied()
@@ -373,30 +379,28 @@ fn structured_parts_text(
             }
             continue;
         }
-        chunks.push(structured_part_text(record, part));
+        chunks.push(part.text.clone());
     }
     chunks.join("\n\n")
 }
 
-fn raw_parts_text(record: &WorkRecord, parts: &[&sivtr_core::record::WorkPart]) -> String {
+fn raw_parts_text(parts: &[&sivtr_core::record::WorkPart]) -> String {
     parts
         .iter()
-        .map(|part| raw_part_text(record, part))
+        .map(|part| raw_part_text(part))
         .collect::<Vec<_>>()
         .join("\n\n")
 }
 
-fn structured_part_text(_record: &WorkRecord, part: &sivtr_core::record::WorkPart) -> String {
+fn structured_part_text(part: &sivtr_core::record::WorkPart) -> String {
     if part.kind.is_structure() {
-        // Folded: only the content-block marker — no ref/time/size noise.
-        return structure_fold_label(part);
+        structure_fold_label(part)
+    } else {
+        part.text.clone()
     }
-
-    // Dialogue / terminal body only.
-    part.text.clone()
 }
 
-fn raw_part_text(_record: &WorkRecord, part: &sivtr_core::record::WorkPart) -> String {
+fn raw_part_text(part: &sivtr_core::record::WorkPart) -> String {
     if part.kind.is_structure() {
         return part
             .kind
@@ -410,7 +414,6 @@ fn raw_part_text(_record: &WorkRecord, part: &sivtr_core::record::WorkPart) -> S
             })
             .unwrap_or_else(|| part.text.clone());
     }
-
     part.text.clone()
 }
 
@@ -421,17 +424,8 @@ fn structure_fold_label(part: &sivtr_core::record::WorkPart) -> String {
         .unwrap_or_else(|| "<:structure:>".to_string())
 }
 
-/// Collapse structure parts onto one line of original markers.
-///
-/// Keeps each part's open marker (`<:tool:Bash call:>`, `<:skill:review:>`,
-/// `<:thinking:>`, …). Identical markers anywhere in the set are counted:
-/// `<:tool:Bash call:> x3` — order of first appearance only affects display order
-/// of *distinct* markers, not whether they merge.
+/// One line of original markers; identical labels become `label xN`.
 fn collapse_structure_markers(parts: &[&sivtr_core::record::WorkPart]) -> String {
-    if parts.is_empty() {
-        return String::new();
-    }
-
     let mut counts: Vec<(String, usize)> = Vec::new();
     for part in parts {
         let label = structure_fold_label(part);
@@ -572,7 +566,8 @@ pub(crate) struct WorkspaceView<'a> {
     pub(crate) selected_dialogues: &'a [bool],
     pub(crate) range_anchor: Option<usize>,
     pub(crate) focus: WorkspaceFocus,
-    pub(crate) content_scroll: usize,
+    pub(crate) content_scrolls: ContentScrolls,
+    pub(crate) content_io_focus: ContentIoFocus,
     pub(crate) content_mode: ContentViewMode,
     pub(crate) content_at: Option<WorkAt>,
     pub(crate) show_help: bool,
@@ -614,6 +609,63 @@ pub(crate) struct WorkspaceLayout {
     pub(crate) sessions: Rect,
     pub(crate) dialogues: Rect,
     pub(crate) content: Rect,
+}
+
+/// Which content half keyboard / selection targets.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ContentIoFocus {
+    #[default]
+    Input,
+    Output,
+}
+
+impl ContentIoFocus {
+    pub(crate) fn toggle(self) -> Self {
+        match self {
+            Self::Input => Self::Output,
+            Self::Output => Self::Input,
+        }
+    }
+}
+
+/// Independent scroll offsets for the dual content panes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ContentScrolls {
+    pub(crate) input: usize,
+    pub(crate) output: usize,
+}
+
+impl ContentScrolls {
+    pub(crate) fn get(self, focus: ContentIoFocus) -> usize {
+        match focus {
+            ContentIoFocus::Input => self.input,
+            ContentIoFocus::Output => self.output,
+        }
+    }
+
+    pub(crate) fn set(&mut self, focus: ContentIoFocus, value: usize) {
+        match focus {
+            ContentIoFocus::Input => self.input = value,
+            ContentIoFocus::Output => self.output = value,
+        }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
+
+/// Split the content column into Input (top) / Output (bottom) panes.
+/// Always both halves so the panel borders form a stable divider.
+pub(crate) fn content_io_layout(area: Rect) -> (Rect, Rect) {
+    if area.height == 0 {
+        return (Rect::default(), Rect::default());
+    }
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+    (chunks[0], chunks[1])
 }
 
 pub(crate) fn selected_index(state: &ListState) -> usize {
@@ -1026,31 +1078,65 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         view.focus == WorkspaceFocus::Dialogues,
     );
 
-    let content_text = workspace_content_text(
+    let io_texts = workspace_content_io_texts(
         view.dialogues,
         view.selected_dialogues,
         dialogue_idx,
         view.content_mode,
         view.content_at,
     );
+    let (input_area, output_area) = content_io_layout(layout.content);
+    let content_active = view.focus == WorkspaceFocus::Content;
+    let content_search = view
+        .search
+        .as_ref()
+        .filter(|search| search.scope == WorkspaceSearchScope::Content)
+        .and(search_regex.as_ref());
+    let title_suffix = content_title_suffix(view.selected_dialogues, current_ref.as_ref());
+
     render_content_panel(
         frame,
-        layout.content,
+        input_area,
         Panel::new(
             WorkspaceFocus::Content.key(),
-            content_title(
-                view.content_mode,
-                view.selected_dialogues,
-                current_ref.as_ref(),
-            ),
-            view.focus == WorkspaceFocus::Content,
+            format!("Input ({}){title_suffix}", view.content_mode.label()),
+            content_active && view.content_io_focus == ContentIoFocus::Input,
         ),
-        content_text.clone(),
-        view.content_scroll,
+        if io_texts.input.is_empty() {
+            "<empty>".to_string()
+        } else {
+            io_texts.input.clone()
+        },
+        view.content_scrolls.input,
         view.content_mode,
-        view.content_selection,
-        view.search.as_ref(),
-        search_regex.as_ref(),
+        content_selection_for_half(
+            view.content_selection,
+            view.content_io_focus,
+            ContentIoFocus::Input,
+        ),
+        content_search,
+    );
+    render_content_panel(
+        frame,
+        output_area,
+        Panel::new(
+            WorkspaceFocus::Content.key(),
+            format!("Output ({}){title_suffix}", view.content_mode.label()),
+            content_active && view.content_io_focus == ContentIoFocus::Output,
+        ),
+        if io_texts.output.is_empty() {
+            "<empty>".to_string()
+        } else {
+            io_texts.output.clone()
+        },
+        view.content_scrolls.output,
+        view.content_mode,
+        content_selection_for_half(
+            view.content_selection,
+            view.content_io_focus,
+            ContentIoFocus::Output,
+        ),
+        content_search,
     );
 
     render_footer(
@@ -1070,16 +1156,36 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         },
     );
 
-    if let Some(selection) = view.content_selection.and_then(|selection| {
-        content_cursor_position(
-            layout.content,
-            &content_text,
-            view.content_scroll,
+    if let Some(selection) = view.content_selection {
+        let (half_area, half_text, half_scroll) = match view.content_io_focus {
+            ContentIoFocus::Input => (
+                input_area,
+                if io_texts.input.is_empty() {
+                    "<empty>"
+                } else {
+                    io_texts.input.as_str()
+                },
+                view.content_scrolls.input,
+            ),
+            ContentIoFocus::Output => (
+                output_area,
+                if io_texts.output.is_empty() {
+                    "<empty>"
+                } else {
+                    io_texts.output.as_str()
+                },
+                view.content_scrolls.output,
+            ),
+        };
+        if let Some(pos) = content_cursor_position(
+            half_area,
+            half_text,
+            half_scroll,
             view.content_mode,
             selection.cursor,
-        )
-    }) {
-        frame.set_cursor_position(selection);
+        ) {
+            frame.set_cursor_position(pos);
+        }
     }
 
     if let Some(search) = view.search.filter(|search| search.input_open) {
@@ -1680,12 +1786,8 @@ fn render_content_panel(
     scroll: usize,
     mode: ContentViewMode,
     selection: Option<ContentSelection>,
-    search: Option<&WorkspaceSearchView<'_>>,
     search_regex: Option<&Regex>,
 ) {
-    let content_search = search
-        .filter(|search| search.scope == WorkspaceSearchScope::Content)
-        .and(search_regex);
     render_content_view(
         frame,
         area,
@@ -1693,11 +1795,19 @@ fn render_content_panel(
         ContentView {
             text: &text,
             scroll,
-            search_regex: content_search,
+            search_regex,
             mode,
             selection,
         },
     );
+}
+
+fn content_selection_for_half(
+    selection: Option<ContentSelection>,
+    active: ContentIoFocus,
+    half: ContentIoFocus,
+) -> Option<ContentSelection> {
+    selection.filter(|_| active == half)
 }
 
 fn selected_parent_title(
@@ -1719,20 +1829,35 @@ fn selected_parent_title(
     }
 }
 
+fn content_title_suffix(
+    selected_dialogues: &[bool],
+    current_ref: Option<&WorkRef>,
+) -> String {
+    let count = selected_dialogues.iter().filter(|s| **s).count();
+    let select = match count {
+        0 => String::new(),
+        1 => ": 1 dialogue selected".to_string(),
+        n => format!(": {n} dialogues selected"),
+    };
+    match (select.as_str(), current_ref) {
+        ("", None) => String::new(),
+        ("", Some(r)) => format!(" [{r}]"),
+        (s, None) => s.to_string(),
+        (s, Some(r)) => format!("{s} [{r}]"),
+    }
+}
+
+#[cfg(test)]
 fn content_title(
     mode: ContentViewMode,
     selected_dialogues: &[bool],
     current_ref: Option<&WorkRef>,
 ) -> String {
-    let title = selected_parent_title(
-        &format!("Content ({})", mode.label()),
-        selected_dialogues,
-        "dialogue",
-        "dialogues",
-    );
-    current_ref
-        .map(|work_ref| format!("{title} [{work_ref}]"))
-        .unwrap_or(title)
+    format!(
+        "Content ({}){}",
+        mode.label(),
+        content_title_suffix(selected_dialogues, current_ref)
+    )
 }
 
 pub(crate) fn workspace_content_text(
@@ -1742,8 +1867,23 @@ pub(crate) fn workspace_content_text(
     mode: ContentViewMode,
     target: Option<WorkAt>,
 ) -> String {
+    workspace_content_io_texts(dialogues, selected_dialogues, highlighted_idx, mode, target)
+        .join_displayed()
+}
+
+/// Input / Output bodies for the dual content panes.
+pub(crate) fn workspace_content_io_texts(
+    dialogues: &[WorkspaceDialogue],
+    selected_dialogues: &[bool],
+    highlighted_idx: usize,
+    mode: ContentViewMode,
+    target: Option<WorkAt>,
+) -> ContentIoTexts {
     if dialogues.is_empty() {
-        return "<empty>".to_string();
+        return ContentIoTexts {
+            input: "<empty>".to_string(),
+            output: String::new(),
+        };
     }
 
     let selected = selected_dialogues
@@ -1755,16 +1895,40 @@ pub(crate) fn workspace_content_text(
     if selected.is_empty() {
         return dialogues
             .get(highlighted_idx)
-            .map(|dialogue| dialogue.content_text(mode, target))
-            .unwrap_or_else(|| "<empty>".to_string());
+            .map(|dialogue| dialogue.content_io_texts(mode, target))
+            .unwrap_or_else(|| ContentIoTexts {
+                input: "<empty>".to_string(),
+                output: String::new(),
+            });
     }
 
-    selected
-        .into_iter()
-        .filter_map(|dialogue_idx| dialogues.get(dialogue_idx))
-        .map(|dialogue| dialogue.content_text(mode, None))
-        .collect::<Vec<_>>()
-        .join("\n\n")
+    // Multi-select: join each dialogue's IO half separately.
+    let mut input = Vec::new();
+    let mut output = Vec::new();
+    for dialogue_idx in selected {
+        let Some(dialogue) = dialogues.get(dialogue_idx) else {
+            continue;
+        };
+        let io = dialogue.content_io_texts(mode, None);
+        if !io.input.trim().is_empty() {
+            input.push(io.input);
+        }
+        if !io.output.trim().is_empty() {
+            output.push(io.output);
+        }
+    }
+    ContentIoTexts {
+        input: if input.is_empty() {
+            String::new()
+        } else {
+            input.join("\n\n")
+        },
+        output: if output.is_empty() {
+            String::new()
+        } else {
+            output.join("\n\n")
+        },
+    }
 }
 
 #[cfg(test)]
@@ -1772,7 +1936,7 @@ mod tests {
     use super::WorkspaceFocus;
     use super::{
         can_open_dialogue_vim, content_title, current_content_dialogue, line_filter_prompt_text,
-        search_box_body, search_box_title, workspace_content_text,
+        search_box_body, search_box_title, workspace_content_io_texts, workspace_content_text,
     };
     use crate::tui::content_view::ContentViewMode;
     use crate::tui::workspace::{
@@ -1838,11 +2002,19 @@ mod tests {
             copy: WorkspaceCopyParts::default(),
         };
 
+        let io = workspace_content_io_texts(
+            std::slice::from_ref(&dialogue),
+            &[false],
+            0,
+            ContentViewMode::Raw,
+            None,
+        );
         let text = workspace_content_text(&[dialogue], &[false], 0, ContentViewMode::Raw, None);
-        assert!(text.contains("## Input"));
-        assert!(text.contains("## Output"));
+        assert_eq!(io.input.trim(), "alpha");
+        assert_eq!(io.output.trim(), "omega");
         assert!(text.contains("alpha"));
         assert!(text.contains("omega"));
+        assert!(!text.contains("## Input"));
         assert!(!text.contains("[r expand]"));
     }
 
@@ -2030,30 +2202,42 @@ mod tests {
             ContentViewMode::Reading,
             None,
         );
-        assert!(reading.contains("## Input"));
-        assert!(reading.contains("## Output"));
-        assert!(reading.contains("question"));
+        let reading_io = workspace_content_io_texts(
+            std::slice::from_ref(&dialogue),
+            &[false],
+            0,
+            ContentViewMode::Reading,
+            None,
+        );
+        assert!(reading_io.input.contains("question"));
         // Single structure part keeps the detailed open marker.
-        assert!(reading.contains("<:tool:Bash call:>"));
-        assert!(reading.contains("<:tool:Bash result:>"));
-        assert!(reading.contains("answer"));
+        assert!(reading_io.input.contains("<:tool:Bash call:>"));
+        assert!(reading_io.output.contains("<:tool:Bash result:>"));
+        assert!(reading_io.output.contains("answer"));
         assert!(!reading.contains("cargo test"));
         assert!(!reading.contains("codex/session"));
         assert!(!reading.contains("## User"));
+        assert!(!reading.contains("## Input"));
         assert!(!reading.contains("[r expand]"));
 
+        let raw_io = workspace_content_io_texts(
+            std::slice::from_ref(&dialogue),
+            &[false],
+            0,
+            ContentViewMode::Raw,
+            None,
+        );
         let raw = workspace_content_text(&[dialogue], &[false], 0, ContentViewMode::Raw, None);
-        assert!(raw.contains("## Input"));
-        assert!(raw.contains("## Output"));
-        assert!(raw.contains("question"));
-        assert!(raw.contains("cargo test"));
-        assert!(raw.contains("<:tool:Bash call:>"));
-        assert!(raw.contains("<:/tool:Bash call:>"));
-        assert!(raw.contains("<:tool:Bash result:>"));
-        assert!(raw.contains("ok"));
-        assert!(raw.contains("answer"));
+        assert!(raw_io.input.contains("question"));
+        assert!(raw_io.input.contains("cargo test"));
+        assert!(raw_io.input.contains("<:tool:Bash call:>"));
+        assert!(raw_io.input.contains("<:/tool:Bash call:>"));
+        assert!(raw_io.output.contains("<:tool:Bash result:>"));
+        assert!(raw_io.output.contains("ok"));
+        assert!(raw_io.output.contains("answer"));
         assert!(!raw.contains("codex/session"));
         assert!(!raw.contains("## User"));
+        assert!(!raw.contains("## Input"));
     }
 
     #[test]
@@ -2140,6 +2324,13 @@ mod tests {
             copy: WorkspaceCopyParts::default(),
         };
 
+        let reading_io = workspace_content_io_texts(
+            std::slice::from_ref(&dialogue),
+            &[false],
+            0,
+            ContentViewMode::Reading,
+            None,
+        );
         let reading = workspace_content_text(
             std::slice::from_ref(&dialogue),
             &[false],
@@ -2147,25 +2338,25 @@ mod tests {
             ContentViewMode::Reading,
             None,
         );
-        assert!(reading.contains("## Input"));
-        assert!(reading.contains("do it"));
+        assert!(reading_io.input.contains("do it"));
         // Original open markers kept (not generic <:tool:> / <:skill:>).
-        assert!(reading.contains("<:tool:Bash call:>"));
-        assert!(reading.contains("<:tool:Read call:>"));
-        assert!(reading.contains("<:skill:review:>"));
-        assert!(reading.contains("<:skill:deploy:>"));
-        // Same IO section: all structure markers share one fold line.
-        let fold_line = reading
+        assert!(reading_io.input.contains("<:tool:Bash call:>"));
+        assert!(reading_io.input.contains("<:tool:Read call:>"));
+        assert!(reading_io.input.contains("<:skill:review:>"));
+        assert!(reading_io.input.contains("<:skill:deploy:>"));
+        // Same IO half: all structure markers share one fold line.
+        let fold_line = reading_io
+            .input
             .lines()
             .find(|line| line.contains("<:tool:Bash call:>"))
             .expect("collapsed structure line");
         assert!(fold_line.contains("<:tool:Read call:>"));
         assert!(fold_line.contains("<:skill:review:>"));
         assert!(fold_line.contains("<:skill:deploy:>"));
-        assert!(reading.contains("## Output"));
-        assert!(reading.contains("done"));
+        assert!(reading_io.output.contains("done"));
         assert!(!reading.contains("ls"));
         assert!(!reading.contains("skill body"));
+        assert!(!reading.contains("## Input"));
     }
 
     #[test]
