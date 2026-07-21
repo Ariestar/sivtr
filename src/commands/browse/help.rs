@@ -205,6 +205,9 @@ pub(super) fn apply_workspace_help_action(
         WorkspaceHelpAction::ToggleContentMode if *focus == WorkspaceFocus::Content => {
             *content_mode = content_mode.toggle();
         }
+        WorkspaceHelpAction::ToggleContentIo if *focus == WorkspaceFocus::Content => {
+            *content_io_focus = content_io_focus.toggle();
+        }
         WorkspaceHelpAction::VisualTextSelect if *focus == WorkspaceFocus::Content => {
             let size = terminal.size()?;
             let layout = workspace_layout(

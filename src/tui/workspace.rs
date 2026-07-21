@@ -510,6 +510,8 @@ pub(crate) enum WorkspaceHelpAction {
     ScrollDown,
     ScrollUp,
     ToggleContentMode,
+    /// Switch focused content half (Input ↔ Output).
+    ToggleContentIo,
     VisualTextSelect,
     Copy,
     CopyInput,
@@ -850,6 +852,13 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
             description: "toggle fold/full content",
             action: WorkspaceHelpAction::ToggleContentMode,
             footer_label: Some("fold/full"),
+            footer_panes: CNT,
+        },
+        WorkspaceHelpEntry {
+            key: "Tab",
+            description: "switch Input/Output half",
+            action: WorkspaceHelpAction::ToggleContentIo,
+            footer_label: Some("io"),
             footer_panes: CNT,
         },
         WorkspaceHelpEntry {
