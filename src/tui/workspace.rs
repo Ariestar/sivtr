@@ -19,6 +19,11 @@ use crate::tui::workspace_search::{workspace_search_regex_for_query, WorkspaceSe
 use sivtr_core::ai::AgentProvider;
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
 
+// Dual-pane surface (defined in content_io) — re-export for browse modules.
+pub(crate) use crate::tui::content_io::{
+    search_match_half, ContentIoFocus, ContentIoFrame, ContentIoTexts, ContentScrolls,
+};
+
 /// Kind of memory source (local path body before any `scope:` prefix).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WorkspaceSourceKind {
@@ -281,7 +286,7 @@ impl WorkspaceDialogue {
             };
         }
         let reading = matches!(mode, ContentViewMode::Reading);
-        ContentIoTexts::from_record(record, reading)
+        content_io_from_record(record, reading)
     }
 
     pub(crate) fn content_ref(&self, target: Option<WorkAt>) -> Option<WorkRef> {
@@ -314,29 +319,11 @@ impl WorkspaceDialogue {
 }
 
 
-/// Body text for one IO half (no section headers — panes own titles).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ContentIoTexts {
-    pub(crate) input: String,
-    pub(crate) output: String,
-}
-
-impl ContentIoTexts {
-    pub(crate) fn join_displayed(&self) -> String {
-        match (self.input.trim().is_empty(), self.output.trim().is_empty()) {
-            (true, true) => "<empty>".to_string(),
-            (false, true) => self.input.clone(),
-            (true, false) => self.output.clone(),
-            (false, false) => format!("{}\n\n{}", self.input, self.output),
-        }
-    }
-
-    fn from_record(record: &WorkRecord, reading: bool) -> Self {
-        use sivtr_core::record::WorkPartIo;
-        Self {
-            input: io_body_text(record, reading, WorkPartIo::Input),
-            output: io_body_text(record, reading, WorkPartIo::Output),
-        }
+fn content_io_from_record(record: &WorkRecord, reading: bool) -> ContentIoTexts {
+    use sivtr_core::record::WorkPartIo;
+    ContentIoTexts {
+        input: io_body_text(record, reading, WorkPartIo::Input),
+        output: io_body_text(record, reading, WorkPartIo::Output),
     }
 }
 
@@ -609,63 +596,6 @@ pub(crate) struct WorkspaceLayout {
     pub(crate) sessions: Rect,
     pub(crate) dialogues: Rect,
     pub(crate) content: Rect,
-}
-
-/// Which content half keyboard / selection targets.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum ContentIoFocus {
-    #[default]
-    Input,
-    Output,
-}
-
-impl ContentIoFocus {
-    pub(crate) fn toggle(self) -> Self {
-        match self {
-            Self::Input => Self::Output,
-            Self::Output => Self::Input,
-        }
-    }
-}
-
-/// Independent scroll offsets for the dual content panes.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ContentScrolls {
-    pub(crate) input: usize,
-    pub(crate) output: usize,
-}
-
-impl ContentScrolls {
-    pub(crate) fn get(self, focus: ContentIoFocus) -> usize {
-        match focus {
-            ContentIoFocus::Input => self.input,
-            ContentIoFocus::Output => self.output,
-        }
-    }
-
-    pub(crate) fn set(&mut self, focus: ContentIoFocus, value: usize) {
-        match focus {
-            ContentIoFocus::Input => self.input = value,
-            ContentIoFocus::Output => self.output = value,
-        }
-    }
-
-    pub(crate) fn clear(&mut self) {
-        *self = Self::default();
-    }
-}
-
-/// Split the content column into Input (top) / Output (bottom) panes.
-/// Always both halves so the panel borders form a stable divider.
-pub(crate) fn content_io_layout(area: Rect) -> (Rect, Rect) {
-    if area.height == 0 {
-        return (Rect::default(), Rect::default());
-    }
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(area);
-    (chunks[0], chunks[1])
 }
 
 pub(crate) fn selected_index(state: &ListState) -> usize {
@@ -1085,7 +1015,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         view.content_mode,
         view.content_at,
     );
-    let (input_area, output_area) = content_io_layout(layout.content);
+    let frame_io = ContentIoFrame::build(layout.content, &io_texts, view.content_mode);
     let content_active = view.focus == WorkspaceFocus::Content;
     let content_search = view
         .search
@@ -1094,50 +1024,30 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         .and(search_regex.as_ref());
     let title_suffix = content_title_suffix(view.selected_dialogues, current_ref.as_ref());
 
-    render_content_panel(
-        frame,
-        input_area,
-        Panel::new(
-            WorkspaceFocus::Content.key(),
-            format!("Input ({}){title_suffix}", view.content_mode.label()),
-            content_active && view.content_io_focus == ContentIoFocus::Input,
-        ),
-        if io_texts.input.is_empty() {
-            "<empty>".to_string()
-        } else {
-            io_texts.input.clone()
-        },
-        view.content_scrolls.input,
-        view.content_mode,
-        content_selection_for_half(
-            view.content_selection,
-            view.content_io_focus,
-            ContentIoFocus::Input,
-        ),
-        content_search,
-    );
-    render_content_panel(
-        frame,
-        output_area,
-        Panel::new(
-            WorkspaceFocus::Content.key(),
-            format!("Output ({}){title_suffix}", view.content_mode.label()),
-            content_active && view.content_io_focus == ContentIoFocus::Output,
-        ),
-        if io_texts.output.is_empty() {
-            "<empty>".to_string()
-        } else {
-            io_texts.output.clone()
-        },
-        view.content_scrolls.output,
-        view.content_mode,
-        content_selection_for_half(
-            view.content_selection,
-            view.content_io_focus,
-            ContentIoFocus::Output,
-        ),
-        content_search,
-    );
+    for half in [ContentIoFocus::Input, ContentIoFocus::Output] {
+        let area = frame_io.areas.area(half);
+        if area.height == 0 {
+            continue;
+        }
+        render_content_panel(
+            frame,
+            area,
+            Panel::new(
+                WorkspaceFocus::Content.key(),
+                format!(
+                    "{} ({}){title_suffix}",
+                    half.title(),
+                    view.content_mode.label()
+                ),
+                content_active && view.content_io_focus == half,
+            ),
+            io_texts.display_owned(half),
+            view.content_scrolls.get(half),
+            view.content_mode,
+            content_selection_for_half(view.content_selection, view.content_io_focus, half),
+            content_search,
+        );
+    }
 
     render_footer(
         frame,
@@ -1157,30 +1067,12 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
     );
 
     if let Some(selection) = view.content_selection {
-        let (half_area, half_text, half_scroll) = match view.content_io_focus {
-            ContentIoFocus::Input => (
-                input_area,
-                if io_texts.input.is_empty() {
-                    "<empty>"
-                } else {
-                    io_texts.input.as_str()
-                },
-                view.content_scrolls.input,
-            ),
-            ContentIoFocus::Output => (
-                output_area,
-                if io_texts.output.is_empty() {
-                    "<empty>"
-                } else {
-                    io_texts.output.as_str()
-                },
-                view.content_scrolls.output,
-            ),
-        };
+        let mut scrolls = view.content_scrolls;
+        let active = frame_io.active(view.content_io_focus, &mut scrolls);
         if let Some(pos) = content_cursor_position(
-            half_area,
-            half_text,
-            half_scroll,
+            active.area,
+            active.text,
+            *active.scroll,
             view.content_mode,
             selection.cursor,
         ) {

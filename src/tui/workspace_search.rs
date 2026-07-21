@@ -84,12 +84,6 @@ pub(crate) struct WorkspaceSearchMatch {
     pub(crate) matched_line: usize,
 }
 
-impl WorkspaceSearchMatch {
-    pub(crate) fn content_scroll_index(&self) -> usize {
-        self.matched_line.saturating_sub(1)
-    }
-}
-
 impl WorkspaceSearchIndex {
     pub(crate) fn new(sessions: &[WorkspaceSession]) -> Self {
         let mut session_entries = Vec::with_capacity(sessions.len());

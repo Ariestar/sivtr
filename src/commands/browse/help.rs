@@ -6,8 +6,8 @@ use ratatui::widgets::ListState;
 use crate::tui::content_view::ContentViewMode;
 use crate::tui::terminal::{init as init_tui, restore as restore_tui};
 use crate::tui::workspace::{
-    can_open_dialogue_vim, content_io_layout, selected_index, workspace_content_io_texts,
-    workspace_content_text, workspace_layout, ContentIoFocus, ContentScrolls, WorkspaceDialogue,
+    can_open_dialogue_vim, selected_index, workspace_content_io_texts, workspace_content_text,
+    workspace_layout, ContentIoFocus, ContentIoFrame, ContentScrolls, WorkspaceDialogue,
     WorkspaceFocus, WorkspaceHelpAction, WorkspacePickedContent, WorkspaceSession, WorkspaceSource,
 };
 use sivtr_core::record::WorkAt;
@@ -220,32 +220,13 @@ pub(super) fn apply_workspace_help_action(
                     *content_mode,
                     content_at,
                 );
-                let (input_area, output_area) = content_io_layout(layout.content);
-                let (half_area, half_text, half_scroll) = match *content_io_focus {
-                    ContentIoFocus::Input => (
-                        input_area,
-                        if io.input.is_empty() {
-                            "<empty>".to_string()
-                        } else {
-                            io.input
-                        },
-                        &mut content_scrolls.input,
-                    ),
-                    ContentIoFocus::Output => (
-                        output_area,
-                        if io.output.is_empty() {
-                            "<empty>".to_string()
-                        } else {
-                            io.output
-                        },
-                        &mut content_scrolls.output,
-                    ),
-                };
+                let frame = ContentIoFrame::build(layout.content, &io, *content_mode);
+                let active = frame.active(*content_io_focus, content_scrolls);
                 enter_visual_select_mode(
                     visual_select_mode,
-                    half_scroll,
-                    half_area,
-                    &half_text,
+                    active.scroll,
+                    active.area,
+                    active.text,
                     *content_mode,
                 );
             }

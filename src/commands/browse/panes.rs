@@ -8,10 +8,10 @@
 //! Do **not** reimplement viewport growth, keep/evict, or blanking rules.
 
 use crate::pane::{Pane, PaneInput, SlidingPane, WindowRow};
-use crate::tui::content_view::{content_view_line_count, ContentViewMode};
+use crate::tui::content_view::ContentViewMode;
 use crate::tui::workspace::{
-    content_io_layout, workspace_content_io_texts, ContentIoFocus, ContentIoTexts,
-    WorkspaceDialogue, WorkspaceSession, WorkspaceSource,
+    workspace_content_io_texts, ContentIoFocus, ContentIoFrame, ContentIoTexts, WorkspaceDialogue,
+    WorkspaceSession, WorkspaceSource,
 };
 use sivtr_core::ai::AgentSelection;
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
@@ -402,6 +402,7 @@ impl ContentPane {
         }
     }
 
+    /// Build texts + dynamic layout metrics for this frame.
     pub fn ensure(&mut self, ctx: ContentCtx<'_>) -> ContentIoTexts {
         let texts = workspace_content_io_texts(
             ctx.dialogues,
@@ -410,27 +411,9 @@ impl ContentPane {
             ctx.mode,
             ctx.target,
         );
-        let (input_area, output_area) = content_io_layout(ctx.area);
-        self.input_lines = content_view_line_count(
-            input_area,
-            if texts.input.is_empty() {
-                "<empty>"
-            } else {
-                &texts.input
-            },
-            ctx.mode,
-        )
-        .max(1);
-        self.output_lines = content_view_line_count(
-            output_area,
-            if texts.output.is_empty() {
-                "<empty>"
-            } else {
-                &texts.output
-            },
-            ctx.mode,
-        )
-        .max(1);
+        let frame = ContentIoFrame::build(ctx.area, &texts, ctx.mode);
+        self.input_lines = frame.input_lines;
+        self.output_lines = frame.output_lines;
         texts
     }
 }
