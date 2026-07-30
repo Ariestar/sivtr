@@ -29,29 +29,24 @@ fn io_body_text(record: &WorkRecord, reading: bool, input: bool) -> String {
     }
 }
 
-/// Reading: dialogue in order; structure folded.
-/// Identical markers in this IO half count as `xN` (no adjacency requirement).
+/// Reading: dialogue in order; each adjacent structure run folds into one
+/// marker line at its position, identical markers within a run count as `xN`.
 fn structured_parts_text(parts: &[&sivtr_core::record::WorkPart]) -> String {
-    let structure: Vec<&sivtr_core::record::WorkPart> = parts
-        .iter()
-        .copied()
-        .filter(|part| part.kind().is_structure())
-        .collect();
-    let fold = (!structure.is_empty()).then(|| collapse_structure_markers(&structure));
-
     let mut chunks = Vec::new();
-    let mut fold_emitted = false;
+    let mut run: Vec<&sivtr_core::record::WorkPart> = Vec::new();
     for part in parts {
         if part.kind().is_structure() {
-            if !fold_emitted {
-                if let Some(fold) = fold.as_ref() {
-                    chunks.push(fold.clone());
-                }
-                fold_emitted = true;
-            }
+            run.push(part);
             continue;
         }
+        if !run.is_empty() {
+            chunks.push(collapse_structure_markers(&run));
+            run.clear();
+        }
         chunks.push(part.text().into_owned());
+    }
+    if !run.is_empty() {
+        chunks.push(collapse_structure_markers(&run));
     }
     chunks.join("\n\n")
 }

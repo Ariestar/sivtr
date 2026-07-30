@@ -19,17 +19,16 @@ fn tool_test_value(text: String) -> serde_json::Value {
     serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text))
 }
 
-#[test]
-fn can_open_dialogue_vim_accepts_sessions_when_dialogues_exist() {
-    assert!(can_open_dialogue_vim(WorkspaceFocus::Sessions, 1));
-    assert!(can_open_dialogue_vim(WorkspaceFocus::Dialogues, 1));
-    assert!(can_open_dialogue_vim(WorkspaceFocus::Content, 1));
-    assert!(!can_open_dialogue_vim(WorkspaceFocus::Sessions, 0));
+fn part(seq: usize, data: sivtr_core::record::WorkPartData) -> sivtr_core::record::WorkPart {
+    sivtr_core::record::WorkPart {
+        seq,
+        occurred_at: None,
+        data,
+    }
 }
 
-#[test]
-fn content_preview_text_preserves_raw_text_without_line_number_prefixes() {
-    let record = WorkRecord {
+fn chat_record(parts: Vec<sivtr_core::record::WorkPart>) -> WorkRecord {
+    WorkRecord {
         schema_version: 2,
         work_ref: WorkRef::agent(AgentProvider::Codex, "session", 1),
         kind: sivtr_core::record::WorkRecordKind::ChatTurn,
@@ -46,29 +45,44 @@ fn content_preview_text_preserves_raw_text_without_line_number_prefixes() {
         time: sivtr_core::record::WorkTime::default(),
         status: None,
         title: "cmd".to_string(),
-        parts: vec![
-            sivtr_core::record::WorkPart {
-                seq: 1,
-                occurred_at: None,
-                data: sivtr_core::record::WorkPartData::User {
-                    content: "alpha".to_string(),
-                },
-            },
-            sivtr_core::record::WorkPart {
-                seq: 1,
-                occurred_at: None,
-                data: sivtr_core::record::WorkPartData::Assistant {
-                    content: "omega".to_string(),
-                },
-            },
-        ],
-    };
-    let dialogue = WorkspaceDialogue {
+        parts,
+    }
+}
+
+fn codex_dialogue(record: WorkRecord) -> WorkspaceDialogue {
+    WorkspaceDialogue {
         source: WorkspaceSource::agent(AgentProvider::Codex),
         work_ref: Some(record.work_ref.clone()),
         record: Some(record),
         copy: WorkspaceCopyParts::default(),
-    };
+    }
+}
+
+#[test]
+fn can_open_dialogue_vim_accepts_sessions_when_dialogues_exist() {
+    assert!(can_open_dialogue_vim(WorkspaceFocus::Sessions, 1));
+    assert!(can_open_dialogue_vim(WorkspaceFocus::Dialogues, 1));
+    assert!(can_open_dialogue_vim(WorkspaceFocus::Content, 1));
+    assert!(!can_open_dialogue_vim(WorkspaceFocus::Sessions, 0));
+}
+
+#[test]
+fn content_preview_text_preserves_raw_text_without_line_number_prefixes() {
+    let record = chat_record(vec![
+        part(
+            1,
+            sivtr_core::record::WorkPartData::User {
+                content: "alpha".to_string(),
+            },
+        ),
+        part(
+            1,
+            sivtr_core::record::WorkPartData::Assistant {
+                content: "omega".to_string(),
+            },
+        ),
+    ]);
+    let dialogue = codex_dialogue(record);
 
     let io = workspace_content_io_texts(
         std::slice::from_ref(&dialogue),
@@ -88,39 +102,15 @@ fn content_preview_text_preserves_raw_text_without_line_number_prefixes() {
 
 #[test]
 fn content_preview_text_uses_targeted_part_text_in_raw_mode() {
-    let record = WorkRecord {
-        schema_version: 2,
-        work_ref: WorkRef::agent(AgentProvider::Codex, "session", 1),
-        kind: sivtr_core::record::WorkRecordKind::ChatTurn,
-        source: sivtr_core::record::WorkSource {
-            channel: sivtr_core::record::WorkChannel::Chat,
-            provider: Some("codex".to_string()),
+    let record = chat_record(vec![part(
+        1,
+        sivtr_core::record::WorkPartData::ToolCall {
+            call_id: None,
+            tool: Some("tool".to_string()),
+            input: tool_test_value("hidden tool call".to_string()),
         },
-        session: sivtr_core::record::WorkSessionRef {
-            id: "session".to_string(),
-            canonical_id: None,
-            path: None,
-        },
-        cwd: None,
-        time: sivtr_core::record::WorkTime::default(),
-        status: None,
-        title: "cmd".to_string(),
-        parts: vec![sivtr_core::record::WorkPart {
-            seq: 1,
-            occurred_at: None,
-            data: sivtr_core::record::WorkPartData::ToolCall {
-                call_id: None,
-                tool: Some("tool".to_string()),
-                input: tool_test_value("hidden tool call".to_string()),
-            },
-        }],
-    };
-    let dialogue = WorkspaceDialogue {
-        source: WorkspaceSource::agent(AgentProvider::Codex),
-        work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
-        record: Some(record),
-        copy: WorkspaceCopyParts::default(),
-    };
+    )]);
+    let dialogue = codex_dialogue(record);
 
     let text = workspace_content_text(
         &[dialogue],
@@ -136,39 +126,15 @@ fn content_preview_text_uses_targeted_part_text_in_raw_mode() {
 
 #[test]
 fn content_preview_text_uses_structured_targeted_part_text_in_reading_mode() {
-    let record = WorkRecord {
-        schema_version: 2,
-        work_ref: WorkRef::agent(AgentProvider::Codex, "session", 1),
-        kind: sivtr_core::record::WorkRecordKind::ChatTurn,
-        source: sivtr_core::record::WorkSource {
-            channel: sivtr_core::record::WorkChannel::Chat,
-            provider: Some("codex".to_string()),
+    let record = chat_record(vec![part(
+        1,
+        sivtr_core::record::WorkPartData::ToolCall {
+            call_id: None,
+            tool: Some("tool".to_string()),
+            input: tool_test_value("hidden tool call".to_string()),
         },
-        session: sivtr_core::record::WorkSessionRef {
-            id: "session".to_string(),
-            canonical_id: None,
-            path: None,
-        },
-        cwd: None,
-        time: sivtr_core::record::WorkTime::default(),
-        status: None,
-        title: "cmd".to_string(),
-        parts: vec![sivtr_core::record::WorkPart {
-            seq: 1,
-            occurred_at: None,
-            data: sivtr_core::record::WorkPartData::ToolCall {
-                call_id: None,
-                tool: Some("tool".to_string()),
-                input: tool_test_value("hidden tool call".to_string()),
-            },
-        }],
-    };
-    let dialogue = WorkspaceDialogue {
-        source: WorkspaceSource::agent(AgentProvider::Codex),
-        work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
-        record: Some(record),
-        copy: WorkspaceCopyParts::default(),
-    };
+    )]);
+    let dialogue = codex_dialogue(record);
 
     let text = workspace_content_text(
         &[dialogue],
@@ -187,68 +153,37 @@ fn content_preview_text_uses_structured_targeted_part_text_in_reading_mode() {
 
 #[test]
 fn reading_mode_folds_structure_and_raw_expands() {
-    let record = WorkRecord {
-        schema_version: 2,
-        work_ref: WorkRef::agent(AgentProvider::Codex, "session", 1),
-        kind: sivtr_core::record::WorkRecordKind::ChatTurn,
-        source: sivtr_core::record::WorkSource {
-            channel: sivtr_core::record::WorkChannel::Chat,
-            provider: Some("codex".to_string()),
-        },
-        session: sivtr_core::record::WorkSessionRef {
-            id: "session".to_string(),
-            canonical_id: None,
-            path: None,
-        },
-        cwd: None,
-        time: sivtr_core::record::WorkTime {
-            started_at: Some("2026-05-24T12:00:00Z".to_string()),
-            ended_at: None,
-            duration_ms: None,
-        },
-        status: None,
-        title: "cmd".to_string(),
-        parts: vec![
-            sivtr_core::record::WorkPart {
-                seq: 1,
-                occurred_at: None,
-                data: sivtr_core::record::WorkPartData::User {
-                    content: "question".to_string(),
-                },
+    let record = chat_record(vec![
+        part(
+            1,
+            sivtr_core::record::WorkPartData::User {
+                content: "question".to_string(),
             },
-            sivtr_core::record::WorkPart {
-                seq: 2,
-                occurred_at: None,
-                data: sivtr_core::record::WorkPartData::ToolCall {
-                    call_id: None,
-                    tool: Some("Bash".to_string()),
-                    input: tool_test_value("cargo test".to_string()),
-                },
+        ),
+        part(
+            2,
+            sivtr_core::record::WorkPartData::ToolCall {
+                call_id: None,
+                tool: Some("Bash".to_string()),
+                input: tool_test_value("cargo test".to_string()),
             },
-            sivtr_core::record::WorkPart {
-                seq: 3,
-                occurred_at: None,
-                data: sivtr_core::record::WorkPartData::ToolResult {
-                    call_id: None,
-                    tool: Some("Bash".to_string()),
-                    output: tool_test_value("ok".to_string()),
-                },
+        ),
+        part(
+            3,
+            sivtr_core::record::WorkPartData::ToolResult {
+                call_id: None,
+                tool: Some("Bash".to_string()),
+                output: tool_test_value("ok".to_string()),
             },
-            sivtr_core::record::WorkPart {
-                seq: 4,
-                occurred_at: None,
-                data: sivtr_core::record::WorkPartData::Assistant {
-                    content: "answer".to_string(),
-                },
+        ),
+        part(
+            4,
+            sivtr_core::record::WorkPartData::Assistant {
+                content: "answer".to_string(),
             },
-        ],
-    };
-    let dialogue = WorkspaceDialogue {
-        source: WorkspaceSource::agent(AgentProvider::Codex),
-        work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
-        record: Some(record),
-        copy: WorkspaceCopyParts::default(),
-    };
+        ),
+    ]);
+    let dialogue = codex_dialogue(record);
 
     let reading = workspace_content_text(
         std::slice::from_ref(&dialogue),
@@ -297,80 +232,51 @@ fn reading_mode_folds_structure_and_raw_expands() {
 
 #[test]
 fn reading_mode_collapses_adjacent_structure_runs() {
-    let record = WorkRecord {
-        schema_version: 2,
-        work_ref: WorkRef::agent(AgentProvider::Codex, "session", 1),
-        kind: sivtr_core::record::WorkRecordKind::ChatTurn,
-        source: sivtr_core::record::WorkSource {
-            channel: sivtr_core::record::WorkChannel::Chat,
-            provider: Some("codex".to_string()),
-        },
-        session: sivtr_core::record::WorkSessionRef {
-            id: "session".to_string(),
-            canonical_id: None,
-            path: None,
-        },
-        cwd: None,
-        time: sivtr_core::record::WorkTime::default(),
-        status: None,
-        title: "cmd".to_string(),
-        parts: vec![
-            sivtr_core::record::WorkPart {
-                seq: 1,
-                occurred_at: None,
-                data: sivtr_core::record::WorkPartData::User {
-                    content: "do it".to_string(),
-                },
+    let record = chat_record(vec![
+        part(
+            1,
+            sivtr_core::record::WorkPartData::User {
+                content: "do it".to_string(),
             },
-            sivtr_core::record::WorkPart {
-                seq: 2,
-                occurred_at: None,
-                data: sivtr_core::record::WorkPartData::ToolCall {
-                    call_id: None,
-                    tool: Some("Bash".to_string()),
-                    input: tool_test_value("ls".to_string()),
-                },
+        ),
+        part(
+            2,
+            sivtr_core::record::WorkPartData::ToolCall {
+                call_id: None,
+                tool: Some("Bash".to_string()),
+                input: tool_test_value("ls".to_string()),
             },
-            sivtr_core::record::WorkPart {
-                seq: 3,
-                occurred_at: None,
-                data: sivtr_core::record::WorkPartData::ToolCall {
-                    call_id: None,
-                    tool: Some("Read".to_string()),
-                    input: tool_test_value("file".to_string()),
-                },
+        ),
+        part(
+            3,
+            sivtr_core::record::WorkPartData::ToolCall {
+                call_id: None,
+                tool: Some("Read".to_string()),
+                input: tool_test_value("file".to_string()),
             },
-            sivtr_core::record::WorkPart {
-                seq: 4,
-                occurred_at: None,
-                data: sivtr_core::record::WorkPartData::Skill {
-                    skill: Some("review".to_string()),
-                    content: "skill body".to_string(),
-                },
+        ),
+        part(
+            4,
+            sivtr_core::record::WorkPartData::Skill {
+                skill: Some("review".to_string()),
+                content: "skill body".to_string(),
             },
-            sivtr_core::record::WorkPart {
-                seq: 5,
-                occurred_at: None,
-                data: sivtr_core::record::WorkPartData::Skill {
-                    skill: Some("deploy".to_string()),
-                    content: "skill body 2".to_string(),
-                },
+        ),
+        part(
+            5,
+            sivtr_core::record::WorkPartData::Skill {
+                skill: Some("deploy".to_string()),
+                content: "skill body 2".to_string(),
             },
-            sivtr_core::record::WorkPart {
-                seq: 1,
-                occurred_at: None,
-                data: sivtr_core::record::WorkPartData::Assistant {
-                    content: "done".to_string(),
-                },
+        ),
+        part(
+            1,
+            sivtr_core::record::WorkPartData::Assistant {
+                content: "done".to_string(),
             },
-        ],
-    };
-    let dialogue = WorkspaceDialogue {
-        source: WorkspaceSource::agent(AgentProvider::Codex),
-        work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
-        record: Some(record),
-        copy: WorkspaceCopyParts::default(),
-    };
+        ),
+    ]);
+    let dialogue = codex_dialogue(record);
 
     let reading_io = workspace_content_io_texts(
         std::slice::from_ref(&dialogue),
@@ -414,76 +320,48 @@ fn reading_mode_collapses_adjacent_structure_runs() {
 
 #[test]
 fn reading_mode_counts_identical_structure_markers_regardless_of_order() {
-    let record = WorkRecord {
-        schema_version: 2,
-        work_ref: WorkRef::agent(AgentProvider::Codex, "session", 1),
-        kind: sivtr_core::record::WorkRecordKind::ChatTurn,
-        source: sivtr_core::record::WorkSource {
-            channel: sivtr_core::record::WorkChannel::Chat,
-            provider: Some("codex".to_string()),
-        },
-        session: sivtr_core::record::WorkSessionRef {
-            id: "session".to_string(),
-            canonical_id: None,
-            path: None,
-        },
-        cwd: None,
-        time: sivtr_core::record::WorkTime::default(),
-        status: None,
-        title: "cmd".to_string(),
-        parts: vec![
-            // Interleaved with dialogue — still one IO-section fold, same markers count.
-            sivtr_core::record::WorkPart {
-                seq: 1,
-                occurred_at: None,
-                data: sivtr_core::record::WorkPartData::ToolCall {
-                    call_id: None,
-                    tool: Some("Bash".to_string()),
-                    input: tool_test_value("ls".to_string()),
-                },
+    let record = chat_record(vec![
+        // Interleaved with dialogue — still one IO-section fold, same markers count.
+        part(
+            1,
+            sivtr_core::record::WorkPartData::ToolCall {
+                call_id: None,
+                tool: Some("Bash".to_string()),
+                input: tool_test_value("ls".to_string()),
             },
-            sivtr_core::record::WorkPart {
-                seq: 2,
-                occurred_at: None,
-                data: sivtr_core::record::WorkPartData::User {
-                    content: "middle note".to_string(),
-                },
+        ),
+        part(
+            2,
+            sivtr_core::record::WorkPartData::User {
+                content: "middle note".to_string(),
             },
-            sivtr_core::record::WorkPart {
-                seq: 3,
-                occurred_at: None,
-                data: sivtr_core::record::WorkPartData::ToolCall {
-                    call_id: None,
-                    tool: Some("Read".to_string()),
-                    input: tool_test_value("file".to_string()),
-                },
+        ),
+        part(
+            3,
+            sivtr_core::record::WorkPartData::ToolCall {
+                call_id: None,
+                tool: Some("Read".to_string()),
+                input: tool_test_value("file".to_string()),
             },
-            sivtr_core::record::WorkPart {
-                seq: 4,
-                occurred_at: None,
-                data: sivtr_core::record::WorkPartData::ToolCall {
-                    call_id: None,
-                    tool: Some("Bash".to_string()),
-                    input: tool_test_value("pwd".to_string()),
-                },
+        ),
+        part(
+            4,
+            sivtr_core::record::WorkPartData::ToolCall {
+                call_id: None,
+                tool: Some("Bash".to_string()),
+                input: tool_test_value("pwd".to_string()),
             },
-            sivtr_core::record::WorkPart {
-                seq: 5,
-                occurred_at: None,
-                data: sivtr_core::record::WorkPartData::ToolCall {
-                    call_id: None,
-                    tool: Some("Bash".to_string()),
-                    input: tool_test_value("date".to_string()),
-                },
+        ),
+        part(
+            5,
+            sivtr_core::record::WorkPartData::ToolCall {
+                call_id: None,
+                tool: Some("Bash".to_string()),
+                input: tool_test_value("date".to_string()),
             },
-        ],
-    };
-    let dialogue = WorkspaceDialogue {
-        source: WorkspaceSource::agent(AgentProvider::Codex),
-        work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
-        record: Some(record),
-        copy: WorkspaceCopyParts::default(),
-    };
+        ),
+    ]);
+    let dialogue = codex_dialogue(record);
 
     let reading = workspace_content_text(
         std::slice::from_ref(&dialogue),
@@ -504,6 +382,67 @@ fn reading_mode_counts_identical_structure_markers_regardless_of_order() {
         .filter(|line| line.contains("<:tool:Bash call:>"))
         .count();
     assert_eq!(fold_hits, 1);
+}
+
+#[test]
+fn reading_mode_keeps_structure_runs_in_call_order() {
+    let record = chat_record(vec![
+        part(
+            1,
+            sivtr_core::record::WorkPartData::User {
+                content: "do it".to_string(),
+            },
+        ),
+        part(
+            2,
+            sivtr_core::record::WorkPartData::Assistant {
+                content: "checking first".to_string(),
+            },
+        ),
+        part(
+            3,
+            sivtr_core::record::WorkPartData::ToolCall {
+                call_id: None,
+                tool: Some("Bash".to_string()),
+                input: tool_test_value("ls".to_string()),
+            },
+        ),
+        part(
+            4,
+            sivtr_core::record::WorkPartData::ToolResult {
+                call_id: None,
+                tool: Some("Bash".to_string()),
+                output: tool_test_value("ok".to_string()),
+            },
+        ),
+        part(
+            5,
+            sivtr_core::record::WorkPartData::Assistant {
+                content: "all done".to_string(),
+            },
+        ),
+    ]);
+    let dialogue = codex_dialogue(record);
+
+    let reading_io = workspace_content_io_texts(
+        std::slice::from_ref(&dialogue),
+        &[false],
+        0,
+        ContentViewMode::Reading,
+        None,
+    );
+    // Fold sits between the assistant chunks, matching the call order.
+    let output = &reading_io.output;
+    let first_text = output.find("checking first").expect("first assistant text");
+    let fold = output.find("<:tool:Bash call:>").expect("tool fold line");
+    let last_text = output.find("all done").expect("last assistant text");
+    assert!(first_text < fold);
+    assert!(fold < last_text);
+    let fold_line = output
+        .lines()
+        .find(|line| line.contains("<:tool:Bash call:>"))
+        .expect("fold line");
+    assert!(fold_line.contains("<:tool:Bash result:>"));
 }
 
 #[test]
