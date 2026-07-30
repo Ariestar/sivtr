@@ -15,6 +15,7 @@ pub mod model;
 pub mod openclaw;
 pub mod opencode;
 pub mod pi;
+pub mod qoder;
 pub mod sqlite;
 
 pub use jsonl::{jsonl_files, list_recent_jsonl_sessions, parse_jsonl_meta, parse_jsonl_session};
@@ -96,6 +97,14 @@ const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
         current_session_id_env: None,
         factory: pi_provider,
     },
+    AgentProviderSpec {
+        provider: AgentProvider::Qoder,
+        name: "Qoder",
+        command_name: "qoder",
+        current_transcript_env: None,
+        current_session_id_env: None,
+        factory: qoder_provider,
+    },
 ];
 
 fn codex_provider() -> Box<dyn AgentSessionProvider> {
@@ -128,6 +137,10 @@ fn hermes_provider() -> Box<dyn AgentSessionProvider> {
 
 fn pi_provider() -> Box<dyn AgentSessionProvider> {
     Box::new(crate::agents::pi::PiProvider)
+}
+
+fn qoder_provider() -> Box<dyn AgentSessionProvider> {
+    Box::new(crate::agents::qoder::QoderProvider)
 }
 
 impl AgentProvider {

@@ -39,6 +39,7 @@ impl WorkspaceSourceKind {
             Self::Agent(AgentProvider::Hermes) => "hrm",
             Self::Agent(AgentProvider::Grok) => "grk",
             Self::Agent(AgentProvider::Pi) => "pi",
+            Self::Agent(AgentProvider::Qoder) => "qdr",
         }
     }
 

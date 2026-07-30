@@ -60,6 +60,7 @@ pub(crate) fn provider_color(provider: AgentProvider) -> Color {
         AgentProvider::Hermes => Color::Rgb(250, 204, 21), // yellow-400
         AgentProvider::Grok => Color::Rgb(244, 114, 182),  // pink-400
         AgentProvider::Pi => Color::Rgb(74, 222, 128),     // green-400
+        AgentProvider::Qoder => Color::Rgb(34, 211, 238),  // cyan-400
     }
 }
 

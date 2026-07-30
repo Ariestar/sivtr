@@ -16,6 +16,7 @@ pub enum AgentProvider {
     OpenClaw,
     OpenCode,
     Pi,
+    Qoder,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
