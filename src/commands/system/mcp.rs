@@ -122,6 +122,16 @@ const MCP_HOSTS: &[McpHostSpec] = &[
         config_path: |_loc| pi_config_path(),
         host_present: pi_host_present,
     },
+    McpHostSpec {
+        provider: AgentProvider::Qoder,
+        location: McpLocationSupport::GlobalOnly,
+        kind: McpConfigKind::Json {
+            key: "mcpServers",
+            entry: claude_cursor_entry,
+        },
+        config_path: |_loc| qoder_config_path(),
+        host_present: qoder_host_present,
+    },
 ];
 
 fn mcp_host(provider: AgentProvider) -> &'static McpHostSpec {
@@ -811,6 +821,14 @@ fn opencode_host_present() -> bool {
 
 fn pi_host_present() -> bool {
     pi_config_path().exists() || pi_home().exists()
+}
+
+fn qoder_config_path() -> PathBuf {
+    sivtr_core::agents::qoder::qoder_home().join("mcp.json")
+}
+
+fn qoder_host_present() -> bool {
+    qoder_config_path().exists() || sivtr_core::agents::qoder::qoder_home().exists()
 }
 
 fn hermes_host_present() -> bool {

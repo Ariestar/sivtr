@@ -476,7 +476,7 @@ fn record_anchor_matches<'a>(
     let matched_part = record
         .parts
         .iter()
-        .any(|part| part_matches_filters(part, filter, regex));
+        .any(|part| part_matches_filters(part, filter, regex, false));
     (matched_meta || matched_part)
         .then(|| matched(record, anchor.clone()))
         .into_iter()
@@ -492,7 +492,7 @@ fn part_anchor_matches<'a>(
     let Some(part) = record.part_for_at(anchor.at) else {
         return Vec::new();
     };
-    part_matches_filters(part, filter, regex)
+    part_matches_filters(part, filter, regex, true)
         .then(|| matched(record, anchor.clone()))
         .into_iter()
         .collect()
@@ -509,7 +509,7 @@ fn part_anchors_for<'a>(
         WorkAt::Whole => record
             .parts
             .iter()
-            .filter(|part| part_matches_filters(part, filter, regex))
+            .filter(|part| part_matches_filters(part, filter, regex, false))
             .map(|part| matched(record, record.work_ref.with_part(part.seq)))
             .collect(),
     }
@@ -523,7 +523,12 @@ fn matched(record: &WorkRecord, anchor: WorkRef) -> MatchedAnchor<'_> {
     }
 }
 
-fn part_matches_filters(part: &WorkPart, filter: &Filter, regex: Option<&Regex>) -> bool {
+fn part_matches_filters(
+    part: &WorkPart,
+    filter: &Filter,
+    regex: Option<&Regex>,
+    pinned: bool,
+) -> bool {
     if filter.kind.is_some_and(|kind| !kind.matches(part.kind())) {
         return false;
     }
@@ -531,8 +536,9 @@ fn part_matches_filters(part: &WorkPart, filter: &Filter, regex: Option<&Regex>)
         return false;
     }
     // Default content search is dialogue-only so tools, skills, and thinking do not pollute hits.
-    // Structural parts are selected explicitly with `--kind`.
-    if matches!(filter.in_field, SearchFieldArg::Content)
+    // Structural parts are selected explicitly with `--kind` or by pinning the part ref.
+    if !pinned
+        && matches!(filter.in_field, SearchFieldArg::Content)
         && filter.kind.is_none()
         && part.kind().is_structure()
     {
