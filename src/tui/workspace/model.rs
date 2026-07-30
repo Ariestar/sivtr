@@ -8,7 +8,7 @@ use std::time::SystemTime;
 
 use crate::commands::select::CommandSelection;
 use crate::tui::content::io::{ContentIoFocus, ContentIoTexts, ContentScrolls};
-use crate::tui::content::text::{content_io_from_record, raw_part_text, structured_part_text};
+use crate::tui::content::text::{content_io_from_record, structured_part_text};
 use crate::tui::content::view::{ContentSelection, ContentViewMode};
 use crate::tui::search::WorkspaceSearchScope;
 use crate::tui::theme;
@@ -291,10 +291,7 @@ impl WorkspaceDialogue {
             return None;
         };
         let part = self.record.as_ref()?.part_for_at(target)?;
-        if part.kind().is_structure() {
-            return Some(raw_part_text(part));
-        }
-        Some(part.text().into_owned())
+        Some(sivtr_core::record::format_work_part(part))
     }
 
     fn targeted_structured_text(&self, target: WorkAt) -> Option<String> {

@@ -265,8 +265,8 @@ fn reading_mode_folds_structure_and_raw_expands() {
         None,
     );
     assert!(reading_io.input.contains("question"));
-    // Single structure part keeps the detailed open marker.
-    assert!(reading_io.input.contains("<:tool:Bash call:>"));
+    // Single structure part keeps the detailed open marker; tool calls live in output.
+    assert!(reading_io.output.contains("<:tool:Bash call:>"));
     assert!(reading_io.output.contains("<:tool:Bash result:>"));
     assert!(reading_io.output.contains("answer"));
     assert!(!reading.contains("cargo test"));
@@ -284,9 +284,9 @@ fn reading_mode_folds_structure_and_raw_expands() {
     );
     let raw = workspace_content_text(&[dialogue], &[false], 0, ContentViewMode::Raw, None);
     assert!(raw_io.input.contains("question"));
-    assert!(raw_io.input.contains("cargo test"));
-    assert!(raw_io.input.contains("<:tool:Bash call:>"));
-    assert!(raw_io.input.contains("<:/tool:Bash call:>"));
+    assert!(raw_io.output.contains("cargo test"));
+    assert!(raw_io.output.contains("<:tool:Bash call:>"));
+    assert!(raw_io.output.contains("<:/tool:Bash call:>"));
     assert!(raw_io.output.contains("<:tool:Bash result:>"));
     assert!(raw_io.output.contains("ok"));
     assert!(raw_io.output.contains("answer"));
@@ -388,19 +388,24 @@ fn reading_mode_collapses_adjacent_structure_runs() {
     );
     assert!(reading_io.input.contains("do it"));
     // Original open markers kept (not generic <:tool:> / <:skill:>).
-    assert!(reading_io.input.contains("<:tool:Bash call:>"));
-    assert!(reading_io.input.contains("<:tool:Read call:>"));
+    // Tool calls fold in the output half; skills fold in the input half.
+    assert!(reading_io.output.contains("<:tool:Bash call:>"));
+    assert!(reading_io.output.contains("<:tool:Read call:>"));
     assert!(reading_io.input.contains("<:skill:review:>"));
     assert!(reading_io.input.contains("<:skill:deploy:>"));
-    // Same IO half: all structure markers share one fold line.
-    let fold_line = reading_io
-        .input
+    // Same IO half: structure markers share one fold line.
+    let tool_fold = reading_io
+        .output
         .lines()
         .find(|line| line.contains("<:tool:Bash call:>"))
-        .expect("collapsed structure line");
-    assert!(fold_line.contains("<:tool:Read call:>"));
-    assert!(fold_line.contains("<:skill:review:>"));
-    assert!(fold_line.contains("<:skill:deploy:>"));
+        .expect("collapsed tool structure line");
+    assert!(tool_fold.contains("<:tool:Read call:>"));
+    let skill_fold = reading_io
+        .input
+        .lines()
+        .find(|line| line.contains("<:skill:review:>"))
+        .expect("collapsed skill structure line");
+    assert!(skill_fold.contains("<:skill:deploy:>"));
     assert!(reading_io.output.contains("done"));
     assert!(!reading.contains("ls"));
     assert!(!reading.contains("skill body"));

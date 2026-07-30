@@ -190,14 +190,19 @@ impl WorkPartKind {
     pub fn is_input(self) -> bool {
         matches!(
             self,
-            Self::Prompt | Self::Command | Self::User | Self::ToolCall | Self::Skill
+            Self::Prompt | Self::Command | Self::User | Self::Skill
         )
     }
 
     pub fn is_output(self) -> bool {
         matches!(
             self,
-            Self::Assistant | Self::ToolResult | Self::Thinking | Self::Output | Self::Error
+            Self::Assistant
+                | Self::ToolCall
+                | Self::ToolResult
+                | Self::Thinking
+                | Self::Output
+                | Self::Error
         )
     }
 
@@ -551,14 +556,9 @@ impl WorkRecord {
                     .iter()
                     .filter(|part| matches!(part.kind(), WorkPartKind::Command)),
             )),
-            WorkRecordKind::ChatTurn => {
-                non_empty(join_parts_structured(self.parts.iter().filter(|part| {
-                    matches!(
-                        part.kind(),
-                        WorkPartKind::User | WorkPartKind::ToolCall | WorkPartKind::Skill
-                    )
-                })))
-            }
+            WorkRecordKind::ChatTurn => non_empty(join_parts_structured(
+                self.parts.iter().filter(|part| part.kind().is_input()),
+            )),
         }
     }
 
@@ -569,14 +569,9 @@ impl WorkRecord {
                     .iter()
                     .filter(|part| matches!(part.kind(), WorkPartKind::Output)),
             )),
-            WorkRecordKind::ChatTurn => {
-                non_empty(join_parts_structured(self.parts.iter().filter(|part| {
-                    matches!(
-                        part.kind(),
-                        WorkPartKind::Assistant | WorkPartKind::ToolResult | WorkPartKind::Thinking
-                    )
-                })))
-            }
+            WorkRecordKind::ChatTurn => non_empty(join_parts_structured(
+                self.parts.iter().filter(|part| part.kind().is_output()),
+            )),
         }
     }
 
@@ -1209,7 +1204,7 @@ fn split_skill_segments(text: &str, dialogue_kind: TextSegmentKind) -> Vec<TextS
     segments
 }
 
-fn format_work_part(part: &WorkPart) -> String {
+pub fn format_work_part(part: &WorkPart) -> String {
     let text = part.text();
     match part.kind().as_agent_block_kind() {
         Some(agent_kind) => format_structured_block(agent_kind, part.label(), &text),
@@ -1302,9 +1297,9 @@ mod tests {
         assert_eq!(records.len(), 1);
         let input = records[0].input_text().unwrap_or_default();
         assert!(input.contains("fix latest terminal error"));
-        assert!(input.contains("<:tool:bash call:>"));
-        assert!(input.contains("cargo test"));
         let output = records[0].output_text().unwrap_or_default();
+        assert!(output.contains("<:tool:bash call:>"));
+        assert!(output.contains("cargo test"));
         assert!(output.contains("<:tool:bash result:>"));
         assert!(output.contains("failed"));
         assert_eq!(

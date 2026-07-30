@@ -41,9 +41,9 @@ impl AgentSessionProvider for QoderProvider {
             if !bucket_path.is_dir() {
                 continue;
             }
-            for entry in fs::read_dir(&bucket_path).with_context(|| {
-                format!("Failed to read Qoder bucket {}", bucket_path.display())
-            })? {
+            for entry in fs::read_dir(&bucket_path)
+                .with_context(|| format!("Failed to read Qoder bucket {}", bucket_path.display()))?
+            {
                 let entry = entry?;
                 let path = entry.path();
                 if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
@@ -172,10 +172,7 @@ fn apply_message(
     kind: AgentBlockKind,
     timestamp: Option<String>,
 ) {
-    let Some(content) = value
-        .get("message")
-        .and_then(|m| m.get("content"))
-    else {
+    let Some(content) = value.get("message").and_then(|m| m.get("content")) else {
         return;
     };
     push_content_blocks(session, kind, timestamp, content);
@@ -219,9 +216,7 @@ fn push_content_blocks(
                                 AgentBlockKind::ToolCall,
                                 timestamp.clone(),
                                 item.get("id").and_then(Value::as_str).map(str::to_string),
-                                item.get("name")
-                                    .and_then(Value::as_str)
-                                    .map(str::to_string),
+                                item.get("name").and_then(Value::as_str).map(str::to_string),
                                 pretty_json_value(input),
                             );
                         }

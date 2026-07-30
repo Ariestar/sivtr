@@ -59,7 +59,7 @@ fn structured_parts_text(parts: &[&sivtr_core::record::WorkPart]) -> String {
 fn raw_parts_text(parts: &[&sivtr_core::record::WorkPart]) -> String {
     parts
         .iter()
-        .map(|part| raw_part_text(part))
+        .map(|part| sivtr_core::record::format_work_part(part))
         .collect::<Vec<_>>()
         .join("\n\n")
 }
@@ -70,19 +70,6 @@ pub(crate) fn structured_part_text(part: &sivtr_core::record::WorkPart) -> Strin
     } else {
         part.text().into_owned()
     }
-}
-
-pub(crate) fn raw_part_text(part: &sivtr_core::record::WorkPart) -> String {
-    if part.kind().is_structure() {
-        return part
-            .kind()
-            .as_agent_block_kind()
-            .map(|kind| {
-                sivtr_core::ai::format_structured_block(kind, part.label(), part.text().trim())
-            })
-            .unwrap_or_else(|| part.text().into_owned());
-    }
-    part.text().into_owned()
 }
 
 fn structure_fold_label(part: &sivtr_core::record::WorkPart) -> String {
