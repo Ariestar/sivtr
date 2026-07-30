@@ -6,8 +6,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::agents::{
     extract_content_text, filter_sessions_by_workspace, parse_jsonl_session, pretty_json_string,
-    pretty_json_value, push_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionInfo,
-    AgentSessionProvider,
+    pretty_json_value, push_block, push_tool_block, AgentBlockKind, AgentProvider, AgentSession,
+    AgentSessionInfo, AgentSessionProvider,
 };
 
 const PROVIDER_NAME: &str = "Grok";
@@ -320,7 +320,17 @@ fn apply_tool_result(session: &mut AgentSession, value: &Value) {
         Value::String(text) => text.clone(),
         other => extract_content_text(other),
     };
-    push_block(session, AgentBlockKind::ToolOutput, None, None, text);
+    push_tool_block(
+        session,
+        AgentBlockKind::ToolOutput,
+        None,
+        value
+            .get("tool_call_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        None,
+        text,
+    );
 }
 
 fn apply_reasoning(session: &mut AgentSession, value: &Value) {
@@ -360,7 +370,17 @@ fn push_one_tool_call(session: &mut AgentSession, tool_call: &Value) {
             other => pretty_json_value(other),
         })
         .unwrap_or_else(|| pretty_json_value(tool_call));
-    push_block(session, AgentBlockKind::ToolCall, None, name, arguments);
+    push_tool_block(
+        session,
+        AgentBlockKind::ToolCall,
+        None,
+        tool_call
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        name,
+        arguments,
+    );
 }
 
 fn extract_user_text(content: &Value) -> String {

@@ -4,7 +4,6 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::ai::AgentProvider;
-use crate::record::model::WorkPartIo;
 
 /// Where a ref lives: current workspace, or a named scope (`docs`, `desk`, `alice/sivtr`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,8 +100,7 @@ impl fmt::Display for WorkPath {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkAt {
     Whole,
-    Line(usize),
-    Part { io: WorkPartIo, index: usize },
+    Part(usize),
 }
 
 /// Exact address: `[scope:]path[/at]`.
@@ -118,13 +116,11 @@ pub enum WorkRefSelector {
     Terminal {
         session: Option<String>,
         records: Option<Vec<usize>>,
-        lines: Option<Vec<usize>>,
     },
     Agent {
         provider: Option<AgentProvider>,
         session: Option<String>,
         records: Option<Vec<usize>>,
-        lines: Option<Vec<usize>>,
     },
 }
 
@@ -186,12 +182,6 @@ impl WorkRefSelector {
 
         true
     }
-
-    pub fn selected_lines(&self) -> Option<&[usize]> {
-        match self {
-            Self::Terminal { lines, .. } | Self::Agent { lines, .. } => lines.as_deref(),
-        }
-    }
 }
 
 impl WorkRef {
@@ -250,12 +240,8 @@ impl WorkRef {
         self.with_path(self.path.with_session(session))
     }
 
-    pub fn with_line(&self, line: usize) -> Self {
-        self.with_at(WorkAt::Line(line))
-    }
-
-    pub fn with_part(&self, io: WorkPartIo, index: usize) -> Self {
-        self.with_at(WorkAt::Part { io, index })
+    pub fn with_part(&self, seq: usize) -> Self {
+        self.with_at(WorkAt::Part(seq))
     }
 
     pub fn with_at(&self, at: WorkAt) -> Self {
@@ -270,17 +256,10 @@ impl WorkRef {
         self.with_at(WorkAt::Whole)
     }
 
-    pub fn line(&self) -> Option<usize> {
+    pub fn part(&self) -> Option<usize> {
         match self.at {
-            WorkAt::Line(line) => Some(line),
-            WorkAt::Whole | WorkAt::Part { .. } => None,
-        }
-    }
-
-    pub fn part(&self) -> Option<(WorkPartIo, usize)> {
-        match self.at {
-            WorkAt::Part { io, index } => Some((io, index)),
-            WorkAt::Whole | WorkAt::Line(_) => None,
+            WorkAt::Part(seq) => Some(seq),
+            WorkAt::Whole => None,
         }
     }
 
@@ -305,8 +284,7 @@ impl fmt::Display for WorkRef {
         write!(f, "{}", self.path)?;
         match self.at {
             WorkAt::Whole => {}
-            WorkAt::Line(line) => write!(f, "/{line}")?,
-            WorkAt::Part { io, index } => write!(f, "/{}/{index}", part_segment(io))?,
+            WorkAt::Part(seq) => write!(f, "/p{seq}")?,
         }
         Ok(())
     }
@@ -339,8 +317,8 @@ impl FromStr for WorkRefSelector {
             .split('/')
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>();
-        if parts.is_empty() || parts.len() > 4 {
-            bail!("Invalid work ref selector `{value}`; expected terminal[/<session>[/<record>[/line]]], agent[/<session>[/<turn>[/line]]], or <provider>[/<session>[/<turn>[/line]]]");
+        if parts.is_empty() || parts.len() > 3 {
+            bail!("Invalid work ref selector `{value}`; expected terminal[/<session>[/<record>]], agent[/<session>[/<turn>]], or <provider>[/<session>[/<turn>]]");
         }
 
         let session = parts
@@ -352,31 +330,19 @@ impl FromStr for WorkRefSelector {
             .filter(|part| **part != "*")
             .map(|part| parse_index_selector(part, "record", value))
             .transpose()?;
-        let lines = parts
-            .get(3)
-            .filter(|part| **part != "*")
-            .map(|part| parse_index_selector(part, "line", value))
-            .transpose()?;
-
         let selector = if parts[0].eq_ignore_ascii_case("terminal") {
-            WorkRefSelector::Terminal {
-                session,
-                records,
-                lines,
-            }
+            WorkRefSelector::Terminal { session, records }
         } else if parts[0].eq_ignore_ascii_case("agent") {
             WorkRefSelector::Agent {
                 provider: None,
                 session,
                 records,
-                lines,
             }
         } else if let Some(provider) = AgentProvider::from_command_name(parts[0]) {
             WorkRefSelector::Agent {
                 provider: Some(provider),
                 session,
                 records,
-                lines,
             }
         } else {
             bail!(
@@ -433,19 +399,15 @@ fn parse_path_and_at(value: &str) -> Result<(WorkPath, WorkAt)> {
         .split('/')
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>();
-    if !(3..=5).contains(&parts.len()) {
+    if !(3..=4).contains(&parts.len()) {
         bail!(
-            "Invalid work ref `{value}`; expected terminal/<session>/<index>[/line|/i/<part>|/o/<part>] or <provider>/<session>/<index>[/line|/i/<part>|/o/<part>]"
+            "Invalid work ref `{value}`; expected terminal/<session>/<index>[/p<part>] or <provider>/<session>/<index>[/p<part>]"
         );
     }
 
     let at = match parts.len() {
         3 => WorkAt::Whole,
-        4 => WorkAt::Line(parse_one_based(parts[3], "line", value)?),
-        5 => WorkAt::Part {
-            io: parse_part_io(parts[3], value)?,
-            index: parse_one_based(parts[4], "part", value)?,
-        },
+        4 => WorkAt::Part(parse_part_index(parts[3], value)?),
         _ => unreachable!("length already validated"),
     };
     let index = parse_one_based(parts[2], "index", value)?;
@@ -520,19 +482,11 @@ fn parse_one_based(part: &str, label: &str, reference: &str) -> Result<usize> {
     Ok(value)
 }
 
-fn parse_part_io(part: &str, reference: &str) -> Result<WorkPartIo> {
-    match part {
-        "i" => Ok(WorkPartIo::Input),
-        "o" => Ok(WorkPartIo::Output),
-        _ => bail!("Invalid work ref `{reference}`; expected `i` or `o` part selector"),
-    }
-}
-
-fn part_segment(io: WorkPartIo) -> &'static str {
-    match io {
-        WorkPartIo::Input => "i",
-        WorkPartIo::Output => "o",
-    }
+fn parse_part_index(segment: &str, reference: &str) -> Result<usize> {
+    let raw = segment
+        .strip_prefix('p')
+        .ok_or_else(|| anyhow::anyhow!("Invalid work ref `{reference}`; expected p<part>"))?;
+    parse_one_based(raw, "part", reference)
 }
 
 fn parse_index_selector(part: &str, label: &str, reference: &str) -> Result<Vec<usize>> {
@@ -572,7 +526,7 @@ mod tests {
 
     #[test]
     fn parses_and_renders_terminal_refs() {
-        let reference: WorkRef = "terminal/current/3/12".parse().unwrap();
+        let reference: WorkRef = "terminal/current/3".parse().unwrap();
         assert_eq!(
             reference,
             WorkRef {
@@ -581,16 +535,15 @@ mod tests {
                     session: "current".to_string(),
                     index: 3,
                 },
-                at: WorkAt::Line(12),
+                at: WorkAt::Whole,
             }
         );
-        assert_eq!(reference.to_string(), "terminal/current/3/12");
-        assert_eq!(reference.whole().to_string(), "terminal/current/3");
+        assert_eq!(reference.to_string(), "terminal/current/3");
     }
 
     #[test]
     fn parses_and_renders_terminal_part_refs() {
-        let reference: WorkRef = "terminal/current/3/o/2".parse().unwrap();
+        let reference: WorkRef = "terminal/current/3/p2".parse().unwrap();
         assert_eq!(
             reference,
             WorkRef {
@@ -599,14 +552,11 @@ mod tests {
                     session: "current".to_string(),
                     index: 3,
                 },
-                at: WorkAt::Part {
-                    io: WorkPartIo::Output,
-                    index: 2,
-                },
+                at: WorkAt::Part(2),
             }
         );
-        assert_eq!(reference.part(), Some((WorkPartIo::Output, 2)));
-        assert_eq!(reference.to_string(), "terminal/current/3/o/2");
+        assert_eq!(reference.part(), Some(2));
+        assert_eq!(reference.to_string(), "terminal/current/3/p2");
         assert_eq!(reference.whole().to_string(), "terminal/current/3");
     }
 
@@ -625,11 +575,7 @@ mod tests {
                 at: WorkAt::Whole,
             }
         );
-        assert_eq!(reference.with_line(7).to_string(), "pi/abcdef12/2/7");
-        assert_eq!(
-            reference.with_part(WorkPartIo::Input, 3).to_string(),
-            "pi/abcdef12/2/i/3"
-        );
+        assert_eq!(reference.with_part(3).to_string(), "pi/abcdef12/2/p3");
     }
 
     #[test]
@@ -644,7 +590,7 @@ mod tests {
 
     #[test]
     fn named_scope_parses_and_renders() {
-        let reference: WorkRef = "desk:terminal/session_42/3/o/1".parse().unwrap();
+        let reference: WorkRef = "desk:terminal/session_42/3/p1".parse().unwrap();
         assert_eq!(
             reference,
             WorkRef {
@@ -653,15 +599,12 @@ mod tests {
                     session: "session_42".to_string(),
                     index: 3,
                 },
-                at: WorkAt::Part {
-                    io: WorkPartIo::Output,
-                    index: 1,
-                },
+                at: WorkAt::Part(1),
             }
         );
         assert!(!reference.is_local());
         assert_eq!(reference.scope_name(), Some("desk"));
-        assert_eq!(reference.to_string(), "desk:terminal/session_42/3/o/1");
+        assert_eq!(reference.to_string(), "desk:terminal/session_42/3/p1");
     }
 
     #[test]
@@ -675,8 +618,8 @@ mod tests {
     fn scope_preserved_through_at_changes() {
         let reference: WorkRef = "laptop:codex/abc123/5".parse().unwrap();
         assert_eq!(
-            reference.with_line(2).to_string(),
-            "laptop:codex/abc123/5/2"
+            reference.with_part(2).to_string(),
+            "laptop:codex/abc123/5/p2"
         );
         assert_eq!(reference.whole().to_string(), "laptop:codex/abc123/5");
     }
@@ -732,24 +675,22 @@ mod tests {
     #[test]
     fn rejects_zero_indices() {
         assert!("pi/session/0".parse::<WorkRef>().is_err());
-        assert!("pi/session/1/0".parse::<WorkRef>().is_err());
-        assert!("pi/session/1/i/0".parse::<WorkRef>().is_err());
+        assert!("pi/session/1/p0".parse::<WorkRef>().is_err());
     }
 
     #[test]
     fn rejects_unknown_part_selector() {
-        assert!("pi/session/1/x/1".parse::<WorkRef>().is_err());
+        assert!("pi/session/1/x1".parse::<WorkRef>().is_err());
     }
 
     #[test]
     fn parses_ref_selectors() {
         assert_eq!(
-            "pi/abcdef12/2-4,7/*".parse::<WorkRefSelector>().unwrap(),
+            "pi/abcdef12/2-4,7".parse::<WorkRefSelector>().unwrap(),
             WorkRefSelector::Agent {
                 provider: Some(AgentProvider::Pi),
                 session: Some("abcdef12".to_string()),
                 records: Some(vec![2, 3, 4, 7]),
-                lines: None,
             }
         );
     }

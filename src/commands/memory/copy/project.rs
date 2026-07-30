@@ -47,21 +47,13 @@ fn exact_text(record: &WorkRecord, at: WorkAt) -> Result<TextPair> {
 fn missing_at_message(work_ref: &WorkRef, at: WorkAt) -> String {
     match at {
         WorkAt::Whole => format!("No content for `{}`", work_ref.whole()),
-        WorkAt::Line(line) => format!("No line {line} in `{}`", work_ref.whole()),
-        WorkAt::Part { io, index } => {
-            let label = match io {
-                sivtr_core::record::WorkPartIo::Input => "input",
-                sivtr_core::record::WorkPartIo::Output => "output",
-            };
-            format!("No {label} part {index} in `{}`", work_ref.whole())
-        }
+        WorkAt::Part(seq) => format!("No part {seq} in `{}`", work_ref.whole()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sivtr_core::record::WorkPartIo;
     use sivtr_core::session::SessionEntry;
     use std::path::Path;
 
@@ -123,15 +115,7 @@ mod tests {
             0,
         )
         .unwrap();
-        let text = project_record(
-            &record,
-            Projection::Exact(WorkAt::Part {
-                io: WorkPartIo::Output,
-                index: 1,
-            }),
-            None,
-        )
-        .unwrap();
+        let text = project_record(&record, Projection::Exact(WorkAt::Part(3)), None).unwrap();
         assert_eq!(text.plain, "ok");
     }
 }

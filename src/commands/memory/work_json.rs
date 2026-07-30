@@ -47,8 +47,7 @@ mod tests {
     use super::*;
     use sivtr_core::ai::AgentProvider;
     use sivtr_core::record::{
-        WorkPart, WorkPartIo, WorkPartKind, WorkRecord, WorkRecordKind, WorkRef, WorkSessionRef,
-        WorkSource, WorkTime,
+        WorkPart, WorkRecord, WorkRecordKind, WorkRef, WorkSessionRef, WorkSource, WorkTime,
     };
 
     #[test]
@@ -86,13 +85,11 @@ mod tests {
             status: None,
             title: "title".to_string(),
             parts: vec![WorkPart {
-                io: WorkPartIo::Output,
-                kind: WorkPartKind::AssistantMessage,
-                index: 1,
+                seq: 1,
                 occurred_at: Some("2026-05-24T12:00:00Z".to_string()),
-                label: None,
-                text: "assistant reply".to_string(),
-                ansi: None,
+                data: sivtr_core::record::WorkPartData::Assistant {
+                    content: "assistant reply".to_string(),
+                },
             }],
         }
     }

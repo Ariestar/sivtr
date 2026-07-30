@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::cli::{
     FilterArgs, SearchArgs, SearchFieldArg, SearchSortArg, SearchStatusArg, ShowArgs,
-    WorkPartFilterArg, WorkPartKindArg, ZoomArgs,
+    WorkPartKindArg, ZoomArgs,
 };
 
 // MCP JSON schema exposes these as strings; serde still uses FromStr aliases.
@@ -74,9 +74,6 @@ pub struct FilterParams {
     #[serde(default)]
     #[schemars(with = "Option<String>")]
     pub in_field: Option<SearchFieldArg>,
-    #[serde(default)]
-    #[schemars(with = "Option<String>")]
-    pub io: Option<WorkPartFilterArg>,
     #[serde(default)]
     #[schemars(with = "Option<String>")]
     pub kind: Option<WorkPartKindArg>,
@@ -268,7 +265,6 @@ pub fn to_filter_args(params: &FilterParams) -> Result<FilterArgs, String> {
         match_: params.match_regex.clone(),
         exclude: params.exclude.clone(),
         in_field: params.in_field.unwrap_or_default(),
-        io: params.io.unwrap_or_default(),
         kind: params.kind,
         status: params.status,
         exit_code: params.exit_code,
@@ -492,7 +488,6 @@ mod tests {
             match_regex: None,
             exclude: None,
             in_field: None,
-            io: None,
             kind: None,
             status: None,
             exit_code: None,

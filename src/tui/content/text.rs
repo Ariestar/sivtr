@@ -7,16 +7,18 @@ use crate::tui::content::view::ContentViewMode;
 use crate::tui::workspace::model::WorkspaceDialogue;
 
 pub(crate) fn content_io_from_record(record: &WorkRecord, reading: bool) -> ContentIoTexts {
-    use sivtr_core::record::WorkPartIo;
     ContentIoTexts {
-        input: io_body_text(record, reading, WorkPartIo::Input),
-        output: io_body_text(record, reading, WorkPartIo::Output),
+        input: io_body_text(record, reading, true),
+        output: io_body_text(record, reading, false),
     }
 }
 
-fn io_body_text(record: &WorkRecord, reading: bool, io: sivtr_core::record::WorkPartIo) -> String {
-    let parts: Vec<&sivtr_core::record::WorkPart> =
-        record.parts.iter().filter(|part| part.io == io).collect();
+fn io_body_text(record: &WorkRecord, reading: bool, input: bool) -> String {
+    let parts: Vec<&sivtr_core::record::WorkPart> = record
+        .parts
+        .iter()
+        .filter(|part| part.kind().is_input() == input)
+        .collect();
     if parts.is_empty() {
         return String::new();
     }
@@ -33,14 +35,14 @@ fn structured_parts_text(parts: &[&sivtr_core::record::WorkPart]) -> String {
     let structure: Vec<&sivtr_core::record::WorkPart> = parts
         .iter()
         .copied()
-        .filter(|part| part.kind.is_structure())
+        .filter(|part| part.kind().is_structure())
         .collect();
     let fold = (!structure.is_empty()).then(|| collapse_structure_markers(&structure));
 
     let mut chunks = Vec::new();
     let mut fold_emitted = false;
     for part in parts {
-        if part.kind.is_structure() {
+        if part.kind().is_structure() {
             if !fold_emitted {
                 if let Some(fold) = fold.as_ref() {
                     chunks.push(fold.clone());
@@ -49,7 +51,7 @@ fn structured_parts_text(parts: &[&sivtr_core::record::WorkPart]) -> String {
             }
             continue;
         }
-        chunks.push(part.text.clone());
+        chunks.push(part.text().into_owned());
     }
     chunks.join("\n\n")
 }
@@ -63,34 +65,30 @@ fn raw_parts_text(parts: &[&sivtr_core::record::WorkPart]) -> String {
 }
 
 pub(crate) fn structured_part_text(part: &sivtr_core::record::WorkPart) -> String {
-    if part.kind.is_structure() {
+    if part.kind().is_structure() {
         structure_fold_label(part)
     } else {
-        part.text.clone()
+        part.text().into_owned()
     }
 }
 
 pub(crate) fn raw_part_text(part: &sivtr_core::record::WorkPart) -> String {
-    if part.kind.is_structure() {
+    if part.kind().is_structure() {
         return part
-            .kind
+            .kind()
             .as_agent_block_kind()
             .map(|kind| {
-                sivtr_core::ai::format_structured_block(
-                    kind,
-                    part.label.as_deref(),
-                    part.text.trim(),
-                )
+                sivtr_core::ai::format_structured_block(kind, part.label(), part.text().trim())
             })
-            .unwrap_or_else(|| part.text.clone());
+            .unwrap_or_else(|| part.text().into_owned());
     }
-    part.text.clone()
+    part.text().into_owned()
 }
 
 fn structure_fold_label(part: &sivtr_core::record::WorkPart) -> String {
-    part.kind
+    part.kind()
         .as_agent_block_kind()
-        .and_then(|kind| kind.open_marker(part.label.as_deref()))
+        .and_then(|kind| kind.open_marker(part.label()))
         .unwrap_or_else(|| "<:structure:>".to_string())
 }
 

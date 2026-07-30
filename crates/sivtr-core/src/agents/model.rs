@@ -90,6 +90,7 @@ pub struct AgentBlock {
     pub kind: AgentBlockKind,
     pub timestamp: Option<String>,
     pub label: Option<String>,
+    pub call_id: Option<String>,
     pub text: String,
 }
 
@@ -215,6 +216,27 @@ pub fn push_block(
             kind,
             timestamp,
             label,
+            call_id: None,
+            text,
+        });
+    }
+}
+
+pub fn push_tool_block(
+    session: &mut AgentSession,
+    kind: AgentBlockKind,
+    timestamp: Option<String>,
+    call_id: Option<String>,
+    label: Option<String>,
+    text: impl Into<String>,
+) {
+    let text = text.into().trim().to_string();
+    if !text.is_empty() {
+        session.blocks.push(AgentBlock {
+            kind,
+            timestamp,
+            label,
+            call_id,
             text,
         });
     }

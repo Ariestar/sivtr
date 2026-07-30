@@ -1,6 +1,6 @@
 use regex::Regex;
 
-use super::model::{WorkPart, WorkPartIo, WorkRecord, WorkRecordKind};
+use super::model::{WorkPart, WorkRecord, WorkRecordKind};
 use super::refs::{WorkAt, WorkRef};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,9 +38,9 @@ impl WorkRecordIndex {
     }
 
     pub fn resolve_part(&self, reference: &WorkRef) -> Option<&WorkPart> {
-        let (io, index) = reference.part()?;
+        let seq = reference.part()?;
         self.resolve(reference)
-            .and_then(|record| find_part(record, io, index))
+            .and_then(|record| find_part(record, seq))
     }
 
     pub fn search(
@@ -89,12 +89,7 @@ pub fn work_record_content_matches<'a>(
     record: &'a WorkRecord,
     regex: &Regex,
 ) -> Vec<WorkRecordMatch<'a>> {
-    let part_matches = matching_parts(record, regex);
-    if part_matches.is_empty() {
-        matching_lines(record, regex)
-    } else {
-        part_matches
-    }
+    matching_parts(record, regex)
 }
 
 fn matching_parts<'a>(record: &'a WorkRecord, regex: &Regex) -> Vec<WorkRecordMatch<'a>> {
@@ -102,35 +97,17 @@ fn matching_parts<'a>(record: &'a WorkRecord, regex: &Regex) -> Vec<WorkRecordMa
         .parts
         .iter()
         .flat_map(|part| {
-            part.text
-                .lines()
+            let text = part.text();
+            text.lines()
                 .enumerate()
                 .filter(|(_, line)| regex.is_match(line))
                 .map(|(line_index, line)| WorkRecordMatch {
                     record,
-                    at: WorkAt::Part {
-                        io: part.io,
-                        index: part.index,
-                    },
+                    at: WorkAt::Part(part.seq),
                     content: line.to_string(),
                     matched_line: line_index + 1,
                 })
                 .collect::<Vec<_>>()
-        })
-        .collect()
-}
-
-fn matching_lines<'a>(record: &'a WorkRecord, regex: &Regex) -> Vec<WorkRecordMatch<'a>> {
-    record
-        .combined_text()
-        .lines()
-        .enumerate()
-        .filter(|(_, line)| regex.is_match(line))
-        .map(|(line_index, line)| WorkRecordMatch {
-            record,
-            at: WorkAt::Line(line_index + 1),
-            content: line.to_string(),
-            matched_line: line_index + 1,
         })
         .collect()
 }
@@ -148,18 +125,15 @@ fn matching_session<'a>(record: &'a WorkRecord, regex: &Regex) -> Option<WorkRec
     None
 }
 
-fn find_part(record: &WorkRecord, io: WorkPartIo, index: usize) -> Option<&WorkPart> {
-    record
-        .parts
-        .iter()
-        .find(|part| part.io == io && part.index == index)
+fn find_part(record: &WorkRecord, seq: usize) -> Option<&WorkPart> {
+    record.parts.iter().find(|part| part.seq == seq)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ai::AgentProvider;
-    use crate::record::model::{WorkOutcome, WorkPartKind, WorkRecordKind, WorkStatus, WorkTime};
+    use crate::record::model::{WorkOutcome, WorkPartData, WorkRecordKind, WorkStatus, WorkTime};
 
     #[test]
     fn resolves_records_by_typed_ref() {
@@ -177,7 +151,7 @@ mod tests {
     fn resolves_parts_by_typed_ref() {
         let record = test_record_with_parts("terminal/current/1", "current", 1, "hello");
         let index = WorkRecordIndex::new(vec![record]);
-        let reference = WorkRef::terminal("current", 1).with_part(WorkPartIo::Output, 1);
+        let reference = WorkRef::terminal("current", 1).with_part(1);
 
         assert!(index.resolve_part(&reference).is_some());
     }
@@ -223,13 +197,11 @@ mod tests {
             status: None,
             title: "title".to_string(),
             parts: vec![WorkPart {
-                io: WorkPartIo::Output,
-                kind: WorkPartKind::AssistantMessage,
-                index: 1,
+                seq: 1,
                 occurred_at: None,
-                label: None,
-                text: combined.to_string(),
-                ansi: None,
+                data: WorkPartData::Assistant {
+                    content: combined.to_string(),
+                },
             }],
         }
     }
@@ -263,13 +235,12 @@ mod tests {
             }),
             title: "title".to_string(),
             parts: vec![WorkPart {
-                io: WorkPartIo::Output,
-                kind: WorkPartKind::Text,
-                index: 1,
+                seq: 1,
                 occurred_at: None,
-                label: None,
-                text: text.to_string(),
-                ansi: None,
+                data: WorkPartData::Output {
+                    content: text.to_string(),
+                    ansi: None,
+                },
             }],
         }
     }

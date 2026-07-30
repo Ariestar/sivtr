@@ -4,7 +4,6 @@
 //! so picker / render / help don't re-copy the same match arms.
 
 use ratatui::layout::Rect;
-use sivtr_core::record::{WorkAt, WorkPartIo};
 
 use crate::tui::content::view::{content_view_line_count, ContentViewMode};
 
@@ -320,39 +319,13 @@ fn split_bottom(area: Rect, top_height: u16) -> Rect {
 }
 
 /// Map a search hit to (half, 0-based scroll in that half's displayed text).
-///
-/// - `WorkAt::Part` → half from `io`, line is part-local (best effort under fold).
-/// - `WorkAt::Line` / `Whole` → prefer the non-blank half; if both have text,
-///   treat `matched_line` as walking Input then Output display lines.
-pub(crate) fn search_match_half(
-    at: WorkAt,
-    matched_line: usize,
-    texts: &ContentIoTexts,
-) -> (ContentIoFocus, usize) {
-    let line0 = matched_line.saturating_sub(1);
-    match at {
-        WorkAt::Part {
-            io: WorkPartIo::Output,
-            ..
-        } => (ContentIoFocus::Output, line0),
-        WorkAt::Part { .. } => (ContentIoFocus::Input, line0),
-        WorkAt::Line(_) | WorkAt::Whole => {
-            let in_blank = texts.input_blank();
-            let out_blank = texts.output_blank();
-            if in_blank && !out_blank {
-                return (ContentIoFocus::Output, line0);
-            }
-            if out_blank && !in_blank {
-                return (ContentIoFocus::Input, line0);
-            }
-            let in_n = texts.display(ContentIoFocus::Input).lines().count().max(1);
-            if line0 < in_n {
-                (ContentIoFocus::Input, line0)
-            } else {
-                (ContentIoFocus::Output, line0.saturating_sub(in_n))
-            }
-        }
-    }
+pub(crate) fn search_match_half(input: bool, matched_line: usize) -> (ContentIoFocus, usize) {
+    let half = if input {
+        ContentIoFocus::Input
+    } else {
+        ContentIoFocus::Output
+    };
+    (half, matched_line.saturating_sub(1))
 }
 
 pub(crate) fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
@@ -396,34 +369,12 @@ mod tests {
     }
 
     #[test]
-    fn search_part_routes_by_io() {
-        let texts = ContentIoTexts {
-            input: "a".into(),
-            output: "b\nc".into(),
-        };
-        let (half, scroll) = search_match_half(
-            WorkAt::Part {
-                io: WorkPartIo::Output,
-                index: 1,
-            },
-            2,
-            &texts,
-        );
+    fn search_part_routes_by_kind_direction() {
+        let (half, scroll) = search_match_half(false, 2);
         assert_eq!(half, ContentIoFocus::Output);
         assert_eq!(scroll, 1);
-    }
 
-    #[test]
-    fn search_line_walks_input_then_output() {
-        let texts = ContentIoTexts {
-            input: "i1\ni2".into(),
-            output: "o1\no2".into(),
-        };
-        // 2 display lines in input; matched_line 3 (1-based) → output offset 0
-        let (half, scroll) = search_match_half(WorkAt::Line(3), 3, &texts);
-        assert_eq!(half, ContentIoFocus::Output);
-        assert_eq!(scroll, 0);
-        let (half, scroll) = search_match_half(WorkAt::Line(1), 1, &texts);
+        let (half, scroll) = search_match_half(true, 1);
         assert_eq!(half, ContentIoFocus::Input);
         assert_eq!(scroll, 0);
     }

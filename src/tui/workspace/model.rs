@@ -228,7 +228,7 @@ impl WorkspaceDialogue {
         mode: ContentViewMode,
         target: Option<WorkAt>,
     ) -> ContentIoTexts {
-        if let Some(target @ WorkAt::Part { .. }) = target {
+        if let Some(target @ WorkAt::Part(_)) = target {
             let text = match mode {
                 ContentViewMode::Raw => self.targeted_plain_text(target),
                 ContentViewMode::Reading => self.targeted_structured_text(target),
@@ -247,15 +247,16 @@ impl WorkspaceDialogue {
                     output: String::new(),
                 };
             };
-            return match part.io {
-                sivtr_core::record::WorkPartIo::Input => ContentIoTexts {
+            return if part.kind().is_input() {
+                ContentIoTexts {
                     input: text,
                     output: String::new(),
-                },
-                sivtr_core::record::WorkPartIo::Output => ContentIoTexts {
+                }
+            } else {
+                ContentIoTexts {
                     input: String::new(),
                     output: text,
-                },
+                }
             };
         }
 
@@ -278,25 +279,25 @@ impl WorkspaceDialogue {
     pub(crate) fn content_ref(&self, target: Option<WorkAt>) -> Option<WorkRef> {
         let work_ref = self.work_ref.as_ref()?;
         let target = match target {
-            Some(target @ WorkAt::Part { .. }) => target,
+            Some(target @ WorkAt::Part(_)) => target,
             _ => return Some(work_ref.clone()),
         };
         Some(work_ref.with_at(target))
     }
 
     fn targeted_plain_text(&self, target: WorkAt) -> Option<String> {
-        let WorkAt::Part { .. } = target else {
+        let WorkAt::Part(_) = target else {
             return None;
         };
         let part = self.record.as_ref()?.part_for_at(target)?;
-        if part.kind.is_structure() {
+        if part.kind().is_structure() {
             return Some(raw_part_text(part));
         }
-        Some(part.text.clone())
+        Some(part.text().into_owned())
     }
 
     fn targeted_structured_text(&self, target: WorkAt) -> Option<String> {
-        let WorkAt::Part { .. } = target else {
+        let WorkAt::Part(_) = target else {
             return None;
         };
         let part = self.record.as_ref()?.part_for_at(target)?;

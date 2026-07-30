@@ -15,6 +15,10 @@ use crate::tui::search::WorkspaceSearchScope;
 use sivtr_core::ai::AgentProvider;
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
 
+fn tool_test_value(text: String) -> serde_json::Value {
+    serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text))
+}
+
 #[test]
 fn can_open_dialogue_vim_accepts_sessions_when_dialogues_exist() {
     assert!(can_open_dialogue_vim(WorkspaceFocus::Sessions, 1));
@@ -44,22 +48,18 @@ fn content_preview_text_preserves_raw_text_without_line_number_prefixes() {
         title: "cmd".to_string(),
         parts: vec![
             sivtr_core::record::WorkPart {
-                io: sivtr_core::record::WorkPartIo::Input,
-                kind: sivtr_core::record::WorkPartKind::UserMessage,
-                index: 1,
+                seq: 1,
                 occurred_at: None,
-                label: None,
-                text: "alpha".to_string(),
-                ansi: None,
+                data: sivtr_core::record::WorkPartData::User {
+                    content: "alpha".to_string(),
+                },
             },
             sivtr_core::record::WorkPart {
-                io: sivtr_core::record::WorkPartIo::Output,
-                kind: sivtr_core::record::WorkPartKind::AssistantMessage,
-                index: 1,
+                seq: 1,
                 occurred_at: None,
-                label: None,
-                text: "omega".to_string(),
-                ansi: None,
+                data: sivtr_core::record::WorkPartData::Assistant {
+                    content: "omega".to_string(),
+                },
             },
         ],
     };
@@ -106,13 +106,13 @@ fn content_preview_text_uses_targeted_part_text_in_raw_mode() {
         status: None,
         title: "cmd".to_string(),
         parts: vec![sivtr_core::record::WorkPart {
-            io: sivtr_core::record::WorkPartIo::Input,
-            kind: sivtr_core::record::WorkPartKind::ToolCall,
-            index: 1,
+            seq: 1,
             occurred_at: None,
-            label: Some("tool".to_string()),
-            text: "hidden tool call".to_string(),
-            ansi: None,
+            data: sivtr_core::record::WorkPartData::ToolCall {
+                call_id: None,
+                tool: Some("tool".to_string()),
+                input: tool_test_value("hidden tool call".to_string()),
+            },
         }],
     };
     let dialogue = WorkspaceDialogue {
@@ -127,10 +127,7 @@ fn content_preview_text_uses_targeted_part_text_in_raw_mode() {
         &[false],
         0,
         ContentViewMode::Raw,
-        Some(WorkAt::Part {
-            io: sivtr_core::record::WorkPartIo::Input,
-            index: 1,
-        }),
+        Some(WorkAt::Part(1)),
     );
     assert!(text.contains("<:tool:tool call:>"));
     assert!(text.contains("hidden tool call"));
@@ -157,13 +154,13 @@ fn content_preview_text_uses_structured_targeted_part_text_in_reading_mode() {
         status: None,
         title: "cmd".to_string(),
         parts: vec![sivtr_core::record::WorkPart {
-            io: sivtr_core::record::WorkPartIo::Input,
-            kind: sivtr_core::record::WorkPartKind::ToolCall,
-            index: 1,
+            seq: 1,
             occurred_at: None,
-            label: Some("tool".to_string()),
-            text: "hidden tool call".to_string(),
-            ansi: None,
+            data: sivtr_core::record::WorkPartData::ToolCall {
+                call_id: None,
+                tool: Some("tool".to_string()),
+                input: tool_test_value("hidden tool call".to_string()),
+            },
         }],
     };
     let dialogue = WorkspaceDialogue {
@@ -178,10 +175,7 @@ fn content_preview_text_uses_structured_targeted_part_text_in_reading_mode() {
         &[false],
         0,
         ContentViewMode::Reading,
-        Some(WorkAt::Part {
-            io: sivtr_core::record::WorkPartIo::Input,
-            index: 1,
-        }),
+        Some(WorkAt::Part(1)),
     );
 
     // Reading folds structure to one open marker only.
@@ -216,40 +210,36 @@ fn reading_mode_folds_structure_and_raw_expands() {
         title: "cmd".to_string(),
         parts: vec![
             sivtr_core::record::WorkPart {
-                io: sivtr_core::record::WorkPartIo::Input,
-                kind: sivtr_core::record::WorkPartKind::UserMessage,
-                index: 1,
+                seq: 1,
                 occurred_at: None,
-                label: None,
-                text: "question".to_string(),
-                ansi: None,
+                data: sivtr_core::record::WorkPartData::User {
+                    content: "question".to_string(),
+                },
             },
             sivtr_core::record::WorkPart {
-                io: sivtr_core::record::WorkPartIo::Input,
-                kind: sivtr_core::record::WorkPartKind::ToolCall,
-                index: 2,
+                seq: 2,
                 occurred_at: None,
-                label: Some("Bash".to_string()),
-                text: "cargo test".to_string(),
-                ansi: None,
+                data: sivtr_core::record::WorkPartData::ToolCall {
+                    call_id: None,
+                    tool: Some("Bash".to_string()),
+                    input: tool_test_value("cargo test".to_string()),
+                },
             },
             sivtr_core::record::WorkPart {
-                io: sivtr_core::record::WorkPartIo::Output,
-                kind: sivtr_core::record::WorkPartKind::ToolOutput,
-                index: 1,
+                seq: 3,
                 occurred_at: None,
-                label: Some("Bash".to_string()),
-                text: "ok".to_string(),
-                ansi: None,
+                data: sivtr_core::record::WorkPartData::ToolResult {
+                    call_id: None,
+                    tool: Some("Bash".to_string()),
+                    output: tool_test_value("ok".to_string()),
+                },
             },
             sivtr_core::record::WorkPart {
-                io: sivtr_core::record::WorkPartIo::Output,
-                kind: sivtr_core::record::WorkPartKind::AssistantMessage,
-                index: 2,
+                seq: 4,
                 occurred_at: None,
-                label: None,
-                text: "answer".to_string(),
-                ansi: None,
+                data: sivtr_core::record::WorkPartData::Assistant {
+                    content: "answer".to_string(),
+                },
             },
         ],
     };
@@ -326,58 +316,52 @@ fn reading_mode_collapses_adjacent_structure_runs() {
         title: "cmd".to_string(),
         parts: vec![
             sivtr_core::record::WorkPart {
-                io: sivtr_core::record::WorkPartIo::Input,
-                kind: sivtr_core::record::WorkPartKind::UserMessage,
-                index: 1,
+                seq: 1,
                 occurred_at: None,
-                label: None,
-                text: "do it".to_string(),
-                ansi: None,
+                data: sivtr_core::record::WorkPartData::User {
+                    content: "do it".to_string(),
+                },
             },
             sivtr_core::record::WorkPart {
-                io: sivtr_core::record::WorkPartIo::Input,
-                kind: sivtr_core::record::WorkPartKind::ToolCall,
-                index: 2,
+                seq: 2,
                 occurred_at: None,
-                label: Some("Bash".to_string()),
-                text: "ls".to_string(),
-                ansi: None,
+                data: sivtr_core::record::WorkPartData::ToolCall {
+                    call_id: None,
+                    tool: Some("Bash".to_string()),
+                    input: tool_test_value("ls".to_string()),
+                },
             },
             sivtr_core::record::WorkPart {
-                io: sivtr_core::record::WorkPartIo::Input,
-                kind: sivtr_core::record::WorkPartKind::ToolCall,
-                index: 3,
+                seq: 3,
                 occurred_at: None,
-                label: Some("Read".to_string()),
-                text: "file".to_string(),
-                ansi: None,
+                data: sivtr_core::record::WorkPartData::ToolCall {
+                    call_id: None,
+                    tool: Some("Read".to_string()),
+                    input: tool_test_value("file".to_string()),
+                },
             },
             sivtr_core::record::WorkPart {
-                io: sivtr_core::record::WorkPartIo::Input,
-                kind: sivtr_core::record::WorkPartKind::Skill,
-                index: 4,
+                seq: 4,
                 occurred_at: None,
-                label: Some("review".to_string()),
-                text: "skill body".to_string(),
-                ansi: None,
+                data: sivtr_core::record::WorkPartData::Skill {
+                    skill: Some("review".to_string()),
+                    content: "skill body".to_string(),
+                },
             },
             sivtr_core::record::WorkPart {
-                io: sivtr_core::record::WorkPartIo::Input,
-                kind: sivtr_core::record::WorkPartKind::Skill,
-                index: 5,
+                seq: 5,
                 occurred_at: None,
-                label: Some("deploy".to_string()),
-                text: "skill body 2".to_string(),
-                ansi: None,
+                data: sivtr_core::record::WorkPartData::Skill {
+                    skill: Some("deploy".to_string()),
+                    content: "skill body 2".to_string(),
+                },
             },
             sivtr_core::record::WorkPart {
-                io: sivtr_core::record::WorkPartIo::Output,
-                kind: sivtr_core::record::WorkPartKind::AssistantMessage,
-                index: 1,
+                seq: 1,
                 occurred_at: None,
-                label: None,
-                text: "done".to_string(),
-                ansi: None,
+                data: sivtr_core::record::WorkPartData::Assistant {
+                    content: "done".to_string(),
+                },
             },
         ],
     };
@@ -445,49 +429,47 @@ fn reading_mode_counts_identical_structure_markers_regardless_of_order() {
         parts: vec![
             // Interleaved with dialogue — still one IO-section fold, same markers count.
             sivtr_core::record::WorkPart {
-                io: sivtr_core::record::WorkPartIo::Input,
-                kind: sivtr_core::record::WorkPartKind::ToolCall,
-                index: 1,
+                seq: 1,
                 occurred_at: None,
-                label: Some("Bash".to_string()),
-                text: "ls".to_string(),
-                ansi: None,
+                data: sivtr_core::record::WorkPartData::ToolCall {
+                    call_id: None,
+                    tool: Some("Bash".to_string()),
+                    input: tool_test_value("ls".to_string()),
+                },
             },
             sivtr_core::record::WorkPart {
-                io: sivtr_core::record::WorkPartIo::Input,
-                kind: sivtr_core::record::WorkPartKind::UserMessage,
-                index: 2,
+                seq: 2,
                 occurred_at: None,
-                label: None,
-                text: "middle note".to_string(),
-                ansi: None,
+                data: sivtr_core::record::WorkPartData::User {
+                    content: "middle note".to_string(),
+                },
             },
             sivtr_core::record::WorkPart {
-                io: sivtr_core::record::WorkPartIo::Input,
-                kind: sivtr_core::record::WorkPartKind::ToolCall,
-                index: 3,
+                seq: 3,
                 occurred_at: None,
-                label: Some("Read".to_string()),
-                text: "file".to_string(),
-                ansi: None,
+                data: sivtr_core::record::WorkPartData::ToolCall {
+                    call_id: None,
+                    tool: Some("Read".to_string()),
+                    input: tool_test_value("file".to_string()),
+                },
             },
             sivtr_core::record::WorkPart {
-                io: sivtr_core::record::WorkPartIo::Input,
-                kind: sivtr_core::record::WorkPartKind::ToolCall,
-                index: 4,
+                seq: 4,
                 occurred_at: None,
-                label: Some("Bash".to_string()),
-                text: "pwd".to_string(),
-                ansi: None,
+                data: sivtr_core::record::WorkPartData::ToolCall {
+                    call_id: None,
+                    tool: Some("Bash".to_string()),
+                    input: tool_test_value("pwd".to_string()),
+                },
             },
             sivtr_core::record::WorkPart {
-                io: sivtr_core::record::WorkPartIo::Input,
-                kind: sivtr_core::record::WorkPartKind::ToolCall,
-                index: 5,
+                seq: 5,
                 occurred_at: None,
-                label: Some("Bash".to_string()),
-                text: "date".to_string(),
-                ansi: None,
+                data: sivtr_core::record::WorkPartData::ToolCall {
+                    call_id: None,
+                    tool: Some("Bash".to_string()),
+                    input: tool_test_value("date".to_string()),
+                },
             },
         ],
     };
@@ -657,18 +639,9 @@ fn current_content_ref_round_trips_active_part_target() {
         copy: WorkspaceCopyParts::default(),
     }];
 
-    let current = current_content_ref(
-        &dialogues,
-        &[false],
-        0,
-        Some(WorkAt::Part {
-            io: sivtr_core::record::WorkPartIo::Output,
-            index: 1,
-        }),
-    )
-    .unwrap();
+    let current = current_content_ref(&dialogues, &[false], 0, Some(WorkAt::Part(1))).unwrap();
 
-    assert_eq!(current.to_string(), "codex/session/2/o/1");
+    assert_eq!(current.to_string(), "codex/session/2/p1");
 }
 
 #[test]

@@ -109,12 +109,7 @@ pub fn load_workspace_source(cwd: &Path, source: &str) -> Result<SourceQueryResu
         if !selector.matches_work_ref(&record.work_ref) {
             continue;
         }
-        let record_ref = record.work_ref.whole();
-        if let Some(lines) = selector.selected_lines() {
-            anchors.extend(lines.iter().map(|line| record_ref.with_line(*line)));
-        } else {
-            anchors.push(record_ref);
-        }
+        anchors.push(record.work_ref.whole());
         records.push(record);
     }
 
@@ -321,8 +316,7 @@ mod tests {
         AgentBlock, AgentBlockKind, AgentSession, AgentSessionInfo, AgentSessionProvider,
     };
     use crate::record::{
-        WorkChannel, WorkPart, WorkPartIo, WorkPartKind, WorkRecordKind, WorkSessionRef,
-        WorkSource, WorkTime,
+        WorkChannel, WorkPart, WorkPartData, WorkRecordKind, WorkSessionRef, WorkSource, WorkTime,
     };
     use anyhow::Result;
     use std::path::{Path, PathBuf};
@@ -401,13 +395,11 @@ mod tests {
             ),
         ];
         records[1].parts.push(WorkPart {
-            io: WorkPartIo::Output,
-            kind: WorkPartKind::AssistantMessage,
-            index: 1,
+            seq: 3,
             occurred_at: None,
-            label: Some("assistant".to_string()),
-            text: "assistant with more detail".to_string(),
-            ansi: None,
+            data: WorkPartData::Assistant {
+                content: "assistant with more detail".to_string(),
+            },
         });
 
         dedup_records(&mut records);
@@ -416,7 +408,7 @@ mod tests {
         assert!(records[0]
             .parts
             .iter()
-            .any(|part| part.text == "assistant with more detail"));
+            .any(|part| part.text() == "assistant with more detail"));
         assert_eq!(records[0].session.id, "session-01234567");
     }
 
@@ -479,12 +471,14 @@ mod tests {
                         kind: AgentBlockKind::User,
                         timestamp: None,
                         label: None,
+                        call_id: None,
                         text: "question".to_string(),
                     },
                     AgentBlock {
                         kind: AgentBlockKind::Assistant,
                         timestamp: None,
                         label: None,
+                        call_id: None,
                         text: "assistant".to_string(),
                     },
                 ],
@@ -512,22 +506,18 @@ mod tests {
             title: "title".to_string(),
             parts: vec![
                 WorkPart {
-                    io: WorkPartIo::Input,
-                    kind: WorkPartKind::UserMessage,
-                    index: 1,
+                    seq: 1,
                     occurred_at: None,
-                    label: None,
-                    text: "user".to_string(),
-                    ansi: None,
+                    data: WorkPartData::User {
+                        content: "user".to_string(),
+                    },
                 },
                 WorkPart {
-                    io: WorkPartIo::Output,
-                    kind: WorkPartKind::AssistantMessage,
-                    index: 1,
+                    seq: 2,
                     occurred_at: None,
-                    label: None,
-                    text: "assistant".to_string(),
-                    ansi: None,
+                    data: WorkPartData::Assistant {
+                        content: "assistant".to_string(),
+                    },
                 },
             ],
         }

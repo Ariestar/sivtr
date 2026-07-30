@@ -9,7 +9,7 @@
 //! captured output.
 
 use regex::Regex;
-use sivtr_core::record::{WorkPart, WorkRecord};
+use sivtr_core::record::{WorkPart, WorkPartData, WorkRecord};
 
 const REDACTED: &str = "[REDACTED]";
 
@@ -73,15 +73,55 @@ pub fn redact_record(record: &WorkRecord) -> WorkRecord {
 }
 
 pub fn redact_part(mut part: WorkPart, patterns: &[(&'static str, Regex)]) -> WorkPart {
-    part.text = redact_text(&part.text, patterns);
-    if let Some(ansi) = part.ansi.take() {
-        part.ansi = Some(redact_text(&ansi, patterns));
-    }
-    if let Some(label) = part.label.take() {
-        // Labels are short and rarely carry secrets, but redact for consistency.
-        part.label = Some(redact_text(&label, patterns));
+    match &mut part.data {
+        WorkPartData::Prompt { content, ansi } | WorkPartData::Output { content, ansi } => {
+            *content = redact_text(content, patterns);
+            if let Some(value) = ansi {
+                *value = redact_text(value, patterns);
+            }
+        }
+        WorkPartData::Command { content }
+        | WorkPartData::User { content }
+        | WorkPartData::Assistant { content }
+        | WorkPartData::Thinking { content }
+        | WorkPartData::Error { content } => *content = redact_text(content, patterns),
+        WorkPartData::ToolCall { tool, input, .. } => {
+            if let Some(value) = tool {
+                *value = redact_text(value, patterns);
+            }
+            redact_json(input, patterns);
+        }
+        WorkPartData::ToolResult { tool, output, .. } => {
+            if let Some(value) = tool {
+                *value = redact_text(value, patterns);
+            }
+            redact_json(output, patterns);
+        }
+        WorkPartData::Skill { skill, content } => {
+            if let Some(value) = skill {
+                *value = redact_text(value, patterns);
+            }
+            *content = redact_text(content, patterns);
+        }
     }
     part
+}
+
+fn redact_json(value: &mut serde_json::Value, patterns: &[(&'static str, Regex)]) {
+    match value {
+        serde_json::Value::String(text) => *text = redact_text(text, patterns),
+        serde_json::Value::Array(items) => {
+            for item in items {
+                redact_json(item, patterns);
+            }
+        }
+        serde_json::Value::Object(object) => {
+            for value in object.values_mut() {
+                redact_json(value, patterns);
+            }
+        }
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {}
+    }
 }
 
 #[cfg(test)]

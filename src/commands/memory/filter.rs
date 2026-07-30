@@ -7,12 +7,11 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sivtr_core::ai::{AgentProvider, AgentSessionProvider};
 use sivtr_core::record::{
-    WorkAt, WorkOutcome, WorkPart, WorkPartIo, WorkPartKind, WorkRecord, WorkRecordKind, WorkRef,
+    WorkAt, WorkOutcome, WorkPart, WorkPartKind, WorkRecord, WorkRecordKind, WorkRef,
 };
 
 use crate::cli::{
-    FilterArgs, SearchArgs, SearchFieldArg, SearchSortArg, SearchStatusArg, WorkPartFilterArg,
-    WorkPartsArgs,
+    FilterArgs, SearchArgs, SearchFieldArg, SearchSortArg, SearchStatusArg, WorkPartsArgs,
 };
 use crate::commands::memory::show;
 use crate::commands::memory::time_filter::{build_time_range, TimeRange};
@@ -47,8 +46,6 @@ pub struct Filter {
     exclude_regex: Option<String>,
     #[serde(default)]
     in_field: SearchFieldArg,
-    #[serde(default)]
-    io: WorkPartFilterArg,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     kind: Option<crate::cli::WorkPartKindArg>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -100,7 +97,6 @@ impl Filter {
             filter.latest = Some(SEARCH_DEFAULT_LATEST);
         }
         filter.mode = FilterMode::Anchors;
-        filter.io = WorkPartFilterArg::All;
         filter.pre_sort = Some(SearchSortArg::Newest);
         if filter.post_sort.is_none() {
             filter.post_sort = Some(args.sort);
@@ -131,7 +127,6 @@ impl Filter {
         } else {
             FilterMode::Anchors
         };
-        filter.io = args.io;
         filter.pre_sort = args.latest.map(|_| SearchSortArg::Newest);
         Ok(filter)
     }
@@ -142,7 +137,6 @@ impl Filter {
             match_regex: args.match_.clone(),
             exclude_regex: None,
             in_field: SearchFieldArg::Content,
-            io: args.io,
             kind: args.kind,
             status: None,
             exit_code: None,
@@ -237,7 +231,6 @@ fn common_bounds(
         match_regex: match_.map(str::to_string),
         exclude_regex: exclude.map(str::to_string),
         in_field,
-        io: WorkPartFilterArg::All,
         kind,
         status,
         exit_code,
@@ -455,8 +448,7 @@ fn matching_anchors<'a>(
     match filter.mode {
         FilterMode::Anchors => match anchor.at {
             WorkAt::Whole => record_anchor_matches(record, anchor, filter, regex),
-            WorkAt::Line(line) => line_anchor_matches(record, anchor, filter, regex, line),
-            WorkAt::Part { .. } => part_anchor_matches(record, anchor, filter, regex),
+            WorkAt::Part(_) => part_anchor_matches(record, anchor, filter, regex),
         },
         FilterMode::Parts => part_anchors_for(record, anchor, filter, regex),
     }
@@ -491,32 +483,6 @@ fn record_anchor_matches<'a>(
         .collect()
 }
 
-fn line_anchor_matches<'a>(
-    record: &'a WorkRecord,
-    anchor: &WorkRef,
-    filter: &Filter,
-    regex: Option<&Regex>,
-    line: usize,
-) -> Vec<MatchedAnchor<'a>> {
-    let Some(text) = record.content_for_at(WorkAt::Line(line)) else {
-        return Vec::new();
-    };
-    if matches!(
-        filter.in_field,
-        SearchFieldArg::Title | SearchFieldArg::Session
-    ) {
-        return (filter.kind.is_none() && meta_matches(record, filter.in_field, regex))
-            .then(|| matched(record, anchor.clone()))
-            .into_iter()
-            .collect();
-    }
-    regex
-        .is_none_or(|regex| regex.is_match(&text))
-        .then(|| matched(record, anchor.clone()))
-        .into_iter()
-        .collect()
-}
-
 fn part_anchor_matches<'a>(
     record: &'a WorkRecord,
     anchor: &WorkRef,
@@ -539,12 +505,12 @@ fn part_anchors_for<'a>(
     regex: Option<&Regex>,
 ) -> Vec<MatchedAnchor<'a>> {
     match anchor.at {
-        WorkAt::Part { .. } => part_anchor_matches(record, anchor, filter, regex),
-        WorkAt::Whole | WorkAt::Line(_) => record
+        WorkAt::Part(_) => part_anchor_matches(record, anchor, filter, regex),
+        WorkAt::Whole => record
             .parts
             .iter()
             .filter(|part| part_matches_filters(part, filter, regex))
-            .map(|part| matched(record, record.work_ref.with_part(part.io, part.index)))
+            .map(|part| matched(record, record.work_ref.with_part(part.seq)))
             .collect(),
     }
 }
@@ -558,31 +524,28 @@ fn matched(record: &WorkRecord, anchor: WorkRef) -> MatchedAnchor<'_> {
 }
 
 fn part_matches_filters(part: &WorkPart, filter: &Filter, regex: Option<&Regex>) -> bool {
-    if !filter.io.matches(part.io) {
-        return false;
-    }
-    if filter.kind.is_some_and(|kind| !kind.matches(part.kind)) {
+    if filter.kind.is_some_and(|kind| !kind.matches(part.kind())) {
         return false;
     }
     if !part_field_matches(part, filter.in_field) {
         return false;
     }
-    // Default content search is dialogue-only so tools/skills/thinking don't pollute hits.
-    // Opt in with `-i all`, or target them with `--kind tool_call|skill|thinking|…`.
+    // Default content search is dialogue-only so tools, skills, and thinking do not pollute hits.
+    // Structural parts are selected explicitly with `--kind`.
     if matches!(filter.in_field, SearchFieldArg::Content)
         && filter.kind.is_none()
-        && part.kind.is_structure()
+        && part.kind().is_structure()
     {
         return false;
     }
-    regex.is_none_or(|regex| regex.is_match(&part.text))
+    regex.is_none_or(|regex| regex.is_match(&part.text()))
 }
 
 fn part_field_matches(part: &WorkPart, field: SearchFieldArg) -> bool {
     matches!(field, SearchFieldArg::Content | SearchFieldArg::All)
-        || matches!(field, SearchFieldArg::Input) && part.io == WorkPartIo::Input
-        || matches!(field, SearchFieldArg::Output) && part.io == WorkPartIo::Output
-        || matches!(field, SearchFieldArg::Command) && part.kind == WorkPartKind::Command
+        || matches!(field, SearchFieldArg::Input) && part.kind().is_input()
+        || matches!(field, SearchFieldArg::Output) && part.kind().is_output()
+        || matches!(field, SearchFieldArg::Command) && part.kind() == WorkPartKind::Command
 }
 
 fn meta_matches(record: &WorkRecord, field: SearchFieldArg, regex: Option<&Regex>) -> bool {
@@ -611,8 +574,8 @@ fn match_excluded(matched: &MatchedAnchor<'_>, regex: Option<&Regex>) -> bool {
             .record
             .parts
             .iter()
-            .any(|part| regex.is_match(&part.text)),
-        WorkAt::Line(_) | WorkAt::Part { .. } => matched
+            .any(|part| regex.is_match(&part.text())),
+        WorkAt::Part(_) => matched
             .record
             .content_for_at(matched.anchor.at)
             .is_some_and(|text| regex.is_match(&text)),

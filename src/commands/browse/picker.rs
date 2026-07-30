@@ -276,7 +276,12 @@ pub(crate) fn run(
             ContentIoFrame::build(layout.content, &io_texts, content_mode, content_io_focus);
         content_scrolls.clamp_to(content_frame.input_lines, content_frame.output_lines);
         if let Some(matched) = pending_match {
-            let (half, scroll) = search_match_half(matched.at, matched.matched_line, &io_texts);
+            let input = dialogues
+                .get(dialogue_idx)
+                .and_then(|dialogue| dialogue.record.as_ref())
+                .and_then(|record| record.part_for_at(matched.at))
+                .is_none_or(|part| part.kind().is_input());
+            let (half, scroll) = search_match_half(input, matched.matched_line);
             content_io_focus = half;
             let total = content_frame.line_count(half);
             content_scrolls.set(half, scroll.min(total.saturating_sub(1)));
@@ -834,6 +839,9 @@ pub(crate) fn run(
 
 #[cfg(test)]
 mod tests {
+    fn tool_test_value(text: String) -> serde_json::Value {
+        serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text))
+    }
 
     use super::super::content::{
         handle_line_filter_key, workspace_dialogue_vim_view, workspace_picked_content,
@@ -859,8 +867,8 @@ mod tests {
     use sivtr_core::ai::AgentProvider;
     use sivtr_core::record::{WorkAt, WorkRef};
     use sivtr_core::record::{
-        WorkChannel, WorkPart, WorkPartIo, WorkPartKind, WorkRecord, WorkRecordKind,
-        WorkSessionRef, WorkSource, WorkTime, RECORD_SCHEMA_VERSION,
+        WorkChannel, WorkPart, WorkRecord, WorkRecordKind, WorkSessionRef, WorkSource, WorkTime,
+        RECORD_SCHEMA_VERSION,
     };
     use std::time::SystemTime;
 
@@ -1147,19 +1155,13 @@ mod tests {
                 WorkspaceSearchMatch {
                     session_index: 0,
                     dialogue_index: 0,
-                    at: WorkAt::Part {
-                        io: WorkPartIo::Input,
-                        index: 1,
-                    },
+                    at: WorkAt::Part(1),
                     matched_line: 2,
                 },
                 WorkspaceSearchMatch {
                     session_index: 0,
                     dialogue_index: 0,
-                    at: WorkAt::Part {
-                        io: WorkPartIo::Input,
-                        index: 1,
-                    },
+                    at: WorkAt::Part(1),
                     matched_line: 4,
                 }
             ]
@@ -1175,13 +1177,13 @@ mod tests {
             0,
         );
         record.parts = vec![sivtr_core::record::WorkPart {
-            io: sivtr_core::record::WorkPartIo::Input,
-            kind: sivtr_core::record::WorkPartKind::ToolCall,
-            index: 1,
+            seq: 1,
             occurred_at: None,
-            label: Some("tool".to_string()),
-            text: "hidden cargo test".to_string(),
-            ansi: None,
+            data: sivtr_core::record::WorkPartData::ToolCall {
+                call_id: None,
+                tool: Some("tool".to_string()),
+                input: tool_test_value("hidden cargo test".to_string()),
+            },
         }];
         let sessions = vec![WorkspaceSession {
             source: WorkspaceSource::agent(AgentProvider::Codex),
@@ -1200,10 +1202,7 @@ mod tests {
             vec![WorkspaceSearchMatch {
                 session_index: 0,
                 dialogue_index: 0,
-                at: WorkAt::Part {
-                    io: sivtr_core::record::WorkPartIo::Input,
-                    index: 1,
-                },
+                at: WorkAt::Part(1),
                 matched_line: 1,
             }]
         );
@@ -1218,13 +1217,13 @@ mod tests {
             0,
         );
         record.parts = vec![sivtr_core::record::WorkPart {
-            io: sivtr_core::record::WorkPartIo::Output,
-            kind: sivtr_core::record::WorkPartKind::ToolOutput,
-            index: 1,
+            seq: 1,
             occurred_at: None,
-            label: Some("tool".to_string()),
-            text: "first line\nneedle one\nmiddle\nneedle two".to_string(),
-            ansi: None,
+            data: sivtr_core::record::WorkPartData::ToolResult {
+                call_id: None,
+                tool: None,
+                output: tool_test_value("first line\nneedle one\nmiddle\nneedle two".to_string()),
+            },
         }];
         let sessions = vec![WorkspaceSession {
             source: WorkspaceSource::agent(AgentProvider::Codex),
@@ -1244,19 +1243,13 @@ mod tests {
                 WorkspaceSearchMatch {
                     session_index: 0,
                     dialogue_index: 0,
-                    at: WorkAt::Part {
-                        io: sivtr_core::record::WorkPartIo::Output,
-                        index: 1,
-                    },
+                    at: WorkAt::Part(1),
                     matched_line: 2,
                 },
                 WorkspaceSearchMatch {
                     session_index: 0,
                     dialogue_index: 0,
-                    at: WorkAt::Part {
-                        io: sivtr_core::record::WorkPartIo::Output,
-                        index: 1,
-                    },
+                    at: WorkAt::Part(1),
                     matched_line: 4,
                 },
             ]
@@ -1273,13 +1266,13 @@ mod tests {
             0,
         );
         record.parts = vec![sivtr_core::record::WorkPart {
-            io: sivtr_core::record::WorkPartIo::Input,
-            kind: sivtr_core::record::WorkPartKind::ToolCall,
-            index: 1,
+            seq: 1,
             occurred_at: None,
-            label: Some("tool".to_string()),
-            text: "hidden cargo test".to_string(),
-            ansi: None,
+            data: sivtr_core::record::WorkPartData::ToolCall {
+                call_id: None,
+                tool: Some("tool".to_string()),
+                input: tool_test_value("hidden cargo test".to_string()),
+            },
         }];
         let sessions = vec![WorkspaceSession {
             source: WorkspaceSource::agent(AgentProvider::Codex),
@@ -1300,7 +1293,7 @@ mod tests {
         })
         .expect("work ref");
 
-        assert_eq!(work_ref.to_string(), "codex/test/1/i/1");
+        assert_eq!(work_ref.to_string(), "codex/test/1/p1");
     }
 
     #[test]
@@ -1590,13 +1583,13 @@ mod tests {
             0,
         );
         record.parts = vec![sivtr_core::record::WorkPart {
-            io: sivtr_core::record::WorkPartIo::Input,
-            kind: sivtr_core::record::WorkPartKind::ToolCall,
-            index: 1,
+            seq: 1,
             occurred_at: None,
-            label: Some("tool".to_string()),
-            text: "hidden cargo test".to_string(),
-            ansi: None,
+            data: sivtr_core::record::WorkPartData::ToolCall {
+                call_id: None,
+                tool: Some("tool".to_string()),
+                input: tool_test_value("hidden cargo test".to_string()),
+            },
         }];
         let dialogues = vec![WorkspaceDialogue {
             source: WorkspaceSource::agent(AgentProvider::Codex),
@@ -1608,15 +1601,7 @@ mod tests {
             }),
         }];
 
-        let picked = workspace_picked_content(
-            &dialogues,
-            &[false],
-            0,
-            Some(WorkAt::Part {
-                io: sivtr_core::record::WorkPartIo::Input,
-                index: 1,
-            }),
-        );
+        let picked = workspace_picked_content(&dialogues, &[false], 0, Some(WorkAt::Part(1)));
 
         assert_eq!(picked.units[0].plain.trim(), "<:tool:tool call:>");
         // Displayed copy uses Reading mode: fold marker only, no payload.
@@ -1686,13 +1671,11 @@ mod tests {
             status: None,
             title: title.to_string(),
             parts: vec![WorkPart {
-                io: WorkPartIo::Input,
-                kind: WorkPartKind::UserMessage,
-                index: 1,
+                seq: 1,
                 occurred_at: None,
-                label: None,
-                text: plain.to_string(),
-                ansi: None,
+                data: sivtr_core::record::WorkPartData::User {
+                    content: plain.to_string(),
+                },
             }],
         }
     }

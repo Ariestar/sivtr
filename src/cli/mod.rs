@@ -1,7 +1,7 @@
 use clap::{ArgGroup, Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sivtr_core::ai::AgentProvider;
-use sivtr_core::record::{WorkPartIo, WorkPartKind};
+use sivtr_core::record::WorkPartKind;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::LazyLock;
@@ -84,13 +84,14 @@ impl std::fmt::Display for SearchFieldArg {
 pub enum WorkPartKindArg {
     Prompt,
     Command,
-    UserMessage,
-    AssistantMessage,
+    User,
+    Assistant,
+    Tool,
     ToolCall,
-    ToolOutput,
+    ToolResult,
     Skill,
     Thinking,
-    Text,
+    Output,
     Error,
 }
 
@@ -98,23 +99,18 @@ impl_serde_via_str!(WorkPartKindArg);
 
 impl WorkPartKindArg {
     pub fn matches(self, kind: WorkPartKind) -> bool {
-        WorkPartKind::from(self) == kind
-    }
-}
-
-impl From<WorkPartKindArg> for WorkPartKind {
-    fn from(value: WorkPartKindArg) -> Self {
-        match value {
-            WorkPartKindArg::Prompt => WorkPartKind::Prompt,
-            WorkPartKindArg::Command => WorkPartKind::Command,
-            WorkPartKindArg::UserMessage => WorkPartKind::UserMessage,
-            WorkPartKindArg::AssistantMessage => WorkPartKind::AssistantMessage,
-            WorkPartKindArg::ToolCall => WorkPartKind::ToolCall,
-            WorkPartKindArg::ToolOutput => WorkPartKind::ToolOutput,
-            WorkPartKindArg::Skill => WorkPartKind::Skill,
-            WorkPartKindArg::Thinking => WorkPartKind::Thinking,
-            WorkPartKindArg::Text => WorkPartKind::Text,
-            WorkPartKindArg::Error => WorkPartKind::Error,
+        match self {
+            Self::Prompt => kind == WorkPartKind::Prompt,
+            Self::Command => kind == WorkPartKind::Command,
+            Self::User => kind == WorkPartKind::User,
+            Self::Assistant => kind == WorkPartKind::Assistant,
+            Self::Tool => matches!(kind, WorkPartKind::ToolCall | WorkPartKind::ToolResult),
+            Self::ToolCall => kind == WorkPartKind::ToolCall,
+            Self::ToolResult => kind == WorkPartKind::ToolResult,
+            Self::Skill => kind == WorkPartKind::Skill,
+            Self::Thinking => kind == WorkPartKind::Thinking,
+            Self::Output => kind == WorkPartKind::Output,
+            Self::Error => kind == WorkPartKind::Error,
         }
     }
 }
@@ -126,16 +122,17 @@ impl FromStr for WorkPartKindArg {
         match value.to_ascii_lowercase().replace('-', "_").as_str() {
             "prompt" => Ok(Self::Prompt),
             "command" | "cmd" => Ok(Self::Command),
-            "user_message" | "user" => Ok(Self::UserMessage),
-            "assistant_message" | "assistant" => Ok(Self::AssistantMessage),
+            "user" => Ok(Self::User),
+            "assistant" => Ok(Self::Assistant),
+            "tool" => Ok(Self::Tool),
             "tool_call" | "call" => Ok(Self::ToolCall),
-            "tool_output" | "tool" => Ok(Self::ToolOutput),
+            "tool_result" | "result" => Ok(Self::ToolResult),
             "skill" => Ok(Self::Skill),
             "thinking" | "reason" | "reasoning" => Ok(Self::Thinking),
-            "text" => Ok(Self::Text),
+            "output" => Ok(Self::Output),
             "error" => Ok(Self::Error),
             _ => Err(format!(
-                "unknown part kind `{value}`; expected prompt, command, user_message, assistant_message, tool_call, tool_output, skill, thinking, text, or error"
+                "unknown part kind `{value}`; expected prompt, command, user, assistant, tool, tool_call, tool_result, skill, thinking, output, or error"
             )),
         }
     }
@@ -146,13 +143,14 @@ impl std::fmt::Display for WorkPartKindArg {
         formatter.write_str(match self {
             Self::Prompt => "prompt",
             Self::Command => "command",
-            Self::UserMessage => "user_message",
-            Self::AssistantMessage => "assistant_message",
+            Self::User => "user",
+            Self::Assistant => "assistant",
+            Self::Tool => "tool",
             Self::ToolCall => "tool_call",
-            Self::ToolOutput => "tool_output",
+            Self::ToolResult => "tool_result",
             Self::Skill => "skill",
             Self::Thinking => "thinking",
-            Self::Text => "text",
+            Self::Output => "output",
             Self::Error => "error",
         })
     }
@@ -236,55 +234,6 @@ impl std::fmt::Display for SearchSortArg {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum WorkPartFilterArg {
-    Input,
-    Output,
-    #[default]
-    All,
-}
-
-impl_serde_via_str!(WorkPartFilterArg);
-
-impl WorkPartFilterArg {
-    pub fn matches(self, io: WorkPartIo) -> bool {
-        match self {
-            Self::All => true,
-            Self::Input => io == WorkPartIo::Input,
-            Self::Output => io == WorkPartIo::Output,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Input => "input",
-            Self::Output => "output",
-            Self::All => "all",
-        }
-    }
-}
-
-impl FromStr for WorkPartFilterArg {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value.to_ascii_lowercase().as_str() {
-            "input" | "in" | "i" => Ok(Self::Input),
-            "output" | "out" | "o" => Ok(Self::Output),
-            "all" => Ok(Self::All),
-            _ => Err(format!(
-                "unknown part filter `{value}`; expected all, input, or output"
-            )),
-        }
-    }
-}
-
-impl std::fmt::Display for WorkPartFilterArg {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
 /// After-help for `copy`, generated once from the agent registry.
 static COPY_AFTER_HELP: LazyLock<String> = LazyLock::new(|| {
     let providers = AgentProvider::command_names_csv();
@@ -297,7 +246,7 @@ Grammar:
 Slots:
   address     same source/ref language as search/show
               omit → current terminal session
-              examples: codex, codex/SESSION, terminal/s/12, desk:codex, …/o/1
+              examples: codex, codex/SESSION, terminal/s/12, desk:codex, …/p1
   dialogues   relative to newest: N or A..B (default 1)
               only when address does not already pin a record
   projection  both (default) | in | out | cmd
@@ -318,7 +267,7 @@ Examples:
   sivtr copy codex
   sivtr copy out codex 2..4
   sivtr copy codex/abc/12
-  sivtr copy terminal/s/12/o/1
+  sivtr copy terminal/s/12/p3
   sivtr copy in --prompt ':'
 "
     )
@@ -398,9 +347,9 @@ static SEARCH_AFTER_HELP: LazyLock<String> = LazyLock::new(|| {
     format!(
         r##"
 Target selectors:
-  terminal[/<session>[/<record>[/<line>]]]  Search terminal command records
-  agent[/<session>[/<turn>[/<line>]]]       Search all AI/agent records
-  <provider>[/<session>[/<turn>[/<line>]]] Search one provider: {providers}
+  terminal[/<session>[/<record>[/p<part>]]]  Search terminal command records
+  agent[/<session>[/<turn>[/p<part>]]]       Search all AI/agent records
+  <provider>[/<session>[/<turn>[/p<part>]]] Search one provider: {providers}
   <remote>:<selector>                      Run the same selector against a configured remote
   Use * for wildcard path segments, e.g. terminal/*/3 or pi/*/*.
 
@@ -408,8 +357,8 @@ Filters:
   --match <regex>       Case-insensitive regex content filter
   --exclude <regex>     Case-insensitive regex exclusion filter
   --in <field>          content, title, session, input, output, command, or all
-  --kind <kind>        Part kind: prompt, command, user_message, assistant_message,
-                        tool_call, tool_output, skill, thinking, text, or error
+  --kind <kind>        Part kind: prompt, command, user, assistant, tool,
+                        tool_call, tool_result, skill, thinking, output, or error
   --status <status>     success, failure, or unknown
   --exit-code <code>    Exact terminal process exit code
   --min-duration <dur>  Minimum command duration, e.g. 500ms, 2s, 1m
@@ -433,8 +382,7 @@ WorkSets:
 
 Notes:
   When neither --latest nor --limit is set, search defaults to --latest 5.
-  Content hits may return structured refs such as `.../i/<n>` or `.../o/<n>`
-  when the match belongs to a canonical input/output part.
+  Content hits return exact part refs such as `.../p3`.
 
 Examples:
   sivtr search terminal --status failure --latest 1 --json
@@ -444,7 +392,7 @@ Examples:
   sivtr search pi --match "merge|conflict" --latest 20 --format timeline
   sivtr search pi/019e5941 --match "cargo test" --format md
   sivtr search pi/019e5941/7 --format workset
-  sivtr search terminal/session_13104/3/12 --format workset
+  sivtr search terminal/session_13104/3/p3 --format workset
   sivtr search desk:terminal --status failure --latest 5 --refs
 "##
     )
@@ -491,17 +439,16 @@ Defaults:
   Piped stdout emits WorkSet JSON; terminal stdout defaults to full unless `--refs` or `-f` is used.
 
 Filters:
-  `--io all` selects every part.
-  `--io input` selects input-side parts.
-  `--io output` selects output-side parts.
-  `--kind tool_call` selects one part kind.
-  `--match <regex>` filters part text.
+  `--kind tool` selects tool calls and results.
+  `--kind tool_call` selects calls only.
+  `--kind skill` selects skill invocations.
+  `--match <regex>` filters part content.
 
 Examples:
-  sivtr work parts @last[1] --io output --refs
-  sivtr work parts desk:pi/019df7fb/3 --io output --refs
-  sivtr work parts pi/019df7fb/3 --kind tool_output -m "error|failed" --refs
-  sivtr s agent -m "ssh.github.com" | sivtr work parts @ --io output | sivtr s @ -m "main -> main" | sivtr show @ --full
+  sivtr work parts @last[1] --kind assistant --refs
+  sivtr work parts desk:pi/019df7fb/3 --kind tool --refs
+  sivtr work parts pi/019df7fb/3 --kind tool_result -m "error|failed" --refs
+  sivtr s agent -m "ssh.github.com" | sivtr work parts @ --kind output | sivtr s @ -m "main -> main" | sivtr show @ --full
 "#;
 
 const HOTKEY_AFTER_HELP: &str = "\
@@ -831,7 +778,7 @@ pub struct SearchArgs {
     #[arg(short = 'i', long = "in", default_value_t = SearchFieldArg::default(), value_name = "FIELD")]
     pub in_field: SearchFieldArg,
 
-    /// Part kind filter: prompt, command, user_message, assistant_message, tool_call, tool_output, skill, thinking, text, or error
+    /// Part kind filter: prompt, command, user, assistant, tool, tool_call, tool_result, skill, thinking, output, or error
     #[arg(long, value_name = "KIND")]
     pub kind: Option<WorkPartKindArg>,
 
@@ -923,11 +870,7 @@ pub struct FilterArgs {
     #[arg(short = 'i', long = "in", default_value_t = SearchFieldArg::default(), value_name = "FIELD")]
     pub in_field: SearchFieldArg,
 
-    /// Which leaf parts to select: all, input, or output
-    #[arg(long, default_value_t = WorkPartFilterArg::default(), value_name = "IO")]
-    pub io: WorkPartFilterArg,
-
-    /// Part kind filter: prompt, command, user_message, assistant_message, tool_call, tool_output, skill, thinking, text, or error
+    /// Part kind filter: prompt, command, user, assistant, tool, tool_call, tool_result, skill, thinking, output, or error
     #[arg(long, value_name = "KIND")]
     pub kind: Option<WorkPartKindArg>,
 
@@ -1212,11 +1155,7 @@ pub struct WorkPartsArgs {
     /// Source selector, WorkSet reference, or record ref.
     pub source: String,
 
-    /// Which leaf parts to select: all, input, or output
-    #[arg(long, default_value_t = WorkPartFilterArg::default(), value_name = "IO")]
-    pub io: WorkPartFilterArg,
-
-    /// Part kind filter: prompt, command, user_message, assistant_message, tool_call, tool_output, skill, thinking, text, or error
+    /// Part kind filter: prompt, command, user, assistant, tool, tool_call, tool_result, skill, thinking, output, or error
     #[arg(long, value_name = "KIND")]
     pub kind: Option<WorkPartKindArg>,
 
@@ -1597,7 +1536,7 @@ mod tests {
         let cli = Cli::try_parse_from([
             "sivtr",
             "copy",
-            "codex/session/3/o/1",
+            "codex/session/3/p1",
             "--print",
             "--regex",
             "error",
@@ -1607,7 +1546,7 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                "codex/session/3/o/1".to_string(),
+                "codex/session/3/p1".to_string(),
                 "--print".to_string(),
                 "--regex".to_string(),
                 "error".to_string(),
@@ -1708,7 +1647,7 @@ mod tests {
                 assert_eq!(args.match_.as_deref(), Some("workspace picker"));
                 assert_eq!(args.exclude.as_deref(), None);
                 assert_eq!(args.in_field, SearchFieldArg::Title);
-                assert_eq!(args.kind, Some(WorkPartKindArg::AssistantMessage));
+                assert_eq!(args.kind, Some(WorkPartKindArg::Assistant));
                 assert_eq!(args.status, Some(SearchStatusArg::Unknown));
                 assert_eq!(args.exit_code, None);
                 assert_eq!(args.min_duration, None);
@@ -1906,14 +1845,14 @@ mod tests {
     }
 
     #[test]
-    fn work_parts_accepts_output_filter() {
+    fn work_parts_accepts_kind_filter() {
         let cli = Cli::try_parse_from([
             "sivtr",
             "work",
             "parts",
             "codex/019df7fb/3",
-            "--io",
-            "output",
+            "--kind",
+            "assistant",
             "--json",
         ])
         .unwrap();
@@ -1922,8 +1861,7 @@ mod tests {
             Some(Commands::Work(cmd)) => match cmd.action {
                 WorkSubcommand::Parts(args) => {
                     assert_eq!(args.source, "codex/019df7fb/3");
-                    assert_eq!(args.io, WorkPartFilterArg::Output);
-                    assert_eq!(args.kind, None);
+                    assert_eq!(args.kind, Some(WorkPartKindArg::Assistant));
                     assert!(args.json);
                 }
                 _ => panic!("expected work parts command"),

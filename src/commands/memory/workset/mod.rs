@@ -224,8 +224,7 @@ fn validate_selection(reference: &str, set: &WorkSet, selection: &WorkSetSelecti
 mod tests {
     use super::*;
     use sivtr_core::record::{
-        WorkChannel, WorkPart, WorkPartIo, WorkPartKind, WorkRecord, WorkRecordKind,
-        WorkSessionRef, WorkSource, WorkTime,
+        WorkChannel, WorkPart, WorkRecord, WorkRecordKind, WorkSessionRef, WorkSource, WorkTime,
     };
 
     fn record(index: usize) -> WorkRecord {
@@ -249,13 +248,12 @@ mod tests {
             status: None,
             title: format!("record {index}"),
             parts: vec![WorkPart {
-                io: WorkPartIo::Output,
-                kind: WorkPartKind::Text,
-                index: 1,
+                seq: 1,
                 occurred_at: None,
-                label: None,
-                text: format!("record {index}"),
-                ansi: None,
+                data: sivtr_core::record::WorkPartData::Output {
+                    content: format!("record {index}"),
+                    ansi: None,
+                },
             }],
         }
     }
@@ -290,8 +288,8 @@ mod tests {
     fn selected_keeps_part_anchor_order() {
         let records = vec![record(1), record(2)];
         let anchors = vec![
-            records[1].work_ref.with_part(WorkPartIo::Output, 1),
-            records[0].work_ref.with_part(WorkPartIo::Output, 1),
+            records[1].work_ref.with_part(1),
+            records[0].work_ref.with_part(1),
         ];
         let set = WorkSet::with_anchors(".", records, anchors);
         let selected = apply_selection(set, WorkSetSelection::Indices(vec![2, 1]));
@@ -303,7 +301,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             refs,
-            vec!["terminal/session_1/1/o/1", "terminal/session_1/2/o/1"]
+            vec!["terminal/session_1/1/p1", "terminal/session_1/2/p1"]
         );
     }
 

@@ -146,9 +146,7 @@ mod tests {
     fn expand_around_clamps_session_edges() {
         let records = (1..=3).map(test_terminal_record).collect::<Vec<_>>();
         let sources = vec![records[0].clone()];
-        let anchors = vec![sources[0]
-            .work_ref
-            .with_part(sivtr_core::record::WorkPartIo::Output, 1)];
+        let anchors = vec![sources[0].work_ref.with_part(1)];
 
         let expanded =
             expand_around(&sources, &anchors, &records, 5, 1).expect("expands around edge");

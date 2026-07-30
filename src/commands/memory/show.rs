@@ -259,11 +259,7 @@ fn print_refs(set: &workset::WorkSet) {
 fn anchor_summary(record: &WorkRecord, anchor: &WorkRef) -> String {
     match anchor.at {
         WorkAt::Whole => record.title.clone(),
-        WorkAt::Line(_) => record
-            .content_for_at(anchor.at)
-            .map(|text| summary_text(&text))
-            .unwrap_or_else(|| record.title.clone()),
-        WorkAt::Part { .. } => record
+        WorkAt::Part(_) => record
             .part_for_at(anchor.at)
             .map(part_summary)
             .unwrap_or_else(|| record.title.clone()),
@@ -272,21 +268,20 @@ fn anchor_summary(record: &WorkRecord, anchor: &WorkRef) -> String {
 
 fn part_summary(part: &WorkPart) -> String {
     let label = part
-        .label
-        .as_deref()
+        .label()
         .filter(|label| !label.trim().is_empty())
         .map(|label| format!("{} ", summary_text(label)))
         .unwrap_or_default();
-    format!("{}{}", label, summary_text(&part.text))
+    format!("{}{}", label, summary_text(&part.text()))
 }
 
 fn anchor_timestamp<'a>(record: &'a WorkRecord, anchor: &WorkRef) -> Option<&'a str> {
     match anchor.at {
-        WorkAt::Part { .. } => record
+        WorkAt::Part(_) => record
             .part_for_at(anchor.at)
             .and_then(|part| part.occurred_at.as_deref())
             .or_else(|| record.time.primary_at()),
-        WorkAt::Whole | WorkAt::Line(_) => record.time.primary_at(),
+        WorkAt::Whole => record.time.primary_at(),
     }
 }
 

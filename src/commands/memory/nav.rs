@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use sivtr_core::record::{WorkAt, WorkPartIo, WorkPath, WorkRecord, WorkRef};
+use sivtr_core::record::{WorkAt, WorkPath, WorkRecord, WorkRef};
 use std::path::PathBuf;
 
 use crate::cli::NavArgs;
@@ -78,7 +78,7 @@ fn parent(
     all_records: &[WorkRecord],
 ) -> Result<Vec<WorkRef>> {
     match anchor.at {
-        WorkAt::Part { .. } | WorkAt::Line(_) => Ok(vec![anchor.whole()]),
+        WorkAt::Part(_) => Ok(vec![anchor.whole()]),
         WorkAt::Whole => session(anchor, source_records, all_records),
     }
 }
@@ -98,9 +98,9 @@ fn child(
             let Some(part) = record.parts.get(index - 1) else {
                 return Ok(Vec::new());
             };
-            Ok(vec![record.work_ref.with_part(part.io, part.index)])
+            Ok(vec![record.work_ref.with_part(part.seq)])
         }
-        WorkAt::Line(_) | WorkAt::Part { .. } => Ok(Vec::new()),
+        WorkAt::Part(_) => Ok(Vec::new()),
     }
 }
 
@@ -125,25 +125,15 @@ fn sibling(
             };
             Ok(vec![session_records[target].work_ref.whole()])
         }
-        WorkAt::Part { io, index } => {
+        WorkAt::Part(seq) => {
             let record = record_for_anchor(anchor, source_records, all_records)?;
-            let part_positions = parts_with_io(record, io);
-            let Some(position) = part_positions
-                .iter()
-                .position(|part_index| *part_index == index)
-            else {
+            let Some(position) = record.parts.iter().position(|part| part.seq == seq) else {
                 return Ok(Vec::new());
             };
-            let Some(target) = offset_index(position, offset, part_positions.len()) else {
+            let Some(target) = offset_index(position, offset, record.parts.len()) else {
                 return Ok(Vec::new());
             };
-            Ok(vec![record.work_ref.with_part(io, part_positions[target])])
-        }
-        WorkAt::Line(line) => {
-            let Some(target) = offset_one_based(line, offset) else {
-                return Ok(Vec::new());
-            };
-            Ok(vec![anchor.whole().with_line(target)])
+            Ok(vec![record.work_ref.with_part(record.parts[target].seq)])
         }
     }
 }
@@ -173,25 +163,18 @@ fn window(
                 .map(|record| record.work_ref.whole())
                 .collect())
         }
-        WorkAt::Part { io, index } => {
+        WorkAt::Part(seq) => {
             let record = record_for_anchor(anchor, source_records, all_records)?;
-            let part_positions = parts_with_io(record, io);
-            let position = part_positions
+            let position = record
+                .parts
                 .iter()
-                .position(|part_index| *part_index == index)
+                .position(|part| part.seq == seq)
                 .with_context(|| format!("No part found for ref `{anchor}`"))?;
-            let start = clamp_offset(position, start, part_positions.len());
-            let end = clamp_offset(position, end, part_positions.len());
-            Ok(part_positions[start..=end]
+            let start = clamp_offset(position, start, record.parts.len());
+            let end = clamp_offset(position, end, record.parts.len());
+            Ok(record.parts[start..=end]
                 .iter()
-                .map(|part_index| record.work_ref.with_part(io, *part_index))
-                .collect())
-        }
-        WorkAt::Line(line) => {
-            let start = offset_one_based(line, start).unwrap_or(1);
-            let end = offset_one_based(line, end).unwrap_or(1).max(start);
-            Ok((start..=end)
-                .map(|line| anchor.whole().with_line(line))
+                .map(|part| record.work_ref.with_part(part.seq))
                 .collect())
         }
     }
@@ -253,25 +236,10 @@ fn same_stream(left: &WorkRecord, right: &WorkRecord) -> bool {
     }
 }
 
-fn parts_with_io(record: &WorkRecord, io: WorkPartIo) -> Vec<usize> {
-    record
-        .parts
-        .iter()
-        .filter(|part| part.io == io)
-        .map(|part| part.index)
-        .collect()
-}
-
 fn offset_index(position: usize, offset: isize, len: usize) -> Option<usize> {
     position
         .checked_add_signed(offset)
         .filter(|target| *target < len)
-}
-
-fn offset_one_based(position: usize, offset: isize) -> Option<usize> {
-    position
-        .checked_add_signed(offset)
-        .filter(|target| *target > 0)
 }
 
 fn clamp_offset(position: usize, offset: isize, len: usize) -> usize {
@@ -378,7 +346,7 @@ fn parse_signed_literal(value: &str, label: &str) -> Result<isize> {
 mod tests {
     use super::*;
     use sivtr_core::record::{
-        WorkChannel, WorkPart, WorkPartKind, WorkRecordKind, WorkSessionRef, WorkSource, WorkTime,
+        WorkChannel, WorkPart, WorkRecordKind, WorkSessionRef, WorkSource, WorkTime,
     };
 
     #[test]
@@ -401,7 +369,7 @@ mod tests {
     #[test]
     fn navigates_parent_child_sibling_and_window() {
         let records = (1..=4).map(test_record).collect::<Vec<_>>();
-        let start = vec![records[1].work_ref.with_part(WorkPartIo::Output, 2)];
+        let start = vec![records[1].work_ref.with_part(2)];
 
         assert_refs(
             navigate(&records, &start, &records, "<").expect("parent"),
@@ -409,7 +377,7 @@ mod tests {
         );
         assert_refs(
             navigate(&records, &start, &records, "<+1>1").expect("next record first child"),
-            &["terminal/session_1/3/i/1"],
+            &["terminal/session_1/3/p1"],
         );
         assert_refs(
             navigate(&records, &start, &records, "<[-1..+1]").expect("record window"),
@@ -435,7 +403,7 @@ mod tests {
         let records = vec![test_record(1)];
         assert_refs(
             navigate(&records, &[records[0].work_ref.whole()], &records, ">3").expect("child"),
-            &["terminal/session_1/1/o/2"],
+            &["terminal/session_1/1/p2"],
         );
         assert!(navigate(&records, &[records[0].work_ref.whole()], &records, ">0").is_err());
     }
@@ -490,31 +458,27 @@ mod tests {
             status: None,
             parts: vec![
                 WorkPart {
-                    io: WorkPartIo::Input,
-                    kind: WorkPartKind::Command,
-                    index: 1,
+                    seq: 1,
                     occurred_at: None,
-                    label: None,
-                    text: format!("cmd {index}"),
-                    ansi: None,
+                    data: sivtr_core::record::WorkPartData::Command {
+                        content: format!("cmd {index}"),
+                    },
                 },
                 WorkPart {
-                    io: WorkPartIo::Output,
-                    kind: WorkPartKind::Text,
-                    index: 1,
+                    seq: 1,
                     occurred_at: None,
-                    label: None,
-                    text: format!("out {index}.1"),
-                    ansi: None,
+                    data: sivtr_core::record::WorkPartData::Output {
+                        content: format!("out {index}.1"),
+                        ansi: None,
+                    },
                 },
                 WorkPart {
-                    io: WorkPartIo::Output,
-                    kind: WorkPartKind::Text,
-                    index: 2,
+                    seq: 2,
                     occurred_at: None,
-                    label: None,
-                    text: format!("out {index}.2"),
-                    ansi: None,
+                    data: sivtr_core::record::WorkPartData::Output {
+                        content: format!("out {index}.2"),
+                        ansi: None,
+                    },
                 },
             ],
         }
