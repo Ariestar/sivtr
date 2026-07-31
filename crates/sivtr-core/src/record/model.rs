@@ -938,7 +938,7 @@ fn title_from_parts(parts: &[WorkPart]) -> String {
             .filter(|part| matches!(part.kind(), WorkPartKind::User)),
     );
     if !user.trim().is_empty() {
-        return title_preview(&user);
+        return preview(&user);
     }
     let assistant = join_part_text(
         parts
@@ -946,9 +946,9 @@ fn title_from_parts(parts: &[WorkPart]) -> String {
             .filter(|part| matches!(part.kind(), WorkPartKind::Assistant)),
     );
     if !assistant.trim().is_empty() {
-        return title_preview(&assistant);
+        return preview(&assistant);
     }
-    title_preview(&join_part_text(parts))
+    preview(&join_part_text(parts))
 }
 
 fn skill_attribute(tag: &str, name: &str) -> Option<String> {
@@ -958,31 +958,15 @@ fn skill_attribute(tag: &str, name: &str) -> Option<String> {
     Some(tag[start..start + end].to_string())
 }
 
-fn title_preview(text: &str) -> String {
-    preview_from_lines(
-        text.lines()
-            .filter(|line| !is_skill_marker_line(line.trim())),
-    )
-}
-
 fn preview(text: &str) -> String {
     preview_from_lines(text.lines())
-}
-
-fn is_skill_marker_line(line: &str) -> bool {
-    line.starts_with("<:skill:") || (line.starts_with("[skill:") && line.ends_with(']'))
 }
 
 fn preview_from_lines<'a>(lines: impl IntoIterator<Item = &'a str>) -> String {
     lines
         .into_iter()
         .map(str::trim)
-        .find(|line| {
-            !line.is_empty()
-                && !line.starts_with("## ")
-                && !line.starts_with("<:")
-                && !is_skill_marker_line(line)
-        })
+        .find(|line| !line.is_empty() && !line.starts_with("## ") && !line.starts_with("<:"))
         .unwrap_or("<empty>")
         .chars()
         .take(80)
