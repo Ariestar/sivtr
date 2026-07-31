@@ -1,7 +1,7 @@
 use super::refs::{WorkAt, WorkRef};
 use crate::ai::{
-    format_blocks_with_text, format_structured_block, select_blocks, AgentBlock, AgentBlockKind,
-    AgentProvider, AgentSelection, AgentSession,
+    format_structured_block, select_blocks, AgentBlock, AgentBlockKind, AgentProvider,
+    AgentSelection, AgentSession,
 };
 use crate::session::SessionEntry;
 use crate::time::{derive_ended_at, derive_started_at, duration_between_ms, normalize_timestamp};
@@ -445,11 +445,7 @@ impl WorkRecord {
         let session_ref_id = agent_session_ref_id(session.id.as_deref(), &session.path);
         let canonical_id = agent_session_canonical_id(session.id.as_deref(), &session.path);
         let work_ref = WorkRef::agent(provider, session_ref_id.clone(), index + 1);
-        let title = if user.trim().is_empty() {
-            title_preview(&assistant)
-        } else {
-            title_preview(&user)
-        };
+        let title = title_from_parts(&parts);
         let started_at =
             first_timestamp(blocks).and_then(|timestamp| normalize_timestamp(&timestamp));
         let ended_at = last_timestamp(blocks).and_then(|timestamp| normalize_timestamp(&timestamp));
@@ -750,8 +746,8 @@ fn selected_block_record(
     index: usize,
     block: AgentBlock,
 ) -> WorkRecord {
-    let text = compact_skill_blocks(block.text.trim());
-    let title = title_preview(&text);
+    let parts = agent_parts(std::slice::from_ref(&block));
+    let title = title_from_parts(&parts);
     let session_ref_id = agent_session_ref_id(session.id.as_deref(), &session.path);
     let canonical_id = agent_session_canonical_id(session.id.as_deref(), &session.path);
     let work_ref = WorkRef::agent(provider, session_ref_id.clone(), index + 1);
@@ -773,7 +769,7 @@ fn selected_block_record(
         time: WorkTime::from_components(block_timestamp.clone(), None, None),
         status: None,
         title,
-        parts: agent_parts(std::slice::from_ref(&block)),
+        parts,
     }
 }
 
@@ -783,8 +779,8 @@ fn selected_group_record(
     selection: AgentSelection,
 ) -> Vec<WorkRecord> {
     let blocks = select_blocks(session, selection);
-    let combined = format_blocks_with_compacted_skills(&blocks);
-    if combined.trim().is_empty() {
+    let parts = agent_parts(&blocks);
+    if parts.is_empty() {
         return Vec::new();
     }
 
@@ -793,7 +789,6 @@ fn selected_group_record(
     let work_ref = WorkRef::agent(provider, session_ref_id.clone(), 1);
     let started_at = first_timestamp(&blocks).and_then(|timestamp| normalize_timestamp(&timestamp));
     let ended_at = last_timestamp(&blocks).and_then(|timestamp| normalize_timestamp(&timestamp));
-    let parts = agent_parts(&blocks);
     vec![WorkRecord {
         schema_version: RECORD_SCHEMA_VERSION,
         work_ref,
@@ -810,7 +805,7 @@ fn selected_group_record(
         cwd: non_empty(session.cwd.clone().unwrap_or_default()),
         time: WorkTime::from_components(started_at, ended_at, None),
         status: None,
-        title: title_preview(&combined),
+        title: title_from_parts(&parts),
         parts,
     }]
 }
@@ -923,10 +918,6 @@ fn last_timestamp(blocks: &[AgentBlock]) -> Option<String> {
         .find_map(|block| block.timestamp.clone())
 }
 
-fn format_blocks_with_compacted_skills(blocks: &[AgentBlock]) -> String {
-    format_blocks_with_text(blocks, |block| block.text.trim().to_string())
-}
-
 fn last_user_is_followed_only_by_tools(blocks: &[AgentBlock]) -> bool {
     let Some(user_idx) = blocks
         .iter()
@@ -940,23 +931,24 @@ fn last_user_is_followed_only_by_tools(blocks: &[AgentBlock]) -> bool {
         .all(|block| block.kind.is_structure())
 }
 
-fn compact_skill_blocks(text: &str) -> String {
-    // Kept for title/preview helpers: expand skills to markers without dropping content.
-    split_skill_segments(text, TextSegmentKind::Assistant)
-        .into_iter()
-        .map(|segment| match segment.kind {
-            TextSegmentKind::Skill => {
-                let name = segment.label.as_deref().unwrap_or("unknown");
-                if segment.text.is_empty() {
-                    format!("<:skill:{name}:>")
-                } else {
-                    format_structured_block(AgentBlockKind::Skill, Some(name), &segment.text)
-                }
-            }
-            _ => segment.text,
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
+fn title_from_parts(parts: &[WorkPart]) -> String {
+    let user = join_part_text(
+        parts
+            .iter()
+            .filter(|part| matches!(part.kind(), WorkPartKind::User)),
+    );
+    if !user.trim().is_empty() {
+        return title_preview(&user);
+    }
+    let assistant = join_part_text(
+        parts
+            .iter()
+            .filter(|part| matches!(part.kind(), WorkPartKind::Assistant)),
+    );
+    if !assistant.trim().is_empty() {
+        return title_preview(&assistant);
+    }
+    title_preview(&join_part_text(parts))
 }
 
 fn skill_attribute(tag: &str, name: &str) -> Option<String> {
