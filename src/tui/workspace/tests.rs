@@ -200,9 +200,9 @@ fn reading_mode_folds_structure_and_raw_expands() {
         None,
     );
     assert!(reading_io.input.contains("question"));
-    // Single structure part keeps the detailed open marker; tool calls live in output.
-    assert!(reading_io.output.contains("<:tool:Bash call:>"));
-    assert!(reading_io.output.contains("<:tool:Bash result:>"));
+    // Fold summarizes tool activity by channel; results are dropped.
+    assert!(reading_io.output.contains("tools: Bash"));
+    assert!(!reading_io.output.contains("result"));
     assert!(reading_io.output.contains("answer"));
     assert!(!reading.contains("cargo test"));
     assert!(!reading.contains("codex/session"));
@@ -293,27 +293,23 @@ fn reading_mode_collapses_adjacent_structure_runs() {
         None,
     );
     assert!(reading_io.input.contains("do it"));
-    // Original open markers kept (not generic <:tool:> / <:skill:>).
-    // Tool calls fold in the output half; skills fold in the input half.
-    assert!(reading_io.output.contains("<:tool:Bash call:>"));
-    assert!(reading_io.output.contains("<:tool:Read call:>"));
-    assert!(reading_io.input.contains("<:skill:review:>"));
-    assert!(reading_io.input.contains("<:skill:deploy:>"));
-    // Same IO half: structure markers share one fold line.
+    // Tool calls fold to one channel line in the output half; skills to one in the input half.
     let tool_fold = reading_io
         .output
         .lines()
-        .find(|line| line.contains("<:tool:Bash call:>"))
-        .expect("collapsed tool structure line");
-    assert!(tool_fold.contains("<:tool:Read call:>"));
+        .find(|line| line.starts_with("tools:"))
+        .expect("tools channel line");
+    assert!(tool_fold.contains("Bash"));
+    assert!(tool_fold.contains("Read"));
     let skill_fold = reading_io
         .input
         .lines()
-        .find(|line| line.contains("<:skill:review:>"))
-        .expect("collapsed skill structure line");
-    assert!(skill_fold.contains("<:skill:deploy:>"));
+        .find(|line| line.starts_with("skills:"))
+        .expect("skills channel line");
+    assert!(skill_fold.contains("review"));
+    assert!(skill_fold.contains("deploy"));
     assert!(reading_io.output.contains("done"));
-    assert!(!reading.contains("ls"));
+    assert!(!reading.contains("file"));
     assert!(!reading.contains("skill body"));
     assert!(!reading.contains("## Input"));
 }
@@ -370,16 +366,15 @@ fn reading_mode_counts_identical_structure_markers_regardless_of_order() {
         ContentViewMode::Reading,
         None,
     );
-    // Identical markers in the same IO section merge even when not adjacent.
-    assert!(reading.contains("<:tool:Bash call:> x3"));
-    assert!(reading.contains("<:tool:Read call:>"));
+    // Repeated tool names count as xN within the single tools channel line.
+    assert!(reading.contains("tools: Bash x3, Read"));
     assert!(reading.contains("middle note"));
-    assert!(!reading.contains("ls"));
+    assert!(!reading.contains("file"));
     assert!(!reading.contains("pwd"));
-    // Single fold line for the section (not split by the dialogue part).
+    // Single tools line for the section (not split by the dialogue part).
     let fold_hits = reading
         .lines()
-        .filter(|line| line.contains("<:tool:Bash call:>"))
+        .filter(|line| line.starts_with("tools:"))
         .count();
     assert_eq!(fold_hits, 1);
 }
@@ -434,15 +429,11 @@ fn reading_mode_keeps_structure_runs_in_call_order() {
     // Fold sits between the assistant chunks, matching the call order.
     let output = &reading_io.output;
     let first_text = output.find("checking first").expect("first assistant text");
-    let fold = output.find("<:tool:Bash call:>").expect("tool fold line");
+    let fold = output.find("tools: Bash").expect("tool fold line");
     let last_text = output.find("all done").expect("last assistant text");
     assert!(first_text < fold);
     assert!(fold < last_text);
-    let fold_line = output
-        .lines()
-        .find(|line| line.contains("<:tool:Bash call:>"))
-        .expect("fold line");
-    assert!(fold_line.contains("<:tool:Bash result:>"));
+    assert!(!output.contains("result"));
 }
 
 #[test]
