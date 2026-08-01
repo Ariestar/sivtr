@@ -113,7 +113,7 @@ fn execute_parts(args: &WorkPartsArgs) -> Result<()> {
     let cwd = resolve_cwd(args.cwd.as_deref())?;
     let set = workset::query(
         &args.source,
-        filter::Filter::from_work_parts_args(args)?,
+        filter::from_work_parts_args(args)?,
         Some(&cwd),
     )?;
     let mut set = set;

@@ -1,7 +1,8 @@
 use clap::{ArgGroup, Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sivtr_core::ai::AgentProvider;
-use sivtr_core::record::WorkPartKind;
+use sivtr_core::record::WorkOutcome;
+use sivtr_core::search::{Field, PartKind, Sort};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::LazyLock;
@@ -15,225 +16,6 @@ pub use remote::*;
 
 pub(crate) const TIME_FILTER_HELP: &str = "Accepts RFC3339 timestamps, Unix seconds/milliseconds, relative durations like 30m, 2h, 7d, or aliases like today, yesterday, tomorrow, this morning, this afternoon, this evening, tonight, and now.";
 
-/// Serialize/Deserialize via Display + FromStr (keeps clap aliases in one place).
-macro_rules! impl_serde_via_str {
-    ($ty:ty) => {
-        impl Serialize for $ty {
-            fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-                serializer.serialize_str(&self.to_string())
-            }
-        }
-        impl<'de> Deserialize<'de> for $ty {
-            fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-                String::deserialize(deserializer)?
-                    .parse()
-                    .map_err(serde::de::Error::custom)
-            }
-        }
-    };
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SearchFieldArg {
-    #[default]
-    Content,
-    Title,
-    Session,
-    Input,
-    Output,
-    Command,
-    All,
-}
-
-impl_serde_via_str!(SearchFieldArg);
-
-impl FromStr for SearchFieldArg {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value.to_ascii_lowercase().as_str() {
-            "content" => Ok(Self::Content),
-            "title" | "dialogue" | "dialog" => Ok(Self::Title),
-            "session" => Ok(Self::Session),
-            "input" => Ok(Self::Input),
-            "output" => Ok(Self::Output),
-            "command" | "cmd" => Ok(Self::Command),
-            "all" => Ok(Self::All),
-            _ => Err(format!(
-                "unknown search field `{value}`; expected content, title, session, input, output, command, or all"
-            )),
-        }
-    }
-}
-
-impl std::fmt::Display for SearchFieldArg {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Content => "content",
-            Self::Title => "title",
-            Self::Session => "session",
-            Self::Input => "input",
-            Self::Output => "output",
-            Self::Command => "command",
-            Self::All => "all",
-        })
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WorkPartKindArg {
-    Prompt,
-    Command,
-    User,
-    Assistant,
-    Tool,
-    ToolCall,
-    ToolResult,
-    Skill,
-    Thinking,
-    Output,
-    Error,
-}
-
-impl_serde_via_str!(WorkPartKindArg);
-
-impl WorkPartKindArg {
-    pub fn matches(self, kind: WorkPartKind) -> bool {
-        match self {
-            Self::Prompt => kind == WorkPartKind::Prompt,
-            Self::Command => kind == WorkPartKind::Command,
-            Self::User => kind == WorkPartKind::User,
-            Self::Assistant => kind == WorkPartKind::Assistant,
-            Self::Tool => matches!(kind, WorkPartKind::ToolCall | WorkPartKind::ToolResult),
-            Self::ToolCall => kind == WorkPartKind::ToolCall,
-            Self::ToolResult => kind == WorkPartKind::ToolResult,
-            Self::Skill => kind == WorkPartKind::Skill,
-            Self::Thinking => kind == WorkPartKind::Thinking,
-            Self::Output => kind == WorkPartKind::Output,
-            Self::Error => kind == WorkPartKind::Error,
-        }
-    }
-}
-
-impl FromStr for WorkPartKindArg {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value.to_ascii_lowercase().replace('-', "_").as_str() {
-            "prompt" => Ok(Self::Prompt),
-            "command" | "cmd" => Ok(Self::Command),
-            "user" => Ok(Self::User),
-            "assistant" => Ok(Self::Assistant),
-            "tool" => Ok(Self::Tool),
-            "tool_call" | "call" => Ok(Self::ToolCall),
-            "tool_result" | "result" => Ok(Self::ToolResult),
-            "skill" => Ok(Self::Skill),
-            "thinking" | "reason" | "reasoning" => Ok(Self::Thinking),
-            "output" => Ok(Self::Output),
-            "error" => Ok(Self::Error),
-            _ => Err(format!(
-                "unknown part kind `{value}`; expected prompt, command, user, assistant, tool, tool_call, tool_result, skill, thinking, output, or error"
-            )),
-        }
-    }
-}
-
-impl std::fmt::Display for WorkPartKindArg {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Prompt => "prompt",
-            Self::Command => "command",
-            Self::User => "user",
-            Self::Assistant => "assistant",
-            Self::Tool => "tool",
-            Self::ToolCall => "tool_call",
-            Self::ToolResult => "tool_result",
-            Self::Skill => "skill",
-            Self::Thinking => "thinking",
-            Self::Output => "output",
-            Self::Error => "error",
-        })
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SearchStatusArg {
-    Success,
-    Failure,
-    Unknown,
-}
-
-impl_serde_via_str!(SearchStatusArg);
-
-impl FromStr for SearchStatusArg {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value.to_ascii_lowercase().as_str() {
-            "success" | "succeeded" | "ok" | "passed" => Ok(Self::Success),
-            "failure" | "failed" | "fail" | "error" => Ok(Self::Failure),
-            "unknown" => Ok(Self::Unknown),
-            _ => Err(format!(
-                "unknown search status `{value}`; expected success, failure, or unknown"
-            )),
-        }
-    }
-}
-
-impl std::fmt::Display for SearchStatusArg {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Success => "success",
-            Self::Failure => "failure",
-            Self::Unknown => "unknown",
-        })
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SearchSortArg {
-    #[default]
-    Newest,
-    Oldest,
-    Duration,
-    DurationAsc,
-    ExitCode,
-    ExitCodeAsc,
-}
-
-impl_serde_via_str!(SearchSortArg);
-
-impl FromStr for SearchSortArg {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value.to_ascii_lowercase().as_str() {
-            "newest" | "latest" | "time" | "time-desc" => Ok(Self::Newest),
-            "oldest" | "time-asc" => Ok(Self::Oldest),
-            "duration" | "duration-desc" | "longest" => Ok(Self::Duration),
-            "duration-asc" | "shortest" => Ok(Self::DurationAsc),
-            "exit-code" | "exit_code" | "exit" | "exit-desc" => Ok(Self::ExitCode),
-            "exit-code-asc" | "exit_code_asc" | "exit-asc" => Ok(Self::ExitCodeAsc),
-            _ => Err(format!(
-                "unknown search sort `{value}`; expected newest, oldest, duration, duration-asc, exit-code, or exit-code-asc"
-            )),
-        }
-    }
-}
-
-impl std::fmt::Display for SearchSortArg {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Newest => "newest",
-            Self::Oldest => "oldest",
-            Self::Duration => "duration",
-            Self::DurationAsc => "duration-asc",
-            Self::ExitCode => "exit-code",
-            Self::ExitCodeAsc => "exit-code-asc",
-        })
-    }
-}
-
 /// After-help for `copy`, generated once from the agent registry.
 static COPY_AFTER_HELP: LazyLock<String> = LazyLock::new(|| {
     let providers = AgentProvider::command_names_csv();
@@ -245,8 +27,8 @@ Grammar:
 
 Slots:
   address     same source/ref language as search/show
-              omit → current terminal session
-              examples: codex, codex/SESSION, terminal/s/12, desk:codex, …/p1
+              omit �?current terminal session
+              examples: codex, codex/SESSION, terminal/s/12, desk:codex, �?p1
   dialogues   relative to newest: N or A..B (default 1)
               only when address does not already pin a record
   projection  both (default) | in | out | cmd
@@ -274,7 +56,7 @@ Examples:
 });
 
 const COPY_INPUT_AFTER_HELP: &str = "\
-`sivtr copy in [address] [dialogues]` — projection=input.
+`sivtr copy in [address] [dialogues]` �?projection=input.
 
 Examples:
   sivtr copy in
@@ -284,7 +66,7 @@ Examples:
 ";
 
 const COPY_OUTPUT_AFTER_HELP: &str = "\
-`sivtr copy out [address] [dialogues]` — projection=output.
+`sivtr copy out [address] [dialogues]` �?projection=output.
 
 Examples:
   sivtr copy out
@@ -294,7 +76,7 @@ Examples:
 ";
 
 const COPY_COMMAND_AFTER_HELP: &str = "\
-`sivtr copy cmd [address] [dialogues]` — bare command text (terminal).
+`sivtr copy cmd [address] [dialogues]` �?bare command text (terminal).
 
 Examples:
   sivtr copy cmd
@@ -533,6 +315,9 @@ pub enum Commands {
     /// Search captured terminal and AI workspace sessions
     #[command(visible_alias = "s")]
     Search(SearchArgs),
+
+    /// Benchmark retrieval quality against golden queries
+    Eval(EvalArgs),
 
     /// Filter a WorkSet stream or selector
     Filter(FilterArgs),
@@ -775,16 +560,16 @@ pub struct SearchArgs {
     pub exclude: Option<String>,
 
     /// Field to match: content, title, session, input, output, command, or all
-    #[arg(short = 'i', long = "in", default_value_t = SearchFieldArg::default(), value_name = "FIELD")]
-    pub in_field: SearchFieldArg,
+    #[arg(short = 'i', long = "in", default_value_t = Field::default(), value_name = "FIELD")]
+    pub in_field: Field,
 
     /// Part kind filter: prompt, command, user, assistant, tool, tool_call, tool_result, skill, thinking, output, or error
     #[arg(long, value_name = "KIND")]
-    pub kind: Option<WorkPartKindArg>,
+    pub kind: Option<PartKind>,
 
     /// Record status filter: success, failure, or unknown
     #[arg(long, value_name = "STATUS")]
-    pub status: Option<SearchStatusArg>,
+    pub status: Option<WorkOutcome>,
 
     /// Exact terminal process exit code filter
     #[arg(long, value_name = "CODE")]
@@ -799,8 +584,8 @@ pub struct SearchArgs {
     pub max_duration: Option<String>,
 
     /// Result sort: newest, oldest, duration, duration-asc, exit-code, or exit-code-asc
-    #[arg(long, default_value_t = SearchSortArg::default(), value_name = "SORT")]
-    pub sort: SearchSortArg,
+    #[arg(long, default_value_t = Sort::default(), value_name = "SORT")]
+    pub sort: Sort,
 
     /// Workspace directory used to resolve current AI sessions
     #[arg(long, value_name = "PATH")]
@@ -849,6 +634,33 @@ pub struct SearchArgs {
 }
 
 #[derive(Args, Debug, Clone)]
+pub struct EvalArgs {
+    /// Evaluation depth for recall, precision, and NDCG
+    #[arg(long, default_value_t = 5)]
+    pub k: usize,
+
+    /// Sort strategy to benchmark against golden queries
+    #[arg(long, default_value_t = Sort::default(), value_name = "SORT")]
+    pub sort: Sort,
+
+    /// Frozen eval snapshot file (queries + corpus JSON)
+    #[arg(long, value_name = "PATH")]
+    pub snapshot: Option<PathBuf>,
+
+    /// Dump current workspace records into a new snapshot (queries start empty)
+    #[arg(long, value_name = "PATH", conflicts_with = "snapshot")]
+    pub create_snapshot: Option<PathBuf>,
+
+    /// Write qrels.txt and results.txt (trec_eval format) into this directory
+    #[arg(long, value_name = "DIR")]
+    pub export: Option<PathBuf>,
+
+    /// Emit the report as JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
 pub struct FilterArgs {
     /// Source selector, WorkSet reference, or `@` for WorkSet JSON from stdin.
     #[arg(default_value = "@")]
@@ -867,16 +679,16 @@ pub struct FilterArgs {
     pub exclude: Option<String>,
 
     /// Field to match: content, title, session, input, output, command, or all
-    #[arg(short = 'i', long = "in", default_value_t = SearchFieldArg::default(), value_name = "FIELD")]
-    pub in_field: SearchFieldArg,
+    #[arg(short = 'i', long = "in", default_value_t = Field::default(), value_name = "FIELD")]
+    pub in_field: Field,
 
     /// Part kind filter: prompt, command, user, assistant, tool, tool_call, tool_result, skill, thinking, output, or error
     #[arg(long, value_name = "KIND")]
-    pub kind: Option<WorkPartKindArg>,
+    pub kind: Option<PartKind>,
 
     /// Record status filter: success, failure, or unknown
     #[arg(long, value_name = "STATUS")]
-    pub status: Option<SearchStatusArg>,
+    pub status: Option<WorkOutcome>,
 
     /// Exact terminal process exit code filter
     #[arg(long, value_name = "CODE")]
@@ -892,7 +704,7 @@ pub struct FilterArgs {
 
     /// Result sort: newest, oldest, duration, duration-asc, exit-code, or exit-code-asc
     #[arg(long, value_name = "SORT")]
-    pub sort: Option<SearchSortArg>,
+    pub sort: Option<Sort>,
 
     /// Workspace directory used to resolve current AI sessions
     #[arg(long, value_name = "PATH")]
@@ -1157,7 +969,7 @@ pub struct WorkPartsArgs {
 
     /// Part kind filter: prompt, command, user, assistant, tool, tool_call, tool_result, skill, thinking, output, or error
     #[arg(long, value_name = "KIND")]
-    pub kind: Option<WorkPartKindArg>,
+    pub kind: Option<PartKind>,
 
     /// Case-insensitive regex part text filter
     #[arg(short = 'm', long = "match", value_name = "REGEX")]
@@ -1646,13 +1458,13 @@ mod tests {
                 assert_eq!(args.source, "pi/019e5941");
                 assert_eq!(args.match_.as_deref(), Some("workspace picker"));
                 assert_eq!(args.exclude.as_deref(), None);
-                assert_eq!(args.in_field, SearchFieldArg::Title);
-                assert_eq!(args.kind, Some(WorkPartKindArg::Assistant));
-                assert_eq!(args.status, Some(SearchStatusArg::Unknown));
+                assert_eq!(args.in_field, Field::Title);
+                assert_eq!(args.kind, Some(PartKind::Assistant));
+                assert_eq!(args.status, Some(WorkOutcome::Unknown));
                 assert_eq!(args.exit_code, None);
                 assert_eq!(args.min_duration, None);
                 assert_eq!(args.max_duration, None);
-                assert_eq!(args.sort, SearchSortArg::Newest);
+                assert_eq!(args.sort, Sort::Newest);
                 assert_eq!(args.format, Some(WorkSetOutputFormat::Timeline));
                 assert_eq!(args.limit, Some(5));
                 assert_eq!(args.since, None);
@@ -1861,7 +1673,7 @@ mod tests {
             Some(Commands::Work(cmd)) => match cmd.action {
                 WorkSubcommand::Parts(args) => {
                     assert_eq!(args.source, "codex/019df7fb/3");
-                    assert_eq!(args.kind, Some(WorkPartKindArg::Assistant));
+                    assert_eq!(args.kind, Some(PartKind::Assistant));
                     assert!(args.json);
                 }
                 _ => panic!("expected work parts command"),
@@ -1904,7 +1716,7 @@ mod tests {
                 assert_eq!(args.exit_code, Some(101));
                 assert_eq!(args.min_duration.as_deref(), Some("500ms"));
                 assert_eq!(args.max_duration.as_deref(), Some("2s"));
-                assert_eq!(args.sort, SearchSortArg::Duration);
+                assert_eq!(args.sort, Sort::Duration);
             }
             _ => panic!("expected search command"),
         }
@@ -1923,6 +1735,88 @@ mod tests {
     fn search_rejects_unknown_field() {
         let result = Cli::try_parse_from(["sivtr", "search", "needle", "--in", "unknown"]);
 
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn eval_parses_defaults() {
+        let cli = Cli::try_parse_from(["sivtr", "eval"]).unwrap();
+        match cli.command {
+            Some(Commands::Eval(args)) => {
+                assert_eq!(args.k, 5);
+                assert_eq!(args.sort, Sort::Newest);
+                assert!(args.snapshot.is_none());
+                assert!(args.create_snapshot.is_none());
+                assert!(args.export.is_none());
+                assert!(!args.json);
+            }
+            _ => panic!("expected eval command"),
+        }
+    }
+
+    #[test]
+    fn eval_parses_flags() {
+        let cli = Cli::try_parse_from([
+            "sivtr",
+            "eval",
+            "--k",
+            "10",
+            "--sort",
+            "duration",
+            "--snapshot",
+            "snap.json",
+            "--export",
+            "out",
+            "--json",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Eval(args)) => {
+                assert_eq!(args.k, 10);
+                assert_eq!(args.sort, Sort::Duration);
+                assert_eq!(
+                    args.snapshot.as_deref(),
+                    Some(std::path::Path::new("snap.json"))
+                );
+                assert!(args.create_snapshot.is_none());
+                assert_eq!(args.export.as_deref(), Some(std::path::Path::new("out")));
+                assert!(args.json);
+            }
+            _ => panic!("expected eval command"),
+        }
+    }
+
+    #[test]
+    fn eval_parses_create_snapshot() {
+        let cli = Cli::try_parse_from(["sivtr", "eval", "--create-snapshot", "snap.json"]).unwrap();
+        match cli.command {
+            Some(Commands::Eval(args)) => {
+                assert_eq!(
+                    args.create_snapshot.as_deref(),
+                    Some(std::path::Path::new("snap.json"))
+                );
+                assert!(args.snapshot.is_none());
+            }
+            _ => panic!("expected eval command"),
+        }
+    }
+
+    #[test]
+    fn eval_rejects_snapshot_and_create_together() {
+        let result = Cli::try_parse_from([
+            "sivtr",
+            "eval",
+            "--snapshot",
+            "a.json",
+            "--create-snapshot",
+            "b.json",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn eval_rejects_unknown_sort() {
+        let result = Cli::try_parse_from(["sivtr", "eval", "--sort", "unknown"]);
         assert!(result.is_err());
     }
 
@@ -2053,7 +1947,7 @@ mod tests {
             Some(Commands::Search(args)) => {
                 assert_eq!(args.match_.as_deref(), Some("TODO|pending"));
                 assert_eq!(args.exclude.as_deref(), Some("example|示例"));
-                assert_eq!(args.in_field, SearchFieldArg::Title);
+                assert_eq!(args.in_field, Field::Title);
                 assert_eq!(args.format, Some(WorkSetOutputFormat::Timeline));
             }
             _ => panic!("expected search command"),

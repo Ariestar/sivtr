@@ -3,10 +3,9 @@ use std::path::PathBuf;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::cli::{
-    FilterArgs, SearchArgs, SearchFieldArg, SearchSortArg, SearchStatusArg, ShowArgs,
-    WorkPartKindArg, ZoomArgs,
-};
+use crate::cli::{FilterArgs, SearchArgs, ShowArgs, ZoomArgs};
+use sivtr_core::record::WorkOutcome;
+use sivtr_core::search::{Field, PartKind, Sort};
 
 // MCP JSON schema exposes these as strings; serde still uses FromStr aliases.
 use crate::commands::memory::show::{self, WorkSetOutputFormat};
@@ -25,15 +24,15 @@ pub struct SearchParams {
     /// Field to match: content, title, session, input, output, command, all
     #[serde(default)]
     #[schemars(with = "Option<String>")]
-    pub in_field: Option<SearchFieldArg>,
+    pub in_field: Option<Field>,
     /// Part kind filter
     #[serde(default)]
     #[schemars(with = "Option<String>")]
-    pub kind: Option<WorkPartKindArg>,
+    pub kind: Option<PartKind>,
     /// success | failure | unknown
     #[serde(default)]
     #[schemars(with = "Option<String>")]
-    pub status: Option<SearchStatusArg>,
+    pub status: Option<WorkOutcome>,
     #[serde(default)]
     pub exit_code: Option<i32>,
     #[serde(default)]
@@ -73,13 +72,13 @@ pub struct FilterParams {
     pub exclude: Option<String>,
     #[serde(default)]
     #[schemars(with = "Option<String>")]
-    pub in_field: Option<SearchFieldArg>,
+    pub in_field: Option<Field>,
     #[serde(default)]
     #[schemars(with = "Option<String>")]
-    pub kind: Option<WorkPartKindArg>,
+    pub kind: Option<PartKind>,
     #[serde(default)]
     #[schemars(with = "Option<String>")]
-    pub status: Option<SearchStatusArg>,
+    pub status: Option<WorkOutcome>,
     #[serde(default)]
     pub exit_code: Option<i32>,
     #[serde(default)]
@@ -243,7 +242,7 @@ pub fn to_search_args(params: &SearchParams) -> Result<SearchArgs, String> {
         exit_code: params.exit_code,
         min_duration: None,
         max_duration: None,
-        sort: SearchSortArg::default(),
+        sort: Sort::default(),
         cwd: cwd_path(params.cwd.as_deref()),
         since: params.since.clone(),
         until: params.until.clone(),
@@ -431,9 +430,9 @@ mod tests {
             source: "terminal".into(),
             match_regex: Some("panic".into()),
             exclude: None,
-            in_field: Some(SearchFieldArg::Content),
+            in_field: Some(Field::Content),
             kind: None,
-            status: Some(SearchStatusArg::Failure),
+            status: Some(WorkOutcome::Failure),
             exit_code: Some(1),
             since: None,
             until: None,
@@ -448,7 +447,7 @@ mod tests {
         .expect("map");
         assert_eq!(args.source, "terminal");
         assert_eq!(args.match_.as_deref(), Some("panic"));
-        assert_eq!(args.status, Some(SearchStatusArg::Failure));
+        assert_eq!(args.status, Some(WorkOutcome::Failure));
         assert_eq!(args.latest, Some(5));
         assert!(args.exclude_current);
         assert_eq!(args.save.as_deref(), Some("failures"));

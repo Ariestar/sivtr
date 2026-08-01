@@ -57,6 +57,9 @@ fn run() -> Result<()> {
         Some(Commands::Search(args)) => {
             commands::memory::search::execute(&args)?;
         }
+        Some(Commands::Eval(args)) => {
+            commands::memory::eval::execute(&args)?;
+        }
         Some(Commands::Filter(args)) => {
             commands::memory::filter::execute(&args)?;
         }

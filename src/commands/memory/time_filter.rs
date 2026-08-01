@@ -14,30 +14,6 @@ enum TimeBoundary {
     Until,
 }
 
-impl TimeRange {
-    pub(crate) fn contains_record_time(&self, timestamp: Option<&str>) -> bool {
-        self.contains_timestamp(timestamp)
-    }
-
-    pub(crate) fn contains_timestamp(&self, timestamp: Option<&str>) -> bool {
-        let Some(timestamp) = timestamp.and_then(parse_timestamp) else {
-            return false;
-        };
-
-        if let Some(since) = self.since {
-            if timestamp < since {
-                return false;
-            }
-        }
-        if let Some(until) = self.until {
-            if timestamp > until {
-                return false;
-            }
-        }
-        true
-    }
-}
-
 pub(crate) fn parse_duration_filter(value: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>> {
     let trimmed = value.trim();
     if trimmed.is_empty() {

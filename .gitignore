@@ -39,3 +39,6 @@ session_*.log
 
 # Local Hermes dump from server (private transcripts; never commit)
 /hermes-from-server/
+
+# Retrieval eval snapshot (real personal records; never commit)
+/eval-snapshot.json

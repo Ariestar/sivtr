@@ -1,5 +1,6 @@
 pub mod copy;
 pub mod diff;
+pub mod eval;
 pub mod filter;
 pub mod nav;
 pub mod records;

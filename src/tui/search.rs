@@ -1,5 +1,6 @@
 use regex::{Regex, RegexBuilder};
-use sivtr_core::record::{work_record_content_matches, WorkAt};
+use sivtr_core::record::WorkAt;
+use sivtr_core::search::content_line_matches;
 
 use crate::tui::workspace::WorkspaceSession;
 
@@ -211,7 +212,7 @@ impl WorkspaceSearchIndex {
             else {
                 continue;
             };
-            let line_matches = work_record_content_matches(record, regex);
+            let line_matches = content_line_matches(record, regex);
             if line_matches.is_empty() {
                 continue;
             }
@@ -234,8 +235,8 @@ impl WorkspaceSearchIndex {
                 matches.push(WorkspaceSearchMatch {
                     session_index: hit_idx,
                     dialogue_index: entry.dialogue_index,
-                    at: matched.at,
-                    matched_line: matched.matched_line,
+                    at: WorkAt::Part(matched.part_seq),
+                    matched_line: matched.line,
                 });
             }
         }

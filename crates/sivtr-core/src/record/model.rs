@@ -91,6 +91,42 @@ pub enum WorkOutcome {
     Unknown,
 }
 
+impl WorkOutcome {
+    /// `--status` filter parse, including the CLI alias spellings.
+    pub fn from_status_arg(value: &str) -> Result<Self, String> {
+        match value.to_ascii_lowercase().as_str() {
+            "success" | "succeeded" | "ok" | "passed" => Ok(Self::Success),
+            "failure" | "failed" | "fail" | "error" => Ok(Self::Failure),
+            "unknown" => Ok(Self::Unknown),
+            _ => Err(format!(
+                "unknown search status `{value}`; expected success, failure, or unknown"
+            )),
+        }
+    }
+
+    pub fn as_status_arg(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Failure => "failure",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+impl std::str::FromStr for WorkOutcome {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::from_status_arg(value)
+    }
+}
+
+impl std::fmt::Display for WorkOutcome {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_status_arg())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkChannel {

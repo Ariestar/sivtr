@@ -6,7 +6,7 @@ use std::str::FromStr;
 use crate::ai::AgentProvider;
 
 /// Where a ref lives: current workspace, or a named scope (`docs`, `desk`, `alice/sivtr`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WorkScope {
     Local,
     Named(String),
@@ -31,7 +31,7 @@ impl WorkScope {
 }
 
 /// Scope-local logical path: `source/session/index` (not a filesystem path).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WorkPath {
     Terminal {
         session: String,
@@ -97,14 +97,14 @@ impl fmt::Display for WorkPath {
 }
 
 /// Where on a resolved record this ref lands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WorkAt {
     Whole,
     Part(usize),
 }
 
 /// Exact address: `[scope:]path[/at]`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WorkRef {
     pub scope: WorkScope,
     pub path: WorkPath,

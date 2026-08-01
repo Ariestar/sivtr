@@ -4,9 +4,7 @@ pub mod model;
 pub mod refs;
 
 pub use expand::{expand_source, resolve_scope_token};
-pub use index::{
-    work_record_content_matches, WorkRecordIndex, WorkRecordMatch, WorkRecordSearchScope,
-};
+pub use index::WorkRecordIndex;
 pub use model::{
     chat_turn_ranges, format_work_part, is_real_user_block, RecordText, RecordTextMode,
     WorkChannel, WorkOutcome, WorkPart, WorkPartData, WorkPartKind, WorkRecord,

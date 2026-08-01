@@ -16,7 +16,7 @@ pub fn execute(args: &SearchArgs) -> Result<()> {
 pub fn run(args: &SearchArgs) -> Result<WorkSet> {
     let mut workset = workset::query(
         &args.source,
-        filter::Filter::from_search_args(args)?,
+        filter::from_search_args(args)?,
         args.cwd.as_deref(),
     )?;
     workset.save_last()?;

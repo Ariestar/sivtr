@@ -1,22 +1,5 @@
-use regex::Regex;
-
-use super::model::{WorkPart, WorkRecord, WorkRecordKind};
-use super::refs::{WorkAt, WorkRef};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorkRecordSearchScope {
-    Content,
-    Title,
-    Session,
-}
-
-#[derive(Debug, Clone)]
-pub struct WorkRecordMatch<'a> {
-    pub record: &'a WorkRecord,
-    pub at: WorkAt,
-    pub content: String,
-    pub matched_line: usize,
-}
+use super::model::{WorkRecord, WorkRecordKind};
+use super::refs::WorkRef;
 
 #[derive(Debug, Clone)]
 pub struct WorkRecordIndex {
@@ -37,36 +20,10 @@ impl WorkRecordIndex {
         self.records.iter().find(|record| record.work_ref == whole)
     }
 
-    pub fn resolve_part(&self, reference: &WorkRef) -> Option<&WorkPart> {
+    pub fn resolve_part(&self, reference: &WorkRef) -> Option<&super::model::WorkPart> {
         let seq = reference.part()?;
         self.resolve(reference)
             .and_then(|record| find_part(record, seq))
-    }
-
-    pub fn search(
-        &self,
-        regex: &Regex,
-        scope: WorkRecordSearchScope,
-        limit: usize,
-        include: impl Fn(&WorkRecord) -> bool,
-    ) -> Vec<WorkRecordMatch<'_>> {
-        self.records
-            .iter()
-            .filter(|record| include(record))
-            .filter_map(|record| match scope {
-                WorkRecordSearchScope::Content => matching_content(record, regex),
-                WorkRecordSearchScope::Title => {
-                    regex.is_match(&record.title).then_some(WorkRecordMatch {
-                        record,
-                        at: WorkAt::Whole,
-                        content: record.title.clone(),
-                        matched_line: 1,
-                    })
-                }
-                WorkRecordSearchScope::Session => matching_session(record, regex),
-            })
-            .take(limit)
-            .collect()
     }
 }
 
@@ -79,53 +36,7 @@ impl WorkRecord {
     }
 }
 
-fn matching_content<'a>(record: &'a WorkRecord, regex: &Regex) -> Option<WorkRecordMatch<'a>> {
-    work_record_content_matches(record, regex)
-        .into_iter()
-        .next()
-}
-
-pub fn work_record_content_matches<'a>(
-    record: &'a WorkRecord,
-    regex: &Regex,
-) -> Vec<WorkRecordMatch<'a>> {
-    matching_parts(record, regex)
-}
-
-fn matching_parts<'a>(record: &'a WorkRecord, regex: &Regex) -> Vec<WorkRecordMatch<'a>> {
-    record
-        .parts
-        .iter()
-        .flat_map(|part| {
-            let text = part.text();
-            text.lines()
-                .enumerate()
-                .filter(|(_, line)| regex.is_match(line))
-                .map(|(line_index, line)| WorkRecordMatch {
-                    record,
-                    at: WorkAt::Part(part.seq),
-                    content: line.to_string(),
-                    matched_line: line_index + 1,
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect()
-}
-
-fn matching_session<'a>(record: &'a WorkRecord, regex: &Regex) -> Option<WorkRecordMatch<'a>> {
-    let session_id = record.work_ref.session();
-    if regex.is_match(session_id) {
-        return Some(WorkRecordMatch {
-            record,
-            at: WorkAt::Whole,
-            content: session_id.to_string(),
-            matched_line: 1,
-        });
-    }
-    None
-}
-
-fn find_part(record: &WorkRecord, seq: usize) -> Option<&WorkPart> {
+fn find_part(record: &WorkRecord, seq: usize) -> Option<&super::model::WorkPart> {
     record.parts.iter().find(|part| part.seq == seq)
 }
 
@@ -133,7 +44,7 @@ fn find_part(record: &WorkRecord, seq: usize) -> Option<&WorkPart> {
 mod tests {
     use super::*;
     use crate::ai::AgentProvider;
-    use crate::record::model::{WorkOutcome, WorkPartData, WorkRecordKind, WorkStatus, WorkTime};
+    use crate::record::model::{WorkPart, WorkPartData, WorkRecordKind, WorkTime};
 
     #[test]
     fn resolves_records_by_typed_ref() {
@@ -154,21 +65,6 @@ mod tests {
         let reference = WorkRef::terminal("current", 1).with_part(1);
 
         assert!(index.resolve_part(&reference).is_some());
-    }
-
-    #[test]
-    fn search_finds_part_matches() {
-        let records = vec![test_record_with_parts(
-            "terminal/current/1",
-            "current",
-            1,
-            "hello world",
-        )];
-        let index = WorkRecordIndex::new(records);
-        let regex = Regex::new("hello").unwrap();
-        let matches = index.search(&regex, WorkRecordSearchScope::Content, 10, |_| true);
-
-        assert!(!matches.is_empty());
     }
 
     fn test_record(
@@ -229,10 +125,7 @@ mod tests {
             },
             cwd: None,
             time: WorkTime::default(),
-            status: Some(WorkStatus {
-                outcome: WorkOutcome::Success,
-                exit_code: Some(0),
-            }),
+            status: None,
             title: "title".to_string(),
             parts: vec![WorkPart {
                 seq: 1,
