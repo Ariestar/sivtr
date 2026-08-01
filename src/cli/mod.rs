@@ -583,9 +583,9 @@ pub struct SearchArgs {
     #[arg(long, value_name = "DURATION")]
     pub max_duration: Option<String>,
 
-    /// Result sort: newest, oldest, duration, duration-asc, exit-code, or exit-code-asc
-    #[arg(long, default_value_t = Sort::default(), value_name = "SORT")]
-    pub sort: Sort,
+    /// Result sort: newest (default), relevance (default with --match), oldest, duration, duration-asc, exit-code, or exit-code-asc
+    #[arg(long, value_name = "SORT")]
+    pub sort: Option<Sort>,
 
     /// Workspace directory used to resolve current AI sessions
     #[arg(long, value_name = "PATH")]
@@ -1464,7 +1464,7 @@ mod tests {
                 assert_eq!(args.exit_code, None);
                 assert_eq!(args.min_duration, None);
                 assert_eq!(args.max_duration, None);
-                assert_eq!(args.sort, Sort::Newest);
+                assert_eq!(args.sort, None);
                 assert_eq!(args.format, Some(WorkSetOutputFormat::Timeline));
                 assert_eq!(args.limit, Some(5));
                 assert_eq!(args.since, None);
@@ -1716,7 +1716,7 @@ mod tests {
                 assert_eq!(args.exit_code, Some(101));
                 assert_eq!(args.min_duration.as_deref(), Some("500ms"));
                 assert_eq!(args.max_duration.as_deref(), Some("2s"));
-                assert_eq!(args.sort, Sort::Duration);
+                assert_eq!(args.sort, Some(Sort::Duration));
             }
             _ => panic!("expected search command"),
         }

@@ -16,7 +16,16 @@ pub use sivtr_core::search::Filter;
 const SEARCH_DEFAULT_LATEST: usize = 5;
 
 /// Build the search filter: recency default, relevance rank from `--match`.
+///
+/// A `--match` query signals retrieval intent, so relevance becomes the
+/// default sort (BM25 ranks the matched set); without it the search stays a
+/// recency-bounded browse. An explicit `--sort` always wins.
 pub fn from_search_args(args: &SearchArgs) -> Result<Filter> {
+    let sort = args.sort.unwrap_or(if args.match_.is_some() {
+        Sort::Relevance
+    } else {
+        Sort::Newest
+    });
     let mut filter = common_bounds(
         args.match_.as_deref(),
         args.exclude.as_deref(),
@@ -31,15 +40,15 @@ pub fn from_search_args(args: &SearchArgs) -> Result<Filter> {
         args.last.as_deref(),
         args.exclude_current,
         args.latest,
-        Some(args.sort),
+        Some(sort),
         args.limit,
     )?;
     // Search always bounds: default latest=5 when neither latest nor limit set.
     // Relevance ranks the whole result set, so it skips the recency window.
-    if filter.latest.is_none() && filter.limit.is_none() && args.sort != Sort::Relevance {
+    if filter.latest.is_none() && filter.limit.is_none() && sort != Sort::Relevance {
         filter.latest = Some(SEARCH_DEFAULT_LATEST);
     }
-    if args.sort == Sort::Relevance {
+    if sort == Sort::Relevance {
         filter.rank = args.match_.clone();
     }
     Ok(filter)
@@ -241,7 +250,7 @@ mod tests {
             exit_code: None,
             min_duration: None,
             max_duration: None,
-            sort: Sort::Newest,
+            sort: None,
             cwd: None,
             since: None,
             until: None,
@@ -271,7 +280,7 @@ mod tests {
             exit_code: None,
             min_duration: None,
             max_duration: None,
-            sort: Sort::Newest,
+            sort: None,
             cwd: None,
             since: None,
             until: None,
@@ -301,7 +310,7 @@ mod tests {
             exit_code: None,
             min_duration: None,
             max_duration: None,
-            sort: Sort::Newest,
+            sort: None,
             cwd: None,
             since: None,
             until: None,

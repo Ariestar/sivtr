@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::cli::{FilterArgs, SearchArgs, ShowArgs, ZoomArgs};
 use sivtr_core::record::WorkOutcome;
-use sivtr_core::search::{Field, PartKind, Sort};
+use sivtr_core::search::{Field, PartKind};
 
 // MCP JSON schema exposes these as strings; serde still uses FromStr aliases.
 use crate::commands::memory::show::{self, WorkSetOutputFormat};
@@ -242,7 +242,7 @@ pub fn to_search_args(params: &SearchParams) -> Result<SearchArgs, String> {
         exit_code: params.exit_code,
         min_duration: None,
         max_duration: None,
-        sort: Sort::default(),
+        sort: None,
         cwd: cwd_path(params.cwd.as_deref()),
         since: params.since.clone(),
         until: params.until.clone(),
