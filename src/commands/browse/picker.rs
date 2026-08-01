@@ -7,14 +7,13 @@ use std::path::PathBuf;
 
 use crate::tui::content::view::{content_link_at, ContentViewMode};
 use crate::tui::search::{
-    workspace_records_fingerprint, workspace_search_has_query, workspace_search_scope,
-    WorkspaceSearchIndex, WorkspaceSearchOutput,
+    workspace_search_has_query, workspace_search_scope, WorkspaceSearchIndex, WorkspaceSearchOutput,
 };
 use crate::tui::workspace::{
     help_action_for_key, panel_inner_rows, render_workspace, search_match_half, selected_index,
     workspace_help_entries, workspace_hit_test, workspace_layout, ContentIoFocus, ContentIoFrame,
-    ContentScrolls, WorkspaceFocus, WorkspacePickedContent, WorkspaceSearchView, WorkspaceSource,
-    WorkspaceView,
+    ContentScrolls, WorkspaceFocus, WorkspacePickedContent, WorkspaceSearchView, WorkspaceSession,
+    WorkspaceSource, WorkspaceView,
 };
 
 use super::content::{
@@ -83,6 +82,7 @@ pub(crate) fn run(
     let mut search_query = String::new();
     let mut search_output = WorkspaceSearchOutput::default();
     let mut search_index: Option<WorkspaceSearchIndex> = None;
+    let mut search_corpus: Option<Vec<WorkspaceSession>> = None;
     let mut search_cursor = 0usize;
     let mut search_dirty = true;
     let mut search_apply_pending = false;
@@ -107,29 +107,34 @@ pub(crate) fn run(
         }
         if search_dirty {
             if workspace_search_has_query(&search_query) {
-                // Temporary corpus for matching only — not the UI list.
-                let corpus: Vec<_> = all_sessions
-                    .iter()
-                    .map(|s| {
-                        let mut full = s.clone();
-                        if let Some(recs) = sessions_pane.body_for(s) {
-                            full.records = recs.to_vec();
-                        }
-                        full
-                    })
-                    .collect();
-                // Rebuild the search index only when the loaded corpus changed;
-                // its BM25 index is cached across keystrokes.
-                let stale = search_index.as_ref().is_none_or(|index| {
-                    index.fingerprint() != workspace_records_fingerprint(&corpus)
-                });
+                // Rebuild the search corpus and index only when the loaded
+                // corpus changed; both are cached across keystrokes so typing
+                // does not clone every hydrated session per keypress.
+                let fingerprint = search_corpus_fingerprint(&all_sessions, &sessions_pane);
+                let stale = search_index
+                    .as_ref()
+                    .is_none_or(|index| index.fingerprint() != fingerprint);
                 if stale {
+                    let corpus: Vec<_> = all_sessions
+                        .iter()
+                        .map(|s| {
+                            let mut full = s.clone();
+                            if let Some(recs) = sessions_pane.body_for(s) {
+                                full.records = recs.to_vec();
+                            }
+                            full
+                        })
+                        .collect();
                     search_index = Some(WorkspaceSearchIndex::new(&corpus));
+                    search_corpus = Some(corpus);
                 }
                 search_output = search_index
                     .as_ref()
                     .expect("search index built above")
-                    .search(&corpus, &search_query);
+                    .search(
+                        search_corpus.as_ref().expect("search corpus built above"),
+                        &search_query,
+                    );
             } else {
                 search_output = WorkspaceSearchOutput::default();
             }
@@ -847,6 +852,24 @@ pub(crate) fn run(
             _ => {}
         }
     }
+}
+
+/// Fingerprint of the loaded search corpus without cloning it: hashes every
+/// hydrated record ref in corpus order. Matches `WorkspaceSearchIndex`'s
+/// internal fingerprint, so an equal value means the cached corpus is still
+/// current and neither the corpus clone nor the BM25 index need rebuilding.
+fn search_corpus_fingerprint(sessions: &[WorkspaceSession], pane: &SessionColumn) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    for session in sessions {
+        if let Some(records) = pane.body_for(session) {
+            for record in records {
+                record.work_ref.whole().hash(&mut hasher);
+            }
+        }
+    }
+    hasher.finish()
 }
 
 #[cfg(test)]

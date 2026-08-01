@@ -85,7 +85,7 @@ pub(crate) struct WorkspaceSearchIndex {
 
 /// Fingerprint of the loaded dialogue corpus: hash of every record ref.
 /// Identical when the corpus has the same records in the same order.
-pub(crate) fn workspace_records_fingerprint(sessions: &[WorkspaceSession]) -> u64 {
+fn workspace_records_fingerprint(sessions: &[WorkspaceSession]) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for session in sessions {
         for record in &session.records {
