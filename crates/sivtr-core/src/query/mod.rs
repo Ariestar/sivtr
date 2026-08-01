@@ -7,9 +7,12 @@
 //! [`QueryResult::skipped`] parse failures — the core does no printing.
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 
 use crate::ai::AgentProvider;
 #[cfg(test)]
@@ -155,7 +158,9 @@ fn agent_records(
 ) -> Result<Vec<WorkRecord>> {
     // Session files are independent, so list every parse task up front and
     // parse them in parallel; outcomes are reassembled in list order so the
-    // record sequence (and downstream dedup) is unchanged.
+    // record sequence (and downstream dedup) is unchanged. Each task first
+    // checks the per-file bincode cache (mtime+size stamped) and only parses
+    // when the file actually changed.
     let mut tasks: Vec<(AgentProvider, PathBuf)> = Vec::new();
     for provider in providers {
         let source = provider.session_provider();
@@ -172,11 +177,16 @@ fn agent_records(
             .enumerate()
             .map(|(index, (provider, path))| {
                 scope.spawn(move || {
-                    let source = provider.session_provider();
-                    let outcome = source
-                        .parse_session_file(path)
-                        .map(|session| WorkRecord::chat_turns(*provider, &session))
-                        .map_err(|error| format!("{error:#}"));
+                    let outcome = match load_cached_agent_session(*provider, path) {
+                        Some(records) => Ok(records),
+                        None => {
+                            let parsed = parse_agent_session_file(*provider, path);
+                            if let Ok(ref records) = parsed {
+                                store_cached_agent_session(*provider, path, records);
+                            }
+                            parsed
+                        }
+                    };
                     (index, outcome)
                 })
             })
@@ -200,6 +210,103 @@ fn agent_records(
         }
     }
     Ok(records)
+}
+
+/// Bump when the cached record layout or agent parsing changes.
+const AGENT_CACHE_VERSION: u32 = 5;
+
+/// On-disk cache entry for one parsed agent session file, keyed by the
+/// session file's (mtime, size). Reading back a stamp-matched blob is an
+/// order of magnitude cheaper than re-parsing the provider transcript.
+///
+/// Records are stored as-is via MessagePack (rmp-serde): it is map-driven, so
+/// it natively serializes [`WorkRecord`] — including the flattened
+/// `WorkPart.data`, the internally-tagged `WorkPartData`, and
+/// `serde_json::Value` tool payloads — with no parallel cache types (bincode
+/// 1/2 reject flattened fields and serde maps).
+#[derive(Serialize, Deserialize)]
+struct CachedAgentSession {
+    version: u32,
+    mtime_secs: u64,
+    mtime_nanos: u32,
+    size: u64,
+    records: Vec<WorkRecord>,
+}
+
+fn parse_agent_session_file(
+    provider: AgentProvider,
+    path: &Path,
+) -> Result<Vec<WorkRecord>, String> {
+    let source = provider.session_provider();
+    source
+        .parse_session_file(path)
+        .map(|session| WorkRecord::chat_turns(provider, &session))
+        .map_err(|error| format!("{error:#}"))
+}
+
+fn cache_dir() -> PathBuf {
+    crate::workspace::data_dir().join("cache")
+}
+
+fn cache_path(provider: AgentProvider, path: &Path) -> PathBuf {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    provider.hash(&mut hasher);
+    path.hash(&mut hasher);
+    cache_dir().join(format!("agent-{:016x}.bin", hasher.finish()))
+}
+
+fn file_stamp(path: &Path) -> Option<(u64, u32, u64)> {
+    let meta = std::fs::metadata(path).ok()?;
+    let duration = meta
+        .modified()
+        .ok()?
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .ok()?;
+    Some((duration.as_secs(), duration.subsec_nanos(), meta.len()))
+}
+
+/// Read the cached parse if the session file is unchanged; None on any miss
+/// (missing/corrupt/stale cache) so the caller falls back to parsing.
+fn load_cached_agent_session(provider: AgentProvider, path: &Path) -> Option<Vec<WorkRecord>> {
+    let (secs, nanos, size) = file_stamp(path)?;
+    let bytes = std::fs::read(cache_path(provider, path)).ok()?;
+    let cached: CachedAgentSession = rmp_serde::from_slice(&bytes).ok()?;
+    if cached.version != AGENT_CACHE_VERSION
+        || cached.mtime_secs != secs
+        || cached.mtime_nanos != nanos
+        || cached.size != size
+    {
+        return None;
+    }
+    Some(cached.records)
+}
+
+/// Best-effort cache write; failures never block the search.
+fn store_cached_agent_session(provider: AgentProvider, path: &Path, records: &[WorkRecord]) {
+    let Some((secs, nanos, size)) = file_stamp(path) else {
+        return;
+    };
+    let cache_entry = CachedAgentSession {
+        version: AGENT_CACHE_VERSION,
+        mtime_secs: secs,
+        mtime_nanos: nanos,
+        size,
+        records: records.to_vec(),
+    };
+    // `with_struct_map`: rmp's default struct-as-array encoding breaks
+    // `skip_serializing_if` fields, and the flattened `WorkPart.data` needs map
+    // semantics anyway.
+    let mut serializer = rmp_serde::encode::Serializer::new(Vec::new()).with_struct_map();
+    if cache_entry.serialize(&mut serializer).is_err() {
+        return;
+    }
+    let bytes = serializer.into_inner();
+    let _ = std::fs::create_dir_all(cache_dir());
+    let target = cache_path(provider, path);
+    let tmp = target.with_extension("tmp");
+    if std::fs::write(&tmp, bytes).is_ok() {
+        let _ = std::fs::rename(&tmp, &target);
+    }
 }
 
 /// Serial single-source parse path, kept for tests that drive a mocked
@@ -562,5 +669,101 @@ mod tests {
                 },
             ],
         }
+    }
+
+    #[test]
+    fn cache_record_round_trips_through_bincode() {
+        let mut record = test_record(
+            WorkRef::agent(AgentProvider::Codex, "abcdef12", 1),
+            "abcdef12",
+            Some("abcdef1234567890"),
+        );
+        record.parts.extend([
+            WorkPart {
+                seq: 3,
+                occurred_at: Some("2026-01-01T00:00:00Z".to_string()),
+                data: WorkPartData::Prompt {
+                    content: "prompt".to_string(),
+                    ansi: Some("\x1b[31mred\x1b[0m".to_string()),
+                },
+            },
+            WorkPart {
+                seq: 4,
+                occurred_at: None,
+                data: WorkPartData::Command {
+                    content: "ls -la".to_string(),
+                },
+            },
+            WorkPart {
+                seq: 5,
+                occurred_at: None,
+                data: WorkPartData::ToolCall {
+                    call_id: Some("call-1".to_string()),
+                    tool: Some("Bash".to_string()),
+                    input: serde_json::json!({
+                        "command": "ls",
+                        "nested": {"list": [1, 2, 3], "flag": true, "none": null},
+                        "big": 18446744073709551615u64,
+                        "float": 1.5,
+                    }),
+                },
+            },
+            WorkPart {
+                seq: 6,
+                occurred_at: None,
+                data: WorkPartData::ToolResult {
+                    call_id: Some("call-1".to_string()),
+                    tool: Some("Bash".to_string()),
+                    output: serde_json::json!({"exit": 0, "stdout": "hi"}),
+                },
+            },
+            WorkPart {
+                seq: 7,
+                occurred_at: None,
+                data: WorkPartData::Skill {
+                    skill: Some("test".to_string()),
+                    content: "skill body".to_string(),
+                },
+            },
+            WorkPart {
+                seq: 8,
+                occurred_at: None,
+                data: WorkPartData::Thinking {
+                    content: "think".to_string(),
+                },
+            },
+            WorkPart {
+                seq: 9,
+                occurred_at: None,
+                data: WorkPartData::Output {
+                    content: "out".to_string(),
+                    ansi: None,
+                },
+            },
+            WorkPart {
+                seq: 10,
+                occurred_at: None,
+                data: WorkPartData::Error {
+                    content: "err".to_string(),
+                },
+            },
+        ]);
+
+        // MessagePack (rmp-serde) is map-driven, so it natively supports the
+        // flattened `WorkPart.data`, the internally-tagged `WorkPartData`, and
+        // `serde_json::Value` tool payloads. `with_struct_map` is required:
+        // rmp's default struct-as-array encoding breaks `skip_serializing_if`
+        // fields (missing trailing fields shift the array layout).
+        let mut serializer = rmp_serde::encode::Serializer::new(Vec::new()).with_struct_map();
+        record
+            .serialize(&mut serializer)
+            .expect("rmp serializes WorkRecord");
+        let mp_bytes = serializer.into_inner();
+        let mp_restored: WorkRecord =
+            rmp_serde::from_slice(&mp_bytes).expect("rmp deserializes WorkRecord");
+        assert_eq!(
+            record, mp_restored,
+            "rmp round-trip must preserve WorkRecord"
+        );
     }
 }
