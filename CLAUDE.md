@@ -34,7 +34,7 @@ crates/sivtr-core/src/     ← Core library (no CLI deps)
     refs.rs                ← WorkRef parsing (local body + origin:body remote form)
     index.rs               ← Record indexing and lookup
   query/                   ← Workspace record/source loading
-  search/                  ← Search matcher and navigator
+  search/                  ← Filter/Searcher pipeline, BM25 ranking (types.rs, filter.rs, bm25.rs, eval.rs)
   workspace.rs             ← Workspace resolution (git root → sessions), data_dir()
   config/                  ← SivtrConfig, serde TOML
   history/                 ← SQLite command history

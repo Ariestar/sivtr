@@ -1,21 +1,29 @@
-//! BM25 relevance ranking over a record corpus, powered by the `bm25` crate
-//! (Lucene/Elasticsearch-style scoring). `Bm25Index` is built once per corpus
-//! and answers many queries.
+//! BM25 relevance ranking over a record corpus. A standard implementation with
+//! tf saturation (`k1`) and length normalization (`b`), built once per corpus
+//! and answering many queries. The previous `bm25` crate scored `idf * tf`
+//! without either term, so long documents with many query-word mentions (agent
+//! sessions, tool listings) outranked short semantic matches.
 
-use bm25::{SearchEngine, SearchEngineBuilder, Tokenizer};
+use std::collections::HashMap;
 
 use crate::record::{WorkPartKind, WorkRecord, WorkRef};
+
+/// Standard BM25 term-saturation and length-normalization constants.
+const K1: f64 = 1.2;
+const B: f64 = 0.75;
+
+/// Cap on tokens indexed per document. Agent turns and tool listings can run
+/// to tens of thousands of tokens; without a cap their raw term frequencies
+/// outscore short semantic matches (BM25's long-document bias).
+const MAX_TOKENS_PER_DOC: usize = 800;
 
 /// Splits on non-alphanumeric runs, lowercases Latin/digit runs, and emits
 /// overlapping CJK bigrams (Lucene CJKAnalyzer style) so Chinese text is
 /// searchable without a segmentation dictionary.
-// ponytail: no stemming or idf clamping — the crate uses raw Robertson idf, so
-// very common tokens get negative idf. Measured still beats recency; revisit if
-// command-history queries matter.
 pub struct SimpleTokenizer;
 
-impl Tokenizer for SimpleTokenizer {
-    fn tokenize(&self, text: &str) -> Vec<String> {
+impl SimpleTokenizer {
+    pub fn tokenize(&self, text: &str) -> Vec<String> {
         let chars: Vec<char> = text.chars().collect();
         let mut tokens = Vec::new();
         let mut i = 0;
@@ -63,34 +71,87 @@ fn is_cjk(ch: char) -> bool {
 
 /// An in-memory BM25 index over a record corpus. Build once, query many times.
 pub struct Bm25Index {
-    engine: SearchEngine<u32, u32, SimpleTokenizer>,
+    n: usize,
+    avgdl: f64,
+    /// Token -> number of documents containing it.
+    df: HashMap<String, f64>,
+    /// Token -> [(document id, term frequency)].
+    postings: HashMap<String, Vec<(usize, f64)>>,
+    doc_len: Vec<f64>,
     refs: Vec<WorkRef>,
 }
 
 impl Bm25Index {
     pub fn build(records: &[WorkRecord]) -> Self {
-        let corpus = records.iter().map(doc_text).collect::<Vec<_>>();
-        let engine = SearchEngineBuilder::<u32, u32, SimpleTokenizer>::with_tokenizer_and_corpus(
-            SimpleTokenizer,
-            corpus,
-        )
-        .build();
+        let mut df = HashMap::new();
+        let mut postings: HashMap<String, Vec<(usize, f64)>> = HashMap::new();
+        let mut doc_len = Vec::with_capacity(records.len());
+        let refs = records
+            .iter()
+            .map(|record| record.work_ref.whole())
+            .collect::<Vec<_>>();
+
+        for (doc_id, record) in records.iter().enumerate() {
+            let mut term_freq: HashMap<String, usize> = HashMap::new();
+            for token in SimpleTokenizer
+                .tokenize(&doc_text(record))
+                .into_iter()
+                .take(MAX_TOKENS_PER_DOC)
+            {
+                *term_freq.entry(token).or_insert(0) += 1;
+            }
+            doc_len.push(term_freq.values().sum::<usize>() as f64);
+            for (token, count) in term_freq {
+                *df.entry(token.clone()).or_insert(0.0) += 1.0;
+                postings
+                    .entry(token)
+                    .or_default()
+                    .push((doc_id, count as f64));
+            }
+        }
+
+        let n = records.len();
+        let avgdl = if n > 0 {
+            doc_len.iter().sum::<f64>() / n as f64
+        } else {
+            1.0
+        };
         Self {
-            engine,
-            refs: records
-                .iter()
-                .map(|record| record.work_ref.whole())
-                .collect(),
+            n,
+            avgdl,
+            df,
+            postings,
+            doc_len,
+            refs,
         }
     }
 
     /// Rank the corpus by BM25 relevance to `query`, best first. Only records
     /// sharing at least one query token appear in the result.
     pub fn rank(&self, query: &str) -> Vec<(WorkRef, f32)> {
-        self.engine
-            .search(query, None)
+        let tokens = SimpleTokenizer.tokenize(query);
+        let mut scores: HashMap<usize, f64> = HashMap::new();
+        for token in tokens {
+            let Some(&df) = self.df.get(&token) else {
+                continue;
+            };
+            let Some(postings) = self.postings.get(&token) else {
+                continue;
+            };
+            // Robertson idf; non-negative for every token frequency.
+            let idf = ((self.n as f64 - df + 0.5) / (df + 0.5) + 1.0).ln();
+            for (doc_id, tf) in postings {
+                let denom = tf + K1 * (1.0 - B + B * self.doc_len[*doc_id] / self.avgdl);
+                let contribution = idf * tf * (K1 + 1.0) / denom;
+                *scores.entry(*doc_id).or_insert(0.0) += contribution;
+            }
+        }
+
+        let mut ranked: Vec<(usize, f64)> = scores.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
+        ranked
             .into_iter()
-            .map(|result| (self.refs[result.document.id as usize].clone(), result.score))
+            .map(|(doc_id, score)| (self.refs[doc_id].clone(), score as f32))
             .collect()
     }
 }
@@ -212,5 +273,34 @@ mod tests {
         let corpus = vec![record("dev", 1, "cargo build", "Finished dev profile")];
         let index = Bm25Index::build(&corpus);
         assert!(index.rank("zzzznothing").is_empty());
+    }
+
+    #[test]
+    fn long_noise_document_does_not_outrank_short_match() {
+        // The long document repeats one query term ten times but only matches
+        // a single term; the short one matches all three terms. tf saturation
+        // and length normalization keep the short match on top.
+        let long_noise =
+            "command command command command command command command command command command \
+            setup tooling docs and miscellaneous text";
+        let corpus = vec![
+            record("dev", 1, "command error", "command not found: get-item"),
+            record("dev", 2, "unrelated", "the found command ran fine"),
+            record("dev", 3, "setup log", long_noise),
+        ];
+        let index = Bm25Index::build(&corpus);
+        let ranked = index.rank("command not found");
+        assert_eq!(ranked[0].0.to_string(), "terminal/dev/1");
+    }
+
+    #[test]
+    fn multi_word_query_prefers_documents_matching_all_terms() {
+        let corpus = vec![
+            record("dev", 1, "command error", "command not found: get-item"),
+            record("dev", 2, "unrelated", "the found command ran fine"),
+        ];
+        let index = Bm25Index::build(&corpus);
+        let ranked = index.rank("command not found");
+        assert_eq!(ranked[0].0.to_string(), "terminal/dev/1");
     }
 }

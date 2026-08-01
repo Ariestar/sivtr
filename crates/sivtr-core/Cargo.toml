@@ -10,7 +10,6 @@ keywords = ["terminal", "tui", "agents", "ai"]
 categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
-bm25 = { version = "2.3.2", default-features = false }
 strip-ansi-escapes = "0.2"
 unicode-width = "0.2"
 regex = "1"
