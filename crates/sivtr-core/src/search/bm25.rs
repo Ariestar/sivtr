@@ -4,7 +4,7 @@
 
 use bm25::{SearchEngine, SearchEngineBuilder, Tokenizer};
 
-use crate::record::{WorkRecord, WorkRef};
+use crate::record::{WorkPartKind, WorkRecord, WorkRef};
 
 /// Splits on non-alphanumeric runs, lowercases Latin/digit runs, and emits
 /// overlapping CJK bigrams (Lucene CJKAnalyzer style) so Chinese text is
@@ -96,7 +96,10 @@ impl Bm25Index {
 }
 
 /// Document text for BM25: the title repeated three times (cheap field boost)
-/// followed by every part's text.
+/// followed by every part's text. Covers the same parts the default content
+/// pattern matches — dialogue, output, tool results, thinking, errors — and
+/// leaves tool-call payloads and skill text out, so the ranked text is the
+/// same source the boolean filter reads.
 fn doc_text(record: &WorkRecord) -> String {
     let mut text = String::new();
     for _ in 0..3 {
@@ -104,6 +107,9 @@ fn doc_text(record: &WorkRecord) -> String {
         text.push('\n');
     }
     for part in &record.parts {
+        if matches!(part.kind(), WorkPartKind::ToolCall | WorkPartKind::Skill) {
+            continue;
+        }
         text.push_str(&part.text());
         text.push('\n');
     }
