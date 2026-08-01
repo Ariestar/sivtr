@@ -423,13 +423,14 @@ fn part_matches_filters(
     if !part_field_matches(part, filter.in_field) {
         return false;
     }
-    // Default content search is dialogue-only so tools, skills, and thinking
-    // do not pollute hits. Structural parts are selected explicitly with
-    // `--kind` or by pinning the part ref.
+    // Default content search covers the same text BM25 ranks: dialogue turns,
+    // terminal output, tool results (execution errors), and thinking (error
+    // reasoning). Tool-call payloads and skill text stay out as noise; they
+    // remain reachable with `--kind` or `--in all`.
     if !pinned
         && matches!(filter.in_field, Field::Content)
         && filter.kind.is_none()
-        && part.kind().is_structure()
+        && matches!(part.kind(), WorkPartKind::ToolCall | WorkPartKind::Skill)
     {
         return false;
     }
