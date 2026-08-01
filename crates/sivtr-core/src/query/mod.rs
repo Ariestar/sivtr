@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::ai::{AgentProvider, AgentSessionProvider};
+use crate::ai::AgentProvider;
+#[cfg(test)]
+use crate::ai::AgentSessionProvider;
 use crate::record::{WorkPath, WorkRecord, WorkRecordIndex, WorkRef, WorkRefSelector};
 use crate::{session, workspace};
 
@@ -151,19 +153,58 @@ fn agent_records(
     recent_sessions: Option<usize>,
     skipped: &mut Vec<SkippedSession>,
 ) -> Result<Vec<WorkRecord>> {
-    let mut records = Vec::new();
+    // Session files are independent, so list every parse task up front and
+    // parse them in parallel; outcomes are reassembled in list order so the
+    // record sequence (and downstream dedup) is unchanged.
+    let mut tasks: Vec<(AgentProvider, PathBuf)> = Vec::new();
     for provider in providers {
         let source = provider.session_provider();
-        records.extend(agent_records_from_source(
-            source.as_ref(),
-            cwd,
-            recent_sessions,
-            skipped,
-        )?);
+        let mut sessions = source.list_recent_sessions(Some(cwd))?;
+        if let Some(limit) = recent_sessions {
+            sessions.truncate(limit);
+        }
+        tasks.extend(sessions.into_iter().map(|info| (*provider, info.path)));
+    }
+
+    let outcomes: Vec<(usize, Result<Vec<WorkRecord>, String>)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = tasks
+            .iter()
+            .enumerate()
+            .map(|(index, (provider, path))| {
+                scope.spawn(move || {
+                    let source = provider.session_provider();
+                    let outcome = source
+                        .parse_session_file(path)
+                        .map(|session| WorkRecord::chat_turns(*provider, &session))
+                        .map_err(|error| format!("{error:#}"));
+                    (index, outcome)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("session parse worker panicked"))
+            .collect()
+    });
+
+    let mut records = Vec::new();
+    for (index, outcome) in outcomes {
+        let (provider, path) = &tasks[index];
+        match outcome {
+            Ok(session_records) => records.extend(session_records),
+            Err(error) => skipped.push(SkippedSession {
+                provider: *provider,
+                path: path.clone(),
+                error,
+            }),
+        }
     }
     Ok(records)
 }
 
+/// Serial single-source parse path, kept for tests that drive a mocked
+/// `AgentSessionProvider` (the production path parses sessions in parallel).
+#[cfg(test)]
 fn agent_records_from_source(
     source: &dyn AgentSessionProvider,
     cwd: &Path,
