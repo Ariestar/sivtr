@@ -24,36 +24,40 @@ pub struct SimpleTokenizer;
 
 impl SimpleTokenizer {
     pub fn tokenize(&self, text: &str) -> Vec<String> {
-        let chars: Vec<char> = text.chars().collect();
         let mut tokens = Vec::new();
-        let mut i = 0;
-        while i < chars.len() {
-            let ch = chars[i];
+        let mut chars = text.chars().peekable();
+        while let Some(&ch) = chars.peek() {
             if is_cjk(ch) {
                 let mut run = String::new();
-                while i < chars.len() && is_cjk(chars[i]) {
-                    run.push(chars[i]);
-                    i += 1;
+                while let Some(&c) = chars.peek() {
+                    if !is_cjk(c) {
+                        break;
+                    }
+                    run.push(c);
+                    chars.next();
                 }
-                let run: Vec<char> = run.chars().collect();
-                if run.len() == 1 {
-                    tokens.push(run[0].to_string());
+                let run_chars: Vec<char> = run.chars().collect();
+                if run_chars.len() == 1 {
+                    tokens.push(run);
                 } else {
-                    for bigram in run.windows(2) {
+                    for bigram in run_chars.windows(2) {
                         tokens.push(bigram.iter().collect());
                     }
                 }
             } else if ch.is_alphanumeric() {
                 let mut run = String::new();
-                while i < chars.len() && !is_cjk(chars[i]) && chars[i].is_alphanumeric() {
-                    run.push(chars[i]);
-                    i += 1;
+                while let Some(&c) = chars.peek() {
+                    if is_cjk(c) || !c.is_alphanumeric() {
+                        break;
+                    }
+                    run.push(c);
+                    chars.next();
                 }
                 if !run.is_empty() {
                     tokens.push(run.to_lowercase());
                 }
             } else {
-                i += 1;
+                chars.next();
             }
         }
         tokens

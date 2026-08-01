@@ -1,6 +1,11 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::path::Path;
+
 use regex::{Regex, RegexBuilder};
-use sivtr_core::record::WorkAt;
-use sivtr_core::search::content_line_matches;
+use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
+use sivtr_core::search::{content_line_matches, Bm25Index, Field, Filter, Searcher, Sort};
 
 use crate::tui::workspace::WorkspaceSession;
 
@@ -69,6 +74,25 @@ struct WorkspaceSearchDialogueEntry {
 pub(crate) struct WorkspaceSearchIndex {
     sessions: Vec<WorkspaceSearchSessionEntry>,
     dialogues: Vec<WorkspaceSearchDialogueEntry>,
+    /// Loaded dialogue records, aligned one-to-one with `dialogues`.
+    records: Vec<WorkRecord>,
+    /// BM25 index over `records`, built on first content search and reused
+    /// across searches while the corpus stays unchanged.
+    bm25: RefCell<Option<Bm25Index>>,
+    /// Content fingerprint so callers can detect staleness cheaply.
+    fingerprint: u64,
+}
+
+/// Fingerprint of the loaded dialogue corpus: hash of every record ref.
+/// Identical when the corpus has the same records in the same order.
+pub(crate) fn workspace_records_fingerprint(sessions: &[WorkspaceSession]) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for session in sessions {
+        for record in &session.records {
+            record.work_ref.whole().hash(&mut hasher);
+        }
+    }
+    hasher.finish()
 }
 
 #[derive(Default)]
@@ -90,6 +114,7 @@ impl WorkspaceSearchIndex {
         let mut session_entries = Vec::with_capacity(sessions.len());
         let dialogue_count = sessions.iter().map(|session| session.records.len()).sum();
         let mut dialogue_entries = Vec::with_capacity(dialogue_count);
+        let mut records = Vec::with_capacity(dialogue_count);
 
         for (session_index, session) in sessions.iter().enumerate() {
             session_entries.push(WorkspaceSearchSessionEntry {
@@ -103,13 +128,22 @@ impl WorkspaceSearchIndex {
                     dialogue_index,
                     dialogue_title: record.title.clone(),
                 });
+                records.push(record.clone());
             }
         }
 
+        let fingerprint = workspace_records_fingerprint(sessions);
         Self {
             sessions: session_entries,
             dialogues: dialogue_entries,
+            records,
+            bm25: RefCell::new(None),
+            fingerprint,
         }
+    }
+
+    pub(crate) fn fingerprint(&self) -> u64 {
+        self.fingerprint
     }
 
     pub(crate) fn search(
@@ -153,7 +187,9 @@ impl WorkspaceSearchIndex {
                 WorkspaceSearchOutput { sessions, matches }
             }
             WorkspaceSearchScope::Dialogue => self.search_dialogue_titles(all_sessions, &regex),
-            WorkspaceSearchScope::Content => self.search_dialogue_content(all_sessions, &regex),
+            WorkspaceSearchScope::Content => {
+                self.search_dialogue_content(all_sessions, &regex, term)
+            }
         }
     }
 
@@ -201,36 +237,67 @@ impl WorkspaceSearchIndex {
         &self,
         all_sessions: &[WorkspaceSession],
         regex: &Regex,
+        term: &str,
     ) -> WorkspaceSearchOutput {
+        if self.records.is_empty() {
+            return WorkspaceSearchOutput::default();
+        }
+        // Same search path as the CLI: boolean pattern bounds the set, BM25
+        // ranks it. The regex is already compiled and valid here, so the
+        // pattern inside the filter cannot fail.
+        let anchors: Vec<WorkRef> = self
+            .records
+            .iter()
+            .map(|record| record.work_ref.whole())
+            .collect();
+        let filter = Filter {
+            pattern: Some(term.to_string()),
+            rank: Some(term.to_string()),
+            sort: Sort::Relevance,
+            // Browse searches everything, including tool-call payloads, so
+            // hidden arguments and tool names stay findable.
+            in_field: Field::All,
+            ..Filter::default()
+        };
+        let mut index_slot = self.bm25.borrow_mut();
+        let index = index_slot.get_or_insert_with(|| Bm25Index::build(&self.records));
+        let searcher = Searcher::with_index(&self.records, index);
+        let hits = match searcher.search(&filter, &anchors, Path::new(".")) {
+            Ok(hits) => hits,
+            Err(_) => return WorkspaceSearchOutput::default(),
+        };
+        let anchor_position: HashMap<WorkRef, usize> = anchors
+            .into_iter()
+            .enumerate()
+            .map(|(position, anchor)| (anchor, position))
+            .collect();
+
         let mut sessions = Vec::new();
         let mut matches = Vec::new();
-        let mut session_map: Vec<(usize, usize)> = Vec::new();
-        for entry in &self.dialogues {
-            let Some(record) = all_sessions
-                .get(entry.session_index)
-                .and_then(|session| session.records.get(entry.dialogue_index))
-            else {
+        let mut session_map: HashMap<usize, usize> = HashMap::new();
+        for hit in hits {
+            let Some(&record_index) = anchor_position.get(&hit.anchor) else {
                 continue;
+            };
+            let entry = match self.dialogues.get(record_index) {
+                Some(entry) => entry,
+                None => continue,
+            };
+            let record = match self.records.get(record_index) {
+                Some(record) => record,
+                None => continue,
             };
             let line_matches = content_line_matches(record, regex);
             if line_matches.is_empty() {
                 continue;
             }
-            let hit_idx = if let Some((_, hit)) = session_map
-                .iter()
-                .find(|(corpus, _)| *corpus == entry.session_index)
-            {
-                *hit
-            } else {
-                let session = match all_sessions.get(entry.session_index) {
-                    Some(s) => s,
-                    None => continue,
-                };
+            let hit_idx = *session_map.entry(entry.session_index).or_insert_with(|| {
                 let hit = sessions.len();
-                sessions.push(session_meta_shell(session));
-                session_map.push((entry.session_index, hit));
+                if let Some(session) = all_sessions.get(entry.session_index) {
+                    sessions.push(session_meta_shell(session));
+                }
                 hit
-            };
+            });
             for matched in line_matches {
                 matches.push(WorkspaceSearchMatch {
                     session_index: hit_idx,

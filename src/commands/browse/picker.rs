@@ -7,7 +7,8 @@ use std::path::PathBuf;
 
 use crate::tui::content::view::{content_link_at, ContentViewMode};
 use crate::tui::search::{
-    workspace_search_has_query, workspace_search_scope, WorkspaceSearchIndex, WorkspaceSearchOutput,
+    workspace_records_fingerprint, workspace_search_has_query, workspace_search_scope,
+    WorkspaceSearchIndex, WorkspaceSearchOutput,
 };
 use crate::tui::workspace::{
     help_action_for_key, panel_inner_rows, render_workspace, search_match_half, selected_index,
@@ -81,6 +82,7 @@ pub(crate) fn run(
     let mut show_search = false;
     let mut search_query = String::new();
     let mut search_output = WorkspaceSearchOutput::default();
+    let mut search_index: Option<WorkspaceSearchIndex> = None;
     let mut search_cursor = 0usize;
     let mut search_dirty = true;
     let mut search_apply_pending = false;
@@ -116,8 +118,18 @@ pub(crate) fn run(
                         full
                     })
                     .collect();
-                let index = WorkspaceSearchIndex::new(&corpus);
-                search_output = index.search(&corpus, &search_query);
+                // Rebuild the search index only when the loaded corpus changed;
+                // its BM25 index is cached across keystrokes.
+                let stale = search_index.as_ref().is_none_or(|index| {
+                    index.fingerprint() != workspace_records_fingerprint(&corpus)
+                });
+                if stale {
+                    search_index = Some(WorkspaceSearchIndex::new(&corpus));
+                }
+                search_output = search_index
+                    .as_ref()
+                    .expect("search index built above")
+                    .search(&corpus, &search_query);
             } else {
                 search_output = WorkspaceSearchOutput::default();
             }

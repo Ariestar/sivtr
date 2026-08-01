@@ -162,18 +162,35 @@ impl TimeRange {
     }
 }
 
+/// Where a searcher gets its BM25 index: lazily built and owned, or shared
+/// from a caller-owned cache that outlives individual searches.
+enum IndexSource<'a> {
+    Lazy(RefCell<Option<Bm25Index>>),
+    Shared(&'a Bm25Index),
+}
+
 /// Search engine over a record corpus. The BM25 index is built lazily on the
-/// first relevance-ordered search and reused by every later one.
+/// first relevance-ordered search and reused by every later one; callers that
+/// rebuild the corpus rarely (TUI browsing) can own the index themselves via
+/// [`Searcher::with_index`] and skip rebuilding it per search.
 pub struct Searcher<'a> {
     records: &'a [WorkRecord],
-    bm25: RefCell<Option<Bm25Index>>,
+    bm25: IndexSource<'a>,
 }
 
 impl<'a> Searcher<'a> {
     pub fn new(records: &'a [WorkRecord]) -> Self {
         Self {
             records,
-            bm25: RefCell::new(None),
+            bm25: IndexSource::Lazy(RefCell::new(None)),
+        }
+    }
+
+    /// Search over `records` using a caller-owned, already-built index.
+    pub fn with_index(records: &'a [WorkRecord], bm25: &'a Bm25Index) -> Self {
+        Self {
+            records,
+            bm25: IndexSource::Shared(bm25),
         }
     }
 
@@ -242,8 +259,14 @@ impl<'a> Searcher<'a> {
     }
 
     fn relevance_scores(&self, query: &str) -> HashMap<WorkRef, f32> {
-        let mut slot = self.bm25.borrow_mut();
-        let index = slot.get_or_insert_with(|| Bm25Index::build(self.records));
+        let mut lazy_slot;
+        let index: &Bm25Index = match &self.bm25 {
+            IndexSource::Shared(index) => index,
+            IndexSource::Lazy(cell) => {
+                lazy_slot = cell.borrow_mut();
+                lazy_slot.get_or_insert_with(|| Bm25Index::build(self.records))
+            }
+        };
         index.rank(query).into_iter().collect()
     }
 }
