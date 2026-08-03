@@ -585,16 +585,15 @@ mod tests {
 
     impl EnvGuard {
         fn set(key: &'static str, value: &Path) -> Self {
-            // Env mutation is process-global; serialize tests that touch SIVTR_DATA_DIR.
-            static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-            let lock = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            // Env mutation is process-global; serialize every env-touching test.
+            let _lock = crate::test_env_lock();
             let previous = std::env::var_os(key);
-            // SAFETY: test-only temporary env mutation, restored in Drop, guarded by LOCK.
+            // SAFETY: test-only temporary env mutation, restored in Drop, guarded by the lock.
             unsafe { std::env::set_var(key, value) };
             Self {
                 key,
                 previous,
-                _lock: lock,
+                _lock,
             }
         }
     }

@@ -2,13 +2,12 @@ use anyhow::Result;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use crate::agents::{
-    extract_content_text, filter_sessions_by_workspace, jsonl_files, list_recent_jsonl_sessions,
-    normalize_path_for_match, parse_jsonl_meta, parse_jsonl_session, pretty_json_string,
-    pretty_json_value, push_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionInfo,
-    AgentSessionMeta, AgentSessionProvider,
+    extract_content_text, jsonl_files, list_recent_jsonl_sessions, normalize_path_for_match,
+    parse_jsonl_meta, parse_jsonl_session, pretty_json_string, pretty_json_value, push_block,
+    AgentBlockKind, AgentProvider, AgentSession, AgentSessionInfo, AgentSessionMeta,
+    AgentSessionProvider,
 };
 use crate::config::SivtrConfig;
 
@@ -26,44 +25,22 @@ impl AgentSessionProvider for CodexProvider {
         let mut sessions = Vec::new();
 
         for root in configured_codex_session_dirs() {
-            let paths = match jsonl_files(&root) {
-                Ok(paths) => paths,
+            // Shared JSONL discovery (stamp-validated listing cache, workspace
+            // filter) is applied per root; the merge below re-sorts globally.
+            match list_recent_jsonl_sessions(PROVIDER_NAME, &root, cwd, parse_session_meta) {
+                Ok(mut root_sessions) => sessions.append(&mut root_sessions),
                 Err(error) => {
                     eprintln!(
                         "sivtr: warning: failed to read Codex session dir {}: {error:#}",
                         root.display()
                     );
-                    continue;
                 }
-            };
-
-            for path in paths {
-                let meta = match parse_session_meta(&path) {
-                    Ok(meta) => meta,
-                    Err(error) => {
-                        eprintln!(
-                            "sivtr: warning: failed to parse Codex session metadata {}: {error:#}",
-                            path.display()
-                        );
-                        continue;
-                    }
-                };
-
-                sessions.push(AgentSessionInfo {
-                    modified: std::fs::metadata(&path)
-                        .and_then(|meta| meta.modified())
-                        .unwrap_or(SystemTime::UNIX_EPOCH),
-                    path,
-                    id: meta.id,
-                    cwd: meta.cwd,
-                    title: meta.title,
-                });
             }
         }
 
         sessions.sort_by_key(|session| session.modified);
         sessions.reverse();
-        Ok(filter_sessions_by_workspace(sessions, cwd))
+        Ok(sessions)
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
@@ -311,7 +288,12 @@ fn local_session_files() -> Result<Vec<PathBuf>> {
 }
 
 fn list_recent_local_sessions(cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
-    list_recent_jsonl_sessions(&local_codex_sessions_dir(), cwd, parse_session_meta)
+    list_recent_jsonl_sessions(
+        PROVIDER_NAME,
+        &local_codex_sessions_dir(),
+        cwd,
+        parse_session_meta,
+    )
 }
 
 fn find_current_thread_session() -> Result<Option<PathBuf>> {
@@ -349,18 +331,10 @@ mod tests {
     use crate::config::SivtrConfig;
     use serde_json::json;
     use std::path::Path;
-    use std::{
-        env, fs,
-        path::PathBuf,
-        sync::{Mutex, OnceLock},
-        time::Duration,
-    };
+    use std::{env, fs, path::PathBuf, time::Duration};
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        crate::test_env_lock()
     }
 
     fn contains_path(dirs: &[PathBuf], expected: &str) -> bool {
@@ -542,8 +516,10 @@ mod tests {
 
         let previous_codex_home = env::var_os("CODEX_HOME");
         let previous_thread_id = env::var_os("CODEX_THREAD_ID");
+        let previous_data_dir = env::var_os("SIVTR_DATA_DIR");
         env::set_var("CODEX_HOME", &codex_home);
         env::set_var("CODEX_THREAD_ID", "thread-session");
+        env::set_var("SIVTR_DATA_DIR", temp.path().join("data"));
 
         let resolved = CodexProvider.find_current_session(&cwd_match).unwrap();
 
@@ -554,6 +530,10 @@ mod tests {
         match previous_thread_id {
             Some(value) => env::set_var("CODEX_THREAD_ID", value),
             None => env::remove_var("CODEX_THREAD_ID"),
+        }
+        match previous_data_dir {
+            Some(value) => env::set_var("SIVTR_DATA_DIR", value),
+            None => env::remove_var("SIVTR_DATA_DIR"),
         }
 
         assert_eq!(resolved, Some(thread_session));
@@ -685,11 +665,13 @@ mod tests {
         let previous_dirs = env::var_os("SIVTR_CODEX_SESSION_DIRS");
         let previous_xdg_config_home = env::var_os("XDG_CONFIG_HOME");
         let previous_appdata = env::var_os("APPDATA");
+        let previous_data_dir = env::var_os("SIVTR_DATA_DIR");
         let config_home = temp.path().join("config-home");
         std::fs::create_dir_all(&config_home).unwrap();
         env::set_var("CODEX_HOME", &codex_home);
         env::set_var("SIVTR_CODEX_SESSION_DIRS", exported_root.join("sessions"));
         env::set_var("XDG_CONFIG_HOME", &config_home);
+        env::set_var("SIVTR_DATA_DIR", temp.path().join("data"));
         if cfg!(windows) {
             env::set_var("APPDATA", &config_home);
         }
@@ -711,6 +693,10 @@ mod tests {
         match previous_appdata {
             Some(value) => env::set_var("APPDATA", value),
             None => env::remove_var("APPDATA"),
+        }
+        match previous_data_dir {
+            Some(value) => env::set_var("SIVTR_DATA_DIR", value),
+            None => env::remove_var("SIVTR_DATA_DIR"),
         }
 
         assert_eq!(sessions.len(), 2);

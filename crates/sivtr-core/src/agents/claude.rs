@@ -19,7 +19,12 @@ impl AgentSessionProvider for ClaudeProvider {
     }
 
     fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
-        list_recent_jsonl_sessions(&claude_home().join("projects"), cwd, parse_session_meta)
+        list_recent_jsonl_sessions(
+            PROVIDER_NAME,
+            &claude_home().join("projects"),
+            cwd,
+            parse_session_meta,
+        )
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
@@ -364,16 +369,10 @@ mod tests {
     use crate::agents::{
         format_blocks, select_blocks, AgentBlockKind, AgentSelection, AgentSessionProvider,
     };
-    use std::{
-        env,
-        sync::{Mutex, OnceLock},
-    };
+    use std::env;
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        crate::test_env_lock()
     }
 
     #[test]
@@ -657,7 +656,9 @@ mod tests {
         let _guard = env_lock();
         let dir = tempfile::tempdir().unwrap();
         let original_claude_home = env::var_os("CLAUDE_HOME");
+        let original_data_dir = env::var_os("SIVTR_DATA_DIR");
         env::set_var("CLAUDE_HOME", dir.path());
+        env::set_var("SIVTR_DATA_DIR", dir.path().join("data"));
 
         let projects = dir.path().join("projects").join("workspace");
         std::fs::create_dir_all(&projects).unwrap();
@@ -685,6 +686,10 @@ mod tests {
         match original_claude_home {
             Some(value) => env::set_var("CLAUDE_HOME", value),
             None => env::remove_var("CLAUDE_HOME"),
+        }
+        match original_data_dir {
+            Some(value) => env::set_var("SIVTR_DATA_DIR", value),
+            None => env::remove_var("SIVTR_DATA_DIR"),
         }
 
         assert_eq!(sessions.len(), 1);

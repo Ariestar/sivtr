@@ -33,7 +33,8 @@ impl AgentSessionProvider for CursorProvider {
         }
 
         // Prefer structured jsonl listing with metadata when available.
-        let mut sessions = list_recent_jsonl_sessions(&root, cwd, parse_cursor_meta)?;
+        let mut sessions =
+            list_recent_jsonl_sessions(PROVIDER_NAME, &root, cwd, parse_cursor_meta)?;
         if !sessions.is_empty() {
             return Ok(sessions);
         }

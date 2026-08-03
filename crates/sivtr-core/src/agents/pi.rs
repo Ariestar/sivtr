@@ -19,7 +19,7 @@ impl AgentSessionProvider for PiProvider {
     }
 
     fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
-        list_recent_jsonl_sessions(&pi_sessions_dir(), cwd, parse_session_meta)
+        list_recent_jsonl_sessions(PROVIDER_NAME, &pi_sessions_dir(), cwd, parse_session_meta)
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {

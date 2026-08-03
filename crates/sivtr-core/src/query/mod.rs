@@ -7,9 +7,7 @@
 //! [`QueryResult::skipped`] parse failures — the core does no printing.
 
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -244,32 +242,9 @@ fn parse_agent_session_file(
         .map_err(|error| format!("{error:#}"))
 }
 
-fn cache_dir() -> PathBuf {
-    crate::workspace::data_dir().join("cache")
-}
-
-fn cache_path(provider: AgentProvider, path: &Path) -> PathBuf {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    provider.hash(&mut hasher);
-    path.hash(&mut hasher);
-    cache_dir().join(format!("agent-{:016x}.bin", hasher.finish()))
-}
-
-fn file_stamp(path: &Path) -> Option<(u64, u32, u64)> {
-    let meta = std::fs::metadata(path).ok()?;
-    let duration = meta
-        .modified()
-        .ok()?
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .ok()?;
-    Some((duration.as_secs(), duration.subsec_nanos(), meta.len()))
-}
-
-/// Read the cached parse if the session file is unchanged; None on any miss
-/// (missing/corrupt/stale cache) so the caller falls back to parsing.
 fn load_cached_agent_session(provider: AgentProvider, path: &Path) -> Option<Vec<WorkRecord>> {
-    let (secs, nanos, size) = file_stamp(path)?;
-    let bytes = std::fs::read(cache_path(provider, path)).ok()?;
+    let (secs, nanos, size) = crate::cache::file_stamp(path)?;
+    let bytes = std::fs::read(crate::cache::session_cache_path(provider, path)).ok()?;
     let cached: CachedAgentSession = rmp_serde::from_slice(&bytes).ok()?;
     if cached.version != AGENT_CACHE_VERSION
         || cached.mtime_secs != secs
@@ -283,7 +258,7 @@ fn load_cached_agent_session(provider: AgentProvider, path: &Path) -> Option<Vec
 
 /// Best-effort cache write; failures never block the search.
 fn store_cached_agent_session(provider: AgentProvider, path: &Path, records: &[WorkRecord]) {
-    let Some((secs, nanos, size)) = file_stamp(path) else {
+    let Some((secs, nanos, size)) = crate::cache::file_stamp(path) else {
         return;
     };
     let cache_entry = CachedAgentSession {
@@ -300,13 +275,10 @@ fn store_cached_agent_session(provider: AgentProvider, path: &Path, records: &[W
     if cache_entry.serialize(&mut serializer).is_err() {
         return;
     }
-    let bytes = serializer.into_inner();
-    let _ = std::fs::create_dir_all(cache_dir());
-    let target = cache_path(provider, path);
-    let tmp = target.with_extension("tmp");
-    if std::fs::write(&tmp, bytes).is_ok() {
-        let _ = std::fs::rename(&tmp, &target);
-    }
+    crate::cache::write_cache_atomic(
+        &crate::cache::session_cache_path(provider, path),
+        &serializer.into_inner(),
+    );
 }
 
 /// Serial single-source parse path, kept for tests that drive a mocked
