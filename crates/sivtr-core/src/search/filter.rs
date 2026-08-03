@@ -211,9 +211,10 @@ impl<'a> Searcher<'a> {
             HashSet::new()
         };
 
+        let index = RecordIndex::new(self.records);
         let mut hits = Vec::new();
         for anchor in anchors {
-            let Some(record) = resolve_record(self.records, anchor) else {
+            let Some(record) = index.resolve(anchor) else {
                 continue;
             };
             if !record_matches_metadata(record, filter, time_range.as_ref(), &excluded_sessions) {
@@ -228,7 +229,7 @@ impl<'a> Searcher<'a> {
         let mut hits = dedup_hits(hits);
 
         if let Some(latest) = filter.latest {
-            hits.sort_by(|a, b| compare_time_desc(self.records, &a.anchor, &b.anchor));
+            hits.sort_by(|a, b| compare_time_desc(&index, &a.anchor, &b.anchor));
             hits.truncate(latest);
         }
 
@@ -245,7 +246,7 @@ impl<'a> Searcher<'a> {
                 hit.score = scores.get(&hit.anchor).copied();
             }
         }
-        sort_hits(&mut hits, self.records, filter.sort, scores.as_ref());
+        sort_hits(&mut hits, &index, filter.sort, scores.as_ref());
 
         if let Some(limit) = filter.limit {
             hits.truncate(limit);
@@ -298,9 +299,36 @@ fn compile_regex(value: Option<&str>) -> Result<Option<Regex>> {
         .context("Invalid filter regex")
 }
 
-fn resolve_record<'r>(records: &'r [WorkRecord], anchor: &WorkRef) -> Option<&'r WorkRecord> {
-    let whole = anchor.whole();
-    records.iter().find(|record| record.work_ref == whole)
+/// O(1) anchor → record resolution for the duration of one search.
+///
+/// The previous implementation linear-scanned `records` for every anchor,
+/// making the pipeline O(anchors × records); with thousands of records that
+/// dominated the whole search cost.
+struct RecordIndex<'a> {
+    records: &'a [WorkRecord],
+    by_ref: HashMap<WorkRef, usize>,
+}
+
+impl<'a> RecordIndex<'a> {
+    fn new(records: &'a [WorkRecord]) -> Self {
+        let mut by_ref = HashMap::with_capacity(records.len());
+        for (index, record) in records.iter().enumerate() {
+            // First occurrence wins, matching the previous linear `find`.
+            by_ref.entry(record.work_ref.clone()).or_insert(index);
+        }
+        Self { records, by_ref }
+    }
+
+    fn resolve(&self, anchor: &WorkRef) -> Option<&'a WorkRecord> {
+        let key = if anchor.at == WorkAt::Whole {
+            anchor
+        } else {
+            // Part anchors resolve through their whole form (same as the old
+            // `anchor.whole()` lookup); avoid the clone for the common case.
+            &anchor.whole()
+        };
+        self.by_ref.get(key).map(|&index| &self.records[index])
+    }
 }
 
 fn providers_for_records(records: &[WorkRecord]) -> Vec<AgentProvider> {
@@ -508,9 +536,11 @@ fn dedup_hits(hits: Vec<ScoredHit>) -> Vec<ScoredHit> {
     unique
 }
 
-fn compare_time_desc(records: &[WorkRecord], a: &WorkRef, b: &WorkRef) -> std::cmp::Ordering {
+fn compare_time_desc(index: &RecordIndex, a: &WorkRef, b: &WorkRef) -> std::cmp::Ordering {
     let time = |anchor: &WorkRef| {
-        resolve_record(records, anchor).and_then(|record| record.time.primary_at())
+        index
+            .resolve(anchor)
+            .and_then(|record| record.time.primary_at())
     };
     time(b)
         .cmp(&time(a))
@@ -519,13 +549,15 @@ fn compare_time_desc(records: &[WorkRecord], a: &WorkRef, b: &WorkRef) -> std::c
 
 fn sort_hits(
     hits: &mut [ScoredHit],
-    records: &[WorkRecord],
+    index: &RecordIndex,
     sort: Sort,
     scores: Option<&HashMap<WorkRef, f32>>,
 ) {
     hits.sort_by(|a, b| {
         let time = |anchor: &WorkRef| {
-            resolve_record(records, anchor).and_then(|record| record.time.primary_at())
+            index
+                .resolve(anchor)
+                .and_then(|record| record.time.primary_at())
         };
         match sort {
             Sort::Newest => time(&b.anchor)
@@ -534,20 +566,20 @@ fn sort_hits(
             Sort::Oldest => time(&a.anchor)
                 .cmp(&time(&b.anchor))
                 .then_with(|| a.anchor.to_string().cmp(&b.anchor.to_string())),
-            Sort::Duration => duration(&b.anchor, records)
-                .cmp(&duration(&a.anchor, records))
+            Sort::Duration => duration(&b.anchor, index)
+                .cmp(&duration(&a.anchor, index))
                 .then_with(|| time(&b.anchor).cmp(&time(&a.anchor)))
                 .then_with(|| a.anchor.to_string().cmp(&b.anchor.to_string())),
-            Sort::DurationAsc => duration(&a.anchor, records)
-                .cmp(&duration(&b.anchor, records))
+            Sort::DurationAsc => duration(&a.anchor, index)
+                .cmp(&duration(&b.anchor, index))
                 .then_with(|| time(&b.anchor).cmp(&time(&a.anchor)))
                 .then_with(|| a.anchor.to_string().cmp(&b.anchor.to_string())),
-            Sort::ExitCode => exit_code(&b.anchor, records)
-                .cmp(&exit_code(&a.anchor, records))
+            Sort::ExitCode => exit_code(&b.anchor, index)
+                .cmp(&exit_code(&a.anchor, index))
                 .then_with(|| time(&b.anchor).cmp(&time(&a.anchor)))
                 .then_with(|| a.anchor.to_string().cmp(&b.anchor.to_string())),
-            Sort::ExitCodeAsc => exit_code(&a.anchor, records)
-                .cmp(&exit_code(&b.anchor, records))
+            Sort::ExitCodeAsc => exit_code(&a.anchor, index)
+                .cmp(&exit_code(&b.anchor, index))
                 .then_with(|| time(&b.anchor).cmp(&time(&a.anchor)))
                 .then_with(|| a.anchor.to_string().cmp(&b.anchor.to_string())),
             Sort::Relevance => {
@@ -566,12 +598,15 @@ fn sort_hits(
     });
 }
 
-fn duration(anchor: &WorkRef, records: &[WorkRecord]) -> Option<u64> {
-    resolve_record(records, anchor).and_then(|record| record.time.duration_ms)
+fn duration(anchor: &WorkRef, index: &RecordIndex) -> Option<u64> {
+    index
+        .resolve(anchor)
+        .and_then(|record| record.time.duration_ms)
 }
 
-fn exit_code(anchor: &WorkRef, records: &[WorkRecord]) -> Option<i32> {
-    resolve_record(records, anchor)
+fn exit_code(anchor: &WorkRef, index: &RecordIndex) -> Option<i32> {
+    index
+        .resolve(anchor)
         .and_then(|record| record.status.as_ref())
         .and_then(|status| status.exit_code)
 }
