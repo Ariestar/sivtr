@@ -23,7 +23,7 @@ fn do_flush() -> Result<()> {
     let Some(session_log_path) = scrollback::command_session_log_path()? else {
         return Ok(());
     };
-    let target = FlushTarget::new(session_log_path);
+    let mut target = FlushTarget::new(session_log_path);
     if !should_append_entry(&target.state, command_id.as_deref(), &command) {
         return Ok(());
     }
@@ -37,18 +37,33 @@ fn do_flush() -> Result<()> {
 
         let current_lines: Vec<&str> = snapshot.content.lines().collect();
         let prompt = env::var("SIVTR_LAST_PROMPT").unwrap_or_default();
-        let output = session::extract_output_from_snapshot(
+        let mut output = session::extract_output_from_snapshot(
             &prompt,
             &command,
             &current_lines,
             snapshot.width,
         );
+        if output.is_none() {
+            // The command line is not in the visible snapshot: Windows Terminal
+            // exposes only the viewport to Win32 reads, so long output scrolled
+            // it away. Recover the visible tail of the output as the rows that
+            // appeared since the previous flush.
+            output = match target.state.last_snapshot.as_deref() {
+                Some(previous) => Some(session::extract_new_snapshot_rows(
+                    previous,
+                    &snapshot.content,
+                )),
+                None => Some(snapshot.content.clone()),
+            };
+            output = output.map(|output| trim_trailing_prompt_artifact(output, &prompt));
+        }
+        target.state.last_snapshot = Some(snapshot.content.clone());
         append_entry_from_output(
             target,
             prompt,
             command,
             command_id,
-            output,
+            output.unwrap_or_default(),
             TerminalCommandMetadata::from_env(),
         )?;
     }
@@ -163,7 +178,6 @@ fn append_entry_from_output(
     session::save_state(&target.state_path, &target.state)
 }
 
-#[cfg_attr(windows, allow(dead_code))]
 fn trim_trailing_prompt_artifact(output: String, prompt: &str) -> String {
     let prompt_last_line = SessionEntry::new(prompt, "", "")
         .prompt

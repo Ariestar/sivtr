@@ -122,6 +122,9 @@ impl SessionEntry {
 pub struct SessionState {
     pub last_command_id: Option<String>,
     pub last_command: Option<String>,
+    /// The previous flush's console snapshot, used to recover output that
+    /// scrolled out of the visible viewport (Windows Terminal).
+    pub last_snapshot: Option<String>,
 }
 
 pub fn load_entries(path: &Path) -> Result<Vec<SessionEntry>> {
