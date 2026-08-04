@@ -1,4 +1,5 @@
 use std::fmt::Display;
+use std::io::IsTerminal;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,7 +75,7 @@ fn colors_enabled() -> bool {
     match COLOR_CHOICE.load(Ordering::Relaxed) {
         COLOR_ALWAYS => true,
         COLOR_NEVER => false,
-        _ => std::env::var_os("NO_COLOR").is_none() && atty::is(atty::Stream::Stderr),
+        _ => std::env::var_os("NO_COLOR").is_none() && std::io::stderr().is_terminal(),
     }
 }
 

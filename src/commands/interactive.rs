@@ -1,9 +1,10 @@
 use anyhow::{bail, Result};
 use dialoguer::{Confirm, MultiSelect, Select};
+use std::io::IsTerminal;
 
 /// Returns true if stdin is a TTY (interactive terminal).
 pub fn is_interactive() -> bool {
-    atty::is(atty::Stream::Stdin) && atty::is(atty::Stream::Stderr)
+    std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
 }
 
 /// Fail if stdin/stderr are not attached to a TTY.

@@ -19,6 +19,7 @@ use cli::{
 };
 use commands::memory::copy::{plan_from_cli, CopyFilters, Projection};
 use commands::memory::diff::{DiffRequest, DiffTextMode};
+use std::io::IsTerminal;
 use tui::workspace::WorkspaceFocus;
 
 use sivtr_core::ai::AgentProvider;
@@ -140,7 +141,7 @@ fn run() -> Result<()> {
             remote::daemon::run()?;
         }
         None => {
-            if atty::isnt(atty::Stream::Stdin) {
+            if !std::io::stdin().is_terminal() {
                 commands::terminal::pipe::execute()?;
             } else {
                 run_workspace(select_remotes)?;

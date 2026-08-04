@@ -70,7 +70,7 @@ src/                       ← CLI binary
 - **No async** in most CLI paths — remote daemon uses async internally; command handlers stay blocking
 - **Workspace separation** — `sivtr-core` must not depend on CLI types
 - **clippy strict** — `-D warnings` on CI
-- **Rust 2021 edition, MSRV 1.91** — see `Cargo.toml` `rust-version` (toolchain channel is `stable`)
+- **Rust 2021 edition, MSRV 1.95** — see `Cargo.toml` `rust-version` (toolchain channel is `stable`)
 - **Agent lists** — any CLI help / error that names providers must use `AgentProvider::command_names()` / `command_names_csv()`, not a hand-written list
 - **Workspace filter** — session cwd filtering uses `filter_sessions_by_workspace` (unbound keep + path/remote match); do not reimplement per provider
 ## Working Directory
