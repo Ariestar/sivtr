@@ -551,7 +551,14 @@ pub struct SearchArgs {
     #[arg(value_name = "SOURCE")]
     pub source: String,
 
-    /// Case-insensitive regex content filter
+    /// Plain-text search query: BM25 ranks the source by these terms (no
+    /// regex). With --match present, the regex still bounds the set and this
+    /// query ranks it.
+    #[arg(value_name = "QUERY")]
+    pub query: Option<String>,
+
+    /// Case-insensitive regex content filter (optional refinement; bounds
+    /// the set before relevance ranking)
     #[arg(short = 'm', long = "match", value_name = "REGEX")]
     pub match_: Option<String>,
 
@@ -583,7 +590,7 @@ pub struct SearchArgs {
     #[arg(long, value_name = "DURATION")]
     pub max_duration: Option<String>,
 
-    /// Result sort: newest (default), relevance (default with --match), oldest, duration, duration-asc, exit-code, or exit-code-asc
+    /// Result sort: newest (default), relevance (default with a QUERY or --match), oldest, duration, duration-asc, exit-code, or exit-code-asc
     #[arg(long, value_name = "SORT")]
     pub sort: Option<Sort>,
 
@@ -1729,6 +1736,34 @@ mod tests {
                 assert_eq!(args.min_duration.as_deref(), Some("500ms"));
                 assert_eq!(args.max_duration.as_deref(), Some("2s"));
                 assert_eq!(args.sort, Some(Sort::Duration));
+            }
+            _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn search_accepts_positional_query() {
+        let cli =
+            Cli::try_parse_from(["sivtr", "search", "terminal", "docker pull failed"]).unwrap();
+        match cli.command {
+            Some(Commands::Search(args)) => {
+                assert_eq!(args.source, "terminal");
+                assert_eq!(args.query.as_deref(), Some("docker pull failed"));
+                assert_eq!(args.match_, None);
+            }
+            _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn search_accepts_query_with_match_refinement() {
+        let cli = Cli::try_parse_from(["sivtr", "search", "terminal", "docker", "-m", "error.*E0"])
+            .unwrap();
+        match cli.command {
+            Some(Commands::Search(args)) => {
+                assert_eq!(args.source, "terminal");
+                assert_eq!(args.query.as_deref(), Some("docker"));
+                assert_eq!(args.match_.as_deref(), Some("error.*E0"));
             }
             _ => panic!("expected search command"),
         }

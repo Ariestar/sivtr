@@ -15,7 +15,11 @@ use crate::commands::memory::workset::WorkSet;
 pub struct SearchParams {
     /// Source selector: terminal, agent, pi, desk:terminal, @last, ...
     pub source: String,
-    /// Case-insensitive regex content filter
+    /// Plain-text query: BM25 ranks the source by these terms (no regex).
+    /// With match_regex present, the regex bounds the set and this query ranks it.
+    #[serde(default)]
+    pub query: Option<String>,
+    /// Case-insensitive regex content filter (optional refinement)
     #[serde(default)]
     pub match_regex: Option<String>,
     /// Case-insensitive regex exclusion filter
@@ -234,6 +238,7 @@ fn cwd_path(cwd: Option<&str>) -> Option<PathBuf> {
 pub fn to_search_args(params: &SearchParams) -> Result<SearchArgs, String> {
     Ok(SearchArgs {
         source: params.source.clone(),
+        query: params.query.clone(),
         match_: params.match_regex.clone(),
         exclude: params.exclude.clone(),
         in_field: params.in_field.unwrap_or_default(),
@@ -428,6 +433,7 @@ mod tests {
     fn maps_search_params() {
         let args = to_search_args(&SearchParams {
             source: "terminal".into(),
+            query: Some("panic".into()),
             match_regex: Some("panic".into()),
             exclude: None,
             in_field: Some(Field::Content),
@@ -458,6 +464,7 @@ mod tests {
         // CLI search applies latest=5 when both are None; MCP just forwards.
         let args = to_search_args(&SearchParams {
             source: "terminal".into(),
+            query: None,
             match_regex: None,
             exclude: None,
             in_field: None,

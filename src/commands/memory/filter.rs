@@ -15,13 +15,16 @@ pub use sivtr_core::search::Filter;
 /// Default search bound when neither `--latest` nor `--limit` is set.
 const SEARCH_DEFAULT_LATEST: usize = 5;
 
-/// Build the search filter: recency default, relevance rank from `--match`.
+/// Build the search filter: recency default, BM25 primary.
 ///
-/// A `--match` query signals retrieval intent, so relevance becomes the
-/// default sort (BM25 ranks the matched set); without it the search stays a
-/// recency-bounded browse. An explicit `--sort` always wins.
+/// A positional `QUERY` (or `--match`) signals retrieval intent, so relevance
+/// becomes the default sort: BM25 ranks the whole source by the query terms.
+/// `--match` additionally bounds the set with a regex (optional refinement);
+/// without either, the search stays a recency-bounded browse. An explicit
+/// `--sort` always wins.
 pub fn from_search_args(args: &SearchArgs) -> Result<Filter> {
-    let sort = args.sort.unwrap_or(if args.match_.is_some() {
+    let has_intent = args.query.is_some() || args.match_.is_some();
+    let sort = args.sort.unwrap_or(if has_intent {
         Sort::Relevance
     } else {
         Sort::Newest
@@ -49,7 +52,13 @@ pub fn from_search_args(args: &SearchArgs) -> Result<Filter> {
         filter.latest = Some(SEARCH_DEFAULT_LATEST);
     }
     if sort == Sort::Relevance {
-        filter.rank = args.match_.clone();
+        // The plain QUERY is the BM25 query; --match falls back to it when no
+        // query is given (kept for backward compatibility).
+        let rank = args.query.clone().or_else(|| args.match_.clone());
+        match rank {
+            Some(query) => filter.rank = Some(query),
+            None => bail!("relevance sort needs a query (positional QUERY or --match)"),
+        }
     }
     Ok(filter)
 }
@@ -242,6 +251,7 @@ mod tests {
     fn search_defaults_to_latest_five_when_unbounded() {
         let args = SearchArgs {
             source: "terminal".into(),
+            query: None,
             match_: None,
             exclude: None,
             in_field: Field::Content,
@@ -272,6 +282,7 @@ mod tests {
     fn search_keeps_explicit_limit_without_forcing_latest() {
         let args = SearchArgs {
             source: "terminal".into(),
+            query: None,
             match_: None,
             exclude: None,
             in_field: Field::Content,
@@ -302,6 +313,7 @@ mod tests {
     fn search_keeps_explicit_latest_and_limit() {
         let args = SearchArgs {
             source: "terminal".into(),
+            query: None,
             match_: None,
             exclude: None,
             in_field: Field::Content,
@@ -326,5 +338,132 @@ mod tests {
         let spec = from_search_args(&args).expect("spec");
         assert_eq!(spec.latest, Some(3));
         assert_eq!(spec.limit, Some(10));
+    }
+
+    #[test]
+    fn plain_query_ranks_without_regex_filter() {
+        let args = SearchArgs {
+            source: "terminal".into(),
+            query: Some("docker pull failed".into()),
+            match_: None,
+            exclude: None,
+            in_field: Field::Content,
+            kind: None,
+            status: None,
+            exit_code: None,
+            min_duration: None,
+            max_duration: None,
+            sort: None,
+            cwd: None,
+            since: None,
+            until: None,
+            last: None,
+            latest: None,
+            limit: None,
+            exclude_current: false,
+            format: None,
+            json: false,
+            refs: false,
+            save: None,
+        };
+        let spec = from_search_args(&args).expect("spec");
+        assert_eq!(spec.sort, Sort::Relevance);
+        assert_eq!(spec.pattern, None); // no regex filter: pure BM25
+        assert_eq!(spec.rank.as_deref(), Some("docker pull failed"));
+        assert_eq!(spec.latest, None); // relevance skips the recency window
+    }
+
+    #[test]
+    fn query_and_match_compose_filter_then_rank() {
+        let args = SearchArgs {
+            source: "terminal".into(),
+            query: Some("docker pull".into()),
+            match_: Some("error.*E0".into()),
+            exclude: None,
+            in_field: Field::Content,
+            kind: None,
+            status: None,
+            exit_code: None,
+            min_duration: None,
+            max_duration: None,
+            sort: None,
+            cwd: None,
+            since: None,
+            until: None,
+            last: None,
+            latest: None,
+            limit: None,
+            exclude_current: false,
+            format: None,
+            json: false,
+            refs: false,
+            save: None,
+        };
+        let spec = from_search_args(&args).expect("spec");
+        assert_eq!(spec.sort, Sort::Relevance);
+        assert_eq!(spec.pattern.as_deref(), Some("error.*E0")); // regex bounds
+        assert_eq!(spec.rank.as_deref(), Some("docker pull")); // query ranks
+    }
+
+    #[test]
+    fn match_falls_back_as_rank_when_no_query() {
+        let args = SearchArgs {
+            source: "terminal".into(),
+            query: None,
+            match_: Some("kubectl".into()),
+            exclude: None,
+            in_field: Field::Content,
+            kind: None,
+            status: None,
+            exit_code: None,
+            min_duration: None,
+            max_duration: None,
+            sort: None,
+            cwd: None,
+            since: None,
+            until: None,
+            last: None,
+            latest: None,
+            limit: None,
+            exclude_current: false,
+            format: None,
+            json: false,
+            refs: false,
+            save: None,
+        };
+        let spec = from_search_args(&args).expect("spec");
+        assert_eq!(spec.sort, Sort::Relevance);
+        assert_eq!(spec.pattern.as_deref(), Some("kubectl"));
+        assert_eq!(spec.rank.as_deref(), Some("kubectl"));
+    }
+
+    #[test]
+    fn explicit_relevance_without_query_is_an_error() {
+        let args = SearchArgs {
+            source: "terminal".into(),
+            query: None,
+            match_: None,
+            exclude: None,
+            in_field: Field::Content,
+            kind: None,
+            status: None,
+            exit_code: None,
+            min_duration: None,
+            max_duration: None,
+            sort: Some(Sort::Relevance),
+            cwd: None,
+            since: None,
+            until: None,
+            last: None,
+            latest: None,
+            limit: None,
+            exclude_current: false,
+            format: None,
+            json: false,
+            refs: false,
+            save: None,
+        };
+        let error = from_search_args(&args).expect_err("relevance without query must fail");
+        assert!(error.to_string().contains("QUERY"), "{error}");
     }
 }
