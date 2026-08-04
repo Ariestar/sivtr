@@ -12,10 +12,14 @@ use crate::record::{WorkPartKind, WorkRecord, WorkRef};
 const K1: f64 = 1.2;
 const B: f64 = 0.75;
 
-/// Cap on tokens indexed per document. Agent turns and tool listings can run
-/// to tens of thousands of tokens; without a cap their raw term frequencies
-/// outscore short semantic matches (BM25's long-document bias).
-const MAX_TOKENS_PER_DOC: usize = 800;
+/// Tokens indexed per document, applied as a head window plus a tail window of
+/// this many tokens each. A hard head-only cap silently dropped terms that
+/// occur late in long agent turns — exactly where error text lives — while
+/// indexing everything lets common command words inside long chats (df 300+)
+/// outrank the short records that actually ran the command. Head+tail keeps
+/// both protections: short command records stay fully indexed, mid-document
+/// chatter stays out of the postings, and end-of-session errors stay findable.
+const WINDOW_TOKENS: usize = 800;
 
 /// Splits on non-alphanumeric runs, lowercases Latin/digit runs, and emits
 /// overlapping CJK bigrams (Lucene CJKAnalyzer style) so Chinese text is
@@ -97,12 +101,20 @@ impl Bm25Index {
 
         for (doc_id, record) in records.iter().enumerate() {
             let mut term_freq: HashMap<String, usize> = HashMap::new();
-            for token in SimpleTokenizer
-                .tokenize(&doc_text(record))
-                .into_iter()
-                .take(MAX_TOKENS_PER_DOC)
-            {
-                *term_freq.entry(token).or_insert(0) += 1;
+            let tokens = SimpleTokenizer.tokenize(&doc_text(record));
+            if tokens.len() <= 2 * WINDOW_TOKENS {
+                for token in tokens {
+                    *term_freq.entry(token).or_insert(0) += 1;
+                }
+            } else {
+                // Head + tail windows; disjoint because len > 2 * WINDOW_TOKENS.
+                for token in tokens
+                    .iter()
+                    .take(WINDOW_TOKENS)
+                    .chain(tokens.iter().skip(tokens.len() - WINDOW_TOKENS))
+                {
+                    *term_freq.entry(token.clone()).or_insert(0) += 1;
+                }
             }
             doc_len.push(term_freq.values().sum::<usize>() as f64);
             for (token, count) in term_freq {
@@ -305,6 +317,25 @@ mod tests {
         ];
         let index = Bm25Index::build(&corpus);
         let ranked = index.rank("command not found");
+        assert_eq!(ranked[0].0.to_string(), "terminal/dev/1");
+    }
+
+    #[test]
+    fn late_term_in_long_document_is_still_indexed_and_ranked() {
+        // Regression: a head-only per-document token cap silently dropped terms
+        // that occur late in long agent turns — exactly where error text lives.
+        // The tail window must keep them findable.
+        let mut noise = String::new();
+        for i in 0..2_000 {
+            noise.push_str(&format!("padding token {i} "));
+        }
+        let long_turn = format!("{noise}panicked at src/main.rs:42");
+        let corpus = vec![
+            record("dev", 1, "long agent turn", &long_turn),
+            record("dev", 2, "short chatter", "no signal here at all"),
+        ];
+        let index = Bm25Index::build(&corpus);
+        let ranked = index.rank("panicked");
         assert_eq!(ranked[0].0.to_string(), "terminal/dev/1");
     }
 }
