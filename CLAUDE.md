@@ -88,7 +88,14 @@ pwd && git branch
 
 ```bash
 sivtr search terminal --status failure --json | sivtr search terminal --exclude "example" -f timeline
+sivtr search terminal "docker pull failed"   # positional QUERY = pure BM25 ranking (no regex)
+sivtr search agent "bm25" -m ".*passage.*"   # --match regex bounds the set, QUERY ranks it
 ```
+
+`search` is BM25-primary: a positional `QUERY` (or `--match`) makes relevance the
+default sort and BM25 ranks the whole source; `--match` alone keeps the old
+regex-filter behavior (its text doubles as the rank query). No query = recency
+browse (latest=5).
 
 Target selectors: `terminal/<session>/<record>/<line>`, `agent/<session>/<turn>`, `<provider>/<session>/<turn>`. Part refs: `<provider>/<session>/<turn>/<i|o>/<part>`. Use `*` for wildcards. Named scopes: `desk:terminal/...`, `docs:codex/4`.
 
