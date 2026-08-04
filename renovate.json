@@ -2,7 +2,6 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
   "dependencyDashboard": true,
-  "gitAuthor": "Ariestar <1941137088@qq.com>",
   "packageRules": [
     {
       "matchManagers": ["cargo"],
