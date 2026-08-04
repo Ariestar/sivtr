@@ -101,7 +101,7 @@ serde_yaml = "0.9"
 dialoguer = { version = "0.12", default-features = false }
 pulldown-cmark = { version = "0.13", default-features = false }
 unicode-width = "0.2"
-rmcp = { version = "2.2", default-features = false, features = ["server", "macros", "transport-io"] }
+rmcp = { version = "3.1", default-features = false, features = ["server", "macros", "transport-io"] }
 schemars = "1"
 
 [target.'cfg(unix)'.dependencies]
