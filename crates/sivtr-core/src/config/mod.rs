@@ -20,6 +20,8 @@ pub struct SivtrConfig {
     pub codex: CodexConfig,
     /// Global hotkey settings.
     pub hotkey: HotkeyConfig,
+    /// MCP stdio server settings.
+    pub mcp: McpConfig,
 }
 
 /// General behavior settings.
@@ -77,6 +79,17 @@ pub struct CodexConfig {
 pub struct HotkeyConfig {
     /// Hotkey chord used by `sivtr hotkey start`.
     pub chord: String,
+}
+
+/// MCP stdio server settings (shared by every agent host registration —
+/// hosts all run plain `sivtr mcp serve`, behavior is configured here once).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct McpConfig {
+    /// Seconds of no tool calls after which the stdio MCP server exits (0 =
+    /// stay alive until the host closes stdin). Hosts respawn the server on
+    /// the next tool use, so an idle server never lingers.
+    pub idle_exit_secs: u64,
 }
 
 // --- Defaults ---
@@ -213,5 +226,19 @@ mod tests {
         assert!(toml.contains("[codex]"));
         assert!(toml.contains("session_dirs = ["));
         assert!(toml.contains("/srv/sivtr/root-codex/sessions"));
+    }
+
+    #[test]
+    fn serializes_mcp_idle_exit_config() {
+        let config = SivtrConfig {
+            mcp: McpConfig { idle_exit_secs: 60 },
+            ..SivtrConfig::default()
+        };
+
+        let toml = to_toml_string(&config).unwrap();
+
+        assert!(toml.contains("[mcp]"));
+        assert!(toml.contains("idle_exit_secs = 60"));
+        assert_eq!(SivtrConfig::default().mcp.idle_exit_secs, 0);
     }
 }

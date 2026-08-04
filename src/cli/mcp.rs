@@ -21,9 +21,6 @@ pub enum McpAction {
     PrintConfig {
         /// Target agent command name (see `AgentProvider::command_names()`)
         target: String,
-        /// Include `--idle-exit` in the printed args
-        #[arg(long)]
-        idle_exit: Option<u64>,
     },
 }
 
@@ -57,11 +54,6 @@ pub struct McpInstallArgs {
     /// Non-interactive defaults
     #[arg(short = 'y', long = "yes")]
     pub yes: bool,
-
-    /// Add `--idle-exit <SECS>` to the installed args so the server exits
-    /// after this many seconds without tool calls (host respawns on demand).
-    #[arg(long, value_name = "SECS")]
-    pub idle_exit: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]

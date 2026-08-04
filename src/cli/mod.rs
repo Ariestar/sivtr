@@ -1236,30 +1236,7 @@ mod tests {
         let cli = Cli::try_parse_from(["sivtr", "mcp", "print-config", "claude"]).unwrap();
         match cli.command {
             Some(Commands::Mcp(cmd)) => match cmd.action {
-                McpAction::PrintConfig { target, idle_exit } => {
-                    assert_eq!(target, "claude");
-                    assert_eq!(idle_exit, None);
-                }
-                _ => panic!("expected print-config"),
-            },
-            _ => panic!("expected mcp command"),
-        }
-    }
-
-    #[test]
-    fn mcp_print_config_parses_idle_exit() {
-        let cli = Cli::try_parse_from([
-            "sivtr",
-            "mcp",
-            "print-config",
-            "claude",
-            "--idle-exit",
-            "30",
-        ])
-        .unwrap();
-        match cli.command {
-            Some(Commands::Mcp(cmd)) => match cmd.action {
-                McpAction::PrintConfig { idle_exit, .. } => assert_eq!(idle_exit, Some(30)),
+                McpAction::PrintConfig { target } => assert_eq!(target, "claude"),
                 _ => panic!("expected print-config"),
             },
             _ => panic!("expected mcp command"),
