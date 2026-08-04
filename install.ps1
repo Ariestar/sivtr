@@ -63,8 +63,9 @@ if (-not $env:SIVTR_SKIP_VERIFY) {
         $sumsUrl = "https://github.com/$Repo/releases/download/$Version/SHA256SUMS"
         $sums = Join-Path $tmp 'SHA256SUMS'
         Invoke-WebRequest -Uri $sumsUrl -OutFile $sums -UseBasicParsing
+        $pattern = '\s' + [regex]::Escape($Asset) + '$'
         $expected = (Get-Content $sums |
-            Where-Object { $_ -match "\s$([regex]::Escape($Asset))$" } |
+            Where-Object { $_ -match $pattern } |
             ForEach-Object { ($_ -split '\s+')[0] } |
             Select-Object -First 1)
         if (-not $expected) { Err "No SHA256 entry for $Asset in SHA256SUMS" }
@@ -75,7 +76,7 @@ if (-not $env:SIVTR_SKIP_VERIFY) {
         Info "SHA256 verified for $Asset"
     } catch {
         # Releases published before checksum support have no SHA256SUMS.
-        Warn "SHA256SUMS not available for $Version — skipping verification"
+        Warn "SHA256SUMS not available for $Version - skipping verification"
     }
 }
 
