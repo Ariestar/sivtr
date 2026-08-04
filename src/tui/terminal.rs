@@ -52,7 +52,7 @@ impl DerefMut for Tui {
 impl Drop for Tui {
     fn drop(&mut self) {
         if self.state.has_pending_cleanup() {
-            let _ = restore_terminal_state(&mut self.terminal, &mut self.state);
+            let _ = restore_terminal_state(&mut self.state);
         }
         self.drawing_active = false;
     }
@@ -245,7 +245,7 @@ fn apply_full_redraw_policy(buffer: &mut Buffer) {
 /// cleanup is pending because crossterm can write its cached raw mode during a retry.
 pub fn restore(terminal: &mut Tui) -> Result<()> {
     terminal.drawing_active = false;
-    restore_terminal_state(&mut terminal.terminal, &mut terminal.state)
+    restore_terminal_state(&mut terminal.state)
 }
 
 /// Restore a terminal and preserve both the operation error and a cleanup error, if both occur.
@@ -282,36 +282,7 @@ where
     }
 }
 
-fn restore_terminal_state(terminal: &mut InnerTui, state: &mut TerminalState) -> Result<()> {
-    let mut failures = CleanupFailures::default();
-
-    if state.mouse_capture {
-        failures.record_flag(
-            "disable mouse capture",
-            &mut state.mouse_capture,
-            execute!(terminal.backend_mut(), DisableMouseCapture),
-        );
-    }
-    if state.alternate_screen {
-        failures.record_flag(
-            "leave alternate screen",
-            &mut state.alternate_screen,
-            execute!(terminal.backend_mut(), LeaveAlternateScreen),
-        );
-    }
-    if state.cursor_restore_pending {
-        failures.record_flag(
-            "show cursor",
-            &mut state.cursor_restore_pending,
-            terminal.show_cursor(),
-        );
-    }
-    restore_owned_state(&mut failures, state);
-
-    failures.finish("Failed to restore terminal state")
-}
-
-fn rollback_setup(state: &mut TerminalState) -> Result<()> {
+fn restore_terminal_state(state: &mut TerminalState) -> Result<()> {
     let mut failures = CleanupFailures::default();
     let mut stdout = io::stdout();
 
@@ -338,7 +309,7 @@ fn rollback_setup(state: &mut TerminalState) -> Result<()> {
     }
     restore_owned_state(&mut failures, state);
 
-    failures.finish("Failed to roll back partial terminal initialization")
+    failures.finish("Failed to restore terminal state")
 }
 
 fn restore_owned_state(failures: &mut CleanupFailures, state: &mut TerminalState) {
@@ -409,49 +380,23 @@ impl TerminalState {
     }
 }
 
+#[derive(Default)]
 struct TerminalSetup {
     state: TerminalState,
-    retry_cleanup_on_drop: bool,
-}
-
-impl Default for TerminalSetup {
-    fn default() -> Self {
-        Self {
-            state: TerminalState::default(),
-            retry_cleanup_on_drop: true,
-        }
-    }
 }
 
 impl TerminalSetup {
     fn fail<T>(&mut self, error: anyhow::Error) -> Result<T> {
-        let cleanup = rollback_setup(&mut self.state);
-        // Successful rollback steps clear their own state flags. Keep Drop armed only for failed
-        // steps so it makes one final best-effort retry instead of abandoning terminal state.
-        self.retry_cleanup_on_drop = self.state.has_pending_cleanup();
-        setup_failure(error, cleanup)
+        match restore_terminal_state(&mut self.state) {
+            Ok(()) => Err(error),
+            Err(cleanup_error) => Err(anyhow!(
+                "{error:#}; additionally failed to roll back terminal state: {cleanup_error:#}"
+            )),
+        }
     }
 
     fn commit(mut self) -> TerminalState {
-        self.retry_cleanup_on_drop = false;
         mem::take(&mut self.state)
-    }
-}
-
-impl Drop for TerminalSetup {
-    fn drop(&mut self) {
-        if self.retry_cleanup_on_drop && self.state.has_pending_cleanup() {
-            let _ = rollback_setup(&mut self.state);
-        }
-    }
-}
-
-fn setup_failure<T>(error: anyhow::Error, cleanup: Result<()>) -> Result<T> {
-    match cleanup {
-        Ok(()) => Err(error),
-        Err(cleanup_error) => Err(anyhow!(
-            "{error:#}; additionally failed to roll back terminal state: {cleanup_error:#}"
-        )),
     }
 }
 
@@ -1061,41 +1006,6 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("failure: still pending"));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn setup_failure_keeps_only_pending_cleanup_armed_for_drop_retry() {
-        use winapi::um::handleapi::INVALID_HANDLE_VALUE;
-
-        let mut setup = super::TerminalSetup {
-            state: super::TerminalState {
-                modes: Some(super::TerminalModes {
-                    input_handle: INVALID_HANDLE_VALUE,
-                    input_mode: 0,
-                    output_handle: INVALID_HANDLE_VALUE,
-                    output_mode: 0,
-                    input_restore: super::InputModeRestoreState::pending(),
-                    output_pending: false,
-                }),
-                ..super::TerminalState::default()
-            },
-            retry_cleanup_on_drop: true,
-        };
-
-        let error = setup
-            .fail::<()>(anyhow::anyhow!("setup failed"))
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains("setup failed"));
-        assert!(error.contains("restore console input mode"));
-        assert!(setup.retry_cleanup_on_drop);
-        assert!(setup.state.has_pending_cleanup());
-
-        // Avoid a second Win32 call from this test's own Drop; the assertion above verifies that
-        // production Drop would perform the intended final best-effort retry.
-        setup.retry_cleanup_on_drop = false;
     }
 
     #[cfg(windows)]
