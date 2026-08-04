@@ -203,7 +203,13 @@ pub(super) fn apply_workspace_help_action(
                 *content_mode,
                 content_at,
             ));
-            suspend(terminal, || open_vim_view(&view))??;
+            // A failed editor launch must not kill the picker: report it and keep running.
+            suspend(terminal, || {
+                if let Err(error) = open_vim_view(&view) {
+                    eprintln!("sivtr: editor error: {error}");
+                }
+                Ok(())
+            })??;
         }
         WorkspaceHelpAction::ScrollDown if *focus == WorkspaceFocus::Content => {
             content_scrolls.set(
