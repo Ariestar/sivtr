@@ -318,7 +318,7 @@ impl FromStr for WorkRefSelector {
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>();
         if parts.is_empty() || parts.len() > 3 {
-            bail!("Invalid work ref selector `{value}`; expected terminal[/<session>[/<record>]], agent[/<session>[/<turn>]], or <provider>[/<session>[/<turn>]]");
+            bail!("Invalid work ref selector `{value}`; expected terminal[/<session>[/<record>[/p<part>]]], agent[/<session>[/<turn>[/p<part>]]], or <provider>[/<session>[/<turn>[/p<part>]]]");
         }
 
         let session = parts

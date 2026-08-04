@@ -27,8 +27,8 @@ Grammar:
 
 Slots:
   address     same source/ref language as search/show
-              omit �?current terminal session
-              examples: codex, codex/SESSION, terminal/s/12, desk:codex, �?p1
+              omit → current terminal session
+              examples: codex, codex/SESSION, terminal/s/12, desk:codex, → p1
   dialogues   relative to newest: N or A..B (default 1)
               only when address does not already pin a record
   projection  both (default) | in | out | cmd
@@ -56,7 +56,7 @@ Examples:
 });
 
 const COPY_INPUT_AFTER_HELP: &str = "\
-`sivtr copy in [address] [dialogues]` �?projection=input.
+`sivtr copy in [address] [dialogues]` → projection=input.
 
 Examples:
   sivtr copy in
@@ -66,7 +66,7 @@ Examples:
 ";
 
 const COPY_OUTPUT_AFTER_HELP: &str = "\
-`sivtr copy out [address] [dialogues]` �?projection=output.
+`sivtr copy out [address] [dialogues]` → projection=output.
 
 Examples:
   sivtr copy out
@@ -76,7 +76,7 @@ Examples:
 ";
 
 const COPY_COMMAND_AFTER_HELP: &str = "\
-`sivtr copy cmd [address] [dialogues]` �?bare command text (terminal).
+`sivtr copy cmd [address] [dialogues]` → bare command text (terminal).
 
 Examples:
   sivtr copy cmd
@@ -879,7 +879,7 @@ pub struct ZoomArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct ShowArgs {
-    /// Source ref or WorkSet reference to show, for example `pi/019e4f40/3`, `terminal/current/12/8`, `@last`, or `@ctx[1,3]`.
+    /// Source ref or WorkSet reference to show, for example `pi/019e4f40/3`, `terminal/current/12/p2`, `@last`, or `@ctx[1,3]`.
     #[arg(value_name = "SOURCE")]
     pub source: String,
 
