@@ -10,9 +10,8 @@ Source forms:
 
 - `terminal`: terminal command records
 - `agent`: AI/agent conversation records from all providers
-- `codex`, `claude`, `cursor`, `opencode`, `openclaw`, `hermes`, `grok`, `pi`: one provider's conversation records
-- `terminal/<session>/<record>/<line>` or `<provider>/<session>/<turn>/<line>` with optional trailing segments
-- `<provider>/<session>/<turn>/<i|o>/<part>` for input/output part refs
+- `codex`, `claude`, `cursor`, `opencode`, `openclaw`, `grok`, `hermes`, `pi`, `qoder`: one provider's conversation records
+- `terminal/<session>/<record>`, `<provider>/<session>/<turn>`, or `<provider>/<session>/<turn>/p<part>` for input/output part refs
 - `origin:body` for another local workspace name or a named remote, for example `desk:terminal`, `docs:codex/4`
 - `@last`, `@name`, `@name[1]`, `@name[1,3]`, `@name[1..5]`, `@name[1..3,8]`
 - `@` to read a WorkSet from stdin
@@ -27,46 +26,50 @@ Remote origins are registered with `sivtr remote add <alias> <invite>` or listed
 
 - record anchor in -> record anchor out
 - part anchor in -> part anchor out
-- line anchor in -> line anchor out
 
 Every search saves the result to `@last`; `--save <name>` also saves it as `@name`.
 
+Search is BM25-primary: a plain-text positional `QUERY` (no regex) ranks the whole source by relevance. `-m` / `--match` is an optional case-insensitive regex that bounds the set first; with both given, the regex bounds and the QUERY ranks. `--match` alone keeps the regex-filter behavior and its text doubles as the rank query. No QUERY and no `--match` = recency browse (`--latest 5` default).
+
 ```bash
-sivtr s <source> \
+sivtr s <source> [QUERY] \
   -m <case-insensitive-regex> \
   -i <content|title|session|input|output|command|all> \
   -v <case-insensitive-regex> \
-  --kind <prompt|command|user_message|assistant_message|tool_call|tool_output|skill|thinking|text|error> \
+  --kind <prompt|command|user|assistant|tool|tool_call|tool_result|skill|thinking|output|error> \
   --status <success|failure|unknown|fail> \
   --exit-code <code> \
   --min-duration <duration> \
   --max-duration <duration> \
-  --sort <newest|oldest|duration|duration-asc|exit-code|exit-code-asc> \
+  --sort <newest|relevance|oldest|duration|duration-asc|exit-code|exit-code-asc> \
   --cwd <path> \
   --last <duration> \
   --since <time> \
   --until <time> \
   --latest <n> \
-  --limit <n> \
+  -l --limit <n> \
+  --exclude-current \
   --save <name> \
   -f <full|timeline|compact|md|refs|workset>
 ```
 
 Filters:
 
-- `-m` / `--match`: case-insensitive regex content filter.
+- `QUERY`: plain-text search query; BM25 ranks the source by these terms (no regex). Default sort becomes `relevance`.
+- `-m` / `--match`: case-insensitive regex content filter that bounds the set before relevance ranking.
 - `-v` / `--exclude`: case-insensitive regex exclusion filter on the same `-i` / `--in` search surface.
 - `-i` / `--in`: part candidate/search field for `--match` and `--exclude`; default is `content`. Use `input`, `output`, `command`, or `all` to constrain which parts are searched.
-- `--kind`: first-class part kind filter.
+- `--kind`: first-class part kind filter (`prompt`, `command`, `user`, `assistant`, `tool`, `tool_call`, `tool_result`, `skill`, `thinking`, `output`, `error`).
 - `--status`: filter by command/record outcome.
 - `--exit-code`: filter terminal records by exact process exit code.
 - `--min-duration` / `--max-duration`: filter by duration (`500ms`, `2s`, `1m`, `1h`).
-- `--sort`: sort results (`newest`, `oldest`, `duration`, `duration-asc`, `exit-code`, `exit-code-asc`).
+- `--sort`: sort results (`newest` default, `relevance` default with a QUERY or `--match`, plus `oldest`, `duration`, `duration-asc`, `exit-code`, `exit-code-asc`).
 - `--cwd`: choose the workspace used to resolve current AI sessions.
 - `--last`: relative time window (`30m`, `2h`, `7d`).
 - `--since` / `--until`: bound search by RFC3339 time, Unix seconds/millis, or relative durations.
-- `--latest`: return the latest N matching anchors.
-- `--limit`: cap printed results.
+- `--latest`: return the latest N matching anchors. Defaults to 5 when neither `--latest` nor `--limit` is set (relevance sort ranks the whole set and skips the recency window).
+- `-l` / `--limit`: cap printed results (hard ceiling after latest/sort).
+- `--exclude-current` (`--other`): exclude the current agent session from agent searches.
 - `--save`: name the result WorkSet.
 
 Output formats:
@@ -95,8 +98,7 @@ sivtr filter <source> \
   -v <case-insensitive-regex> \
   -i <content|title|session|input|output|command|all> \
   --parts \
-  --io <all|input|output> \
-  --kind <prompt|command|user_message|assistant_message|tool_call|tool_output|skill|thinking|text|error> \
+  --kind <prompt|command|user|assistant|tool|tool_call|tool_result|skill|thinking|output|error> \
   --status <success|failure|unknown|fail> \
   --exit-code <code> \
   --last <duration> \
@@ -113,7 +115,7 @@ Examples:
 ```bash
 sivtr s terminal --status fail --latest 20 --save failures --refs
 sivtr filter @failures -m "panic|compile" --save focused --refs
-sivtr filter @focused --parts --io output --kind tool_output --refs
+sivtr filter @focused --parts --kind tool_result --refs
 sivtr s terminal --json | sivtr filter @ -m "error" --refs
 ```
 
@@ -133,7 +135,7 @@ sivtr s terminal --json | sivtr filter @ -m "error" --refs
 Examples:
 
 ```bash
-sivtr nav @hit '<' --refs          # part/line -> record; record -> session records
+sivtr nav @hit '<' --refs          # part -> record; record -> session records
 sivtr nav @hit '>1' --refs         # record -> first child part
 sivtr nav @hit '<+1>1' --refs      # part -> record -> next record -> first child
 sivtr nav @hit '<[-2..+2]' --refs  # parent record context window
@@ -180,7 +182,7 @@ sivtr ws list
 sivtr remote list
 sivtr s desk:terminal --status fail --latest 5 --refs
 sivtr s desk:agent -m "decision|failed|TODO" --latest 20 --save remote_hits --refs
-sivtr show desk:terminal/session_42/3/o/1 --full
+sivtr show desk:terminal/session_42/3/p1 --full
 sivtr show docs:codex/4 --full
 ```
 
@@ -265,16 +267,16 @@ sivtr s grok -m "<query>" --latest 20 --refs
 sivtr s pi -m "<query>" --latest 20 --refs
 ```
 
-Part kinds include dialogue (`user_message`, `assistant_message`, `tool_call`, `tool_output`, …) and structure (`skill`, `thinking`). Search defaults to dialogue; use `--kind skill` / `--kind thinking` when you need those channels.
+Part kinds include dialogue (`user`, `assistant`, `tool_call`, `tool_result`, …) and structure (`skill`, `thinking`). Default content search covers dialogue turns, terminal output, tool results, and thinking; tool-call payloads and skill text need `--kind tool_call` / `--kind skill` or `-i all`.
 
 ## Compose Filters from the Request
 
-Map request constraints to source selectors and filters. Keep `--match` for the content/topic being searched.
+Map request constraints to source selectors and filters. Put the content/topic being searched in the positional `QUERY` for relevance ranking, or in `-m` / `--match` as a regex bound.
 
 ```bash
-sivtr s <provider> -m "<topic>" --last <duration> --latest 20 --refs
+sivtr s <provider> "<topic>" --last <duration> --latest 20 --refs
 sivtr s <provider> -m "<topic>|<related-term>|<status-term>" --last <duration> --latest 30 --refs
-sivtr s agent -m "<topic>" -i <content|title|session> --cwd <path> --latest 20 --refs
+sivtr s agent "<topic>" -i <content|title|session> --cwd <path> --latest 20 --refs
 ```
 
 Examples:
@@ -298,8 +300,8 @@ sivtr s terminal --status fail -m "error|failed|拒绝访问" \
 Show part-level output matches from the current WorkSet:
 
 ```bash
-sivtr s pi -m "git push|main -> main" --latest 10 \
-  | sivtr work parts @ --io output --kind tool_output \
+sivtr s pi "git push" --latest 10 \
+  | sivtr work parts @ --kind tool_result \
   | sivtr filter @ -m "main -> main" \
   | sivtr show @ --full
 ```
@@ -335,7 +337,7 @@ Options:
 
 ## Show
 
-`show` displays any source at anchor granularity: record anchors show records, part anchors show only that part, and line anchors show only that line.
+`show` displays any source at anchor granularity: record anchors show records, part anchors show only that part.
 
 ```bash
 sivtr show @last --full
@@ -343,19 +345,19 @@ sivtr show @last[1,3] -f timeline
 sivtr show @ctx -f md
 sivtr show "terminal/current/12" --full
 sivtr show "pi/019e4f40/3" --full
-sivtr show "codex/abc123/2/o/1" --full
+sivtr show "codex/abc123/2/p1" --full
 sivtr show "desk:terminal/session_42/3" --full
 ```
 
 Refs/selectors have this shape:
 
 ```text
-[origin:]terminal/session/dialogue[/line]
-[origin:]provider/session/dialogue[/line]
-[origin:]provider/session/dialogue/<i|o>/<part>
+[origin:]terminal/session/record
+[origin:]provider/session/turn
+[origin:]provider/session/turn/p<part>
 ```
 
-The `dialogue` / `line` segments may be concrete numbers or selector lists/ranges when used as command input, for example `3-5,7` or `5-7,10`. Output refs remain concrete anchors. Part refs use `i` (input) or `o` (output) followed by a 1-based part index.
+The `record` / `turn` segments may be concrete numbers or selector lists/ranges when used as command input, for example `3-5,7`. Output refs remain concrete anchors. Part refs are `p` followed by a 1-based part index.
 
 ## Token Budget
 
@@ -367,16 +369,16 @@ The `dialogue` / `line` segments may be concrete numbers or selector lists/range
 
 ## Copy by Ref
 
-Copy content behind an exact ref to clipboard:
+Copy content behind an exact address to clipboard. `copy` takes the address first (same source/ref language as search/show), then an optional dialogue selector:
 
 ```bash
-sivtr copy ref "codex/019e4f40/3/o/1"
-sivtr copy ref "terminal/session_42/5" --print
-sivtr copy ref "pi/abc123/2/i/1" --lines "1:10"
-sivtr copy ref "desk:terminal/session_42/3/o/1" --print
+sivtr copy codex/019e4f40/3
+sivtr copy terminal/session_42/5 --print
+sivtr copy pi/abc123/2/p1 --lines "1:10"
+sivtr copy desk:terminal/session_42/3 --print
 ```
 
-Supports `--print`, `--regex`, `--lines`, and `--cwd` options.
+Supports `--print`, `--regex`, `--lines`, and `--prompt` options, plus `in` / `out` / `cmd` projections.
 
 ## Work Traversal
 
@@ -386,11 +388,11 @@ Explore workspace records at session, record, and part granularity:
 sivtr work sessions --json
 sivtr work records codex/019e4f40 --refs
 sivtr work records @last[1] --refs
-sivtr work parts codex/019e4f40/3 --io output --kind tool_output --refs
-sivtr work parts @ --io all --json
+sivtr work parts codex/019e4f40/3 --kind tool_result --refs
+sivtr work parts @ --kind tool --json
 ```
 
-`work records` projects any source anchors to parent record anchors. `work parts` projects source anchors to part anchors and supports `--io`, `--kind`, and `-m` / `--match` filtering. For new pipelines, prefer `sivtr filter --parts ...` when you want the shared filter surface.
+`work records` projects any source anchors to parent record anchors. `work parts` projects source anchors to part anchors and supports `--kind` and `-m` / `--match` filtering. For new pipelines, prefer `sivtr filter --parts ...` when you want the shared filter surface.
 
 ## Diagnostics
 

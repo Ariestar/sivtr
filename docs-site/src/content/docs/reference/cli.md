@@ -204,18 +204,18 @@ sivtr diff 2 1 --side-by-side
 ## search
 
 ```bash
-sivtr search <TARGET> [OPTIONS]
+sivtr search <TARGET> [QUERY] [OPTIONS]
 ```
 
-Searches captured terminal records and supported AI workspace sessions. The target chooses where to search; filters choose which records match.
+Searches captured terminal records and supported AI workspace sessions. The target chooses where to search; filters choose which records match. A plain-text positional `QUERY` (no regex) ranks the source by BM25 relevance and becomes the default sort; `--match` optionally bounds the set with a regex first.
 
 Targets:
 
 | Target | Meaning |
 | --- | --- |
-| `terminal[/<session>[/<record>[/<line>]]]` | Terminal command records |
-| `agent[/<session>[/<turn>[/<line>]]]` | All registered AI/agent records |
-| `codex` / `claude` / `cursor` / `opencode` / `openclaw` / `hermes` / `grok` / `pi` `[/<session>[/<turn>[/<line>]]]` | One provider's records |
+| `terminal[/<session>[/<record>[/p<part>]]]` | Terminal command records |
+| `agent[/<session>[/<turn>[/p<part>]]]` | All registered AI/agent records |
+| `codex` / `claude` / `cursor` / `opencode` / `openclaw` / `grok` / `hermes` / `pi` / `qoder` `[/<session>[/<turn>[/p<part>]]]` | One provider's records |
 | `<origin>:<target>` | Named remote or other local workspace origin, for example `desk:terminal` or `docs:codex/4` |
 
 Use `*` for wildcard path segments, for example `terminal/*/3` or `pi/*/*`. Origins come from `sivtr remote add <alias> ...` or local workspace names listed by `sivtr ws list`.
@@ -224,19 +224,21 @@ Options:
 
 | Option | Meaning |
 | --- | --- |
-| `--match <REGEX>`, `-m <REGEX>` | Case-insensitive content filter |
+| `QUERY` | Plain-text search query; BM25 ranks the source by these terms (no regex). Default sort becomes `relevance`. |
+| `--match <REGEX>`, `-m <REGEX>` | Case-insensitive regex that bounds the set before relevance ranking |
 | `--exclude <REGEX>`, `-v <REGEX>` | Case-insensitive exclusion filter applied after matches are found |
 | `--in <FIELD>`, `-i <FIELD>` | `content`, `title`, `session`, `input`, `output`, `command`, or `all`; default is `content` |
+| `--kind <KIND>` | Part kind filter: `prompt`, `command`, `user`, `assistant`, `tool`, `tool_call`, `tool_result`, `skill`, `thinking`, `output`, or `error` |
 | `--status <STATUS>` | `success`, `failure`, or `unknown` |
 | `--exit-code <CODE>` | Exact terminal process exit code |
 | `--min-duration <DURATION>` | Minimum command duration, e.g. `500ms`, `2s`, `1m` |
 | `--max-duration <DURATION>` | Maximum command duration |
-| `--sort <SORT>` | `newest`, `oldest`, `duration`, `duration-asc`, `exit-code`, or `exit-code-asc` |
+| `--sort <SORT>` | `newest` (default), `relevance` (default with a `QUERY` or `--match`), `oldest`, `duration`, `duration-asc`, `exit-code`, or `exit-code-asc` |
 | `--cwd <PATH>` | Workspace directory used to resolve records |
 | `--since <TIME>` | Only include records at or after this time |
 | `--until <TIME>` | Only include records at or before this time |
 | `--last <DURATION>` | Recent time window, e.g. `30m`, `2h`, `7d` |
-| `--latest <N>` | Return the latest N matching records before final sort. Defaults to `5` when neither `--latest` nor `--limit` is set. |
+| `--latest <N>` | Return the latest N matching records before final sort. Defaults to `5` when neither `--latest` nor `--limit` is set (relevance sort ranks the whole set and skips the recency window). |
 | `-l, --limit <N>` | Maximum result groups to print (hard ceiling after latest/sort) |
 | `--exclude-current`, `--other` | Exclude the current agent session from agent searches |
 | `--json` | Alias for `--format workset` |
@@ -251,12 +253,37 @@ Examples:
 
 ```bash
 sivtr search terminal --status failure --latest 1 --json
+sivtr s terminal "docker pull failed" --latest 20 --refs
 sivtr s terminal -m "panic|failed" -v "example|sample" --since today --refs
 sivtr s terminal -m "panic|failed" | sivtr filter @ -v "demo" -i title -f timeline
 sivtr search agent --match "TODO|failed|next step" --since yesterday --format md
 sivtr search pi --since today --sort oldest --format timeline
 sivtr search pi/019e5941 --match "cargo test" --format compact
-sivtr search terminal/session_13104/3/12 --format workset
+sivtr search terminal/session_13104/3 --format workset
+```
+
+## eval
+
+```bash
+sivtr eval [OPTIONS]
+```
+
+Benchmarks retrieval quality against golden queries: freezes the current workspace records into a snapshot, then ranks the corpus per query and reports recall@k / precision@k / MRR / NDCG@k. See [`docs/retrieval-eval.md`](https://github.com/Ariestar/sivtr/blob/main/docs/retrieval-eval.md) for the methodology and measured results.
+
+| Option | Meaning |
+| --- | --- |
+| `--k <K>` | Evaluation depth (default `5`) |
+| `--sort <SORT>` | Sort strategy to benchmark (default `newest`) |
+| `--snapshot <PATH>` | Frozen eval snapshot file (queries + corpus JSON) |
+| `--create-snapshot <PATH>` | Dump current workspace records into a new snapshot (queries start empty) |
+| `--export <DIR>` | Write `qrels.txt` and `results.txt` (trec_eval format) into this directory |
+| `--json` | Emit the report as JSON |
+
+Example workflow:
+
+```bash
+sivtr eval --create-snapshot snap.json   # then edit snap.json: add labeled queries { name, query, relevant: [...] }
+sivtr eval --snapshot snap.json --sort relevance --json
 ```
 
 ## filter
@@ -275,8 +302,7 @@ Options:
 | `--match <REGEX>`, `-m <REGEX>` | Case-insensitive content filter |
 | `--exclude <REGEX>`, `-v <REGEX>` | Case-insensitive exclusion filter |
 | `--in <FIELD>`, `-i <FIELD>` | `content`, `title`, `session`, `input`, `output`, `command`, or `all` |
-| `--io <IO>` | With `--parts`, choose `all`, `input`, or `output` parts |
-| `--kind <KIND>` | Part kind filter |
+| `--kind <KIND>` | Part kind filter: `prompt`, `command`, `user`, `assistant`, `tool`, `tool_call`, `tool_result`, `skill`, `thinking`, `output`, or `error` |
 | `--status <STATUS>` | `success`, `failure`, or `unknown` |
 | `--exit-code <CODE>` | Exact terminal process exit code |
 | `--min-duration <DURATION>` | Minimum command duration |
@@ -297,7 +323,7 @@ Examples:
 ```bash
 sivtr search terminal --json | sivtr filter @ -m error --refs
 sivtr filter terminal --status failure --refs
-sivtr filter @last --parts --io output --kind tool_output --refs
+sivtr filter @last --parts --kind tool_result --refs
 ```
 
 ## var
@@ -378,7 +404,7 @@ Prints a workspace ref or WorkSet source such as `@last`, `@name`, or `@`.
 Ref syntax:
 
 ```text
-source/session[/dialogue[/line]]
+source/session[/record-or-turn[/p<part>]]
 ```
 
 Options:
@@ -396,9 +422,9 @@ Examples:
 ```bash
 sivtr show claude/<session-id>
 sivtr show claude/<session-id>/3
-sivtr show claude/<session-id>/3/7 --json
+sivtr show claude/<session-id>/3/p7 --json
 sivtr show terminal/current/2
-sivtr show desk:terminal/session_42/3/o/1 --full
+sivtr show desk:terminal/session_42/3/p1 --full
 sivtr show @last --full
 sivtr show @ctx -f timeline
 ```
@@ -539,7 +565,10 @@ Runs the MCP server on stdio:
 
 ```bash
 sivtr mcp serve
+sivtr mcp serve --idle-exit 60
 ```
+
+`--idle-exit <SECS>` makes the server exit after that many seconds with no tool calls; the host respawns it on the next tool use, so an idle server never lingers (each agent session otherwise keeps one alive until it exits). `0` / absent = stay alive until the host closes stdin. The same value can be set globally with the `[mcp] idle_exit_secs` config key; the CLI flag wins over the config.
 
 Tools:
 

@@ -159,7 +159,7 @@ More end-to-end walkthroughs live in the [Playbooks](https://sivtr.pages.dev/pla
 | --- | --- |
 | WorkRecord | One useful work event: a terminal command, agent turn, tool call, or captured output block. |
 | WorkPart | The command, output, assistant reply, tool output, or error inside a record. Use this when you only need the useful part, not the whole event. |
-| WorkRef | A stable address for one exact piece of memory, for example `pi/<session>/3/o/1`. Good for citations and reproducible handoffs. |
+| WorkRef | A stable address for one exact piece of memory, for example `pi/<session>/3/p1`. Good for citations and reproducible handoffs. |
 | WorkSet | The data behind memory variables such as `@last` and `@failures`: an ordered list of refs you can filter, save, slice, pipe, navigate, expand, and show. |
 
 Memory variables:
@@ -227,10 +227,10 @@ On the other device:
 ```bash
 sivtr remote add desk <invite>   # bare key from `sivtr share invite` stdout
 sivtr s desk:terminal --status failure --latest 5 --refs
-sivtr show desk:terminal/session_42/3/o/1
+sivtr show desk:terminal/session_42/3
 sivtr zoom desk:terminal/session_42/3 -C 2
 sivtr nav desk:terminal/session_42/3 +1 --refs
-sivtr copy ref desk:terminal/session_42/3/o/1 --print
+sivtr copy desk:terminal/session_42/3 --print
 ```
 
 Sharing is opt-in and read-only. Secrets are redacted by default before data leaves the machine. Remote access uses encrypted iroh transport; the daemon auto-starts when needed. Unregistered origins error — register remotes with `sivtr remote add`, or list local workspaces with `sivtr ws`.

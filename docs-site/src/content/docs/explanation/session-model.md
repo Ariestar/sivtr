@@ -103,7 +103,7 @@ This avoids requiring users to remember absolute ids for transient terminal or a
 Search results use refs when a stable follow-up memory target is needed:
 
 ```text
-source/session[/dialogue[/line]]
+source/session[/record-or-turn[/p<part>]]
 ```
 
 Examples:

@@ -102,7 +102,7 @@ WorkSet 包含 materialized `records` 和 active `anchors`。`filter` 缩小 anc
 
 | Motion | 含义 |
 | --- | --- |
-| `<` | 父级。part/line 到 record；record 到所属 session records。 |
+| `<` | 父级。part 到 record；record 到所属 session records。 |
 | `>N` | 第 N 个 child，1-based。record 的 children 是 parts。 |
 | `+N` | 当前层级向后移动 N 个 sibling。 |
 | `-N` | 当前层级向前移动 N 个 sibling。 |
@@ -144,7 +144,7 @@ sivtr copy out --ansi
 `search --format refs` 和 `search --format workset` 会输出 `show` 可以打印的 ref：
 
 ```text
-[origin:]source/session[/dialogue[/line]]
+[origin:]source/session[/record-or-turn[/p<part>]]
 ```
 
 本地示例：
@@ -152,16 +152,16 @@ sivtr copy out --ansi
 ```bash
 sivtr show claude/<session>
 sivtr show claude/<session>/<dialogue>
-sivtr show claude/<session>/<dialogue>/<line>
+sivtr show claude/<session>/<dialogue>/p1
 sivtr show terminal/current/<block>
-sivtr show terminal/current/<block>/<line>
+sivtr show terminal/current/<block>/p2
 ```
 
 带 origin 的示例（`origin:body`）：
 
 ```bash
 sivtr show desk:terminal/session_42/3
-sivtr show desk:agent/<session>/3/o/1
+sivtr show desk:agent/<session>/3/p1
 sivtr show docs:codex/4
 sivtr s desk:terminal --status failure --latest 5 --refs
 ```
@@ -171,4 +171,4 @@ origin 来自：
 - 用 `sivtr remote add <name> <invite>` 创建的远端名；
 - `sivtr ws list` 列出的本机 workspace 目录名。
 
-Dialogue 和 line 索引都是 1-based。
+Dialogue 和 record 索引都是 1-based；part ref 是 `p` 加 1-based part 索引。

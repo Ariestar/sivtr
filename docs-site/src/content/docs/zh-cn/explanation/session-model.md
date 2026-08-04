@@ -103,7 +103,7 @@ sivtr copy claude 2 # 上一个 Agent turn
 搜索结果需要稳定的后续 memory 目标时会使用 ref：
 
 ```text
-source/session[/dialogue[/line]]
+source/session[/record-or-turn[/p<part>]]
 ```
 
 示例：

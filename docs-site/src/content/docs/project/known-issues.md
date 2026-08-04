@@ -34,15 +34,16 @@ Evidence channels are typed on `WorkPartKind` / `AgentBlockKind` with methods fo
 - Structure markers: `<:tool:name call:>` / `<:tool:name result:>`, `<:skill:name:>`, `<:thinking:>`
 - MCP is **not** a separate kind — MCP tools are normal tools (label = tool name)
 - Last turn **keeps** structure; do not reintroduce stripping from records
-- **Default content search** (`-i content`) skips `is_structure()` parts so they don't pollute full-text hits; use `--kind tool_call|skill|thinking` or `-i all` to include them
+- **Default content search** (`-i content`) covers dialogue turns, terminal output, tool results, and thinking; only tool-call payloads and skill text are skipped as noise — reachable with `--kind tool_call|skill` or `-i all`
 
 ### Provider emit gaps
 
 | Kind | Model | Default search | Parse emit |
 | --- | --- | --- | --- |
-| Tool* | yes | excluded unless opted in | most providers |
+| Tool call | yes | excluded unless opted in (`--kind tool_call` / `-i all`) | most providers |
+| Tool result | yes | **included by default** (execution errors) | most providers |
 | Skill | yes | excluded unless opted in | mainly inlined `<skill name>` |
-| Thinking | yes | excluded unless opted in | Claude/Pi/OpenCode reasoning now kept |
+| Thinking | yes | **included by default** (error reasoning) | Claude/Pi/OpenCode reasoning now kept |
 
 Adding a new structure channel: extend enum methods first, then CLI kind aliases, then provider emit. Avoid Markdown `## Tool Call` for structure.
 

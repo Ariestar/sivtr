@@ -80,11 +80,11 @@ Remotes work with the same WorkSet surface as local sources:
 ```bash
 sivtr s desk:terminal --status failure --latest 5 --refs
 sivtr s desk:agent -m "panic|failed|decision" --latest 20 --save remote_hits --refs
-sivtr show desk:terminal/session_42/3/o/1 --full
+sivtr show desk:terminal/session_42/3/p1 --full
 sivtr zoom desk:agent/<session>/3 -C 2 --save remote_ctx --refs
 sivtr filter @remote_hits -m "cargo test" --save remote_tests --refs
 sivtr nav @remote_tests[1] '<[-1..+1]' --refs
-sivtr copy ref desk:terminal/session_42/3/o/1 --print
+sivtr copy desk:terminal/session_42/3 --print
 ```
 
 ## Safety defaults

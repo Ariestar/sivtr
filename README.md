@@ -150,7 +150,7 @@ sivtr s agent -m "TODO|decision|failed" --since today -f timeline
 | --- | --- |
 | WorkRecord | 一个有用的工作事件：终端命令、Agent turn、工具调用或捕获输出块。 |
 | WorkPart | Record 里的命令、输出、assistant 回复、tool output 或 error。只想拿有用片段而不是整个事件时用它。 |
-| WorkRef | 某段精确记忆的稳定地址，例如 `pi/<session>/3/o/1`。适合引用、复现和交接。 |
+| WorkRef | 某段精确记忆的稳定地址，例如 `pi/<session>/3/p1`。适合引用、复现和交接。 |
 | WorkSet | `@last`、`@failures` 这类记忆变量背后的数据：一组有顺序的 refs，可以筛选、保存、切片、管道传递、导航、扩展和展示。 |
 
 记忆变量：
@@ -218,10 +218,10 @@ sivtr ws list                 # 查看本机 workspace origin 标签
 ```bash
 sivtr remote add desk <invite>   # 粘贴 `sivtr share invite` 输出的 bare key
 sivtr s desk:terminal --status failure --latest 5 --refs
-sivtr show desk:terminal/session_42/3/o/1
+sivtr show desk:terminal/session_42/3
 sivtr zoom desk:terminal/session_42/3 -C 2
 sivtr nav desk:terminal/session_42/3 +1 --refs
-sivtr copy ref desk:terminal/session_42/3/o/1 --print
+sivtr copy desk:terminal/session_42/3 --print
 ```
 
 分享是 opt-in、只读，默认在数据离开本机前脱敏常见密钥。远程传输走加密 iroh；需要时会自动启动 daemon。未登记的 origin 会报错——用 `sivtr remote add` 登记 remote，或用 `sivtr ws` 查看本机 workspace。

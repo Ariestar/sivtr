@@ -35,18 +35,19 @@ sivtr search opencode
 sivtr search openclaw
 sivtr search grok
 sivtr search pi
+sivtr search qoder
 ```
 
-Target 可以继续缩小到 session、record/turn 和 line：
+Target 可以继续缩小到 session、record/turn 和 part：
 
 ```bash
 sivtr search pi/019e5941 --match "cargo test"
-sivtr search terminal/session_13104/3/12 --format workset
+sivtr search terminal/session_13104/3 --format workset
 sivtr search pi/019e5941/3-5,7 --match "cargo test"
-sivtr search pi/019e5941/3/5-7,10 --format workset
+sivtr search pi/019e5941/3/p2 --format workset
 ```
 
-record/turn 和 line segment 都是 1-based，支持 `3`、`3-5`、`3,7` 或 `3-5,7`。`*` 表示 wildcard segment。Search selector 只用于缩小输入范围；search 输出仍然返回具体 ref。
+record/turn segment 是 1-based，支持 `3`、`3-5`、`3,7` 或 `3-5,7`。part 用 `p<part>` 后缀（1-based，例如 `/3/p2`）。`*` 表示 wildcard segment。Search selector 只用于缩小输入范围；search 输出仍然返回具体 ref。
 
 使用 `agent` 搜索所有受支持 AI provider，或使用 provider 名只搜一个 provider。
 
@@ -55,11 +56,23 @@ Target 也可以带 origin 前缀（`origin:body`），用于本机另一个 wor
 ```bash
 sivtr search desk:terminal --status failure --latest 5 --refs
 sivtr search desk:agent -m "decision|failed" --latest 20 --save remote_hits --refs
-sivtr show desk:terminal/session_42/3/o/1 --full
+sivtr show desk:terminal/session_42/3/p1 --full
 sivtr show docs:codex/4
 ```
 
 origin 来自 `sivtr remote add <alias> ...` 或 `sivtr ws list`。功能指南见 [远程访问](/zh-cn/usage/remote-access/)。
+
+## 相关性搜索
+
+`sivtr search` 以 BM25 为主：位置参数（plain-text，非正则）`QUERY` 会按相关性给整个 source 排序，并成为默认排序：
+
+```bash
+sivtr search terminal "docker pull failed"
+sivtr search agent "connection refused"
+sivtr search pi "cargo test"
+```
+
+`--match` 现在是可选的补充：大小写不敏感正则，先圈定候选集合，再做相关性排序。同时给出 QUERY 和 `--match` 时，正则圈定候选、QUERY 负责排序；只用 `--match` 则保留经典正则过滤行为，其文本同时充当排序查询。QUERY 和 `--match` 都没有时是 recency browse（默认 `--latest 5`）。
 
 ## 内容过滤
 
@@ -101,6 +114,7 @@ sivtr search terminal --min-duration 500ms --sort duration --format compact
 
 常用排序：
 
+- `relevance` —— 有 plain-text `QUERY` 或 `--match` 时默认
 - `newest`
 - `oldest`
 - `duration`
@@ -138,7 +152,7 @@ Terminal stdout 默认 `full`；piped stdout 默认 `workset`。`--json` 是 `--
 ```bash
 sivtr search terminal --status failure --latest 20 --save failures --refs
 sivtr filter @failures --match "panic|compile" --save focused --refs
-sivtr filter @focused --parts --io output --kind tool_output --refs
+sivtr filter @focused --parts --kind tool_result --refs
 ```
 
 在 shell pipeline 里，`@` 从 stdin 读取 WorkSet JSON：
@@ -155,7 +169,7 @@ sivtr search terminal --json | sivtr filter @ -m error --refs
 
 | Motion | 含义 |
 | --- | --- |
-| `<` | 父级。part/line 到 record；record 到所属 session records。 |
+| `<` | 父级。part 到 record；record 到所属 session records。 |
 | `>N` | 第 N 个 child，1-based。record 的 children 是 parts。 |
 | `+N` | 当前层级向后移动 N 个 sibling。 |
 | `-N` | 当前层级向前移动 N 个 sibling。 |
@@ -190,11 +204,10 @@ sivtr show @ctx --full
 Ref/selector 形状如下：
 
 ```text
-source/session[/record-or-turn[/line]]
-source/session/record/<i|o>/<part>
+source/session[/record-or-turn[/p<part>]]
 ```
 
-具体 ref 指向单个 record、单行或单个 part。作为命令输入时，record/turn 和 line segment 也可以是 `3-5,7` 这样的 selector；输出 ref 仍然是具体锚点。Part ref 使用 `i`（输入）或 `o`（输出）加上 1-based part 索引。
+具体 ref 指向单个 record 或单个 part。作为命令输入时，record/turn segment 也可以是 `3-5,7` 这样的 selector；输出 ref 仍然是具体锚点。Part ref 使用 `p` 加上 1-based part 索引。
 
 打印一个 record 或 turn：
 
@@ -203,25 +216,17 @@ sivtr show pi/<session>/<turn>
 sivtr show terminal/<session>/<record>
 ```
 
-打印某条 1-based line：
+打印特定的 part：
 
 ```bash
-sivtr show claude/<session>/<turn>/<line>
-sivtr show terminal/<session>/<record>/<line>
+sivtr show codex/<session>/<turn>/p1
+sivtr show terminal/<session>/<record>/p2
 ```
 
-打印特定的 input 或 output part：
-
-```bash
-sivtr show codex/<session>/<turn>/o/1
-sivtr show terminal/<session>/<record>/i/2
-```
-
-用 selector 语法打印多个 record 或 line：
+用 selector 语法打印多个 record：
 
 ```bash
 sivtr show pi/<session>/3-5,7
-sivtr show pi/<session>/3/5-7,10
 ```
 
 机器可读 WorkSet 输出：
@@ -260,4 +265,4 @@ sivtr show @ctx --json
    sivtr show <source/session/record-or-turn>
    ```
 
-5. 需要紧凑引用、脚本输入或后续 Agent 的上下文句柄时，再使用精确 part/line ref。
+5. 需要紧凑引用、脚本输入或后续 Agent 的上下文句柄时，再使用精确 part ref（`<source>/<session>/<turn>/p<n>`）。

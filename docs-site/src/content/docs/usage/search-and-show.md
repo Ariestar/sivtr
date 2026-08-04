@@ -35,18 +35,19 @@ sivtr search opencode
 sivtr search openclaw
 sivtr search grok
 sivtr search pi
+sivtr search qoder
 ```
 
-Targets can narrow to a session, record/turn, and line:
+Targets can narrow to a session, record/turn, and part:
 
 ```bash
 sivtr search pi/019e5941 --match "cargo test"
-sivtr search terminal/session_13104/3/12 --format workset
+sivtr search terminal/session_13104/3 --format workset
 sivtr search pi/019e5941/3-5,7 --match "cargo test"
-sivtr search pi/019e5941/3/5-7,10 --format workset
+sivtr search pi/019e5941/3/p2 --format workset
 ```
 
-Record/turn and line segments are 1-based and accept `3`, `3-5`, `3,7`, or `3-5,7`. Use `*` as a wildcard segment. Search selectors narrow the input scope; search output still returns concrete refs.
+Record/turn segments are 1-based and accept `3`, `3-5`, `3,7`, or `3-5,7`. Parts use the `p<part>` suffix (1-based, e.g. `/3/p2`). Use `*` as a wildcard segment. Search selectors narrow the input scope; search output still returns concrete refs.
 
 Use `agent` for every supported AI provider, or a provider name for one provider.
 
@@ -55,11 +56,23 @@ Targets can also use an origin prefix (`origin:body`) for another local workspac
 ```bash
 sivtr search desk:terminal --status failure --latest 5 --refs
 sivtr search desk:agent -m "decision|failed" --latest 20 --save remote_hits --refs
-sivtr show desk:terminal/session_42/3/o/1 --full
+sivtr show desk:terminal/session_42/3/p1 --full
 sivtr show docs:codex/4
 ```
 
 Origins come from `sivtr remote add <alias> ...` or `sivtr ws list`. Feature guide: [Remote Access](/usage/remote-access/).
+
+## Relevance search
+
+`sivtr search` is BM25-primary. A plain-text positional query (no regex) ranks the whole source by relevance, and becomes the default sort:
+
+```bash
+sivtr search terminal "docker pull failed"
+sivtr search agent "connection refused"
+sivtr search pi "cargo test"
+```
+
+`--match` is now an optional refinement: a case-insensitive regex that bounds the set before relevance ranking. With both a query and `--match`, the regex bounds the candidates and the query ranks them; `--match` alone keeps the classic regex-filter behavior and its text doubles as the rank query. No query and no `--match` means a recency browse (default `--latest 5`).
 
 ## Content filters
 
@@ -101,6 +114,7 @@ sivtr search terminal --min-duration 500ms --sort duration --format compact
 
 Useful sorts:
 
+- `relevance` — default with a plain-text `QUERY` or `--match`
 - `newest`
 - `oldest`
 - `duration`
@@ -138,7 +152,7 @@ Use `filter` when you already have a WorkSet and want to narrow it without re-ru
 ```bash
 sivtr search terminal --status failure --latest 20 --save failures --refs
 sivtr filter @failures --match "panic|compile" --save focused --refs
-sivtr filter @focused --parts --io output --kind tool_output --refs
+sivtr filter @focused --parts --kind tool_result --refs
 ```
 
 In a shell pipeline, `@` reads WorkSet JSON from stdin:
@@ -190,11 +204,10 @@ sivtr show @ctx --full
 Refs/selectors have this shape:
 
 ```text
-source/session[/record-or-turn[/line]]
-source/session/record/<i|o>/<part>
+source/session[/record-or-turn[/p<part>]]
 ```
 
-A concrete ref points at one record, one line, or one part. As command input, the record/turn and line segments can also be selectors such as `3-5,7`; output refs remain concrete anchors. Part refs use `i` (input) or `o` (output) followed by a 1-based part index.
+A concrete ref points at one record or one part. As command input, the record/turn segment can also be a selector such as `3-5,7`; output refs remain concrete anchors. Part refs use `p` followed by a 1-based part index.
 
 Print a record or turn:
 
@@ -203,25 +216,17 @@ sivtr show pi/<session>/<turn>
 sivtr show terminal/<session>/<record>
 ```
 
-Print one 1-based line:
+Print a specific part:
 
 ```bash
-sivtr show claude/<session>/<turn>/<line>
-sivtr show terminal/<session>/<record>/<line>
+sivtr show codex/<session>/<turn>/p1
+sivtr show terminal/<session>/<record>/p2
 ```
 
-Print a specific input or output part:
-
-```bash
-sivtr show codex/<session>/<turn>/o/1
-sivtr show terminal/<session>/<record>/i/2
-```
-
-Print multiple records or lines with selector syntax:
+Print multiple records with selector syntax:
 
 ```bash
 sivtr show pi/<session>/3-5,7
-sivtr show pi/<session>/3/5-7,10
 ```
 
 Use WorkSet output for machine-readable piping:
@@ -260,4 +265,4 @@ sivtr show @ctx --json
    sivtr show <source/session/record-or-turn>
    ```
 
-5. Use exact part/line refs when you need compact citations, script input, or context handles for another agent.
+5. Use exact part refs (`<source>/<session>/<turn>/p<n>`) when you need compact citations, script input, or context handles for another agent.

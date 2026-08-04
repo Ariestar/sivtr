@@ -202,18 +202,18 @@ sivtr diff 2 1 --side-by-side
 ## search
 
 ```bash
-sivtr search <TARGET> [OPTIONS]
+sivtr search <TARGET> [QUERY] [OPTIONS]
 ```
 
-搜索捕获到的终端记录和受支持的 AI workspace sessions。Target 决定在哪里搜；filter 决定哪些记录匹配。
+搜索捕获到的终端记录和受支持的 AI workspace sessions。Target 决定在哪里搜；filter 决定哪些记录匹配。位置参数 `QUERY`（plain-text，非正则）会用 BM25 相关性给整个 source 排序并成为默认排序；`--match` 可选地用正则先圈定集合。
 
 Targets：
 
 | Target | 含义 |
 | --- | --- |
-| `terminal[/<session>[/<record>[/<line>]]]` | 终端命令记录 |
-| `agent[/<session>[/<turn>[/<line>]]]` | 所有已注册 AI / Agent 记录 |
-| `codex` / `claude` / `cursor` / `opencode` / `openclaw` / `hermes` / `grok` / `pi` `[/<session>[/<turn>[/<line>]]]` | 单个 provider 的记录 |
+| `terminal[/<session>[/<record>[/p<part>]]]` | 终端命令记录 |
+| `agent[/<session>[/<turn>[/p<part>]]]` | 所有已注册 AI / Agent 记录 |
+| `codex` / `claude` / `cursor` / `opencode` / `openclaw` / `grok` / `hermes` / `pi` / `qoder` `[/<session>[/<turn>[/p<part>]]]` | 单个 provider 的记录 |
 | `<origin>:<target>` | 命名 remote 或其他本机 workspace origin，例如 `desk:terminal` 或 `docs:codex/4` |
 
 可以用 `*` 作为 path segment 通配符，例如 `terminal/*/3` 或 `pi/*/*`。origin 来自 `sivtr remote add <alias> ...`，或 `sivtr ws list` 列出的本机 workspace 名。
@@ -222,19 +222,21 @@ Targets：
 
 | 选项 | 含义 |
 | --- | --- |
-| `--match <REGEX>`、`-m <REGEX>` | 大小写不敏感内容过滤 |
+| `QUERY` | plain-text 搜索查询；BM25 按这些词给 source 排序（非正则）。默认排序变为 `relevance` |
+| `--match <REGEX>`、`-m <REGEX>` | 大小写不敏感正则，在相关性排序前圈定集合 |
 | `--exclude <REGEX>`、`-v <REGEX>` | 大小写不敏感排除过滤，在找到匹配后应用 |
 | `--in <FIELD>`、`-i <FIELD>` | `content`、`title`、`session`、`input`、`output`、`command` 或 `all`；默认是 `content` |
+| `--kind <KIND>` | part kind filter：`prompt`、`command`、`user`、`assistant`、`tool`、`tool_call`、`tool_result`、`skill`、`thinking`、`output` 或 `error` |
 | `--status <STATUS>` | `success`、`failure` 或 `unknown` |
 | `--exit-code <CODE>` | 精确终端进程退出码 |
 | `--min-duration <DURATION>` | 最小命令持续时间，例如 `500ms`、`2s`、`1m` |
 | `--max-duration <DURATION>` | 最大命令持续时间 |
-| `--sort <SORT>` | `newest`、`oldest`、`duration`、`duration-asc`、`exit-code` 或 `exit-code-asc` |
+| `--sort <SORT>` | `newest`（默认）、`relevance`（有 `QUERY` 或 `--match` 时默认）、`oldest`、`duration`、`duration-asc`、`exit-code` 或 `exit-code-asc` |
 | `--cwd <PATH>` | 用于解析记录的 workspace 目录 |
 | `--since <TIME>` | 只包含此时间之后或等于此时间的记录 |
 | `--until <TIME>` | 只包含此时间之前或等于此时间的记录 |
 | `--last <DURATION>` | 最近时间窗口，例如 `30m`、`2h`、`7d` |
-| `--latest <N>` | 在最终排序前取最新 N 条匹配记录。未设 `--latest`/`--limit` 时默认 `5`。 |
+| `--latest <N>` | 在最终排序前取最新 N 条匹配记录。未设 `--latest`/`--limit` 时默认 `5`（relevance 排序会排整个集合，跳过 recency window）。 |
 | `-l, --limit <N>` | 最大打印结果组数（latest/sort 后的硬上限） |
 | `--exclude-current`、`--other` | Agent 搜索时排除当前 agent session |
 | `--json` | `--format workset` 的别名 |
@@ -249,12 +251,37 @@ Targets：
 
 ```bash
 sivtr search terminal --status failure --latest 1 --json
+sivtr s terminal "docker pull failed" --latest 20 --refs
 sivtr s terminal -m "panic|failed" -v "example|sample" --since today --refs
 sivtr s terminal -m "panic|failed" | sivtr filter @ -v "demo" -i title -f timeline
 sivtr search agent --match "TODO|failed|next step" --since yesterday --format md
 sivtr search pi --since today --sort oldest --format timeline
 sivtr search pi/019e5941 --match "cargo test" --format compact
-sivtr search terminal/session_13104/3/12 --format workset
+sivtr search terminal/session_13104/3 --format workset
+```
+
+## eval
+
+```bash
+sivtr eval [OPTIONS]
+```
+
+用 golden queries 基准测试检索质量：把当前 workspace records 冻结成 snapshot，再按查询对语料排序，报告 recall@k / precision@k / MRR / NDCG@k。方法与实测结果见 [`docs/retrieval-eval.md`](https://github.com/Ariestar/sivtr/blob/main/docs/retrieval-eval.md)。
+
+| 选项 | 含义 |
+| --- | --- |
+| `--k <K>` | 评估深度（默认 `5`） |
+| `--sort <SORT>` | 要基准测试的排序策略（默认 `newest`） |
+| `--snapshot <PATH>` | 冻结的 eval snapshot 文件（queries + corpus JSON） |
+| `--create-snapshot <PATH>` | 把当前 workspace records 导出为新 snapshot（queries 为空） |
+| `--export <DIR>` | 往该目录写 `qrels.txt` 和 `results.txt`（trec_eval 格式） |
+| `--json` | 以 JSON 输出报告 |
+
+示例工作流：
+
+```bash
+sivtr eval --create-snapshot snap.json   # 然后编辑 snap.json：加标注查询 { name, query, relevant: [...] }
+sivtr eval --snapshot snap.json --sort relevance --json
 ```
 
 ## filter
@@ -273,8 +300,7 @@ sivtr filter [SOURCE] [OPTIONS]
 | `--match <REGEX>`、`-m <REGEX>` | 大小写不敏感内容过滤 |
 | `--exclude <REGEX>`、`-v <REGEX>` | 大小写不敏感排除过滤 |
 | `--in <FIELD>`、`-i <FIELD>` | `content`、`title`、`session`、`input`、`output`、`command` 或 `all` |
-| `--io <IO>` | 配合 `--parts` 使用，选择 `all`、`input` 或 `output` parts |
-| `--kind <KIND>` | part kind filter |
+| `--kind <KIND>` | part kind filter：`prompt`、`command`、`user`、`assistant`、`tool`、`tool_call`、`tool_result`、`skill`、`thinking`、`output` 或 `error` |
 | `--status <STATUS>` | `success`、`failure` 或 `unknown` |
 | `--exit-code <CODE>` | 精确 terminal process exit code |
 | `--min-duration <DURATION>` | 最小 command duration |
@@ -295,7 +321,7 @@ sivtr filter [SOURCE] [OPTIONS]
 ```bash
 sivtr search terminal --json | sivtr filter @ -m error --refs
 sivtr filter terminal --status failure --refs
-sivtr filter @last --parts --io output --kind tool_output --refs
+sivtr filter @last --parts --kind tool_result --refs
 ```
 
 ## var
@@ -337,7 +363,7 @@ Motion token 从左到右组合：
 
 | Token | 含义 |
 | --- | --- |
-| `<` | 父级。part/line 到 record；record 到所属 session records。 |
+| `<` | 父级。part 到 record；record 到所属 session records。 |
 | `>N` | 第 N 个 child，1-based。record 的 children 是 parts。 |
 | `+N` | 当前层级向后移动 N 个 sibling。 |
 | `-N` | 当前层级向前移动 N 个 sibling。 |
@@ -376,7 +402,7 @@ sivtr show <SOURCE> [OPTIONS]
 Ref 语法：
 
 ```text
-source/session[/dialogue[/line]]
+source/session[/record-or-turn[/p<part>]]
 ```
 
 选项：
@@ -394,9 +420,9 @@ source/session[/dialogue[/line]]
 ```bash
 sivtr show claude/<session-id>
 sivtr show claude/<session-id>/3
-sivtr show claude/<session-id>/3/7 --json
+sivtr show claude/<session-id>/3/p7 --json
 sivtr show terminal/current/2
-sivtr show desk:terminal/session_42/3/o/1 --full
+sivtr show desk:terminal/session_42/3/p1 --full
 sivtr show @last --full
 sivtr show @ctx -f timeline
 ```
@@ -537,7 +563,10 @@ sivtr mcp print-config <claude|cursor|codex>
 
 ```bash
 sivtr mcp serve
+sivtr mcp serve --idle-exit 60
 ```
+
+`--idle-exit <SECS>` 让 server 在连续多少秒没有 tool call 后退出；host 会在下次使用工具时重新拉起，空闲 server 因此不会常驻（否则每个 agent session 会各保留一个直到退出）。`0` / 缺省 = 直到 host 关闭 stdin 才退出。也可以用全局配置键 `[mcp] idle_exit_secs` 设置同样的值；CLI flag 优先于配置。
 
 工具：
 

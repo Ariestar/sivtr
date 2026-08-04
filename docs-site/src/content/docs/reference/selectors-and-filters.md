@@ -144,7 +144,7 @@ Plain text remains the default because it is stable for search, issue reports, a
 `search --format refs` and `search --format workset` emit refs that `show` can print:
 
 ```text
-[origin:]source/session[/dialogue[/line]]
+[origin:]source/session[/record-or-turn[/p<part>]]
 ```
 
 Local examples:
@@ -152,16 +152,16 @@ Local examples:
 ```bash
 sivtr show claude/<session>
 sivtr show claude/<session>/<dialogue>
-sivtr show claude/<session>/<dialogue>/<line>
+sivtr show claude/<session>/<dialogue>/p1
 sivtr show terminal/current/<block>
-sivtr show terminal/current/<block>/<line>
+sivtr show terminal/current/<block>/p2
 ```
 
 Origin-prefixed examples (`origin:body`):
 
 ```bash
 sivtr show desk:terminal/session_42/3
-sivtr show desk:agent/<session>/3/o/1
+sivtr show desk:agent/<session>/3/p1
 sivtr show docs:codex/4
 sivtr s desk:terminal --status failure --latest 5 --refs
 ```
@@ -171,4 +171,4 @@ Origins come from:
 - remote names created with `sivtr remote add <name> <invite>`;
 - local workspace directory names listed by `sivtr ws list`.
 
-Dialogue and line indices are 1-based.
+Dialogue and record indices are 1-based; part refs are `p` followed by a 1-based part index.

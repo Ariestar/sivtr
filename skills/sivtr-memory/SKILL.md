@@ -56,17 +56,17 @@ Mental model to keep in mind:
 - In shell pipelines, `@` means "read the WorkSet JSON from stdin". Do not pipe `--refs` text into `@`; either omit `--refs` in intermediate commands or use `@last` / `@name`.
 
 1. Convert the user's vague reference into a small query.
-2. Choose a source: `terminal`, `agent`, or a provider (`codex`, `claude`, `cursor`, `opencode`, `openclaw`, `hermes`, `grok`, `pi`), a WorkRef selector, an origin-prefixed source such as `desk:terminal` / `docs:agent`, or a WorkSet variable such as `@last` / `@name[1,3]`.
-3. Search with a small limit. Put content terms in `-m` / `--match`. Use `--last` / `--since` for time windows, `-i` / `--in` for part candidate filters, and `--kind` for part kinds (`prompt`, `command`, `user_message`, `assistant_message`, `tool_call`, `tool_output`, `skill`, `thinking`, `text`, `error`).
+2. Choose a source: `terminal`, `agent`, or a provider (`codex`, `claude`, `cursor`, `opencode`, `openclaw`, `grok`, `hermes`, `pi`, `qoder`), a WorkRef selector, an origin-prefixed source such as `desk:terminal` / `docs:agent`, or a WorkSet variable such as `@last` / `@name[1,3]`.
+3. Search is BM25-primary: a plain-text positional `QUERY` (no regex) ranks the whole source by relevance; `-m` / `--match` is an optional case-insensitive regex that bounds the set first, and the QUERY (or `--match` text alone) then ranks it. Use `--last` / `--since` for time windows, `-i` / `--in` for field filters, and `--kind` for part kinds (`prompt`, `command`, `user`, `assistant`, `tool`, `tool_call`, `tool_result`, `skill`, `thinking`, `output`, `error`).
    - Latest terminal error: `sivtr s terminal --status fail --latest 1 --save latest_failure --refs`
-   - Broader terminal error scan: `sivtr s terminal -m "Error|error|failed|fatal|not found|External command failed" --latest 20 --save error_hits --refs`
-   - Mounted remote memory: `sivtr s desk:agent -m "decision|failed" --latest 20 --save remote_hits --refs`
+   - Broader terminal error scan: `sivtr s terminal "error" --latest 20 --save error_hits --refs` or `sivtr s terminal -m "Error|error|failed|fatal|not found|External command failed" --latest 20 --save error_hits --refs`
+   - Mounted remote memory: `sivtr s desk:agent "decision" --latest 20 --save remote_hits --refs`
 4. Save/refine WorkSet variables instead of re-running broad searches:
    - `sivtr filter @error_hits -m "more specific terms" --save narrowed --refs`
    - `sivtr filter @last[1,3] -m "narrower terms" --save focused --refs`
 5. Move anchors deliberately:
    - Filter a saved set: `sivtr filter @focused --status failure --save failed_focused --refs`
-   - Drill into parts: `sivtr work parts @focused --io output --kind tool_output --save output_parts --refs`
+   - Drill into parts: `sivtr work parts @focused --kind tool_result --save output_parts --refs`
    - Deterministically move from a part to its record or neighbor: `sivtr nav @output_parts[1] '<+1>1' --refs`
    - Return to records: `sivtr work records @output_parts --save parent_records --refs`
 6. Expand only useful parent records:
@@ -87,18 +87,18 @@ Core semantics:
 - `search` searches `WorkPart`s, then outputs anchors at the current input granularity.
 - `filter` applies the same WorkSet filters to any source or piped WorkSet.
 - `nav` moves anchors deterministically. It does not implicitly expand children; child movement must specify `>N`.
-- `show` renders at anchor granularity: record anchors show records, part anchors show just that part, line anchors show just that line.
+- `show` renders at anchor granularity: record anchors show records, part anchors show just that part.
 - `zoom` maps any anchor to its parent record, then expands nearby records.
 
 Source forms:
 
-- `terminal`, `agent`, `codex`, `claude`, `cursor`, `opencode`, `openclaw`, `hermes`, `grok`, `pi`
-- `terminal/<session>/<record>`, `<provider>/<session>/<turn>`, `<provider>/<session>/<turn>/<i|o>/<part>`, and selector variants
+- `terminal`, `agent`, `codex`, `claude`, `cursor`, `opencode`, `openclaw`, `grok`, `hermes`, `pi`, `qoder`
+- `terminal/<session>/<record>`, `<provider>/<session>/<turn>`, `<provider>/<session>/<turn>/p<part>`, and selector variants
 - `origin:body` for another local workspace or named remote, for example `desk:terminal/...`, `docs:codex/4`
 - `@last`, `@name`, `@name[1]`, `@name[1,3]`, `@name[1..5]`, `@name[1..3,8]`
 - `@` reads a WorkSet from stdin in shell pipelines
 
-Search defaults to dialogue parts. Structure channels (tool / skill / thinking) appear as `<:channel:…:>` markers in reading mode; expand with `show --full` or the TUI `r` toggle when you need payloads.
+Default content search covers dialogue turns, terminal output, tool results (execution errors), and thinking; tool-call payloads and skill text stay out as noise and remain reachable with `--kind tool_call` / `--kind skill` or `-i all`. Structure channels (tool / skill / thinking) appear as `<:channel:…:>` markers in reading mode; expand with `show --full` or the TUI `r` toggle when you need payloads.
 
 Output behavior:
 
@@ -121,7 +121,7 @@ Anchor movement example:
 
 ```bash
 sivtr s pi -m "git push|main -> main" --latest 10 --save push_hits --refs
-sivtr work parts @push_hits --io output --kind tool_output --save push_outputs --refs
+sivtr work parts @push_hits --kind tool_result --save push_outputs --refs
 sivtr filter @push_outputs -m "main -> main" --save exact_output --refs
 sivtr show @exact_output --full
 ```
@@ -130,8 +130,8 @@ Anchor navigation example:
 
 ```bash
 sivtr s pi -m "panic|failed" --latest 10 --save hits --refs
-sivtr work parts @hits --io output --save output_hits --refs
-sivtr nav @output_hits[1] '<' --refs        # part/line -> parent record
+sivtr work parts @hits --kind output --save output_hits --refs
+sivtr nav @output_hits[1] '<' --refs        # part -> parent record
 sivtr nav @output_hits[1] '<+1>1' --refs    # parent record -> next record -> first child
 sivtr nav @output_hits[1] '<[-2..+2]' --refs # parent record sibling window
 sivtr nav @output_hits[1] '~' --refs        # containing session records

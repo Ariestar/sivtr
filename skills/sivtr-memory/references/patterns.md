@@ -2,6 +2,8 @@
 
 Use this file when you need to turn a vague user request into a retrieval plan. Command syntax itself lives in `references/commands.md`.
 
+Search is BM25-primary: put the topic as a plain-text positional `QUERY` (`sivtr s agent "panic"`) for relevance ranking; use `-m` / `--match` only when you need a regex to bound the set. The examples below use `-m` regex forms, which still work — prefer a bare QUERY when the topic has no regex structure.
+
 ## Recent Failure
 
 When the user says the last command failed, search terminal evidence first.
