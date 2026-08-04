@@ -477,6 +477,7 @@ impl Report {
                 providers: Vec::new(), // detect installed hosts
                 location: crate::cli::McpLocation::Global,
                 yes: true,
+                idle_exit: None,
             };
             match crate::commands::system::mcp::install(&mcp_args) {
                 Ok(()) => {

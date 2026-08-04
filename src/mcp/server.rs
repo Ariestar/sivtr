@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -123,13 +125,103 @@ Use origin-prefixed sources like desk:terminal only after mounts exist (see sivt
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info
     }
+
+    /// Wraps every tool call with activity tracking so the idle-exit watchdog
+    /// sees it. `#[tool_handler]` skips generating this method because it is
+    /// already present.
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
+        let _activity = ActivityGuard::begin();
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        self.tool_router.call(tcc).await
+    }
 }
 
-pub async fn serve_stdio() -> anyhow::Result<()> {
+pub async fn serve_stdio(idle_exit: Option<Duration>) -> anyhow::Result<()> {
     let server = Arc::new(SivtrMcp::new());
     let service = server.serve(stdio()).await?;
-    service.waiting().await?;
-    Ok(())
+    let Some(idle) = idle_exit else {
+        service.waiting().await?;
+        return Ok(());
+    };
+
+    // Idle-exit watchdog: exit 0 once no tool call has completed for `idle`
+    // seconds (and none is in flight). The clock only starts after the first
+    // tool call — "exit after use" — so a freshly spawned server that the host
+    // is still initializing is never killed. MCP stdio hosts respawn the
+    // server on the next tool use, so an idle server never lingers.
+    //
+    // This uses a hard `process::exit`: returning instead would drop the tokio
+    // runtime, whose shutdown joins the blocking pool — and the stdio reader
+    // thread is parked on the still-open stdin pipe, so the drop hangs until
+    // the host closes stdin. Exiting directly is safe here: no tool call is in
+    // flight (BUSY gate) and the last response was flushed seconds ago.
+    let wait = service.waiting();
+    tokio::pin!(wait);
+    let mut ticker = tokio::time::interval(Duration::from_millis(500));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            reason = &mut wait => {
+                reason?;
+                return Ok(());
+            }
+            _ = ticker.tick() => {
+                if HAS_ACTIVITY.load(Ordering::Relaxed)
+                    && !BUSY.load(Ordering::Relaxed)
+                    && idle_elapsed() >= idle.as_millis() as u64
+                {
+                    std::process::exit(0);
+                }
+            }
+        }
+    }
+}
+
+/// Milliseconds since the last completed tool call (0 before any call).
+fn idle_elapsed() -> u64 {
+    let last = LAST_ACTIVITY_MS.load(Ordering::Relaxed);
+    if last == 0 {
+        return u64::MAX;
+    }
+    now_ms().saturating_sub(last)
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Last completed tool call, in epoch milliseconds.
+static LAST_ACTIVITY_MS: AtomicU64 = AtomicU64::new(0);
+/// A tool call is currently executing; the watchdog must not exit mid-call.
+static BUSY: AtomicBool = AtomicBool::new(false);
+/// Whether any tool call has ever completed (the idle clock starts then).
+static HAS_ACTIVITY: AtomicBool = AtomicBool::new(false);
+
+/// Marks activity at the start of a tool call and again when it completes.
+/// Dropped on every exit path, including errors.
+struct ActivityGuard;
+
+impl ActivityGuard {
+    fn begin() -> Self {
+        HAS_ACTIVITY.store(true, Ordering::Relaxed);
+        BUSY.store(true, Ordering::Relaxed);
+        LAST_ACTIVITY_MS.store(now_ms(), Ordering::Relaxed);
+        Self
+    }
+}
+
+impl Drop for ActivityGuard {
+    fn drop(&mut self) {
+        LAST_ACTIVITY_MS.store(now_ms(), Ordering::Relaxed);
+        BUSY.store(false, Ordering::Relaxed);
+    }
 }
 
 fn ok_json<T: Serialize>(value: T) -> Result<CallToolResult, McpError> {

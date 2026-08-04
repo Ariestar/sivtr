@@ -1,6 +1,7 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Map, Value};
@@ -11,8 +12,18 @@ use crate::mcp;
 use crate::output;
 
 const SERVER_NAME: &str = "sivtr";
-const SERVER_ARGS: &[&str] = &["mcp", "serve"];
 const TOML_MCP_MARKER: &str = "[mcp_servers.sivtr]";
+
+/// `mcp serve` invocation, plus `--idle-exit <SECS>` when configured so the
+/// server exits after idle and the host respawns it on demand.
+fn server_args(idle_exit: Option<u64>) -> Vec<String> {
+    let mut args = vec!["mcp".to_string(), "serve".to_string()];
+    if let Some(secs) = idle_exit {
+        args.push("--idle-exit".to_string());
+        args.push(secs.to_string());
+    }
+    args
+}
 
 /// Where a host accepts MCP install.
 #[derive(Clone, Copy)]
@@ -27,7 +38,7 @@ enum McpConfigKind {
     /// Flat JSON: `{ "<key>": { "sivtr": ... } }`
     Json {
         key: &'static str,
-        entry: fn() -> Value,
+        entry: fn(Option<u64>) -> Value,
     },
     /// TOML section: `[mcp_servers.sivtr]`
     Toml,
@@ -37,7 +48,7 @@ enum McpConfigKind {
     JsonNested {
         outer: &'static str,
         inner: &'static str,
-        entry: fn() -> Value,
+        entry: fn(Option<u64>) -> Value,
     },
 }
 
@@ -148,17 +159,17 @@ fn mcp_host(provider: AgentProvider) -> &'static McpHostSpec {
 
 pub fn execute(command: McpCommand) -> Result<()> {
     match command.action {
-        McpAction::Serve => {
+        McpAction::Serve(args) => {
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()?;
-            runtime.block_on(mcp::serve_stdio())
+            runtime.block_on(mcp::serve_stdio(args.idle_exit.map(Duration::from_secs)))
         }
         McpAction::Install(args) => install(&args),
         McpAction::Uninstall(args) => uninstall(&args),
-        McpAction::PrintConfig { target } => {
+        McpAction::PrintConfig { target, idle_exit } => {
             let provider = parse_target(&target)?;
-            print_config(provider);
+            print_config(provider, idle_exit);
             Ok(())
         }
     }
@@ -170,7 +181,7 @@ pub fn install(args: &McpInstallArgs) -> Result<()> {
         bail!("no install targets resolved");
     }
     for target in targets {
-        install_target(target, args.location)?;
+        install_target(target, args.location, args.idle_exit)?;
     }
     Ok(())
 }
@@ -186,19 +197,23 @@ fn uninstall(args: &McpInstallArgs) -> Result<()> {
     Ok(())
 }
 
-fn install_target(target: AgentProvider, location: McpLocation) -> Result<()> {
+fn install_target(
+    target: AgentProvider,
+    location: McpLocation,
+    idle_exit: Option<u64>,
+) -> Result<()> {
     let host = mcp_host(target);
     ensure_location_allowed(host, location, "install")?;
     let path = (host.config_path)(location);
     match host.kind {
-        McpConfigKind::Json { key, entry } => install_json(path, key, entry(), target),
-        McpConfigKind::Toml => install_toml(path, target),
-        McpConfigKind::Yaml { key } => install_yaml(path, key, target),
+        McpConfigKind::Json { key, entry } => install_json(path, key, entry(idle_exit), target),
+        McpConfigKind::Toml => install_toml(path, target, idle_exit),
+        McpConfigKind::Yaml { key } => install_yaml(path, key, target, idle_exit),
         McpConfigKind::JsonNested {
             outer,
             inner,
             entry,
-        } => install_json_nested(path, outer, inner, entry(), target),
+        } => install_json_nested(path, outer, inner, entry(idle_exit), target),
     }
 }
 
@@ -324,7 +339,7 @@ fn config_has_server(host: &McpHostSpec, location: McpLocation) -> bool {
     }
 }
 
-fn print_config(target: AgentProvider) {
+fn print_config(target: AgentProvider, idle_exit: Option<u64>) {
     let host = mcp_host(target);
     let path = (host.config_path)(McpLocation::Global);
     output::info(format!("Add to {}", path.display()));
@@ -334,7 +349,7 @@ fn print_config(target: AgentProvider) {
             let mut root = Map::new();
             root.insert(key.to_string(), Value::Object(Map::new()));
             if let Some(Value::Object(servers)) = root.get_mut(key) {
-                servers.insert(SERVER_NAME.to_string(), entry());
+                servers.insert(SERVER_NAME.to_string(), entry(idle_exit));
             }
             println!(
                 "{}",
@@ -342,14 +357,14 @@ fn print_config(target: AgentProvider) {
             );
         }
         McpConfigKind::Toml => {
-            println!("{}", toml_mcp_snippet());
+            println!("{}", toml_mcp_snippet(idle_exit));
         }
         McpConfigKind::Yaml { key } => {
             let mut root = serde_yaml::Mapping::new();
             let mut servers = serde_yaml::Mapping::new();
             servers.insert(
                 serde_yaml::Value::String(SERVER_NAME.to_string()),
-                hermes_entry(),
+                hermes_entry(idle_exit),
             );
             root.insert(
                 serde_yaml::Value::String(key.to_string()),
@@ -367,7 +382,7 @@ fn print_config(target: AgentProvider) {
                 serde_json::to_string_pretty(&json!({
                     outer: {
                         inner: {
-                            SERVER_NAME: entry(),
+                            SERVER_NAME: entry(idle_exit),
                         }
                     }
                 }))
@@ -403,7 +418,7 @@ fn uninstall_json(path: PathBuf, key: &str, provider: AgentProvider) -> Result<(
     Ok(())
 }
 
-fn install_toml(path: PathBuf, provider: AgentProvider) -> Result<()> {
+fn install_toml(path: PathBuf, provider: AgentProvider, idle_exit: Option<u64>) -> Result<()> {
     let mut text = if path.exists() {
         fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))?
     } else {
@@ -416,7 +431,7 @@ fn install_toml(path: PathBuf, provider: AgentProvider) -> Result<()> {
     if !text.is_empty() {
         text.push('\n');
     }
-    text.push_str(&toml_mcp_snippet());
+    text.push_str(&toml_mcp_snippet(idle_exit));
     text.push('\n');
     write_text(&path, &text)?;
     report_installed(provider, &path);
@@ -462,7 +477,12 @@ fn remove_toml_mcp_block(text: &mut String) -> bool {
     true
 }
 
-fn install_yaml(path: PathBuf, key: &str, provider: AgentProvider) -> Result<()> {
+fn install_yaml(
+    path: PathBuf,
+    key: &str,
+    provider: AgentProvider,
+    idle_exit: Option<u64>,
+) -> Result<()> {
     let mut root: serde_yaml::Value = if path.exists() {
         let text = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
@@ -479,7 +499,7 @@ fn install_yaml(path: PathBuf, key: &str, provider: AgentProvider) -> Result<()>
     let servers = ensure_yaml_mapping(&mut root, key)?;
     servers.insert(
         serde_yaml::Value::String(SERVER_NAME.to_string()),
-        hermes_entry(),
+        hermes_entry(idle_exit),
     );
 
     let text = serde_yaml::to_string(&root)?;
@@ -574,17 +594,17 @@ fn report_removed(provider: AgentProvider, path: &Path) {
     ));
 }
 
-fn claude_cursor_entry() -> Value {
+fn claude_cursor_entry(idle_exit: Option<u64>) -> Value {
     json!({
         "type": "stdio",
         "command": "sivtr",
-        "args": SERVER_ARGS,
+        "args": server_args(idle_exit),
     })
 }
 
-fn opencode_entry() -> Value {
-    let mut command = vec!["sivtr"];
-    command.extend_from_slice(SERVER_ARGS);
+fn opencode_entry(idle_exit: Option<u64>) -> Value {
+    let mut command = vec!["sivtr".to_string()];
+    command.extend(server_args(idle_exit));
     json!({
         "type": "local",
         "command": command,
@@ -592,37 +612,41 @@ fn opencode_entry() -> Value {
     })
 }
 
-fn pi_entry() -> Value {
+fn pi_entry(idle_exit: Option<u64>) -> Value {
     json!({
         "command": "sivtr",
-        "args": SERVER_ARGS,
+        "args": server_args(idle_exit),
     })
 }
 
-fn openclaw_entry() -> Value {
+fn openclaw_entry(idle_exit: Option<u64>) -> Value {
     json!({
         "command": "sivtr",
-        "args": SERVER_ARGS,
+        "args": server_args(idle_exit),
     })
 }
 
-fn toml_mcp_snippet() -> String {
-    format!("{TOML_MCP_MARKER}\ncommand = \"sivtr\"\nargs = [\"mcp\", \"serve\"]\n")
+fn toml_mcp_snippet(idle_exit: Option<u64>) -> String {
+    format!(
+        "{TOML_MCP_MARKER}\ncommand = \"sivtr\"\nargs = {:?}\n",
+        server_args(idle_exit)
+    )
 }
 
-fn hermes_entry() -> serde_yaml::Value {
+fn hermes_entry(idle_exit: Option<u64>) -> serde_yaml::Value {
     let mut entry = serde_yaml::Mapping::new();
     entry.insert(
         serde_yaml::Value::String("command".to_string()),
         serde_yaml::Value::String("sivtr".to_string()),
     );
-    let args = serde_yaml::Sequence::from([
-        serde_yaml::Value::String("mcp".to_string()),
-        serde_yaml::Value::String("serve".to_string()),
-    ]);
     entry.insert(
         serde_yaml::Value::String("args".to_string()),
-        serde_yaml::Value::Sequence(args),
+        serde_yaml::Value::Sequence(
+            server_args(idle_exit)
+                .into_iter()
+                .map(serde_yaml::Value::String)
+                .collect(),
+        ),
     );
     serde_yaml::Value::Mapping(entry)
 }
@@ -953,5 +977,40 @@ mod tests {
         let out = serde_yaml::to_string(&root).unwrap();
         assert!(out.contains("mcp_servers:"));
         assert!(!out.contains("sivtr"));
+    }
+
+    #[test]
+    fn server_args_omit_idle_exit_by_default() {
+        assert_eq!(
+            server_args(None),
+            vec!["mcp".to_string(), "serve".to_string()]
+        );
+    }
+
+    #[test]
+    fn server_args_append_idle_exit_when_configured() {
+        assert_eq!(
+            server_args(Some(60)),
+            vec![
+                "mcp".to_string(),
+                "serve".to_string(),
+                "--idle-exit".to_string(),
+                "60".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn toml_snippet_carries_idle_exit() {
+        assert!(toml_mcp_snippet(None).contains("args = [\"mcp\", \"serve\"]"));
+        assert!(toml_mcp_snippet(Some(60))
+            .contains("args = [\"mcp\", \"serve\", \"--idle-exit\", \"60\"]"));
+    }
+
+    #[test]
+    fn claude_cursor_entry_serializes_idle_exit() {
+        let entry = claude_cursor_entry(Some(30));
+        assert_eq!(entry["args"], json!(["mcp", "serve", "--idle-exit", "30"]));
+        assert_eq!(claude_cursor_entry(None)["args"], json!(["mcp", "serve"]));
     }
 }

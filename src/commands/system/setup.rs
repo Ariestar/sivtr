@@ -47,6 +47,7 @@ pub fn execute() -> Result<()> {
                     providers: vec![target.clone()],
                     location: McpLocation::Global,
                     yes: true,
+                    idle_exit: None,
                 };
                 crate::commands::system::mcp::install(&mcp_args)?;
             }

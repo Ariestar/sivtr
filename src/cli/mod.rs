@@ -1185,7 +1185,19 @@ mod tests {
     fn mcp_serve_parses() {
         let cli = Cli::try_parse_from(["sivtr", "mcp", "serve"]).unwrap();
         match cli.command {
-            Some(Commands::Mcp(cmd)) => assert!(matches!(cmd.action, McpAction::Serve)),
+            Some(Commands::Mcp(cmd)) => assert!(matches!(cmd.action, McpAction::Serve(_))),
+            _ => panic!("expected mcp serve"),
+        }
+    }
+
+    #[test]
+    fn mcp_serve_parses_idle_exit() {
+        let cli = Cli::try_parse_from(["sivtr", "mcp", "serve", "--idle-exit", "60"]).unwrap();
+        match cli.command {
+            Some(Commands::Mcp(cmd)) => match cmd.action {
+                McpAction::Serve(args) => assert_eq!(args.idle_exit, Some(60)),
+                _ => panic!("expected mcp serve"),
+            },
             _ => panic!("expected mcp serve"),
         }
     }
@@ -1224,7 +1236,30 @@ mod tests {
         let cli = Cli::try_parse_from(["sivtr", "mcp", "print-config", "claude"]).unwrap();
         match cli.command {
             Some(Commands::Mcp(cmd)) => match cmd.action {
-                McpAction::PrintConfig { target } => assert_eq!(target, "claude"),
+                McpAction::PrintConfig { target, idle_exit } => {
+                    assert_eq!(target, "claude");
+                    assert_eq!(idle_exit, None);
+                }
+                _ => panic!("expected print-config"),
+            },
+            _ => panic!("expected mcp command"),
+        }
+    }
+
+    #[test]
+    fn mcp_print_config_parses_idle_exit() {
+        let cli = Cli::try_parse_from([
+            "sivtr",
+            "mcp",
+            "print-config",
+            "claude",
+            "--idle-exit",
+            "30",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Mcp(cmd)) => match cmd.action {
+                McpAction::PrintConfig { idle_exit, .. } => assert_eq!(idle_exit, Some(30)),
                 _ => panic!("expected print-config"),
             },
             _ => panic!("expected mcp command"),
