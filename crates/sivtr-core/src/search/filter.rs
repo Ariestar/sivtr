@@ -178,7 +178,7 @@ impl TimeRange {
 /// Where a searcher gets its BM25 index: lazily built and owned, or shared
 /// from a caller-owned cache that outlives individual searches.
 enum IndexSource<'a> {
-    Lazy(RefCell<Option<Bm25Index>>),
+    Lazy(Box<RefCell<Option<Bm25Index>>>),
     Shared(&'a Bm25Index),
 }
 
@@ -195,7 +195,7 @@ impl<'a> Searcher<'a> {
     pub fn new(records: &'a [WorkRecord]) -> Self {
         Self {
             records,
-            bm25: IndexSource::Lazy(RefCell::new(None)),
+            bm25: IndexSource::Lazy(Box::new(RefCell::new(None))),
         }
     }
 

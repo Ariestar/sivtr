@@ -1,48 +1,132 @@
-//! BM25 relevance ranking over a record corpus.
+//! BM25 relevance ranking over a record corpus, structured as passage
+//! retrieval over typed work parts.
 //!
-//! Implemented literature techniques (see `docs/retrieval-literature.md`):
-//! - **Fielded weighting** (BM25F, Robertson et al., CIKM 2004): the title
-//!   (which for terminal records is the executed command) is a separate field
-//!   with its own weight and length normalization, replacing the old hack of
-//!   replicating the title three times into the ranked text.
-//! - **BM25+ lower bound** (Lv & Zhai, CIKM 2011): every query term present in
-//!   a document contributes at least `idf * δ`, so a long document that does
-//!   match is scored strictly above a short document that does not match at
-//!   all — important for sivtr's long agent turns whose error text sits far
-//!   into the conversation.
-//! - Head+tail token windows keep both protections: short command records stay
-//!   fully indexed, mid-document chatter about common command words stays out
-//!   of the postings, and end-of-session errors stay findable.
+//! Literature (see `docs/retrieval-literature.md`):
+//! - **Passage retrieval** (Callan, SIGIR 1994; the same idea modern RAG calls
+//!   chunking): the index unit is a *passage*, not a whole record. sivtr's
+//!   `WorkPart` is a natural passage — agent turns already carry typed parts
+//!   (user/assistant/thinking/output/tool_result/...). A term that sits in the
+//!   middle of a long turn lives inside its own bounded part, so it is fully
+//!   indexed instead of being dropped by a positional window.
+//! - **Fielded weighting** (BM25F, Robertson et al., CIKM 2004): structure is
+//!   signal — the record title and the `Command` part (the executed command
+//!   string) are fields with weight [`TITLE_WEIGHT`]; every other part kind
+//!   (output, error, tool result, user/assistant dialogue, thinking) is
+//!   weighted 1.0 with its own per-kind length normalization. This is the
+//!   structural replacement for both the old title-x3 hack and the head+tail
+//!   window: boosting incidental keyword mentions inside short terminal-output
+//!   passages (measured: it let unrelated terminal records drown provider
+//!   sessions and Chinese content queries) hurt more than it helped.
+//! - **BM25+ lower bound** (Lv & Zhai, CIKM 2011): every matching query term
+//!   contributes at least `idf * δ`, so a document whose passage matches is
+//!   scored strictly above one that does not match at all.
+//!
+//! Record score is the **max over its passages** (passage retrieval): a record
+//! is as relevant as its best part. Summing across passages would let a long
+//! chat turn that mentions common command words in many parts accumulate past
+//! the short record that actually ran the command — max keeps the noise of
+//! many-part mentions bounded while a single strong passage wins.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::record::{WorkPartKind, WorkRecord, WorkRef};
 
-/// Standard BM25 term-saturation and length-normalization constants.
-const K1: f64 = 1.2;
+/// Standard BM25 term-saturation and length-normalization constants. k1 sits
+/// at the top of Robertson's classic [1.2, 2.0] range: less aggressive tf
+/// saturation lets a relevant turn that mentions the keyword many times (tf
+/// 30-90 in thinking/assistant parts) outscore an incidental mention in a
+/// short terminal-output passage (tf 2-3).
+const K1: f64 = 2.0;
 const B: f64 = 0.75;
 
 /// BM25+ lower bound added to every matching query term (Lv & Zhai, CIKM 2011).
 const DELTA: f64 = 1.0;
 
+/// Safety bound for a single passage: genuinely huge parts (rare) get a
+/// head+tail window within the part so their contribution stays bounded. Most
+/// parts (average 60-170 tokens) are fully indexed.
+const MAX_PASSAGE_TOKENS: usize = 2_000;
+
 /// Weight of the title field relative to the body field (BM25F-style).
-/// The title of a terminal record is the command itself, so a title match is
-/// far stronger evidence than a body mention. Applied only to multi-token
-/// queries (see [`Bm25Index::rank_terms_with`]): a single-token query like
-/// `grok` must not promote unrelated terminal records over provider sessions.
+/// Applied only to multi-token queries (see [`Bm25Index::rank_terms_with`]): a
+/// single-token query like `grok` must not promote unrelated terminal records
+/// over provider sessions.
 pub const TITLE_WEIGHT: f64 = 3.0;
 
-/// Tokens indexed per document body, applied as a head window plus a tail
-/// window of this many tokens each. A hard head-only cap silently dropped
-/// terms that occur late in long agent turns — exactly where error text
-/// lives — while indexing everything lets common command words inside long
-/// chats (df 300+) outrank the short records that actually ran the command.
-const WINDOW_TOKENS: usize = 800;
+/// Passage kinds. `ToolCall` and `Skill` parts are excluded entirely
+/// (structural noise, same as the default content filter). Only the record
+/// title and the `Command` part carry a weight above 1.0 — that is the
+/// structural signal. Every content kind (output, error, tool result,
+/// dialogue, thinking) is weighted 1.0: they are all legitimate evidence, and
+/// per-kind length normalization already accounts for their different scales.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum PassageKind {
+    Title = 0,
+    Command = 1,
+    Output = 2,
+    Error = 3,
+    ToolResult = 4,
+    Assistant = 5,
+    User = 6,
+    Thinking = 7,
+}
+
+impl PassageKind {
+    fn weight(self) -> f64 {
+        match self {
+            Self::Title => 3.0,
+            Self::Command => 3.0,
+            Self::Output => 1.0,
+            Self::Error => 1.0,
+            Self::ToolResult => 1.0,
+            Self::Assistant => 1.0,
+            Self::User => 1.0,
+            Self::Thinking => 1.0,
+        }
+    }
+
+    fn index(self) -> usize {
+        self as usize
+    }
+
+    const COUNT: usize = 8;
+}
+
+fn passage_kind_by_index(index: usize) -> PassageKind {
+    match index {
+        0 => PassageKind::Title,
+        1 => PassageKind::Command,
+        2 => PassageKind::Output,
+        3 => PassageKind::Error,
+        4 => PassageKind::ToolResult,
+        5 => PassageKind::Assistant,
+        6 => PassageKind::User,
+        _ => PassageKind::Thinking,
+    }
+}
+
+/// Part-kind → passage-kind mapping; `None` means the part is not indexed.
+fn passage_kind(part_kind: WorkPartKind) -> Option<PassageKind> {
+    match part_kind {
+        WorkPartKind::Command => Some(PassageKind::Command),
+        WorkPartKind::Output => Some(PassageKind::Output),
+        WorkPartKind::Error => Some(PassageKind::Error),
+        WorkPartKind::ToolResult => Some(PassageKind::ToolResult),
+        WorkPartKind::Assistant => Some(PassageKind::Assistant),
+        WorkPartKind::User => Some(PassageKind::User),
+        WorkPartKind::Thinking => Some(PassageKind::Thinking),
+        // Tool-call payloads and skill text stay out of the ranked text — the
+        // same source the default content boolean filter reads.
+        WorkPartKind::ToolCall | WorkPartKind::Skill | WorkPartKind::Prompt => None,
+    }
+}
 
 /// Splits on non-alphanumeric runs, lowercases Latin/digit runs (so `Error[E`
-/// and `error[E0428]` share the token `error`), and emits overlapping CJK
-/// bigrams (Lucene CJKAnalyzer style) so Chinese text is searchable without a
-/// segmentation dictionary.
+/// and `error[E0428]` share the token `error`), emits overlapping CJK bigrams
+/// (Lucene CJKAnalyzer style), and drops single-character tokens (Lucene's
+/// default minimum token length — a degenerate query token like `e` in
+/// `error[E` would otherwise dominate scoring with its near-zero document
+/// frequency).
 pub struct SimpleTokenizer;
 
 impl SimpleTokenizer {
@@ -83,6 +167,7 @@ impl SimpleTokenizer {
                 chars.next();
             }
         }
+        tokens.retain(|token| token.len() >= 2);
         tokens
     }
 }
@@ -96,89 +181,128 @@ fn is_cjk(ch: char) -> bool {
     )
 }
 
-/// An in-memory fielded BM25 index over a record corpus. Build once, query
-/// many times. Each document is two fields: `title` (short, weight
-/// [`TITLE_WEIGHT`]) and `body` (head+tail windowed, weight 1).
+/// Head+tail window within a single oversized passage (safety bound for rare
+/// giant parts): first and last `MAX_PASSAGE_TOKENS` tokens stay indexed.
+fn window_tokens(tokens: Vec<String>) -> Vec<String> {
+    if tokens.len() <= 2 * MAX_PASSAGE_TOKENS {
+        return tokens;
+    }
+    tokens[..MAX_PASSAGE_TOKENS]
+        .iter()
+        .cloned()
+        .chain(tokens[tokens.len() - MAX_PASSAGE_TOKENS..].iter().cloned())
+        .collect()
+}
+
+/// An in-memory passage-based BM25 index over a record corpus. Build once,
+/// query many times.
 pub struct Bm25Index {
     n: usize,
-    avgdl_title: f64,
-    avgdl_body: f64,
-    /// Token -> number of documents containing it.
+    /// Average passage length per passage kind.
+    avgdl: [f64; PassageKind::COUNT],
+    /// Token -> number of records containing it (record-level document
+    /// frequency for idf).
     df: HashMap<String, f64>,
-    /// Token -> [(document id, title term frequency, body term frequency)].
-    postings: HashMap<String, Vec<(usize, f64, f64)>>,
-    doc_len_title: Vec<f64>,
-    doc_len_body: Vec<f64>,
+    /// Token -> [(record id, passage id, passage kind index, term frequency)].
+    /// The passage id is unique per record (title = 0, then each indexed part
+    /// in order), so multiple parts of the same kind stay distinct passages.
+    postings: HashMap<String, Vec<(usize, usize, usize, f64)>>,
+    /// Passage length per (record, passage id).
+    passage_len: HashMap<(usize, usize), f64>,
     refs: Vec<WorkRef>,
 }
 
 impl Bm25Index {
     pub fn build(records: &[WorkRecord]) -> Self {
         let mut df = HashMap::new();
-        let mut postings: HashMap<String, Vec<(usize, f64, f64)>> = HashMap::new();
-        let mut doc_len_title = Vec::with_capacity(records.len());
-        let mut doc_len_body = Vec::with_capacity(records.len());
+        let mut postings: HashMap<String, Vec<(usize, usize, usize, f64)>> = HashMap::new();
+        let mut passage_len: HashMap<(usize, usize), f64> = HashMap::new();
         let refs = records
             .iter()
             .map(|record| record.work_ref.whole())
             .collect::<Vec<_>>();
 
         for (doc_id, record) in records.iter().enumerate() {
-            let mut tf_title: HashMap<String, usize> = HashMap::new();
-            for token in SimpleTokenizer.tokenize(&record.title) {
-                *tf_title.entry(token).or_insert(0) += 1;
+            let mut record_tokens: HashSet<String> = HashSet::new();
+            let mut next_passage_id = 0usize;
+            let push_passage =
+                |kind: PassageKind,
+                 text: &str,
+                 passage_id: usize,
+                 passage_len: &mut HashMap<(usize, usize), f64>,
+                 postings: &mut HashMap<String, Vec<(usize, usize, usize, f64)>>,
+                 record_tokens: &mut HashSet<String>| {
+                    let mut tf: HashMap<String, usize> = HashMap::new();
+                    for token in window_tokens(SimpleTokenizer.tokenize(text)) {
+                        *tf.entry(token).or_insert(0) += 1;
+                    }
+                    passage_len.insert((doc_id, passage_id), tf.values().sum::<usize>() as f64);
+                    for (token, count) in tf {
+                        record_tokens.insert(token.clone());
+                        postings.entry(token).or_default().push((
+                            doc_id,
+                            passage_id,
+                            kind.index(),
+                            count as f64,
+                        ));
+                    }
+                };
+            push_passage(
+                PassageKind::Title,
+                &record.title,
+                next_passage_id,
+                &mut passage_len,
+                &mut postings,
+                &mut record_tokens,
+            );
+            next_passage_id += 1;
+            for part in &record.parts {
+                if let Some(kind) = passage_kind(part.kind()) {
+                    push_passage(
+                        kind,
+                        &part.text(),
+                        next_passage_id,
+                        &mut passage_len,
+                        &mut postings,
+                        &mut record_tokens,
+                    );
+                    next_passage_id += 1;
+                }
             }
-            let mut tf_body: HashMap<String, usize> = HashMap::new();
-            let body_tokens = SimpleTokenizer.tokenize(&body_text(record));
-            if body_tokens.len() <= 2 * WINDOW_TOKENS {
-                for token in body_tokens {
-                    *tf_body.entry(token).or_insert(0) += 1;
-                }
-            } else {
-                // Head + tail windows; disjoint because len > 2 * WINDOW_TOKENS.
-                for token in body_tokens
-                    .iter()
-                    .take(WINDOW_TOKENS)
-                    .chain(body_tokens.iter().skip(body_tokens.len() - WINDOW_TOKENS))
-                {
-                    *tf_body.entry(token.clone()).or_insert(0) += 1;
-                }
-            }
-            doc_len_title.push(tf_title.values().sum::<usize>() as f64);
-            doc_len_body.push(tf_body.values().sum::<usize>() as f64);
-
-            // Merge both fields into df/postings; a token in either field marks
-            // the document as containing it.
-            let mut seen = std::collections::HashSet::new();
-            for token in tf_title.keys().chain(tf_body.keys()) {
-                if !seen.insert(token) {
-                    continue;
-                }
-                *df.entry(token.clone()).or_insert(0.0) += 1.0;
-                postings.entry(token.clone()).or_default().push((
-                    doc_id,
-                    *tf_title.get(token).unwrap_or(&0) as f64,
-                    *tf_body.get(token).unwrap_or(&0) as f64,
-                ));
+            for token in record_tokens {
+                *df.entry(token).or_insert(0.0) += 1.0;
             }
         }
 
         let n = records.len();
-        let avg = |values: &[f64]| -> f64 {
-            if n > 0 {
-                values.iter().sum::<f64>() / n as f64
-            } else {
+        let avg = |kind: PassageKind| -> f64 {
+            let values = passage_len
+                .iter()
+                .filter(|((_, kind_idx), _)| *kind_idx == kind.index())
+                .map(|(_, len)| *len)
+                .collect::<Vec<_>>();
+            if values.is_empty() {
                 1.0
+            } else {
+                values.iter().sum::<f64>() / values.len() as f64
             }
         };
+        let avgdl = [
+            avg(PassageKind::Title),
+            avg(PassageKind::Command),
+            avg(PassageKind::Output),
+            avg(PassageKind::Error),
+            avg(PassageKind::ToolResult),
+            avg(PassageKind::Assistant),
+            avg(PassageKind::User),
+            avg(PassageKind::Thinking),
+        ];
         Self {
             n,
-            avgdl_title: avg(&doc_len_title),
-            avgdl_body: avg(&doc_len_body),
+            avgdl,
             df,
             postings,
-            doc_len_title,
-            doc_len_body,
+            passage_len,
             refs,
         }
     }
@@ -205,10 +329,10 @@ impl Bm25Index {
         self.rank_terms_with(terms, TITLE_WEIGHT)
     }
 
-    /// Rank with explicit per-term weights and a configurable title-field
-    /// weight. Single-token queries pass 1.0 so a lone keyword does not get
-    /// boosted into unrelated terminal records; multi-token command queries
-    /// keep the full [`TITLE_WEIGHT`].
+    /// Rank with explicit per-term weights and a configurable title-passage
+    /// weight. Single-token queries pass 0.0 so a lone keyword is not boosted
+    /// into unrelated terminal records; multi-token command queries keep the
+    /// full [`TITLE_WEIGHT`].
     pub fn rank_terms_with(
         &self,
         terms: &[(String, f64)],
@@ -221,14 +345,11 @@ impl Bm25Index {
     }
 
     /// Ranked document ids (aligned with `records`) for the same term weights.
-    /// Used by the RRF fusion to build per-signal rank lists without re-finding
-    /// records by reference.
     pub fn ranked_ids(&self, terms: &[(String, f64)]) -> Vec<usize> {
         self.ranked_ids_with(terms, TITLE_WEIGHT)
     }
 
-    /// Ranked document ids with a configurable title weight (see
-    /// [`Self::rank_terms_with`]).
+    /// Ranked document ids with a configurable title weight.
     pub fn ranked_ids_with(&self, terms: &[(String, f64)], title_weight: f64) -> Vec<usize> {
         self.score_terms(terms, title_weight)
             .into_iter()
@@ -237,7 +358,9 @@ impl Bm25Index {
     }
 
     fn score_terms(&self, terms: &[(String, f64)], title_weight: f64) -> Vec<(usize, f64)> {
-        let mut scores: HashMap<usize, f64> = HashMap::new();
+        // (record, passage) -> accumulated score; reduced to per-record max at
+        // the end (passage retrieval: a record is as relevant as its best part).
+        let mut passage_scores: HashMap<(usize, usize), f64> = HashMap::new();
         for (token, weight) in terms {
             let Some(&df) = self.df.get(token) else {
                 continue;
@@ -247,21 +370,40 @@ impl Bm25Index {
             };
             // Robertson idf; non-negative for every token frequency.
             let idf = ((self.n as f64 - df + 0.5) / (df + 0.5) + 1.0).ln();
-            for &(doc_id, tf_title, tf_body) in postings {
-                // BM25F-style per-field saturation with per-field length
-                // normalization, plus the BM25+ lower bound per matching term.
-                let sat = |tf: f64, len: f64, avgdl: f64| {
-                    tf * (K1 + 1.0) / (tf + K1 * (1.0 - B + B * len / avgdl.max(1.0)))
+            for &(doc_id, passage_id, kind_idx, tf) in postings {
+                let kind = passage_kind_by_index(kind_idx);
+                // The command-field gate (see [`Self::rank_terms_with`]) applies
+                // to the title AND the Command passage: a single-token query
+                // like `grok` must not promote unrelated terminal records whose
+                // Command part is exactly that keyword.
+                let kind_weight = if matches!(kind, PassageKind::Title | PassageKind::Command) {
+                    title_weight
+                } else {
+                    kind.weight()
                 };
-                let contribution = idf
-                    * (title_weight * sat(tf_title, self.doc_len_title[doc_id], self.avgdl_title)
-                        + sat(tf_body, self.doc_len_body[doc_id], self.avgdl_body)
-                        + DELTA);
-                *scores.entry(doc_id).or_insert(0.0) += weight * contribution;
+                let avgdl = self.avgdl[kind_idx].max(1.0);
+                let len = self
+                    .passage_len
+                    .get(&(doc_id, passage_id))
+                    .copied()
+                    .unwrap_or(0.0);
+                let sat = tf * (K1 + 1.0) / (tf + K1 * (1.0 - B + B * len / avgdl));
+                let contribution = idf * (kind_weight * sat + DELTA);
+                let entry = passage_scores.entry((doc_id, passage_id)).or_insert(0.0);
+                *entry += weight * contribution;
             }
         }
 
-        let mut ranked: Vec<(usize, f64)> = scores.into_iter().collect();
+        // Passage retrieval: record score = max over its passages.
+        let mut record_scores: HashMap<usize, f64> = HashMap::new();
+        for ((doc_id, _passage), score) in passage_scores {
+            let entry = record_scores.entry(doc_id).or_insert(0.0);
+            if score > *entry {
+                *entry = score;
+            }
+        }
+
+        let mut ranked: Vec<(usize, f64)> = record_scores.into_iter().collect();
         // Deterministic order: score desc, then reference asc (HashMap iteration
         // order is randomized per process, so ties must be broken explicitly).
         ranked.sort_by(|a, b| {
@@ -274,6 +416,7 @@ impl Bm25Index {
 
 /// Body text for BM25: every part's text, skipping tool-call payloads and
 /// skill text (the same source the default content boolean filter reads).
+/// Used by the PRF expansion to re-tokenize the top-ranked documents.
 pub fn body_text(record: &WorkRecord) -> String {
     let mut text = String::new();
     for part in &record.parts {
@@ -326,10 +469,86 @@ mod tests {
         }
     }
 
+    /// Chat turn with typed parts: `(kind, content)` pairs.
+    fn chat_record(session: &str, index: usize, title: &str, parts: &[(&str, &str)]) -> WorkRecord {
+        let mut rec = record(session, index, title, "");
+        rec.parts = parts
+            .iter()
+            .enumerate()
+            .map(|(i, (kind, text))| WorkPart {
+                seq: i + 1,
+                occurred_at: None,
+                data: part_data(kind_of(kind), text),
+            })
+            .collect();
+        rec
+    }
+
+    fn kind_of(s: &str) -> WorkPartKind {
+        match s {
+            "command" => WorkPartKind::Command,
+            "output" => WorkPartKind::Output,
+            "error" => WorkPartKind::Error,
+            "tool_result" => WorkPartKind::ToolResult,
+            "assistant" => WorkPartKind::Assistant,
+            "user" => WorkPartKind::User,
+            "thinking" => WorkPartKind::Thinking,
+            "tool_call" => WorkPartKind::ToolCall,
+            _ => WorkPartKind::Prompt,
+        }
+    }
+
+    fn part_data(kind: WorkPartKind, text: &str) -> WorkPartData {
+        match kind {
+            WorkPartKind::Command => WorkPartData::Command {
+                content: text.to_string(),
+            },
+            WorkPartKind::Output => WorkPartData::Output {
+                content: text.to_string(),
+                ansi: None,
+            },
+            WorkPartKind::Error => WorkPartData::Error {
+                content: text.to_string(),
+            },
+            WorkPartKind::ToolResult => WorkPartData::ToolResult {
+                call_id: None,
+                tool: None,
+                output: serde_json::json!(text),
+            },
+            WorkPartKind::Assistant => WorkPartData::Assistant {
+                content: text.to_string(),
+            },
+            WorkPartKind::User => WorkPartData::User {
+                content: text.to_string(),
+            },
+            WorkPartKind::Thinking => WorkPartData::Thinking {
+                content: text.to_string(),
+            },
+            WorkPartKind::ToolCall => WorkPartData::ToolCall {
+                call_id: None,
+                tool: None,
+                input: serde_json::json!({}),
+            },
+            _ => WorkPartData::Output {
+                content: text.to_string(),
+                ansi: None,
+            },
+        }
+    }
+
     #[test]
     fn tokenizer_splits_and_lowercases() {
         let tokens = SimpleTokenizer.tokenize("Deploy-web: Foo.Bar_1");
-        assert_eq!(tokens, vec!["deploy", "web", "foo", "bar", "1"]);
+        assert_eq!(tokens, vec!["deploy", "web", "foo", "bar"]);
+    }
+
+    #[test]
+    fn tokenizer_drops_single_char_tokens() {
+        // Lucene-style minimum token length: a degenerate `e` from `error[E`
+        // must not survive into the query (near-zero df would dominate idf).
+        let tokens = SimpleTokenizer.tokenize("error[E");
+        assert_eq!(tokens, vec!["error"]);
+        assert!(!tokens.contains(&"e".to_string()));
     }
 
     #[test]
@@ -340,18 +559,16 @@ mod tests {
         assert!(doc_tokens.contains(&"error".to_string()));
         assert!(query_tokens.contains(&"error".to_string()));
         assert!(doc_tokens.contains(&"e0428".to_string()));
-        assert!(!query_tokens.contains(&"E".to_string()));
+        assert_eq!(query_tokens, vec!["error"]);
     }
 
     #[test]
     fn tokenizer_emits_cjk_bigrams() {
-        // 4-char run -> 3 overlapping bigrams; 2-char word survives as one bigram.
         assert_eq!(
             SimpleTokenizer.tokenize("重构逻辑"),
             vec!["重构", "构逻", "逻辑"]
         );
         assert_eq!(SimpleTokenizer.tokenize("重构"), vec!["重构"]);
-        // Mixed CJK + Latin keeps both token types.
         assert_eq!(SimpleTokenizer.tokenize("重构cargo"), vec!["重构", "cargo"]);
     }
 
@@ -397,9 +614,6 @@ mod tests {
 
     #[test]
     fn long_noise_document_does_not_outrank_short_match() {
-        // The long document repeats one query term ten times but only matches
-        // a single term; the short one matches all three terms. tf saturation
-        // and length normalization keep the short match on top.
         let long_noise =
             "command command command command command command command command command command \
             setup tooling docs and miscellaneous text";
@@ -426,9 +640,6 @@ mod tests {
 
     #[test]
     fn late_term_in_long_document_is_still_indexed_and_ranked() {
-        // Regression: a head-only per-document token cap silently dropped terms
-        // that occur late in long agent turns — exactly where error text lives.
-        // The tail window must keep them findable.
         let mut noise = String::new();
         for i in 0..2_000 {
             noise.push_str(&format!("padding token {i} "));
@@ -464,8 +675,6 @@ mod tests {
 
     #[test]
     fn title_field_boost_beats_body_only_mention() {
-        // Fielded weighting: a title match (the command itself for terminal
-        // records) outranks a body-only mention of the same common words.
         let corpus = vec![
             record("dev", 1, "sivtr serve status", "ok"),
             record(
@@ -487,10 +696,104 @@ mod tests {
             record("dev", 2, "other", "cargo build passed"),
         ];
         let index = Bm25Index::build(&corpus);
-        // Expansion term `panicked` with weight 1 pulls dev/1 to the top even
-        // though `cargo` alone matches both documents.
         let terms = vec![("cargo".to_string(), 1.0), ("panicked".to_string(), 1.0)];
         let ranked = index.rank_terms(&terms);
+        assert_eq!(ranked[0].0.to_string(), "terminal/dev/1");
+    }
+
+    #[test]
+    fn mid_conversation_term_in_own_part_is_indexed() {
+        // Passage retrieval: the query term sits in the middle of a long turn,
+        // inside its own bounded part. A flat concatenation with a positional
+        // window would drop it; per-part indexing must surface it.
+        let mut noise = String::new();
+        for i in 0..2_500 {
+            noise.push_str(&format!("noise token {i} "));
+        }
+        let corpus = vec![
+            record("dev", 1, "first turn", &noise),
+            chat_record(
+                "dev",
+                2,
+                "long turn",
+                &[
+                    ("user", "start the session and keep going"),
+                    (
+                        "assistant",
+                        &format!("{noise}kubectl connection refused at 1333"),
+                    ),
+                    ("assistant", "and later discussion continues"),
+                ],
+            ),
+        ];
+        let index = Bm25Index::build(&corpus);
+        let ranked = index.rank("kubectl");
+        assert_eq!(
+            ranked[0].0.to_string(),
+            "terminal/dev/2",
+            "mid-turn term in its own part must rank first"
+        );
+    }
+
+    #[test]
+    fn command_part_wins_over_body_chatter() {
+        // The Command part is the executed command: it outranks a long chat
+        // turn that merely mentions the same words many times across parts
+        // (max passage aggregation keeps the noise bounded).
+        let mut chatter = String::new();
+        for _ in 0..50 {
+            chatter.push_str("sivtr serve status and check the daemon ");
+        }
+        let corpus = vec![
+            chat_record(
+                "dev",
+                1,
+                "server run",
+                &[
+                    ("command", "sivtr serve status"),
+                    ("output", "daemon running on 127.0.0.1:17421"),
+                ],
+            ),
+            chat_record(
+                "dev",
+                2,
+                "discussion",
+                &[
+                    ("user", "how does serve work"),
+                    ("assistant", &chatter),
+                    ("assistant", &chatter),
+                ],
+            ),
+        ];
+        let index = Bm25Index::build(&corpus);
+        let ranked = index.rank("sivtr serve status");
+        assert_eq!(ranked[0].0.to_string(), "terminal/dev/1");
+    }
+
+    #[test]
+    fn short_strong_passage_outranks_long_mention() {
+        // Content kinds are weighted equally; a short passage holding the full
+        // query (the error text) beats a longer reasoning passage that only
+        // mentions the words — per-passage length normalization.
+        let corpus = vec![
+            chat_record(
+                "dev",
+                1,
+                "error surface",
+                &[("error", "connection refused: no route to host")],
+            ),
+            chat_record(
+                "dev",
+                2,
+                "reasoning",
+                &[(
+                    "thinking",
+                    "connection refused might mean the port is closed",
+                )],
+            ),
+        ];
+        let index = Bm25Index::build(&corpus);
+        let ranked = index.rank("connection refused");
         assert_eq!(ranked[0].0.to_string(), "terminal/dev/1");
     }
 }
