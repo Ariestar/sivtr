@@ -23,6 +23,9 @@ fn do_flush() -> Result<()> {
     let Some(session_log_path) = scrollback::command_session_log_path()? else {
         return Ok(());
     };
+    // Windows reuses `target` across flush iterations (last_snapshot), so it
+    // must be mut there; the unix branch only moves it into the append call.
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut target = FlushTarget::new(session_log_path);
     if !should_append_entry(&target.state, command_id.as_deref(), &command) {
         return Ok(());
