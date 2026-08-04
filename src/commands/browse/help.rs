@@ -6,7 +6,7 @@ use anyhow::Result;
 use ratatui::widgets::ListState;
 
 use crate::tui::content::view::ContentViewMode;
-use crate::tui::terminal::{init as init_tui, restore as restore_tui};
+use crate::tui::terminal::with_suspended;
 use crate::tui::workspace::{
     can_open_dialogue_vim, selected_index, workspace_content_io_texts, workspace_content_text,
     workspace_layout, ContentIoFocus, ContentIoFrame, ContentScrolls, WorkspaceDialogue,
@@ -203,9 +203,7 @@ pub(super) fn apply_workspace_help_action(
                 *content_mode,
                 content_at,
             ));
-            restore_tui(terminal)?;
-            open_vim_view(&view)?;
-            *terminal = init_tui()?;
+            with_suspended(terminal, || open_vim_view(&view))??;
         }
         WorkspaceHelpAction::ScrollDown if *focus == WorkspaceFocus::Content => {
             content_scrolls.set(

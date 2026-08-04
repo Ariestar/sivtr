@@ -26,7 +26,7 @@ pub(crate) use text::{filter_lines_by_spec, record_text_to_pair, select_lines};
 use anyhow::{Context, Result};
 use sivtr_core::ai::AgentProvider;
 
-use crate::tui::terminal::{init as init_tui, restore as restore_tui};
+use crate::tui::terminal::{finish as finish_tui, init as init_tui};
 use crate::tui::workspace::{WorkspaceFocus, WorkspacePickedContent, WorkspaceSource};
 
 /// Run the workspace browser.
@@ -60,8 +60,7 @@ pub fn run(
         cwd,
         initial_focus,
     );
-    restore_tui(&mut terminal)?;
-    result
+    finish_tui(&mut terminal, result)
 }
 
 /// Open the picker on an already-built session list for one source.
@@ -81,8 +80,7 @@ pub fn run_with_sessions(
         cwd,
         initial_focus,
     );
-    restore_tui(&mut terminal)?;
-    result
+    finish_tui(&mut terminal, result)
 }
 
 /// Shared cancel sentinel for picker Esc/q.

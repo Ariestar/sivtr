@@ -52,6 +52,10 @@ jobs:
           cargo run --quiet -- --version
           cargo run --quiet -- doctor
 
+      - name: Windows ConPTY TUI smoke
+        if: runner.os == 'Windows'
+        run: cargo test --locked tui::conpty_tests::windows_conpty_tui_smoke -- --ignored --exact
+
   audit:
     name: Dependency audit
     runs-on: ubuntu-latest

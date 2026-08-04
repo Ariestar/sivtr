@@ -10,3 +10,6 @@ pub mod search;
 pub mod terminal;
 pub mod theme;
 pub mod workspace;
+
+#[cfg(all(test, windows))]
+mod conpty_tests;
