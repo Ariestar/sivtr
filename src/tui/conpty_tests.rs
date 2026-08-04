@@ -232,7 +232,7 @@ fn run_child_smoke() -> Result<()> {
             .context("verify that the wide-character trailing cell was cleared")?;
         child_marker(WIDE_CLEARED_MARKER)?;
 
-        let suspended = terminal::with_suspended(&mut tui, || {
+        let suspended = terminal::suspend(&mut tui, || {
             assert_console_snapshot(&before, bindings.pipe_input_handle(), "successful suspend")?;
             Ok(())
         })?;
@@ -246,7 +246,7 @@ fn run_child_smoke() -> Result<()> {
         assert_console_text_at(bindings.console_output_handle(), RESUME_TEXT_COORD, "S")
             .context("verify redraw after a successful suspended operation")?;
 
-        let suspended_error = terminal::with_suspended(&mut tui, || -> Result<()> {
+        let suspended_error = terminal::suspend(&mut tui, || -> Result<()> {
             assert_console_snapshot(
                 &before,
                 bindings.pipe_input_handle(),
@@ -259,7 +259,7 @@ fn run_child_smoke() -> Result<()> {
             .to_string()
             .contains("expected suspended operation failure")
         {
-            bail!("with_suspended lost the operation error: {error:#}");
+            bail!("suspend lost the operation error: {error:#}");
         }
         terminal::draw(&mut tui, |frame| {
             frame.render_widget(

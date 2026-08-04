@@ -257,11 +257,11 @@ pub fn finish<T>(terminal: &mut Tui, operation: Result<T>) -> Result<T> {
     )
 }
 
-/// Temporarily restore the terminal while an external program runs, then resume the TUI.
+/// Temporarily exit the TUI while an external program runs, then re-enter it.
 ///
 /// The outer result reports suspend/resume failures. The inner result is the external operation's
 /// result, allowing callers such as the main browser to display editor errors and continue.
-pub fn with_suspended<T, F>(terminal: &mut Tui, operation: F) -> Result<Result<T>>
+pub fn suspend<T, F>(terminal: &mut Tui, operation: F) -> Result<Result<T>>
 where
     F: FnOnce() -> Result<T>,
 {
