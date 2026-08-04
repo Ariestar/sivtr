@@ -42,3 +42,6 @@ session_*.log
 
 # Retrieval eval snapshot (real personal records; never commit)
 /eval-snapshot.json
+
+# Git worktree checkouts (linked repos live under worktrees/, never commit them)
+/worktrees/
