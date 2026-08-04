@@ -123,7 +123,8 @@ verify_checksum() {
         return 0
     fi
 
-    ARCHIVE_NAME="$(basename "$ARCHIVE")"
+    # SHA256SUMS is keyed by the release asset name, not the temp filename.
+    ARCHIVE_NAME="${BINARY_NAME}-${VERSION}-${ASSET}.${EXT}"
     EXPECTED="$(awk -v f="$ARCHIVE_NAME" '$2 == f {print $1}' "$CHECKSUMS" | head -n 1)"
     if [ -z "$EXPECTED" ]; then
         error "No SHA256 entry for ${ARCHIVE_NAME} in SHA256SUMS"
