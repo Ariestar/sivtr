@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Self-hosted Renovate
-        uses: renovatebot/github-action@v46
+        uses: renovatebot/github-action@v46.2.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           configurationFile: renovate.json
