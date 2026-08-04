@@ -9,6 +9,7 @@ use crate::tui::content::view::{content_link_at, ContentViewMode};
 use crate::tui::search::{
     workspace_search_has_query, workspace_search_scope, WorkspaceSearchIndex, WorkspaceSearchOutput,
 };
+use crate::tui::terminal::read_interaction;
 use crate::tui::workspace::{
     help_action_for_key, panel_inner_rows, render_workspace, search_match_half, selected_index,
     workspace_help_entries, workspace_hit_test, workspace_layout, ContentIoFocus, ContentIoFrame,
@@ -367,10 +368,16 @@ pub(crate) fn run(
             }
             continue;
         }
-        match event::read()? {
+        match read_interaction()? {
             Event::Key(key) => {
                 if key.kind != KeyEventKind::Press {
                     continue;
+                }
+
+                // Raw mode swallows Ctrl+C; without this the picker is unkillable by terminal
+                // control sequences and requires an external kill.
+                if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    anyhow::bail!(PICK_CANCELLED_MESSAGE);
                 }
 
                 if let Some(mode) = visual_select_mode.as_mut() {

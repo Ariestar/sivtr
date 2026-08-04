@@ -109,7 +109,8 @@ tempfile = "3"
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["fileapi", "handleapi", "processenv", "processthreadsapi", "winbase", "winnt", "winuser", "windef", "minwindef"] }
+winapi = { version = "0.3", features = ["consoleapi", "fileapi", "handleapi", "namedpipeapi", "processenv", "processthreadsapi", "synchapi", "winbase", "wincon", "winerror", "winnt", "winuser", "windef", "minwindef"] }
+
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
 dhat = "0.3"

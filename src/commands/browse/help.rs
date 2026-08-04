@@ -6,7 +6,7 @@ use anyhow::Result;
 use ratatui::widgets::ListState;
 
 use crate::tui::content::view::ContentViewMode;
-use crate::tui::terminal::{init as init_tui, restore as restore_tui};
+use crate::tui::terminal::suspend;
 use crate::tui::workspace::{
     can_open_dialogue_vim, selected_index, workspace_content_io_texts, workspace_content_text,
     workspace_layout, ContentIoFocus, ContentIoFrame, ContentScrolls, WorkspaceDialogue,
@@ -203,9 +203,13 @@ pub(super) fn apply_workspace_help_action(
                 *content_mode,
                 content_at,
             ));
-            restore_tui(terminal)?;
-            open_vim_view(&view)?;
-            *terminal = init_tui()?;
+            // A failed editor launch must not kill the picker: report it and keep running.
+            suspend(terminal, || {
+                if let Err(error) = open_vim_view(&view) {
+                    eprintln!("sivtr: editor error: {error}");
+                }
+                Ok(())
+            })??;
         }
         WorkspaceHelpAction::ScrollDown if *focus == WorkspaceFocus::Content => {
             content_scrolls.set(
