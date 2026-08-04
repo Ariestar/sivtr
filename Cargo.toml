@@ -112,7 +112,7 @@ winapi = { version = "0.3", features = ["fileapi", "handleapi", "processenv", "p
 
 [dev-dependencies]
 tempfile = "3"
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 dhat = "0.3"
 
 [features]
