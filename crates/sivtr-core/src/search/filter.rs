@@ -17,8 +17,21 @@ use crate::record::{
 };
 use crate::time::parse_timestamp;
 
-use super::bm25::Bm25Index;
+use super::bm25::{body_text, Bm25Index, SimpleTokenizer, TITLE_WEIGHT};
+use super::expand::Prf;
+use super::fusion::rrf_scores;
 use super::types::{Field, FilterMode, PartKind, Sort};
+
+/// RRF constant (Cormack et al., SIGIR 2009): fused = Σ 1/(k + rank).
+const RRF_K: usize = 60;
+/// Shipped switches. PRF expansion is ON (tuned lambda/max_terms in
+/// `expand.rs`; the difficulty gate suppresses it for common-word queries).
+/// RRF fusion is OFF: fusing recency let recent chatter outrank older genuine
+/// matches, and fusing relevance+command measured ndcg@5 0.830 -> 0.813 on the
+/// frozen eval — kept implemented (see `fusion.rs`) but disabled. Both deltas
+/// are recorded in docs/retrieval-literature.md.
+const PRF_ENABLED: bool = true;
+const FUSION_ENABLED: bool = false;
 
 /// One search hit: the anchor plus its BM25 relevance score when ranking by
 /// relevance (None otherwise).
@@ -268,8 +281,97 @@ impl<'a> Searcher<'a> {
                 lazy_slot.get_or_insert_with(|| Bm25Index::build(self.records))
             }
         };
-        index.rank(query).into_iter().collect()
+
+        let query_tokens = SimpleTokenizer.tokenize(query);
+        // The command-field boost applies to multi-token queries only: a
+        // single-token query like `grok` must not promote unrelated terminal
+        // records (title `grok`, few mentions) over provider sessions whose
+        // titles never contain the keyword.
+        let title_weight = if query_tokens.len() >= 2 {
+            TITLE_WEIGHT
+        } else {
+            0.0
+        };
+        let mut terms: Vec<(String, f64)> = query_tokens
+            .iter()
+            .cloned()
+            .map(|token| (token, 1.0))
+            .collect();
+
+        // Pseudo-relevance feedback: expand rare-term queries with terms
+        // harvested from the top-ranked documents. The difficulty gate
+        // suppresses expansion for common-word queries, where the
+        // pseudo-relevant set is dominated by noise.
+        if PRF_ENABLED {
+            let prf = Prf::default();
+            if prf.gate(&query_tokens, |token| index.df_ratio(token)) {
+                let mut docs = Vec::new();
+                for (reference, _) in index
+                    .rank_terms_with(&terms, title_weight)
+                    .into_iter()
+                    .take(prf.top_k)
+                {
+                    if let Some(record) = self.records.iter().find(|r| r.work_ref == reference) {
+                        docs.push(SimpleTokenizer.tokenize(&body_text(record)));
+                    }
+                }
+                for term in prf.select_terms(&query_tokens, &docs) {
+                    if !terms.iter().any(|(existing, _)| *existing == term) {
+                        terms.push((term, prf.lambda));
+                    }
+                }
+            }
+        }
+
+        let ranked = index.rank_terms_with(&terms, title_weight);
+
+        if FUSION_ENABLED {
+            // Reciprocal rank fusion of relevance + command-field match.
+            let n = self.records.len();
+            let mut doc_id: HashMap<WorkRef, usize> = HashMap::with_capacity(n);
+            for (i, record) in self.records.iter().enumerate() {
+                doc_id.insert(record.work_ref.whole(), i);
+            }
+            let relevance_list: Vec<usize> = ranked
+                .iter()
+                .filter_map(|(reference, _)| doc_id.get(reference).copied())
+                .collect();
+            // Command-field match: the record's title (the executed command for
+            // terminal records) contains every query token. Gated on multi-token
+            // queries so single-token queries like `grok` do not promote
+            // unrelated terminal records over provider sessions.
+            let mut command_list: Vec<usize> = Vec::new();
+            if query_tokens.len() >= 2 {
+                for (i, record) in self.records.iter().enumerate() {
+                    if title_contains_all(&record.title, &query_tokens) {
+                        command_list.push(i);
+                    }
+                }
+            }
+            // Recency is deliberately NOT a fusion signal: the eval baseline
+            // notes that recency/failure bonuses are dataset-specific
+            // heuristics that do not generalize (see docs/retrieval-eval.md),
+            // and fusing recency over the whole corpus let recent chatter
+            // outrank older genuine matches.
+            let fused = rrf_scores(n, &[relevance_list, command_list], RRF_K);
+            return self
+                .records
+                .iter()
+                .enumerate()
+                .map(|(i, record)| (record.work_ref.whole(), fused[i] as f32))
+                .collect();
+        }
+        ranked.into_iter().collect()
     }
+}
+
+/// Whether the title (the executed command for terminal records) contains
+/// every query token — the "command-field match" fusion signal.
+fn title_contains_all(title: &str, query_tokens: &[String]) -> bool {
+    let title_tokens: HashSet<String> = SimpleTokenizer.tokenize(title).into_iter().collect();
+    query_tokens
+        .iter()
+        .all(|token| title_tokens.contains(token))
 }
 
 /// Per-line regex matches across every part of `record`.
