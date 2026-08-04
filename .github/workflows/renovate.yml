@@ -27,3 +27,5 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           configurationFile: renovate.json
+        env:
+          RENOVATE_REPOSITORIES: Ariestar/sivtr
