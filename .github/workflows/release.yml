@@ -209,6 +209,18 @@ jobs:
         with:
           path: artifacts
 
+      - name: Generate SHA256SUMS
+        shell: bash
+        run: |
+          cd artifacts
+          find . -type f \( -name '*.zip' -o -name '*.tar.gz' \) -print0 \
+            | while IFS= read -r -d '' f; do
+                h="$(sha256sum "$f" | cut -d' ' -f1)"
+                echo "$h  $(basename "$f")"
+              done \
+            | sort -k2 > SHA256SUMS
+          cat SHA256SUMS
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
@@ -218,3 +230,43 @@ jobs:
             artifacts/**/*
             install.sh
             install.ps1
+
+  install-smoke:
+    name: Smoke test installers
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: install.sh on Linux
+        env:
+          SIVTR_VERSION: ${{ env.RELEASE_REF_NAME }}
+          SIVTR_INSTALL_DIR: ${{ runner.temp }}/sivtr-smoke
+        run: |
+          sh install.sh
+          "$SIVTR_INSTALL_DIR/sivtr" --version
+
+      - name: install.sh honors SIVTR_SKIP_VERIFY
+        env:
+          SIVTR_VERSION: ${{ env.RELEASE_REF_NAME }}
+          SIVTR_INSTALL_DIR: ${{ runner.temp }}/sivtr-smoke-2
+          SIVTR_SKIP_VERIFY: "1"
+        run: sh install.sh
+
+  install-smoke-windows:
+    name: Smoke test install.ps1
+    needs: release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: install.ps1 on Windows
+        shell: pwsh
+        env:
+          SIVTR_VERSION: ${{ env.RELEASE_REF_NAME }}
+          SIVTR_INSTALL_DIR: ${{ runner.temp }}\sivtr-smoke
+        run: |
+          powershell -ExecutionPolicy Bypass -File install.ps1
+          & "$env:SIVTR_INSTALL_DIR\sivtr.exe" --version

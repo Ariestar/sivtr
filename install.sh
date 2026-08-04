@@ -111,6 +111,31 @@ verify_archive_safety() {
     fi
 }
 
+verify_checksum() {
+    [ -n "${SIVTR_SKIP_VERIFY:-}" ] && { warn "SIVTR_SKIP_VERIFY set — skipping SHA256 verification"; return 0; }
+    command -v sha256sum >/dev/null 2>&1 || { warn "sha256sum not available — skipping SHA256 verification"; return 0; }
+
+    CHECKSUMS_URL="https://github.com/${REPO}/releases/download/${VERSION}/SHA256SUMS"
+    CHECKSUMS="${TEMP_DIR}/SHA256SUMS"
+    if ! curl -fsSL "$CHECKSUMS_URL" -o "$CHECKSUMS" 2>/dev/null; then
+        # Releases published before checksum support have no SHA256SUMS.
+        warn "SHA256SUMS not available for ${VERSION} — skipping verification"
+        return 0
+    fi
+
+    ARCHIVE_NAME="$(basename "$ARCHIVE")"
+    EXPECTED="$(awk -v f="$ARCHIVE_NAME" '$2 == f {print $1}' "$CHECKSUMS" | head -n 1)"
+    if [ -z "$EXPECTED" ]; then
+        error "No SHA256 entry for ${ARCHIVE_NAME} in SHA256SUMS"
+    fi
+
+    ACTUAL="$(sha256sum "$ARCHIVE" | awk '{print $1}')"
+    if [ "$ACTUAL" != "$EXPECTED" ]; then
+        error "Checksum mismatch for ${ARCHIVE_NAME} (expected ${EXPECTED}, got ${ACTUAL})"
+    fi
+    info "SHA256 verified for ${ARCHIVE_NAME}"
+}
+
 extract_and_install() {
     EXTRACT_DIR="${TEMP_DIR}/out"
     mkdir -p "$EXTRACT_DIR"
@@ -164,6 +189,7 @@ main() {
 
     download
     verify_archive_safety
+    verify_checksum
     extract_and_install
     verify
 

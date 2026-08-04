@@ -57,6 +57,28 @@ try {
     Err "Download failed: $($_.Exception.Message)"
 }
 
+# --- checksum verification -------------------------------------------------
+if (-not $env:SIVTR_SKIP_VERIFY) {
+    try {
+        $sumsUrl = "https://github.com/$Repo/releases/download/$Version/SHA256SUMS"
+        $sums = Join-Path $tmp 'SHA256SUMS'
+        Invoke-WebRequest -Uri $sumsUrl -OutFile $sums -UseBasicParsing
+        $expected = (Get-Content $sums |
+            Where-Object { $_ -match "\s$([regex]::Escape($Asset))$" } |
+            ForEach-Object { ($_ -split '\s+')[0] } |
+            Select-Object -First 1)
+        if (-not $expected) { Err "No SHA256 entry for $Asset in SHA256SUMS" }
+        $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -ne $expected.ToLowerInvariant()) {
+            Err "Checksum mismatch for $Asset`n  expected: $expected`n  actual:   $actual"
+        }
+        Info "SHA256 verified for $Asset"
+    } catch {
+        # Releases published before checksum support have no SHA256SUMS.
+        Warn "SHA256SUMS not available for $Version — skipping verification"
+    }
+}
+
 # --- extract ---------------------------------------------------------------
 Info "Extracting..."
 $extract = Join-Path $tmp 'out'

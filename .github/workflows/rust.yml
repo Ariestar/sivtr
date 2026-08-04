@@ -44,3 +44,77 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --locked
+
+      - name: Binary smoke test
+        # Real CLI entry points on each OS; catches runtime breakage that
+        # unit tests miss (bad hook glue, missing DLL, platform detection).
+        run: |
+          cargo run --quiet -- --version
+          cargo run --quiet -- doctor
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Audit Cargo.lock
+        # Fails only on known vulnerabilities. Two transitive advisories
+        # remain as warnings (paste, spin — upstream deps of ratatui); they
+        # do not fail the gate.
+        run: cargo audit
+
+  msrv:
+    name: MSRV (${{ vars.MSRV || '1.95' }})
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust MSRV
+        uses: dtolnay/rust-toolchain@${{ vars.MSRV || '1.95' }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check on MSRV
+        run: cargo check --workspace --locked --all-targets
+
+  docs:
+    name: Docs site
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: cd docs-site && bun install --frozen-lockfile
+
+      - name: Astro check
+        run: cd docs-site && bun run check
+
+      - name: Build
+        run: cd docs-site && bun run build
+
+  vscode:
+    name: VS Code extension
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: cd editors/vscode && bun install --frozen-lockfile
+
+      - name: Test
+        run: cd editors/vscode && bun run test
