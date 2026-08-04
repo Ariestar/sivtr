@@ -29,4 +29,3 @@ jobs:
           configurationFile: renovate.json
         env:
           RENOVATE_REPOSITORIES: Ariestar/sivtr
-          LOG_LEVEL: debug
