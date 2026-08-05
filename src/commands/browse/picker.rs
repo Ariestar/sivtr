@@ -411,6 +411,27 @@ pub(crate) fn run(
         }
         redraw = true;
         match read_interaction()? {
+            Event::Paste(text) => {
+                // Bracketed paste delivers the whole clipboard as one event;
+                // route it to the open text input (search or line filter).
+                if show_search {
+                    search_query_edited(
+                        |query| query.push_str(&text),
+                        &mut search_query,
+                        &mut search_dirty,
+                        &mut search_cursor,
+                        &mut search_apply_pending,
+                        &mut session_state,
+                        &mut selected_sessions,
+                        &mut dialogue_state,
+                        &mut selected_dialogues,
+                        &mut range_anchor,
+                        &mut content_scrolls,
+                    );
+                } else if line_filter_input_open {
+                    line_filter.push_str(&text);
+                }
+            }
             Event::Key(key) => {
                 if key.kind == KeyEventKind::Release {
                     continue;
@@ -510,26 +531,28 @@ pub(crate) fn run(
                                 content_io_focus,
                             );
                         }
-                        KeyCode::Backspace => {
-                            search_query.pop();
-                            search_dirty = true;
-                            search_cursor = 0;
-                            search_apply_pending = true;
-                            reset_workspace_search_state(
-                                &mut session_state,
-                                &mut selected_sessions,
-                                &mut dialogue_state,
-                                &mut selected_dialogues,
-                                &mut range_anchor,
-                                &mut content_scrolls,
-                            );
-                        }
+                        KeyCode::Backspace => search_query_edited(
+                            |query| {
+                                query.pop();
+                            },
+                            &mut search_query,
+                            &mut search_dirty,
+                            &mut search_cursor,
+                            &mut search_apply_pending,
+                            &mut session_state,
+                            &mut selected_sessions,
+                            &mut dialogue_state,
+                            &mut selected_dialogues,
+                            &mut range_anchor,
+                            &mut content_scrolls,
+                        ),
                         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            search_query.clear();
-                            search_dirty = true;
-                            search_cursor = 0;
-                            search_apply_pending = true;
-                            reset_workspace_search_state(
+                            search_query_edited(
+                                |query| query.clear(),
+                                &mut search_query,
+                                &mut search_dirty,
+                                &mut search_cursor,
+                                &mut search_apply_pending,
                                 &mut session_state,
                                 &mut selected_sessions,
                                 &mut dialogue_state,
@@ -538,20 +561,19 @@ pub(crate) fn run(
                                 &mut content_scrolls,
                             );
                         }
-                        KeyCode::Char(ch) => {
-                            search_query.push(ch);
-                            search_dirty = true;
-                            search_cursor = 0;
-                            search_apply_pending = true;
-                            reset_workspace_search_state(
-                                &mut session_state,
-                                &mut selected_sessions,
-                                &mut dialogue_state,
-                                &mut selected_dialogues,
-                                &mut range_anchor,
-                                &mut content_scrolls,
-                            );
-                        }
+                        KeyCode::Char(ch) => search_query_edited(
+                            |query| query.push(ch),
+                            &mut search_query,
+                            &mut search_dirty,
+                            &mut search_cursor,
+                            &mut search_apply_pending,
+                            &mut session_state,
+                            &mut selected_sessions,
+                            &mut dialogue_state,
+                            &mut selected_dialogues,
+                            &mut range_anchor,
+                            &mut content_scrolls,
+                        ),
                         _ => {}
                     }
                     continue;
@@ -914,6 +936,38 @@ pub(crate) fn run(
             _ => {}
         }
     }
+}
+
+/// A search input edit (typed character, backspace, or paste) changed the
+/// query: mark the corpus dirty, restart at the first match, and drop the
+/// previous result's selection so a shrinking match set cannot leave
+/// dangling highlights.
+#[allow(clippy::too_many_arguments)]
+fn search_query_edited(
+    edit: impl FnOnce(&mut String),
+    search_query: &mut String,
+    search_dirty: &mut bool,
+    search_cursor: &mut usize,
+    search_apply_pending: &mut bool,
+    session_state: &mut ListState,
+    selected_sessions: &mut Vec<bool>,
+    dialogue_state: &mut ListState,
+    selected_dialogues: &mut Vec<bool>,
+    range_anchor: &mut Option<usize>,
+    content_scrolls: &mut ContentScrolls,
+) {
+    edit(search_query);
+    *search_dirty = true;
+    *search_cursor = 0;
+    *search_apply_pending = true;
+    reset_workspace_search_state(
+        session_state,
+        selected_sessions,
+        dialogue_state,
+        selected_dialogues,
+        range_anchor,
+        content_scrolls,
+    );
 }
 
 /// Keys that safely auto-repeat when held. Navigation and scrolling repeat
