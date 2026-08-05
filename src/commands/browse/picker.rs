@@ -45,8 +45,8 @@ pub(crate) fn run(
     cwd: PathBuf,
     initial_focus: WorkspaceFocus,
 ) -> Result<WorkspacePickedContent> {
-    assert_eq!(sources.len(), selected_sources.len());
-    assert_eq!(sources.len(), source_states.len());
+    debug_assert_eq!(sources.len(), selected_sources.len());
+    debug_assert_eq!(sources.len(), source_states.len());
     let mut selected_sources = selected_sources;
     let mut session_state = ListState::default();
     let mut source_state = ListState::default();
@@ -82,8 +82,7 @@ pub(crate) fn run(
     let mut show_search = false;
     let mut search_query = String::new();
     let mut search_output = WorkspaceSearchOutput::default();
-    let mut search_index: Option<WorkspaceSearchIndex> = None;
-    let mut search_corpus: Option<Vec<WorkspaceSession>> = None;
+    let mut search_engine: Option<(WorkspaceSearchIndex, Vec<WorkspaceSession>)> = None;
     let mut search_cursor = 0usize;
     let mut search_dirty = true;
     let mut search_apply_pending = false;
@@ -124,10 +123,12 @@ pub(crate) fn run(
                 // corpus changed; both are cached across keystrokes so typing
                 // does not clone every hydrated session per keypress.
                 let fingerprint = search_corpus_fingerprint(&all_sessions, &sessions_pane);
-                let stale = search_index
+                if let Some((index, corpus)) = search_engine
                     .as_ref()
-                    .is_none_or(|index| index.fingerprint() != fingerprint);
-                if stale {
+                    .filter(|(index, _)| index.fingerprint() == fingerprint)
+                {
+                    search_output = index.search(corpus, &search_query);
+                } else {
                     let corpus: Vec<_> = all_sessions
                         .iter()
                         .map(|s| {
@@ -138,16 +139,10 @@ pub(crate) fn run(
                             full
                         })
                         .collect();
-                    search_index = Some(WorkspaceSearchIndex::new(&corpus));
-                    search_corpus = Some(corpus);
+                    let index = WorkspaceSearchIndex::new(&corpus);
+                    search_output = index.search(&corpus, &search_query);
+                    search_engine = Some((index, corpus));
                 }
-                search_output = search_index
-                    .as_ref()
-                    .expect("search index built above")
-                    .search(
-                        search_corpus.as_ref().expect("search corpus built above"),
-                        &search_query,
-                    );
             } else {
                 search_output = WorkspaceSearchOutput::default();
             }
