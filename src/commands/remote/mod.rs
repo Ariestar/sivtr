@@ -1,3 +1,4 @@
+pub mod group;
 pub mod mounts;
 pub mod peer;
 pub mod serve;

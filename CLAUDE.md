@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **sivtr** is a terminal output workspace that captures, browses, searches, and reuses terminal command output and AI coding assistant sessions. Agent providers are registry-driven (Codex, Claude Code, Cursor, OpenCode, OpenClaw, Grok, Hermes, Pi, …) and four shells (Bash, Zsh, PowerShell, Nushell). Cross-device remote memory uses a local daemon with Share/Grant/Mount over encrypted iroh transport.
 
-Architecture: CLI binary (`src/`) wrapping a core library (`crates/sivtr-core/`). Clap-based subcommands for copy, search, show, work, filter, var, nav, zoom, init, diff, hotkey, doctor, serve, share, remote, peer, and workspace. TUI mode for browse/search views.
+Architecture: CLI binary (`src/`) wrapping a core library (`crates/sivtr-core/`). Clap-based subcommands for copy, search, show, work, filter, var, nav, zoom, init, diff, hotkey, doctor, serve, share, group, remote, peer, and workspace. TUI mode for browse/search views.
 
 ## Development Commands
 
@@ -111,6 +111,19 @@ sivtr s desk:terminal --status failure --latest 5 --refs
 sivtr serve status            # daemon identity + share/peer counts
 sivtr ws list                 # local workspace origin labels
 ```
+
+Groups (mesh: every member publishes their memory to the group):
+```bash
+sivtr group create team         # create group + share current workspace
+sivtr group invite team         # reusable join link (expires, optional --max-uses)
+sivtr group join <link>         # join + contribute current workspace
+sivtr group list / members team # roster with last-seen
+sivtr group remove team alice   # owner kicks (members self-heal on next sync)
+sivtr group leave team          # leave; owner leaving disbands the group
+sivtr s team:terminal "q"       # fan out to all members, merged
+sivtr s team/alice:terminal "q" # one member (device/workspace scope form)
+```
+Group membership is a roster overlay on share/grant/mount: join = one multi-use invite with the owner, mirror roster locally, grant every member read on your group share. Owner is the roster source of truth; members pull-sync on a 5-min TTL (`GroupSync`), kicked devices drop the group on the next sync. `team:` refs are qualified per member (`team/alice:...`) so `show`/`zoom`/`nav` round-trip.
 
 State lives under `data_dir()` (`SIVTR_DATA_DIR` override, else platform config dir `/sivtr`): `identity.key`, `remote-state.db`, `daemon.json`, `daemon.lock`, `daemon.log`.
 

@@ -357,6 +357,10 @@ pub enum Commands {
     /// Manage remotes for the current workspace (like `git remote`)
     Remote(RemoteCommand),
 
+    /// Manage groups: a named set of devices that share memory with each other
+    #[command(visible_alias = "g")]
+    Group(GroupCommand),
+
     /// Manage configuration
     Config(ConfigCommand),
 
