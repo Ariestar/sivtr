@@ -308,42 +308,56 @@ impl SourceLoadPump {
         let cwd = self.cwd.clone();
         let tx = self.tx.clone();
         let source = source.clone();
-        thread::spawn(move || {
-            let qs = if remote {
-                QuerySource::remote(selector)
-            } else {
-                QuerySource::local(selector)
-            };
-            let (result, exhausted) = match workset::query_many(
-                &[qs],
-                Filter::browse_session_page(budget),
-                Some(&cwd),
-                REMOTE_QUERY_TIMEOUT,
-            ) {
-                Ok(mut results) => match results.pop() {
-                    Some(QuerySourceResult::Ok(set)) => {
-                        let n = set.records.len();
-                        let mut sessions = sessions_from_records(&source, set.records);
-                        for s in &mut sessions {
-                            s.records.clear();
-                            s.body_loaded = false;
+        let spawned = thread::Builder::new()
+            .name(format!("sivtr-meta-{idx}"))
+            .spawn(move || {
+                let qs = if remote {
+                    QuerySource::remote(selector)
+                } else {
+                    QuerySource::local(selector)
+                };
+                let (result, exhausted) = match workset::query_many(
+                    &[qs],
+                    Filter::browse_session_page(budget),
+                    Some(&cwd),
+                    REMOTE_QUERY_TIMEOUT,
+                ) {
+                    Ok(mut results) => match results.pop() {
+                        Some(QuerySourceResult::Ok(set)) => {
+                            let n = set.records.len();
+                            let mut sessions = sessions_from_records(&source, set.records);
+                            for s in &mut sessions {
+                                s.records.clear();
+                                s.body_loaded = false;
+                            }
+                            sessions.sort_by_key(|s| std::cmp::Reverse(s.modified));
+                            (Ok(sessions), n < budget)
                         }
-                        sessions.sort_by_key(|s| std::cmp::Reverse(s.modified));
-                        (Ok(sessions), n < budget)
-                    }
-                    Some(QuerySourceResult::Err(m)) => (Err(m), false),
-                    None => (Err("empty query".into()), false),
-                },
-                Err(e) => (Err(format!("{e:#}")), false),
-            };
-            let _ = tx.send(JobEvent {
+                        Some(QuerySourceResult::Err(m)) => (Err(m), false),
+                        None => (Err("empty query".into()), false),
+                    },
+                    Err(e) => (Err(format!("{e:#}")), false),
+                };
+                let _ = tx.send(JobEvent {
+                    index: idx,
+                    gen,
+                    kind: JobKind::Meta { budget },
+                    result,
+                    exhausted,
+                });
+            });
+        if let Err(error) = spawned {
+            // Without this event the pane would wait forever for a page that
+            // will never arrive; surface the spawn failure like any other
+            // query error.
+            let _ = self.tx.send(JobEvent {
                 index: idx,
                 gen,
                 kind: JobKind::Meta { budget },
-                result,
-                exhausted,
+                result: Err(format!("failed to spawn meta loader thread: {error}")),
+                exhausted: false,
             });
-        });
+        }
     }
 
     fn spawn_body(&mut self, idx: usize, source: &WorkspaceSource, session_id: &str) {
@@ -353,43 +367,56 @@ impl SourceLoadPump {
         let cwd = self.cwd.clone();
         let tx = self.tx.clone();
         let source = source.clone();
-        let session_id = session_id.to_string();
-        thread::spawn(move || {
-            let sel = format!("{selector}/{session_id}");
-            let qs = if remote {
-                QuerySource::remote(sel)
-            } else {
-                QuerySource::local(sel)
-            };
-            let result = match workset::query_many(
-                &[qs],
-                Filter::none(),
-                Some(&cwd),
-                REMOTE_QUERY_TIMEOUT,
-            ) {
-                Ok(mut results) => match results.pop() {
-                    Some(QuerySourceResult::Ok(set)) => {
-                        let mut sessions = sessions_from_records(&source, set.records);
-                        for s in &mut sessions {
-                            s.body_loaded = !s.records.is_empty();
+        let session_id_owned = session_id.to_string();
+        let spawned = thread::Builder::new()
+            .name(format!("sivtr-body-{idx}"))
+            .spawn(move || {
+                let sel = format!("{selector}/{session_id_owned}");
+                let qs = if remote {
+                    QuerySource::remote(sel)
+                } else {
+                    QuerySource::local(sel)
+                };
+                let result = match workset::query_many(
+                    &[qs],
+                    Filter::none(),
+                    Some(&cwd),
+                    REMOTE_QUERY_TIMEOUT,
+                ) {
+                    Ok(mut results) => match results.pop() {
+                        Some(QuerySourceResult::Ok(set)) => {
+                            let mut sessions = sessions_from_records(&source, set.records);
+                            for s in &mut sessions {
+                                s.body_loaded = !s.records.is_empty();
+                            }
+                            Ok(sessions)
                         }
-                        Ok(sessions)
-                    }
-                    Some(QuerySourceResult::Err(m)) => Err(m),
-                    None => Err("empty body".into()),
-                },
-                Err(e) => Err(format!("{e:#}")),
-            };
-            let _ = tx.send(JobEvent {
+                        Some(QuerySourceResult::Err(m)) => Err(m),
+                        None => Err("empty body".into()),
+                    },
+                    Err(e) => Err(format!("{e:#}")),
+                };
+                let _ = tx.send(JobEvent {
+                    index: idx,
+                    gen,
+                    kind: JobKind::Body {
+                        session_id: session_id_owned.clone(),
+                    },
+                    result,
+                    exhausted: true,
+                });
+            });
+        if let Err(error) = spawned {
+            let _ = self.tx.send(JobEvent {
                 index: idx,
                 gen,
                 kind: JobKind::Body {
-                    session_id: session_id.clone(),
+                    session_id: session_id.to_string(),
                 },
-                result,
+                result: Err(format!("failed to spawn body loader thread: {error}")),
                 exhausted: true,
             });
-        });
+        }
     }
 
     pub fn drain(&mut self, states: &mut [SourceLoadState]) -> bool {
