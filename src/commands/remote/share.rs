@@ -107,16 +107,23 @@ fn finish_share(
 }
 
 #[derive(Clone)]
-struct WorkspaceChoice {
-    key: String,
-    root: String,
-    name: String,
-    current: bool,
+pub(crate) struct WorkspaceChoice {
+    pub(crate) key: String,
+    pub(crate) root: String,
+    pub(crate) name: String,
+    pub(crate) current: bool,
 }
 
-fn pick_workspace() -> Result<WorkspaceChoice> {
-    interactive::require_interactive("share")?;
+impl WorkspaceChoice {
+    pub(crate) fn label(&self) -> String {
+        let marker = if self.current { " [current]" } else { "" };
+        format!("{}  {}{marker}", self.name, self.root)
+    }
+}
 
+/// Enumerate registered workspaces, current first then by recency. Shared by
+/// `sivtr share` (single select) and `sivtr group join` (multi select).
+pub(crate) fn list_workspace_choices() -> Result<Vec<WorkspaceChoice>> {
     let current = workspace::resolve_current_workspace()?;
     // Ensure the current repo is registered so it appears in the list.
     if let Some(ref paths) = current {
@@ -151,7 +158,7 @@ fn pick_workspace() -> Result<WorkspaceChoice> {
             .then_with(|| b.last_seen_at.cmp(&a.last_seen_at))
     });
 
-    let choices: Vec<WorkspaceChoice> = metas
+    Ok(metas
         .into_iter()
         .map(|meta| {
             let current = Some(meta.key.as_str()) == current_key;
@@ -162,20 +169,17 @@ fn pick_workspace() -> Result<WorkspaceChoice> {
                 current,
             }
         })
-        .collect();
+        .collect())
+}
 
+fn pick_workspace() -> Result<WorkspaceChoice> {
+    interactive::require_interactive("share")?;
+    let choices = list_workspace_choices()?;
     let default_index = choices
         .iter()
         .position(|choice| choice.current)
         .unwrap_or(0);
-    let labels: Vec<String> = choices
-        .iter()
-        .map(|choice| {
-            let marker = if choice.current { " [current]" } else { "" };
-            format!("{}  {}{marker}", choice.name, choice.root)
-        })
-        .collect();
-
+    let labels: Vec<String> = choices.iter().map(WorkspaceChoice::label).collect();
     let index = interactive::select("Share which workspace?", &labels, default_index)?;
     Ok(choices[index].clone())
 }
@@ -219,7 +223,8 @@ fn add(path: Option<PathBuf>, name: Option<String>, redact: bool) -> Result<Shar
     }
 }
 
-fn find_share_for_workspace(workspace_key: &str) -> Result<ShareInfo> {
+/// Find the share for a workspace, if any. Shared with group join.
+pub(crate) fn find_share_for_workspace(workspace_key: &str) -> Result<ShareInfo> {
     match ipc::call(LocalRequest::ShareList)? {
         LocalResponse::Shares(shares) => shares
             .into_iter()
@@ -229,7 +234,7 @@ fn find_share_for_workspace(workspace_key: &str) -> Result<ShareInfo> {
     }
 }
 
-fn default_share_name(root: &Path) -> String {
+pub(crate) fn default_share_name(root: &Path) -> String {
     root.file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("workspace")
@@ -347,7 +352,7 @@ fn revoke(share: &str, peer: &str) -> Result<()> {
     }
 }
 
-fn parse_duration(value: &str) -> Result<i64> {
+pub(crate) fn parse_duration(value: &str) -> Result<i64> {
     let split = value
         .find(|character: char| !character.is_ascii_digit())
         .context("Duration must include a unit, such as 10m, 2h, or 1d")?;

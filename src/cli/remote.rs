@@ -125,3 +125,58 @@ pub enum WorkspaceAction {
     /// List known local workspaces (origin labels for `name:body` refs)
     List,
 }
+
+#[derive(Parser, Debug)]
+pub struct GroupCommand {
+    #[command(subcommand)]
+    pub action: GroupAction,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum GroupAction {
+    /// Create a group and share the current workspace with it
+    Create {
+        /// Group name used in refs, e.g. `team:terminal/...`
+        name: String,
+        /// Workspace path to contribute; defaults to the current directory
+        #[arg(long)]
+        workspace: Option<PathBuf>,
+        /// Share name for the contributed workspace; defaults to the directory name
+        #[arg(long)]
+        share_name: Option<String>,
+    },
+    /// Print a reusable join link (expires, optionally capped at max_uses)
+    Invite {
+        group: String,
+        /// Invitation lifetime, such as 10m, 2h, or 1d
+        #[arg(long, default_value = "1d")]
+        expires: String,
+        /// Cap on how many peers may join with this link
+        #[arg(long)]
+        max_uses: Option<u32>,
+    },
+    /// Join a group with a join link and contribute the current workspace
+    Join {
+        /// Join link from `sivtr group invite` (bare key only)
+        invite: String,
+        /// Workspace path to contribute; defaults to the current directory
+        #[arg(long)]
+        workspace: Option<PathBuf>,
+        /// Share name for the contributed workspace; defaults to the directory name
+        #[arg(long)]
+        share_name: Option<String>,
+        /// Disable secret redaction for the contributed workspace
+        #[arg(long)]
+        no_redact: bool,
+    },
+    /// List groups this device has joined
+    List,
+    /// List group members with their last-seen state
+    Members { group: String },
+    /// Owner only: remove a member from the group
+    Remove { group: String, peer: String },
+    /// Leave a group (owner leaving disbands the group)
+    Leave { group: String },
+    /// Force a roster refresh from the group owner
+    Sync { group: String },
+}

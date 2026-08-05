@@ -438,20 +438,24 @@ fn parse_path_and_at(value: &str) -> Result<(WorkPath, WorkAt)> {
     ))
 }
 
-/// Normalize a scope name: `name` or `device/workspace`, lowercase, `local` reserved.
+/// Normalize a scope name: `name`, `device/workspace`, or `group/member/share`
+/// (up to three segments), lowercase, `local` reserved.
 pub fn normalize_scope_name(name: &str) -> Result<String> {
     parse_scope_name(name)
 }
 
-/// Scope rules: `name` or `device/workspace`, each segment `[A-Za-z0-9_-]+`,
+/// Scope rules: up to three `/`-separated segments, each `[A-Za-z0-9_-]+`,
 /// case-insensitive (normalized to lowercase). `local` is reserved.
+/// Three segments support group member share selection (`team/alice/proj-b`).
 fn parse_scope_name(name: &str) -> Result<String> {
     if name.is_empty() {
         bail!("Invalid work ref; empty scope before `:`");
     }
     let segments: Vec<&str> = name.split('/').collect();
-    if segments.is_empty() || segments.len() > 2 {
-        bail!("Invalid work ref; scope must be `name` or `device/workspace`");
+    if segments.is_empty() || segments.len() > 3 {
+        bail!(
+            "Invalid work ref; scope must be `name`, `device/workspace`, or `group/member/share`"
+        );
     }
     let mut normalized = Vec::with_capacity(segments.len());
     for segment in segments {
@@ -657,6 +661,8 @@ mod tests {
         assert!("dev_2:terminal/x/1".parse::<WorkRef>().is_ok());
         assert!("my-box:terminal/x/1".parse::<WorkRef>().is_ok());
         assert!("alice/sivtr:terminal/x/1".parse::<WorkRef>().is_ok());
+        // Three segments: group member share selection (`team/alice/proj-b`).
+        assert!("team/alice/proj-b:terminal/x/1".parse::<WorkRef>().is_ok());
         assert_eq!(
             "Dev_2:terminal/x/1"
                 .parse::<WorkRef>()
@@ -668,7 +674,8 @@ mod tests {
         assert!("dev!:terminal/x/1".parse::<WorkRef>().is_err());
         assert!(":terminal/x/1".parse::<WorkRef>().is_err());
         assert!("desk://terminal/x/1".parse::<WorkRef>().is_err());
-        assert!("a/b/c:terminal/x/1".parse::<WorkRef>().is_err());
+        // Four segments exceed the group/device/workspace hierarchy.
+        assert!("a/b/c/d:terminal/x/1".parse::<WorkRef>().is_err());
         assert!("local:terminal/x/1".parse::<WorkRef>().is_ok());
     }
 
