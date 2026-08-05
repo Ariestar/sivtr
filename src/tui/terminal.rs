@@ -4,7 +4,7 @@ use crossterm::terminal::disable_raw_mode;
 #[cfg(windows)]
 use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 use crossterm::{
-    cursor::Show,
+    cursor::{Hide, Show},
     event::{
         DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
         Event, MouseEvent, MouseEventKind,
@@ -148,6 +148,9 @@ pub fn init() -> Result<Tui> {
     }
 
     setup.state.cursor_restore_pending = true;
+    if let Err(error) = execute!(stdout, Hide).context("Failed to hide the terminal cursor") {
+        return setup.fail(error);
+    }
     let backend = CrosstermBackend::new(stdout);
     let terminal = match Terminal::new(backend).context("Failed to initialize terminal buffers") {
         Ok(terminal) => terminal,

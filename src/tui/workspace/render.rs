@@ -1,10 +1,11 @@
 //! Workspace browser painting (lists, dual content panes, overlays, footer).
 
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::prelude::{Color, Frame, Modifier, Style};
+use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
+use ratatui::prelude::{Color, Frame, Modifier, Position, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, ListItem, ListState, Paragraph};
 use regex::Regex;
+use unicode_width::UnicodeWidthStr;
 
 use crate::tui::content::io::ContentIoFocus;
 use crate::tui::content::view::{
@@ -149,6 +150,16 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         }
     }
 
+    // Put the caret at the end of the query in whichever overlay is being
+    // typed into; the picker keeps the cursor visible only in these modes.
+    if let Some(search) = view.search.as_ref().filter(|search| search.input_open) {
+        let area = centered_rect(chunks[0], 60, 12);
+        position_overlay_cursor(frame, area, search.query);
+    } else if view.line_filter_input_open {
+        let area = centered_rect(chunks[0], 60, 14);
+        position_overlay_cursor(frame, area, view.line_filter.unwrap_or_default());
+    }
+
     if let Some(search) = view.search.filter(|search| search.input_open) {
         render_search_box(frame, centered_rect(chunks[0], 60, 12), search);
     } else if view.line_filter_input_open || view.line_filter_error.is_some() {
@@ -162,6 +173,16 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
     } else if view.show_help {
         render_help_panel(frame, chunks[0], view.help_state);
     }
+}
+
+/// Place the cursor just past the typed text inside an overlay's text area.
+fn position_overlay_cursor(frame: &mut Frame, area: Rect, text: &str) {
+    let inner = area.inner(Margin::new(1, 1));
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let column = UnicodeWidthStr::width(text).min(inner.width as usize) as u16;
+    frame.set_cursor_position(Position::new(inner.x.saturating_add(column), inner.y));
 }
 
 fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>) {
