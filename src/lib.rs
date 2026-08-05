@@ -109,6 +109,7 @@ fn run() -> Result<()> {
         Some(Commands::Doctor(args)) => {
             commands::system::doctor::execute(args)?;
         }
+        Some(Commands::Update) => commands::system::update::execute()?,
         Some(Commands::Setup) => {
             commands::system::setup::execute()?;
         }

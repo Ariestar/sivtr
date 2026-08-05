@@ -94,6 +94,12 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/Ariestar/sivtr/main/install.ps1 | iex
 ```
 
+Upgrade:
+
+```bash
+sivtr update    # download the latest release, verify SHA256, replace in place
+```
+
 First-time setup (hooks + MCP hosts):
 
 ```bash
@@ -195,7 +201,8 @@ Memory variables:
 | `sivtr remote` | Name peer shares in the current workspace (`add`/`list`/`remove`/`test`, like `git remote`). |
 | `sivtr workspace` / `sivtr ws` | List known local workspaces (origin labels for `name:body` refs). |
 | `sivtr mcp` | MCP server + host install (`serve` / `install` / `uninstall` / `print-config`). |
-| `sivtr doctor` | Diagnose binary, config, session logs, hooks, providers, and clipboard. |
+| `sivtr doctor` | Diagnose binary, config, session logs, hooks, providers, and clipboard; reports new releases. |
+| `sivtr update` | Self-update to the latest GitHub release. |
 | `sivtr init <shell>` | Install shell integration; also supports `show` and `uninstall`. |
 | `sivtr config` | Manage the TOML config file. |
 | `sivtr history` | List, search, and show captured output history. |

@@ -153,7 +153,15 @@ npx skills add Ariestar/sivtr --skill sivtr-memory -g
 
 ## 更新
 
-更新已发布包：
+原地更新二进制：
+
+```bash
+sivtr update
+```
+
+该命令会下载当前平台最新的 GitHub release，校验 SHA256 后替换现有二进制。`sivtr doctor` 也会在新版本可用时提示。
+
+通过 Cargo 从源码安装的用户可以更新已发布包：
 
 ```bash
 cargo install sivtr --force
@@ -165,8 +173,6 @@ cargo install sivtr --force
 git pull
 cargo install --path . --force
 ```
-
-Cargo 会替换之前安装的二进制。
 
 ## Shell 集成
 

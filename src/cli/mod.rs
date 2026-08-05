@@ -363,6 +363,9 @@ pub enum Commands {
     /// Diagnose installation and environment
     Doctor(DoctorArgs),
 
+    /// Update sivtr to the latest release
+    Update,
+
     /// One-command setup: detect environment, install hooks/config/MCP, smoke test
     Setup,
 

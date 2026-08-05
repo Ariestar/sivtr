@@ -85,6 +85,12 @@ Windows（PowerShell）：
 irm https://raw.githubusercontent.com/Ariestar/sivtr/main/install.ps1 | iex
 ```
 
+升级：
+
+```bash
+sivtr update    # 下载最新 release，SHA256 校验后原地替换
+```
+
 首次安装（hooks + MCP 宿主）：
 
 ```bash
@@ -186,7 +192,8 @@ sivtr s agent -m "TODO|decision|failed" --since today -f timeline
 | `sivtr remote` | 把远端 share 挂到当前 workspace（`add`/`list`/`remove`/`test`）。 |
 | `sivtr workspace` / `sivtr ws` | 列出本机已知 workspace（`name:body` 的 origin 标签）。 |
 | `sivtr mcp` | MCP server 与宿主安装（`serve` / `install` / `uninstall` / `print-config`）。 |
-| `sivtr doctor` | 诊断 binary、config、session logs、hooks、providers、clipboard。 |
+| `sivtr doctor` | 诊断 binary、config、session logs、hooks、providers、clipboard；有新版本时提示。 |
+| `sivtr update` | 从 GitHub Releases 自更新到最新版本。 |
 | `sivtr init <shell>` | 安装 shell integration；也支持 `show` 和 `uninstall`。 |
 | `sivtr config` | 管理 TOML 配置文件。 |
 | `sivtr history` | 列出、搜索、查看捕获输出历史。 |

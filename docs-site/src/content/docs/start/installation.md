@@ -153,7 +153,15 @@ Fix the latest terminal error. Use sivtr first.
 
 ## Update
 
-Update the published package:
+Update the binary in place:
+
+```bash
+sivtr update
+```
+
+This downloads the latest GitHub release for your platform, verifies its SHA256 checksum, and replaces the current binary. `sivtr doctor` also reports when a newer release is available.
+
+If you installed from source via Cargo, update the published package instead:
 
 ```bash
 cargo install sivtr --force
@@ -165,8 +173,6 @@ Or reinstall from a local checkout after pulling changes:
 git pull
 cargo install --path . --force
 ```
-
-Cargo will replace the previously installed binary.
 
 ## Shell integration
 

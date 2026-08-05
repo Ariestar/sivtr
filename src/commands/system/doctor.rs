@@ -98,6 +98,7 @@ impl Report {
         self.check_skill(fix);
         self.check_providers();
         self.check_clipboard();
+        self.check_update();
     }
 
     fn add(&mut self, check: Check) {
@@ -577,6 +578,36 @@ impl Report {
                 detail: "unavailable".to_string(),
                 hint: Some("copy commands may not work in this environment".to_string()),
             });
+        }
+    }
+
+    fn check_update(&mut self) {
+        let current = env!("CARGO_PKG_VERSION");
+        match super::update::latest_version() {
+            Ok(latest) if latest.trim_start_matches('v') == current => self.add(Check {
+                name: "update",
+                label: "latest version",
+                status: Status::Pass,
+                detail: format!("sivtr {current} is up to date"),
+                hint: None,
+            }),
+            Ok(latest) => self.add(Check {
+                name: "update",
+                label: "latest version",
+                status: Status::Manual,
+                detail: format!(
+                    "new release available: sivtr {} (current {current})",
+                    latest.trim_start_matches('v')
+                ),
+                hint: Some("run `sivtr update`".to_string()),
+            }),
+            Err(e) => self.add(Check {
+                name: "update",
+                label: "latest version",
+                status: Status::Manual,
+                detail: format!("could not check: {e}"),
+                hint: None,
+            }),
         }
     }
 }
