@@ -10,8 +10,9 @@
     "check": "astro check"
   },
   "dependencies": {
-    "@astrojs/starlight": "0.39.2",
-    "astro": "6.3.7",
+    "@astrojs/mdx": "7.0.5",
+    "@astrojs/starlight": "0.41.7",
+    "astro": "7.1.6",
     "astro-mermaid": "^2.0.1",
     "mermaid": "^11.15.0"
   },
