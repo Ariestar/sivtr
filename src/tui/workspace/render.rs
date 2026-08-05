@@ -92,7 +92,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
     );
     let frame_io = ContentIoFrame::build(
         layout.content,
-        &io_texts,
+        io_texts,
         view.content_mode,
         view.content_io_focus,
     );
@@ -121,7 +121,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
                 ),
                 content_active && view.content_io_focus == half,
             ),
-            io_texts.display_owned(half),
+            frame_io.texts.display_owned(half),
             view.content_scrolls.get(half),
             view.content_mode,
             content_selection_for_half(view.content_selection, view.content_io_focus, half),

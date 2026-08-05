@@ -412,10 +412,10 @@ impl ContentPane {
             ctx.mode,
             ctx.target,
         );
-        let frame = ContentIoFrame::build(ctx.area, &texts, ctx.mode, ctx.io_focus);
+        let frame = ContentIoFrame::build(ctx.area, texts, ctx.mode, ctx.io_focus);
         self.input_lines = frame.input_lines;
         self.output_lines = frame.output_lines;
-        texts
+        frame.texts
     }
 }
 
