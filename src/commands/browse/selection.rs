@@ -110,7 +110,7 @@ pub(super) fn select_sources(
     selected_sources: &mut [bool],
     selection: WorkspaceSourceSelection,
 ) {
-    assert_eq!(sources.len(), selected_sources.len());
+    debug_assert_eq!(sources.len(), selected_sources.len());
     for (idx, source) in sources.iter().enumerate() {
         selected_sources[idx] = match selection {
             WorkspaceSourceSelection::All => true,
