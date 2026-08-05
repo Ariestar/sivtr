@@ -23,10 +23,15 @@ pub(crate) use load::{workspace_source_catalog, SourceLoadState};
 pub(crate) use picker::run as run_picker;
 pub(crate) use text::{filter_lines_by_spec, record_text_to_pair, select_lines};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use sivtr_core::ai::AgentProvider;
+use std::io::{self, IsTerminal};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use crate::tui::terminal::{finish as finish_tui, init as init_tui};
+use crate::tui::terminal::{
+    finish as finish_tui, init as init_tui, panic_payload_message, restore as restore_tui,
+    wait_for_enter,
+};
 use crate::tui::workspace::{WorkspaceFocus, WorkspacePickedContent, WorkspaceSource};
 
 /// Run the workspace browser.
@@ -52,7 +57,7 @@ pub fn run(
         sources.iter().map(|_| SourceLoadState::idle()).collect();
 
     let mut terminal = init_tui()?;
-    let result = run_picker(
+    let result = run_picker_guarded(
         &mut terminal,
         sources,
         source_states,
@@ -72,7 +77,7 @@ pub fn run_with_sessions(
     let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
     let loaded = sessions.len().max(1);
     let mut terminal = init_tui()?;
-    let result = run_picker(
+    let result = run_picker_guarded(
         &mut terminal,
         vec![source],
         vec![SourceLoadState::ready_from_sessions(sessions, loaded)],
@@ -81,6 +86,44 @@ pub fn run_with_sessions(
         initial_focus,
     );
     finish_tui(&mut terminal, result)
+}
+
+/// Run the picker and convert any panic into a reported error.
+///
+/// A panic inside the TUI must not leave the terminal in raw mode with the
+/// alternate screen active. The unwind is caught and the terminal is restored
+/// first; panics that skip this path are caught by the global panic hook
+/// ([`crate::tui::panic`]) and by the `Tui` drop. The panic message is
+/// printed before the error propagates.
+fn run_picker_guarded(
+    terminal: &mut crate::tui::terminal::Tui,
+    sources: Vec<WorkspaceSource>,
+    source_states: Vec<SourceLoadState>,
+    selected_sources: Vec<bool>,
+    cwd: std::path::PathBuf,
+    initial_focus: WorkspaceFocus,
+) -> Result<WorkspacePickedContent> {
+    match catch_unwind(AssertUnwindSafe(|| {
+        run_picker(
+            terminal,
+            sources,
+            source_states,
+            selected_sources,
+            cwd,
+            initial_focus,
+        )
+    })) {
+        Ok(result) => result,
+        Err(payload) => {
+            let message = panic_payload_message(&payload);
+            let _ = restore_tui(terminal);
+            eprintln!("sivtr: TUI panicked: {message}");
+            if io::stdin().is_terminal() {
+                wait_for_enter("press Enter to continue");
+            }
+            Err(anyhow!("TUI panicked: {message}"))
+        }
+    }
 }
 
 /// Shared cancel sentinel for picker Esc/q.
