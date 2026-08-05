@@ -46,24 +46,6 @@ pub(super) fn reset_workspace_after_source_change(
     content_scrolls.clear();
 }
 
-pub(super) fn reset_workspace_search_state(
-    session_state: &mut ListState,
-    selected_sessions: &mut Vec<bool>,
-    dialogue_state: &mut ListState,
-    selected_dialogues: &mut Vec<bool>,
-    range_anchor: &mut Option<usize>,
-    content_scrolls: &mut ContentScrolls,
-) {
-    reset_workspace_after_source_change(
-        session_state,
-        selected_sessions,
-        dialogue_state,
-        selected_dialogues,
-        range_anchor,
-        content_scrolls,
-    );
-}
-
 pub(super) fn resize_workspace_dialogue_selection(
     dialogue_count: usize,
     selected_dialogues: &mut Vec<bool>,

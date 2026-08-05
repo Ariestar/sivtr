@@ -20,7 +20,7 @@ use super::content::{
 };
 use super::nav::{
     move_workspace_cursor_down, move_workspace_cursor_up, reset_workspace_after_source_change,
-    reset_workspace_dialogue_state, reset_workspace_search_state,
+    reset_workspace_dialogue_state,
 };
 use super::selection::{select_sources, WorkspaceSourceSelection};
 use super::vim::open_vim_view;
@@ -341,7 +341,7 @@ pub(super) fn apply_workspace_help_action(
             *show_search = true;
             search_query.clear();
             *search_dirty = true;
-            reset_workspace_search_state(
+            reset_workspace_after_source_change(
                 session_state,
                 selected_sessions,
                 dialogue_state,
