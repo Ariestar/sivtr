@@ -26,7 +26,7 @@ use super::help::{apply_workspace_help_action, set_focus, HelpDispatch};
 use super::load::{SessionColumn, SessionCtx, SourceLoadState};
 use super::nav::{
     clamp_list_state, move_workspace_cursor_down, move_workspace_cursor_up, open_link_target,
-    reset_workspace_dialogue_state, reset_workspace_search_state,
+    reset_workspace_after_source_change, reset_workspace_dialogue_state,
     resize_workspace_dialogue_selection, row_list_index, source_list_index,
 };
 use super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane, SourcePane};
@@ -494,7 +494,7 @@ pub(crate) fn run(
                             search_dirty = true;
                             search_apply_pending = false;
                             search_cursor = 0;
-                            reset_workspace_search_state(
+                            reset_workspace_after_source_change(
                                 &mut session_state,
                                 &mut selected_sessions,
                                 &mut dialogue_state,
@@ -702,7 +702,7 @@ pub(crate) fn run(
                             search_dirty = true;
                             search_cursor = 0;
                             search_apply_pending = false;
-                            reset_workspace_search_state(
+                            reset_workspace_after_source_change(
                                 &mut session_state,
                                 &mut selected_sessions,
                                 &mut dialogue_state,
@@ -967,7 +967,7 @@ fn search_query_edited(
     *search_dirty = true;
     *search_cursor = 0;
     *search_apply_pending = true;
-    reset_workspace_search_state(
+    reset_workspace_after_source_change(
         session_state,
         selected_sessions,
         dialogue_state,
