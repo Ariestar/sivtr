@@ -368,6 +368,7 @@ pub(crate) fn run(
                         fullscreen,
                         content_selection: visual_select_mode
                             .map(|mode: VisualSelectMode| mode.selection),
+                        content_frame: &content_frame,
                     },
                 )
             })?;

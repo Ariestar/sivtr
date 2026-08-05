@@ -7,7 +7,7 @@ use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
 use std::time::SystemTime;
 
 use crate::commands::select::CommandSelection;
-use crate::tui::content::io::{ContentIoFocus, ContentIoTexts, ContentScrolls};
+use crate::tui::content::io::{ContentIoFocus, ContentIoFrame, ContentIoTexts, ContentScrolls};
 use crate::tui::content::text::{content_io_from_record, structured_part_text};
 use crate::tui::content::view::{ContentSelection, ContentViewMode};
 use crate::tui::search::WorkspaceSearchScope;
@@ -392,6 +392,9 @@ pub(crate) struct WorkspaceView<'a> {
     pub(crate) line_filter_error: Option<&'a str>,
     pub(crate) fullscreen: Option<WorkspaceFocus>,
     pub(crate) content_selection: Option<ContentSelection>,
+    /// Dual IO layout + display texts, computed once per redraw by the picker
+    /// and shared with the renderer (no per-frame duplicate layout).
+    pub(crate) content_frame: &'a ContentIoFrame,
 }
 
 pub(crate) struct WorkspaceSearchView<'a> {
