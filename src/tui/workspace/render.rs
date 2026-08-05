@@ -1,7 +1,7 @@
 //! Workspace browser painting (lists, dual content panes, overlays, footer).
 
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
-use ratatui::prelude::{Color, Frame, Modifier, Position, Style};
+use ratatui::prelude::{Frame, Modifier, Position, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, ListItem, ListState, Paragraph};
 use regex::Regex;
@@ -355,7 +355,7 @@ fn session_row_line(
     spans.extend(highlight_spans(
         &title,
         highlight,
-        Style::default().fg(Color::Rgb(226, 232, 240)),
+        Style::default().fg(theme::text_primary()),
     ));
     if body_failed {
         spans.push(Span::styled(
@@ -537,7 +537,7 @@ fn render_help_panel(frame: &mut Frame, area: Rect, state: &ListState) {
                 Span::styled(format!("{:<12}", entry.key), theme::key_hint_style()),
                 Span::styled(
                     entry.description.to_string(),
-                    Style::default().fg(Color::Rgb(203, 213, 225)),
+                    Style::default().fg(theme::help_text()),
                 ),
             ]))
         })
@@ -644,7 +644,7 @@ fn render_source_strip(
             active_item_style()
         } else {
             match load {
-                SourceLoadMarker::Failed => Style::default().fg(Color::Rgb(248, 113, 113)),
+                SourceLoadMarker::Failed => Style::default().fg(theme::failure()),
                 SourceLoadMarker::Loading => Style::default().fg(theme::accent()),
                 SourceLoadMarker::Ready if selected => Style::default().fg(source.color()),
                 SourceLoadMarker::Idle if selected => Style::default().fg(theme::muted()),
@@ -789,7 +789,7 @@ fn render_dialogue_list(
                 ListItem::new(Line::from(highlight_spans(
                     &line,
                     highlight,
-                    Style::default().fg(Color::Rgb(203, 213, 225)),
+                    Style::default().fg(theme::help_text()),
                 )))
             }
         })

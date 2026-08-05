@@ -13,6 +13,7 @@ use crossterm::{
     terminal::{enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{buffer::CellDiffOption, prelude::*};
+use sivtr_core::config::SivtrConfig;
 use std::io::IsTerminal;
 use std::{
     cell::RefCell,
@@ -25,6 +26,7 @@ use std::{
 use unicode_width::UnicodeWidthStr;
 
 use super::panic;
+use crate::tui::theme;
 
 type InnerTui = Terminal<CrosstermBackend<Stdout>>;
 
@@ -88,6 +90,12 @@ impl Drop for Tui {
 /// Initialize the terminal for TUI rendering.
 pub fn init() -> Result<Tui> {
     ensure_tui_stdout()?;
+
+    // Pick the palette before the first frame draws: honor the config
+    // override, otherwise detect light/dark and truecolor from the
+    // terminal environment.
+    let config = SivtrConfig::load().unwrap_or_default();
+    theme::apply(config.theme.mode);
 
     let mut setup = TerminalSetup::default();
     match ConsoleInputHandle::ensure_console() {

@@ -20,6 +20,8 @@ pub struct SivtrConfig {
     pub codex: CodexConfig,
     /// Global hotkey settings.
     pub hotkey: HotkeyConfig,
+    /// TUI theme settings.
+    pub theme: ThemeConfig,
     /// MCP stdio server settings.
     pub mcp: McpConfig,
 }
@@ -79,6 +81,27 @@ pub struct CodexConfig {
 pub struct HotkeyConfig {
     /// Hotkey chord used by `sivtr hotkey start`.
     pub chord: String,
+}
+
+/// TUI color scheme preference.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeMode {
+    /// Detect light/dark and truecolor support from the terminal environment.
+    #[default]
+    Auto,
+    /// Always use the dark palette.
+    Dark,
+    /// Always use the light palette.
+    Light,
+}
+
+/// TUI theme configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ThemeConfig {
+    /// Color scheme: `"auto"` (default), `"dark"`, or `"light"`.
+    pub mode: ThemeMode,
 }
 
 /// MCP stdio server settings (shared by every agent host registration —
