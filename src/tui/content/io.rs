@@ -48,10 +48,6 @@ impl ContentIoTexts {
             raw
         }
     }
-
-    pub(crate) fn display_owned(&self, half: ContentIoFocus) -> String {
-        self.display(half).to_string()
-    }
 }
 
 /// Which content half keyboard / selection targets.

@@ -6,8 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, ListItem, ListState, Paragraph};
 use regex::Regex;
 
-use crate::tui::content::io::{ContentIoFocus, ContentIoFrame};
-use crate::tui::content::text::workspace_content_io_texts;
+use crate::tui::content::io::ContentIoFocus;
 use crate::tui::content::view::{
     content_cursor_position, highlight_spans, render_content_view, ContentSelection, ContentView,
     ContentViewMode,
@@ -83,19 +82,9 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         view.focus == WorkspaceFocus::Dialogues,
     );
 
-    let io_texts = workspace_content_io_texts(
-        view.dialogues,
-        view.selected_dialogues,
-        dialogue_idx,
-        view.content_mode,
-        view.content_at,
-    );
-    let frame_io = ContentIoFrame::build(
-        layout.content,
-        io_texts,
-        view.content_mode,
-        view.content_io_focus,
-    );
+    // Dual IO layout + display texts were computed once by the picker for
+    // this redraw; reuse them instead of laying the content out a second time.
+    let frame_io = view.content_frame;
     let content_active = view.focus == WorkspaceFocus::Content;
     let content_search = view
         .search
@@ -121,7 +110,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
                 ),
                 content_active && view.content_io_focus == half,
             ),
-            frame_io.texts.display_owned(half),
+            frame_io.texts.display(half),
             view.content_scrolls.get(half),
             view.content_mode,
             content_selection_for_half(view.content_selection, view.content_io_focus, half),
@@ -816,7 +805,7 @@ fn render_content_panel(
     frame: &mut Frame,
     area: Rect,
     panel: Panel,
-    text: String,
+    text: &str,
     scroll: usize,
     mode: ContentViewMode,
     selection: Option<ContentSelection>,
@@ -827,7 +816,7 @@ fn render_content_panel(
         area,
         panel,
         ContentView {
-            text: &text,
+            text,
             scroll,
             search_regex,
             mode,

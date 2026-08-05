@@ -86,17 +86,19 @@ pub(crate) fn render_content_view(
         return;
     }
 
-    let (total_lines, chunks) = content_layout(area, view.text, view.mode);
+    // Lay out the whole document once; the line count drives the gutter and
+    // the visible window is a slice of the same layout.
+    let (lines, chunks) = content_layout(area, view.text, view.mode);
 
     let visible_height = inner.height as usize;
+    let total_lines = lines.len().max(1);
     let scroll = view.scroll.min(total_lines.saturating_sub(1));
-    let visible = visible_content_lines(
-        view.text,
-        scroll,
-        visible_height,
-        chunks[2].width as usize,
-        view.mode,
-    );
+    let visible: Vec<ContentLine> = lines
+        .iter()
+        .skip(scroll)
+        .take(visible_height)
+        .cloned()
+        .collect();
     frame.render_widget(
         Paragraph::new(line_number_lines(total_lines, scroll, &visible))
             .alignment(Alignment::Right),
@@ -146,7 +148,7 @@ pub(crate) fn content_link_at(
         return None;
     }
 
-    let (total_lines, chunks) = content_layout(area, text, mode);
+    let (lines, chunks) = content_layout(area, text, mode);
     let content_area = chunks[2];
     if column < content_area.x
         || column >= content_area.x.saturating_add(content_area.width)
@@ -156,15 +158,8 @@ pub(crate) fn content_link_at(
         return None;
     }
 
-    let scroll = scroll.min(total_lines.saturating_sub(1));
-    let visible = visible_content_lines(
-        text,
-        scroll,
-        content_area.height as usize,
-        content_area.width as usize,
-        mode,
-    );
-    let line = visible.get((row - content_area.y) as usize)?;
+    let scroll = scroll.min(lines.len().saturating_sub(1));
+    let line = lines.get(scroll.saturating_add((row - content_area.y) as usize))?;
     let hit_col = (column - content_area.x) as usize;
     line.links
         .iter()
@@ -344,12 +339,15 @@ pub(crate) fn content_view_line_count(area: Rect, text: &str, mode: ContentViewM
     if inner.width == 0 || inner.height == 0 {
         return 1;
     }
-    content_layout_metrics(inner.width, text, mode).0
+    content_layout_lines_metrics(inner.width, text, mode)
+        .0
+        .len()
+        .max(1)
 }
 
-fn content_layout(area: Rect, text: &str, mode: ContentViewMode) -> (usize, Rc<[Rect]>) {
+fn content_layout(area: Rect, text: &str, mode: ContentViewMode) -> (Vec<ContentLine>, Rc<[Rect]>) {
     let inner = panel_block(&Panel::new("", "", false)).inner(area);
-    let (total_lines, gutter_width) = content_layout_metrics(inner.width, text, mode);
+    let (lines, gutter_width) = content_layout_lines_metrics(inner.width, text, mode);
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -358,9 +356,10 @@ fn content_layout(area: Rect, text: &str, mode: ContentViewMode) -> (usize, Rc<[
             Constraint::Min(1),
         ])
         .split(inner);
-    (total_lines, chunks)
+    (lines, chunks)
 }
 
+#[cfg(test)]
 fn visible_content_lines(
     text: &str,
     scroll: usize,
@@ -411,17 +410,22 @@ fn all_content_lines(text: &str, width: usize, mode: ContentViewMode) -> Vec<Con
         .collect()
 }
 
-fn display_line_count(text: &str, mode: ContentViewMode, width: usize) -> usize {
-    all_content_lines(text, width, mode).len().max(1)
-}
-
-fn content_layout_metrics(inner_width: u16, text: &str, mode: ContentViewMode) -> (usize, u16) {
+/// Lay out the document and converge the gutter width (digit count of the
+/// line count) against the wrap width. The final layout is returned so the
+/// caller's metrics and its visible window share one markdown + wrap pass.
+fn content_layout_lines_metrics(
+    inner_width: u16,
+    text: &str,
+    mode: ContentViewMode,
+) -> (Vec<ContentLine>, u16) {
     let mut total_lines = line_count(text);
     let mut gutter_width = line_number_width(total_lines).saturating_add(1);
+    let mut lines = Vec::new();
 
     for _ in 0..4 {
         let content_width = inner_width.saturating_sub(gutter_width.saturating_add(1)) as usize;
-        let next_total_lines = display_line_count(text, mode, content_width);
+        lines = all_content_lines(text, content_width, mode);
+        let next_total_lines = lines.len().max(1);
         let next_gutter_width = line_number_width(next_total_lines).saturating_add(1);
         if next_total_lines == total_lines && next_gutter_width == gutter_width {
             break;
@@ -430,7 +434,7 @@ fn content_layout_metrics(inner_width: u16, text: &str, mode: ContentViewMode) -
         gutter_width = next_gutter_width;
     }
 
-    (total_lines, gutter_width)
+    (lines, gutter_width)
 }
 
 fn content_lines(
@@ -1481,5 +1485,39 @@ mod tests {
         let backend = terminal.backend();
         assert!(backend_row(backend, 1).contains("1|alpha"));
         assert!(backend_row(backend, 2).contains("2|beta"));
+    }
+
+    #[test]
+    fn content_layout_single_pass_matches_metrics_and_fits_width() {
+        let text = "line one\nline two\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n```rust\nfn main() {}\n```\n";
+        let area = Rect::new(0, 0, 60, 20);
+
+        let (lines, chunks) = super::content_layout(area, text, ContentViewMode::Reading);
+        assert_eq!(chunks.len(), 3);
+        let inner_width = area.width.saturating_sub(2) as usize; // panel borders
+        let column_widths = chunks.iter().map(|c| c.width as usize).sum::<usize>();
+        assert_eq!(column_widths, inner_width);
+
+        // Metrics (used by ContentIoFrame) and the layout used for painting
+        // agree on the total line count — one markdown + wrap pass.
+        let metrics = super::content_view_line_count(area, text, ContentViewMode::Reading);
+        assert_eq!(metrics, lines.len().max(1));
+        assert!(!lines.is_empty());
+
+        // Every wrapped line fits the content column.
+        for line in &lines {
+            let joined: String = line
+                .line
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect();
+            let width = UnicodeWidthStr::width(joined.as_str());
+            assert!(
+                width <= chunks[2].width as usize,
+                "line {width} exceeds content width {}",
+                chunks[2].width
+            );
+        }
     }
 }
