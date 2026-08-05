@@ -11,6 +11,7 @@ use crate::cli::{
 };
 use crate::commands::browse;
 use crate::commands::memory::copy;
+use crate::tui::terminal::{panic_payload_message, wait_for_enter};
 use crate::tui::workspace::WorkspaceFocus;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,10 +73,10 @@ pub fn pick_agent(args: &HotkeyPickAgentArgs) -> Result<()> {
             }
         }
         Err(panic) => {
-            let message = panic_message(&panic);
+            let message = panic_payload_message(&panic);
             eprintln!("sivtr: AI session picker panicked");
             eprintln!("{message}");
-            wait_for_enter();
+            wait_for_enter("Press Enter to close this window.");
         }
     }
 
@@ -178,24 +179,7 @@ fn state_path() -> Result<PathBuf> {
 fn show_pick_error_and_wait(error: &anyhow::Error) {
     eprintln!("sivtr: AI session picker failed");
     eprintln!("{error:#}");
-    wait_for_enter();
-}
-
-fn wait_for_enter() {
-    eprintln!();
-    eprintln!("Press Enter to close this window.");
-    let mut input = String::new();
-    let _ = std::io::stdin().read_line(&mut input);
-}
-
-fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
-    if let Some(message) = panic.downcast_ref::<&str>() {
-        (*message).to_string()
-    } else if let Some(message) = panic.downcast_ref::<String>() {
-        message.clone()
-    } else {
-        "unknown panic payload".to_string()
-    }
+    wait_for_enter("Press Enter to close this window.");
 }
 
 #[cfg(windows)]
