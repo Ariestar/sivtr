@@ -388,8 +388,14 @@ pub(crate) fn run(
                     },
                 )
             })?;
-            if visual_select_mode.is_some() {
+            // Ratatui reveals the cursor after every frame. Keep it visible
+            // only while typing in an overlay or selecting text; hide it
+            // otherwise so it does not blink at a stale position during
+            // normal browsing.
+            if show_search || line_filter_input_open || visual_select_mode.is_some() {
                 terminal.show_cursor()?;
+            } else {
+                terminal.hide_cursor()?;
             }
         }
 
