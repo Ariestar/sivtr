@@ -12,12 +12,16 @@ use crossterm::{
 use ratatui::{buffer::CellDiffOption, prelude::*};
 use std::io::IsTerminal;
 use std::{
+    cell::RefCell,
     fmt::Display,
     io::{self, Stdout},
     mem,
     ops::{Deref, DerefMut},
+    rc::Rc,
 };
 use unicode_width::UnicodeWidthStr;
+
+use super::panic;
 
 type InnerTui = Terminal<CrosstermBackend<Stdout>>;
 
@@ -28,7 +32,9 @@ type InnerTui = Terminal<CrosstermBackend<Stdout>>;
 pub struct Tui {
     terminal: InnerTui,
     drawing_active: bool,
-    state: TerminalState,
+    /// Shared with the panic hook so a crash restores the terminal exactly as `Drop` would.
+    /// The TUI and its panic restore live on the same thread, so the state never leaves it.
+    state: Rc<RefCell<TerminalState>>,
     #[cfg(windows)]
     previous_frame_had_wide_cells: bool,
     #[cfg(windows)]
@@ -49,10 +55,28 @@ impl DerefMut for Tui {
     }
 }
 
+impl Tui {
+    /// Register the terminal restore with the panic hook, replacing any previous registration.
+    ///
+    /// Called by [`init`] for every new terminal session. The previous session's state was
+    /// already restored (or its `Tui` is still alive and owns its own registration path), so
+    /// replacing the closure is safe.
+    fn register_panic_restore(&self) {
+        let state = Rc::clone(&self.state);
+        panic::register_restore(Box::new(move || {
+            // Restore in place: successful cleanup steps are disarmed, so an unwinding `Drop`
+            // afterwards retries only the steps that failed here.
+            let mut state = state.borrow_mut();
+            let _ = restore_terminal_state(&mut state);
+        }));
+    }
+}
+
 impl Drop for Tui {
     fn drop(&mut self) {
-        if self.state.has_pending_cleanup() {
-            let _ = restore_terminal_state(&mut self.state);
+        let mut state = self.state.borrow_mut();
+        if state.has_pending_cleanup() {
+            let _ = restore_terminal_state(&mut state);
         }
         self.drawing_active = false;
     }
@@ -116,15 +140,17 @@ pub fn init() -> Result<Tui> {
         Err(error) => return setup.fail(error),
     };
 
-    Ok(Tui {
+    let tui = Tui {
         terminal,
         drawing_active: true,
-        state: setup.commit(),
+        state: Rc::new(RefCell::new(setup.commit())),
         #[cfg(windows)]
         previous_frame_had_wide_cells: false,
         #[cfg(windows)]
         synchronized_updates_supported,
-    })
+    };
+    tui.register_panic_restore();
+    Ok(tui)
 }
 
 /// Draw one TUI frame.
@@ -245,7 +271,8 @@ fn apply_full_redraw_policy(buffer: &mut Buffer) {
 /// cleanup is pending because crossterm can write its cached raw mode during a retry.
 pub fn restore(terminal: &mut Tui) -> Result<()> {
     terminal.drawing_active = false;
-    restore_terminal_state(&mut terminal.state)
+    let mut state = terminal.state.borrow_mut();
+    restore_terminal_state(&mut state)
 }
 
 /// Restore a terminal and preserve both the operation error and a cleanup error, if both occur.
