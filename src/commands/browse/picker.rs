@@ -101,6 +101,9 @@ pub(crate) fn run(
     // that skip redrawing (idle with no state change).
     let mut dialogues: Vec<WorkspaceDialogue> = Vec::new();
     let mut content_frame = ContentIoFrame::default();
+    // (engine generation, selected mask, focused index) for the projection in
+    // `dialogues`; unchanged redraws reuse it instead of re-cloning bodies.
+    let mut dialogues_key: Option<(u64, Vec<bool>, usize)> = None;
 
     loop {
         // ── Unified pane poll/ensure ───────────────────────────────────────
@@ -285,11 +288,24 @@ pub(crate) fn run(
             dialogue_idx,
         );
 
+        // Materialize the dialogue projection only when the engine, the
+        // selected mask, or the focused row changed. Content scrolling and
+        // other-pane activity reuse the last projection instead of cloning
+        // dialogue bodies on every redraw.
+        let materialize_key = (
+            dialogue_pane.generation(),
+            selected_dialogues.clone(),
+            dialogue_idx,
+        );
+        if dialogues_key.as_ref() != Some(&materialize_key) {
+            dialogue_pane.materialize_into(&selected_dialogues, dialogue_idx, &mut dialogues);
+            dialogues_key = Some(materialize_key);
+        }
+
         if redraw {
             redraw = false;
             // List: title borrows. Content/copy: materialize (body only for focus∪select).
             let dialogue_titles: Vec<&str> = dialogue_pane.titles().collect();
-            dialogues = dialogue_pane.materialize(&selected_dialogues, dialogue_idx);
 
             content_frame = ContentIoFrame::build(
                 layout.content,

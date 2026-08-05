@@ -80,6 +80,10 @@ struct DialogueFingerprint {
 pub struct DialoguePane {
     engine: DialogueEngine,
     fingerprint: DialogueFingerprint,
+    /// Bumped whenever the engine's rows or bodies change. Callers use it as
+    /// the cheap half of a materialization key so they can skip rebuilding
+    /// the owned projection (and its body clones) across unchanged redraws.
+    generation: u64,
 }
 
 impl DialoguePane {
@@ -88,34 +92,52 @@ impl DialoguePane {
         self.engine.rows().iter().map(|r| r.meta.title.as_str())
     }
 
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     /// Index-stable rows for content/copy/vim.
     /// Clones **body only** for focus ∪ multi-select; other rows are title shells.
+    #[cfg(test)]
     pub fn materialize(&self, selected: &[bool], focus: usize) -> Vec<WorkspaceDialogue> {
+        let mut out = Vec::new();
+        self.materialize_into(selected, focus, &mut out);
+        out
+    }
+
+    /// Rebuild `out` from the engine rows. Callers cache `out` between calls
+    /// and only invoke this when `generation()`, the selected mask, or the
+    /// focused index changed, so scrolling content does not re-clone bodies.
+    pub fn materialize_into(
+        &self,
+        selected: &[bool],
+        focus: usize,
+        out: &mut Vec<WorkspaceDialogue>,
+    ) {
+        out.clear();
         let rows = self.engine.rows();
         if rows.is_empty() {
-            return Vec::new();
+            return;
         }
         let any = selected.iter().any(|s| *s);
         let focus = focus.min(rows.len() - 1);
-        rows.iter()
-            .enumerate()
-            .map(|(i, row)| {
-                let need_body = if any {
-                    selected.get(i).copied().unwrap_or(false)
-                } else {
-                    i == focus
-                };
-                if need_body {
-                    if let Some(body) = row.body.clone() {
-                        body
-                    } else {
-                        shell_from_row(row)
-                    }
+        for (i, row) in rows.iter().enumerate() {
+            let need_body = if any {
+                selected.get(i).copied().unwrap_or(false)
+            } else {
+                i == focus
+            };
+            let item = if need_body {
+                if let Some(body) = row.body.clone() {
+                    body
                 } else {
                     shell_from_row(row)
                 }
-            })
-            .collect()
+            } else {
+                shell_from_row(row)
+            };
+            out.push(item);
+        }
     }
 
     #[cfg(test)]
@@ -203,16 +225,27 @@ impl Pane for DialoguePane {
         let keep = self
             .engine
             .keep_for_focus(input.focus, input.selected, input.neighbor_radius);
+        // Bodies hydrate asynchronously; a fill changes what materialize
+        // projects, so bump the generation even when the row count is stable.
+        let mut bodies_filled = false;
         self.engine.ensure_bodies_sync(keep, |key| {
-            body_for_key(
+            let body = body_for_key(
                 ctx.sessions,
                 ctx.session_idx,
                 ctx.selected_sessions,
                 ctx.records,
                 key,
-            )
+            );
+            if body.is_some() {
+                bodies_filled = true;
+            }
+            body
         });
-        grown || self.engine.len() != before
+        let changed = grown || self.engine.len() != before || bodies_filled;
+        if changed {
+            self.generation = self.generation.wrapping_add(1);
+        }
+        changed
     }
 
     fn len(&self) -> usize {
@@ -686,5 +719,74 @@ mod tests {
         let with_body = rows.iter().filter(|d| d.record.is_some()).count();
         assert_eq!(with_body, 1);
         assert!(rows[5].record.is_some());
+    }
+
+    #[test]
+    fn generation_tracks_engine_changes_and_materialize_is_stable() {
+        let sessions = vec![session_with_n(30, true)];
+        let mut pane = DialoguePane::default();
+        let records = |s: &WorkspaceSession| {
+            sessions
+                .iter()
+                .find(|x| x.session_id == s.session_id && x.source == s.source)
+                .filter(|x| x.body_loaded)
+                .map(|x| x.records.as_slice())
+        };
+        let vp = Viewport {
+            first: 0,
+            visible: 20,
+        };
+        let ensure = |pane: &mut DialoguePane| {
+            pane.ensure(
+                DialogueCtx {
+                    sessions: &sessions,
+                    session_idx: 0,
+                    selected_sessions: &[false],
+                    records: &records,
+                },
+                &PaneInput::new(vp, 0).with_selected(&[false]),
+            )
+        };
+
+        let g0 = pane.generation();
+        assert!(ensure(&mut pane), "first ensure builds rows");
+        let g1 = pane.generation();
+        assert!(g1 > g0, "row build must bump the generation");
+
+        assert!(!ensure(&mut pane), "steady-state ensure is a no-op");
+        assert_eq!(
+            pane.generation(),
+            g1,
+            "a no-op ensure must not bump the generation"
+        );
+
+        // Same inputs → identical projection, focused body included.
+        let sel = vec![false; pane.len()];
+        let mut out = Vec::new();
+        pane.materialize_into(&sel, 0, &mut out);
+        let snapshot: Vec<String> = out
+            .iter()
+            .map(|d| {
+                d.work_ref
+                    .as_ref()
+                    .map(|r| r.to_string())
+                    .unwrap_or_default()
+            })
+            .collect();
+        assert!(
+            out.first().is_some_and(|d| d.record.is_some()),
+            "focused body present"
+        );
+        pane.materialize_into(&sel, 0, &mut out);
+        let again: Vec<String> = out
+            .iter()
+            .map(|d| {
+                d.work_ref
+                    .as_ref()
+                    .map(|r| r.to_string())
+                    .unwrap_or_default()
+            })
+            .collect();
+        assert_eq!(snapshot, again);
     }
 }
