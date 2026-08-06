@@ -84,6 +84,10 @@ impl Drop for Tui {
 
 /// Initialize the terminal for TUI rendering.
 pub fn init() -> Result<Tui> {
+    // The panic hook that restores the terminal is normally installed by `cli_main`; library
+    // callers (e.g. `commands::browse::run_with_sessions`) never pass through it, so install
+    // here too. `install` is idempotent, and `register_panic_restore` below arms the closure.
+    panic::install();
     ensure_tui_stdout()?;
 
     let mut setup = TerminalSetup::default();
