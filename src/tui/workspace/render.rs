@@ -176,13 +176,25 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
 }
 
 /// Place the cursor just past the typed text inside an overlay's text area.
+///
+/// Pasted text can contain newlines, and `Paragraph` renders each line on its
+/// own row. The caret must therefore sit on the row of the *last* rendered line
+/// (clipped to the visible box when the text overflows it), not on the first
+/// row with the summed width of every line.
 fn position_overlay_cursor(frame: &mut Frame, area: Rect, text: &str) {
     let inner = area.inner(Margin::new(1, 1));
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    let column = UnicodeWidthStr::width(text).min(inner.width as usize) as u16;
-    frame.set_cursor_position(Position::new(inner.x.saturating_add(column), inner.y));
+    let lines: Vec<&str> = text.split('\n').collect();
+    let caret_row = lines
+        .len()
+        .saturating_sub(1)
+        .min(inner.height as usize - 1);
+    let caret_line = lines.get(caret_row).copied().unwrap_or("");
+    let column = UnicodeWidthStr::width(caret_line).min(inner.width as usize) as u16;
+    let row = inner.y.saturating_add(caret_row as u16);
+    frame.set_cursor_position(Position::new(inner.x.saturating_add(column), row));
 }
 
 fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>) {
@@ -899,4 +911,51 @@ pub(crate) fn content_title(
         mode.label(),
         content_title_suffix(selected_dialogues, current_ref)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::position_overlay_cursor;
+    use ratatui::backend::{Backend, TestBackend};
+    use ratatui::layout::Rect;
+    use ratatui::prelude::Terminal;
+
+    /// Render the overlay at `(2, 1, 14, 4)` — inner text area `(3, 2, 12, 2)` —
+    /// and return the caret position the frame recorded.
+    fn cursor_for(text: &str) -> (u16, u16) {
+        let backend = TestBackend::new(20, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                position_overlay_cursor(frame, Rect::new(2, 1, 14, 4), text);
+            })
+            .unwrap();
+        let pos = terminal.backend_mut().get_cursor_position().unwrap();
+        (pos.x, pos.y)
+    }
+
+    #[test]
+    fn overlay_cursor_follows_single_line_text() {
+        assert_eq!(cursor_for("2:3"), (6, 2));
+        assert_eq!(cursor_for(""), (3, 2));
+    }
+
+    #[test]
+    fn overlay_cursor_tracks_the_last_rendered_line() {
+        // "1,3\n5:7" renders "1,3" on the first row and "5:7" on the second;
+        // the caret must sit at the end of "5:7", not at the summed width on
+        // the first row.
+        assert_eq!(cursor_for("1,3\n5:7"), (6, 3));
+        // A trailing newline opens an empty final row for the caret.
+        assert_eq!(cursor_for("1,3\n"), (3, 3));
+    }
+
+    #[test]
+    fn overlay_cursor_clamps_to_the_visible_box() {
+        // More lines than the box has rows: the caret stays on the last visible
+        // row, at the end of the line rendered there.
+        assert_eq!(cursor_for("1\n2\n3\n4"), (4, 3));
+        // A line wider than the box clamps the column to the right edge.
+        assert_eq!(cursor_for("1\n0123456789abcdefghij"), (15, 3));
+    }
 }
