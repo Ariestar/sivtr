@@ -291,6 +291,21 @@ pub(crate) fn run(
             let dialogue_titles: Vec<&str> = dialogue_pane.titles().collect();
             dialogues = dialogue_pane.materialize(&selected_dialogues, dialogue_idx);
 
+            // Resolve where the pending search match lands *before* building the
+            // frame: the frame weights geometry toward the focused half, so a
+            // focus switch must be visible to the build or the newly active pane
+            // keeps the smaller height until the next redraw.
+            let pending_half = pending_match.as_ref().map(|matched| {
+                let input = dialogues
+                    .get(dialogue_idx)
+                    .and_then(|dialogue| dialogue.record.as_ref())
+                    .and_then(|record| record.part_for_at(matched.at))
+                    .is_none_or(|part| part.kind().is_input());
+                search_match_half(input, matched.matched_line)
+            });
+            if let Some((half, _)) = pending_half {
+                content_io_focus = half;
+            }
             content_frame = ContentIoFrame::build(
                 layout.content,
                 content_pane.ensure(ContentCtx {
@@ -306,14 +321,7 @@ pub(crate) fn run(
                 content_io_focus,
             );
             content_scrolls.clamp_to(content_frame.input_lines, content_frame.output_lines);
-            if let Some(matched) = pending_match {
-                let input = dialogues
-                    .get(dialogue_idx)
-                    .and_then(|dialogue| dialogue.record.as_ref())
-                    .and_then(|record| record.part_for_at(matched.at))
-                    .is_none_or(|part| part.kind().is_input());
-                let (half, scroll) = search_match_half(input, matched.matched_line);
-                content_io_focus = half;
+            if let Some((half, scroll)) = pending_half {
                 let total = content_frame.line_count(half);
                 content_scrolls.set(half, scroll.min(total.saturating_sub(1)));
                 search_apply_pending = false;
