@@ -1177,11 +1177,11 @@ pub struct CodexExportArgs {
     #[arg(long, default_value_t = false)]
     pub watch: bool,
 
-    /// Seconds between sync passes when `--watch` is enabled
+    /// Maximum seconds between periodic reconciliation passes when `--watch` is enabled
     #[arg(long, value_name = "SECONDS", default_value_t = 1, requires = "watch")]
     pub interval: u64,
 
-    /// Milliseconds between sync passes when `--watch` is enabled (overrides `--interval`)
+    /// Maximum milliseconds between periodic reconciliation passes (overrides `--interval`)
     #[arg(long, value_name = "MILLISECONDS", requires = "watch")]
     pub interval_ms: Option<u64>,
 }

@@ -108,6 +108,7 @@ ureq = { version = "3.3.0", default-features = false, features = ["rustls"] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 flate2 = "1.1.9"
 tar = { version = "0.4.46", default-features = false }
+notify = "8.2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
