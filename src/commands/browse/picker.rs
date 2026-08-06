@@ -18,7 +18,7 @@ use crate::tui::workspace::{
 };
 
 use super::content::{
-    active_workspace_content_at, handle_line_filter_key, line_filter_spec,
+    active_workspace_content_at, handle_line_filter_key, handle_line_filter_paste, line_filter_spec,
     workspace_search_target_ref,
 };
 use super::help::{apply_workspace_help_action, set_focus, HelpDispatch};
@@ -437,7 +437,7 @@ pub(crate) fn run(
                         &mut content_scrolls,
                     );
                 } else if line_filter_input_open {
-                    line_filter.push_str(&text);
+                    handle_line_filter_paste(&text, &mut line_filter, &mut line_filter_error);
                 }
             }
             Event::Key(key) => {
@@ -1039,10 +1039,10 @@ mod tests {
     }
 
     use super::super::content::{
-        handle_line_filter_key, workspace_dialogue_vim_view, workspace_picked_content,
-        workspace_picked_content_for_copy, workspace_picked_content_for_copy_with_line_filter,
-        workspace_picked_content_with_line_filter, workspace_search_target_ref,
-        WorkspaceCopyShortcut,
+        handle_line_filter_key, handle_line_filter_paste, workspace_dialogue_vim_view,
+        workspace_picked_content, workspace_picked_content_for_copy,
+        workspace_picked_content_for_copy_with_line_filter, workspace_picked_content_with_line_filter,
+        workspace_search_target_ref, WorkspaceCopyShortcut,
     };
     use super::super::nav::{clamp_list_state, move_workspace_cursor_up};
     use super::super::panes::{DialogueCtx, DialoguePane};
@@ -1775,6 +1775,23 @@ mod tests {
 
         assert_eq!(filter, "2:3");
         assert!(open);
+    }
+
+    #[test]
+    fn line_filter_paste_strips_disallowed_characters() {
+        let mut filter = String::new();
+        let mut error = Some("previous error".into());
+
+        // Clipboard trailing newline and stray text must not leak into the spec.
+        handle_line_filter_paste("1,3:5\n", &mut filter, &mut error);
+        assert_eq!(filter, "1,3:5");
+        assert!(error.is_none());
+
+        // Fully invalid paste is dropped and the previous error is kept.
+        let mut error = Some("previous error".into());
+        handle_line_filter_paste("alpha beta\n", &mut filter, &mut error);
+        assert_eq!(filter, "1,3:5");
+        assert!(error.is_some());
     }
 
     #[test]

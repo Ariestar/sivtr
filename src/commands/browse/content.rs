@@ -181,6 +181,26 @@ pub(super) fn handle_line_filter_key(
     }
 }
 
+/// Apply a bracketed paste to the line filter with the same character policy
+/// as typed input (digits, `:`, `,`). Clipboard content is often copied with a
+/// trailing newline or other stray characters; appending it verbatim would make
+/// the later `filter_lines_by_spec` parse fail and exit the picker. Matching the
+/// typed path, the error is cleared once usable characters land.
+pub(super) fn handle_line_filter_paste(
+    text: &str,
+    line_filter: &mut String,
+    line_filter_error: &mut Option<String>,
+) {
+    let filtered: String = text
+        .chars()
+        .filter(|ch| matches!(ch, '0'..='9' | ':' | ','))
+        .collect();
+    if !filtered.is_empty() {
+        line_filter.push_str(&filtered);
+        *line_filter_error = None;
+    }
+}
+
 pub(super) fn apply_dialogue_range_selection(
     range_anchor: &mut Option<usize>,
     selected_dialogues: &mut [bool],
