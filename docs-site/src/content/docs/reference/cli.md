@@ -725,9 +725,14 @@ Options:
 | --- | --- |
 | `--dest <PATH>` | Destination directory that will receive the `sessions/` tree |
 | `--limit <N>` | Keep only newest N session files; `0` means export all |
-| `--watch` | Continue mirroring local sessions |
-| `--interval <SECONDS>` | Seconds between sync passes when watching; default is `1` |
-| `--interval-ms <MILLISECONDS>` | Milliseconds between sync passes; overrides `--interval` |
+| `--watch` | Continue mirroring with native filesystem wakeups and periodic reconciliation |
+| `--interval <SECONDS>` | Maximum seconds between reconciliation passes; default is `1` |
+| `--interval-ms <MILLISECONDS>` | Maximum milliseconds between reconciliation passes; overrides `--interval` |
+
+Native filesystem events can trigger an earlier pass. If native watching is unavailable or
+disconnects, export falls back to periodic polling. Stable files are not republished; verified
+append-only growth writes only the new suffix. After a restart or filesystem migration, export
+verifies file content before resuming incremental writes.
 
 Examples:
 
