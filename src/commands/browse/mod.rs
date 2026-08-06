@@ -43,6 +43,28 @@ pub fn run(
     select_remotes: bool,
     initial_focus: WorkspaceFocus,
 ) -> Result<WorkspacePickedContent> {
+    run_catalog(providers, select_remotes, initial_focus, true)
+}
+
+/// Like [`run`], but does not prompt for Enter after a recovered panic.
+///
+/// The Windows hotkey picker runs in its own console and already waits when it
+/// reports errors (`show_pick_error_and_wait`); waiting here as well would make
+/// the first keypress appear to be ignored by the panic prompt.
+pub fn run_without_panic_wait(
+    providers: &[AgentProvider],
+    select_remotes: bool,
+    initial_focus: WorkspaceFocus,
+) -> Result<WorkspacePickedContent> {
+    run_catalog(providers, select_remotes, initial_focus, false)
+}
+
+fn run_catalog(
+    providers: &[AgentProvider],
+    select_remotes: bool,
+    initial_focus: WorkspaceFocus,
+    wait_after_panic: bool,
+) -> Result<WorkspacePickedContent> {
     let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
     let sources = workspace_source_catalog(providers, &cwd)?;
     if sources.is_empty() {
@@ -64,6 +86,7 @@ pub fn run(
         selected_sources,
         cwd,
         initial_focus,
+        wait_after_panic,
     );
     finish_tui(&mut terminal, result)
 }
@@ -84,6 +107,7 @@ pub fn run_with_sessions(
         vec![true],
         cwd,
         initial_focus,
+        true,
     );
     finish_tui(&mut terminal, result)
 }
@@ -95,6 +119,10 @@ pub fn run_with_sessions(
 /// first; panics that skip this path are caught by the global panic hook
 /// ([`crate::tui::panic`]) and by the `Tui` drop. The panic message is
 /// printed before the error propagates.
+///
+/// `wait_after_panic` controls whether a recovered panic prompts for Enter: the
+/// hotkey picker reports errors itself, so it passes `false` to avoid consuming
+/// a keypress the outer handler is about to wait on.
 fn run_picker_guarded(
     terminal: &mut crate::tui::terminal::Tui,
     sources: Vec<WorkspaceSource>,
@@ -102,6 +130,7 @@ fn run_picker_guarded(
     selected_sources: Vec<bool>,
     cwd: std::path::PathBuf,
     initial_focus: WorkspaceFocus,
+    wait_after_panic: bool,
 ) -> Result<WorkspacePickedContent> {
     match catch_unwind(AssertUnwindSafe(|| {
         run_picker(
@@ -118,7 +147,7 @@ fn run_picker_guarded(
             let message = panic_payload_message(&payload);
             let _ = restore_tui(terminal);
             eprintln!("sivtr: TUI panicked: {message}");
-            if io::stdin().is_terminal() {
+            if wait_after_panic && io::stdin().is_terminal() {
                 wait_for_enter("press Enter to continue");
             }
             Err(anyhow!("TUI panicked: {message}"))
