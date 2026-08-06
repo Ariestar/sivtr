@@ -61,7 +61,10 @@ pub fn pick_agent(args: &HotkeyPickAgentArgs) -> Result<()> {
         let providers = args.provider.providers();
         // Hotkey owns the browse product surface; copy only exports the pick.
         let _ = args.current_session;
-        let picked = browse::run(&providers, args.all, WorkspaceFocus::Sessions)?;
+        // The no-wait variant: this handler reports errors (and waits) itself,
+        // so a panic recovered inside the picker must not consume an Enter
+        // before show_pick_error_and_wait prompts.
+        let picked = browse::run_without_panic_wait(&providers, args.all, WorkspaceFocus::Sessions)?;
         copy::export_picked(&picked, false, None, None, false)
     });
 
