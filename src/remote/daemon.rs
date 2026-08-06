@@ -238,7 +238,13 @@ async fn process_local(
         }
         LocalRequest::ShareGrants { share } => LocalResponse::Grants(context.store.grants(&share)?),
         LocalRequest::ShareRevoke { share, peer } => {
-            LocalResponse::Grant(context.store.revoke(&share, &peer)?)
+            match context.store.revoke(&share, &peer)? {
+                Some(grant) => LocalResponse::Grant(grant),
+                // An explicit revoke of a grant that never existed is an error
+                // on the CLI path, even though the group paths treat it as an
+                // idempotent no-op.
+                None => bail!("Peer `{peer}` has no active grant for `{share}`"),
+            }
         }
         LocalRequest::PeerList => LocalResponse::Peers(context.store.peers()?),
         LocalRequest::PeerForget { peer } => LocalResponse::Peer(context.store.forget_peer(&peer)?),
@@ -344,12 +350,15 @@ async fn process_local(
             LocalResponse::Members(context.store.members(&group)?)
         }
         LocalRequest::GroupShares { group } => {
-            let group = context.store.group(&group)?;
-            LocalResponse::GroupShares(
-                context
+            // First-time join runs before any local group row exists; an
+            // unknown group simply means nothing is contributed yet.
+            let shares = match context.store.group_opt(&group)? {
+                Some(group) => context
                     .store
                     .group_shares(&group.id, &context.identity.id())?,
-            )
+                None => Vec::new(),
+            };
+            LocalResponse::GroupShares(shares)
         }
         LocalRequest::GroupInvite {
             group,
@@ -634,6 +643,25 @@ async fn handle_remote(connection: Connection, context: Arc<DaemonContext>) -> R
     Ok(())
 }
 
+/// Require `sender` to be the group's owner before roster-changing requests.
+///
+/// Membership changes are always owner-driven: joins, kicks, and leaves are
+/// broadcast by the owner after it updates its authoritative roster. Binding
+/// them to the transport-authenticated sender prevents a member from forging
+/// additions (which would grant an attacker read access to other members'
+/// contributions) or removals.
+fn require_group_owner(store: &StateStore, group_id: &str, sender: &str) -> Result<()> {
+    let owner = store
+        .members(group_id)?
+        .into_iter()
+        .find(|member| member.role == "owner")
+        .context("Group has no owner")?;
+    if owner.peer_id != sender {
+        bail!("Only the group owner may change membership");
+    }
+    Ok(())
+}
+
 async fn process_remote(
     context: &Arc<DaemonContext>,
     peer_id: &str,
@@ -758,6 +786,7 @@ async fn process_remote(
             })
         }
         RemoteRequest::GroupMemberAdded { group_id, member } => {
+            require_group_owner(&context.store, &group_id, peer_id)?;
             let endpoint_json = serde_json::to_string(&member.endpoint)?;
             context
                 .store
@@ -783,36 +812,46 @@ async fn process_remote(
         }
         RemoteRequest::GroupShareAdded {
             group_id,
-            peer_id,
+            peer_id: contributor,
             peer_name: _,
             share_id,
             share_name,
         } => {
+            // Only the contributor may register its own contribution; a forged
+            // peer_id would otherwise let a member attach arbitrary shares to
+            // other members' rosters.
+            if contributor != peer_id {
+                bail!("Only the contributor may register its own share");
+            }
             // The contributor granted everyone access locally; members only
             // need to register the new contribution so fan-out can reach it.
             context
                 .store
-                .add_group_share(&group_id, &peer_id, &share_id, &share_name)?;
+                .add_group_share(&group_id, &contributor, &share_id, &share_name)?;
             Ok(RemoteResponse::GroupAck)
         }
         RemoteRequest::GroupShareRemoved {
             group_id,
-            peer_id,
+            peer_id: contributor,
             share_id,
         } => {
+            if contributor != peer_id {
+                bail!("Only the contributor may withdraw its own share");
+            }
             // The share is no longer part of the group; drop the local
             // registration so fan-out stops dialing it.
             context
                 .store
-                .remove_group_share(&group_id, &peer_id, &share_id)?;
+                .remove_group_share(&group_id, &contributor, &share_id)?;
             Ok(RemoteResponse::GroupAck)
         }
         RemoteRequest::GroupMemberRemoved {
             group_id,
-            peer_id,
+            peer_id: removed_peer,
             peer_name: _,
         } => {
-            if peer_id == context.identity.id() {
+            require_group_owner(&context.store, &group_id, peer_id)?;
+            if removed_peer == context.identity.id() {
                 // We were kicked (or the owner disbanded the group).
                 drop_group(context, &group_id).await?;
             } else {
@@ -820,9 +859,9 @@ async fn process_remote(
                     .store
                     .group_shares(&group_id, &context.identity.id())?
                 {
-                    revoke_peer_grant(&context.store, &share.share_id, &peer_id);
+                    revoke_peer_grant(&context.store, &share.share_id, &removed_peer)?;
                 }
-                context.store.remove_member(&group_id, &peer_id)?;
+                context.store.remove_member(&group_id, &removed_peer)?;
             }
             Ok(RemoteResponse::GroupAck)
         }
@@ -831,58 +870,66 @@ async fn process_remote(
             let leaver = members_before
                 .iter()
                 .find(|row| row.peer_id == peer_id)
-                .cloned();
+                .cloned()
+                .context("Unknown group member")?;
             context.store.remove_member(&group_id, peer_id)?;
             // Revoke every owner contribution from the leaver.
             if let Some(owner) = members_before.iter().find(|row| row.role == "owner") {
                 for share in context.store.group_shares(&group_id, &owner.peer_id)? {
-                    revoke_peer_grant(&context.store, &share.share_id, peer_id);
+                    revoke_peer_grant(&context.store, &share.share_id, peer_id)?;
                 }
             }
-            if let Some(leaver) = leaver {
-                broadcast(
-                    context,
-                    &group_id,
-                    RemoteRequest::GroupMemberRemoved {
-                        group_id: group_id.clone(),
-                        peer_id: leaver.peer_id.clone(),
-                        peer_name: leaver.peer_name.clone(),
-                    },
-                    None,
-                )
-                .await;
-            }
+            broadcast(
+                context,
+                &group_id,
+                RemoteRequest::GroupMemberRemoved {
+                    group_id: group_id.clone(),
+                    peer_id: leaver.peer_id.clone(),
+                    peer_name: leaver.peer_name.clone(),
+                },
+                None,
+            )
+            .await;
             Ok(RemoteResponse::GroupAck)
         }
         RemoteRequest::GroupSync { group_id } => {
-            let (group_name, member, members) = match context.store.group(&group_id) {
-                Ok(group) => {
-                    let roster: Vec<MemberInfo> = context
-                        .store
-                        .members(&group.id)?
-                        .iter()
-                        .map(|member| member_info_from_store(&context.store, &group.id, member))
-                        .collect::<Result<_>>()?;
-                    let is_member = roster.iter().any(|row| row.peer_id == peer_id);
-                    // Live endpoint for the owner's own entry.
-                    let owner_addr = context.endpoint.addr();
-                    let roster = roster
-                        .into_iter()
-                        .map(|mut row| {
-                            if row.peer_id == context.identity.id() {
-                                row.endpoint = owner_addr.clone();
-                            }
-                            row
-                        })
-                        .collect();
-                    (group.name, is_member, roster)
-                }
-                Err(_) => (group_id.clone(), false, Vec::new()),
+            let Ok(group) = context.store.group(&group_id) else {
+                return Ok(RemoteResponse::GroupSynced {
+                    group_name: group_id.clone(),
+                    member: false,
+                    members: Vec::new(),
+                });
             };
+            let roster: Vec<MemberInfo> = context
+                .store
+                .members(&group.id)?
+                .iter()
+                .map(|member| member_info_from_store(&context.store, &group.id, member))
+                .collect::<Result<_>>()?;
+            // The roster is membership data: only members may read it, so a
+            // non-member learns only that it is not a member.
+            if !roster.iter().any(|row| row.peer_id == peer_id) {
+                return Ok(RemoteResponse::GroupSynced {
+                    group_name: group.name,
+                    member: false,
+                    members: Vec::new(),
+                });
+            }
+            // Live endpoint for the owner's own entry.
+            let owner_addr = context.endpoint.addr();
+            let roster = roster
+                .into_iter()
+                .map(|mut row| {
+                    if row.peer_id == context.identity.id() {
+                        row.endpoint = owner_addr.clone();
+                    }
+                    row
+                })
+                .collect();
             Ok(RemoteResponse::GroupSynced {
-                group_name,
-                member,
-                members,
+                group_name: group.name,
+                member: true,
+                members: roster,
             })
         }
     }
@@ -1088,6 +1135,26 @@ async fn sync_group(context: &Arc<DaemonContext>, group_name_or_id: &str) -> Res
                 context
                     .store
                     .add_member(&group.id, &remote.peer_id, &remote.role)?;
+                // Reconcile this member's full contribution set: a share the
+                // owner no longer lists (e.g. a lost GroupShareRemoved push)
+                // must not keep fan-out dialing it. Our own contributions are
+                // local authority and never pruned here.
+                if remote.peer_id != self_id {
+                    let local = context.store.group_shares(&group.id, &remote.peer_id)?;
+                    for existing in local {
+                        if !remote
+                            .shares
+                            .iter()
+                            .any(|(share_id, _)| *share_id == existing.share_id)
+                        {
+                            context.store.remove_group_share(
+                                &group.id,
+                                &remote.peer_id,
+                                &existing.share_id,
+                            )?;
+                        }
+                    }
+                }
                 for (share_id, share_name) in &remote.shares {
                     context.store.add_group_share(
                         &group.id,
@@ -1113,7 +1180,7 @@ async fn sync_group(context: &Arc<DaemonContext>, group_name_or_id: &str) -> Res
                 if !members.iter().any(|remote| remote.peer_id == local.peer_id) {
                     context.store.remove_member(&group.id, &local.peer_id)?;
                     for share in &self_shares {
-                        revoke_peer_grant(&context.store, &share.share_id, &local.peer_id);
+                        revoke_peer_grant(&context.store, &share.share_id, &local.peer_id)?;
                     }
                 }
             }
@@ -1150,7 +1217,7 @@ async fn drop_group(context: &Arc<DaemonContext>, group_name_or_id: &str) -> Res
     for share in context.store.group_shares(&group.id, &self_id)? {
         for member in &members {
             if member.peer_id != self_id {
-                revoke_peer_grant(&context.store, &share.share_id, &member.peer_id);
+                revoke_peer_grant(&context.store, &share.share_id, &member.peer_id)?;
             }
         }
     }
@@ -1172,7 +1239,7 @@ async fn leave_group(context: &Arc<DaemonContext>, group_name_or_id: &str) -> Re
         for member in &members {
             if member.peer_id != self_id {
                 for share in &self_shares {
-                    revoke_peer_grant(&context.store, &share.share_id, &member.peer_id);
+                    revoke_peer_grant(&context.store, &share.share_id, &member.peer_id)?;
                 }
             }
         }
@@ -1204,7 +1271,7 @@ async fn leave_group(context: &Arc<DaemonContext>, group_name_or_id: &str) -> Re
     for member in &members {
         if member.peer_id != self_id {
             for share in &self_shares {
-                revoke_peer_grant(&context.store, &share.share_id, &member.peer_id);
+                revoke_peer_grant(&context.store, &share.share_id, &member.peer_id)?;
             }
         }
     }
@@ -1248,7 +1315,7 @@ async fn remove_group_member(
         })
         .context("Unknown group member")?;
     for share in context.store.group_shares(&group.id, &self_id)? {
-        revoke_peer_grant(&context.store, &share.share_id, &target.peer_id);
+        revoke_peer_grant(&context.store, &share.share_id, &target.peer_id)?;
     }
     context.store.remove_member(&group.id, &target.peer_id)?;
     // Everyone hears about the removal — the removed peer clears the group
@@ -1400,9 +1467,15 @@ fn member_info_from_store(
     })
 }
 
-/// Revoke a grant if one exists; ignore the "no active grant" case.
-fn revoke_peer_grant(store: &StateStore, share_name_or_id: &str, peer_name_or_id: &str) {
-    store.revoke(share_name_or_id, peer_name_or_id).ok();
+/// Revoke a grant. A missing grant is an idempotent no-op (`revoke` returns
+/// `Ok(None)`); every storage failure is propagated, so kick/leave/disband
+/// cannot report success while access remains active.
+fn revoke_peer_grant(
+    store: &StateStore,
+    share_name_or_id: &str,
+    peer_name_or_id: &str,
+) -> Result<()> {
+    store.revoke(share_name_or_id, peer_name_or_id).map(|_| ())
 }
 
 fn random_token() -> String {
@@ -1416,5 +1489,39 @@ pub fn remove_stale_daemon_info() -> Result<()> {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::require_group_owner;
+    use super::StateStore;
+
+    fn group_store() -> (tempfile::TempDir, StateStore) {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = StateStore::open(temp.path().join("state.db")).expect("store");
+        store.add_group("team", "self-1", "self").expect("group");
+        store.save_remote_peer("peer-2", "bob", "{}").expect("peer");
+        store
+            .add_member("team", "peer-2", "member")
+            .expect("member");
+        (temp, store)
+    }
+
+    #[test]
+    fn only_the_owner_may_change_membership() {
+        let (_temp, store) = group_store();
+        require_group_owner(&store, "team", "self-1").expect("owner passes");
+        let error = require_group_owner(&store, "team", "peer-2").expect_err("member rejected");
+        assert!(error.to_string().contains("Only the group owner"));
+        let error = require_group_owner(&store, "team", "stranger").expect_err("outsider rejected");
+        assert!(error.to_string().contains("Only the group owner"));
+    }
+
+    #[test]
+    fn unknown_group_has_no_owner() {
+        let (_temp, store) = group_store();
+        let error = require_group_owner(&store, "missing", "self-1").expect_err("unknown group");
+        assert!(error.to_string().contains("Unknown group"));
     }
 }

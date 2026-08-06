@@ -233,8 +233,12 @@ impl StateStore {
             "ALTER TABLE invites ADD COLUMN max_uses INTEGER",
             "ALTER TABLE invites ADD COLUMN used_count INTEGER NOT NULL DEFAULT 0",
         ] {
+            // Only the expected "column already exists" failure is benign for
+            // an idempotent ALTER; anything else is a real migration error.
             match connection.execute(statement, []) {
-                Ok(_) | Err(_) => {}
+                Ok(_) => {}
+                Err(error) if Self::is_duplicate_column(&error) => {}
+                Err(error) => return Err(error.into()),
             }
         }
         // Migrate the pre-split `group_members` (one share per member) into the
@@ -291,6 +295,16 @@ impl StateStore {
             )?;
         }
         Ok(())
+    }
+
+    /// True for the only benign `ALTER TABLE ADD COLUMN` failure on an
+    /// already-migrated database: the column already exists.
+    fn is_duplicate_column(error: &rusqlite::Error) -> bool {
+        matches!(
+            error,
+            rusqlite::Error::SqliteFailure(_, Some(message))
+                if message.contains("duplicate column name")
+        )
     }
 
     pub fn add_share(
@@ -601,24 +615,31 @@ impl StateStore {
             .map_err(Into::into)
     }
 
-    pub fn revoke(&self, share_name_or_id: &str, peer_name_or_id: &str) -> Result<GrantInfo> {
+    /// Revoke a grant, returning it when one was active.
+    ///
+    /// Revoking a grant that does not exist is an idempotent no-op (`Ok(None)`):
+    /// the group paths rely on it, since kick/leave must not fail just because
+    /// a peer already lost access. Every other failure (missing share/peer,
+    /// database error) is propagated.
+    pub fn revoke(
+        &self,
+        share_name_or_id: &str,
+        peer_name_or_id: &str,
+    ) -> Result<Option<GrantInfo>> {
         let share = self.share(share_name_or_id)?;
         let peer = self.peer(peer_name_or_id)?;
         let grant = self
             .grants(&share.id)?
             .into_iter()
-            .find(|grant| grant.peer_id == peer.id)
-            .with_context(|| {
-                format!(
-                    "Peer `{}` has no active grant for `{}`",
-                    peer.name, share.name
-                )
-            })?;
+            .find(|grant| grant.peer_id == peer.id);
+        let Some(grant) = grant else {
+            return Ok(None);
+        };
         self.connect()?.execute(
             "UPDATE grants SET revoked_at = ?1 WHERE peer_id = ?2 AND share_id = ?3",
             params![now(), peer.id, share.id],
         )?;
-        Ok(grant)
+        Ok(Some(grant))
     }
 
     // ------------------------------------------------------------------
@@ -667,14 +688,19 @@ impl StateStore {
             .map_err(Into::into)
     }
 
-    pub fn group(&self, name_or_id: &str) -> Result<GroupInfo> {
+    pub fn group_opt(&self, name_or_id: &str) -> Result<Option<GroupInfo>> {
         self.connect()?
             .query_row(
                 "SELECT g.id, g.name, (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id), g.created_at FROM groups g WHERE g.id = ?1 OR lower(g.name) = lower(?1)",
                 [name_or_id],
                 group_from_row,
             )
-            .optional()?
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn group(&self, name_or_id: &str) -> Result<GroupInfo> {
+        self.group_opt(name_or_id)?
             .with_context(|| format!("Unknown group `{name_or_id}`"))
     }
 
@@ -1382,13 +1408,36 @@ mod tests {
             )
             .unwrap();
         store.remove_member("team", "peer-1").unwrap();
-        store.revoke(&share.name, "peer-1").unwrap();
+        assert!(
+            store.revoke(&share.name, "peer-1").unwrap().is_some(),
+            "an active grant was revoked"
+        );
         assert!(store.authorize("peer-1", &share.id, "query").is_err());
         assert!(!store
             .members("team")
             .unwrap()
             .iter()
             .any(|member| member.peer_id == "peer-1"));
+    }
+
+    #[test]
+    fn revoke_without_grant_is_an_idempotent_noop() {
+        let (_temp, store, share) = group_store();
+        store.save_remote_peer("peer-1", "alice", "{}").unwrap();
+        assert!(store.revoke(&share.name, "peer-1").unwrap().is_none());
+        // Repeating the revoke stays a success: kick/leave must not fail just
+        // because a peer already lost access.
+        assert!(store.revoke(&share.name, "peer-1").unwrap().is_none());
+    }
+
+    #[test]
+    fn group_opt_is_none_for_unknown_group() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = StateStore::open(temp.path().join("state.db")).unwrap();
+        assert!(store.group_opt("missing").unwrap().is_none());
+        store.add_group("team", "self-1", "self").unwrap();
+        let group = store.group_opt("team").unwrap().expect("known group");
+        assert_eq!(group.name, "team");
     }
 
     #[test]
