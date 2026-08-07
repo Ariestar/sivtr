@@ -564,6 +564,13 @@ impl SessionColumn {
         self.states.get(idx)?.body(&session.session_id)
     }
 
+    /// Error message for a session whose body hydration failed, if any.
+    pub fn body_failure(&self, session: &WorkspaceSession) -> Option<&str> {
+        let idx = source_index_for_session(&self.sources, session)?;
+        let ik = format!("{}\0{}", idx, session.session_id);
+        self.pump.body_failed.get(&ik).map(String::as_str)
+    }
+
     /// Bootstrap / force-load selected sources.
     pub fn kick(&mut self, selected: &[bool], viewport: Viewport, force: bool) {
         self.pump
