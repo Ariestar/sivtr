@@ -58,8 +58,9 @@ pub enum RemoteRequest {
     },
     /// Joiner → group owner: redeem a multi-use group invite and register the
     /// joiner's contributed workspaces so the owner can grant the joiner access.
+    /// The group is not part of the request: the invite row is the authority,
+    /// and the owner returns the authoritative id in [`RemoteResponse::GroupJoined`].
     RedeemGroupInvite {
-        group_id: String,
         invite_id: String,
         secret: String,
         peer_name: String,
@@ -120,6 +121,8 @@ pub enum RemoteResponse {
         share_name: String,
     },
     GroupJoined {
+        /// Authoritative group id, read from the invite row by the owner.
+        group_id: String,
         group_name: String,
         members: Vec<MemberInfo>,
     },

@@ -23,7 +23,7 @@ use super::protocol::{
     LocalResponse, MemberInfo, QueryResponse, RemoteRequest, RemoteResponse, MAX_MESSAGE_SIZE,
     REMOTE_ALPN,
 };
-use super::state::{GroupMemberInfo, MountInfo, StateStore};
+use super::state::{GroupInfo, GroupMemberInfo, MountInfo, StateStore};
 use crate::commands::memory::filter::Filter;
 
 pub fn run() -> Result<()> {
@@ -444,44 +444,12 @@ async fn process_local(
         } => {
             let group_info = context.store.group(&group)?;
             maybe_sync_group(context, &group).await;
-            let roster = context.store.members(&group_info.id)?;
-            let all: Vec<MemberInfo> = roster
-                .iter()
-                .filter(|member| member.peer_id != context.identity.id())
-                .map(|member| member_info_from_store(&context.store, &group_info.id, member))
-                .collect::<Result<_>>()?;
-            let mut targets: Vec<MemberInfo> = match member {
-                Some(name) => {
-                    let needle = name.to_ascii_lowercase();
-                    let matches: Vec<MemberInfo> = all
-                        .into_iter()
-                        .filter(|member| {
-                            member.peer_name.to_ascii_lowercase() == needle
-                                || member.peer_id == needle
-                        })
-                        .collect();
-                    if matches.is_empty() {
-                        bail!("No group member named `{name}` in `{}`", group_info.name);
-                    }
-                    matches
-                }
-                None => all,
-            };
-            // Three-segment scope `team/alice/proj-b` pins one contributed share.
-            if let Some(share_name) = share {
-                for target in &mut targets {
-                    target
-                        .shares
-                        .retain(|(_, name)| name.eq_ignore_ascii_case(&share_name));
-                }
-                targets.retain(|target| !target.shares.is_empty());
-                if targets.is_empty() {
-                    bail!(
-                        "No member contributes a share named `{share_name}` in `{}`",
-                        group_info.name
-                    );
-                }
-            }
+            let targets = group_targets(
+                &context.store,
+                &group_info,
+                member.as_deref(),
+                share.as_deref(),
+            )?;
             if targets.is_empty() {
                 return Ok((
                     LocalResponse::GroupQuery(GroupQueryResponse {
@@ -495,7 +463,7 @@ async fn process_local(
                 ));
             }
             let response =
-                group_fan_out(context, &group_info.name, &targets, &source, filter).await;
+                group_fan_out(context, &group_info.name, &targets, &source, filter).await?;
             LocalResponse::GroupQuery(response)
         }
     };
@@ -722,7 +690,6 @@ async fn process_remote(
             })
         }
         RemoteRequest::RedeemGroupInvite {
-            group_id,
             invite_id,
             secret,
             peer_name,
@@ -736,11 +703,16 @@ async fn process_remote(
                 shares: &shares,
                 endpoint_json: &endpoint_json,
             };
-            let roster = context
+            let redeemed = context
                 .store
                 .redeem_group_invite(&invite_id, &secret, &joiner)?;
+            // The invite row is the authority: the group is derived from the
+            // ticket, never from the joiner's request, and used for every
+            // follow-up (name lookup, roster, broadcast).
+            let group_id = redeemed.group_id;
             let group_name = context.store.group(&group_id)?.name;
-            let members: Vec<MemberInfo> = roster
+            let members: Vec<MemberInfo> = redeemed
+                .roster
                 .iter()
                 .map(|member| member_info_from_store(&context.store, &group_id, member))
                 .collect::<Result<_>>()?;
@@ -766,14 +738,14 @@ async fn process_remote(
                 endpoint,
             };
             let context = context.clone();
-            let group_id = group_id.clone();
             let newcomer_id = newcomer.peer_id.clone();
+            let broadcast_group_id = group_id.clone();
             tokio::spawn(async move {
                 broadcast(
                     &context,
-                    &group_id,
+                    &broadcast_group_id,
                     RemoteRequest::GroupMemberAdded {
-                        group_id: group_id.clone(),
+                        group_id: broadcast_group_id.clone(),
                         member: newcomer,
                     },
                     Some(&newcomer_id),
@@ -781,6 +753,7 @@ async fn process_remote(
                 .await;
             });
             Ok(RemoteResponse::GroupJoined {
+                group_id,
                 group_name,
                 members,
             })
@@ -964,15 +937,13 @@ async fn redeem_group_remote(
     if invite.expires_at < Utc::now().timestamp() {
         bail!("Invitation is expired");
     }
-    let group_id = invite
-        .group_id
-        .as_deref()
-        .context("Invitation is not a group invite")?;
+    if invite.group_id.is_none() {
+        bail!("Invitation is not a group invite");
+    }
     let (response, _observed) = exchange(
         context,
         invite.endpoint,
         RemoteRequest::RedeemGroupInvite {
-            group_id: group_id.to_string(),
             invite_id: invite.invite_id,
             secret: invite.secret,
             peer_name: context.identity.name.clone(),
@@ -981,11 +952,13 @@ async fn redeem_group_remote(
         },
     )
     .await?;
-    let (group_name, members) = match response {
+    // The owner derives the group from the invite row; register under that id.
+    let (group_id, group_name, members) = match response {
         RemoteResponse::GroupJoined {
+            group_id,
             group_name,
             members,
-        } => (group_name, members),
+        } => (group_id, group_name, members),
         response => bail!("Unexpected invitation response: {response:?}"),
     };
     // Our own device is a peer of itself (FK target in group_members).
@@ -993,14 +966,14 @@ async fn redeem_group_remote(
         .store
         .save_remote_peer(&context.identity.id(), &context.identity.name, "{}")?;
     // Mirror the owner-assigned group identity and join it.
-    context.store.register_group(group_id, &group_name)?;
+    context.store.register_group(&group_id, &group_name)?;
     context
         .store
-        .add_member(group_id, &context.identity.id(), "member")?;
+        .add_member(&group_id, &context.identity.id(), "member")?;
     for (share_id, share_name) in shares {
         context
             .store
-            .add_group_share(group_id, &context.identity.id(), share_id, share_name)?;
+            .add_group_share(&group_id, &context.identity.id(), share_id, share_name)?;
     }
     // Mirror the roster and grant every member read access to our shares.
     for member in &members {
@@ -1010,17 +983,17 @@ async fn redeem_group_remote(
             .save_remote_peer(&member.peer_id, &member.peer_name, &member_endpoint)?;
         context
             .store
-            .add_member(group_id, &member.peer_id, &member.role)?;
+            .add_member(&group_id, &member.peer_id, &member.role)?;
         for (share_id, share_name) in &member.shares {
             context
                 .store
-                .add_group_share(group_id, &member.peer_id, share_id, share_name)?;
+                .add_group_share(&group_id, &member.peer_id, share_id, share_name)?;
         }
         for (share_id, _) in shares {
             context.store.group_grant(share_id, &member.peer_id)?;
         }
     }
-    context.store.touch_group_sync(group_id)?;
+    context.store.touch_group_sync(&group_id)?;
     // The returned roster already includes this device; it is the full count.
     Ok((group_name, members.len()))
 }
@@ -1365,19 +1338,59 @@ async fn broadcast(
     while tasks.join_next().await.is_some() {}
 }
 
-/// Parallel fan-out: query every (member, contributed share), merge results
-/// qualified per member and share, and report members that did not answer
-/// within the budget. A member counts as online if any share answered.
+/// Fan out a group query: the caller's own contributions run in-process (a
+/// failure is a real error), every remote (member, share) is dialed in parallel
+/// under a per-peer budget, and results are merged qualified per member and
+/// share. Members that did not answer are reported as skipped.
 async fn group_fan_out(
     context: &Arc<DaemonContext>,
     group_name: &str,
     members: &[MemberInfo],
     source: &str,
     filter: Filter,
-) -> GroupQueryResponse {
+) -> Result<GroupQueryResponse> {
     const PER_PEER_TIMEOUT: Duration = Duration::from_millis(2500);
+    let self_id = context.identity.id();
+    let mut records = Vec::new();
+    let mut anchors = Vec::new();
+    // Every result is scoped `team/alice/proj-b` so members stay apart and
+    // records round-trip through show/zoom/nav.
+    let mut merge = |peer_name: &str, share_name: &str, mut query: QueryResponse| {
+        qualify_query_scope(
+            &format!("{group_name}/{peer_name}/{share_name}"),
+            &mut query,
+        );
+        records.extend(query.records);
+        anchors.extend(query.anchors);
+    };
+
+    // The local member's contributions are part of the group, so they are
+    // queried like any other share — just in-process instead of over the wire.
+    // Local failures propagate; they are not "offline" peers.
+    for member in members.iter().filter(|member| member.peer_id == self_id) {
+        for (share_id, share_name) in &member.shares {
+            let share = context.store.share(share_id)?;
+            let query = tokio::task::spawn_blocking({
+                let root = share.root.clone();
+                let source = source.to_string();
+                let filter = filter.clone();
+                move || {
+                    let (records, anchors) = crate::commands::memory::workset::run_on_share(
+                        std::path::Path::new(&root),
+                        &source,
+                        filter,
+                        share.redact,
+                    )?;
+                    Ok::<_, anyhow::Error>(QueryResponse { records, anchors })
+                }
+            })
+            .await??;
+            merge(&member.peer_name, share_name, query);
+        }
+    }
+
     let mut tasks = JoinSet::new();
-    for member in members {
+    for member in members.iter().filter(|member| member.peer_id != self_id) {
         for (share_id, share_name) in &member.shares {
             let context = context.clone();
             let peer_id = member.peer_id.clone();
@@ -1404,23 +1417,14 @@ async fn group_fan_out(
             });
         }
     }
-    let mut records = Vec::new();
-    let mut anchors = Vec::new();
     let mut offline: Vec<(String, String)> = Vec::new();
     while let Some(joined) = tasks.join_next().await {
         let Ok((peer_id, peer_name, share_name, result)) = joined else {
             continue;
         };
         match result {
-            Ok(Ok(RemoteResponse::Query(mut query))) => {
-                // `team/alice/proj-b` — distinct scopes keep members apart and
-                // make results round-trip through show/zoom/nav.
-                qualify_query_scope(
-                    &format!("{group_name}/{peer_name}/{share_name}"),
-                    &mut query,
-                );
-                records.extend(query.records);
-                anchors.extend(query.anchors);
+            Ok(Ok(RemoteResponse::Query(query))) => {
+                merge(&peer_name, &share_name, query);
                 // A member is online if any share answered.
                 offline.retain(|(id, _)| *id != peer_id);
             }
@@ -1435,10 +1439,59 @@ async fn group_fan_out(
         .into_iter()
         .map(|(_, peer_name)| peer_name)
         .collect();
-    GroupQueryResponse {
+    Ok(GroupQueryResponse {
         query: QueryResponse { records, anchors },
         skipped,
+    })
+}
+
+/// Resolve which (member, share) pairs a group query fans out to. The caller's
+/// own contribution is a target like any other member's — the local member is
+/// queried in-process by [`group_fan_out`]. `member` and `share` pin the
+/// three-segment scopes `team/alice` and `team/alice/proj-b`.
+fn group_targets(
+    store: &StateStore,
+    group: &GroupInfo,
+    member: Option<&str>,
+    share: Option<&str>,
+) -> Result<Vec<MemberInfo>> {
+    let all: Vec<MemberInfo> = store
+        .members(&group.id)?
+        .iter()
+        .map(|member| member_info_from_store(store, &group.id, member))
+        .collect::<Result<_>>()?;
+    let mut targets: Vec<MemberInfo> = match member {
+        Some(name) => {
+            let needle = name.to_ascii_lowercase();
+            let matches: Vec<MemberInfo> = all
+                .into_iter()
+                .filter(|member| {
+                    member.peer_name.to_ascii_lowercase() == needle || member.peer_id == needle
+                })
+                .collect();
+            if matches.is_empty() {
+                bail!("No group member named `{name}` in `{}`", group.name);
+            }
+            matches
+        }
+        None => all,
+    };
+    // `team/alice/proj-b` pins one contributed share per member.
+    if let Some(share_name) = share {
+        for target in &mut targets {
+            target
+                .shares
+                .retain(|(_, name)| name.eq_ignore_ascii_case(share_name));
+        }
+        targets.retain(|target| !target.shares.is_empty());
+        if targets.is_empty() {
+            bail!(
+                "No member contributes a share named `{share_name}` in `{}`",
+                group.name
+            );
+        }
     }
+    Ok(targets)
 }
 
 fn member_info_from_store(
@@ -1494,6 +1547,7 @@ pub fn remove_stale_daemon_info() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::group_targets;
     use super::require_group_owner;
     use super::StateStore;
 
@@ -1523,5 +1577,67 @@ mod tests {
         let (_temp, store) = group_store();
         let error = require_group_owner(&store, "missing", "self-1").expect_err("unknown group");
         assert!(error.to_string().contains("Unknown group"));
+    }
+
+    #[test]
+    fn group_targets_include_the_local_member() {
+        let (_temp, store, self_id) = group_with_members();
+        let group = store.group("team").expect("group");
+        let targets = group_targets(&store, &group, None, None).expect("targets");
+        assert!(
+            targets.iter().any(|member| member.peer_id == self_id),
+            "the caller's own contribution is a fan-out target"
+        );
+        assert!(targets.iter().any(|member| member.peer_name == "bob"));
+    }
+
+    #[test]
+    fn group_targets_pin_one_member_by_name_or_id() {
+        let (_temp, store, self_id) = group_with_members();
+        let group = store.group("team").expect("group");
+        let targets = group_targets(&store, &group, Some("self"), None).expect("targets");
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].peer_id, self_id,
+            "self-query resolves to the local member"
+        );
+        let error =
+            group_targets(&store, &group, Some("nobody"), None).expect_err("unknown member");
+        assert!(error.to_string().contains("No group member named"));
+    }
+
+    #[test]
+    fn group_targets_pin_one_contributed_share() {
+        let (_temp, store, _self_id) = group_with_members();
+        let group = store.group("team").expect("group");
+        let targets = group_targets(&store, &group, None, Some("project")).expect("targets");
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].peer_name, "self");
+        assert_eq!(targets[0].shares.len(), 1);
+
+        let error =
+            group_targets(&store, &group, None, Some("missing")).expect_err("unknown share");
+        assert!(error.to_string().contains("No member contributes a share"));
+    }
+
+    /// Group with the owner contributing `project` and a second member `bob`,
+    /// using real node ids so `member_info_from_store` can build fan-out targets.
+    fn group_with_members() -> (tempfile::TempDir, StateStore, String) {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace dir");
+        let store = StateStore::open(temp.path().join("state.db")).expect("store");
+        let share = store
+            .add_share("workspace-key", &workspace, "project", true)
+            .expect("share");
+        let self_id = iroh::SecretKey::generate().public().to_string();
+        let bob_id = iroh::SecretKey::generate().public().to_string();
+        store.add_group("team", &self_id, "self").expect("group");
+        store
+            .add_group_share("team", &self_id, &share.id, &share.name)
+            .expect("contribution");
+        store.save_remote_peer(&bob_id, "bob", "{}").expect("peer");
+        store.add_member("team", &bob_id, "member").expect("member");
+        (temp, store, self_id)
     }
 }
