@@ -3,6 +3,7 @@ use crossterm::event::{
     self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
 use ratatui::widgets::ListState;
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::tui::content::view::{content_link_at, ContentViewMode};
@@ -345,6 +346,10 @@ pub(crate) fn run(
             }
 
             let source_markers = sessions_pane.markers();
+            let body_failures: HashSet<String> = sessions
+                .iter()
+                .filter_map(|s| sessions_pane.body_failure(s).map(|_| s.session_id.clone()))
+                .collect();
             terminal.draw(|frame| {
                 render_workspace(
                     frame,
@@ -357,6 +362,7 @@ pub(crate) fn run(
                         sessions: &sessions,
                         selected_sessions: &selected_sessions,
                         session_state: &session_state,
+                        body_failures,
                         dialogue_titles: &dialogue_titles,
                         dialogues: &dialogues,
                         dialogue_state: &dialogue_state,

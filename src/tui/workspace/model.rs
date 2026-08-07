@@ -4,6 +4,7 @@ use ratatui::prelude::Color;
 use ratatui::widgets::ListState;
 use sivtr_core::ai::AgentProvider;
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
+use std::collections::HashSet;
 use std::time::SystemTime;
 
 use crate::commands::select::CommandSelection;
@@ -372,6 +373,9 @@ pub(crate) struct WorkspaceView<'a> {
     pub(crate) sessions: &'a [WorkspaceSession],
     pub(crate) selected_sessions: &'a [bool],
     pub(crate) session_state: &'a ListState,
+    /// Session ids whose body hydration failed (spawn or query error). Rows
+    /// render an error marker and the loader does not retry them.
+    pub(crate) body_failures: HashSet<String>,
     /// Dialogue list titles only (no body materialize on paint).
     pub(crate) dialogue_titles: &'a [&'a str],
     /// Materialized dialogues for content/copy (focus ∪ multi-select bodies).
