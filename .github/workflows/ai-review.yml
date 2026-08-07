@@ -3,10 +3,17 @@ name: ai-review
 # AI-powered pull request review: a senior-reviewer prompt reads the PR diff
 # and submits an APPROVED / REQUEST_CHANGES review as github-actions[bot], so
 # the "required approving review" rule is satisfied by an actual code review
-# (not just green CI). Requires an OpenAI API key in the OPENAI_API_KEY secret.
+# (not just green CI). Provider-agnostic: any OpenAI-compatible chat-completions
+# endpoint works (OpenAI, DeepSeek, xAI, ...).
 #
-# Model is configurable via the AI_REVIEW_MODEL repository variable
-# (default: gpt-4o-mini).
+# Configuration (repository settings):
+#   secret    LLM_API_KEY              - API key for the chosen provider
+#   variable  AI_REVIEW_MODEL          - model name, e.g. deepseek-v4-flash (required)
+#   variable  AI_REVIEW_BASE_URL       - API base URL (optional; default
+#                                        https://api.deepseek.com/v1)
+#
+# The workflow fails closed: if LLM_API_KEY or AI_REVIEW_MODEL is missing, no
+# review is submitted.
 
 on:
   pull_request:
@@ -32,14 +39,23 @@ jobs:
 
       - name: Run AI review
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          AI_REVIEW_MODEL: ${{ vars.AI_REVIEW_MODEL || 'gpt-4o-mini' }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          AI_REVIEW_MODEL: ${{ vars.AI_REVIEW_MODEL }}
+          AI_REVIEW_BASE_URL: ${{ vars.AI_REVIEW_BASE_URL || 'https://api.deepseek.com/v1' }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           set -euo pipefail
           python3 - <<'PYEOF'
-          import json, os, urllib.error, urllib.request
+          import json, os, sys, urllib.error, urllib.request
+
+          api_key = os.environ.get("LLM_API_KEY", "")
+          model = os.environ.get("AI_REVIEW_MODEL", "")
+          if not api_key or not model:
+              print("::error::AI review is not configured: set the LLM_API_KEY "
+                    "secret and the AI_REVIEW_MODEL repository variable "
+                    "(optionally AI_REVIEW_BASE_URL). No review was submitted.")
+              sys.exit(1)
 
           with open("/tmp/pr.diff", encoding="utf-8", errors="replace") as f:
               diff = f.read()
@@ -57,7 +73,7 @@ jobs:
               "invent issues."
           )
           payload = {
-              "model": os.environ.get("AI_REVIEW_MODEL", "gpt-4o-mini"),
+              "model": model,
               "messages": [
                   {"role": "system", "content": system},
                   {"role": "user", "content": (
@@ -69,11 +85,12 @@ jobs:
               "temperature": 0.2,
               "response_format": {"type": "json_object"},
           }
+          url = os.environ.get("AI_REVIEW_BASE_URL", "https://api.deepseek.com/v1").rstrip("/") + "/chat/completions"
           req = urllib.request.Request(
-              "https://api.openai.com/v1/chat/completions",
+              url,
               data=json.dumps(payload).encode(),
               headers={
-                  "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
+                  "Authorization": f"Bearer {api_key}",
                   "Content-Type": "application/json",
               },
           )
@@ -82,7 +99,7 @@ jobs:
                   data = json.load(resp)
           except urllib.error.HTTPError as e:
               body = e.read().decode(errors="replace")[:500]
-              print(f"::error::OpenAI API error: {e.code} {body}")
+              print(f"::error::LLM API error: {e.code} {body}")
               raise
           content = data["choices"][0]["message"]["content"]
           parsed = json.loads(content)
