@@ -423,8 +423,13 @@ pub(crate) fn run(
                 // Bracketed paste delivers the whole clipboard as one event;
                 // route it to the open text input (search or line filter).
                 if show_search {
+                    // A copied line usually carries a trailing newline; the
+                    // per-line search regex cannot match one, so pasting
+                    // "target\n" would yield zero results. Normalize trailing
+                    // line breaks before applying the edit.
+                    let pasted = text.trim_end_matches(['\r', '\n']);
                     search_query_edited(
-                        |query| query.push_str(&text),
+                        |query| query.push_str(pasted),
                         &mut search_query,
                         &mut search_dirty,
                         &mut search_cursor,
