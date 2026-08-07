@@ -1,0 +1,122 @@
+name: ai-review
+
+# AI-powered pull request review: a senior-reviewer prompt reads the PR diff
+# and submits an APPROVED / REQUEST_CHANGES review as github-actions[bot], so
+# the "required approving review" rule is satisfied by an actual code review
+# (not just green CI). Requires an OpenAI API key in the OPENAI_API_KEY secret.
+#
+# Model is configurable via the AI_REVIEW_MODEL repository variable
+# (default: gpt-4o-mini).
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false && github.event.pull_request.user.login != 'github-actions[bot]'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute diff
+        run: |
+          git diff "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}" -- . ':!Cargo.lock' > /tmp/pr.diff || true
+          echo "diff bytes: $(wc -c < /tmp/pr.diff)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run AI review
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          AI_REVIEW_MODEL: ${{ vars.AI_REVIEW_MODEL || 'gpt-4o-mini' }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PYEOF'
+          import json, os, urllib.error, urllib.request
+
+          with open("/tmp/pr.diff", encoding="utf-8", errors="replace") as f:
+              diff = f.read()
+          if len(diff) > 150_000:
+              diff = diff[:150_000] + "\n... [diff truncated]"
+
+          system = (
+              "You are a senior code reviewer for the sivtr repository, a Rust terminal "
+              "workspace tool. Review the pull request diff strictly on its merits: "
+              "correctness, safety (no unwrap() in production; anyhow errors with context), "
+              "and adherence to the project's coding rules. Reply with ONLY a JSON object: "
+              '{"verdict": "approve" | "request_changes", "summary": "one or two sentences", '
+              '"comments": [{"path": "file", "comment": "text"}]}. Use "request_changes" only '
+              "for real blocking issues; a small correct diff should be approved. Do not "
+              "invent issues."
+          )
+          payload = {
+              "model": os.environ.get("AI_REVIEW_MODEL", "gpt-4o-mini"),
+              "messages": [
+                  {"role": "system", "content": system},
+                  {"role": "user", "content": (
+                      f"PR title: {os.environ['PR_TITLE']}\n\n"
+                      f"PR body: {os.environ['PR_BODY']}\n\n"
+                      f"Diff:\n{diff}"
+                  )},
+              ],
+              "temperature": 0.2,
+              "response_format": {"type": "json_object"},
+          }
+          req = urllib.request.Request(
+              "https://api.openai.com/v1/chat/completions",
+              data=json.dumps(payload).encode(),
+              headers={
+                  "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
+                  "Content-Type": "application/json",
+              },
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=180) as resp:
+                  data = json.load(resp)
+          except urllib.error.HTTPError as e:
+              body = e.read().decode(errors="replace")[:500]
+              print(f"::error::OpenAI API error: {e.code} {body}")
+              raise
+          content = data["choices"][0]["message"]["content"]
+          parsed = json.loads(content)
+          verdict = parsed.get("verdict")
+          if verdict not in ("approve", "request_changes"):
+              verdict = "request_changes"
+          summary = parsed.get("summary", "")
+          comments = parsed.get("comments", [])
+          with open("/tmp/ai_verdict", "w", encoding="utf-8") as f:
+              f.write(verdict)
+          with open("/tmp/ai_summary", "w", encoding="utf-8") as f:
+              f.write(summary)
+          with open("/tmp/ai_comments", "w", encoding="utf-8") as f:
+              json.dump(comments[:20], f)
+          print(f"verdict={verdict}")
+          PYEOF
+
+      - name: Submit review
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const verdict = fs.readFileSync('/tmp/ai_verdict', 'utf8').trim();
+            const summary = fs.readFileSync('/tmp/ai_summary', 'utf8').trim();
+            const comments = JSON.parse(fs.readFileSync('/tmp/ai_comments', 'utf8'));
+            const event = verdict === 'approve' ? 'APPROVED' : 'REQUEST_CHANGES';
+            let body = `### 🤖 AI review — ${verdict === 'approve' ? 'approved' : 'changes requested'}\n\n${summary}`;
+            if (comments.length > 0) {
+              body += '\n\n**Notes:**\n' + comments.map(c => `- \`${c.path}\`: ${c.comment}`).join('\n');
+            }
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              event,
+              body,
+            });
