@@ -420,21 +420,25 @@ fn content_layout_lines_metrics(
 ) -> (Vec<ContentLine>, u16) {
     let mut total_lines = line_count(text);
     let mut gutter_width = line_number_width(total_lines).saturating_add(1);
-    let mut lines = Vec::new();
 
     for _ in 0..4 {
         let content_width = inner_width.saturating_sub(gutter_width.saturating_add(1)) as usize;
-        lines = all_content_lines(text, content_width, mode);
+        let lines = all_content_lines(text, content_width, mode);
         let next_total_lines = lines.len().max(1);
         let next_gutter_width = line_number_width(next_total_lines).saturating_add(1);
         if next_total_lines == total_lines && next_gutter_width == gutter_width {
-            break;
+            return (lines, gutter_width);
         }
         total_lines = next_total_lines;
         gutter_width = next_gutter_width;
     }
 
-    (lines, gutter_width)
+    // Non-convergent narrow panes (the gutter width oscillates against the
+    // wrap width): recompute the lines for the final gutter so content and
+    // gutter stay consistent — otherwise the last pass may have run at a
+    // different width and the layout can drop the content entirely.
+    let content_width = inner_width.saturating_sub(gutter_width.saturating_add(1)) as usize;
+    (all_content_lines(text, content_width, mode), gutter_width)
 }
 
 fn content_lines(
@@ -1338,6 +1342,19 @@ mod tests {
             ),
             2
         );
+    }
+
+    #[test]
+    fn oscillating_gutter_recomputes_lines_for_the_final_width() {
+        // inner_width == 4 makes the gutter width oscillate between 2 and 3
+        // for a ten-character unbroken line (content widths 1 and 0). The
+        // layout must return lines generated at the final gutter width
+        // instead of the single blank line produced at width 0.
+        let (lines, gutter_width) =
+            super::content_layout_lines_metrics(4, "0123456789", ContentViewMode::Reading);
+        assert_eq!(gutter_width, 2);
+        assert_eq!(lines.len(), 10, "one character per wrapped row");
+        assert!(!lines[0].line.spans.is_empty(), "content must not vanish");
     }
 
     #[test]
