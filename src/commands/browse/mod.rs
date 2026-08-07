@@ -132,6 +132,9 @@ fn run_picker_guarded(
     initial_focus: WorkspaceFocus,
     wait_after_panic: bool,
 ) -> Result<WorkspacePickedContent> {
+    // This guard recovers the panic and reports it itself, so the terminal-
+    // restoring hook must not also emit the default "uncaught panic" report.
+    let _suppress = crate::tui::panic::SuppressDefaultReport::enter();
     match catch_unwind(AssertUnwindSafe(|| {
         run_picker(
             terminal,
@@ -145,9 +148,13 @@ fn run_picker_guarded(
         Ok(result) => result,
         Err(payload) => {
             let message = panic_payload_message(&payload);
-            let _ = restore_tui(terminal);
+            let restored = restore_tui(terminal).is_ok();
             eprintln!("sivtr: TUI panicked: {message}");
-            if wait_after_panic && io::stdin().is_terminal() {
+            // Only prompt after a successful restore: while raw mode is still
+            // active a blocking read may never see a newline, and the later
+            // finish_tui retry must get a chance to run and report the
+            // cleanup failure.
+            if restored && wait_after_panic && io::stdin().is_terminal() {
                 wait_for_enter("press Enter to continue");
             }
             Err(anyhow!("TUI panicked: {message}"))
