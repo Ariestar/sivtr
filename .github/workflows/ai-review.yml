@@ -14,6 +14,11 @@ name: ai-review
 #
 # The workflow fails closed: if LLM_API_KEY or AI_REVIEW_MODEL is missing, no
 # review is submitted.
+#
+# Limitation: on `pull_request` events from forks, GITHUB_TOKEN is read-only, so
+# submitting the review would 403. Fork PRs are not auto-reviewed; a human
+# review is expected instead (or set up a PAT / pull_request_target if fork PRs
+# must be auto-reviewed too).
 
 on:
   pull_request:
@@ -26,7 +31,10 @@ permissions:
 jobs:
   review:
     runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false && github.event.pull_request.user.login != 'github-actions[bot]'
+    # Skip bots: github-actions[bot] (no self-review loop), Dependabot
+    # (GITHUB_TOKEN cannot approve its PRs anyway) and Renovate (dependency
+    # bumps auto-merged via the review-rule bypass).
+    if: github.event.pull_request.draft == false && !contains(fromJSON('["github-actions[bot]", "dependabot[bot]", "dependabot", "renovate[bot]"]'), github.event.pull_request.user.login)
     steps:
       - uses: actions/checkout@v4
         with:
