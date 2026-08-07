@@ -165,6 +165,42 @@ impl Theme {
             },
         }
     }
+
+    /// Terminal-defined palette for light-background terminals without
+    /// truecolor: darker ANSI colors that stay readable against a light
+    /// default background (the light `Light*` variants used by [`Theme::ansi`]
+    /// would wash out).
+    pub(crate) const fn ansi_light() -> Self {
+        Self {
+            accent: Color::Blue,
+            muted: Color::DarkGray,
+            dim: Color::Gray,
+            local_origin: Color::Green,
+            remote_origin: Color::Magenta,
+            focus_bg: Color::Blue,
+            focus_fg: Color::White,
+            selected_bg: Color::DarkGray,
+            selected_fg: Color::White,
+            range_fg: Color::Yellow,
+            title_active: Color::Black,
+            muted_text: Color::DarkGray,
+            key_hint: Color::Blue,
+            footer: Color::DarkGray,
+            text_primary: Color::Black,
+            failure: Color::Red,
+            provider: ProviderPalette {
+                codex: Color::Blue,
+                claude: Color::Yellow,
+                cursor: Color::Magenta,
+                opencode: Color::Cyan,
+                openclaw: Color::Red,
+                hermes: Color::Gray,
+                grok: Color::DarkGray,
+                pi: Color::Green,
+                qoder: Color::Cyan,
+            },
+        }
+    }
 }
 
 thread_local! {
@@ -183,12 +219,17 @@ pub(crate) fn apply(preference: ThemeMode) {
 }
 
 fn detect() -> Theme {
+    let light = light_background();
     if supports_truecolor() {
-        if light_background() {
+        if light {
             Theme::light()
         } else {
             Theme::dark()
         }
+    } else if light {
+        // No truecolor does not mean the terminal is dark: pick the darker
+        // ANSI palette on a light background so labels stay readable.
+        Theme::ansi_light()
     } else {
         Theme::ansi()
     }
@@ -349,13 +390,44 @@ mod tests {
 
     #[test]
     fn ansi_provider_palette_emits_no_rgb() {
-        let palette = Theme::ansi().provider;
-        for spec in AgentProvider::all() {
-            let color = palette.color(spec.provider);
+        for palette in [Theme::ansi().provider, Theme::ansi_light().provider] {
+            for spec in AgentProvider::all() {
+                let color = palette.color(spec.provider);
+                assert!(
+                    !matches!(color, Color::Rgb(..)),
+                    "{:?} leaks RGB through the ANSI fallback: {color:?}",
+                    spec.provider
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ansi_light_uses_darker_foregrounds_for_light_backgrounds() {
+        let dark = Theme::ansi();
+        let light = Theme::ansi_light();
+        assert_ne!(light.text_primary, dark.text_primary);
+        assert_ne!(light.title_active, dark.title_active);
+        // The light ANSI palette must avoid the bright foregrounds that wash
+        // out against a light default background.
+        for color in [
+            light.text_primary,
+            light.title_active,
+            light.footer,
+            light.muted_text,
+        ] {
             assert!(
-                !matches!(color, Color::Rgb(..)),
-                "{:?} leaks RGB through the ANSI fallback: {color:?}",
-                spec.provider
+                !matches!(
+                    color,
+                    Color::White
+                        | Color::LightRed
+                        | Color::LightGreen
+                        | Color::LightYellow
+                        | Color::LightBlue
+                        | Color::LightMagenta
+                        | Color::LightCyan
+                ),
+                "bright foreground on a light ANSI background: {color:?}"
             );
         }
     }
