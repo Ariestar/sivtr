@@ -195,9 +195,12 @@ where
             return false;
         }
         self.list_inflight = false;
+        // Keep the message even when rows exist: a refresh/pagination failure
+        // after initial loading must not silently fall back to a stale list.
+        // The phase only hard-fails with nothing to show.
+        self.fail_message = Some(message);
         if self.rows.is_empty() {
             self.phase = StorePhase::Failed;
-            self.fail_message = Some(message);
         }
         true
     }
@@ -368,6 +371,21 @@ mod tests {
         assert_eq!(store.phase, StorePhase::Ready);
         assert!(store.list_inflight);
         assert_eq!(store.rows.len(), 1);
+    }
+
+    #[test]
+    fn apply_meta_err_preserves_message_when_rows_exist() {
+        let mut store: SlidingStore<u32, &str, String> =
+            SlidingStore::ready(vec![WindowRow::meta_only(1u32, "a")], 10, false);
+        store.begin_meta(1);
+        assert!(store.apply_meta_err(1, "refresh failed".into()));
+        assert_eq!(store.fail_message.as_deref(), Some("refresh failed"));
+        assert_eq!(store.phase, StorePhase::Ready, "rows remain browsable");
+
+        // A successful retry clears the error and the marker returns to Ready.
+        store.begin_meta(2);
+        assert!(store.apply_meta_ok(2, 10, true, vec![WindowRow::meta_only(2u32, "b")]));
+        assert_eq!(store.fail_message, None);
     }
 
     #[test]

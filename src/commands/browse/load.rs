@@ -86,6 +86,9 @@ impl SourceLoadState {
             StorePhase::Idle => SourceLoadMarker::Idle,
             StorePhase::Booting => SourceLoadMarker::Loading,
             StorePhase::Ready if store.list_inflight => SourceLoadMarker::Loading,
+            // A refresh or pagination failure with rows still on screen:
+            // keep the stale list visible but flag the failed load.
+            StorePhase::Ready if store.fail_message.is_some() => SourceLoadMarker::Failed,
             StorePhase::Ready => SourceLoadMarker::Ready,
             StorePhase::Failed => SourceLoadMarker::Failed,
         }
@@ -151,13 +154,17 @@ pub struct SourceLoadPump {
     body_inflight: HashSet<String>,
     /// `{source_idx}\0{session_id}` → error message for body loads that failed
     /// (thread spawn refused or the body query errored). Failed keys are not
-    /// retried by [`SourceLoadPump::sync_bodies`] and stay reachable through
-    /// [`SessionColumn::body_failure`].
+    /// retried by [`SourceLoadPump::sync_bodies`] until an explicit refresh or
+    /// the source is reselected.
     body_failed: HashMap<String, String>,
+    /// Per-source generation for body jobs. Bumped when a source is dropped so
+    /// events from a canceled job cannot apply bodies or record failures
+    /// against a newer selection of the same source.
+    body_generation: Vec<u64>,
 }
 
 impl SourceLoadPump {
-    pub fn new(_source_count: usize, cwd: PathBuf) -> Self {
+    pub fn new(source_count: usize, cwd: PathBuf) -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
             tx,
@@ -165,6 +172,7 @@ impl SourceLoadPump {
             cwd,
             body_inflight: HashSet::new(),
             body_failed: HashMap::new(),
+            body_generation: vec![0; source_count],
         }
     }
 
@@ -202,6 +210,11 @@ impl SourceLoadPump {
             if !selected.get(idx).copied().unwrap_or(false) {
                 continue;
             }
+            // An explicit refresh is a retry: drop recorded body failures so
+            // transient errors (remote timeouts, temporary transport issues)
+            // get another chance once connectivity recovers.
+            self.body_failed
+                .retain(|k, _| !k.starts_with(&format!("{idx}\0")));
             if let Some(need) = states[idx].pane.force_meta(viewport) {
                 self.spawn_meta(idx, source, need.gen, need.budget);
             }
@@ -297,6 +310,11 @@ impl SourceLoadPump {
                 .retain(|k| !k.starts_with(&format!("{idx}\0")));
             self.body_failed
                 .retain(|k, _| !k.starts_with(&format!("{idx}\0")));
+            // Invalidate body jobs spawned for this source: their results
+            // must not touch the state of a later re-selection.
+            if let Some(gen) = self.body_generation.get_mut(idx) {
+                *gen = gen.saturating_add(1);
+            }
         }
     }
 
@@ -369,7 +387,7 @@ impl SourceLoadPump {
     }
 
     fn spawn_body(&mut self, idx: usize, source: &WorkspaceSource, session_id: &str) {
-        let gen = sources_list_gen_placeholder();
+        let gen = self.body_generation.get(idx).copied().unwrap_or(0);
         let selector = source.selector();
         let remote = source.is_remote();
         let cwd = self.cwd.clone();
@@ -449,6 +467,12 @@ impl SourceLoadPump {
         };
         match ev.kind {
             JobKind::Body { session_id } => {
+                // Ignore events from a canceled body job: after the source was
+                // dropped and reselected, an old thread's result must neither
+                // apply bodies nor record failures against the new selection.
+                if self.body_generation.get(ev.index).copied().unwrap_or(0) != ev.gen {
+                    return false;
+                }
                 let ik = format!("{}\0{session_id}", ev.index);
                 self.body_inflight.remove(&ik);
                 match ev.result {
@@ -495,11 +519,6 @@ impl SourceLoadPump {
             },
         }
     }
-}
-
-/// Body jobs do not use list_gen cancellation; placeholder keeps the event shape.
-fn sources_list_gen_placeholder() -> u64 {
-    0
 }
 
 // ── Session column as unified [`Pane`] ──────────────────────────────────
@@ -856,6 +875,57 @@ mod tests {
             column.pump.body_failed.get("0\0s1").map(String::as_str),
             Some("boom")
         );
+    }
+
+    #[test]
+    fn refresh_clears_failed_bodies_and_stale_jobs_are_ignored() {
+        let source = WorkspaceSource::agent(AgentProvider::Codex);
+        let sources = vec![source.clone()];
+        let meta = SessionMeta {
+            source: source.clone(),
+            session_id: "s1".into(),
+            modified: UNIX_EPOCH,
+            title: "s1".into(),
+            search_title: "s1".into(),
+        };
+        let state = SourceLoadState {
+            pane: SessionPane::ready(vec![WindowRow::meta_only("s1".into(), meta)], 10, true),
+        };
+        let mut column = SessionColumn::new(sources.clone(), vec![state], PathBuf::from("."));
+
+        // A recorded failure is retried by an explicit refresh ...
+        column
+            .pump
+            .body_failed
+            .insert("0\0s1".into(), "boom".into());
+        column.pump.refresh_selected(
+            &sources,
+            &[true],
+            &mut column.states,
+            Viewport {
+                first: 0,
+                visible: 10,
+            },
+        );
+        assert!(column.pump.body_failed.is_empty());
+
+        // ... and events from a body job spawned before a source was dropped
+        // must not record failures against the newer selection.
+        column.pump.drop_unselected(&[false], &mut column.states); // gen 0 -> 1
+        column.pump.body_inflight.insert("0\0s1".into()); // new selection re-spawned
+        let stale = JobEvent {
+            index: 0,
+            gen: 0,
+            kind: JobKind::Body {
+                session_id: "s1".into(),
+            },
+            result: Err("stale job failed".into()),
+            exhausted: true,
+        };
+        assert!(!column.pump.apply(stale, &mut column.states));
+        assert!(!column.pump.body_failed.contains_key("0\0s1"));
+        // The fresh in-flight marker for the new job is untouched.
+        assert!(column.pump.body_inflight.contains("0\0s1"));
     }
 
     fn test_record(session: &str, index: usize, title: &str, ended: &str) -> WorkRecord {
