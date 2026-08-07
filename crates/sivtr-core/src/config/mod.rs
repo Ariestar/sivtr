@@ -264,4 +264,23 @@ mod tests {
         assert!(toml.contains("idle_exit_secs = 60"));
         assert_eq!(SivtrConfig::default().mcp.idle_exit_secs, 0);
     }
+
+    #[test]
+    fn theme_config_round_trips_and_rejects_typos() {
+        let config = SivtrConfig {
+            theme: ThemeConfig {
+                mode: ThemeMode::Light,
+            },
+            ..SivtrConfig::default()
+        };
+
+        let toml = to_toml_string(&config).unwrap();
+        assert!(toml.contains("[theme]"));
+        assert!(toml.contains("mode = \"light\""));
+
+        // A typo such as `mode = "ligth"` must fail loudly instead of silently
+        // falling back to auto (which made the setting look ignored).
+        assert!(toml::from_str::<SivtrConfig>("[theme]\nmode = \"ligth\"\n").is_err());
+        assert!(toml::from_str::<SivtrConfig>("[theme]\nmode = \"light\"\n").is_ok());
+    }
 }
