@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
@@ -149,6 +149,11 @@ pub struct SourceLoadPump {
     rx: Receiver<JobEvent>,
     cwd: PathBuf,
     body_inflight: HashSet<String>,
+    /// `{source_idx}\0{session_id}` → error message for body loads that failed
+    /// (thread spawn refused or the body query errored). Failed keys are not
+    /// retried by [`SourceLoadPump::sync_bodies`] and stay reachable through
+    /// [`SessionColumn::body_failure`].
+    body_failed: HashMap<String, String>,
 }
 
 impl SourceLoadPump {
@@ -159,6 +164,7 @@ impl SourceLoadPump {
             rx,
             cwd,
             body_inflight: HashSet::new(),
+            body_failed: HashMap::new(),
         }
     }
 
@@ -270,7 +276,7 @@ impl SourceLoadPump {
             };
             for session_id in missing {
                 let ik = format!("{source_idx}\0{session_id}");
-                if self.body_inflight.contains(&ik) {
+                if self.body_inflight.contains(&ik) || self.body_failed.contains_key(&ik) {
                     continue;
                 }
                 self.body_inflight.insert(ik);
@@ -289,6 +295,8 @@ impl SourceLoadPump {
             }
             self.body_inflight
                 .retain(|k| !k.starts_with(&format!("{idx}\0")));
+            self.body_failed
+                .retain(|k, _| !k.starts_with(&format!("{idx}\0")));
         }
     }
 
@@ -407,15 +415,15 @@ impl SourceLoadPump {
                 });
             });
         if let Err(error) = spawned {
-            let _ = self.tx.send(JobEvent {
-                index: idx,
-                gen,
-                kind: JobKind::Body {
-                    session_id: session_id.to_string(),
-                },
-                result: Err(format!("failed to spawn body loader thread: {error}")),
-                exhausted: true,
-            });
+            // The OS refused to start the loader thread. Record the failure
+            // directly instead of routing it through the channel: the body
+            // event path used to discard such errors, leaving the session
+            // silently unloaded and re-spawned on every sync_bodies pass.
+            let ik = format!("{idx}\0{session_id}");
+            self.body_inflight.remove(&ik);
+            eprintln!("sivtr: failed to load session body: {error}");
+            self.body_failed
+                .insert(ik, format!("failed to spawn body loader thread: {error}"));
         }
     }
 
@@ -441,18 +449,28 @@ impl SourceLoadPump {
         };
         match ev.kind {
             JobKind::Body { session_id } => {
-                self.body_inflight
-                    .remove(&format!("{}\0{session_id}", ev.index));
-                let Ok(sessions) = ev.result else {
-                    return false;
-                };
-                let mut changed = false;
-                for s in sessions {
-                    if state.pane.apply_body(&s.session_id, s.records) {
-                        changed = true;
+                let ik = format!("{}\0{session_id}", ev.index);
+                self.body_inflight.remove(&ik);
+                match ev.result {
+                    Ok(sessions) => {
+                        let mut changed = false;
+                        for s in sessions {
+                            if state.pane.apply_body(&s.session_id, s.records) {
+                                changed = true;
+                            }
+                        }
+                        changed
+                    }
+                    Err(message) => {
+                        // The body query itself failed (timeout, remote error,
+                        // ...). Keep the message instead of discarding it and
+                        // stop the pump from retrying a key that cannot load.
+                        // `true` wakes the picker so the change is noticed.
+                        eprintln!("sivtr: failed to load session body: {message}");
+                        self.body_failed.insert(ik, message);
+                        true
                     }
                 }
-                changed
             }
             JobKind::Meta { budget } => match ev.result {
                 Ok(sessions) => {
@@ -805,6 +823,39 @@ mod tests {
         assert!(keep.contains(&(0, "a".into())));
         assert!(keep.contains(&(0, "b".into())));
         assert!(keep.contains(&(0, "c".into())));
+    }
+
+    #[test]
+    fn body_load_failure_is_preserved_and_not_retried() {
+        let source = WorkspaceSource::agent(AgentProvider::Codex);
+        let sources = vec![source.clone()];
+        let meta = SessionMeta {
+            source: source.clone(),
+            session_id: "s1".into(),
+            modified: UNIX_EPOCH,
+            title: "s1".into(),
+            search_title: "s1".into(),
+        };
+        let state = SourceLoadState {
+            pane: SessionPane::ready(vec![WindowRow::meta_only("s1".into(), meta)], 10, true),
+        };
+        let mut column = SessionColumn::new(sources.clone(), vec![state], PathBuf::from("."));
+
+        // Simulate a refused spawn / failed query for session "s1".
+        column
+            .pump
+            .body_failed
+            .insert("0\0s1".into(), "boom".into());
+
+        // The body is still missing from the pane, but a sync pass must not
+        // re-spawn the failed key or clear its recorded error.
+        let keep: HashSet<(usize, String)> = [(0, "s1".into())].into();
+        column.pump.sync_bodies(&sources, &mut column.states, &keep);
+        assert!(column.pump.body_inflight.is_empty());
+        assert_eq!(
+            column.pump.body_failed.get("0\0s1").map(String::as_str),
+            Some("boom")
+        );
     }
 
     fn test_record(session: &str, index: usize, title: &str, ended: &str) -> WorkRecord {
