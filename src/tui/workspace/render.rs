@@ -367,10 +367,7 @@ fn session_row_line(
         Style::default().fg(theme::text_primary()),
     ));
     if body_failed {
-        spans.push(Span::styled(
-            " [!]",
-            Style::default().fg(Color::Rgb(248, 113, 113)), // red-400
-        ));
+        spans.push(Span::styled(" [!]", Style::default().fg(theme::failure())));
     }
     Line::from(spans)
 }
