@@ -64,9 +64,17 @@ impl Tui {
     fn register_panic_restore(&self) {
         let state = Rc::clone(&self.state);
         panic::register_restore(Box::new(move || {
-            // Restore in place: successful cleanup steps are disarmed, so an unwinding `Drop`
-            // afterwards retries only the steps that failed here.
-            let mut state = state.borrow_mut();
+            // Restore in place: successful cleanup steps are disarmed, so an
+            // unwinding `Drop` afterwards retries only the steps that failed here.
+            // The state may be mutably borrowed by the frame that is unwinding,
+            // so borrow non-panicking: the `Drop` path is the safety net.
+            let Ok(mut state) = state.try_borrow_mut() else {
+                return;
+            };
+            // A library caller may catch the panic itself and keep using this
+            // `Tui`; mark it so a later `draw` cannot paint onto the restored
+            // normal screen, and a later panic knows cleanup already ran.
+            state.panic_restored = true;
             let _ = restore_terminal_state(&mut state);
         }));
     }
@@ -168,6 +176,9 @@ where
 {
     if !terminal.drawing_active {
         bail!("Cannot draw while the terminal session is suspended");
+    }
+    if terminal.state.borrow().panic_restored {
+        bail!("Cannot draw after the terminal was restored by a panic");
     }
 
     #[cfg(windows)]
@@ -398,6 +409,9 @@ struct TerminalState {
     modes: Option<TerminalModes>,
     code_pages: Option<ConsoleCodePages>,
     console_input: Option<ConsoleInputHandle>,
+    /// Set when the panic hook already restored the terminal for a `Tui` that
+    /// survived the unwind (library callers may catch the panic themselves).
+    panic_restored: bool,
 }
 
 impl TerminalState {
