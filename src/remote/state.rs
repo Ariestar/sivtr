@@ -97,6 +97,15 @@ pub struct RedeemedShare {
     pub share_name: String,
 }
 
+/// A redeemed group invite: the authoritative group id (read from the invite
+/// row, never from the joiner's request) plus the post-join roster for the
+/// joiner to mirror.
+#[derive(Debug)]
+pub struct RedeemedGroup {
+    pub group_id: String,
+    pub roster: Vec<GroupMemberInfo>,
+}
+
 /// A peer joining a group, as seen by the group owner. `shares` lists every
 /// workspace the joiner contributes (multi-select join).
 #[derive(Debug)]
@@ -899,14 +908,14 @@ impl StateStore {
 
     /// Redeem a group invite: validates the multi-use ticket, adds the joiner
     /// to the roster with every contributed workspace, grants the joiner read
-    /// access to the owner's contributions, and returns the current roster for
-    /// the joiner to reconcile.
+    /// access to the owner's contributions, and returns the authoritative
+    /// group id with the current roster for the joiner to reconcile.
     pub fn redeem_group_invite(
         &self,
         invite_id: &str,
         secret: &str,
         joiner: &JoinerInfo<'_>,
-    ) -> Result<Vec<GroupMemberInfo>> {
+    ) -> Result<RedeemedGroup> {
         validate_identifier(joiner.peer_name, "peer name")?;
         let mut connection = self.connect()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -974,7 +983,8 @@ impl StateStore {
             [invite_id],
         )?;
         transaction.commit()?;
-        self.members(&group_id)
+        let roster = self.members(&group_id)?;
+        Ok(RedeemedGroup { group_id, roster })
     }
 
     pub fn touch_group_sync(&self, group_name_or_id: &str) -> Result<()> {
@@ -1266,7 +1276,7 @@ mod tests {
         let erin_share = real_share(&store, temp.path(), "erin", "erin-ws");
 
         let invite = store.create_group_invite("team", 60, None).unwrap();
-        let roster = store
+        let redeemed = store
             .redeem_group_invite(
                 &invite.id,
                 &invite.secret,
@@ -1277,9 +1287,14 @@ mod tests {
                 ),
             )
             .unwrap();
-        assert_eq!(roster.len(), 2, "owner + alice");
+        assert_eq!(
+            redeemed.group_id,
+            store.group("team").unwrap().id,
+            "the group is derived from the invite row"
+        );
+        assert_eq!(redeemed.roster.len(), 2, "owner + alice");
         // The same ticket admits another peer — group invites are multi-use.
-        let roster = store
+        let redeemed = store
             .redeem_group_invite(
                 &invite.id,
                 &invite.secret,
@@ -1290,7 +1305,7 @@ mod tests {
                 ),
             )
             .unwrap();
-        assert_eq!(roster.len(), 3);
+        assert_eq!(redeemed.roster.len(), 3);
         assert!(store
             .redeem_group_invite(
                 &invite.id,
@@ -1334,7 +1349,7 @@ mod tests {
         let (temp, store, share) = group_store();
         let alice_share = real_share(&store, temp.path(), "alice", "alice-ws");
         let invite = store.create_group_invite("team", 60, None).unwrap();
-        let roster = store
+        let redeemed = store
             .redeem_group_invite(
                 &invite.id,
                 &invite.secret,
@@ -1349,7 +1364,8 @@ mod tests {
         // Owner's share is now authorized for the newcomer.
         store.authorize("peer-1", &share.id, "query").unwrap();
         // Roster carries the member's endpoint hint for dialing back.
-        let alice = roster
+        let alice = redeemed
+            .roster
             .iter()
             .find(|member| member.peer_id == "peer-1")
             .expect("alice in roster");
