@@ -29,6 +29,39 @@ pub(crate) struct Theme {
     pub(crate) footer: Color,
     pub(crate) text_primary: Color,
     pub(crate) failure: Color,
+    /// Per-agent label colors, chosen per palette so light and ANSI
+    /// terminals get readable, non-RGB variants.
+    pub(crate) provider: ProviderPalette,
+}
+
+/// Per-agent label colors for one palette.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ProviderPalette {
+    pub(crate) codex: Color,
+    pub(crate) claude: Color,
+    pub(crate) cursor: Color,
+    pub(crate) opencode: Color,
+    pub(crate) openclaw: Color,
+    pub(crate) hermes: Color,
+    pub(crate) grok: Color,
+    pub(crate) pi: Color,
+    pub(crate) qoder: Color,
+}
+
+impl ProviderPalette {
+    pub(crate) const fn color(self, provider: AgentProvider) -> Color {
+        match provider {
+            AgentProvider::Codex => self.codex,
+            AgentProvider::Claude => self.claude,
+            AgentProvider::Cursor => self.cursor,
+            AgentProvider::OpenCode => self.opencode,
+            AgentProvider::OpenClaw => self.openclaw,
+            AgentProvider::Hermes => self.hermes,
+            AgentProvider::Grok => self.grok,
+            AgentProvider::Pi => self.pi,
+            AgentProvider::Qoder => self.qoder,
+        }
+    }
 }
 
 impl Theme {
@@ -51,6 +84,17 @@ impl Theme {
             footer: Color::Rgb(148, 163, 184),        // slate-400
             text_primary: Color::Rgb(226, 232, 240),  // slate-200
             failure: Color::Rgb(248, 113, 113),       // red-400
+            provider: ProviderPalette {
+                codex: Color::Rgb(129, 140, 248),    // indigo-400
+                claude: Color::Rgb(251, 146, 60),    // orange-400
+                cursor: Color::Rgb(167, 139, 250),   // violet-400
+                opencode: Color::Rgb(45, 212, 191),  // teal-400
+                openclaw: Color::Rgb(248, 113, 113), // red-400
+                hermes: Color::Rgb(250, 204, 21),    // yellow-400
+                grok: Color::Rgb(244, 114, 182),     // pink-400
+                pi: Color::Rgb(74, 222, 128),        // green-400
+                qoder: Color::Rgb(34, 211, 238),     // cyan-400
+            },
         }
     }
 
@@ -73,6 +117,17 @@ impl Theme {
             footer: Color::Rgb(71, 85, 105),         // slate-600
             text_primary: Color::Rgb(30, 41, 59),    // slate-800
             failure: Color::Rgb(220, 38, 38),        // red-600
+            provider: ProviderPalette {
+                codex: Color::Rgb(79, 70, 229),     // indigo-600
+                claude: Color::Rgb(234, 88, 12),    // orange-600
+                cursor: Color::Rgb(124, 58, 237),   // violet-600
+                opencode: Color::Rgb(13, 148, 136), // teal-600
+                openclaw: Color::Rgb(220, 38, 38),  // red-600
+                hermes: Color::Rgb(202, 138, 4),    // yellow-600
+                grok: Color::Rgb(219, 39, 119),     // pink-600
+                pi: Color::Rgb(22, 163, 74),        // green-600
+                qoder: Color::Rgb(8, 145, 178),     // cyan-600
+            },
         }
     }
 
@@ -97,6 +152,17 @@ impl Theme {
             footer: Color::Gray,
             text_primary: Color::Gray,
             failure: Color::Red,
+            provider: ProviderPalette {
+                codex: Color::Blue,
+                claude: Color::Yellow,
+                cursor: Color::Magenta,
+                opencode: Color::Cyan,
+                openclaw: Color::Red,
+                hermes: Color::LightYellow,
+                grok: Color::LightMagenta,
+                pi: Color::Green,
+                qoder: Color::LightCyan,
+            },
         }
     }
 }
@@ -137,12 +203,21 @@ fn supports_truecolor() -> bool {
 }
 
 /// Light background when `COLORFGBG`'s background half is a bright ANSI
-/// color (8–15); anything else (dark, unset, `default`) stays dark.
+/// color (8–15); anything else — dark 256-color indexes such as 16 or 232,
+/// unset, `default` — stays dark.
 fn light_background() -> bool {
     std::env::var("COLORFGBG")
         .ok()
-        .and_then(|value| value.rsplit(';').next()?.parse::<u8>().ok())
-        .is_some_and(|background| background >= 8)
+        .is_some_and(|value| colorfgbg_is_light(&value))
+}
+
+/// Whether a `COLORFGBG` value ("fg;bg") denotes a light background.
+fn colorfgbg_is_light(value: &str) -> bool {
+    value
+        .rsplit(';')
+        .next()
+        .and_then(|background| background.parse::<u8>().ok())
+        .is_some_and(|background| (8..=15).contains(&background))
 }
 
 /// Active panel chrome (focused border / scrollbar).
@@ -183,17 +258,7 @@ pub(crate) fn range_row() -> Style {
 }
 
 pub(crate) fn provider_color(provider: AgentProvider) -> Color {
-    match provider {
-        AgentProvider::Codex => Color::Rgb(129, 140, 248), // indigo-400
-        AgentProvider::Claude => Color::Rgb(251, 146, 60), // orange-400
-        AgentProvider::Cursor => Color::Rgb(167, 139, 250), // violet-400
-        AgentProvider::OpenCode => Color::Rgb(45, 212, 191), // teal-400
-        AgentProvider::OpenClaw => Color::Rgb(248, 113, 113), // red-400
-        AgentProvider::Hermes => Color::Rgb(250, 204, 21), // yellow-400
-        AgentProvider::Grok => Color::Rgb(244, 114, 182),  // pink-400
-        AgentProvider::Pi => Color::Rgb(74, 222, 128),     // green-400
-        AgentProvider::Qoder => Color::Rgb(34, 211, 238),  // cyan-400
-    }
+    ACTIVE.get().provider.color(provider)
 }
 
 pub(crate) fn terminal_color() -> Color {
@@ -264,5 +329,44 @@ mod tests {
         assert_ne!(accent(), dark_accent, "light palette must differ from dark");
         apply(ThemeMode::Dark);
         assert_eq!(accent(), dark_accent);
+    }
+
+    #[test]
+    fn provider_colors_follow_the_active_palette() {
+        for spec in AgentProvider::all() {
+            let provider = spec.provider;
+            assert_ne!(
+                Theme::dark().provider.color(provider),
+                Theme::light().provider.color(provider),
+                "{provider:?} must have a light variant distinct from its dark one"
+            );
+        }
+        apply(ThemeMode::Dark);
+        let dark = provider_color(AgentProvider::Hermes);
+        apply(ThemeMode::Light);
+        assert_ne!(provider_color(AgentProvider::Hermes), dark);
+    }
+
+    #[test]
+    fn ansi_provider_palette_emits_no_rgb() {
+        let palette = Theme::ansi().provider;
+        for spec in AgentProvider::all() {
+            let color = palette.color(spec.provider);
+            assert!(
+                !matches!(color, Color::Rgb(..)),
+                "{:?} leaks RGB through the ANSI fallback: {color:?}",
+                spec.provider
+            );
+        }
+    }
+
+    #[test]
+    fn only_bright_ansi_backgrounds_count_as_light() {
+        assert!(colorfgbg_is_light("0;15"), "bright white background");
+        assert!(!colorfgbg_is_light("15;0"), "black background");
+        assert!(!colorfgbg_is_light("15;16"), "256-color dark blue");
+        assert!(!colorfgbg_is_light("15;232"), "256-color near-black");
+        assert!(!colorfgbg_is_light("15;default"));
+        assert!(!colorfgbg_is_light("garbage"));
     }
 }

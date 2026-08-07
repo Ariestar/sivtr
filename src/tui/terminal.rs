@@ -93,8 +93,10 @@ pub fn init() -> Result<Tui> {
 
     // Pick the palette before the first frame draws: honor the config
     // override, otherwise detect light/dark and truecolor from the
-    // terminal environment.
-    let config = SivtrConfig::load().unwrap_or_default();
+    // terminal environment. A missing config file already yields defaults;
+    // a real read/parse failure must surface instead of silently looking
+    // like the theme setting was ignored.
+    let config = SivtrConfig::load().context("Failed to load theme config")?;
     theme::apply(config.theme.mode);
 
     let mut setup = TerminalSetup::default();
