@@ -135,7 +135,7 @@ jobs:
             const verdict = fs.readFileSync('/tmp/ai_verdict', 'utf8').trim();
             const summary = fs.readFileSync('/tmp/ai_summary', 'utf8').trim();
             const comments = JSON.parse(fs.readFileSync('/tmp/ai_comments', 'utf8'));
-            const event = verdict === 'approve' ? 'APPROVED' : 'REQUEST_CHANGES';
+            const event = verdict === 'approve' ? 'APPROVE' : 'REQUEST_CHANGES';
             let body = `### 🤖 AI review — ${verdict === 'approve' ? 'approved' : 'changes requested'}\n\n${summary}`;
             if (comments.length > 0) {
               body += '\n\n**Notes:**\n' + comments.map(c => `- \`${c.path}\`: ${c.comment}`).join('\n');
