@@ -1,0 +1,189 @@
+name: ai-review
+
+# AI-powered pull request review: a senior-reviewer prompt reads the PR diff
+# and submits an APPROVED / REQUEST_CHANGES review as github-actions[bot], so
+# the "required approving review" rule is satisfied by an actual code review.
+# Provider-agnostic: any OpenAI-compatible chat-completions endpoint works
+# (OpenAI, DeepSeek, xAI, ...).
+#
+# Trigger: runs only after the "Rust" CI workflow completes successfully --
+# not on every push. Each CI run produces at most one AI review, and the AI
+# judges exactly the commit CI tested, so its verdict complements (does not
+# replace) the CI gate. No green CI, no review.
+#
+# Security: this workflow_run job holds pull-requests: write, so it never
+# checks out the (untrusted) PR head. The diff is fetched from the compare
+# API instead, and all actions are pinned to commit SHAs.
+#
+# Configuration (repository settings):
+#   secret    LLM_API_KEY              - API key for the chosen provider
+#   variable  AI_REVIEW_MODEL          - model name, e.g. deepseek-v4-flash (required)
+#   variable  AI_REVIEW_BASE_URL       - API base URL (optional; default
+#                                        https://api.deepseek.com/v1)
+#
+# The workflow fails closed: if LLM_API_KEY or AI_REVIEW_MODEL is missing, no
+# review is submitted.
+#
+# Skipped PRs: drafts, fork PRs (policy), and bot-authored PRs
+# (github-actions[bot], Dependabot, Renovate).
+#
+# Note: workflow_run triggers only fire for workflows that exist on the
+# default branch, so this file must be on `main` before it takes effect.
+
+on:
+  workflow_run:
+    workflows: ["Rust"]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    # Only PR-triggered CI runs that finished green. Draft / bot / fork PRs are
+    # filtered in the "Find pull request" step, once we have the PR object.
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request'
+    steps:
+      - name: Find pull request
+        id: pr
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          pr=$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/pulls" \
+            --jq '[.[] | select(.state == "open" and .draft == false and .head.repo.fork == false and (.user.login | IN("github-actions[bot]", "dependabot[bot]", "dependabot", "renovate[bot]") | not))][0] // empty')
+          if [ -z "$pr" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Skipped: no reviewable open PR for this CI run (draft, bot-authored, fork, or closed)." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "number=$(echo "$pr" | jq -r .number)" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$(echo "$pr" | jq -r .base.sha)" >> "$GITHUB_OUTPUT"
+          echo "$pr" | jq -r .title > /tmp/pr_title
+          echo "$pr" | jq -r .body > /tmp/pr_body
+          echo "Reviewed PR: #$(echo "$pr" | jq -r .number) by $(echo "$pr" | jq -r .user.login)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Compute diff
+        if: steps.pr.outputs.skip != 'true'
+        env:
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          # Compare API, not a checkout: this job is privileged (workflow_run),
+          # so the untrusted PR head is never checked out or executed.
+          gh api "repos/$GITHUB_REPOSITORY/compare/$BASE_SHA...$HEAD_SHA" \
+            --jq -r '.files[] | select(.filename != "Cargo.lock") | "\ndiff --git a/\(.filename) b/\(.filename)\n" + (.patch // "(patch unavailable: too large or binary)")' \
+            > /tmp/pr.diff
+          echo "diff bytes: $(wc -c < /tmp/pr.diff)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run AI review
+        if: steps.pr.outputs.skip != 'true'
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          AI_REVIEW_MODEL: ${{ vars.AI_REVIEW_MODEL }}
+          AI_REVIEW_BASE_URL: ${{ vars.AI_REVIEW_BASE_URL || 'https://api.deepseek.com/v1' }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PYEOF'
+          import json, os, sys, urllib.error, urllib.request
+
+          api_key = os.environ.get("LLM_API_KEY", "")
+          model = os.environ.get("AI_REVIEW_MODEL", "")
+          if not api_key or not model:
+              print("::error::AI review is not configured: set the LLM_API_KEY "
+                    "secret and the AI_REVIEW_MODEL repository variable "
+                    "(optionally AI_REVIEW_BASE_URL). No review was submitted.")
+              sys.exit(1)
+
+          with open("/tmp/pr_title", encoding="utf-8", errors="replace") as f:
+              pr_title = f.read().strip()
+          with open("/tmp/pr_body", encoding="utf-8", errors="replace") as f:
+              pr_body = f.read()
+          with open("/tmp/pr.diff", encoding="utf-8", errors="replace") as f:
+              diff = f.read()
+          if len(diff) > 150_000:
+              diff = diff[:150_000] + "\n... [diff truncated]"
+
+          system = (
+              "You are a senior code reviewer for the sivtr repository, a Rust terminal "
+              "workspace tool. Review the pull request diff strictly on its merits: "
+              "correctness, safety (no unwrap() in production; anyhow errors with context), "
+              "and adherence to the project's coding rules. Reply with ONLY a JSON object: "
+              '{"verdict": "approve" | "request_changes", "summary": "one or two sentences", '
+              '"comments": [{"path": "file", "comment": "text"}]}. Use "request_changes" only '
+              "for real blocking issues; a small correct diff should be approved. Do not "
+              "invent issues."
+          )
+          payload = {
+              "model": model,
+              "messages": [
+                  {"role": "system", "content": system},
+                  {"role": "user", "content": (
+                      f"PR title: {pr_title}\n\n"
+                      f"PR body: {pr_body}\n\n"
+                      f"Diff:\n{diff}"
+                  )},
+              ],
+              "temperature": 0.2,
+              "response_format": {"type": "json_object"},
+          }
+          url = os.environ.get("AI_REVIEW_BASE_URL", "https://api.deepseek.com/v1").rstrip("/") + "/chat/completions"
+          req = urllib.request.Request(
+              url,
+              data=json.dumps(payload).encode(),
+              headers={
+                  "Authorization": f"Bearer {api_key}",
+                  "Content-Type": "application/json",
+              },
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=180) as resp:
+                  data = json.load(resp)
+          except urllib.error.HTTPError as e:
+              body = e.read().decode(errors="replace")[:500]
+              print(f"::error::LLM API error: {e.code} {body}")
+              raise
+          content = data["choices"][0]["message"]["content"]
+          parsed = json.loads(content)
+          verdict = parsed.get("verdict")
+          if verdict not in ("approve", "request_changes"):
+              verdict = "request_changes"
+          summary = parsed.get("summary", "")
+          comments = parsed.get("comments", [])
+          with open("/tmp/ai_verdict", "w", encoding="utf-8") as f:
+              f.write(verdict)
+          with open("/tmp/ai_summary", "w", encoding="utf-8") as f:
+              f.write(summary)
+          with open("/tmp/ai_comments", "w", encoding="utf-8") as f:
+              json.dump(comments[:20], f)
+          print(f"verdict={verdict}")
+          PYEOF
+
+      - name: Submit review
+        if: steps.pr.outputs.skip != 'true'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        with:
+          script: |
+            const fs = require('fs');
+            const verdict = fs.readFileSync('/tmp/ai_verdict', 'utf8').trim();
+            const summary = fs.readFileSync('/tmp/ai_summary', 'utf8').trim();
+            const comments = JSON.parse(fs.readFileSync('/tmp/ai_comments', 'utf8'));
+            const event = verdict === 'approve' ? 'APPROVE' : 'REQUEST_CHANGES';
+            let body = `### 🤖 AI review — ${verdict === 'approve' ? 'approved' : 'changes requested'}\n\n${summary}`;
+            if (comments.length > 0) {
+              body += '\n\n**Notes:**\n' + comments.map(c => `- \`${c.path}\`: ${c.comment}`).join('\n');
+            }
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: Number(process.env.PR_NUMBER),
+              event,
+              body,
+            });
