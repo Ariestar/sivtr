@@ -187,10 +187,7 @@ fn position_overlay_cursor(frame: &mut Frame, area: Rect, text: &str) {
         return;
     }
     let lines: Vec<&str> = text.split('\n').collect();
-    let caret_row = lines
-        .len()
-        .saturating_sub(1)
-        .min(inner.height as usize - 1);
+    let caret_row = lines.len().saturating_sub(1).min(inner.height as usize - 1);
     let caret_line = lines.get(caret_row).copied().unwrap_or("");
     let column = UnicodeWidthStr::width(caret_line).min(inner.width as usize) as u16;
     let row = inner.y.saturating_add(caret_row as u16);
