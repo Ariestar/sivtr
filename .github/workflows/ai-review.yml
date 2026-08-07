@@ -2,9 +2,14 @@ name: ai-review
 
 # AI-powered pull request review: a senior-reviewer prompt reads the PR diff
 # and submits an APPROVED / REQUEST_CHANGES review as github-actions[bot], so
-# the "required approving review" rule is satisfied by an actual code review
-# (not just green CI). Provider-agnostic: any OpenAI-compatible chat-completions
-# endpoint works (OpenAI, DeepSeek, xAI, ...).
+# the "required approving review" rule is satisfied by an actual code review.
+# Provider-agnostic: any OpenAI-compatible chat-completions endpoint works
+# (OpenAI, DeepSeek, xAI, ...).
+#
+# Trigger: runs only after the "Rust" CI workflow completes successfully --
+# not on every push. Each CI run produces at most one AI review, and the AI
+# judges exactly the commit CI tested, so its verdict complements (does not
+# replace) the CI gate. No green CI, no review.
 #
 # Configuration (repository settings):
 #   secret    LLM_API_KEY              - API key for the chosen provider
@@ -15,45 +20,68 @@ name: ai-review
 # The workflow fails closed: if LLM_API_KEY or AI_REVIEW_MODEL is missing, no
 # review is submitted.
 #
-# Limitation: on `pull_request` events from forks, GITHUB_TOKEN is read-only, so
-# submitting the review would 403. Fork PRs are not auto-reviewed; a human
-# review is expected instead (or set up a PAT / pull_request_target if fork PRs
-# must be auto-reviewed too).
+# Skipped PRs: drafts, fork PRs (policy), and bot-authored PRs
+# (github-actions[bot], Dependabot, Renovate).
+#
+# Note: workflow_run triggers only fire for workflows that exist on the
+# default branch, so this file must be on `main` before it takes effect.
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_run:
+    workflows: ["Rust"]
+    types: [completed]
 
 permissions:
   contents: read
+  actions: read
   pull-requests: write
 
 jobs:
   review:
     runs-on: ubuntu-latest
-    # Skip bots: github-actions[bot] (no self-review loop), Dependabot
-    # (GITHUB_TOKEN cannot approve its PRs anyway) and Renovate (dependency
-    # bumps auto-merged via the review-rule bypass). Also skip fork PRs:
-    # on `pull_request` events GITHUB_TOKEN is read-only for forks, so the
-    # review could not be submitted anyway.
-    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.fork == false && !contains(fromJSON('["github-actions[bot]", "dependabot[bot]", "dependabot", "renovate[bot]"]'), github.event.pull_request.user.login)
+    # Only PR-triggered CI runs that finished green. Draft / bot / fork PRs are
+    # filtered in the "Find pull request" step, once we have the PR object.
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request'
     steps:
-      - uses: actions/checkout@v4
+      - name: Find pull request
+        id: pr
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          pr=$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/pulls" \
+            --jq '[.[] | select(.state == "open" and .draft == false and .head.repo.fork == false and (.user.login | IN("github-actions[bot]", "dependabot[bot]", "dependabot", "renovate[bot]") | not))][0] // empty')
+          if [ -z "$pr" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Skipped: no reviewable open PR for this CI run (draft, bot-authored, fork, or closed)." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "number=$(echo "$pr" | jq -r .number)" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$(echo "$pr" | jq -r .base.sha)" >> "$GITHUB_OUTPUT"
+          echo "$pr" | jq -r .title > /tmp/pr_title
+          echo "$pr" | jq -r .body > /tmp/pr_body
+          echo "Reviewed PR: #$(echo "$pr" | jq -r .number) by $(echo "$pr" | jq -r .user.login)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Checkout PR head
+        if: steps.pr.outputs.skip != 'true'
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Compute diff
+        if: steps.pr.outputs.skip != 'true'
         run: |
-          git diff "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}" -- . ':!Cargo.lock' > /tmp/pr.diff || true
+          git diff "${{ steps.pr.outputs.base_sha }}...${{ github.event.workflow_run.head_sha }}" -- . ':!Cargo.lock' > /tmp/pr.diff || true
           echo "diff bytes: $(wc -c < /tmp/pr.diff)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Run AI review
+        if: steps.pr.outputs.skip != 'true'
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           AI_REVIEW_MODEL: ${{ vars.AI_REVIEW_MODEL }}
           AI_REVIEW_BASE_URL: ${{ vars.AI_REVIEW_BASE_URL || 'https://api.deepseek.com/v1' }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           set -euo pipefail
           python3 - <<'PYEOF'
@@ -67,6 +95,10 @@ jobs:
                     "(optionally AI_REVIEW_BASE_URL). No review was submitted.")
               sys.exit(1)
 
+          with open("/tmp/pr_title", encoding="utf-8", errors="replace") as f:
+              pr_title = f.read().strip()
+          with open("/tmp/pr_body", encoding="utf-8", errors="replace") as f:
+              pr_body = f.read()
           with open("/tmp/pr.diff", encoding="utf-8", errors="replace") as f:
               diff = f.read()
           if len(diff) > 150_000:
@@ -87,8 +119,8 @@ jobs:
               "messages": [
                   {"role": "system", "content": system},
                   {"role": "user", "content": (
-                      f"PR title: {os.environ['PR_TITLE']}\n\n"
-                      f"PR body: {os.environ['PR_BODY']}\n\n"
+                      f"PR title: {pr_title}\n\n"
+                      f"PR body: {pr_body}\n\n"
                       f"Diff:\n{diff}"
                   )},
               ],
@@ -128,7 +160,10 @@ jobs:
           PYEOF
 
       - name: Submit review
+        if: steps.pr.outputs.skip != 'true'
         uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
         with:
           script: |
             const fs = require('fs');
@@ -143,7 +178,7 @@ jobs:
             await github.rest.pulls.createReview({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: context.issue.number,
+              pull_number: Number(process.env.PR_NUMBER),
               event,
               body,
             });
