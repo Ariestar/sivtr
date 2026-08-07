@@ -98,7 +98,7 @@ pub enum ThemeMode {
 
 /// TUI theme configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ThemeConfig {
     /// Color scheme: `"auto"` (default), `"dark"`, or `"light"`.
     pub mode: ThemeMode,
@@ -282,5 +282,9 @@ mod tests {
         // falling back to auto (which made the setting look ignored).
         assert!(toml::from_str::<SivtrConfig>("[theme]\nmode = \"ligth\"\n").is_err());
         assert!(toml::from_str::<SivtrConfig>("[theme]\nmode = \"light\"\n").is_ok());
+
+        // A misspelled key (`mod` instead of `mode`) is rejected too; serde
+        // would otherwise ignore the unknown field and keep `mode` at auto.
+        assert!(toml::from_str::<SivtrConfig>("[theme]\nmod = \"light\"\n").is_err());
     }
 }
