@@ -11,6 +11,10 @@ name: ai-review
 # judges exactly the commit CI tested, so its verdict complements (does not
 # replace) the CI gate. No green CI, no review.
 #
+# Security: this workflow_run job holds pull-requests: write, so it never
+# checks out the (untrusted) PR head. The diff is fetched from the compare
+# API instead, and all actions are pinned to commit SHAs.
+#
 # Configuration (repository settings):
 #   secret    LLM_API_KEY              - API key for the chosen provider
 #   variable  AI_REVIEW_MODEL          - model name, e.g. deepseek-v4-flash (required)
@@ -63,17 +67,18 @@ jobs:
           echo "$pr" | jq -r .body > /tmp/pr_body
           echo "Reviewed PR: #$(echo "$pr" | jq -r .number) by $(echo "$pr" | jq -r .user.login)" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Checkout PR head
-        if: steps.pr.outputs.skip != 'true'
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event.workflow_run.head_sha }}
-
       - name: Compute diff
         if: steps.pr.outputs.skip != 'true'
+        env:
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          git diff "${{ steps.pr.outputs.base_sha }}...${{ github.event.workflow_run.head_sha }}" -- . ':!Cargo.lock' > /tmp/pr.diff || true
+          set -euo pipefail
+          # Compare API, not a checkout: this job is privileged (workflow_run),
+          # so the untrusted PR head is never checked out or executed.
+          gh api "repos/$GITHUB_REPOSITORY/compare/$BASE_SHA...$HEAD_SHA" \
+            --jq -r '.files[] | select(.filename != "Cargo.lock") | "\ndiff --git a/\(.filename) b/\(.filename)\n" + (.patch // "(patch unavailable: too large or binary)")' \
+            > /tmp/pr.diff
           echo "diff bytes: $(wc -c < /tmp/pr.diff)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Run AI review
@@ -161,7 +166,7 @@ jobs:
 
       - name: Submit review
         if: steps.pr.outputs.skip != 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         with:
