@@ -18,8 +18,8 @@ use crate::tui::workspace::{
 };
 
 use super::content::{
-    active_workspace_content_at, handle_line_filter_key, handle_line_filter_paste, line_filter_spec,
-    workspace_search_target_ref,
+    active_workspace_content_at, handle_line_filter_key, handle_line_filter_paste,
+    line_filter_spec, workspace_search_target_ref,
 };
 use super::help::{apply_workspace_help_action, set_focus, HelpDispatch};
 use super::load::{SessionColumn, SessionCtx, SourceLoadState};
@@ -1041,8 +1041,9 @@ mod tests {
     use super::super::content::{
         handle_line_filter_key, handle_line_filter_paste, workspace_dialogue_vim_view,
         workspace_picked_content, workspace_picked_content_for_copy,
-        workspace_picked_content_for_copy_with_line_filter, workspace_picked_content_with_line_filter,
-        workspace_search_target_ref, WorkspaceCopyShortcut,
+        workspace_picked_content_for_copy_with_line_filter,
+        workspace_picked_content_with_line_filter, workspace_search_target_ref,
+        WorkspaceCopyShortcut,
     };
     use super::super::nav::{clamp_list_state, move_workspace_cursor_up};
     use super::super::panes::{DialogueCtx, DialoguePane};
