@@ -42,6 +42,20 @@ pub(crate) fn require_group_owner(store: &StateStore, group_id: &str, sender: &s
     Ok(())
 }
 
+/// Revoke `target`'s grants on every share `contributor` contributes to the
+/// group.
+fn revoke_member_access(
+    store: &StateStore,
+    group_id: &str,
+    contributor: &str,
+    target: &str,
+) -> Result<()> {
+    for share in store.group_shares(group_id, contributor)? {
+        store.revoke_group_grant(group_id, &share.share_id, target)?;
+    }
+    Ok(())
+}
+
 fn member_info_from_store(
     store: &StateStore,
     group_id: &str,
@@ -276,13 +290,9 @@ pub(crate) async fn drop_group(context: &Arc<DaemonContext>, group_name_or_id: &
     let group = context.store.group(group_name_or_id)?;
     let members = context.store.members(&group.id)?;
     let self_id = context.identity.id();
-    for share in context.store.group_shares(&group.id, &self_id)? {
-        for member in &members {
-            if member.peer_id != self_id {
-                context
-                    .store
-                    .revoke_group_grant(&group.id, &share.share_id, &member.peer_id)?;
-            }
+    for member in &members {
+        if member.peer_id != self_id {
+            revoke_member_access(&context.store, &group.id, &self_id, &member.peer_id)?;
         }
     }
     context.store.remove_group(&group.id)?;
@@ -370,11 +380,7 @@ pub(crate) async fn remove_group_member(
     if target.peer_id == self_id {
         bail!("The group owner cannot remove itself; leave the group to disband it");
     }
-    for share in context.store.group_shares(&group.id, &self_id)? {
-        context
-            .store
-            .revoke_group_grant(&group.id, &share.share_id, &target.peer_id)?;
-    }
+    revoke_member_access(&context.store, &group.id, &self_id, &target.peer_id)?;
     // Notify everyone, including the removed peer, before dropping it from
     // the roster: broadcast reads the member list from the store, so the
     // target must still be listed to receive its own removal and clear the
@@ -641,14 +647,12 @@ pub(crate) async fn handle_member_removed(
         // We were kicked (or the owner disbanded the group).
         drop_group(context, group_id).await?;
     } else {
-        for share in context
-            .store
-            .group_shares(group_id, &context.identity.id())?
-        {
-            context
-                .store
-                .revoke_group_grant(group_id, &share.share_id, removed_peer)?;
-        }
+        revoke_member_access(
+            &context.store,
+            group_id,
+            &context.identity.id(),
+            removed_peer,
+        )?;
         context.store.remove_member(group_id, removed_peer)?;
     }
     Ok(RemoteResponse::GroupAck)
@@ -671,11 +675,7 @@ pub(crate) async fn handle_leave(
     context.store.remove_member(group_id, sender)?;
     // Revoke every owner contribution from the leaver.
     if let Some(owner) = members_before.iter().find(|row| row.role == "owner") {
-        for share in context.store.group_shares(group_id, &owner.peer_id)? {
-            context
-                .store
-                .revoke_group_grant(group_id, &share.share_id, sender)?;
-        }
+        revoke_member_access(&context.store, group_id, &owner.peer_id, sender)?;
     }
     broadcast(
         context,
@@ -739,26 +739,12 @@ pub(crate) async fn group_fan_out(
                 let source = source.to_string();
                 let filter = bounds.clone();
                 move || {
-                    let result = crate::commands::memory::workset::run_on_share(
+                    let (records, anchors) = crate::commands::memory::workset::run_on_share(
                         std::path::Path::new(&root),
                         &source,
                         filter,
                         share.redact,
-                    );
-                    // An empty workspace has no sessions; report it as an
-                    // empty result (same convention as the remote path), so
-                    // one member's empty contribution cannot abort the group.
-                    let (records, anchors) = match result {
-                        Ok(result) => result,
-                        Err(error)
-                            if error
-                                .to_string()
-                                .starts_with("No record found for ref selector") =>
-                        {
-                            (Vec::new(), Vec::new())
-                        }
-                        Err(error) => return Err(error),
-                    };
+                    )?;
                     Ok::<_, anyhow::Error>(QueryResponse { records, anchors })
                 }
             })

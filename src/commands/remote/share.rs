@@ -193,34 +193,59 @@ fn confirm_single(root: &Path, share_name: &str) -> Result<()> {
     bail!("share cancelled");
 }
 
-fn add(path: Option<PathBuf>, name: Option<String>, redact: bool) -> Result<ShareInfo> {
+/// Resolve or create the share for a workspace: reuse an existing enabled
+/// share, re-enable a disabled one, or add a new one. Silent (no output);
+/// shared by `share add` and group join.
+pub(crate) fn ensure_share(
+    path: Option<PathBuf>,
+    share_name: Option<String>,
+    redact: bool,
+) -> Result<(ShareInfo, PathBuf)> {
     let path =
         path.unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
     let paths = workspace::ensure_workspace_for_dir(&path)?
         .with_context(|| format!("{} is not inside a git workspace", path.display()))?;
-    let name = name.unwrap_or_else(|| default_share_name(&paths.root));
-    match ipc::call(LocalRequest::ShareAdd {
-        workspace_key: paths.key,
-        root: paths.root.display().to_string(),
-        name,
-        redact,
-    })? {
-        LocalResponse::Share(share) => {
-            output::success(format!("shared workspace `{}`", share.name));
-            output::detail("id", share.id.clone());
-            output::detail("root", share.root.clone());
-            output::detail(
-                "redaction",
-                if share.redact { "enabled" } else { "disabled" },
-            );
-            output::hint(format!(
-                "create an invite with: sivtr share invite {}",
-                share.name
-            ));
-            Ok(share)
+    let name = share_name.unwrap_or_else(|| default_share_name(&paths.root));
+    let share = match find_share_for_workspace(&paths.key) {
+        Ok(existing) if existing.enabled => existing,
+        Ok(existing) => {
+            // Re-enable a disabled share: a contributed workspace must be
+            // queryable, or members' `authorize` would deny every read.
+            match ipc::call(LocalRequest::ShareSetEnabled {
+                share: existing.id,
+                enabled: true,
+            })? {
+                LocalResponse::Share(share) => share,
+                response => bail!("Unexpected daemon response: {response:?}"),
+            }
         }
-        response => bail!("Unexpected daemon response: {response:?}"),
-    }
+        Err(_) => match ipc::call(LocalRequest::ShareAdd {
+            workspace_key: paths.key,
+            root: paths.root.display().to_string(),
+            name,
+            redact,
+        })? {
+            LocalResponse::Share(share) => share,
+            response => bail!("Unexpected daemon response: {response:?}"),
+        },
+    };
+    Ok((share, paths.root))
+}
+
+fn add(path: Option<PathBuf>, name: Option<String>, redact: bool) -> Result<ShareInfo> {
+    let (share, root) = ensure_share(path, name, redact)?;
+    output::success(format!("shared workspace `{}`", share.name));
+    output::detail("id", share.id.clone());
+    output::detail("root", root.display().to_string());
+    output::detail(
+        "redaction",
+        if share.redact { "enabled" } else { "disabled" },
+    );
+    output::hint(format!(
+        "create an invite with: sivtr share invite {}",
+        share.name
+    ));
+    Ok(share)
 }
 
 /// Find the share for a workspace, if any. Shared with group join.

@@ -3,7 +3,6 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 use chrono::{TimeZone, Utc};
-use sivtr_core::workspace;
 
 use crate::cli::{GroupAction, GroupCommand};
 use crate::commands::interactive;
@@ -42,7 +41,7 @@ pub fn execute(command: GroupCommand) -> Result<()> {
 }
 
 fn create(name: &str, path: Option<PathBuf>, share_name: Option<String>) -> Result<()> {
-    let (share, root) = ensure_share(path, share_name, true)?;
+    let (share, root) = super::share::ensure_share(path, share_name, true)?;
     match ipc::call(LocalRequest::GroupCreate {
         name: name.to_string(),
         share_id: share.id.clone(),
@@ -137,7 +136,7 @@ fn select_contributions(
     // current contributions (re-running join in another workspace adds it).
     let picker = interactive::is_interactive() && path.is_none();
     if !picker {
-        let (share, _) = ensure_share(path, share_name, redact)?;
+        let (share, _) = super::share::ensure_share(path, share_name, redact)?;
         let group_id = ticket_group_id(encoded_invite)?;
         return append_contribution(&group_id, &share);
     }
@@ -188,7 +187,8 @@ fn select_contributions(
     let mut shares = Vec::with_capacity(selected.len());
     for index in selected {
         let choice = &choices[index];
-        let (share, _) = ensure_share(Some(PathBuf::from(&choice.root)), None, redact)?;
+        let (share, _) =
+            super::share::ensure_share(Some(PathBuf::from(&choice.root)), None, redact)?;
         shares.push((share.id, share.name));
     }
     Ok(shares)
@@ -322,43 +322,4 @@ fn sync(group: &str) -> Result<()> {
         }
         response => bail!("Unexpected daemon response: {response:?}"),
     }
-}
-
-/// Contribute a workspace to the group: reuse the existing share for this
-/// workspace when one exists, otherwise create it.
-fn ensure_share(
-    path: Option<PathBuf>,
-    share_name: Option<String>,
-    redact: bool,
-) -> Result<(ShareInfo, PathBuf)> {
-    let path =
-        path.unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
-    let paths = workspace::ensure_workspace_for_dir(&path)?
-        .with_context(|| format!("{} is not inside a git workspace", path.display()))?;
-    let name = share_name.unwrap_or_else(|| super::share::default_share_name(&paths.root));
-    let share = match super::share::find_share_for_workspace(&paths.key) {
-        Ok(existing) if existing.enabled => existing,
-        Ok(existing) => {
-            // Re-enable a disabled share, mirroring `sivtr share add`: a
-            // contributed workspace must be queryable, or members' `authorize`
-            // would deny every read.
-            match ipc::call(LocalRequest::ShareSetEnabled {
-                share: existing.id,
-                enabled: true,
-            })? {
-                LocalResponse::Share(share) => share,
-                response => bail!("Unexpected daemon response: {response:?}"),
-            }
-        }
-        Err(_) => match ipc::call(LocalRequest::ShareAdd {
-            workspace_key: paths.key,
-            root: paths.root.display().to_string(),
-            name,
-            redact,
-        })? {
-            LocalResponse::Share(share) => share,
-            response => bail!("Unexpected daemon response: {response:?}"),
-        },
-    };
-    Ok((share, paths.root))
 }
