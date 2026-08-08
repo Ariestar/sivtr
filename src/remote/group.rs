@@ -871,6 +871,8 @@ pub(crate) fn group_targets(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remote::identity::Identity;
+    use crate::remote::protocol::REMOTE_ALPN;
 
     fn group_store() -> (tempfile::TempDir, StateStore) {
         let temp = tempfile::tempdir().expect("temp dir");
@@ -960,5 +962,197 @@ mod tests {
         store.save_remote_peer(&bob_id, "bob", "{}").expect("peer");
         store.add_member("team", &bob_id, "member").expect("member");
         (temp, store, self_id)
+    }
+
+    /// Real daemon context (bound endpoint, temp store, generated identity)
+    /// plus a group owned by `self` contributing `owner-ws`, and a member
+    /// `bob`. Production signatures stay context-based; the seam lives
+    /// entirely in this test module.
+    async fn context_with_members() -> (tempfile::TempDir, Arc<DaemonContext>, String) {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace dir");
+        let store = StateStore::open(temp.path().join("state.db")).expect("store");
+        let owner_share = store
+            .add_share("workspace-key", &workspace, "owner-ws", true)
+            .expect("owner share");
+        let identity = Identity {
+            name: "self".to_string(),
+            secret_key: iroh::SecretKey::generate(),
+        };
+        let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
+            .secret_key(identity.secret_key.clone())
+            .alpns(vec![REMOTE_ALPN.to_vec()])
+            .bind()
+            .await
+            .expect("endpoint");
+        let self_id = identity.id();
+        store.add_group("team", &self_id, "self").expect("group");
+        store
+            .add_group_share("team", &self_id, &owner_share.id, &owner_share.name)
+            .expect("owner contribution");
+        let bob_id = iroh::SecretKey::generate().public().to_string();
+        store.save_remote_peer(&bob_id, "bob", "{}").expect("peer");
+        store.add_member("team", &bob_id, "member").expect("member");
+        let context = Arc::new(DaemonContext {
+            store,
+            endpoint,
+            identity,
+            started_at: String::new(),
+            control_token: String::new(),
+        });
+        (temp, context, self_id)
+    }
+
+    /// A roster row the way it travels on the wire.
+    fn member_info(
+        peer_id: &str,
+        peer_name: &str,
+        role: &str,
+        shares: Vec<(String, String)>,
+    ) -> MemberInfo {
+        let id: iroh::EndpointId = peer_id.parse().expect("node id");
+        MemberInfo {
+            peer_id: peer_id.to_string(),
+            peer_name: peer_name.to_string(),
+            shares,
+            role: role.to_string(),
+            endpoint: iroh::EndpointAddr::new(id),
+        }
+    }
+
+    #[tokio::test]
+    async fn member_add_push_never_prunes_concurrent_share() {
+        let (temp, context, _self_id) = context_with_members().await;
+        let store = &context.store;
+        let workspace = temp.path().join("workspace");
+        let bob_id = store
+            .members("team")
+            .expect("members")
+            .into_iter()
+            .find(|member| member.peer_name == "bob")
+            .expect("bob")
+            .peer_id;
+        let s2 = store
+            .add_share("workspace-bob", &workspace, "bob-ws", true)
+            .expect("share");
+        let s3 = store
+            .add_share("workspace-bob-2", &workspace, "bob-ws-2", true)
+            .expect("share");
+        store
+            .add_group_share("team", &bob_id, &s2.id, &s2.name)
+            .expect("s2 broadcast");
+        store
+            .add_group_share("team", &bob_id, &s3.id, &s3.name)
+            .expect("s3 broadcast");
+        // The owner's join-time snapshot is stale: it predates the S3
+        // broadcast and does not list it.
+        let stale_push = member_info(&bob_id, "bob", "member", vec![(s2.id.clone(), s2.name.clone())]);
+        merge_member(&context, "team", &stale_push).expect("merge");
+        let shares = store.group_shares("team", &bob_id).expect("shares");
+        assert!(
+            shares.iter().any(|share| share.share_id == s3.id),
+            "an add-only push must never prune a share broadcast concurrently"
+        );
+        assert!(shares.iter().any(|share| share.share_id == s2.id));
+    }
+
+    #[tokio::test]
+    async fn reconcile_prunes_stale_shares_on_pull() {
+        let (temp, context, self_id) = context_with_members().await;
+        let store = &context.store;
+        let workspace = temp.path().join("workspace");
+        let owner_share = store.share("owner-ws").expect("owner share");
+        let bob_id = store
+            .members("team")
+            .expect("members")
+            .into_iter()
+            .find(|member| member.peer_name == "bob")
+            .expect("bob")
+            .peer_id;
+        let s2 = store
+            .add_share("workspace-bob", &workspace, "bob-ws", true)
+            .expect("share");
+        let s3 = store
+            .add_share("workspace-bob-2", &workspace, "bob-ws-2", true)
+            .expect("share");
+        store
+            .add_group_share("team", &bob_id, &s2.id, &s2.name)
+            .expect("s2");
+        store
+            .add_group_share("team", &bob_id, &s3.id, &s3.name)
+            .expect("s3");
+        // The owner's authoritative roster no longer lists S3 (Bob withdrew
+        // it); the pull must prune the local copy.
+        let roster = vec![
+            member_info(
+                &self_id,
+                "self",
+                "owner",
+                vec![(owner_share.id.clone(), owner_share.name.clone())],
+            ),
+            member_info(&bob_id, "bob", "member", vec![(s2.id.clone(), s2.name.clone())]),
+        ];
+        reconcile_roster(&context, "team", &roster).expect("reconcile");
+        let shares = store.group_shares("team", &bob_id).expect("shares");
+        assert_eq!(shares.len(), 1, "withdrawn share pruned by the pull");
+        assert_eq!(shares[0].share_id, s2.id);
+    }
+
+    #[tokio::test]
+    async fn reconcile_drops_members_absent_from_roster() {
+        let (temp, context, self_id) = context_with_members().await;
+        let store = &context.store;
+        let workspace = temp.path().join("workspace");
+        let owner_share = store.share("owner-ws").expect("owner share");
+        let bob_id = store
+            .members("team")
+            .expect("members")
+            .into_iter()
+            .find(|member| member.peer_name == "bob")
+            .expect("bob")
+            .peer_id;
+        // Carol joined after the last pull; the owner then kicked her.
+        let carol_id = iroh::SecretKey::generate().public().to_string();
+        store.save_remote_peer(&carol_id, "carol", "{}").expect("peer");
+        store.add_member("team", &carol_id, "member").expect("member");
+        let carol_share = store
+            .add_share("workspace-carol", &workspace, "carol-ws", true)
+            .expect("share");
+        store
+            .add_group_share("team", &carol_id, &carol_share.id, &carol_share.name)
+            .expect("carol contribution");
+        store
+            .group_grant("team", &owner_share.id, &carol_id)
+            .expect("grant");
+        // The authoritative roster lists every remaining member (self + bob);
+        // carol is absent, so the pull must drop her and revoke her grants.
+        let roster = vec![
+            member_info(
+                &self_id,
+                "self",
+                "owner",
+                vec![(owner_share.id.clone(), owner_share.name.clone())],
+            ),
+            member_info(&bob_id, "bob", "member", Vec::new()),
+        ];
+        reconcile_roster(&context, "team", &roster).expect("reconcile");
+        let members = store.members("team").expect("members");
+        assert!(
+            !members.iter().any(|member| member.peer_id == carol_id),
+            "member absent from the owner roster is dropped"
+        );
+        assert!(
+            store.group_shares("team", &carol_id).expect("shares").is_empty(),
+            "dropped member's contribution rows are cleaned"
+        );
+        assert!(
+            store
+                .grants(&owner_share.id)
+                .expect("grants")
+                .iter()
+                .all(|grant| grant.peer_id != carol_id),
+            "dropped member's grants on our shares are revoked"
+        );
     }
 }
