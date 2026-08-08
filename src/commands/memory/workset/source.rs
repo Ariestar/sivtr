@@ -12,11 +12,16 @@ use sivtr_core::workspace;
 
 use crate::commands::memory::filter::{self, Filter};
 use crate::commands::memory::records::warn_skipped;
+use crate::output;
 
 use super::WorkSet;
 
 /// Default deadline for one remote source inside [`query_many`].
 pub const REMOTE_QUERY_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Minimum deadline for one group fan-out inside [`query`]; a group query
+/// fans out to every member, so it needs headroom beyond a single remote hop.
+const GROUP_QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How one source is scheduled inside [`query_many`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,6 +103,13 @@ pub fn query(source: &str, filter: Filter, cwd: Option<&Path>) -> Result<WorkSet
             if let Some(set) = try_remote(&ws.key, &scope, path, filter.clone(), &cwd)? {
                 return Ok(set);
             }
+        }
+
+        // Group fan-out: `team:terminal` (all members) or `team/alice:terminal`
+        // (one member). Groups are device-global, resolved after mounts so a
+        // mount alias always wins over a same-named group.
+        if let Some(set) = try_group(&scope, path, filter.clone(), &cwd)? {
+            return Ok(set);
         }
 
         if !scope.contains('/') {
@@ -245,17 +257,20 @@ fn query_remote_bounded(
     // Prefer the timed IPC path for `scope:path` remotes so the daemon socket
     // itself respects the interactive deadline.
     if let Some((scope, path)) = selector.split_once(':') {
-        if !path.is_empty()
-            && !path.starts_with('/')
-            && !scope.eq_ignore_ascii_case("local")
-            && !scope.contains('/')
-        {
-            if let Some(ws) = workspace::resolve_workspace_for_dir(cwd)? {
-                if let Some(set) =
-                    try_remote_timed(&ws.key, scope, path, filter.clone(), cwd, read_timeout)?
-                {
-                    return Ok(set);
+        if !path.is_empty() && !path.starts_with('/') && !scope.eq_ignore_ascii_case("local") {
+            if !scope.contains('/') {
+                if let Some(ws) = workspace::resolve_workspace_for_dir(cwd)? {
+                    if let Some(set) =
+                        try_remote_timed(&ws.key, scope, path, filter.clone(), cwd, read_timeout)?
+                    {
+                        return Ok(set);
+                    }
                 }
+            }
+            // Groups (`team` or `team/alice`) are device-global; mount aliases
+            // are workspace-scoped and were checked above.
+            if let Some(set) = try_group_timed(scope, path, filter.clone(), cwd, read_timeout)? {
+                return Ok(set);
             }
         }
     }
@@ -362,6 +377,94 @@ fn try_remote_timed(
     }
 }
 
+fn try_group(scope: &str, path: &str, filter: Filter, cwd: &Path) -> Result<Option<WorkSet>> {
+    try_group_timed(scope, path, filter, cwd, GROUP_QUERY_TIMEOUT)
+}
+
+/// Group fan-out with a deadline. Returns `Ok(None)` when `scope` is not a
+/// group on this device so the caller can continue the scope cascade.
+fn try_group_timed(
+    scope: &str,
+    path: &str,
+    filter: Filter,
+    cwd: &Path,
+    read_timeout: Duration,
+) -> Result<Option<WorkSet>> {
+    use crate::remote::ipc;
+    use crate::remote::protocol::{LocalRequest, LocalResponse};
+
+    let Some((group, member, share)) = split_group_scope(scope) else {
+        return Ok(None);
+    };
+    crate::commands::remote::serve::ensure_running()?;
+    let exists = match ipc::call(LocalRequest::GroupList)? {
+        LocalResponse::Groups(groups) => groups.iter().any(|group_info| group_info.name == group),
+        _ => return Ok(None),
+    };
+    if !exists {
+        return Ok(None);
+    }
+    // Fan-out happens inside the daemon (parallel per-member dials); give the
+    // socket read enough headroom beyond the daemon's per-peer budget.
+    let read_timeout = read_timeout.max(GROUP_QUERY_TIMEOUT);
+    match ipc::call_with_read_timeout(
+        LocalRequest::GroupQuery {
+            group,
+            member,
+            share,
+            source: path.to_string(),
+            filter,
+        },
+        read_timeout,
+    )? {
+        LocalResponse::GroupQuery(response) => {
+            if !response.skipped.is_empty() {
+                output::info(format!(
+                    "group members offline: {}",
+                    response.skipped.join(", ")
+                ));
+            }
+            Ok(Some(WorkSet::with_anchors(
+                cwd.display().to_string(),
+                response.query.records,
+                response.query.anchors,
+            )))
+        }
+        response => anyhow::bail!("Unexpected daemon response: {response:?}"),
+    }
+}
+
+/// Split a group scope: `team` (all members), `team/alice` (one member), or
+/// `team/alice/proj-b` (one member, one contributed share). Returns `None` for
+/// anything that is not a valid group scope so the caller can fall through to
+/// the local-workspace cascade.
+fn split_group_scope(scope: &str) -> Option<(String, Option<String>, Option<String>)> {
+    let parts: Vec<&str> = scope.split('/').collect();
+    match parts.as_slice() {
+        [group] if is_identifier(group) => Some((group.to_string(), None, None)),
+        [group, member] if is_identifier(group) && is_identifier(member) => {
+            Some((group.to_string(), Some(member.to_string()), None))
+        }
+        [group, member, share]
+            if is_identifier(group) && is_identifier(member) && is_identifier(share) =>
+        {
+            Some((
+                group.to_string(),
+                Some(member.to_string()),
+                Some(share.to_string()),
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn is_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+}
+
 fn read_stdin() -> Result<WorkSet> {
     let mut input = String::new();
     io::stdin()
@@ -410,4 +513,35 @@ pub fn load_context_records(
         }
     }
     Ok(records)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_group_scope;
+
+    #[test]
+    fn group_scope_splits_team_and_member_forms() {
+        assert_eq!(
+            split_group_scope("team"),
+            Some(("team".to_string(), None, None))
+        );
+        assert_eq!(
+            split_group_scope("team/alice"),
+            Some(("team".to_string(), Some("alice".to_string()), None))
+        );
+        assert_eq!(
+            split_group_scope("team/alice/proj-b"),
+            Some((
+                "team".to_string(),
+                Some("alice".to_string()),
+                Some("proj-b".to_string())
+            ))
+        );
+        // Not group-shaped: falls through to the local-workspace cascade.
+        assert_eq!(split_group_scope("team/a/b/c"), None);
+        assert_eq!(split_group_scope("team@alice"), None);
+        assert_eq!(split_group_scope(""), None);
+        assert_eq!(split_group_scope("team/"), None);
+        assert_eq!(split_group_scope("a b"), None);
+    }
 }
