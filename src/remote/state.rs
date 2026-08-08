@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
@@ -62,11 +63,54 @@ pub struct GroupInfo {
     pub created_at: String,
 }
 
+/// A member's role inside a group. Stored as TEXT in SQLite and carried as a
+/// lowercase string on the wire; typed here so role comparisons cannot
+/// silently drift (`"owner"` vs `"Owner"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GroupRole {
+    Owner,
+    Member,
+}
+
+impl GroupRole {
+    pub fn is_owner(self) -> bool {
+        matches!(self, Self::Owner)
+    }
+
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            Self::Owner => "owner",
+            Self::Member => "member",
+        }
+    }
+}
+
+impl std::str::FromStr for GroupRole {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value {
+            "owner" => Ok(Self::Owner),
+            "member" => Ok(Self::Member),
+            _ => bail!("Unknown group role `{value}`"),
+        }
+    }
+}
+
+impl rusqlite::types::FromSql for GroupRole {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let text = value.as_str()?;
+        text.parse()
+            .map_err(|_| rusqlite::types::FromSqlError::InvalidType)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupMemberInfo {
     pub peer_id: String,
     pub peer_name: String,
-    pub role: String,
+    pub role: GroupRole,
     pub joined_at: String,
     pub last_seen_at: Option<String>,
     /// Number of workspaces this member contributes to the group.
@@ -80,6 +124,17 @@ pub struct GroupShareInfo {
     pub share_id: String,
     pub share_name: String,
     pub added_at: String,
+}
+
+/// One roster row as it converges into the store: peer identity, role, and
+/// contributed shares, with the wire endpoint already serialized.
+#[derive(Debug, Clone)]
+pub struct RosterRow {
+    pub peer_id: String,
+    pub peer_name: String,
+    pub role: String,
+    pub shares: Vec<(String, String)>,
+    pub endpoint_json: String,
 }
 
 #[derive(Debug, Clone)]
@@ -254,6 +309,7 @@ impl StateStore {
             "ALTER TABLE invites ADD COLUMN group_id TEXT",
             "ALTER TABLE invites ADD COLUMN max_uses INTEGER",
             "ALTER TABLE invites ADD COLUMN used_count INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE groups ADD COLUMN roster_epoch INTEGER NOT NULL DEFAULT 0",
         ] {
             // Only the expected "column already exists" failure is benign for
             // an idempotent ALTER; anything else is a real migration error.
@@ -798,16 +854,18 @@ impl StateStore {
     }
 
     /// Insert or refresh one member row. Endpoint/name live in `peers`.
+    /// `role` is parsed at this single boundary; comparisons use [`GroupRole`].
     pub fn add_member(
         &self,
         group_name_or_id: &str,
         peer_id: &str,
         role: &str,
     ) -> Result<GroupMemberInfo> {
+        let role = GroupRole::from_str(role)?;
         let group = self.group(group_name_or_id)?;
         self.connect()?.execute(
             "INSERT INTO group_members(group_id, peer_id, role, joined_at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(group_id, peer_id) DO UPDATE SET role = excluded.role",
-            params![group.id, peer_id, role, now()],
+            params![group.id, peer_id, role.as_wire(), now()],
         )?;
         self.member(&group.id, peer_id)
     }
@@ -851,6 +909,230 @@ impl StateStore {
             "SELECT gm.peer_id, p.name, gm.role, gm.joined_at, p.last_seen_at, p.endpoint_json, (SELECT COUNT(*) FROM group_shares gs WHERE gs.group_id = gm.group_id AND gs.peer_id = gm.peer_id) FROM group_members gm JOIN peers p ON p.id = gm.peer_id WHERE gm.group_id = ?1 ORDER BY p.name",
         )?;
         let rows = statement.query_map([group.id], group_member_from_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    /// The owner's membership row; the single authority for "who owns this
+    /// group". A group without an owner row is treated as an error.
+    pub fn owner(&self, group_name_or_id: &str) -> Result<GroupMemberInfo> {
+        self.members(group_name_or_id)?
+            .into_iter()
+            .find(|member| member.role.is_owner())
+            .context("Group has no owner")
+    }
+
+    /// True when `peer_id` is the group's owner.
+    pub fn is_owner(&self, group_name_or_id: &str, peer_id: &str) -> Result<bool> {
+        Ok(self.owner(group_name_or_id)?.peer_id == peer_id)
+    }
+
+    /// True when `peer_id` is a member of the group (any role).
+    pub fn is_member(&self, group_name_or_id: &str, peer_id: &str) -> Result<bool> {
+        Ok(self
+            .members(group_name_or_id)?
+            .iter()
+            .any(|member| member.peer_id == peer_id))
+    }
+
+    /// Upsert peers, membership, contributions, and grants for every row in
+    /// `roster`, all in one transaction. Add-only and idempotent: nothing
+    /// local is ever removed. Used on the snapshot paths (join mirror,
+    /// member-added push), where the sender's own share broadcasts race the
+    /// snapshot - pruning there would let a stale push regress a share that
+    /// was just added.
+    pub fn apply_roster_add_only(
+        &self,
+        group_name_or_id: &str,
+        self_id: &str,
+        roster: &[RosterRow],
+    ) -> Result<()> {
+        let group = self.group(group_name_or_id)?;
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        self.upsert_roster_sql(&transaction, &group.id, self_id, roster)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Make local group state match the owner's authoritative `roster`, in one
+    /// transaction: upsert, prune each member's stale contributions (except
+    /// our own - they are local authority), and remove members the roster no
+    /// longer lists (with their contribution rows and grants). The roster
+    /// always lists every member including us, so a member missing from it has
+    /// been removed. Pull-only: the owner sees every share change, so its
+    /// roster may prune; snapshot pushes must stay add-only via
+    /// [`Self::apply_roster_add_only`].
+    pub fn apply_roster_reconcile(
+        &self,
+        group_name_or_id: &str,
+        self_id: &str,
+        roster: &[RosterRow],
+    ) -> Result<()> {
+        let group = self.group(group_name_or_id)?;
+        let group_id = &group.id;
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        self.upsert_roster_sql(&transaction, group_id, self_id, roster)?;
+        // Prune stale shares for every non-self member.
+        for row in roster {
+            if row.peer_id == self_id {
+                continue;
+            }
+            let local = self.group_shares_sql(&transaction, group_id, &row.peer_id)?;
+            for existing in local {
+                if !row.shares.iter().any(|(id, _)| *id == existing) {
+                    transaction.execute(
+                        "DELETE FROM group_shares WHERE group_id = ?1 AND peer_id = ?2 AND share_id = ?3",
+                        params![group_id, row.peer_id, existing],
+                    )?;
+                }
+            }
+        }
+        // Drop members absent from the roster, revoking their grants on our
+        // shares. Read our shares after the upsert so newly added self
+        // contributions are covered too.
+        let self_shares = self.group_shares_sql(&transaction, group_id, self_id)?;
+        let local_members = self.members_sql(&transaction, group_id)?;
+        for local in local_members {
+            if !roster.iter().any(|row| row.peer_id == local) {
+                transaction.execute(
+                    "DELETE FROM group_shares WHERE group_id = ?1 AND peer_id = ?2",
+                    params![group_id, local],
+                )?;
+                transaction.execute(
+                    "DELETE FROM group_members WHERE group_id = ?1 AND peer_id = ?2",
+                    params![group_id, local],
+                )?;
+                for share_id in &self_shares {
+                    self.revoke_group_grant_sql(&transaction, group_id, share_id, &local)?;
+                }
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Transaction-scoped upsert shared by the add-only and reconcile paths.
+    fn upsert_roster_sql(
+        &self,
+        transaction: &rusqlite::Connection,
+        group_id: &str,
+        self_id: &str,
+        roster: &[RosterRow],
+    ) -> Result<()> {
+        let self_shares = self.group_shares_sql(transaction, group_id, self_id)?;
+        let timestamp = now();
+        for row in roster {
+            transaction.execute(
+                "INSERT INTO peers(id, name, endpoint_json, created_at, last_seen_at) VALUES (?1, ?2, ?3, ?4, ?4) ON CONFLICT(id) DO UPDATE SET name = excluded.name, endpoint_json = excluded.endpoint_json, last_seen_at = excluded.last_seen_at",
+                params![row.peer_id, row.peer_name, row.endpoint_json, timestamp],
+            )?;
+            transaction.execute(
+                "INSERT INTO group_members(group_id, peer_id, role, joined_at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(group_id, peer_id) DO UPDATE SET role = excluded.role",
+                params![group_id, row.peer_id, row.role, timestamp],
+            )?;
+            for (share_id, share_name) in &row.shares {
+                transaction.execute(
+                    "INSERT INTO group_shares(group_id, peer_id, share_id, share_name, added_at) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(group_id, peer_id, share_id) DO NOTHING",
+                    params![group_id, row.peer_id, share_id, share_name, timestamp],
+                )?;
+            }
+            if row.peer_id != self_id {
+                for share_id in &self_shares {
+                    self.group_grant_sql(
+                        transaction,
+                        group_id,
+                        share_id,
+                        &row.peer_id,
+                        &timestamp,
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Transaction-scoped grant of `peer`'s read access to `share` on behalf
+    /// of `group` (idempotent; mirrors [`Self::group_grant`]).
+    fn group_grant_sql(
+        &self,
+        transaction: &rusqlite::Connection,
+        group_id: &str,
+        share_id: &str,
+        peer_id: &str,
+        timestamp: &str,
+    ) -> Result<()> {
+        transaction.execute(
+            "INSERT INTO grant_sources(share_id, peer_id, via, group_id, created_at) VALUES (?1, ?2, 'group', ?3, ?4) ON CONFLICT DO NOTHING",
+            params![share_id, peer_id, group_id, timestamp],
+        )?;
+        transaction.execute(
+            "INSERT INTO grants(peer_id, share_id, permission, created_at, revoked_at) VALUES (?1, ?2, ?3, ?4, NULL) ON CONFLICT(peer_id, share_id) DO UPDATE SET permission = excluded.permission, revoked_at = NULL",
+            params![peer_id, share_id, PERMISSION_READ_MEMORY, timestamp],
+        )?;
+        Ok(())
+    }
+
+    /// Transaction-scoped revocation of a member's grant on a group share
+    /// (mirrors [`Self::revoke_group_grant`]: the group source is removed
+    /// first; the grant survives while another source justifies it).
+    fn revoke_group_grant_sql(
+        &self,
+        transaction: &rusqlite::Connection,
+        group_id: &str,
+        share_id: &str,
+        peer_id: &str,
+    ) -> Result<()> {
+        transaction.execute(
+            "DELETE FROM grant_sources WHERE share_id = ?1 AND peer_id = ?2 AND via = 'group' AND group_id = ?3",
+            params![share_id, peer_id, group_id],
+        )?;
+        let other: bool = transaction.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM grant_sources
+                WHERE share_id = ?1 AND peer_id = ?2
+                  AND NOT (via = 'group' AND group_id = ?3)
+            )",
+            params![share_id, peer_id, group_id],
+            |row| row.get(0),
+        )?;
+        if !other {
+            transaction.execute(
+                "UPDATE grants SET revoked_at = ?1 WHERE peer_id = ?2 AND share_id = ?3",
+                params![now(), peer_id, share_id],
+            )?;
+            transaction.execute(
+                "DELETE FROM grant_sources WHERE peer_id = ?1 AND share_id = ?2",
+                params![peer_id, share_id],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Transaction-scoped share-id list for one member of a group.
+    fn group_shares_sql(
+        &self,
+        transaction: &rusqlite::Connection,
+        group_id: &str,
+        peer_id: &str,
+    ) -> Result<Vec<String>> {
+        let mut statement = transaction
+            .prepare("SELECT share_id FROM group_shares WHERE group_id = ?1 AND peer_id = ?2")?;
+        let rows = statement.query_map(params![group_id, peer_id], |row| row.get(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    /// Transaction-scoped member id list for a group.
+    fn members_sql(
+        &self,
+        transaction: &rusqlite::Connection,
+        group_id: &str,
+    ) -> Result<Vec<String>> {
+        let mut statement =
+            transaction.prepare("SELECT peer_id FROM group_members WHERE group_id = ?1")?;
+        let rows = statement.query_map([group_id], |row| row.get(0))?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
     }
@@ -940,20 +1222,12 @@ impl StateStore {
     pub fn group_grant(&self, group_name_or_id: &str, share_id: &str, peer_id: &str) -> Result<()> {
         let group = self.group(group_name_or_id)?;
         let connection = self.connect()?;
-        connection.execute(
-            "INSERT INTO grant_sources(share_id, peer_id, via, group_id, created_at) VALUES (?1, ?2, 'group', ?3, ?4) ON CONFLICT DO NOTHING",
-            params![share_id, peer_id, group.id, now()],
-        )?;
-        connection.execute(
-            "INSERT INTO grants(peer_id, share_id, permission, created_at, revoked_at) VALUES (?1, ?2, ?3, ?4, NULL) ON CONFLICT(peer_id, share_id) DO UPDATE SET permission = excluded.permission, revoked_at = NULL",
-            params![peer_id, share_id, PERMISSION_READ_MEMORY, now()],
-        )?;
-        Ok(())
+        self.group_grant_sql(&connection, &group.id, share_id, peer_id, &now())
     }
 
     /// Revoke a member's grant on a group share. The group's source row is
     /// removed first; the grant itself survives while another source still
-    /// justifies it (see [`Self::has_other_grant_source`]).
+    /// justifies it (see [`Self::revoke_group_grant_sql`]).
     pub fn revoke_group_grant(
         &self,
         group_name_or_id: &str,
@@ -961,39 +1235,8 @@ impl StateStore {
         peer_id: &str,
     ) -> Result<()> {
         let group = self.group(group_name_or_id)?;
-        self.connect()?.execute(
-            "DELETE FROM grant_sources WHERE share_id = ?1 AND peer_id = ?2 AND via = 'group' AND group_id = ?3",
-            params![share_id, peer_id, group.id],
-        )?;
-        if self.has_other_grant_source(&group.id, share_id, peer_id)? {
-            return Ok(());
-        }
-        self.revoke(share_id, peer_id)?;
-        Ok(())
-    }
-
-    /// True when `peer` still holds access to `share` from a source other than
-    /// the group being revoked from. `grants` stores one row per (peer, share)
-    /// even when several sources issued it, so each group grant and direct
-    /// redeem records a row in `grant_sources`; revocation must not tear down
-    /// independently authorized access.
-    fn has_other_grant_source(
-        &self,
-        group_id: &str,
-        share_id: &str,
-        peer_id: &str,
-    ) -> Result<bool> {
-        self.connect()?
-            .query_row(
-                "SELECT EXISTS(
-                    SELECT 1 FROM grant_sources
-                    WHERE share_id = ?1 AND peer_id = ?2
-                      AND NOT (via = 'group' AND group_id = ?3)
-                )",
-                params![share_id, peer_id, group_id],
-                |row| row.get(0),
-            )
-            .map_err(Into::into)
+        let connection = self.connect()?;
+        self.revoke_group_grant_sql(&connection, &group.id, share_id, peer_id)
     }
 
     /// Revoke every other member's grant on `share` (the contributor withdrew
@@ -1158,6 +1401,45 @@ impl StateStore {
         self.connect()?.execute(
             "UPDATE groups SET last_synced_at = ?1 WHERE id = ?2",
             params![now(), group.id],
+        )?;
+        Ok(())
+    }
+
+    /// The highest roster version this device has adopted. The owner bumps it
+    /// on every membership change it processes; members adopt it from owner
+    /// broadcasts and pulls. Never regresses, so it doubles as the stale-
+    /// message watermark on the receiving side.
+    pub fn roster_epoch(&self, group_name_or_id: &str) -> Result<i64> {
+        let group = self.group(group_name_or_id)?;
+        self.connect()?
+            .query_row(
+                "SELECT roster_epoch FROM groups WHERE id = ?1",
+                [&group.id],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
+    }
+
+    /// Owner-side: record one roster change and return the new epoch, which
+    /// the caller carries on the accompanying broadcast or sync response.
+    pub fn bump_roster_epoch(&self, group_name_or_id: &str) -> Result<i64> {
+        let group = self.group(group_name_or_id)?;
+        self.connect()?
+            .query_row(
+                "UPDATE groups SET roster_epoch = roster_epoch + 1 WHERE id = ?1 RETURNING roster_epoch",
+                [&group.id],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
+    }
+
+    /// Adopt a roster version observed from the owner (broadcast or pull).
+    /// Monotonic: a stale observation never regresses the local watermark.
+    pub fn adopt_roster_epoch(&self, group_name_or_id: &str, epoch: i64) -> Result<()> {
+        let group = self.group(group_name_or_id)?;
+        self.connect()?.execute(
+            "UPDATE groups SET roster_epoch = MAX(roster_epoch, ?1) WHERE id = ?2",
+            params![epoch, group.id],
         )?;
         Ok(())
     }
@@ -1426,6 +1708,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn is_owner_and_is_member_gate_membership() {
+        let (_temp, store, _share) = group_store();
+        store.save_remote_peer("peer-2", "bob", "{}").unwrap();
+        store.add_member("team", "peer-2", "member").unwrap();
+        assert!(store.is_owner("team", "self-1").unwrap());
+        assert!(!store.is_owner("team", "peer-2").unwrap());
+        assert!(!store.is_owner("team", "stranger").unwrap());
+        assert!(store.is_member("team", "self-1").unwrap());
+        assert!(store.is_member("team", "peer-2").unwrap());
+        assert!(!store.is_member("team", "stranger").unwrap());
+        // A group without an owner row has no owner authority.
+        assert!(store.owner("missing").is_err());
+    }
+
     /// Create a real share under `temp` (group_shares.share_id references shares.id).
     fn real_share(store: &StateStore, temp: &Path, key: &str, name: &str) -> ShareInfo {
         let root = temp.join(format!("ws-{key}"));
@@ -1536,7 +1833,7 @@ mod tests {
             .find(|member| member.peer_id == "peer-1")
             .expect("alice in roster");
         assert_eq!(alice.endpoint.as_deref(), Some(r#"{"id":"alice"}"#));
-        assert_eq!(alice.role, "member");
+        assert_eq!(alice.role, GroupRole::Member);
         assert_eq!(alice.share_count, 1);
     }
 
@@ -1727,7 +2024,7 @@ mod tests {
             .iter()
             .find(|member| member.peer_id == "peer-1")
             .unwrap();
-        assert_eq!(alice.role, "member");
+        assert_eq!(alice.role, GroupRole::Member);
         assert_eq!(alice.endpoint.as_deref(), Some(r#"{"id":"alice"}"#));
         assert_eq!(alice.share_count, 1);
         assert!(

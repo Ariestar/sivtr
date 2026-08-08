@@ -13,6 +13,18 @@ pub use super::state::{
 
 pub const REMOTE_ALPN: &[u8] = b"sivtr/memory/1";
 pub const MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
+/// Wire protocol version. Every request and response travels inside a
+/// [`RemoteEnvelope`] carrying this version; a daemon rejects any envelope
+/// whose version it does not speak instead of failing on an unknown variant.
+pub const PROTOCOL_VERSION: u32 = 2;
+
+/// Wire envelope for remote requests and responses: the payload plus the
+/// protocol version, so a mixed fleet fails loudly and explicitly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteEnvelope<T> {
+    pub protocol_version: u32,
+    pub kind: T,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InviteTicket {
@@ -73,11 +85,15 @@ pub enum RemoteRequest {
     GroupMemberAdded {
         group_id: String,
         member: MemberInfo,
+        /// Owner's roster version after this join.
+        roster_epoch: i64,
     },
     GroupMemberRemoved {
         group_id: String,
         peer_id: String,
         peer_name: String,
+        /// Owner's roster version after this removal.
+        roster_epoch: i64,
     },
     /// An existing member added another contributed workspace.
     GroupShareAdded {
@@ -125,11 +141,14 @@ pub enum RemoteResponse {
         group_id: String,
         group_name: String,
         members: Vec<MemberInfo>,
+        /// Owner's roster version after this join.
+        roster_epoch: i64,
     },
     GroupSynced {
         group_name: String,
         member: bool,
         members: Vec<MemberInfo>,
+        roster_epoch: i64,
     },
     GroupAck,
     Query(QueryResponse),
@@ -201,6 +220,10 @@ pub struct DaemonStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalEnvelope {
     pub token: String,
+    /// Same [`PROTOCOL_VERSION`] as the remote wire; old clients (version 1)
+    /// are rejected loudly instead of failing on an unknown request variant.
+    #[serde(default)]
+    pub protocol_version: u32,
     pub request: LocalRequest,
 }
 
@@ -279,6 +302,12 @@ pub enum LocalRequest {
     GroupShares {
         group: String,
     },
+    /// Cheap existence probe for the query scope cascade; resolves the group
+    /// from the store without syncing, so a query is never held up by an
+    /// unreachable owner.
+    GroupResolve {
+        group: String,
+    },
     GroupInvite {
         group: String,
         valid_for_seconds: i64,
@@ -348,6 +377,9 @@ pub enum LocalResponse {
     Groups(Vec<GroupInfo>),
     Members(Vec<GroupMemberInfo>),
     GroupShares(Vec<GroupShareInfo>),
+    GroupResolved {
+        exists: bool,
+    },
     GroupJoined {
         group_name: String,
         member_count: usize,

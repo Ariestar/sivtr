@@ -21,6 +21,8 @@ pub const REMOTE_QUERY_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Minimum deadline for one group fan-out inside [`query`]; a group query
 /// fans out to every member, so it needs headroom beyond a single remote hop.
+/// Must stay >= the daemon's group sync pull budget plus the per-share
+/// fan-out budget (`remote::group` constants).
 const GROUP_QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How one source is scheduled inside [`query_many`].
@@ -410,8 +412,12 @@ fn try_group_timed(
         return Ok(None);
     };
     crate::commands::remote::serve::ensure_running()?;
-    let exists = match ipc::call(LocalRequest::GroupList)? {
-        LocalResponse::Groups(groups) => groups.iter().any(|group_info| group_info.name == group),
+    // Cheap existence probe: the daemon resolves the group from its store
+    // without syncing, so a query is never held up by an unreachable owner.
+    let exists = match ipc::call(LocalRequest::GroupResolve {
+        group: group.clone(),
+    })? {
+        LocalResponse::GroupResolved { exists } => exists,
         _ => return Ok(None),
     };
     if !exists {
