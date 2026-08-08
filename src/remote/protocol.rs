@@ -158,6 +158,19 @@ pub struct QueryResponse {
     pub anchors: Vec<WorkRef>,
 }
 
+/// Prefix every ref in `response` with `scope` so results from different
+/// sources stay apart and round-trip through show/zoom/nav. Shared by the
+/// mount query path (alias scope) and group fan-out (member/share scope).
+pub fn qualify_query_scope(scope: &str, response: &mut QueryResponse) {
+    let scope = scope.to_ascii_lowercase();
+    for record in &mut response.records {
+        record.work_ref = record.work_ref.with_named_scope(scope.clone());
+    }
+    for anchor in &mut response.anchors {
+        *anchor = anchor.with_named_scope(scope.clone());
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupQueryResponse {
     pub query: QueryResponse,
