@@ -311,6 +311,24 @@ pub fn finish<T>(terminal: &mut Tui, operation: Result<T>) -> Result<T> {
     )
 }
 
+/// Extract a panic payload's message for user-facing reporting.
+pub(crate) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic".to_string()
+    }
+}
+
+/// Print a prompt and block until the user presses Enter.
+pub(crate) fn wait_for_enter(prompt: &str) {
+    eprintln!("{prompt}");
+    let mut input = String::new();
+    let _ = std::io::stdin().read_line(&mut input);
+}
+
 /// Temporarily exit the TUI while an external program runs, then re-enter it.
 ///
 /// The outer result reports suspend/resume failures. The inner result is the external operation's
