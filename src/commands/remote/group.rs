@@ -319,7 +319,19 @@ fn ensure_share(
         .with_context(|| format!("{} is not inside a git workspace", path.display()))?;
     let name = share_name.unwrap_or_else(|| super::share::default_share_name(&paths.root));
     let share = match super::share::find_share_for_workspace(&paths.key) {
-        Ok(existing) => existing,
+        Ok(existing) if existing.enabled => existing,
+        Ok(existing) => {
+            // Re-enable a disabled share, mirroring `sivtr share add`: a
+            // contributed workspace must be queryable, or members' `authorize`
+            // would deny every read.
+            match ipc::call(LocalRequest::ShareSetEnabled {
+                share: existing.id,
+                enabled: true,
+            })? {
+                LocalResponse::Share(share) => share,
+                response => bail!("Unexpected daemon response: {response:?}"),
+            }
+        }
         Err(_) => match ipc::call(LocalRequest::ShareAdd {
             workspace_key: paths.key,
             root: paths.root.display().to_string(),
