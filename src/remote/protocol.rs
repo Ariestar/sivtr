@@ -279,6 +279,12 @@ pub enum LocalRequest {
     GroupShares {
         group: String,
     },
+    /// Cheap existence probe for the query scope cascade; resolves the group
+    /// from the store without syncing, so a query is never held up by an
+    /// unreachable owner.
+    GroupResolve {
+        group: String,
+    },
     GroupInvite {
         group: String,
         valid_for_seconds: i64,
@@ -348,6 +354,9 @@ pub enum LocalResponse {
     Groups(Vec<GroupInfo>),
     Members(Vec<GroupMemberInfo>),
     GroupShares(Vec<GroupShareInfo>),
+    GroupResolved {
+        exists: bool,
+    },
     GroupJoined {
         group_name: String,
         member_count: usize,

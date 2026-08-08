@@ -267,21 +267,26 @@ pub(crate) async fn sync_group(context: &Arc<DaemonContext>, group_name_or_id: &
     }
 }
 
-/// Best-effort sync when the cached roster is stale; never blocks queries.
-/// The owner short-circuits inside [`sync_group`].
-pub(crate) async fn maybe_sync_group(context: &Arc<DaemonContext>, group_name_or_id: &str) {
+/// Best-effort sync when the cached roster is stale; never blocks callers.
+/// The owner short-circuits inside [`sync_group`]. Runs in the background so
+/// IPC handlers return the cached roster immediately; staleness is bounded by
+/// the sync TTL, and a manual `sivtr group sync` forces a pull.
+pub(crate) fn maybe_sync_group(context: &Arc<DaemonContext>, group_name_or_id: &str) {
     let stale = match context.store.sync_stale(group_name_or_id, 300) {
         Ok(stale) => stale,
         Err(_) => return,
     };
-    if stale {
-        if let Err(error) = sync_group(context, group_name_or_id).await {
-            // Owner unreachable - fall back to the cached roster.
-            crate::output::error(format!(
-                "group sync failed for `{group_name_or_id}`: {error:#}"
-            ));
-        }
+    if !stale {
+        return;
     }
+    let context = context.clone();
+    let group = group_name_or_id.to_string();
+    tokio::spawn(async move {
+        if let Err(error) = sync_group(&context, &group).await {
+            // Owner unreachable - the cached roster stays in effect.
+            crate::output::error(format!("group sync failed for `{group}`: {error:#}"));
+        }
+    });
 }
 
 /// Remove the group locally: revoke the grants we handed out on every
