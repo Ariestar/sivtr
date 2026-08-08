@@ -780,7 +780,7 @@ async fn process_remote(
             {
                 context
                     .store
-                    .group_grant(&share.share_id, &member.peer_id)?;
+                    .group_grant(&group_id, &share.share_id, &member.peer_id)?;
             }
             Ok(RemoteResponse::GroupAck)
         }
@@ -995,7 +995,9 @@ async fn redeem_group_remote(
                 .add_group_share(&group_id, &member.peer_id, share_id, share_name)?;
         }
         for (share_id, _) in shares {
-            context.store.group_grant(share_id, &member.peer_id)?;
+            context
+                .store
+                .group_grant(&group_id, share_id, &member.peer_id)?;
         }
     }
     context.store.touch_group_sync(&group_id)?;
@@ -1011,6 +1013,11 @@ async fn adjust_group_shares(
     group_name_or_id: &str,
     shares: &[(String, String)],
 ) -> Result<()> {
+    // The mesh contract requires at least one contribution; an empty final
+    // set would keep the membership while consuming everyone else's memory.
+    if shares.is_empty() {
+        bail!("A group member must contribute at least one workspace");
+    }
     let group = context.store.group(group_name_or_id)?;
     let self_id = context.identity.id();
     let members = context.store.members(&group.id)?;
@@ -1027,7 +1034,9 @@ async fn adjust_group_shares(
                 .add_group_share(&group.id, &self_id, share_id, share_name)?;
             for member in &members {
                 if member.peer_id != self_id {
-                    context.store.group_grant(share_id, &member.peer_id)?;
+                    context
+                        .store
+                        .group_grant(&group.id, share_id, &member.peer_id)?;
                 }
             }
             broadcast(
@@ -1155,7 +1164,7 @@ async fn sync_group(context: &Arc<DaemonContext>, group_name_or_id: &str) -> Res
                     for share in &self_shares {
                         context
                             .store
-                            .group_grant(&share.share_id, &remote.peer_id)?;
+                            .group_grant(&group.id, &share.share_id, &remote.peer_id)?;
                     }
                 }
             }
@@ -1392,12 +1401,26 @@ async fn group_fan_out(
                 let source = source.to_string();
                 let filter = bounds.clone();
                 move || {
-                    let (records, anchors) = crate::commands::memory::workset::run_on_share(
+                    let result = crate::commands::memory::workset::run_on_share(
                         std::path::Path::new(&root),
                         &source,
                         filter,
                         share.redact,
-                    )?;
+                    );
+                    // An empty workspace has no sessions; report it as an
+                    // empty result (same convention as the remote path), so
+                    // one member's empty contribution cannot abort the group.
+                    let (records, anchors) = match result {
+                        Ok(result) => result,
+                        Err(error)
+                            if error
+                                .to_string()
+                                .starts_with("No record found for ref selector") =>
+                        {
+                            (Vec::new(), Vec::new())
+                        }
+                        Err(error) => return Err(error),
+                    };
                     Ok::<_, anyhow::Error>(QueryResponse { records, anchors })
                 }
             })
