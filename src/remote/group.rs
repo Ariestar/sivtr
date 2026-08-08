@@ -22,7 +22,7 @@ use super::protocol::{
     qualify_query_scope, GroupQueryResponse, InviteTicket, MemberInfo, QueryResponse,
     RemoteRequest, RemoteResponse,
 };
-use super::state::{GroupInfo, GroupMemberInfo, StateStore};
+use super::state::{GroupInfo, GroupMemberInfo, RosterRow, StateStore};
 use crate::commands::memory::filter::Filter;
 
 /// Time budgets for group convergence. The client-side IPC read timeout
@@ -124,38 +124,16 @@ pub(crate) fn roster_for(
 /// `roster`. Add-only and idempotent: nothing local is ever removed. Used on
 /// the snapshot paths (join mirror, member-added push), where the sender's
 /// own share broadcasts race the snapshot - pruning there would let a stale
-/// push regress a share that was just added.
+/// push regress a share that was just added. Runs in one store transaction.
 fn upsert_roster(
     context: &Arc<DaemonContext>,
     group_id: &str,
     roster: &[MemberInfo],
 ) -> Result<()> {
     let self_id = context.identity.id();
-    let self_shares = context.store.group_shares(group_id, &self_id)?;
-    for remote in roster {
-        context.store.save_remote_peer(
-            &remote.peer_id,
-            &remote.peer_name,
-            &serde_json::to_string(&remote.endpoint)?,
-        )?;
-        context
-            .store
-            .add_member(group_id, &remote.peer_id, &remote.role)?;
-        for (share_id, share_name) in &remote.shares {
-            context
-                .store
-                .add_group_share(group_id, &remote.peer_id, share_id, share_name)?;
-        }
-        // Grant every member read access to our own contributions.
-        if remote.peer_id != self_id {
-            for share in &self_shares {
-                context
-                    .store
-                    .group_grant(group_id, &share.share_id, &remote.peer_id)?;
-            }
-        }
-    }
-    Ok(())
+    context
+        .store
+        .apply_roster_add_only(group_id, &self_id, &roster_rows(roster)?)
 }
 
 /// Make local group state match the owner's authoritative `roster`: upsert,
@@ -164,39 +142,33 @@ fn upsert_roster(
 /// contribution rows and grants). The roster always lists every member
 /// including us, so a member missing from it has been removed. Pull-only: the
 /// owner sees every share change, so its roster may prune; snapshot pushes
-/// must stay add-only via [`upsert_roster`].
+/// must stay add-only via [`upsert_roster`]. Runs in one store transaction.
 fn reconcile_roster(
     context: &Arc<DaemonContext>,
     group_id: &str,
     roster: &[MemberInfo],
 ) -> Result<()> {
     let self_id = context.identity.id();
-    upsert_roster(context, group_id, roster)?;
-    for remote in roster {
-        if remote.peer_id == self_id {
-            continue;
-        }
-        let local = context.store.group_shares(group_id, &remote.peer_id)?;
-        for existing in local {
-            if !remote.shares.iter().any(|(id, _)| *id == existing.share_id) {
-                context
-                    .store
-                    .remove_group_share(group_id, &remote.peer_id, &existing.share_id)?;
-            }
-        }
-    }
-    let local_members = context.store.members(group_id)?;
-    for local in local_members {
-        if !roster.iter().any(|remote| remote.peer_id == local.peer_id) {
-            context.store.remove_member(group_id, &local.peer_id)?;
-            for share in &context.store.group_shares(group_id, &self_id)? {
-                context
-                    .store
-                    .revoke_group_grant(group_id, &share.share_id, &local.peer_id)?;
-            }
-        }
-    }
-    Ok(())
+    context
+        .store
+        .apply_roster_reconcile(group_id, &self_id, &roster_rows(roster)?)
+}
+
+/// Convert wire roster rows into the store-level form the transactional
+/// converge methods consume.
+fn roster_rows(roster: &[MemberInfo]) -> Result<Vec<RosterRow>> {
+    roster
+        .iter()
+        .map(|member| {
+            Ok(RosterRow {
+                peer_id: member.peer_id.clone(),
+                peer_name: member.peer_name.clone(),
+                role: member.role.clone(),
+                shares: member.shares.clone(),
+                endpoint_json: serde_json::to_string(&member.endpoint)?,
+            })
+        })
+        .collect()
 }
 
 /// Merge one newcomer into the local roster (the `GroupMemberAdded` push):

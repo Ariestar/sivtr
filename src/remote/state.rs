@@ -126,6 +126,17 @@ pub struct GroupShareInfo {
     pub added_at: String,
 }
 
+/// One roster row as it converges into the store: peer identity, role, and
+/// contributed shares, with the wire endpoint already serialized.
+#[derive(Debug, Clone)]
+pub struct RosterRow {
+    pub peer_id: String,
+    pub peer_name: String,
+    pub role: String,
+    pub shares: Vec<(String, String)>,
+    pub endpoint_json: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct InviteRecord {
     pub id: String,
@@ -922,6 +933,208 @@ impl StateStore {
             .members(group_name_or_id)?
             .iter()
             .any(|member| member.peer_id == peer_id))
+    }
+
+    /// Upsert peers, membership, contributions, and grants for every row in
+    /// `roster`, all in one transaction. Add-only and idempotent: nothing
+    /// local is ever removed. Used on the snapshot paths (join mirror,
+    /// member-added push), where the sender's own share broadcasts race the
+    /// snapshot - pruning there would let a stale push regress a share that
+    /// was just added.
+    pub fn apply_roster_add_only(
+        &self,
+        group_name_or_id: &str,
+        self_id: &str,
+        roster: &[RosterRow],
+    ) -> Result<()> {
+        let group = self.group(group_name_or_id)?;
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        self.upsert_roster_sql(&transaction, &group.id, self_id, roster)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Make local group state match the owner's authoritative `roster`, in one
+    /// transaction: upsert, prune each member's stale contributions (except
+    /// our own - they are local authority), and remove members the roster no
+    /// longer lists (with their contribution rows and grants). The roster
+    /// always lists every member including us, so a member missing from it has
+    /// been removed. Pull-only: the owner sees every share change, so its
+    /// roster may prune; snapshot pushes must stay add-only via
+    /// [`Self::apply_roster_add_only`].
+    pub fn apply_roster_reconcile(
+        &self,
+        group_name_or_id: &str,
+        self_id: &str,
+        roster: &[RosterRow],
+    ) -> Result<()> {
+        let group = self.group(group_name_or_id)?;
+        let group_id = &group.id;
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        self.upsert_roster_sql(&transaction, group_id, self_id, roster)?;
+        // Prune stale shares for every non-self member.
+        for row in roster {
+            if row.peer_id == self_id {
+                continue;
+            }
+            let local = self.group_shares_sql(&transaction, group_id, &row.peer_id)?;
+            for existing in local {
+                if !row.shares.iter().any(|(id, _)| *id == existing) {
+                    transaction.execute(
+                        "DELETE FROM group_shares WHERE group_id = ?1 AND peer_id = ?2 AND share_id = ?3",
+                        params![group_id, row.peer_id, existing],
+                    )?;
+                }
+            }
+        }
+        // Drop members absent from the roster, revoking their grants on our
+        // shares. Read our shares after the upsert so newly added self
+        // contributions are covered too.
+        let self_shares = self.group_shares_sql(&transaction, group_id, self_id)?;
+        let local_members = self.members_sql(&transaction, group_id)?;
+        for local in local_members {
+            if !roster.iter().any(|row| row.peer_id == local) {
+                transaction.execute(
+                    "DELETE FROM group_shares WHERE group_id = ?1 AND peer_id = ?2",
+                    params![group_id, local],
+                )?;
+                transaction.execute(
+                    "DELETE FROM group_members WHERE group_id = ?1 AND peer_id = ?2",
+                    params![group_id, local],
+                )?;
+                for share_id in &self_shares {
+                    self.revoke_group_grant_sql(&transaction, group_id, share_id, &local)?;
+                }
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Transaction-scoped upsert shared by the add-only and reconcile paths.
+    fn upsert_roster_sql(
+        &self,
+        transaction: &rusqlite::Connection,
+        group_id: &str,
+        self_id: &str,
+        roster: &[RosterRow],
+    ) -> Result<()> {
+        let self_shares = self.group_shares_sql(transaction, group_id, self_id)?;
+        let timestamp = now();
+        for row in roster {
+            transaction.execute(
+                "INSERT INTO peers(id, name, endpoint_json, created_at, last_seen_at) VALUES (?1, ?2, ?3, ?4, ?4) ON CONFLICT(id) DO UPDATE SET name = excluded.name, endpoint_json = excluded.endpoint_json, last_seen_at = excluded.last_seen_at",
+                params![row.peer_id, row.peer_name, row.endpoint_json, timestamp],
+            )?;
+            transaction.execute(
+                "INSERT INTO group_members(group_id, peer_id, role, joined_at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(group_id, peer_id) DO UPDATE SET role = excluded.role",
+                params![group_id, row.peer_id, row.role, timestamp],
+            )?;
+            for (share_id, share_name) in &row.shares {
+                transaction.execute(
+                    "INSERT INTO group_shares(group_id, peer_id, share_id, share_name, added_at) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(group_id, peer_id, share_id) DO NOTHING",
+                    params![group_id, row.peer_id, share_id, share_name, timestamp],
+                )?;
+            }
+            if row.peer_id != self_id {
+                for share_id in &self_shares {
+                    self.group_grant_sql(
+                        transaction,
+                        group_id,
+                        share_id,
+                        &row.peer_id,
+                        &timestamp,
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Transaction-scoped grant of `peer`'s read access to `share` on behalf
+    /// of `group` (idempotent; mirrors [`Self::group_grant`]).
+    fn group_grant_sql(
+        &self,
+        transaction: &rusqlite::Connection,
+        group_id: &str,
+        share_id: &str,
+        peer_id: &str,
+        timestamp: &str,
+    ) -> Result<()> {
+        transaction.execute(
+            "INSERT INTO grant_sources(share_id, peer_id, via, group_id, created_at) VALUES (?1, ?2, 'group', ?3, ?4) ON CONFLICT DO NOTHING",
+            params![share_id, peer_id, group_id, timestamp],
+        )?;
+        transaction.execute(
+            "INSERT INTO grants(peer_id, share_id, permission, created_at, revoked_at) VALUES (?1, ?2, ?3, ?4, NULL) ON CONFLICT(peer_id, share_id) DO UPDATE SET permission = excluded.permission, revoked_at = NULL",
+            params![peer_id, share_id, PERMISSION_READ_MEMORY, timestamp],
+        )?;
+        Ok(())
+    }
+
+    /// Transaction-scoped revocation of a member's grant on a group share
+    /// (mirrors [`Self::revoke_group_grant`]: the group source is removed
+    /// first; the grant survives while another source justifies it).
+    fn revoke_group_grant_sql(
+        &self,
+        transaction: &rusqlite::Connection,
+        group_id: &str,
+        share_id: &str,
+        peer_id: &str,
+    ) -> Result<()> {
+        transaction.execute(
+            "DELETE FROM grant_sources WHERE share_id = ?1 AND peer_id = ?2 AND via = 'group' AND group_id = ?3",
+            params![share_id, peer_id, group_id],
+        )?;
+        let other: bool = transaction.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM grant_sources
+                WHERE share_id = ?1 AND peer_id = ?2
+                  AND NOT (via = 'group' AND group_id = ?3)
+            )",
+            params![share_id, peer_id, group_id],
+            |row| row.get(0),
+        )?;
+        if !other {
+            transaction.execute(
+                "UPDATE grants SET revoked_at = ?1 WHERE peer_id = ?2 AND share_id = ?3",
+                params![now(), peer_id, share_id],
+            )?;
+            transaction.execute(
+                "DELETE FROM grant_sources WHERE peer_id = ?1 AND share_id = ?2",
+                params![peer_id, share_id],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Transaction-scoped share-id list for one member of a group.
+    fn group_shares_sql(
+        &self,
+        transaction: &rusqlite::Connection,
+        group_id: &str,
+        peer_id: &str,
+    ) -> Result<Vec<String>> {
+        let mut statement = transaction
+            .prepare("SELECT share_id FROM group_shares WHERE group_id = ?1 AND peer_id = ?2")?;
+        let rows = statement.query_map(params![group_id, peer_id], |row| row.get(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    /// Transaction-scoped member id list for a group.
+    fn members_sql(
+        &self,
+        transaction: &rusqlite::Connection,
+        group_id: &str,
+    ) -> Result<Vec<String>> {
+        let mut statement =
+            transaction.prepare("SELECT peer_id FROM group_members WHERE group_id = ?1")?;
+        let rows = statement.query_map([group_id], |row| row.get(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     /// Register one contributed workspace for a member (idempotent).
