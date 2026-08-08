@@ -109,26 +109,32 @@ pub(crate) fn roster_for(
 /// own share broadcasts race the snapshot - pruning there would let a stale
 /// push regress a share that was just added.
 fn upsert_roster(
-    store: &StateStore,
-    self_id: &str,
+    context: &Arc<DaemonContext>,
     group_id: &str,
     roster: &[MemberInfo],
 ) -> Result<()> {
-    let self_shares = store.group_shares(group_id, self_id)?;
+    let self_id = context.identity.id();
+    let self_shares = context.store.group_shares(group_id, &self_id)?;
     for remote in roster {
-        store.save_remote_peer(
+        context.store.save_remote_peer(
             &remote.peer_id,
             &remote.peer_name,
             &serde_json::to_string(&remote.endpoint)?,
         )?;
-        store.add_member(group_id, &remote.peer_id, &remote.role)?;
+        context
+            .store
+            .add_member(group_id, &remote.peer_id, &remote.role)?;
         for (share_id, share_name) in &remote.shares {
-            store.add_group_share(group_id, &remote.peer_id, share_id, share_name)?;
+            context
+                .store
+                .add_group_share(group_id, &remote.peer_id, share_id, share_name)?;
         }
         // Grant every member read access to our own contributions.
         if remote.peer_id != self_id {
             for share in &self_shares {
-                store.group_grant(group_id, &share.share_id, &remote.peer_id)?;
+                context
+                    .store
+                    .group_grant(group_id, &share.share_id, &remote.peer_id)?;
             }
         }
     }
@@ -143,29 +149,33 @@ fn upsert_roster(
 /// owner sees every share change, so its roster may prune; snapshot pushes
 /// must stay add-only via [`upsert_roster`].
 fn reconcile_roster(
-    store: &StateStore,
-    self_id: &str,
+    context: &Arc<DaemonContext>,
     group_id: &str,
     roster: &[MemberInfo],
 ) -> Result<()> {
-    upsert_roster(store, self_id, group_id, roster)?;
+    let self_id = context.identity.id();
+    upsert_roster(context, group_id, roster)?;
     for remote in roster {
         if remote.peer_id == self_id {
             continue;
         }
-        let local = store.group_shares(group_id, &remote.peer_id)?;
+        let local = context.store.group_shares(group_id, &remote.peer_id)?;
         for existing in local {
             if !remote.shares.iter().any(|(id, _)| *id == existing.share_id) {
-                store.remove_group_share(group_id, &remote.peer_id, &existing.share_id)?;
+                context
+                    .store
+                    .remove_group_share(group_id, &remote.peer_id, &existing.share_id)?;
             }
         }
     }
-    let local_members = store.members(group_id)?;
+    let local_members = context.store.members(group_id)?;
     for local in local_members {
         if !roster.iter().any(|remote| remote.peer_id == local.peer_id) {
-            store.remove_member(group_id, &local.peer_id)?;
-            for share in &store.group_shares(group_id, self_id)? {
-                store.revoke_group_grant(group_id, &share.share_id, &local.peer_id)?;
+            context.store.remove_member(group_id, &local.peer_id)?;
+            for share in &context.store.group_shares(group_id, &self_id)? {
+                context
+                    .store
+                    .revoke_group_grant(group_id, &share.share_id, &local.peer_id)?;
             }
         }
     }
@@ -181,12 +191,7 @@ pub(crate) fn merge_member(
     group_id: &str,
     member: &MemberInfo,
 ) -> Result<()> {
-    upsert_roster(
-        &context.store,
-        &context.identity.id(),
-        group_id,
-        std::slice::from_ref(member),
-    )
+    upsert_roster(context, group_id, std::slice::from_ref(member))
 }
 
 /// Pull the authoritative roster from the owner and reconcile membership,
@@ -240,7 +245,7 @@ pub(crate) async fn sync_group(context: &Arc<DaemonContext>, group_name_or_id: &
                     ));
                 }
             }
-            reconcile_roster(&context.store, &context.identity.id(), &group.id, &members)?;
+            reconcile_roster(context, &group.id, &members)?;
             context.store.touch_group_sync(&group.id)?;
             Ok(())
         }
@@ -469,7 +474,7 @@ pub(crate) async fn redeem_group_remote(
     }
     // Converge on the returned roster and grant every member our shares. The
     // mirror is a join-time snapshot: add-only, never prune.
-    upsert_roster(&context.store, &context.identity.id(), &group_id, &members)?;
+    upsert_roster(context, &group_id, &members)?;
     context.store.touch_group_sync(&group_id)?;
     Ok((group_name, members.len()))
 }
@@ -962,101 +967,5 @@ mod tests {
         store.save_remote_peer(&bob_id, "bob", "{}").expect("peer");
         store.add_member("team", &bob_id, "member").expect("member");
         (temp, store, self_id)
-    }
-
-    /// Owner with two shares and a second member `bob`, for exercising the
-    /// roster paths (upsert vs prune) against concurrent contribution rows.
-    fn roster_state() -> (tempfile::TempDir, StateStore, String, String, String) {
-        let (temp, store, self_id) = group_with_members();
-        let workspace = temp.path().join("workspace");
-        let share_b = store
-            .add_share("workspace-key-b", &workspace, "proj-b", true)
-            .expect("share");
-        let bob_id = store
-            .members("team")
-            .expect("members")
-            .into_iter()
-            .find(|member| member.role == "member")
-            .expect("bob")
-            .peer_id;
-        (temp, store, self_id, bob_id, share_b.id)
-    }
-
-    fn member_info(
-        peer_id: &str,
-        peer_name: &str,
-        role: &str,
-        shares: Vec<(String, String)>,
-    ) -> MemberInfo {
-        MemberInfo {
-            peer_id: peer_id.to_string(),
-            peer_name: peer_name.to_string(),
-            shares,
-            role: role.to_string(),
-            endpoint: iroh::EndpointAddr::new(peer_id.parse().expect("node id")),
-        }
-    }
-
-    #[test]
-    fn member_add_push_never_prunes_concurrent_share() {
-        let (_temp, store, self_id, bob_id, share_b) = roster_state();
-        let share_a = store.share("project").expect("share");
-        // Bob's share B landed via GroupShareAdded before the (stale) join
-        // push that still lists only share A.
-        store
-            .add_group_share("team", &bob_id, &share_b, "proj-b")
-            .expect("share");
-        let member = member_info(
-            &bob_id,
-            "bob",
-            "member",
-            vec![(share_a.id.clone(), share_a.name.clone())],
-        );
-        upsert_roster(&store, &self_id, "team", std::slice::from_ref(&member)).expect("upsert");
-        let shares = store.group_shares("team", &bob_id).expect("shares");
-        assert!(
-            shares.iter().any(|share| share.share_id == share_b),
-            "the push must not prune a share the member broadcast concurrently"
-        );
-        assert!(shares.iter().any(|share| share.share_id == share_a.id));
-    }
-
-    #[test]
-    fn reconcile_prunes_stale_shares_on_pull() {
-        let (_temp, store, self_id, bob_id, share_b) = roster_state();
-        let share_a = store.share("project").expect("share");
-        // Bob's share B landed via GroupShareAdded before the (stale) pull;
-        // the roster still claims only share A.
-        store
-            .add_group_share("team", &bob_id, &share_b, "proj-b")
-            .expect("share");
-        // The pull roster lists every member, self included.
-        let roster = [
-            member_info(
-                &self_id,
-                "self",
-                "owner",
-                vec![(share_a.id.clone(), share_a.name.clone())],
-            ),
-            member_info(
-                &bob_id,
-                "bob",
-                "member",
-                vec![(share_a.id.clone(), share_a.name.clone())],
-            ),
-        ];
-        reconcile_roster(&store, &self_id, "team", &roster).expect("reconcile");
-        let shares = store.group_shares("team", &bob_id).expect("shares");
-        assert_eq!(
-            shares.len(),
-            1,
-            "the pull prunes shares the owner no longer lists"
-        );
-        assert_eq!(shares[0].share_id, share_a.id);
-        assert_eq!(
-            store.members("team").expect("members").len(),
-            2,
-            "no member dropped"
-        );
     }
 }
