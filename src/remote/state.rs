@@ -279,9 +279,12 @@ impl StateStore {
         }
         // Rebuild `group_shares` without the share_id foreign key: mirrored
         // members' shares live on their own devices, so they never exist in
-        // the local shares table and a FK would reject them.
+        // the local shares table and a FK would reject them. Only the obsolete
+        // `share_id` FK triggers the rebuild — the `group_id`/`peer_id` FKs are
+        // intentional, so counting every FK would re-run this migration on
+        // every startup.
         let share_fks: i64 = connection.query_row(
-            "SELECT COUNT(*) FROM pragma_foreign_key_list('group_shares')",
+            "SELECT COUNT(*) FROM pragma_foreign_key_list('group_shares') WHERE \"from\" = 'share_id'",
             [],
             |row| row.get(0),
         )?;
@@ -414,9 +417,12 @@ impl StateStore {
         validate_identifier(peer_name, "peer name")?;
         let mut connection = self.connect()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // Only share tickets are redeemable here; a group ticket carries an
+        // owner share id and must go through `redeem_group_invite`, which
+        // joins the roster and grants the whole mesh instead of a direct grant.
         let invite = transaction
             .query_row(
-                "SELECT i.share_id, s.name, i.secret_hash, i.expires_at, i.used_at, s.enabled FROM invites i JOIN shares s ON s.id = i.share_id WHERE i.id = ?1",
+                "SELECT i.share_id, s.name, i.secret_hash, i.expires_at, i.used_at, s.enabled FROM invites i JOIN shares s ON s.id = i.share_id WHERE i.id = ?1 AND i.kind = 'share'",
                 [invite_id],
                 |row| {
                     Ok((
@@ -917,6 +923,12 @@ impl StateStore {
         joiner: &JoinerInfo<'_>,
     ) -> Result<RedeemedGroup> {
         validate_identifier(joiner.peer_name, "peer name")?;
+        // Group mode promises every member publishes memory to the mesh; a
+        // joiner with no contribution would consume the roster and owner
+        // shares without contributing anything back.
+        if joiner.shares.is_empty() {
+            bail!("A group member must contribute at least one workspace");
+        }
         let mut connection = self.connect()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let invite = transaction
@@ -1372,6 +1384,70 @@ mod tests {
         assert_eq!(alice.endpoint.as_deref(), Some(r#"{"id":"alice"}"#));
         assert_eq!(alice.role, "member");
         assert_eq!(alice.share_count, 1);
+    }
+
+    #[test]
+    fn redeem_invite_rejects_group_tickets() {
+        let (temp, store, _share) = group_store();
+        let invite = store.create_group_invite("team", 60, None).unwrap();
+        let error = store
+            .redeem_invite(&invite.id, &invite.secret, "peer-1", "alice")
+            .expect_err("a group ticket must not grant a direct share");
+        assert!(error.to_string().contains("invalid or expired"));
+        // The failed attempt grants nothing and leaves the multi-use ticket
+        // valid, so legitimate joiners are unaffected.
+        assert!(store
+            .authorize("peer-1", &invite.share_id, "query")
+            .is_err());
+        let alice_share = real_share(&store, temp.path(), "alice", "alice-ws");
+        store
+            .redeem_group_invite(
+                &invite.id,
+                &invite.secret,
+                &joiner("peer-1", "alice", &[(alice_share.id, alice_share.name)]),
+            )
+            .expect("group ticket still redeemable");
+    }
+
+    #[test]
+    fn group_join_requires_a_contributed_workspace() {
+        let (_temp, store, _share) = group_store();
+        let invite = store.create_group_invite("team", 60, None).unwrap();
+        let error = store
+            .redeem_group_invite(&invite.id, &invite.secret, &joiner("peer-1", "alice", &[]))
+            .expect_err("an empty contribution set must be rejected");
+        assert!(error.to_string().contains("contribute at least one"));
+        // The peer was not admitted and holds no grant.
+        assert!(store
+            .members("team")
+            .unwrap()
+            .iter()
+            .all(|member| member.peer_id != "peer-1"));
+        assert!(store
+            .authorize("peer-1", &invite.share_id, "query")
+            .is_err());
+    }
+
+    #[test]
+    fn group_shares_keeps_only_intentional_foreign_keys() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = temp.path().join("state.db");
+        StateStore::open(db.clone()).unwrap();
+        let store = StateStore::open(db).unwrap();
+        let connection = store.connect().unwrap();
+        let mut fks: Vec<String> = connection
+            .prepare("SELECT \"from\" FROM pragma_foreign_key_list('group_shares')")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        fks.sort();
+        assert_eq!(
+            fks,
+            vec!["group_id".to_string(), "peer_id".to_string()],
+            "the obsolete share_id FK stays gone across reopens"
+        );
     }
 
     #[test]

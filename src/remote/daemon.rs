@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::path::PathBuf;
@@ -1079,14 +1080,20 @@ async fn sync_group(context: &Arc<DaemonContext>, group_name_or_id: &str) -> Res
         context.store.touch_group_sync(&group.id)?;
         return Ok(());
     }
-    let response = exchange_with_peer(
-        context,
-        &owner.peer_id,
-        RemoteRequest::GroupSync {
-            group_id: group.id.clone(),
-        },
+    // Pulling the roster must never hang a local operation on an unreachable
+    // owner; callers fall back to the cached roster after this bound.
+    let response = tokio::time::timeout(
+        Duration::from_secs(5),
+        exchange_with_peer(
+            context,
+            &owner.peer_id,
+            RemoteRequest::GroupSync {
+                group_id: group.id.clone(),
+            },
+        ),
     )
-    .await?;
+    .await
+    .context("Group roster sync with the owner timed out")??;
     match response {
         RemoteResponse::GroupSynced {
             group_name: _,
@@ -1287,6 +1294,9 @@ async fn remove_group_member(
                 || member.peer_name.eq_ignore_ascii_case(peer_name_or_id)
         })
         .context("Unknown group member")?;
+    if target.peer_id == self_id {
+        bail!("The group owner cannot remove itself; leave the group to disband it");
+    }
     for share in context.store.group_shares(&group.id, &self_id)? {
         revoke_peer_grant(&context.store, &share.share_id, &target.peer_id)?;
     }
@@ -1350,6 +1360,17 @@ async fn group_fan_out(
     filter: Filter,
 ) -> Result<GroupQueryResponse> {
     const PER_PEER_TIMEOUT: Duration = Duration::from_millis(2500);
+    // Shares only bound the set (pattern/status/time/…). Ordering, the
+    // `latest` window, and `limit` are group-wide: pushed down, they would
+    // return a per-share top-k (five per share for `--latest 5`) instead of
+    // the group's global top results, so they are applied once on the merged
+    // corpus below.
+    let full = filter.for_remote_peer();
+    let mut bounds = full.clone();
+    bounds.rank = None;
+    bounds.latest = None;
+    bounds.limit = None;
+
     let self_id = context.identity.id();
     let mut records = Vec::new();
     let mut anchors = Vec::new();
@@ -1373,7 +1394,7 @@ async fn group_fan_out(
             let query = tokio::task::spawn_blocking({
                 let root = share.root.clone();
                 let source = source.to_string();
-                let filter = filter.clone();
+                let filter = bounds.clone();
                 move || {
                     let (records, anchors) = crate::commands::memory::workset::run_on_share(
                         std::path::Path::new(&root),
@@ -1398,7 +1419,7 @@ async fn group_fan_out(
             let share_id = share_id.clone();
             let share_name = share_name.clone();
             let source = source.to_string();
-            let filter = filter.clone();
+            let filter = bounds.clone();
             tasks.spawn(async move {
                 let result = tokio::time::timeout(
                     PER_PEER_TIMEOUT,
@@ -1417,30 +1438,35 @@ async fn group_fan_out(
             });
         }
     }
-    let mut offline: Vec<(String, String)> = Vec::new();
+    // A member is online when any of its shares answered, decided only after
+    // every share task completes so a later failure cannot reclassify a peer
+    // whose records were already merged.
+    let mut online: HashSet<String> = HashSet::new();
     while let Some(joined) = tasks.join_next().await {
         let Ok((peer_id, peer_name, share_name, result)) = joined else {
             continue;
         };
-        match result {
-            Ok(Ok(RemoteResponse::Query(query))) => {
-                merge(&peer_name, &share_name, query);
-                // A member is online if any share answered.
-                offline.retain(|(id, _)| *id != peer_id);
-            }
-            _ => {
-                if !offline.iter().any(|(id, _)| *id == peer_id) {
-                    offline.push((peer_id, peer_name));
-                }
-            }
+        if let Ok(Ok(RemoteResponse::Query(query))) = result {
+            merge(&peer_name, &share_name, query);
+            online.insert(peer_id);
         }
     }
-    let skipped: Vec<String> = offline
-        .into_iter()
-        .map(|(_, peer_name)| peer_name)
+    let skipped: Vec<String> = members
+        .iter()
+        .filter(|member| member.peer_id != self_id && !online.contains(&member.peer_id))
+        .map(|member| member.peer_name.clone())
         .collect();
+
+    // Order the merged corpus once, as one group: `latest` window → sort →
+    // `limit`. Re-running the pipeline here is idempotent for the bounds each
+    // share already applied; the shared code also ranks the merged corpus as
+    // a whole when the sort is relevance.
+    let merged = crate::commands::memory::filter::apply(PathBuf::new(), records, anchors, full)?;
     Ok(GroupQueryResponse {
-        query: QueryResponse { records, anchors },
+        query: QueryResponse {
+            records: merged.records,
+            anchors: merged.anchors,
+        },
         skipped,
     })
 }
