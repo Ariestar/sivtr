@@ -79,7 +79,7 @@ jobs:
           # Compare API, not a checkout: this job is privileged (workflow_run),
           # so the untrusted PR head is never checked out or executed.
           gh api "repos/$GITHUB_REPOSITORY/compare/$BASE_SHA...$HEAD_SHA" \
-            --jq -r '.files[] | select(.filename != "Cargo.lock") | "\ndiff --git a/\(.filename) b/\(.filename)\n" + (.patch // "(patch unavailable: too large or binary)")' \
+            --jq '.files[] | select(.filename != "Cargo.lock") | "\ndiff --git a/\(.filename) b/\(.filename)\n" + (.patch // "(patch unavailable: too large or binary)")' \
             > /tmp/pr.diff
           echo "diff bytes: $(wc -c < /tmp/pr.diff)" >> "$GITHUB_STEP_SUMMARY"
 
