@@ -292,6 +292,15 @@ impl SourceLoadPump {
         }
     }
 
+    /// True while at least one body-hydration job is still running.
+    ///
+    /// `SessionColumn::is_fetching` uses this to keep the event loop on its short poll while
+    /// bodies stream in: metadata may already be `Ready`, but a copy action against a not-yet
+    /// hydrated body would return stale or empty content.
+    pub fn has_inflight_bodies(&self) -> bool {
+        !self.body_inflight.is_empty()
+    }
+
     fn spawn_meta(&mut self, idx: usize, source: &WorkspaceSource, gen: u64, budget: usize) {
         let budget = budget.clamp(FETCH_FLOOR, FETCH_CEILING);
         let selector = source.selector();
@@ -560,7 +569,7 @@ impl Pane for SessionColumn {
     }
 
     fn is_fetching(&self) -> bool {
-        self.states.iter().any(SourceLoadState::is_fetching)
+        self.states.iter().any(SourceLoadState::is_fetching) || self.pump.has_inflight_bodies()
     }
 }
 
