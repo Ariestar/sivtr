@@ -286,22 +286,35 @@ fn is_timeout_error(message: &str) -> bool {
         || lower.contains("i/o operation")
 }
 
-/// Peer-side: same local query on share root, optional redact.
+/// Peer-side query on a share root, optional redact. An empty workspace has
+/// no sessions and reports an empty result instead of erroring, so one
+/// member's empty contribution cannot abort a group fan-out.
 pub fn run_on_share(
     root: &Path,
     source: &str,
     filter: Filter,
     redact: bool,
 ) -> Result<(Vec<WorkRecord>, Vec<WorkRef>)> {
-    let mut set = run_local(source, root, filter.for_remote_peer())?;
-    if redact {
-        set.records = set
-            .records
-            .iter()
-            .map(crate::remote::redact::redact_record)
-            .collect();
+    match run_local(source, root, filter.for_remote_peer()) {
+        Ok(mut set) => {
+            if redact {
+                set.records = set
+                    .records
+                    .iter()
+                    .map(crate::remote::redact::redact_record)
+                    .collect();
+            }
+            Ok((set.records, set.anchors))
+        }
+        Err(error)
+            if error
+                .to_string()
+                .starts_with("No record found for ref selector") =>
+        {
+            Ok((Vec::new(), Vec::new()))
+        }
+        Err(error) => Err(error),
     }
-    Ok((set.records, set.anchors))
 }
 
 fn run_local(source: &str, root: &Path, filter: Filter) -> Result<WorkSet> {

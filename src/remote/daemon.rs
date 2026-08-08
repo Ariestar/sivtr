@@ -1,9 +1,7 @@
-use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use base64::Engine;
@@ -11,21 +9,21 @@ use chrono::Utc;
 use fs2::FileExt;
 use iroh::endpoint::presets;
 use iroh::endpoint::Connection;
-use iroh::{Endpoint, EndpointAddr};
+use iroh::Endpoint;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
-use tokio::task::JoinSet;
 
+use super::context::DaemonContext;
+use super::group;
 use super::identity::Identity;
 use super::ipc;
+use super::net;
 use super::protocol::{
-    DaemonInfo, DaemonStatus, GroupQueryResponse, InviteTicket, LocalEnvelope, LocalRequest,
-    LocalResponse, MemberInfo, QueryResponse, RemoteRequest, RemoteResponse, MAX_MESSAGE_SIZE,
-    REMOTE_ALPN,
+    qualify_query_scope, DaemonInfo, DaemonStatus, InviteTicket, LocalEnvelope, LocalRequest,
+    LocalResponse, QueryResponse, RemoteRequest, RemoteResponse, MAX_MESSAGE_SIZE, REMOTE_ALPN,
 };
-use super::state::{GroupInfo, GroupMemberInfo, MountInfo, StateStore};
-use crate::commands::memory::filter::Filter;
+use super::state::{MountInfo, StateStore};
 
 pub fn run() -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -133,14 +131,6 @@ impl Drop for DaemonInfoGuard {
     fn drop(&mut self) {
         ipc::remove_daemon_info();
     }
-}
-
-struct DaemonContext {
-    store: StateStore,
-    endpoint: Endpoint,
-    identity: Identity,
-    started_at: String,
-    control_token: String,
 }
 
 async fn handle_local(
@@ -278,8 +268,9 @@ async fn process_local(
             alias,
         } => {
             let mount = context.store.mount(&workspace_key, &alias)?;
-            let response = exchange_with_peer(
-                context,
+            let response = net::exchange_with_peer(
+                &context.store,
+                &context.endpoint,
                 &mount.peer_id,
                 RemoteRequest::Probe {
                     share_id: mount.share_id.clone(),
@@ -304,8 +295,9 @@ async fn process_local(
             filter,
         } => {
             let mount = context.store.mount(&workspace_key, &alias)?;
-            let response = exchange_with_peer(
-                context,
+            let response = net::exchange_with_peer(
+                &context.store,
+                &context.endpoint,
                 &mount.peer_id,
                 RemoteRequest::Query {
                     share_id: mount.share_id.clone(),
@@ -342,12 +334,12 @@ async fn process_local(
         }
         LocalRequest::GroupList => {
             for group in context.store.groups()? {
-                maybe_sync_group(context, &group.name).await;
+                group::maybe_sync_group(context, &group.name).await;
             }
             LocalResponse::Groups(context.store.groups()?)
         }
         LocalRequest::GroupMembers { group } => {
-            maybe_sync_group(context, &group).await;
+            group::maybe_sync_group(context, &group).await;
             LocalResponse::Members(context.store.members(&group)?)
         }
         LocalRequest::GroupShares { group } => {
@@ -366,6 +358,9 @@ async fn process_local(
             valid_for_seconds,
             max_uses,
         } => {
+            // Only the owner may mint join links: a member-created invite
+            // would let anyone join without the owner's consent.
+            group::require_group_owner(&context.store, &group, &context.identity.id())?;
             let invite = context
                 .store
                 .create_group_invite(&group, valid_for_seconds, max_uses)?;
@@ -396,28 +391,22 @@ async fn process_local(
                 .context("Invitation is not a group invite")?;
             // A known member re-running join adjusts contributions (multi-select
             // checkboxes: additions register + grant, withdrawals revoke).
-            let known = context.store.group(group_id).ok();
-            let is_member = known.as_ref().is_some_and(|group| {
-                context
-                    .store
-                    .members(&group.id)
-                    .map(|members| {
-                        members
-                            .iter()
-                            .any(|member| member.peer_id == context.identity.id())
-                    })
-                    .unwrap_or(false)
+            let member_group = context.store.group(group_id).ok().filter(|group| {
+                context.store.members(&group.id).is_ok_and(|members| {
+                    members
+                        .iter()
+                        .any(|member| member.peer_id == context.identity.id())
+                })
             });
-            if is_member {
-                let group = known.expect("group exists");
-                adjust_group_shares(context, &group.id, &shares).await?;
+            if let Some(group) = member_group {
+                group::adjust_group_shares(context, &group.id, &shares).await?;
                 LocalResponse::GroupJoined {
                     group_name: group.name,
                     member_count: group.member_count as usize,
                 }
             } else {
                 let (group_name, member_count) =
-                    redeem_group_remote(context, &invite, &shares).await?;
+                    group::redeem_group_remote(context, &invite, &shares).await?;
                 LocalResponse::GroupJoined {
                     group_name,
                     member_count,
@@ -425,20 +414,20 @@ async fn process_local(
             }
         }
         LocalRequest::GroupLeave { group } => {
-            leave_group(context, &group).await?;
+            group::leave_group(context, &group).await?;
             LocalResponse::Ok
         }
         LocalRequest::GroupRemoveMember { group, peer } => {
-            remove_group_member(context, &group, &peer).await?;
+            group::remove_group_member(context, &group, &peer).await?;
             LocalResponse::Ok
         }
         LocalRequest::GroupRename { group, name } => {
             let info = context.store.group(&group)?;
-            require_group_owner(&context.store, &info.id, &context.identity.id())?;
+            group::require_group_owner(&context.store, &info.id, &context.identity.id())?;
             LocalResponse::Group(context.store.rename_group(&info.id, &name)?)
         }
         LocalRequest::GroupSync { group } => {
-            sync_group(context, &group).await?;
+            group::sync_group(context, &group).await?;
             LocalResponse::Group(context.store.group(&group)?)
         }
         LocalRequest::GroupQuery {
@@ -449,33 +438,23 @@ async fn process_local(
             filter,
         } => {
             let group_info = context.store.group(&group)?;
-            maybe_sync_group(context, &group).await;
-            let targets = group_targets(
+            group::maybe_sync_group(context, &group).await;
+            let targets = group::group_targets(
                 &context.store,
                 &group_info,
                 member.as_deref(),
                 share.as_deref(),
             )?;
-            if targets.is_empty() {
-                return Ok((
-                    LocalResponse::GroupQuery(GroupQueryResponse {
-                        query: QueryResponse {
-                            records: Vec::new(),
-                            anchors: Vec::new(),
-                        },
-                        skipped: Vec::new(),
-                    }),
-                    false,
-                ));
-            }
             let response =
-                group_fan_out(context, &group_info.name, &targets, &source, filter).await?;
+                group::group_fan_out(context, &group_info.name, &targets, &source, filter).await?;
             LocalResponse::GroupQuery(response)
         }
     };
     Ok((response, false))
 }
 
+/// Mount-side join: redeem a share invite with its owner and register the
+/// resulting peer + mount locally.
 async fn redeem_remote(
     context: &DaemonContext,
     workspace_key: &str,
@@ -487,8 +466,8 @@ async fn redeem_remote(
         bail!("Invitation is expired");
     }
     let peer_id = invite.endpoint.id.to_string();
-    let (response, observed) = exchange(
-        context,
+    let (response, observed) = net::exchange(
+        &context.endpoint,
         invite.endpoint,
         RemoteRequest::RedeemInvite {
             invite_id: invite.invite_id,
@@ -515,90 +494,6 @@ async fn redeem_remote(
         .add_mount(workspace_key, alias, &peer_id, &share_id, &share_name)
 }
 
-async fn exchange_with_peer(
-    context: &DaemonContext,
-    peer_id: &str,
-    request: RemoteRequest,
-) -> Result<RemoteResponse> {
-    let endpoint_json = context.store.peer_endpoint(peer_id)?;
-    let address: EndpointAddr =
-        serde_json::from_str(&endpoint_json).context("Invalid stored peer endpoint")?;
-    let (response, observed) = exchange(context, address, request).await?;
-    let endpoint_json =
-        serde_json::to_string(&observed).context("Failed to encode peer endpoint")?;
-    context
-        .store
-        .refresh_peer_endpoint(peer_id, &endpoint_json)
-        .context("Failed to refresh peer endpoint after successful dial")?;
-    Ok(response)
-}
-
-/// Dial the peer and exchange one request/response.
-///
-/// Default mode (`presets::N0`) includes address lookup. We dial the stored/bootstrap
-/// address first; if that fails, dial by `EndpointId` alone so N0 discovery can resolve
-/// current direct/relay paths. That is how default mode works — not a path rewrite.
-///
-/// After a successful dial, return iroh's observed addresses so callers can refresh storage.
-async fn exchange(
-    context: &DaemonContext,
-    address: EndpointAddr,
-    request: RemoteRequest,
-) -> Result<(RemoteResponse, EndpointAddr)> {
-    let connection = connect_default(&context.endpoint, &address).await?;
-    let observed = observed_endpoint(&context.endpoint, &connection, &address).await;
-    let (mut send, mut receive) = connection.open_bi().await?;
-    send.write_all(&serde_json::to_vec(&request)?).await?;
-    send.finish()?;
-    let bytes = receive.read_to_end(MAX_MESSAGE_SIZE).await?;
-    connection.close(0u32.into(), b"done");
-    let response: RemoteResponse =
-        serde_json::from_slice(&bytes).context("Invalid remote daemon response")?;
-    match response {
-        RemoteResponse::Error { message } => Err(anyhow::anyhow!(message)),
-        response => Ok((response, observed)),
-    }
-}
-
-/// Default-mode dial: known address first, then EndpointId discovery via N0.
-async fn connect_default(endpoint: &Endpoint, address: &EndpointAddr) -> Result<Connection> {
-    match endpoint.connect(address.clone(), REMOTE_ALPN).await {
-        Ok(connection) => Ok(connection),
-        Err(first) => {
-            // Already id-only: discovery was the only path; do not double-dial.
-            if address.is_empty() {
-                return Err(anyhow::anyhow!(first)).context("Failed to reach remote sivtr daemon");
-            }
-            match endpoint
-                .connect(EndpointAddr::new(address.id), REMOTE_ALPN)
-                .await
-            {
-                Ok(connection) => Ok(connection),
-                Err(second) => Err(anyhow::anyhow!(
-                    "known address failed ({first:#}); discovery by id failed ({second:#})"
-                ))
-                .context("Failed to reach remote sivtr daemon"),
-            }
-        }
-    }
-}
-
-async fn observed_endpoint(
-    endpoint: &Endpoint,
-    connection: &Connection,
-    dialed: &EndpointAddr,
-) -> EndpointAddr {
-    let remote_id = connection.remote_id();
-    if let Some(info) = endpoint.remote_info(remote_id).await {
-        let observed =
-            EndpointAddr::from_parts(info.id(), info.into_addrs().map(|addr| addr.into_addr()));
-        if !observed.is_empty() {
-            return observed;
-        }
-    }
-    dialed.clone()
-}
-
 async fn handle_remote(connection: Connection, context: Arc<DaemonContext>) -> Result<()> {
     let peer_id = connection.remote_id().to_string();
     let (mut send, mut receive) = connection.accept_bi().await?;
@@ -614,25 +509,6 @@ async fn handle_remote(connection: Connection, context: Arc<DaemonContext>) -> R
     send.write_all(&serde_json::to_vec(&response)?).await?;
     send.finish()?;
     connection.closed().await;
-    Ok(())
-}
-
-/// Require `sender` to be the group's owner before roster-changing requests.
-///
-/// Membership changes are always owner-driven: joins, kicks, and leaves are
-/// broadcast by the owner after it updates its authoritative roster. Binding
-/// them to the transport-authenticated sender prevents a member from forging
-/// additions (which would grant an attacker read access to other members'
-/// contributions) or removals.
-fn require_group_owner(store: &StateStore, group_id: &str, sender: &str) -> Result<()> {
-    let owner = store
-        .members(group_id)?
-        .into_iter()
-        .find(|member| member.role == "owner")
-        .context("Group has no owner")?;
-    if owner.peer_id != sender {
-        bail!("Only the group owner may perform this operation");
-    }
     Ok(())
 }
 
@@ -663,26 +539,12 @@ async fn process_remote(
         } => {
             let share = context.store.authorize(peer_id, &share_id, "query")?;
             let response = tokio::task::spawn_blocking(move || {
-                let result = crate::commands::memory::workset::run_on_share(
+                let (records, anchors) = crate::commands::memory::workset::run_on_share(
                     std::path::Path::new(&share.root),
                     &source,
                     filter,
                     share.redact,
-                );
-                // An empty workspace has no sessions; report it as an empty
-                // result instead of an error (matches the client-side
-                // convention in `query_many`).
-                let (records, anchors) = match result {
-                    Ok(result) => result,
-                    Err(error)
-                        if error
-                            .to_string()
-                            .starts_with("No record found for ref selector") =>
-                    {
-                        (Vec::new(), Vec::new())
-                    }
-                    Err(error) => return Err(error),
-                };
+                )?;
                 Ok::<_, anyhow::Error>(QueryResponse { records, anchors })
             })
             .await??;
@@ -702,91 +564,15 @@ async fn process_remote(
             shares,
             endpoint,
         } => {
-            let endpoint_json = serde_json::to_string(&endpoint)?;
-            let joiner = super::state::JoinerInfo {
-                peer_id,
-                peer_name: &peer_name,
-                shares: &shares,
-                endpoint_json: &endpoint_json,
-            };
-            let redeemed = context
-                .store
-                .redeem_group_invite(&invite_id, &secret, &joiner)?;
-            // The invite row is the authority: the group is derived from the
-            // ticket, never from the joiner's request, and used for every
-            // follow-up (name lookup, roster, broadcast).
-            let group_id = redeemed.group_id;
-            let group_name = context.store.group(&group_id)?.name;
-            let members: Vec<MemberInfo> = redeemed
-                .roster
-                .iter()
-                .map(|member| member_info_from_store(&context.store, &group_id, member))
-                .collect::<Result<_>>()?;
-            // Ensure the owner's own roster entry carries the live endpoint so
-            // the joiner can dial back without relying on discovery alone.
-            let owner_addr = context.endpoint.addr();
-            let members = members
-                .into_iter()
-                .map(|mut member| {
-                    if member.peer_id == context.identity.id() {
-                        member.endpoint = owner_addr.clone();
-                    }
-                    member
-                })
-                .collect();
-            // Notify existing members about the newcomer so they can grant the
-            // newcomer access. Offline members reconcile on their next sync.
-            let newcomer = MemberInfo {
-                peer_id: peer_id.to_string(),
-                peer_name,
-                shares,
-                role: "member".to_string(),
-                endpoint,
-            };
-            let context = context.clone();
-            let newcomer_id = newcomer.peer_id.clone();
-            let broadcast_group_id = group_id.clone();
-            tokio::spawn(async move {
-                broadcast(
-                    &context,
-                    &broadcast_group_id,
-                    RemoteRequest::GroupMemberAdded {
-                        group_id: broadcast_group_id.clone(),
-                        member: newcomer,
-                    },
-                    Some(&newcomer_id),
-                )
-                .await;
-            });
-            Ok(RemoteResponse::GroupJoined {
-                group_id,
-                group_name,
-                members,
-            })
+            let response = group::handle_redeem_group_invite(
+                context, peer_id, &invite_id, &secret, peer_name, shares, endpoint,
+            )
+            .await?;
+            Ok(response)
         }
         RemoteRequest::GroupMemberAdded { group_id, member } => {
-            require_group_owner(&context.store, &group_id, peer_id)?;
-            let endpoint_json = serde_json::to_string(&member.endpoint)?;
-            context
-                .store
-                .save_remote_peer(&member.peer_id, &member.peer_name, &endpoint_json)?;
-            context
-                .store
-                .add_member(&group_id, &member.peer_id, &member.role)?;
-            for (share_id, share_name) in &member.shares {
-                context
-                    .store
-                    .add_group_share(&group_id, &member.peer_id, share_id, share_name)?;
-            }
-            // Grant the newcomer read access to every contribution we make.
-            for share in context
-                .store
-                .group_shares(&group_id, &context.identity.id())?
-            {
-                context
-                    .store
-                    .group_grant(&group_id, &share.share_id, &member.peer_id)?;
-            }
+            group::require_group_owner(&context.store, &group_id, peer_id)?;
+            group::merge_member(context, &group_id, &member)?;
             Ok(RemoteResponse::GroupAck)
         }
         RemoteRequest::GroupShareAdded {
@@ -829,755 +615,36 @@ async fn process_remote(
             peer_id: removed_peer,
             peer_name: _,
         } => {
-            require_group_owner(&context.store, &group_id, peer_id)?;
-            if removed_peer == context.identity.id() {
-                // We were kicked (or the owner disbanded the group).
-                drop_group(context, &group_id).await?;
-            } else {
-                for share in context
-                    .store
-                    .group_shares(&group_id, &context.identity.id())?
-                {
-                    context
-                        .store
-                        .revoke_group_grant(&group_id, &share.share_id, &removed_peer)?;
-                }
-                context.store.remove_member(&group_id, &removed_peer)?;
-            }
-            Ok(RemoteResponse::GroupAck)
+            group::require_group_owner(&context.store, &group_id, peer_id)?;
+            group::handle_member_removed(context, &group_id, &removed_peer).await
         }
         RemoteRequest::GroupLeave { group_id } => {
-            let members_before = context.store.members(&group_id)?;
-            let leaver = members_before
-                .iter()
-                .find(|row| row.peer_id == peer_id)
-                .cloned()
-                .context("Unknown group member")?;
-            context.store.remove_member(&group_id, peer_id)?;
-            // Revoke every owner contribution from the leaver.
-            if let Some(owner) = members_before.iter().find(|row| row.role == "owner") {
-                for share in context.store.group_shares(&group_id, &owner.peer_id)? {
-                    context
-                        .store
-                        .revoke_group_grant(&group_id, &share.share_id, peer_id)?;
-                }
-            }
-            broadcast(
-                context,
-                &group_id,
-                RemoteRequest::GroupMemberRemoved {
-                    group_id: group_id.clone(),
-                    peer_id: leaver.peer_id.clone(),
-                    peer_name: leaver.peer_name.clone(),
-                },
-                None,
-            )
-            .await;
+            group::handle_leave(context, &group_id, peer_id).await?;
             Ok(RemoteResponse::GroupAck)
         }
         RemoteRequest::GroupSync { group_id } => {
-            let Ok(group) = context.store.group(&group_id) else {
+            let Some((group_name, members)) = group::roster_for(context, &group_id, peer_id)?
+            else {
                 return Ok(RemoteResponse::GroupSynced {
                     group_name: group_id.clone(),
                     member: false,
                     members: Vec::new(),
                 });
             };
-            let roster: Vec<MemberInfo> = context
-                .store
-                .members(&group.id)?
-                .iter()
-                .map(|member| member_info_from_store(&context.store, &group.id, member))
-                .collect::<Result<_>>()?;
-            // The roster is membership data: only members may read it, so a
-            // non-member learns only that it is not a member.
-            if !roster.iter().any(|row| row.peer_id == peer_id) {
+            if members.is_empty() {
                 return Ok(RemoteResponse::GroupSynced {
-                    group_name: group.name,
+                    group_name,
                     member: false,
                     members: Vec::new(),
                 });
             }
-            // Live endpoint for the owner's own entry.
-            let owner_addr = context.endpoint.addr();
-            let roster = roster
-                .into_iter()
-                .map(|mut row| {
-                    if row.peer_id == context.identity.id() {
-                        row.endpoint = owner_addr.clone();
-                    }
-                    row
-                })
-                .collect();
             Ok(RemoteResponse::GroupSynced {
-                group_name: group.name,
+                group_name,
                 member: true,
-                members: roster,
+                members,
             })
         }
     }
-}
-
-fn qualify_query_scope(scope: &str, response: &mut QueryResponse) {
-    let scope = scope.to_ascii_lowercase();
-    for record in &mut response.records {
-        record.work_ref = record.work_ref.with_named_scope(scope.clone());
-    }
-    for anchor in &mut response.anchors {
-        *anchor = anchor.with_named_scope(scope.clone());
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Group mode: a named set of devices that expose their memory to each other.
-// Membership is a mesh overlay on the existing share/grant/mount model: join =
-// redeem a multi-use invite with the owner, mirror the roster (members and
-// their contributed shares) locally, and grant every member read access to
-// every share we contribute.
-// ---------------------------------------------------------------------------
-
-/// Client-side join (first time): redeem the invite with the owner, mirror the
-/// roster, register our contributed shares, and grant members.
-async fn redeem_group_remote(
-    context: &Arc<DaemonContext>,
-    encoded_invite: &str,
-    shares: &[(String, String)],
-) -> Result<(String, usize)> {
-    let invite = InviteTicket::parse(encoded_invite)?;
-    if invite.expires_at < Utc::now().timestamp() {
-        bail!("Invitation is expired");
-    }
-    if invite.group_id.is_none() {
-        bail!("Invitation is not a group invite");
-    }
-    let (response, _observed) = exchange(
-        context,
-        invite.endpoint,
-        RemoteRequest::RedeemGroupInvite {
-            invite_id: invite.invite_id,
-            secret: invite.secret,
-            peer_name: context.identity.name.clone(),
-            shares: shares.to_vec(),
-            endpoint: context.endpoint.addr(),
-        },
-    )
-    .await?;
-    // The owner derives the group from the invite row; register under that id.
-    let (group_id, group_name, members) = match response {
-        RemoteResponse::GroupJoined {
-            group_id,
-            group_name,
-            members,
-        } => (group_id, group_name, members),
-        response => bail!("Unexpected invitation response: {response:?}"),
-    };
-    // Our own device is a peer of itself (FK target in group_members).
-    context
-        .store
-        .save_remote_peer(&context.identity.id(), &context.identity.name, "{}")?;
-    // Mirror the owner-assigned group identity and join it.
-    context.store.register_group(&group_id, &group_name)?;
-    context
-        .store
-        .add_member(&group_id, &context.identity.id(), "member")?;
-    for (share_id, share_name) in shares {
-        context
-            .store
-            .add_group_share(&group_id, &context.identity.id(), share_id, share_name)?;
-    }
-    // Mirror the roster and grant every member read access to our shares.
-    for member in &members {
-        let member_endpoint = serde_json::to_string(&member.endpoint)?;
-        context
-            .store
-            .save_remote_peer(&member.peer_id, &member.peer_name, &member_endpoint)?;
-        context
-            .store
-            .add_member(&group_id, &member.peer_id, &member.role)?;
-        for (share_id, share_name) in &member.shares {
-            context
-                .store
-                .add_group_share(&group_id, &member.peer_id, share_id, share_name)?;
-        }
-        for (share_id, _) in shares {
-            context
-                .store
-                .group_grant(&group_id, share_id, &member.peer_id)?;
-        }
-    }
-    context.store.touch_group_sync(&group_id)?;
-    // The returned roster already includes this device; it is the full count.
-    Ok((group_name, members.len()))
-}
-
-/// An existing member re-runs join with the final checkbox list: register new
-/// contributions (granting every member), withdraw unchecked ones (revoking
-/// grants), and broadcast both directions so peers stay in sync.
-async fn adjust_group_shares(
-    context: &Arc<DaemonContext>,
-    group_name_or_id: &str,
-    shares: &[(String, String)],
-) -> Result<()> {
-    // The mesh contract requires at least one contribution; an empty final
-    // set would keep the membership while consuming everyone else's memory.
-    if shares.is_empty() {
-        bail!("A group member must contribute at least one workspace");
-    }
-    let group = context.store.group(group_name_or_id)?;
-    let self_id = context.identity.id();
-    let members = context.store.members(&group.id)?;
-    let current = context.store.group_shares(&group.id, &self_id)?;
-    let wanted: &[(String, String)] = shares;
-
-    for (share_id, share_name) in wanted {
-        if !current
-            .iter()
-            .any(|existing| existing.share_id == *share_id)
-        {
-            context
-                .store
-                .add_group_share(&group.id, &self_id, share_id, share_name)?;
-            for member in &members {
-                if member.peer_id != self_id {
-                    context
-                        .store
-                        .group_grant(&group.id, share_id, &member.peer_id)?;
-                }
-            }
-            broadcast(
-                context,
-                &group.id,
-                RemoteRequest::GroupShareAdded {
-                    group_id: group.id.clone(),
-                    peer_id: self_id.clone(),
-                    peer_name: String::new(),
-                    share_id: share_id.clone(),
-                    share_name: share_name.clone(),
-                },
-                Some(&self_id),
-            )
-            .await;
-        }
-    }
-    for existing in current {
-        if !wanted.iter().any(|(id, _)| *id == existing.share_id) {
-            context
-                .store
-                .remove_group_share(&group.id, &self_id, &existing.share_id)?;
-            context
-                .store
-                .revoke_group_share(&group.id, &existing.share_id, &self_id)?;
-            broadcast(
-                context,
-                &group.id,
-                RemoteRequest::GroupShareRemoved {
-                    group_id: group.id.clone(),
-                    peer_id: self_id.clone(),
-                    share_id: existing.share_id.clone(),
-                },
-                Some(&self_id),
-            )
-            .await;
-        }
-    }
-    Ok(())
-}
-
-/// Pull the authoritative roster from the owner and reconcile membership,
-/// contributions, and grants. If the owner says we are no longer a member,
-/// drop the group.
-async fn sync_group(context: &Arc<DaemonContext>, group_name_or_id: &str) -> Result<()> {
-    let group = context.store.group(group_name_or_id)?;
-    let local_members = context.store.members(&group.id)?;
-    let owner = local_members
-        .iter()
-        .find(|member| member.role == "owner")
-        .context("Group has no owner")?;
-    if owner.peer_id == context.identity.id() {
-        // The owner is the roster source of truth; nothing to pull.
-        context.store.touch_group_sync(&group.id)?;
-        return Ok(());
-    }
-    // Pulling the roster must never hang a local operation on an unreachable
-    // owner; callers fall back to the cached roster after this bound.
-    let response = tokio::time::timeout(
-        Duration::from_secs(5),
-        exchange_with_peer(
-            context,
-            &owner.peer_id,
-            RemoteRequest::GroupSync {
-                group_id: group.id.clone(),
-            },
-        ),
-    )
-    .await
-    .context("Group roster sync with the owner timed out")??;
-    match response {
-        RemoteResponse::GroupSynced {
-            group_name,
-            member,
-            members,
-        } => {
-            if !member {
-                drop_group(context, &group.id).await?;
-                return Ok(());
-            }
-            // The owner's name is authoritative: apply a rename this device
-            // has not synced yet. A collision with another local group keeps
-            // the stale name but must not block the roster reconciliation.
-            if group_name != context.store.group(&group.id)?.name {
-                if let Err(error) = context.store.rename_group(&group.id, &group_name) {
-                    crate::output::error(format!(
-                        "kept local name for group `{}`: {error:#}",
-                        context.store.group(&group.id)?.name
-                    ));
-                }
-            }
-            let self_id = context.identity.id();
-            // Roster is authoritative: upsert peers, membership, contributions.
-            for remote in &members {
-                context.store.save_remote_peer(
-                    &remote.peer_id,
-                    &remote.peer_name,
-                    &serde_json::to_string(&remote.endpoint)?,
-                )?;
-                context
-                    .store
-                    .add_member(&group.id, &remote.peer_id, &remote.role)?;
-                // Reconcile this member's full contribution set: a share the
-                // owner no longer lists (e.g. a lost GroupShareRemoved push)
-                // must not keep fan-out dialing it. Our own contributions are
-                // local authority and never pruned here.
-                if remote.peer_id != self_id {
-                    let local = context.store.group_shares(&group.id, &remote.peer_id)?;
-                    for existing in local {
-                        if !remote
-                            .shares
-                            .iter()
-                            .any(|(share_id, _)| *share_id == existing.share_id)
-                        {
-                            context.store.remove_group_share(
-                                &group.id,
-                                &remote.peer_id,
-                                &existing.share_id,
-                            )?;
-                        }
-                    }
-                }
-                for (share_id, share_name) in &remote.shares {
-                    context.store.add_group_share(
-                        &group.id,
-                        &remote.peer_id,
-                        share_id,
-                        share_name,
-                    )?;
-                }
-            }
-            // Grant every member read access to our contributions.
-            let self_shares = context.store.group_shares(&group.id, &self_id)?;
-            for remote in &members {
-                if remote.peer_id != self_id {
-                    for share in &self_shares {
-                        context
-                            .store
-                            .group_grant(&group.id, &share.share_id, &remote.peer_id)?;
-                    }
-                }
-            }
-            // Drop members the owner no longer lists, revoking their grants.
-            for local in local_members {
-                if !members.iter().any(|remote| remote.peer_id == local.peer_id) {
-                    context.store.remove_member(&group.id, &local.peer_id)?;
-                    for share in &self_shares {
-                        context.store.revoke_group_grant(
-                            &group.id,
-                            &share.share_id,
-                            &local.peer_id,
-                        )?;
-                    }
-                }
-            }
-            context.store.touch_group_sync(&group.id)?;
-            Ok(())
-        }
-        response => bail!("Unexpected group sync response: {response:?}"),
-    }
-}
-
-/// Best-effort sync when the cached roster is stale; never blocks queries.
-/// The owner short-circuits inside [`sync_group`].
-async fn maybe_sync_group(context: &Arc<DaemonContext>, group_name_or_id: &str) {
-    let stale = match context.store.sync_stale(group_name_or_id, 300) {
-        Ok(stale) => stale,
-        Err(_) => return,
-    };
-    if stale {
-        if let Err(error) = sync_group(context, group_name_or_id).await {
-            // Owner unreachable — fall back to the cached roster.
-            crate::output::error(format!(
-                "group sync failed for `{group_name_or_id}`: {error:#}"
-            ));
-        }
-    }
-}
-
-/// Remove the group locally: revoke the grants we handed out on every
-/// contribution, then drop the group row (members + contributions cascade).
-async fn drop_group(context: &Arc<DaemonContext>, group_name_or_id: &str) -> Result<()> {
-    let group = context.store.group(group_name_or_id)?;
-    let members = context.store.members(&group.id)?;
-    let self_id = context.identity.id();
-    for share in context.store.group_shares(&group.id, &self_id)? {
-        for member in &members {
-            if member.peer_id != self_id {
-                context
-                    .store
-                    .revoke_group_grant(&group.id, &share.share_id, &member.peer_id)?;
-            }
-        }
-    }
-    context.store.remove_group(&group.id)?;
-    Ok(())
-}
-
-async fn leave_group(context: &Arc<DaemonContext>, group_name_or_id: &str) -> Result<()> {
-    let group = context.store.group(group_name_or_id)?;
-    let members = context.store.members(&group.id)?;
-    let self_id = context.identity.id();
-    let self_member = members
-        .iter()
-        .find(|member| member.peer_id == self_id)
-        .context("You are not a member of this group")?;
-    let is_owner = self_member.role == "owner";
-    // Leaving revokes the grants we handed out on our shares and drops the
-    // local group row (membership and contributions cascade), so `group list`
-    // stops showing it immediately - even while the owner is offline.
-    drop_group(context, &group.id).await?;
-    if is_owner {
-        // Owner leaving disbands the group: kick every remaining member. Each
-        // request names its own target (`peer_id` differs per recipient), so
-        // broadcast's shared template does not fit - send them individually.
-        for member in &members {
-            if member.peer_id == self_id {
-                continue;
-            }
-            let _ = tokio::time::timeout(
-                Duration::from_secs(3),
-                exchange_with_peer(
-                    context,
-                    &member.peer_id,
-                    RemoteRequest::GroupMemberRemoved {
-                        group_id: group.id.clone(),
-                        peer_id: member.peer_id.clone(),
-                        peer_name: String::new(),
-                    },
-                ),
-            )
-            .await;
-        }
-    } else if let Some(owner) = members.iter().find(|member| member.role == "owner") {
-        let _ = tokio::time::timeout(
-            Duration::from_secs(3),
-            exchange_with_peer(
-                context,
-                &owner.peer_id,
-                RemoteRequest::GroupLeave {
-                    group_id: group.id.clone(),
-                },
-            ),
-        )
-        .await;
-    }
-    Ok(())
-}
-
-async fn remove_group_member(
-    context: &Arc<DaemonContext>,
-    group_name_or_id: &str,
-    peer_name_or_id: &str,
-) -> Result<()> {
-    let group = context.store.group(group_name_or_id)?;
-    let members = context.store.members(&group.id)?;
-    let self_id = context.identity.id();
-    let self_member = members
-        .iter()
-        .find(|member| member.peer_id == self_id)
-        .context("You are not a member of this group")?;
-    if self_member.role != "owner" {
-        bail!("Only the group owner can remove members");
-    }
-    let target = members
-        .iter()
-        .find(|member| {
-            member.peer_id == peer_name_or_id
-                || member.peer_name.eq_ignore_ascii_case(peer_name_or_id)
-        })
-        .context("Unknown group member")?;
-    if target.peer_id == self_id {
-        bail!("The group owner cannot remove itself; leave the group to disband it");
-    }
-    for share in context.store.group_shares(&group.id, &self_id)? {
-        context
-            .store
-            .revoke_group_grant(&group.id, &share.share_id, &target.peer_id)?;
-    }
-    context.store.remove_member(&group.id, &target.peer_id)?;
-    // Everyone hears about the removal — the removed peer clears the group
-    // locally when it sees its own peer_id.
-    broadcast(
-        context,
-        &group.id,
-        RemoteRequest::GroupMemberRemoved {
-            group_id: group.id.clone(),
-            peer_id: target.peer_id.clone(),
-            peer_name: target.peer_name.clone(),
-        },
-        None,
-    )
-    .await;
-    Ok(())
-}
-
-/// Best-effort send `request` to every group member except `skip`. The caller
-/// builds the request once from borrowed data; each member task owns a cloned
-/// copy ('static tasks), which is the only clone per member.
-async fn broadcast(
-    context: &Arc<DaemonContext>,
-    group_name_or_id: &str,
-    request: RemoteRequest,
-    skip: Option<&str>,
-) {
-    let Ok(members) = context.store.members(group_name_or_id) else {
-        return;
-    };
-    let mut tasks = JoinSet::new();
-    for member in members {
-        if skip == Some(member.peer_id.as_str()) {
-            continue;
-        }
-        let context = context.clone();
-        let peer_id = member.peer_id.clone();
-        let request = request.clone();
-        tasks.spawn(async move {
-            let _ = tokio::time::timeout(
-                Duration::from_secs(3),
-                exchange_with_peer(&context, &peer_id, request),
-            )
-            .await;
-        });
-    }
-    while tasks.join_next().await.is_some() {}
-}
-
-/// Fan out a group query: the caller's own contributions run in-process (a
-/// failure is a real error), every remote (member, share) is dialed in parallel
-/// under a per-peer budget, and results are merged qualified per member and
-/// share. Members that did not answer are reported as skipped.
-async fn group_fan_out(
-    context: &Arc<DaemonContext>,
-    group_name: &str,
-    members: &[MemberInfo],
-    source: &str,
-    filter: Filter,
-) -> Result<GroupQueryResponse> {
-    const PER_PEER_TIMEOUT: Duration = Duration::from_millis(2500);
-    // Shares only bound the set (pattern/status/time/…). Ordering, the
-    // `latest` window, and `limit` are group-wide: pushed down, they would
-    // return a per-share top-k (five per share for `--latest 5`) instead of
-    // the group's global top results, so they are applied once on the merged
-    // corpus below.
-    let full = filter.for_remote_peer();
-    let mut bounds = full.clone();
-    bounds.rank = None;
-    bounds.latest = None;
-    bounds.limit = None;
-
-    let self_id = context.identity.id();
-    let mut records = Vec::new();
-    let mut anchors = Vec::new();
-    // Every result is scoped `team/<peer-id>/proj-b` so members stay apart and
-    // records round-trip through show/zoom/nav. The member segment is the
-    // stable peer id, not the display name: two devices can share a hostname
-    // (and a workspace name), and a name-based scope would collide and make
-    // the refs ambiguous.
-    let mut merge = |peer_id: &str, share_name: &str, mut query: QueryResponse| {
-        qualify_query_scope(&format!("{group_name}/{peer_id}/{share_name}"), &mut query);
-        records.extend(query.records);
-        anchors.extend(query.anchors);
-    };
-
-    // The local member's contributions are part of the group, so they are
-    // queried like any other share — just in-process instead of over the wire.
-    // Local failures propagate; they are not "offline" peers.
-    for member in members.iter().filter(|member| member.peer_id == self_id) {
-        for (share_id, share_name) in &member.shares {
-            let share = context.store.share(share_id)?;
-            let query = tokio::task::spawn_blocking({
-                let root = share.root.clone();
-                let source = source.to_string();
-                let filter = bounds.clone();
-                move || {
-                    let result = crate::commands::memory::workset::run_on_share(
-                        std::path::Path::new(&root),
-                        &source,
-                        filter,
-                        share.redact,
-                    );
-                    // An empty workspace has no sessions; report it as an
-                    // empty result (same convention as the remote path), so
-                    // one member's empty contribution cannot abort the group.
-                    let (records, anchors) = match result {
-                        Ok(result) => result,
-                        Err(error)
-                            if error
-                                .to_string()
-                                .starts_with("No record found for ref selector") =>
-                        {
-                            (Vec::new(), Vec::new())
-                        }
-                        Err(error) => return Err(error),
-                    };
-                    Ok::<_, anyhow::Error>(QueryResponse { records, anchors })
-                }
-            })
-            .await??;
-            merge(&member.peer_id, share_name, query);
-        }
-    }
-
-    let mut tasks = JoinSet::new();
-    for member in members.iter().filter(|member| member.peer_id != self_id) {
-        for (share_id, share_name) in &member.shares {
-            let context = context.clone();
-            let peer_id = member.peer_id.clone();
-            let share_id = share_id.clone();
-            let share_name = share_name.clone();
-            let source = source.to_string();
-            let filter = bounds.clone();
-            tasks.spawn(async move {
-                let result = tokio::time::timeout(
-                    PER_PEER_TIMEOUT,
-                    exchange_with_peer(
-                        &context,
-                        &peer_id,
-                        RemoteRequest::Query {
-                            share_id,
-                            source,
-                            filter,
-                        },
-                    ),
-                )
-                .await;
-                (peer_id, share_name, result)
-            });
-        }
-    }
-    // A member is online when any of its shares answered, decided only after
-    // every share task completes so a later failure cannot reclassify a peer
-    // whose records were already merged.
-    let mut online: HashSet<String> = HashSet::new();
-    while let Some(joined) = tasks.join_next().await {
-        let Ok((peer_id, share_name, result)) = joined else {
-            continue;
-        };
-        if let Ok(Ok(RemoteResponse::Query(query))) = result {
-            merge(&peer_id, &share_name, query);
-            online.insert(peer_id);
-        }
-    }
-    let skipped: Vec<String> = members
-        .iter()
-        .filter(|member| member.peer_id != self_id && !online.contains(&member.peer_id))
-        .map(|member| member.peer_name.clone())
-        .collect();
-
-    // Order the merged corpus once, as one group: `latest` window → sort →
-    // `limit`. Re-running the pipeline here is idempotent for the bounds each
-    // share already applied; the shared code also ranks the merged corpus as
-    // a whole when the sort is relevance.
-    let merged = crate::commands::memory::filter::apply(PathBuf::new(), records, anchors, full)?;
-    Ok(GroupQueryResponse {
-        query: QueryResponse {
-            records: merged.records,
-            anchors: merged.anchors,
-        },
-        skipped,
-    })
-}
-
-/// Resolve which (member, share) pairs a group query fans out to. The caller's
-/// own contribution is a target like any other member's — the local member is
-/// queried in-process by [`group_fan_out`]. `member` and `share` pin the
-/// three-segment scopes `team/alice` and `team/alice/proj-b`.
-fn group_targets(
-    store: &StateStore,
-    group: &GroupInfo,
-    member: Option<&str>,
-    share: Option<&str>,
-) -> Result<Vec<MemberInfo>> {
-    let all: Vec<MemberInfo> = store
-        .members(&group.id)?
-        .iter()
-        .map(|member| member_info_from_store(store, &group.id, member))
-        .collect::<Result<_>>()?;
-    let mut targets: Vec<MemberInfo> = match member {
-        Some(name) => {
-            let needle = name.to_ascii_lowercase();
-            let matches: Vec<MemberInfo> = all
-                .into_iter()
-                .filter(|member| {
-                    member.peer_name.to_ascii_lowercase() == needle || member.peer_id == needle
-                })
-                .collect();
-            if matches.is_empty() {
-                bail!("No group member named `{name}` in `{}`", group.name);
-            }
-            matches
-        }
-        None => all,
-    };
-    // `team/alice/proj-b` pins one contributed share per member.
-    if let Some(share_name) = share {
-        for target in &mut targets {
-            target
-                .shares
-                .retain(|(_, name)| name.eq_ignore_ascii_case(share_name));
-        }
-        targets.retain(|target| !target.shares.is_empty());
-        if targets.is_empty() {
-            bail!(
-                "No member contributes a share named `{share_name}` in `{}`",
-                group.name
-            );
-        }
-    }
-    Ok(targets)
-}
-
-fn member_info_from_store(
-    store: &StateStore,
-    group_id: &str,
-    member: &GroupMemberInfo,
-) -> Result<MemberInfo> {
-    let shares = store
-        .group_shares(group_id, &member.peer_id)?
-        .into_iter()
-        .map(|share| (share.share_id, share.share_name))
-        .collect();
-    let id: iroh::EndpointId = member.peer_id.parse().context("Invalid stored node id")?;
-    let endpoint = member
-        .endpoint
-        .as_deref()
-        .filter(|json| !json.is_empty())
-        .and_then(|json| serde_json::from_str::<EndpointAddr>(json).ok())
-        .unwrap_or_else(|| EndpointAddr::new(id));
-    Ok(MemberInfo {
-        peer_id: member.peer_id.clone(),
-        peer_name: member.peer_name.clone(),
-        shares,
-        role: member.role.clone(),
-        endpoint,
-    })
 }
 
 fn random_token() -> String {
@@ -1591,102 +658,5 @@ pub fn remove_stale_daemon_info() -> Result<()> {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::group_targets;
-    use super::require_group_owner;
-    use super::StateStore;
-
-    fn group_store() -> (tempfile::TempDir, StateStore) {
-        let temp = tempfile::tempdir().expect("temp dir");
-        let store = StateStore::open(temp.path().join("state.db")).expect("store");
-        store.add_group("team", "self-1", "self").expect("group");
-        store.save_remote_peer("peer-2", "bob", "{}").expect("peer");
-        store
-            .add_member("team", "peer-2", "member")
-            .expect("member");
-        (temp, store)
-    }
-
-    #[test]
-    fn only_the_owner_may_change_membership() {
-        let (_temp, store) = group_store();
-        require_group_owner(&store, "team", "self-1").expect("owner passes");
-        let error = require_group_owner(&store, "team", "peer-2").expect_err("member rejected");
-        assert!(error.to_string().contains("Only the group owner"));
-        let error = require_group_owner(&store, "team", "stranger").expect_err("outsider rejected");
-        assert!(error.to_string().contains("Only the group owner"));
-    }
-
-    #[test]
-    fn unknown_group_has_no_owner() {
-        let (_temp, store) = group_store();
-        let error = require_group_owner(&store, "missing", "self-1").expect_err("unknown group");
-        assert!(error.to_string().contains("Unknown group"));
-    }
-
-    #[test]
-    fn group_targets_include_the_local_member() {
-        let (_temp, store, self_id) = group_with_members();
-        let group = store.group("team").expect("group");
-        let targets = group_targets(&store, &group, None, None).expect("targets");
-        assert!(
-            targets.iter().any(|member| member.peer_id == self_id),
-            "the caller's own contribution is a fan-out target"
-        );
-        assert!(targets.iter().any(|member| member.peer_name == "bob"));
-    }
-
-    #[test]
-    fn group_targets_pin_one_member_by_name_or_id() {
-        let (_temp, store, self_id) = group_with_members();
-        let group = store.group("team").expect("group");
-        let targets = group_targets(&store, &group, Some("self"), None).expect("targets");
-        assert_eq!(targets.len(), 1);
-        assert_eq!(
-            targets[0].peer_id, self_id,
-            "self-query resolves to the local member"
-        );
-        let error =
-            group_targets(&store, &group, Some("nobody"), None).expect_err("unknown member");
-        assert!(error.to_string().contains("No group member named"));
-    }
-
-    #[test]
-    fn group_targets_pin_one_contributed_share() {
-        let (_temp, store, _self_id) = group_with_members();
-        let group = store.group("team").expect("group");
-        let targets = group_targets(&store, &group, None, Some("project")).expect("targets");
-        assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].peer_name, "self");
-        assert_eq!(targets[0].shares.len(), 1);
-
-        let error =
-            group_targets(&store, &group, None, Some("missing")).expect_err("unknown share");
-        assert!(error.to_string().contains("No member contributes a share"));
-    }
-
-    /// Group with the owner contributing `project` and a second member `bob`,
-    /// using real node ids so `member_info_from_store` can build fan-out targets.
-    fn group_with_members() -> (tempfile::TempDir, StateStore, String) {
-        let temp = tempfile::tempdir().expect("temp dir");
-        let workspace = temp.path().join("workspace");
-        std::fs::create_dir(&workspace).expect("workspace dir");
-        let store = StateStore::open(temp.path().join("state.db")).expect("store");
-        let share = store
-            .add_share("workspace-key", &workspace, "project", true)
-            .expect("share");
-        let self_id = iroh::SecretKey::generate().public().to_string();
-        let bob_id = iroh::SecretKey::generate().public().to_string();
-        store.add_group("team", &self_id, "self").expect("group");
-        store
-            .add_group_share("team", &self_id, &share.id, &share.name)
-            .expect("contribution");
-        store.save_remote_peer(&bob_id, "bob", "{}").expect("peer");
-        store.add_member("team", &bob_id, "member").expect("member");
-        (temp, store, self_id)
     }
 }
