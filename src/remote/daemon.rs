@@ -437,7 +437,11 @@ async fn process_local(
         LocalRequest::GroupRename { group, name } => {
             let info = context.store.group(&group)?;
             group::require_group_owner(&context.store, &info.id, &context.identity.id())?;
-            LocalResponse::Group(context.store.rename_group(&info.id, &name)?)
+            let renamed = context.store.rename_group(&info.id, &name)?;
+            // The rename reaches members on their next roster pull; bump the
+            // epoch so that pull carries a fresh watermark.
+            context.store.bump_roster_epoch(&info.id)?;
+            LocalResponse::Group(renamed)
         }
         LocalRequest::GroupSync { group } => {
             group::sync_group(context, &group).await?;
@@ -594,9 +598,13 @@ async fn process_remote(
             .await?;
             Ok(response)
         }
-        RemoteRequest::GroupMemberAdded { group_id, member } => {
+        RemoteRequest::GroupMemberAdded {
+            group_id,
+            member,
+            roster_epoch,
+        } => {
             group::require_group_owner(&context.store, &group_id, peer_id)?;
-            group::merge_member(context, &group_id, &member)?;
+            group::merge_member(context, &group_id, &member, roster_epoch)?;
             Ok(RemoteResponse::GroupAck)
         }
         RemoteRequest::GroupShareAdded {
@@ -622,9 +630,10 @@ async fn process_remote(
             group_id,
             peer_id: removed_peer,
             peer_name: _,
+            roster_epoch,
         } => {
             group::require_group_owner(&context.store, &group_id, peer_id)?;
-            group::handle_member_removed(context, &group_id, &removed_peer).await
+            group::handle_member_removed(context, &group_id, &removed_peer, roster_epoch).await
         }
         RemoteRequest::GroupLeave { group_id } => {
             group::handle_leave(context, &group_id, peer_id).await?;
@@ -637,19 +646,23 @@ async fn process_remote(
                     group_name: group_id.clone(),
                     member: false,
                     members: Vec::new(),
+                    roster_epoch: 0,
                 });
             };
+            let roster_epoch = context.store.roster_epoch(&group_id)?;
             if members.is_empty() {
                 return Ok(RemoteResponse::GroupSynced {
                     group_name,
                     member: false,
                     members: Vec::new(),
+                    roster_epoch,
                 });
             }
             Ok(RemoteResponse::GroupSynced {
                 group_name,
                 member: true,
                 members,
+                roster_epoch,
             })
         }
     }

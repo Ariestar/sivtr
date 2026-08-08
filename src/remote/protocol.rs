@@ -85,11 +85,15 @@ pub enum RemoteRequest {
     GroupMemberAdded {
         group_id: String,
         member: MemberInfo,
+        /// Owner's roster version after this join.
+        roster_epoch: i64,
     },
     GroupMemberRemoved {
         group_id: String,
         peer_id: String,
         peer_name: String,
+        /// Owner's roster version after this removal.
+        roster_epoch: i64,
     },
     /// An existing member added another contributed workspace.
     GroupShareAdded {
@@ -137,11 +141,14 @@ pub enum RemoteResponse {
         group_id: String,
         group_name: String,
         members: Vec<MemberInfo>,
+        /// Owner's roster version after this join.
+        roster_epoch: i64,
     },
     GroupSynced {
         group_name: String,
         member: bool,
         members: Vec<MemberInfo>,
+        roster_epoch: i64,
     },
     GroupAck,
     Query(QueryResponse),

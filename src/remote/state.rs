@@ -298,6 +298,7 @@ impl StateStore {
             "ALTER TABLE invites ADD COLUMN group_id TEXT",
             "ALTER TABLE invites ADD COLUMN max_uses INTEGER",
             "ALTER TABLE invites ADD COLUMN used_count INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE groups ADD COLUMN roster_epoch INTEGER NOT NULL DEFAULT 0",
         ] {
             // Only the expected "column already exists" failure is benign for
             // an idempotent ALTER; anything else is a real migration error.
@@ -1226,6 +1227,45 @@ impl StateStore {
         self.connect()?.execute(
             "UPDATE groups SET last_synced_at = ?1 WHERE id = ?2",
             params![now(), group.id],
+        )?;
+        Ok(())
+    }
+
+    /// The highest roster version this device has adopted. The owner bumps it
+    /// on every membership change it processes; members adopt it from owner
+    /// broadcasts and pulls. Never regresses, so it doubles as the stale-
+    /// message watermark on the receiving side.
+    pub fn roster_epoch(&self, group_name_or_id: &str) -> Result<i64> {
+        let group = self.group(group_name_or_id)?;
+        self.connect()?
+            .query_row(
+                "SELECT roster_epoch FROM groups WHERE id = ?1",
+                [&group.id],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
+    }
+
+    /// Owner-side: record one roster change and return the new epoch, which
+    /// the caller carries on the accompanying broadcast or sync response.
+    pub fn bump_roster_epoch(&self, group_name_or_id: &str) -> Result<i64> {
+        let group = self.group(group_name_or_id)?;
+        self.connect()?
+            .query_row(
+                "UPDATE groups SET roster_epoch = roster_epoch + 1 WHERE id = ?1 RETURNING roster_epoch",
+                [&group.id],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
+    }
+
+    /// Adopt a roster version observed from the owner (broadcast or pull).
+    /// Monotonic: a stale observation never regresses the local watermark.
+    pub fn adopt_roster_epoch(&self, group_name_or_id: &str, epoch: i64) -> Result<()> {
+        let group = self.group(group_name_or_id)?;
+        self.connect()?.execute(
+            "UPDATE groups SET roster_epoch = MAX(roster_epoch, ?1) WHERE id = ?2",
+            params![epoch, group.id],
         )?;
         Ok(())
     }
