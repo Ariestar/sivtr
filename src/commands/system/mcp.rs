@@ -134,6 +134,36 @@ const MCP_HOSTS: &[McpHostSpec] = &[
         config_path: |_loc| qoder_config_path(),
         host_present: qoder_host_present,
     },
+    McpHostSpec {
+        provider: AgentProvider::Gemini,
+        location: McpLocationSupport::GlobalOnly,
+        kind: McpConfigKind::Json {
+            key: "mcpServers",
+            entry: pi_entry,
+        },
+        config_path: |_loc| gemini_config_path(),
+        host_present: gemini_host_present,
+    },
+    McpHostSpec {
+        provider: AgentProvider::Qwen,
+        location: McpLocationSupport::GlobalOnly,
+        kind: McpConfigKind::Json {
+            key: "mcpServers",
+            entry: pi_entry,
+        },
+        config_path: |_loc| qwen_config_path(),
+        host_present: qwen_host_present,
+    },
+    McpHostSpec {
+        provider: AgentProvider::Goose,
+        location: McpLocationSupport::GlobalOrLocal,
+        kind: McpConfigKind::Json {
+            key: "mcpServers",
+            entry: pi_entry,
+        },
+        config_path: goose_config_path,
+        host_present: goose_host_present,
+    },
 ];
 
 fn mcp_host(provider: AgentProvider) -> &'static McpHostSpec {
@@ -840,6 +870,43 @@ fn qoder_config_path() -> PathBuf {
 
 fn qoder_host_present() -> bool {
     qoder_config_path().exists() || sivtr_core::agents::qoder::qoder_home().exists()
+}
+
+/// Gemini CLI reads MCP servers from `settings.json` (`mcpServers` key).
+fn gemini_config_path() -> PathBuf {
+    sivtr_core::agents::gemini::gemini_home().join("settings.json")
+}
+
+fn gemini_host_present() -> bool {
+    gemini_config_path().exists() || sivtr_core::agents::gemini::gemini_home().exists()
+}
+
+/// Qwen Code reads MCP servers from `settings.json` (`mcpServers` key).
+fn qwen_config_path() -> PathBuf {
+    sivtr_core::agents::qwen::qwen_home().join("settings.json")
+}
+
+fn qwen_host_present() -> bool {
+    qwen_config_path().exists() || sivtr_core::agents::qwen::qwen_home().exists()
+}
+
+/// Goose loads MCP servers from `.mcp.json` plugin manifests, discovered
+/// under `<root>/.agents/plugins/<name>/` (project or user scope).
+fn goose_config_path(location: McpLocation) -> PathBuf {
+    let root = match location {
+        McpLocation::Global => dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")),
+        McpLocation::Local => env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    };
+    root.join(".agents")
+        .join("plugins")
+        .join("sivtr")
+        .join(".mcp.json")
+}
+
+fn goose_host_present() -> bool {
+    let config_dir = dirs::config_dir().is_some_and(|dir| dir.join("goose").exists());
+    let agents_dir = dirs::home_dir().is_some_and(|home| home.join(".agents").exists());
+    config_dir || agents_dir || sivtr_core::agents::goose::goose_db_path().exists()
 }
 
 fn hermes_host_present() -> bool {

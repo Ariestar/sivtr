@@ -42,12 +42,43 @@ pub fn list_recent_jsonl_sessions(
     cwd: Option<&Path>,
     parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
 ) -> Result<Vec<AgentSessionInfo>> {
+    collect_recent_sessions(provider, root, cwd, jsonl_files(root)?, parse_meta)
+}
+
+/// Walk a chat-recording tmp root: `<tmp>/<project>*/chats/*.json[l]`.
+///
+/// Shared by Gemini CLI and Qwen Code, which both store one session per
+/// file directly under a per-project `chats/` directory inside `tmp/`.
+/// Subagent files nested one level deeper under `chats/<parent>/` are
+/// skipped, matching what each tool's own session picker shows.
+pub fn list_chat_recording_sessions(
+    provider: &str,
+    tmp_root: &Path,
+    cwd: Option<&Path>,
+    parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
+) -> Result<Vec<AgentSessionInfo>> {
+    collect_recent_sessions(
+        provider,
+        tmp_root,
+        cwd,
+        chat_recording_files(tmp_root)?,
+        parse_meta,
+    )
+}
+
+fn collect_recent_sessions(
+    provider: &str,
+    root: &Path,
+    cwd: Option<&Path>,
+    files: Vec<PathBuf>,
+    parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
+) -> Result<Vec<AgentSessionInfo>> {
     let wanted = cwd.map(WorkspaceMatchTarget::new);
     let mut cache = load_listing_cache(provider, root);
     let mut dirty = false;
     let mut sessions = Vec::new();
 
-    for path in jsonl_files(root)? {
+    for path in files {
         let Some(stamp) = crate::cache::file_stamp(&path) else {
             // Unstampable file (e.g. racing delete): parse without caching.
             match parse_meta(&path) {
@@ -116,6 +147,36 @@ pub fn list_recent_jsonl_sessions(
     sessions.sort_by_key(|session| session.modified);
     sessions.reverse();
     Ok(sessions)
+}
+
+fn chat_recording_files(tmp_root: &Path) -> Result<Vec<PathBuf>> {
+    if !tmp_root.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut files = Vec::new();
+    for project in
+        fs::read_dir(tmp_root).with_context(|| format!("Failed to read {}", tmp_root.display()))?
+    {
+        let chats = project?.path().join("chats");
+        if !chats.is_dir() {
+            continue;
+        }
+        for entry in
+            fs::read_dir(&chats).with_context(|| format!("Failed to read {}", chats.display()))?
+        {
+            let path = entry?.path();
+            let is_chat_file = path.is_file()
+                && path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| ext == "json" || ext == "jsonl");
+            if is_chat_file {
+                files.push(path);
+            }
+        }
+    }
+    Ok(files)
 }
 
 fn push_session(
