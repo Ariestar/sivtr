@@ -31,12 +31,7 @@ use crate::commands::memory::filter::Filter;
 /// sender prevents a member from forging additions (which would grant an
 /// attacker read access to other members' contributions) or removals.
 pub(crate) fn require_group_owner(store: &StateStore, group_id: &str, sender: &str) -> Result<()> {
-    let owner = store
-        .members(group_id)?
-        .into_iter()
-        .find(|member| member.role == "owner")
-        .context("Group has no owner")?;
-    if owner.peer_id != sender {
+    if !store.is_owner(group_id, sender)? {
         bail!("Only the group owner may perform this operation");
     }
     Ok(())
@@ -77,7 +72,7 @@ fn member_info_from_store(
         peer_id: member.peer_id.clone(),
         peer_name: member.peer_name.clone(),
         shares,
-        role: member.role.clone(),
+        role: member.role.as_wire().to_string(),
         endpoint,
     })
 }
@@ -213,11 +208,7 @@ pub(crate) fn merge_member(
 /// drop the group.
 pub(crate) async fn sync_group(context: &Arc<DaemonContext>, group_name_or_id: &str) -> Result<()> {
     let group = context.store.group(group_name_or_id)?;
-    let local_members = context.store.members(&group.id)?;
-    let owner = local_members
-        .iter()
-        .find(|member| member.role == "owner")
-        .context("Group has no owner")?;
+    let owner = context.store.owner(&group.id)?;
     if owner.peer_id == context.identity.id() {
         // The owner is the roster source of truth; nothing to pull.
         context.store.touch_group_sync(&group.id)?;
@@ -315,7 +306,7 @@ pub(crate) async fn leave_group(
         .iter()
         .find(|member| member.peer_id == self_id)
         .context("You are not a member of this group")?;
-    let is_owner = self_member.role == "owner";
+    let is_owner = self_member.role.is_owner();
     // Leaving revokes the grants we handed out on our shares and drops the
     // local group row (membership and contributions cascade), so `group list`
     // stops showing it immediately - even while the owner is offline.
@@ -343,7 +334,7 @@ pub(crate) async fn leave_group(
             )
             .await;
         }
-    } else if let Some(owner) = members.iter().find(|member| member.role == "owner") {
+    } else if let Some(owner) = members.iter().find(|member| member.role.is_owner()) {
         let _ = tokio::time::timeout(
             Duration::from_secs(3),
             net::exchange_with_peer(
@@ -372,7 +363,7 @@ pub(crate) async fn remove_group_member(
         .iter()
         .find(|member| member.peer_id == self_id)
         .context("You are not a member of this group")?;
-    if self_member.role != "owner" {
+    if !self_member.role.is_owner() {
         bail!("Only the group owner can remove members");
     }
     let target = members
@@ -679,7 +670,7 @@ pub(crate) async fn handle_leave(
         .context("Unknown group member")?;
     context.store.remove_member(group_id, sender)?;
     // Revoke every owner contribution from the leaver.
-    if let Some(owner) = members_before.iter().find(|row| row.role == "owner") {
+    if let Some(owner) = members_before.iter().find(|row| row.role.is_owner()) {
         revoke_member_access(&context.store, group_id, &owner.peer_id, sender)?;
     }
     broadcast(
@@ -1047,7 +1038,12 @@ mod tests {
             .expect("s3 broadcast");
         // The owner's join-time snapshot is stale: it predates the S3
         // broadcast and does not list it.
-        let stale_push = member_info(&bob_id, "bob", "member", vec![(s2.id.clone(), s2.name.clone())]);
+        let stale_push = member_info(
+            &bob_id,
+            "bob",
+            "member",
+            vec![(s2.id.clone(), s2.name.clone())],
+        );
         merge_member(&context, "team", &stale_push).expect("merge");
         let shares = store.group_shares("team", &bob_id).expect("shares");
         assert!(
@@ -1091,7 +1087,12 @@ mod tests {
                 "owner",
                 vec![(owner_share.id.clone(), owner_share.name.clone())],
             ),
-            member_info(&bob_id, "bob", "member", vec![(s2.id.clone(), s2.name.clone())]),
+            member_info(
+                &bob_id,
+                "bob",
+                "member",
+                vec![(s2.id.clone(), s2.name.clone())],
+            ),
         ];
         reconcile_roster(&context, "team", &roster).expect("reconcile");
         let shares = store.group_shares("team", &bob_id).expect("shares");
@@ -1114,8 +1115,12 @@ mod tests {
             .peer_id;
         // Carol joined after the last pull; the owner then kicked her.
         let carol_id = iroh::SecretKey::generate().public().to_string();
-        store.save_remote_peer(&carol_id, "carol", "{}").expect("peer");
-        store.add_member("team", &carol_id, "member").expect("member");
+        store
+            .save_remote_peer(&carol_id, "carol", "{}")
+            .expect("peer");
+        store
+            .add_member("team", &carol_id, "member")
+            .expect("member");
         let carol_share = store
             .add_share("workspace-carol", &workspace, "carol-ws", true)
             .expect("share");
@@ -1143,7 +1148,10 @@ mod tests {
             "member absent from the owner roster is dropped"
         );
         assert!(
-            store.group_shares("team", &carol_id).expect("shares").is_empty(),
+            store
+                .group_shares("team", &carol_id)
+                .expect("shares")
+                .is_empty(),
             "dropped member's contribution rows are cleaned"
         );
         assert!(

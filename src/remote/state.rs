@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
@@ -62,11 +63,57 @@ pub struct GroupInfo {
     pub created_at: String,
 }
 
+/// A member's role inside a group. Stored as TEXT in SQLite and carried as a
+/// lowercase string on the wire; typed here so role comparisons cannot
+/// silently drift (`"owner"` vs `"Owner"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GroupRole {
+    Owner,
+    Member,
+}
+
+impl GroupRole {
+    pub fn is_owner(self) -> bool {
+        matches!(self, Self::Owner)
+    }
+
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            Self::Owner => "owner",
+            Self::Member => "member",
+        }
+    }
+}
+
+impl std::str::FromStr for GroupRole {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value {
+            "owner" => Ok(Self::Owner),
+            "member" => Ok(Self::Member),
+            _ => bail!("Unknown group role `{value}`"),
+        }
+    }
+}
+
+impl rusqlite::types::FromSql for GroupRole {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let text = value.as_str()?;
+        match text {
+            "owner" => Ok(Self::Owner),
+            "member" => Ok(Self::Member),
+            _ => Err(rusqlite::types::FromSqlError::InvalidType),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupMemberInfo {
     pub peer_id: String,
     pub peer_name: String,
-    pub role: String,
+    pub role: GroupRole,
     pub joined_at: String,
     pub last_seen_at: Option<String>,
     /// Number of workspaces this member contributes to the group.
@@ -798,16 +845,18 @@ impl StateStore {
     }
 
     /// Insert or refresh one member row. Endpoint/name live in `peers`.
+    /// `role` is parsed at this single boundary; comparisons use [`GroupRole`].
     pub fn add_member(
         &self,
         group_name_or_id: &str,
         peer_id: &str,
         role: &str,
     ) -> Result<GroupMemberInfo> {
+        let role = GroupRole::from_str(role)?;
         let group = self.group(group_name_or_id)?;
         self.connect()?.execute(
             "INSERT INTO group_members(group_id, peer_id, role, joined_at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(group_id, peer_id) DO UPDATE SET role = excluded.role",
-            params![group.id, peer_id, role, now()],
+            params![group.id, peer_id, role.as_wire(), now()],
         )?;
         self.member(&group.id, peer_id)
     }
@@ -853,6 +902,28 @@ impl StateStore {
         let rows = statement.query_map([group.id], group_member_from_row)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
+    }
+
+    /// The owner's membership row; the single authority for "who owns this
+    /// group". A group without an owner row is treated as an error.
+    pub fn owner(&self, group_name_or_id: &str) -> Result<GroupMemberInfo> {
+        self.members(group_name_or_id)?
+            .into_iter()
+            .find(|member| member.role.is_owner())
+            .context("Group has no owner")
+    }
+
+    /// True when `peer_id` is the group's owner.
+    pub fn is_owner(&self, group_name_or_id: &str, peer_id: &str) -> Result<bool> {
+        Ok(self.owner(group_name_or_id)?.peer_id == peer_id)
+    }
+
+    /// True when `peer_id` is a member of the group (any role).
+    pub fn is_member(&self, group_name_or_id: &str, peer_id: &str) -> Result<bool> {
+        Ok(self
+            .members(group_name_or_id)?
+            .iter()
+            .any(|member| member.peer_id == peer_id))
     }
 
     /// Register one contributed workspace for a member (idempotent).
@@ -1426,6 +1497,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn is_owner_and_is_member_gate_membership() {
+        let (_temp, store, _share) = group_store();
+        store.save_remote_peer("peer-2", "bob", "{}").unwrap();
+        store.add_member("team", "peer-2", "member").unwrap();
+        assert!(store.is_owner("team", "self-1").unwrap());
+        assert!(!store.is_owner("team", "peer-2").unwrap());
+        assert!(!store.is_owner("team", "stranger").unwrap());
+        assert!(store.is_member("team", "self-1").unwrap());
+        assert!(store.is_member("team", "peer-2").unwrap());
+        assert!(!store.is_member("team", "stranger").unwrap());
+        // A group without an owner row has no owner authority.
+        assert!(store.owner("missing").is_err());
+    }
+
     /// Create a real share under `temp` (group_shares.share_id references shares.id).
     fn real_share(store: &StateStore, temp: &Path, key: &str, name: &str) -> ShareInfo {
         let root = temp.join(format!("ws-{key}"));
@@ -1536,7 +1622,7 @@ mod tests {
             .find(|member| member.peer_id == "peer-1")
             .expect("alice in roster");
         assert_eq!(alice.endpoint.as_deref(), Some(r#"{"id":"alice"}"#));
-        assert_eq!(alice.role, "member");
+        assert_eq!(alice.role, GroupRole::Member);
         assert_eq!(alice.share_count, 1);
     }
 
@@ -1727,7 +1813,7 @@ mod tests {
             .iter()
             .find(|member| member.peer_id == "peer-1")
             .unwrap();
-        assert_eq!(alice.role, "member");
+        assert_eq!(alice.role, GroupRole::Member);
         assert_eq!(alice.endpoint.as_deref(), Some(r#"{"id":"alice"}"#));
         assert_eq!(alice.share_count, 1);
         assert!(

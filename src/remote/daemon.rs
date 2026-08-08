@@ -587,9 +587,12 @@ async fn process_remote(
             share_id,
             share_name,
         } => {
-            // Only the contributor may register its own contribution; a forged
-            // peer_id would otherwise let a member attach arbitrary shares to
-            // other members' rosters.
+            // Only a member may register contributions, and only its own: a
+            // forged peer_id would otherwise let an outsider attach arbitrary
+            // shares to other members' rosters.
+            if !context.store.is_member(&group_id, peer_id)? {
+                bail!("Only group members may register shares");
+            }
             if contributor != peer_id {
                 bail!("Only the contributor may register its own share");
             }
@@ -605,6 +608,9 @@ async fn process_remote(
             peer_id: contributor,
             share_id,
         } => {
+            if !context.store.is_member(&group_id, peer_id)? {
+                bail!("Only group members may withdraw shares");
+            }
             if contributor != peer_id {
                 bail!("Only the contributor may withdraw its own share");
             }
