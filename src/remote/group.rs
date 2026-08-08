@@ -26,6 +26,15 @@ use super::protocol::{
 use super::state::{GroupInfo, GroupMemberInfo, StateStore};
 use crate::commands::memory::filter::Filter;
 
+/// Time budgets for group convergence. The client-side IPC read timeout
+/// (`workset::GROUP_QUERY_TIMEOUT`) must stay at least [`SYNC_PULL_TIMEOUT`]
+/// plus the per-share fan-out budget, so a query is never cut off mid-flight.
+const SYNC_PULL_TIMEOUT: Duration = Duration::from_secs(5);
+const BROADCAST_TIMEOUT: Duration = Duration::from_secs(3);
+const PER_SHARE_QUERY_TIMEOUT: Duration = Duration::from_millis(2500);
+/// The cached roster is re-pulled from the owner after this many seconds.
+const SYNC_TTL_SECS: i64 = 300;
+
 /// Require `sender` to be the group's owner before owner-only requests
 /// (roster changes, renames). Binding them to the transport-authenticated
 /// sender prevents a member from forging additions (which would grant an
@@ -217,7 +226,7 @@ pub(crate) async fn sync_group(context: &Arc<DaemonContext>, group_name_or_id: &
     // Pulling the roster must never hang a local operation on an unreachable
     // owner; callers fall back to the cached roster after this bound.
     let response = tokio::time::timeout(
-        Duration::from_secs(5),
+        SYNC_PULL_TIMEOUT,
         net::exchange_with_peer(
             &context.store,
             &context.endpoint,
@@ -263,7 +272,7 @@ pub(crate) async fn sync_group(context: &Arc<DaemonContext>, group_name_or_id: &
 /// IPC handlers return the cached roster immediately; staleness is bounded by
 /// the sync TTL, and a manual `sivtr group sync` forces a pull.
 pub(crate) fn maybe_sync_group(context: &Arc<DaemonContext>, group_name_or_id: &str) {
-    let stale = match context.store.sync_stale(group_name_or_id, 300) {
+    let stale = match context.store.sync_stale(group_name_or_id, SYNC_TTL_SECS) {
         Ok(stale) => stale,
         Err(_) => return,
     };
@@ -320,7 +329,7 @@ pub(crate) async fn leave_group(
                 continue;
             }
             let _ = tokio::time::timeout(
-                Duration::from_secs(3),
+                BROADCAST_TIMEOUT,
                 net::exchange_with_peer(
                     &context.store,
                     &context.endpoint,
@@ -336,7 +345,7 @@ pub(crate) async fn leave_group(
         }
     } else if let Some(owner) = members.iter().find(|member| member.role.is_owner()) {
         let _ = tokio::time::timeout(
-            Duration::from_secs(3),
+            BROADCAST_TIMEOUT,
             net::exchange_with_peer(
                 &context.store,
                 &context.endpoint,
@@ -418,7 +427,7 @@ async fn broadcast(
         let request = request.clone();
         tasks.spawn(async move {
             let _ = tokio::time::timeout(
-                Duration::from_secs(3),
+                BROADCAST_TIMEOUT,
                 net::exchange_with_peer(&context.store, &context.endpoint, &peer_id, request),
             )
             .await;
@@ -698,7 +707,6 @@ pub(crate) async fn group_fan_out(
     source: &str,
     filter: Filter,
 ) -> Result<GroupQueryResponse> {
-    const PER_PEER_TIMEOUT: Duration = Duration::from_millis(2500);
     // Shares only bound the set (pattern/status/time/...). Ordering, the
     // `latest` window, and `limit` are group-wide: pushed down, they would
     // return a per-share top-k (five per share for `--latest 5`) instead of
@@ -760,7 +768,7 @@ pub(crate) async fn group_fan_out(
             let filter = bounds.clone();
             tasks.spawn(async move {
                 let result = tokio::time::timeout(
-                    PER_PEER_TIMEOUT,
+                    PER_SHARE_QUERY_TIMEOUT,
                     net::exchange_with_peer(
                         &context.store,
                         &context.endpoint,
