@@ -1223,24 +1223,15 @@ async fn leave_group(context: &Arc<DaemonContext>, group_name_or_id: &str) -> Re
         .iter()
         .find(|member| member.peer_id == self_id)
         .context("You are not a member of this group")?;
-    let self_shares = context.store.group_shares(&group.id, &self_id)?;
-    if self_member.role == "owner" {
-        // Owner leaving disbands the group: revoke all grants and kick everyone.
-        for member in &members {
-            if member.peer_id != self_id {
-                for share in &self_shares {
-                    context.store.revoke_group_grant(
-                        &group.id,
-                        &share.share_id,
-                        &member.peer_id,
-                    )?;
-                }
-            }
-        }
-        context.store.remove_group(&group.id)?;
-        // Kick every remaining member: each request names its own target
-        // (`peer_id` differs per recipient), so broadcast's shared template
-        // does not fit — send them individually.
+    let is_owner = self_member.role == "owner";
+    // Leaving revokes the grants we handed out on our shares and drops the
+    // local group row (membership and contributions cascade), so `group list`
+    // stops showing it immediately - even while the owner is offline.
+    drop_group(context, &group.id).await?;
+    if is_owner {
+        // Owner leaving disbands the group: kick every remaining member. Each
+        // request names its own target (`peer_id` differs per recipient), so
+        // broadcast's shared template does not fit - send them individually.
         for member in &members {
             if member.peer_id == self_id {
                 continue;
@@ -1259,20 +1250,7 @@ async fn leave_group(context: &Arc<DaemonContext>, group_name_or_id: &str) -> Re
             )
             .await;
         }
-        return Ok(());
-    }
-    // Regular member: revoke the grants we gave the group on our shares.
-    for member in &members {
-        if member.peer_id != self_id {
-            for share in &self_shares {
-                context
-                    .store
-                    .revoke_group_grant(&group.id, &share.share_id, &member.peer_id)?;
-            }
-        }
-    }
-    context.store.remove_member(&group.id, &self_id)?;
-    if let Some(owner) = members.iter().find(|member| member.role == "owner") {
+    } else if let Some(owner) = members.iter().find(|member| member.role == "owner") {
         let _ = tokio::time::timeout(
             Duration::from_secs(3),
             exchange_with_peer(
@@ -1285,11 +1263,6 @@ async fn leave_group(context: &Arc<DaemonContext>, group_name_or_id: &str) -> Re
         )
         .await;
     }
-    // Leaving drops the local group row (members and contributions cascade),
-    // so `group list` stops showing it immediately instead of waiting for the
-    // owner's next roster sync - which may never come while the owner is
-    // offline.
-    context.store.remove_group(&group.id)?;
     Ok(())
 }
 
