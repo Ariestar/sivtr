@@ -358,6 +358,9 @@ async fn process_local(
             valid_for_seconds,
             max_uses,
         } => {
+            // Only the owner may mint join links: a member-created invite
+            // would let anyone join without the owner's consent.
+            group::require_group_owner(&context.store, &group, &context.identity.id())?;
             let invite = context
                 .store
                 .create_group_invite(&group, valid_for_seconds, max_uses)?;
