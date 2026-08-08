@@ -21,6 +21,8 @@ pub const REMOTE_QUERY_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Minimum deadline for one group fan-out inside [`query`]; a group query
 /// fans out to every member, so it needs headroom beyond a single remote hop.
+/// Must stay >= the daemon's group sync pull budget plus the per-share
+/// fan-out budget (`remote::group` constants).
 const GROUP_QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How one source is scheduled inside [`query_many`].
