@@ -1222,20 +1222,12 @@ impl StateStore {
     pub fn group_grant(&self, group_name_or_id: &str, share_id: &str, peer_id: &str) -> Result<()> {
         let group = self.group(group_name_or_id)?;
         let connection = self.connect()?;
-        connection.execute(
-            "INSERT INTO grant_sources(share_id, peer_id, via, group_id, created_at) VALUES (?1, ?2, 'group', ?3, ?4) ON CONFLICT DO NOTHING",
-            params![share_id, peer_id, group.id, now()],
-        )?;
-        connection.execute(
-            "INSERT INTO grants(peer_id, share_id, permission, created_at, revoked_at) VALUES (?1, ?2, ?3, ?4, NULL) ON CONFLICT(peer_id, share_id) DO UPDATE SET permission = excluded.permission, revoked_at = NULL",
-            params![peer_id, share_id, PERMISSION_READ_MEMORY, now()],
-        )?;
-        Ok(())
+        self.group_grant_sql(&connection, &group.id, share_id, peer_id, &now())
     }
 
     /// Revoke a member's grant on a group share. The group's source row is
     /// removed first; the grant itself survives while another source still
-    /// justifies it (see [`Self::has_other_grant_source`]).
+    /// justifies it (see [`Self::revoke_group_grant_sql`]).
     pub fn revoke_group_grant(
         &self,
         group_name_or_id: &str,
@@ -1243,39 +1235,8 @@ impl StateStore {
         peer_id: &str,
     ) -> Result<()> {
         let group = self.group(group_name_or_id)?;
-        self.connect()?.execute(
-            "DELETE FROM grant_sources WHERE share_id = ?1 AND peer_id = ?2 AND via = 'group' AND group_id = ?3",
-            params![share_id, peer_id, group.id],
-        )?;
-        if self.has_other_grant_source(&group.id, share_id, peer_id)? {
-            return Ok(());
-        }
-        self.revoke(share_id, peer_id)?;
-        Ok(())
-    }
-
-    /// True when `peer` still holds access to `share` from a source other than
-    /// the group being revoked from. `grants` stores one row per (peer, share)
-    /// even when several sources issued it, so each group grant and direct
-    /// redeem records a row in `grant_sources`; revocation must not tear down
-    /// independently authorized access.
-    fn has_other_grant_source(
-        &self,
-        group_id: &str,
-        share_id: &str,
-        peer_id: &str,
-    ) -> Result<bool> {
-        self.connect()?
-            .query_row(
-                "SELECT EXISTS(
-                    SELECT 1 FROM grant_sources
-                    WHERE share_id = ?1 AND peer_id = ?2
-                      AND NOT (via = 'group' AND group_id = ?3)
-                )",
-                params![share_id, peer_id, group_id],
-                |row| row.get(0),
-            )
-            .map_err(Into::into)
+        let connection = self.connect()?;
+        self.revoke_group_grant_sql(&connection, &group.id, share_id, peer_id)
     }
 
     /// Revoke every other member's grant on `share` (the contributor withdrew
