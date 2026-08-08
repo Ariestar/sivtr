@@ -736,10 +736,21 @@ impl StateStore {
 
     pub fn remove_member(&self, group_name_or_id: &str, peer_id: &str) -> Result<()> {
         let group = self.group(group_name_or_id)?;
-        self.connect()?.execute(
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // The member's contribution rows describe access on its own device and
+        // are not covered by the `group_members` cascade; leaving them behind
+        // would resurrect stale shares if the peer ever rejoins with a
+        // different set, so removal is one operation over both tables.
+        transaction.execute(
+            "DELETE FROM group_shares WHERE group_id = ?1 AND peer_id = ?2",
+            params![group.id, peer_id],
+        )?;
+        transaction.execute(
             "DELETE FROM group_members WHERE group_id = ?1 AND peer_id = ?2",
             params![group.id, peer_id],
         )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -852,8 +863,55 @@ impl StateStore {
         Ok(())
     }
 
+    /// Revoke a member's grant on a group share, keeping it while another
+    /// source still justifies the access (see [`Self::has_other_grant_source`]).
+    pub fn revoke_group_grant(
+        &self,
+        group_name_or_id: &str,
+        share_id: &str,
+        peer_id: &str,
+    ) -> Result<()> {
+        let group = self.group(group_name_or_id)?;
+        if self.has_other_grant_source(&group.id, share_id, peer_id)? {
+            return Ok(());
+        }
+        self.revoke(share_id, peer_id)?;
+        Ok(())
+    }
+
+    /// True when `peer` still holds access to `share` from a source other than
+    /// the group being revoked from: membership in another group that lists
+    /// the share, or a direct share mount. `grants` stores one row per
+    /// (peer, share) even when several sources issued it, so group revocation
+    /// must not tear down independently authorized access.
+    fn has_other_grant_source(
+        &self,
+        group_id: &str,
+        share_id: &str,
+        peer_id: &str,
+    ) -> Result<bool> {
+        let connection = self.connect()?;
+        let other_group: bool = connection.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM group_members gm
+                JOIN group_shares gs ON gs.group_id = gm.group_id AND gs.share_id = ?1
+                WHERE gm.peer_id = ?2 AND gm.group_id != ?3
+            )",
+            params![share_id, peer_id, group_id],
+            |row| row.get(0),
+        )?;
+        let direct_mount: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM mounts WHERE peer_id = ?1 AND share_id = ?2)",
+            params![peer_id, share_id],
+            |row| row.get(0),
+        )?;
+        Ok(other_group || direct_mount)
+    }
+
     /// Revoke every other member's grant on `share` (the contributor withdrew
-    /// that workspace from the group).
+    /// that workspace from the group). A grant survives when the peer still
+    /// holds access from another source, because `grants` keeps one row per
+    /// (peer, share) regardless of how many sources issued it.
     pub fn revoke_group_share(
         &self,
         group_name_or_id: &str,
@@ -861,10 +919,14 @@ impl StateStore {
         except_peer_id: &str,
     ) -> Result<()> {
         let group = self.group(group_name_or_id)?;
-        self.connect()?.execute(
-            "UPDATE grants SET revoked_at = ?1 WHERE share_id = ?2 AND revoked_at IS NULL AND peer_id IN (SELECT peer_id FROM group_members WHERE group_id = ?3 AND peer_id != ?4)",
-            params![now(), share_id, group.id, except_peer_id],
-        )?;
+        let peers: Vec<String> = self
+            .connect()?
+            .prepare("SELECT peer_id FROM group_members WHERE group_id = ?1 AND peer_id != ?2")?
+            .query_map(params![group.id, except_peer_id], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for peer_id in peers {
+            self.revoke_group_grant(&group.id, share_id, &peer_id)?;
+        }
         Ok(())
     }
 
@@ -1647,6 +1709,93 @@ mod tests {
         // Re-adding the share re-grants.
         store.group_grant(&share.id, "peer-1").unwrap();
         assert!(store.authorize("peer-1", &share.id, "query").is_ok());
+    }
+
+    #[test]
+    fn group_revocation_preserves_access_from_other_groups() {
+        let (_temp, store, share) = group_store();
+        // Alice is a member of `team` and `team-b`; the owner contributes the
+        // same workspace to both groups.
+        store.add_group("team-b", "self-1", "self").unwrap();
+        store.save_remote_peer("peer-1", "alice", "{}").unwrap();
+        store.add_member("team", "peer-1", "member").unwrap();
+        store.add_member("team-b", "peer-1", "member").unwrap();
+        store
+            .add_group_share("team", "self-1", &share.id, &share.name)
+            .unwrap();
+        store
+            .add_group_share("team-b", "self-1", &share.id, &share.name)
+            .unwrap();
+        store.group_grant(&share.id, "peer-1").unwrap();
+        // Withdraw from `team` (contribution row first, as the daemon does):
+        // the grant survives because `team-b` still lists the share.
+        store
+            .remove_group_share("team", "self-1", &share.id)
+            .unwrap();
+        store
+            .revoke_group_share("team", &share.id, "self-1")
+            .unwrap();
+        assert!(
+            store.authorize("peer-1", &share.id, "query").is_ok(),
+            "the second group still justifies the grant"
+        );
+        // Withdrawing from the last group revokes it.
+        store
+            .remove_group_share("team-b", "self-1", &share.id)
+            .unwrap();
+        store
+            .revoke_group_share("team-b", &share.id, "self-1")
+            .unwrap();
+        assert!(store.authorize("peer-1", &share.id, "query").is_err());
+    }
+
+    #[test]
+    fn group_revocation_preserves_direct_mount_access() {
+        let (temp, store, share) = group_store();
+        let alice_share = real_share(&store, temp.path(), "alice", "alice-ws");
+        let invite = store.create_group_invite("team", 60, None).unwrap();
+        store
+            .redeem_group_invite(
+                &invite.id,
+                &invite.secret,
+                &joiner(
+                    "peer-1",
+                    "alice",
+                    &[(alice_share.id.clone(), alice_share.name.clone())],
+                ),
+            )
+            .unwrap();
+        // Alice also redeemed a direct share invite for the owner workspace.
+        store
+            .add_mount("workspace-key", "desk", "peer-1", &share.id, &share.name)
+            .unwrap();
+        store
+            .revoke_group_share("team", &share.id, "self-1")
+            .unwrap();
+        assert!(
+            store.authorize("peer-1", &share.id, "query").is_ok(),
+            "the direct mount still grants access"
+        );
+    }
+
+    #[test]
+    fn remove_member_cleans_contribution_rows() {
+        let (temp, store, _share) = group_store();
+        let alice_share = real_share(&store, temp.path(), "alice", "alice-ws");
+        let invite = store.create_group_invite("team", 60, None).unwrap();
+        store
+            .redeem_group_invite(
+                &invite.id,
+                &invite.secret,
+                &joiner("peer-1", "alice", &[(alice_share.id, alice_share.name)]),
+            )
+            .unwrap();
+        assert_eq!(store.group_shares("team", "peer-1").unwrap().len(), 1);
+        store.remove_member("team", "peer-1").unwrap();
+        assert!(
+            store.group_shares("team", "peer-1").unwrap().is_empty(),
+            "contributions are removed with the membership"
+        );
     }
 
     #[test]

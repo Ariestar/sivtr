@@ -833,7 +833,9 @@ async fn process_remote(
                     .store
                     .group_shares(&group_id, &context.identity.id())?
                 {
-                    revoke_peer_grant(&context.store, &share.share_id, &removed_peer)?;
+                    context
+                        .store
+                        .revoke_group_grant(&group_id, &share.share_id, &removed_peer)?;
                 }
                 context.store.remove_member(&group_id, &removed_peer)?;
             }
@@ -850,7 +852,9 @@ async fn process_remote(
             // Revoke every owner contribution from the leaver.
             if let Some(owner) = members_before.iter().find(|row| row.role == "owner") {
                 for share in context.store.group_shares(&group_id, &owner.peer_id)? {
-                    revoke_peer_grant(&context.store, &share.share_id, peer_id)?;
+                    context
+                        .store
+                        .revoke_group_grant(&group_id, &share.share_id, peer_id)?;
                 }
             }
             broadcast(
@@ -1160,7 +1164,11 @@ async fn sync_group(context: &Arc<DaemonContext>, group_name_or_id: &str) -> Res
                 if !members.iter().any(|remote| remote.peer_id == local.peer_id) {
                     context.store.remove_member(&group.id, &local.peer_id)?;
                     for share in &self_shares {
-                        revoke_peer_grant(&context.store, &share.share_id, &local.peer_id)?;
+                        context.store.revoke_group_grant(
+                            &group.id,
+                            &share.share_id,
+                            &local.peer_id,
+                        )?;
                     }
                 }
             }
@@ -1197,7 +1205,9 @@ async fn drop_group(context: &Arc<DaemonContext>, group_name_or_id: &str) -> Res
     for share in context.store.group_shares(&group.id, &self_id)? {
         for member in &members {
             if member.peer_id != self_id {
-                revoke_peer_grant(&context.store, &share.share_id, &member.peer_id)?;
+                context
+                    .store
+                    .revoke_group_grant(&group.id, &share.share_id, &member.peer_id)?;
             }
         }
     }
@@ -1219,7 +1229,11 @@ async fn leave_group(context: &Arc<DaemonContext>, group_name_or_id: &str) -> Re
         for member in &members {
             if member.peer_id != self_id {
                 for share in &self_shares {
-                    revoke_peer_grant(&context.store, &share.share_id, &member.peer_id)?;
+                    context.store.revoke_group_grant(
+                        &group.id,
+                        &share.share_id,
+                        &member.peer_id,
+                    )?;
                 }
             }
         }
@@ -1251,7 +1265,9 @@ async fn leave_group(context: &Arc<DaemonContext>, group_name_or_id: &str) -> Re
     for member in &members {
         if member.peer_id != self_id {
             for share in &self_shares {
-                revoke_peer_grant(&context.store, &share.share_id, &member.peer_id)?;
+                context
+                    .store
+                    .revoke_group_grant(&group.id, &share.share_id, &member.peer_id)?;
             }
         }
     }
@@ -1269,6 +1285,11 @@ async fn leave_group(context: &Arc<DaemonContext>, group_name_or_id: &str) -> Re
         )
         .await;
     }
+    // Leaving drops the local group row (members and contributions cascade),
+    // so `group list` stops showing it immediately instead of waiting for the
+    // owner's next roster sync - which may never come while the owner is
+    // offline.
+    context.store.remove_group(&group.id)?;
     Ok(())
 }
 
@@ -1298,7 +1319,9 @@ async fn remove_group_member(
         bail!("The group owner cannot remove itself; leave the group to disband it");
     }
     for share in context.store.group_shares(&group.id, &self_id)? {
-        revoke_peer_grant(&context.store, &share.share_id, &target.peer_id)?;
+        context
+            .store
+            .revoke_group_grant(&group.id, &share.share_id, &target.peer_id)?;
     }
     context.store.remove_member(&group.id, &target.peer_id)?;
     // Everyone hears about the removal — the removed peer clears the group
@@ -1374,13 +1397,13 @@ async fn group_fan_out(
     let self_id = context.identity.id();
     let mut records = Vec::new();
     let mut anchors = Vec::new();
-    // Every result is scoped `team/alice/proj-b` so members stay apart and
-    // records round-trip through show/zoom/nav.
-    let mut merge = |peer_name: &str, share_name: &str, mut query: QueryResponse| {
-        qualify_query_scope(
-            &format!("{group_name}/{peer_name}/{share_name}"),
-            &mut query,
-        );
+    // Every result is scoped `team/<peer-id>/proj-b` so members stay apart and
+    // records round-trip through show/zoom/nav. The member segment is the
+    // stable peer id, not the display name: two devices can share a hostname
+    // (and a workspace name), and a name-based scope would collide and make
+    // the refs ambiguous.
+    let mut merge = |peer_id: &str, share_name: &str, mut query: QueryResponse| {
+        qualify_query_scope(&format!("{group_name}/{peer_id}/{share_name}"), &mut query);
         records.extend(query.records);
         anchors.extend(query.anchors);
     };
@@ -1406,7 +1429,7 @@ async fn group_fan_out(
                 }
             })
             .await??;
-            merge(&member.peer_name, share_name, query);
+            merge(&member.peer_id, share_name, query);
         }
     }
 
@@ -1415,7 +1438,6 @@ async fn group_fan_out(
         for (share_id, share_name) in &member.shares {
             let context = context.clone();
             let peer_id = member.peer_id.clone();
-            let peer_name = member.peer_name.clone();
             let share_id = share_id.clone();
             let share_name = share_name.clone();
             let source = source.to_string();
@@ -1434,7 +1456,7 @@ async fn group_fan_out(
                     ),
                 )
                 .await;
-                (peer_id, peer_name, share_name, result)
+                (peer_id, share_name, result)
             });
         }
     }
@@ -1443,11 +1465,11 @@ async fn group_fan_out(
     // whose records were already merged.
     let mut online: HashSet<String> = HashSet::new();
     while let Some(joined) = tasks.join_next().await {
-        let Ok((peer_id, peer_name, share_name, result)) = joined else {
+        let Ok((peer_id, share_name, result)) = joined else {
             continue;
         };
         if let Ok(Ok(RemoteResponse::Query(query))) = result {
-            merge(&peer_name, &share_name, query);
+            merge(&peer_id, &share_name, query);
             online.insert(peer_id);
         }
     }
@@ -1544,17 +1566,6 @@ fn member_info_from_store(
         role: member.role.clone(),
         endpoint,
     })
-}
-
-/// Revoke a grant. A missing grant is an idempotent no-op (`revoke` returns
-/// `Ok(None)`); every storage failure is propagated, so kick/leave/disband
-/// cannot report success while access remains active.
-fn revoke_peer_grant(
-    store: &StateStore,
-    share_name_or_id: &str,
-    peer_name_or_id: &str,
-) -> Result<()> {
-    store.revoke(share_name_or_id, peer_name_or_id).map(|_| ())
 }
 
 fn random_token() -> String {
