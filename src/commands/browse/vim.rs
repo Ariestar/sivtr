@@ -102,21 +102,20 @@ fn remove_dir_all_with_retry(
             "cleanup attempts must be greater than zero",
         ));
     }
-    let mut last_error = None;
-
-    for attempt in 0..attempts {
+    let mut failed = 0;
+    loop {
         match remove(path) {
             Ok(()) => return Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => last_error = Some(error),
-        }
-
-        if attempt + 1 < attempts {
-            std::thread::sleep(retry_delay);
+            Err(error) => {
+                failed += 1;
+                if failed == attempts {
+                    return Err(error);
+                }
+                std::thread::sleep(retry_delay);
+            }
         }
     }
-
-    Err(last_error.expect("cleanup attempts must be greater than zero"))
 }
 
 fn finish_vim_view(operation: Result<()>, cleanup: Result<()>) -> Result<()> {
