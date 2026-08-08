@@ -334,14 +334,18 @@ async fn process_local(
         }
         LocalRequest::GroupList => {
             for group in context.store.groups()? {
-                group::maybe_sync_group(context, &group.name).await;
+                // Background pull; the cached roster is returned immediately.
+                group::maybe_sync_group(context, &group.name);
             }
             LocalResponse::Groups(context.store.groups()?)
         }
         LocalRequest::GroupMembers { group } => {
-            group::maybe_sync_group(context, &group).await;
+            group::maybe_sync_group(context, &group);
             LocalResponse::Members(context.store.members(&group)?)
         }
+        LocalRequest::GroupResolve { group } => LocalResponse::GroupResolved {
+            exists: context.store.group_opt(&group)?.is_some(),
+        },
         LocalRequest::GroupShares { group } => {
             // First-time join runs before any local group row exists; an
             // unknown group simply means nothing is contributed yet.
@@ -438,7 +442,8 @@ async fn process_local(
             filter,
         } => {
             let group_info = context.store.group(&group)?;
-            group::maybe_sync_group(context, &group).await;
+            // Background pull; the fan-out below uses the cached roster.
+            group::maybe_sync_group(context, &group);
             let targets = group::group_targets(
                 &context.store,
                 &group_info,

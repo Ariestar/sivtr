@@ -410,8 +410,12 @@ fn try_group_timed(
         return Ok(None);
     };
     crate::commands::remote::serve::ensure_running()?;
-    let exists = match ipc::call(LocalRequest::GroupList)? {
-        LocalResponse::Groups(groups) => groups.iter().any(|group_info| group_info.name == group),
+    // Cheap existence probe: the daemon resolves the group from its store
+    // without syncing, so a query is never held up by an unreachable owner.
+    let exists = match ipc::call(LocalRequest::GroupResolve {
+        group: group.clone(),
+    })? {
+        LocalResponse::GroupResolved { exists } => exists,
         _ => return Ok(None),
     };
     if !exists {
