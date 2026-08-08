@@ -640,6 +640,53 @@ pub(crate) async fn adjust_group_shares(
     Ok(())
 }
 
+/// Receiver side of a `GroupShareAdded` broadcast: a member registered a new
+/// contribution. The contributor granted everyone access locally; members only
+/// need to register the contribution so fan-out can reach it.
+pub(crate) fn handle_share_added(
+    context: &Arc<DaemonContext>,
+    group_id: &str,
+    sender: &str,
+    contributor: &str,
+    share_id: &str,
+    share_name: &str,
+) -> Result<RemoteResponse> {
+    // Only a member may register contributions, and only its own: a forged
+    // peer_id would otherwise let an outsider attach arbitrary shares to
+    // other members' rosters.
+    if !context.store.is_member(group_id, sender)? {
+        bail!("Only group members may register shares");
+    }
+    if contributor != sender {
+        bail!("Only the contributor may register its own share");
+    }
+    context
+        .store
+        .add_group_share(group_id, contributor, share_id, share_name)?;
+    Ok(RemoteResponse::GroupAck)
+}
+
+/// Receiver side of a `GroupShareRemoved` broadcast: a member withdrew a
+/// contribution. Drop the local registration so fan-out stops dialing it.
+pub(crate) fn handle_share_removed(
+    context: &Arc<DaemonContext>,
+    group_id: &str,
+    sender: &str,
+    contributor: &str,
+    share_id: &str,
+) -> Result<RemoteResponse> {
+    if !context.store.is_member(group_id, sender)? {
+        bail!("Only group members may withdraw shares");
+    }
+    if contributor != sender {
+        bail!("Only the contributor may withdraw its own share");
+    }
+    context
+        .store
+        .remove_group_share(group_id, contributor, share_id)?;
+    Ok(RemoteResponse::GroupAck)
+}
+
 /// Receiver side of a `GroupMemberRemoved` push: the removed peer drops the
 /// group locally; everyone else revokes that peer's grants and removes it.
 /// The router has already verified the sender is the group owner.
