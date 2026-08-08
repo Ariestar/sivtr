@@ -101,11 +101,8 @@ impl std::str::FromStr for GroupRole {
 impl rusqlite::types::FromSql for GroupRole {
     fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
         let text = value.as_str()?;
-        match text {
-            "owner" => Ok(Self::Owner),
-            "member" => Ok(Self::Member),
-            _ => Err(rusqlite::types::FromSqlError::InvalidType),
-        }
+        text.parse()
+            .map_err(|_| rusqlite::types::FromSqlError::InvalidType)
     }
 }
 

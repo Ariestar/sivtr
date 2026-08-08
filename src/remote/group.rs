@@ -633,6 +633,24 @@ pub(crate) async fn adjust_group_shares(
     Ok(())
 }
 
+/// Require `sender` to be a member and the named contributor before a share
+/// add/remove broadcast is applied locally.
+fn require_own_share_change(
+    store: &StateStore,
+    group_id: &str,
+    sender: &str,
+    contributor: &str,
+    action: &str,
+) -> Result<()> {
+    if !store.is_member(group_id, sender)? {
+        bail!("Only group members may {action} shares");
+    }
+    if contributor != sender {
+        bail!("Only the contributor may {action} its own share");
+    }
+    Ok(())
+}
+
 /// Receiver side of a `GroupShareAdded` broadcast: a member registered a new
 /// contribution. The contributor granted everyone access locally; members only
 /// need to register the contribution so fan-out can reach it.
@@ -644,15 +662,7 @@ pub(crate) fn handle_share_added(
     share_id: &str,
     share_name: &str,
 ) -> Result<RemoteResponse> {
-    // Only a member may register contributions, and only its own: a forged
-    // peer_id would otherwise let an outsider attach arbitrary shares to
-    // other members' rosters.
-    if !context.store.is_member(group_id, sender)? {
-        bail!("Only group members may register shares");
-    }
-    if contributor != sender {
-        bail!("Only the contributor may register its own share");
-    }
+    require_own_share_change(&context.store, group_id, sender, contributor, "register")?;
     context
         .store
         .add_group_share(group_id, contributor, share_id, share_name)?;
@@ -668,12 +678,7 @@ pub(crate) fn handle_share_removed(
     contributor: &str,
     share_id: &str,
 ) -> Result<RemoteResponse> {
-    if !context.store.is_member(group_id, sender)? {
-        bail!("Only group members may withdraw shares");
-    }
-    if contributor != sender {
-        bail!("Only the contributor may withdraw its own share");
-    }
+    require_own_share_change(&context.store, group_id, sender, contributor, "withdraw")?;
     context
         .store
         .remove_group_share(group_id, contributor, share_id)?;
@@ -742,7 +747,7 @@ enum QueryTarget {
     /// In-process query over a local share; a failure is a real error.
     Local { root: PathBuf, redact: bool },
     /// Wire query to a peer's share under the per-share budget.
-    Remote { peer_id: String, share_id: String },
+    Remote { share_id: String },
 }
 
 /// Fan out a group query: the caller's own contributions run in-process (a
@@ -782,7 +787,6 @@ pub(crate) async fn group_fan_out(
                 }
             } else {
                 QueryTarget::Remote {
-                    peer_id: peer_id.clone(),
                     share_id: share_id.clone(),
                 }
             };
@@ -830,11 +834,7 @@ pub(crate) async fn group_fan_out(
 
     let mut tasks = JoinSet::new();
     for (target, peer_id, share_name) in targets {
-        if let QueryTarget::Remote {
-            peer_id: target_peer,
-            share_id,
-        } = target
-        {
+        if let QueryTarget::Remote { share_id } = target {
             let context = context.clone();
             let source = source.to_string();
             let filter = bounds.clone();
@@ -844,7 +844,7 @@ pub(crate) async fn group_fan_out(
                     net::exchange_with_peer(
                         &context.store,
                         &context.endpoint,
-                        &target_peer,
+                        &peer_id,
                         RemoteRequest::Query {
                             share_id,
                             source,
