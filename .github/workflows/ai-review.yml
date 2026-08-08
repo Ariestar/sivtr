@@ -50,6 +50,7 @@ jobs:
       - name: Find pull request
         id: pr
         env:
+          GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
@@ -70,6 +71,7 @@ jobs:
       - name: Compute diff
         if: steps.pr.outputs.skip != 'true'
         env:
+          GH_TOKEN: ${{ github.token }}
           BASE_SHA: ${{ steps.pr.outputs.base_sha }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
