@@ -13,7 +13,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use chrono::Utc;
 use iroh::EndpointAddr;
 use tokio::task::JoinSet;
 
@@ -437,25 +436,19 @@ async fn broadcast(
 }
 
 /// Client-side join (first time): redeem the invite with the owner, mirror
-/// the roster, register our contributed shares, and grant members.
+/// the roster, register our contributed shares, and grant members. The ticket
+/// is already parsed and validated at the daemon boundary ([`InviteTicket`]).
 pub(crate) async fn redeem_group_remote(
     context: &Arc<DaemonContext>,
-    encoded_invite: &str,
+    invite: &InviteTicket,
     shares: &[(String, String)],
 ) -> Result<(String, usize)> {
-    let invite = InviteTicket::parse(encoded_invite)?;
-    if invite.expires_at < Utc::now().timestamp() {
-        bail!("Invitation is expired");
-    }
-    if invite.group_id.is_none() {
-        bail!("Invitation is not a group invite");
-    }
     let (response, _observed) = net::exchange(
         &context.endpoint,
-        invite.endpoint,
+        invite.endpoint.clone(),
         RemoteRequest::RedeemGroupInvite {
-            invite_id: invite.invite_id,
-            secret: invite.secret,
+            invite_id: invite.invite_id.clone(),
+            secret: invite.secret.clone(),
             peer_name: context.identity.name.clone(),
             shares: shares.to_vec(),
             endpoint: context.endpoint.addr(),

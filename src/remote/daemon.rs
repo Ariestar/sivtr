@@ -385,6 +385,8 @@ async fn process_local(
             }
         }
         LocalRequest::GroupJoin { invite, shares } => {
+            // The ticket is parsed once at the daemon boundary; validation is
+            // done here and the parsed ticket is passed down (never re-parsed).
             let ticket = InviteTicket::parse(&invite)?;
             if ticket.expires_at < Utc::now().timestamp() {
                 bail!("Invitation is expired");
@@ -410,7 +412,7 @@ async fn process_local(
                 }
             } else {
                 let (group_name, member_count) =
-                    group::redeem_group_remote(context, &invite, &shares).await?;
+                    group::redeem_group_remote(context, &ticket, &shares).await?;
                 LocalResponse::GroupJoined {
                     group_name,
                     member_count,
