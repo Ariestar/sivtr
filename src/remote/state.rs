@@ -832,7 +832,7 @@ impl StateStore {
         Ok(())
     }
 
-    pub fn member(&self, group_name_or_id: &str, peer_id: &str) -> Result<GroupMemberInfo> {
+    fn member(&self, group_name_or_id: &str, peer_id: &str) -> Result<GroupMemberInfo> {
         let group = self.group(group_name_or_id)?;
         self.connect()?
             .query_row(

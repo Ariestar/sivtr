@@ -539,26 +539,12 @@ async fn process_remote(
         } => {
             let share = context.store.authorize(peer_id, &share_id, "query")?;
             let response = tokio::task::spawn_blocking(move || {
-                let result = crate::commands::memory::workset::run_on_share(
+                let (records, anchors) = crate::commands::memory::workset::run_on_share(
                     std::path::Path::new(&share.root),
                     &source,
                     filter,
                     share.redact,
-                );
-                // An empty workspace has no sessions; report it as an empty
-                // result instead of an error (matches the client-side
-                // convention in `query_many`).
-                let (records, anchors) = match result {
-                    Ok(result) => result,
-                    Err(error)
-                        if error
-                            .to_string()
-                            .starts_with("No record found for ref selector") =>
-                    {
-                        (Vec::new(), Vec::new())
-                    }
-                    Err(error) => return Err(error),
-                };
+                )?;
                 Ok::<_, anyhow::Error>(QueryResponse { records, anchors })
             })
             .await??;
