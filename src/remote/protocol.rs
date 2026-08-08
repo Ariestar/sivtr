@@ -286,6 +286,12 @@ pub enum LocalRequest {
         group: String,
         peer: String,
     },
+    /// Owner-only: rename the group. The name is the ref segment, stored once
+    /// in `groups.name`; members mirror it on their next roster sync.
+    GroupRename {
+        group: String,
+        name: String,
+    },
     /// Force a roster pull from the group owner.
     GroupSync {
         group: String,

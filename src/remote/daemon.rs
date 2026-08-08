@@ -432,6 +432,11 @@ async fn process_local(
             remove_group_member(context, &group, &peer).await?;
             LocalResponse::Ok
         }
+        LocalRequest::GroupRename { group, name } => {
+            let info = context.store.group(&group)?;
+            require_group_owner(&context.store, &info.id, &context.identity.id())?;
+            LocalResponse::Group(context.store.rename_group(&info.id, &name)?)
+        }
         LocalRequest::GroupSync { group } => {
             sync_group(context, &group).await?;
             LocalResponse::Group(context.store.group(&group)?)
@@ -626,7 +631,7 @@ fn require_group_owner(store: &StateStore, group_id: &str, sender: &str) -> Resu
         .find(|member| member.role == "owner")
         .context("Group has no owner")?;
     if owner.peer_id != sender {
-        bail!("Only the group owner may change membership");
+        bail!("Only the group owner may perform this operation");
     }
     Ok(())
 }
@@ -1109,13 +1114,24 @@ async fn sync_group(context: &Arc<DaemonContext>, group_name_or_id: &str) -> Res
     .context("Group roster sync with the owner timed out")??;
     match response {
         RemoteResponse::GroupSynced {
-            group_name: _,
+            group_name,
             member,
             members,
         } => {
             if !member {
                 drop_group(context, &group.id).await?;
                 return Ok(());
+            }
+            // The owner's name is authoritative: apply a rename this device
+            // has not synced yet. A collision with another local group keeps
+            // the stale name but must not block the roster reconciliation.
+            if group_name != context.store.group(&group.id)?.name {
+                if let Err(error) = context.store.rename_group(&group.id, &group_name) {
+                    crate::output::error(format!(
+                        "kept local name for group `{}`: {error:#}",
+                        context.store.group(&group.id)?.name
+                    ));
+                }
             }
             let self_id = context.identity.id();
             // Roster is authoritative: upsert peers, membership, contributions.
