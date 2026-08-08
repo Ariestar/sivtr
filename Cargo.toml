@@ -125,3 +125,13 @@ dhat = "0.3"
 perf-benches = []
 # Heap profiling: `cargo bench -p sivtr --bench browse_dhat --features "perf-benches,dhat-heap"`
 dhat-heap = []
+
+# Release binary optimization. This is a TUI-heavy CLI where binary size and
+# startup latency are user-visible: cross-crate LTO inlines across the heavy
+# dependency chain (iroh/tokio/rusqlite), a single codegen unit maximizes that,
+# and stripping debug symbols halves the shipped artifact. `panic` stays
+# `unwind` — anyhow backtraces rely on it.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
