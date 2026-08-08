@@ -20,6 +20,8 @@ pub struct SivtrConfig {
     pub codex: CodexConfig,
     /// Global hotkey settings.
     pub hotkey: HotkeyConfig,
+    /// TUI theme settings.
+    pub theme: ThemeConfig,
     /// MCP stdio server settings.
     pub mcp: McpConfig,
 }
@@ -79,6 +81,27 @@ pub struct CodexConfig {
 pub struct HotkeyConfig {
     /// Hotkey chord used by `sivtr hotkey start`.
     pub chord: String,
+}
+
+/// TUI color scheme preference.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeMode {
+    /// Detect light/dark and truecolor support from the terminal environment.
+    #[default]
+    Auto,
+    /// Always use the dark palette.
+    Dark,
+    /// Always use the light palette.
+    Light,
+}
+
+/// TUI theme configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ThemeConfig {
+    /// Color scheme: `"auto"` (default), `"dark"`, or `"light"`.
+    pub mode: ThemeMode,
 }
 
 /// MCP stdio server settings (shared by every agent host registration —
@@ -240,5 +263,28 @@ mod tests {
         assert!(toml.contains("[mcp]"));
         assert!(toml.contains("idle_exit_secs = 60"));
         assert_eq!(SivtrConfig::default().mcp.idle_exit_secs, 0);
+    }
+
+    #[test]
+    fn theme_config_round_trips_and_rejects_typos() {
+        let config = SivtrConfig {
+            theme: ThemeConfig {
+                mode: ThemeMode::Light,
+            },
+            ..SivtrConfig::default()
+        };
+
+        let toml = to_toml_string(&config).unwrap();
+        assert!(toml.contains("[theme]"));
+        assert!(toml.contains("mode = \"light\""));
+
+        // A typo such as `mode = "ligth"` must fail loudly instead of silently
+        // falling back to auto (which made the setting look ignored).
+        assert!(toml::from_str::<SivtrConfig>("[theme]\nmode = \"ligth\"\n").is_err());
+        assert!(toml::from_str::<SivtrConfig>("[theme]\nmode = \"light\"\n").is_ok());
+
+        // A misspelled key (`mod` instead of `mode`) is rejected too; serde
+        // would otherwise ignore the unknown field and keep `mode` at auto.
+        assert!(toml::from_str::<SivtrConfig>("[theme]\nmod = \"light\"\n").is_err());
     }
 }

@@ -13,6 +13,7 @@ use crossterm::{
     terminal::{enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{buffer::CellDiffOption, prelude::*};
+use sivtr_core::config::SivtrConfig;
 use std::io::IsTerminal;
 use std::{
     cell::RefCell,
@@ -25,6 +26,7 @@ use std::{
 use unicode_width::UnicodeWidthStr;
 
 use super::panic;
+use crate::tui::theme;
 
 type InnerTui = Terminal<CrosstermBackend<Stdout>>;
 
@@ -100,6 +102,14 @@ pub fn init() -> Result<Tui> {
     // here too. `install` is idempotent, and `register_panic_restore` below arms the closure.
     panic::install();
     ensure_tui_stdout()?;
+
+    // Pick the palette before the first frame draws: honor the config
+    // override, otherwise detect light/dark and truecolor from the
+    // terminal environment. A missing config file already yields defaults;
+    // a real read/parse failure must surface instead of silently looking
+    // like the theme setting was ignored.
+    let config = SivtrConfig::load().context("Failed to load theme config")?;
+    theme::apply(config.theme.mode);
 
     let mut setup = TerminalSetup::default();
     match ConsoleInputHandle::ensure_console() {
