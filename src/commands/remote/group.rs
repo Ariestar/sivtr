@@ -244,7 +244,7 @@ fn members(group: &str) -> Result<()> {
                 output::plain("no members");
             }
             for member in members {
-                let marker = if member.role == "owner" {
+                let marker = if member.role.is_owner() {
                     " [owner]"
                 } else {
                     ""
