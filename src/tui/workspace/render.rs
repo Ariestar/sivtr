@@ -5,6 +5,7 @@ use ratatui::prelude::{Color, Frame, Modifier, Position, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, ListItem, ListState, Paragraph};
 use regex::Regex;
+use std::collections::HashSet;
 use unicode_width::UnicodeWidthStr;
 
 use crate::tui::content::io::ContentIoFocus;
@@ -66,6 +67,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         view.selected_sources,
         view.selected_sessions,
         view.session_state,
+        &view.body_failures,
         view.search.as_ref(),
         search_regex.as_ref(),
         view.focus == WorkspaceFocus::Sessions,
@@ -305,13 +307,15 @@ fn footer_status_spans(label: &str) -> Vec<Span<'static>> {
 
 /// Compact session row: `· cdx  title…` (origin glyph + short badge + title).
 ///
-/// `·` = local, `↗` = remote (named scope on the source or work_ref).
+/// `·` = local, `↗` = remote (named scope on the source or work_ref). A ` [!]`
+/// suffix marks a session whose body failed to hydrate.
 fn session_row_line(
     choice: &WorkspaceSession,
     selected: bool,
     active_panel: bool,
     base_style: Style,
     highlight: Option<&Regex>,
+    body_failed: bool,
 ) -> Line<'static> {
     let remote = choice.source.is_remote()
         || choice
@@ -332,7 +336,10 @@ fn session_row_line(
     let title = compact_session_title(choice);
     // Keep search highlighting over the full visible text, but paint origin/badge
     // with their own colors when the row is not using a solid selection background.
-    let plain = format!("{check}{origin} {badge}  {title}");
+    let plain = format!(
+        "{check}{origin} {badge}  {title}{}",
+        if body_failed { " [!]" } else { "" }
+    );
     if base_style.bg.is_some() {
         return Line::from(highlight_spans(&plain, highlight, base_style));
     }
@@ -359,6 +366,12 @@ fn session_row_line(
         highlight,
         Style::default().fg(Color::Rgb(226, 232, 240)),
     ));
+    if body_failed {
+        spans.push(Span::styled(
+            " [!]",
+            Style::default().fg(Color::Rgb(248, 113, 113)), // red-400
+        ));
+    }
     Line::from(spans)
 }
 
@@ -676,6 +689,7 @@ fn render_session_list(
     selected_sources: &[bool],
     selected_sessions: &[bool],
     state: &ListState,
+    body_failures: &HashSet<String>,
     search: Option<&WorkspaceSearchView<'_>>,
     search_regex: Option<&Regex>,
     active: bool,
@@ -699,7 +713,12 @@ fn render_session_list(
                 .filter(|search| search.scope == WorkspaceSearchScope::Session)
                 .and(search_regex);
             ListItem::new(session_row_line(
-                choice, selected, active, base_style, highlight,
+                choice,
+                selected,
+                active,
+                base_style,
+                highlight,
+                body_failures.contains(&choice.session_id),
             ))
         })
         .collect();
