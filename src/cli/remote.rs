@@ -175,6 +175,8 @@ pub enum GroupAction {
     Members { group: String },
     /// Owner only: remove a member from the group
     Remove { group: String, peer: String },
+    /// Owner only: rename the group (the new name is the ref segment)
+    Rename { group: String, name: String },
     /// Leave a group (owner leaving disbands the group)
     Leave { group: String },
     /// Force a roster refresh from the group owner
