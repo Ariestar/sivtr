@@ -2,7 +2,8 @@
 # https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/displaying-a-sponsor-button-in-your-repository
 #
 # - `github`: requires GitHub Sponsors enabled for the account
-# - `custom`: any HTTPS link (WeChat tip page lives on the docs site)
+# - `custom`: any HTTPS link (PayPal.me and the WeChat tip page on the docs site)
 github: [Ariestar]
 custom:
+  - https://paypal.me/wolllf987
   - https://sivtr.pages.dev/zh-cn/project/sponsor/

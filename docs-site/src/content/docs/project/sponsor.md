@@ -1,9 +1,13 @@
 ---
 title: Sponsor
-description: Support sivtr development via WeChat tip (微信赞赏).
+description: Support sivtr development via PayPal or WeChat tip (微信赞赏).
 ---
 
 If sivtr saves you time, optional support helps keep the project maintained.
+
+## PayPal
+
+Send a tip to [paypal.me/wolllf987](https://paypal.me/wolllf987) — works worldwide, no Chinese bank card needed.
 
 ## WeChat tip (微信赞赏)
 
@@ -11,7 +15,7 @@ Scan the QR code below with WeChat:
 
 ![WeChat tip QR code](/sponsor/wechat-qr.png)
 
-> If the image is missing, the maintainer has not uploaded the QR asset yet. Prefer [GitHub Sponsors](https://github.com/sponsors/Ariestar) when available, or open an issue to ask for the current tip QR.
+> If the image is missing, the maintainer has not uploaded the QR asset yet. Prefer [GitHub Sponsors](https://github.com/sponsors/Ariestar) or [PayPal](https://paypal.me/wolllf987) when available, or open an issue to ask for the current tip QR.
 
 ## Other ways to help
 
