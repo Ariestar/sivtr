@@ -21,7 +21,8 @@ use super::ipc;
 use super::net;
 use super::protocol::{
     qualify_query_scope, DaemonInfo, DaemonStatus, InviteTicket, LocalEnvelope, LocalRequest,
-    LocalResponse, QueryResponse, RemoteRequest, RemoteResponse, MAX_MESSAGE_SIZE, REMOTE_ALPN,
+    LocalResponse, QueryResponse, RemoteEnvelope, RemoteRequest, RemoteResponse, MAX_MESSAGE_SIZE,
+    PROTOCOL_VERSION, REMOTE_ALPN,
 };
 use super::state::{MountInfo, StateStore};
 
@@ -146,6 +147,12 @@ async fn handle_local(
         .context("Failed to read local request")?;
     let envelope: LocalEnvelope =
         serde_json::from_str(&line).context("Invalid local control request")?;
+    if envelope.protocol_version != PROTOCOL_VERSION {
+        anyhow::bail!(
+            "Unsupported control protocol version {} (this build speaks {PROTOCOL_VERSION})",
+            envelope.protocol_version
+        );
+    }
     let (response, shutdown) = if envelope.token != context.control_token {
         (
             LocalResponse::Error {
@@ -505,15 +512,25 @@ async fn handle_remote(connection: Connection, context: Arc<DaemonContext>) -> R
     let peer_id = connection.remote_id().to_string();
     let (mut send, mut receive) = connection.accept_bi().await?;
     let bytes = receive.read_to_end(MAX_MESSAGE_SIZE).await?;
-    let request: RemoteRequest =
+    let envelope: RemoteEnvelope<RemoteRequest> =
         serde_json::from_slice(&bytes).context("Invalid remote request")?;
-    let response = match process_remote(&context, &peer_id, request).await {
+    if envelope.protocol_version != PROTOCOL_VERSION {
+        anyhow::bail!(
+            "Unsupported peer protocol version {} (this build speaks {PROTOCOL_VERSION})",
+            envelope.protocol_version
+        );
+    }
+    let response = match process_remote(&context, &peer_id, envelope.kind).await {
         Ok(response) => response,
         Err(error) => RemoteResponse::Error {
             message: format!("{error:#}"),
         },
     };
-    send.write_all(&serde_json::to_vec(&response)?).await?;
+    let envelope = RemoteEnvelope {
+        protocol_version: PROTOCOL_VERSION,
+        kind: response,
+    };
+    send.write_all(&serde_json::to_vec(&envelope)?).await?;
     send.finish()?;
     connection.closed().await;
     Ok(())

@@ -13,6 +13,18 @@ pub use super::state::{
 
 pub const REMOTE_ALPN: &[u8] = b"sivtr/memory/1";
 pub const MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
+/// Wire protocol version. Every request and response travels inside a
+/// [`RemoteEnvelope`] carrying this version; a daemon rejects any envelope
+/// whose version it does not speak instead of failing on an unknown variant.
+pub const PROTOCOL_VERSION: u32 = 2;
+
+/// Wire envelope for remote requests and responses: the payload plus the
+/// protocol version, so a mixed fleet fails loudly and explicitly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteEnvelope<T> {
+    pub protocol_version: u32,
+    pub kind: T,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InviteTicket {
@@ -201,6 +213,10 @@ pub struct DaemonStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalEnvelope {
     pub token: String,
+    /// Same [`PROTOCOL_VERSION`] as the remote wire; old clients (version 1)
+    /// are rejected loudly instead of failing on an unknown request variant.
+    #[serde(default)]
+    pub protocol_version: u32,
     pub request: LocalRequest,
 }
 
