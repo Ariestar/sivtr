@@ -545,6 +545,22 @@ async fn process_remote(
     peer_id: &str,
     request: RemoteRequest,
 ) -> Result<RemoteResponse> {
+    // The access matrix is the single gate: every request is classified once
+    // against its role rule, then the arms do domain work only.
+    match group::access_rule(&request) {
+        group::AccessRule::Open => {}
+        group::AccessRule::Owner => {
+            let group_id = group::request_group_id(&request).context("Owner rule needs a group")?;
+            group::require_group_owner(&context.store, group_id, peer_id)?;
+        }
+        group::AccessRule::Member => {
+            let group_id =
+                group::request_group_id(&request).context("Member rule needs a group")?;
+            if !context.store.is_member(group_id, peer_id)? {
+                bail!("Only group members may send this request");
+            }
+        }
+    }
     match request {
         RemoteRequest::RedeemInvite {
             invite_id,
@@ -603,7 +619,6 @@ async fn process_remote(
             member,
             roster_epoch,
         } => {
-            group::require_group_owner(&context.store, &group_id, peer_id)?;
             group::merge_member(context, &group_id, &member, roster_epoch)?;
             Ok(RemoteResponse::GroupAck)
         }
@@ -631,10 +646,7 @@ async fn process_remote(
             peer_id: removed_peer,
             peer_name: _,
             roster_epoch,
-        } => {
-            group::require_group_owner(&context.store, &group_id, peer_id)?;
-            group::handle_member_removed(context, &group_id, &removed_peer, roster_epoch).await
-        }
+        } => group::handle_member_removed(context, &group_id, &removed_peer, roster_epoch).await,
         RemoteRequest::GroupLeave { group_id } => {
             group::handle_leave(context, &group_id, peer_id).await?;
             Ok(RemoteResponse::GroupAck)
