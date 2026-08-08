@@ -34,7 +34,10 @@ enum McpConfigKind {
     /// TOML section: `[mcp_servers.sivtr]`
     Toml,
     /// YAML mapping: `<key>:\n  sivtr: ...`
-    Yaml { key: &'static str },
+    Yaml {
+        key: &'static str,
+        entry: fn() -> serde_yaml::Value,
+    },
     /// Nested JSON: `{ "<outer>": { "<inner>": { "sivtr": ... } } }`
     JsonNested {
         outer: &'static str,
@@ -110,7 +113,10 @@ const MCP_HOSTS: &[McpHostSpec] = &[
     McpHostSpec {
         provider: AgentProvider::Hermes,
         location: McpLocationSupport::GlobalOnly,
-        kind: McpConfigKind::Yaml { key: "mcp_servers" },
+        kind: McpConfigKind::Yaml {
+            key: "mcp_servers",
+            entry: hermes_entry,
+        },
         config_path: |_loc| hermes_config_path(),
         host_present: hermes_host_present,
     },
@@ -156,12 +162,12 @@ const MCP_HOSTS: &[McpHostSpec] = &[
     },
     McpHostSpec {
         provider: AgentProvider::Goose,
-        location: McpLocationSupport::GlobalOrLocal,
-        kind: McpConfigKind::Json {
-            key: "mcpServers",
-            entry: pi_entry,
+        location: McpLocationSupport::GlobalOnly,
+        kind: McpConfigKind::Yaml {
+            key: "extensions",
+            entry: goose_entry,
         },
-        config_path: goose_config_path,
+        config_path: |_loc| goose_config_path(),
         host_present: goose_host_present,
     },
 ];
@@ -234,7 +240,7 @@ fn install_target(target: AgentProvider, location: McpLocation) -> Result<()> {
     match host.kind {
         McpConfigKind::Json { key, entry } => install_json(path, key, entry(), target),
         McpConfigKind::Toml => install_toml(path, target),
-        McpConfigKind::Yaml { key } => install_yaml(path, key, target),
+        McpConfigKind::Yaml { key, entry } => install_yaml(path, key, entry(), target),
         McpConfigKind::JsonNested {
             outer,
             inner,
@@ -250,7 +256,7 @@ fn uninstall_target(target: AgentProvider, location: McpLocation) -> Result<()> 
     match host.kind {
         McpConfigKind::Json { key, .. } => uninstall_json(path, key, target),
         McpConfigKind::Toml => uninstall_toml(path, target),
-        McpConfigKind::Yaml { key } => uninstall_yaml(path, key, target),
+        McpConfigKind::Yaml { key, .. } => uninstall_yaml(path, key, target),
         McpConfigKind::JsonNested { outer, inner, .. } => {
             uninstall_json_nested(path, outer, inner, target)
         }
@@ -358,7 +364,7 @@ fn config_has_server(host: &McpHostSpec, location: McpLocation) -> bool {
     match host.kind {
         McpConfigKind::Json { key, .. } => json_has_server(&path, key),
         McpConfigKind::Toml => toml_has_server(&path),
-        McpConfigKind::Yaml { key } => yaml_has_server(&path, key),
+        McpConfigKind::Yaml { key, .. } => yaml_has_server(&path, key),
         McpConfigKind::JsonNested { outer, inner, .. } => {
             json_nested_has_server(&path, outer, inner)
         }
@@ -385,7 +391,7 @@ fn print_config(target: AgentProvider) {
         McpConfigKind::Toml => {
             println!("{}", toml_mcp_snippet());
         }
-        McpConfigKind::Yaml { key } => {
+        McpConfigKind::Yaml { key, .. } => {
             let mut root = serde_yaml::Mapping::new();
             let mut servers = serde_yaml::Mapping::new();
             servers.insert(
@@ -503,7 +509,12 @@ fn remove_toml_mcp_block(text: &mut String) -> bool {
     true
 }
 
-fn install_yaml(path: PathBuf, key: &str, provider: AgentProvider) -> Result<()> {
+fn install_yaml(
+    path: PathBuf,
+    key: &str,
+    entry: serde_yaml::Value,
+    provider: AgentProvider,
+) -> Result<()> {
     let mut root: serde_yaml::Value = if path.exists() {
         let text = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
@@ -518,10 +529,7 @@ fn install_yaml(path: PathBuf, key: &str, provider: AgentProvider) -> Result<()>
     };
 
     let servers = ensure_yaml_mapping(&mut root, key)?;
-    servers.insert(
-        serde_yaml::Value::String(SERVER_NAME.to_string()),
-        hermes_entry(),
-    );
+    servers.insert(serde_yaml::Value::String(SERVER_NAME.to_string()), entry);
 
     let text = serde_yaml::to_string(&root)?;
     write_text(&path, &text)?;
@@ -890,23 +898,71 @@ fn qwen_host_present() -> bool {
     qwen_config_path().exists() || sivtr_core::agents::qwen::qwen_home().exists()
 }
 
-/// Goose loads MCP servers from `.mcp.json` plugin manifests, discovered
-/// under `<root>/.agents/plugins/<name>/` (project or user scope).
-fn goose_config_path(location: McpLocation) -> PathBuf {
-    let root = match location {
-        McpLocation::Global => dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")),
-        McpLocation::Local => env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-    };
-    root.join(".agents")
-        .join("plugins")
-        .join("sivtr")
-        .join(".mcp.json")
+/// Goose loads MCP servers from `config.yaml` under `extensions:` (the
+/// ExtensionConfig shape written by `goose configure`). Paths follow
+/// etcetera's app layout for `Block/goose` (Windows/macOS) or plain
+/// `goose` (XDG on Linux).
+fn goose_config_path() -> PathBuf {
+    if cfg!(windows) {
+        dirs::data_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("Block")
+            .join("goose")
+            .join("config")
+            .join("config.yaml")
+    } else if cfg!(target_os = "macos") {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("Library")
+            .join("Application Support")
+            .join("Block")
+            .join("goose")
+            .join("config.yaml")
+    } else {
+        dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("goose")
+            .join("config.yaml")
+    }
+}
+
+/// Goose extension entry (`extensions.sivtr`) in the ExtensionConfig schema:
+/// `{enabled, type: stdio, name, cmd, args, envs}`.
+fn goose_entry() -> serde_yaml::Value {
+    let mut entry = serde_yaml::Mapping::new();
+    entry.insert(
+        serde_yaml::Value::String("enabled".to_string()),
+        serde_yaml::Value::Bool(true),
+    );
+    entry.insert(
+        serde_yaml::Value::String("type".to_string()),
+        serde_yaml::Value::String("stdio".to_string()),
+    );
+    entry.insert(
+        serde_yaml::Value::String("name".to_string()),
+        serde_yaml::Value::String(SERVER_NAME.to_string()),
+    );
+    entry.insert(
+        serde_yaml::Value::String("cmd".to_string()),
+        serde_yaml::Value::String("sivtr".to_string()),
+    );
+    let args = serde_yaml::Sequence::from([
+        serde_yaml::Value::String("mcp".to_string()),
+        serde_yaml::Value::String("serve".to_string()),
+    ]);
+    entry.insert(
+        serde_yaml::Value::String("args".to_string()),
+        serde_yaml::Value::Sequence(args),
+    );
+    entry.insert(
+        serde_yaml::Value::String("envs".to_string()),
+        serde_yaml::Value::Mapping(Default::default()),
+    );
+    serde_yaml::Value::Mapping(entry)
 }
 
 fn goose_host_present() -> bool {
-    let config_dir = dirs::config_dir().is_some_and(|dir| dir.join("goose").exists());
-    let agents_dir = dirs::home_dir().is_some_and(|home| home.join(".agents").exists());
-    config_dir || agents_dir || sivtr_core::agents::goose::goose_db_path().exists()
+    goose_config_path().exists() || sivtr_core::agents::goose::goose_db_path().exists()
 }
 
 fn hermes_host_present() -> bool {

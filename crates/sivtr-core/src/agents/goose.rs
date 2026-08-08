@@ -5,7 +5,9 @@
 //! <data-dir>/sessions/sessions.db    tables: sessions + messages
 //! ```
 //! The data dir follows `etcetera`'s app layout for `Block/goose`:
-//! Windows `%APPDATA%\Block\goose\data`, Unix `~/.local/share/Block/goose/data`.
+//! Windows `%APPDATA%\Block\goose\data`, macOS
+//! `~/Library/Application Support/Block/goose/data`, Linux
+//! `~/.local/share/goose/data` (XDG uses the app name only).
 //! `GOOSE_PATH_ROOT` (absolute) overrides the root; sessions then live under
 //! `<root>/data/sessions/`.
 //!
@@ -116,13 +118,32 @@ pub fn goose_db_path() -> PathBuf {
         return root.join("data").join("sessions").join("sessions.db");
     }
 
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("Block")
-        .join("goose")
-        .join("data")
-        .join("sessions")
-        .join("sessions.db")
+    if cfg!(windows) {
+        dirs::data_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("Block")
+            .join("goose")
+            .join("data")
+            .join("sessions")
+            .join("sessions.db")
+    } else if cfg!(target_os = "macos") {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("Library")
+            .join("Application Support")
+            .join("Block")
+            .join("goose")
+            .join("data")
+            .join("sessions")
+            .join("sessions.db")
+    } else {
+        dirs::data_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("goose")
+            .join("data")
+            .join("sessions")
+            .join("sessions.db")
+    }
 }
 
 fn goose_path_root() -> Option<PathBuf> {
