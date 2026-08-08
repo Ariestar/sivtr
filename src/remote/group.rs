@@ -736,9 +736,18 @@ pub(crate) async fn handle_leave(
     Ok(())
 }
 
+/// One (member, share) fan-out target. The local member's contributions run
+/// in-process; every other member's are dialed over the wire.
+enum QueryTarget {
+    /// In-process query over a local share; a failure is a real error.
+    Local { root: PathBuf, redact: bool },
+    /// Wire query to a peer's share under the per-share budget.
+    Remote { peer_id: String, share_id: String },
+}
+
 /// Fan out a group query: the caller's own contributions run in-process (a
 /// failure is a real error), every remote (member, share) is dialed in parallel
-/// under a per-peer budget, and results are merged qualified per member and
+/// under a per-share budget, and results are merged qualified per member and
 /// share. Members that did not answer are reported as skipped.
 pub(crate) async fn group_fan_out(
     context: &Arc<DaemonContext>,
@@ -759,6 +768,28 @@ pub(crate) async fn group_fan_out(
     bounds.limit = None;
 
     let self_id = context.identity.id();
+    // Expand the fan-out list once; the local/remote split below only decides
+    // how each target executes.
+    let mut targets: Vec<(QueryTarget, String, String)> = Vec::new();
+    for member in members {
+        for (share_id, share_name) in &member.shares {
+            let peer_id = member.peer_id.clone();
+            let target = if peer_id == self_id {
+                let share = context.store.share(share_id)?;
+                QueryTarget::Local {
+                    root: PathBuf::from(share.root),
+                    redact: share.redact,
+                }
+            } else {
+                QueryTarget::Remote {
+                    peer_id: peer_id.clone(),
+                    share_id: share_id.clone(),
+                }
+            };
+            targets.push((target, peer_id, share_name.clone()));
+        }
+    }
+
     let mut records = Vec::new();
     let mut anchors = Vec::new();
     // Every result is scoped `team/<peer-id>/proj-b` so members stay apart and
@@ -774,12 +805,12 @@ pub(crate) async fn group_fan_out(
 
     // The local member's contributions are part of the group, so they are
     // queried like any other share - just in-process instead of over the wire.
-    // Local failures propagate; they are not "offline" peers.
-    for member in members.iter().filter(|member| member.peer_id == self_id) {
-        for (share_id, share_name) in &member.shares {
-            let share = context.store.share(share_id)?;
+    // Local failures propagate before any remote dial; they are not "offline".
+    for (target, peer_id, share_name) in &targets {
+        if let QueryTarget::Local { root, redact } = target {
             let query = tokio::task::spawn_blocking({
-                let root = share.root.clone();
+                let root = root.clone();
+                let redact = *redact;
                 let source = source.to_string();
                 let filter = bounds.clone();
                 move || {
@@ -787,23 +818,24 @@ pub(crate) async fn group_fan_out(
                         std::path::Path::new(&root),
                         &source,
                         filter,
-                        share.redact,
+                        redact,
                     )?;
                     Ok::<_, anyhow::Error>(QueryResponse { records, anchors })
                 }
             })
             .await??;
-            merge(&member.peer_id, share_name, query);
+            merge(peer_id, share_name, query);
         }
     }
 
     let mut tasks = JoinSet::new();
-    for member in members.iter().filter(|member| member.peer_id != self_id) {
-        for (share_id, share_name) in &member.shares {
+    for (target, peer_id, share_name) in targets {
+        if let QueryTarget::Remote {
+            peer_id: target_peer,
+            share_id,
+        } = target
+        {
             let context = context.clone();
-            let peer_id = member.peer_id.clone();
-            let share_id = share_id.clone();
-            let share_name = share_name.clone();
             let source = source.to_string();
             let filter = bounds.clone();
             tasks.spawn(async move {
@@ -812,7 +844,7 @@ pub(crate) async fn group_fan_out(
                     net::exchange_with_peer(
                         &context.store,
                         &context.endpoint,
-                        &peer_id,
+                        &target_peer,
                         RemoteRequest::Query {
                             share_id,
                             source,
