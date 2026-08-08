@@ -202,13 +202,21 @@ fn reconcile_roster(
 /// Merge one newcomer into the local roster (the `GroupMemberAdded` push):
 /// register the member, its contributions, and grant it our own shares. The
 /// push is a join-time snapshot, so it is add-only - it must never prune a
-/// share the newcomer broadcast directly (the two are unordered).
+/// share the newcomer broadcast directly (the two are unordered). `roster_epoch`
+/// is the owner's watermark after the join: an older push (kick-then-rejoin
+/// reordering) is dropped instead of resurrecting a removed member.
 pub(crate) fn merge_member(
     context: &Arc<DaemonContext>,
     group_id: &str,
     member: &MemberInfo,
+    roster_epoch: i64,
 ) -> Result<()> {
-    upsert_roster(context, group_id, std::slice::from_ref(member))
+    if roster_epoch <= context.store.roster_epoch(group_id)? {
+        return Ok(());
+    }
+    upsert_roster(context, group_id, std::slice::from_ref(member))?;
+    context.store.adopt_roster_epoch(group_id, roster_epoch)?;
+    Ok(())
 }
 
 /// Pull the authoritative roster from the owner and reconcile membership,
@@ -242,6 +250,7 @@ pub(crate) async fn sync_group(context: &Arc<DaemonContext>, group_name_or_id: &
             group_name,
             member,
             members,
+            roster_epoch,
         } => {
             if !member {
                 drop_group(context, &group.id).await?;
@@ -259,6 +268,7 @@ pub(crate) async fn sync_group(context: &Arc<DaemonContext>, group_name_or_id: &
                 }
             }
             reconcile_roster(context, &group.id, &members)?;
+            context.store.adopt_roster_epoch(&group.id, roster_epoch)?;
             context.store.touch_group_sync(&group.id)?;
             Ok(())
         }
@@ -318,11 +328,13 @@ pub(crate) async fn leave_group(
     // Leaving revokes the grants we handed out on our shares and drops the
     // local group row (membership and contributions cascade), so `group list`
     // stops showing it immediately - even while the owner is offline.
-    drop_group(context, &group.id).await?;
     if is_owner {
-        // Owner leaving disbands the group: kick every remaining member. Each
+        // Owner leaving disbands the group: kick every remaining member. The
+        // epoch is bumped while the group row still exists so the disband
+        // removal carries a fresh watermark (never droppable as stale). Each
         // request names its own target (`peer_id` differs per recipient), so
         // broadcast's shared template does not fit - send them individually.
+        let roster_epoch = context.store.bump_roster_epoch(&group.id)?;
         for member in &members {
             if member.peer_id == self_id {
                 continue;
@@ -337,24 +349,29 @@ pub(crate) async fn leave_group(
                         group_id: group.id.clone(),
                         peer_id: member.peer_id.clone(),
                         peer_name: String::new(),
+                        roster_epoch,
                     },
                 ),
             )
             .await;
         }
-    } else if let Some(owner) = members.iter().find(|member| member.role.is_owner()) {
-        let _ = tokio::time::timeout(
-            BROADCAST_TIMEOUT,
-            net::exchange_with_peer(
-                &context.store,
-                &context.endpoint,
-                &owner.peer_id,
-                RemoteRequest::GroupLeave {
-                    group_id: group.id.clone(),
-                },
-            ),
-        )
-        .await;
+        drop_group(context, &group.id).await?;
+    } else {
+        drop_group(context, &group.id).await?;
+        if let Some(owner) = members.iter().find(|member| member.role.is_owner()) {
+            let _ = tokio::time::timeout(
+                BROADCAST_TIMEOUT,
+                net::exchange_with_peer(
+                    &context.store,
+                    &context.endpoint,
+                    &owner.peer_id,
+                    RemoteRequest::GroupLeave {
+                        group_id: group.id.clone(),
+                    },
+                ),
+            )
+            .await;
+        }
     }
     Ok(())
 }
@@ -388,7 +405,9 @@ pub(crate) async fn remove_group_member(
     // Notify everyone, including the removed peer, before dropping it from
     // the roster: broadcast reads the member list from the store, so the
     // target must still be listed to receive its own removal and clear the
-    // group locally. Offline peers converge on their next sync.
+    // group locally. Offline peers converge on their next sync. The epoch is
+    // bumped first so the broadcast carries the post-removal watermark.
+    let roster_epoch = context.store.bump_roster_epoch(&group.id)?;
     broadcast(
         context,
         &group.id,
@@ -396,6 +415,7 @@ pub(crate) async fn remove_group_member(
             group_id: group.id.clone(),
             peer_id: target.peer_id.clone(),
             peer_name: target.peer_name.clone(),
+            roster_epoch,
         },
         None,
     )
@@ -456,12 +476,13 @@ pub(crate) async fn redeem_group_remote(
     )
     .await?;
     // The owner derives the group from the invite row; register under that id.
-    let (group_id, group_name, members) = match response {
+    let (group_id, group_name, members, roster_epoch) = match response {
         RemoteResponse::GroupJoined {
             group_id,
             group_name,
             members,
-        } => (group_id, group_name, members),
+            roster_epoch,
+        } => (group_id, group_name, members, roster_epoch),
         response => bail!("Unexpected invitation response: {response:?}"),
     };
     // Our own device is a peer of itself (FK target in group_members).
@@ -481,6 +502,9 @@ pub(crate) async fn redeem_group_remote(
     // Converge on the returned roster and grant every member our shares. The
     // mirror is a join-time snapshot: add-only, never prune.
     upsert_roster(context, &group_id, &members)?;
+    // The join's roster epoch is the local watermark from the start, so
+    // broadcasts predating the join are never applied.
+    context.store.adopt_roster_epoch(&group_id, roster_epoch)?;
     context.store.touch_group_sync(&group_id)?;
     Ok((group_name, members.len()))
 }
@@ -509,8 +533,10 @@ pub(crate) async fn handle_redeem_group_invite(
         .redeem_group_invite(invite_id, secret, &joiner)?;
     // The invite row is the authority: the group is derived from the ticket,
     // never from the joiner's request, and used for every follow-up (name
-    // lookup, roster, broadcast).
+    // lookup, roster, broadcast). The join bumps the roster epoch so both the
+    // response and the newcomer broadcast carry a fresh watermark.
     let group_id = redeemed.group_id;
+    let roster_epoch = context.store.bump_roster_epoch(&group_id)?;
     let group_name = context.store.group(&group_id)?.name;
     let members: Vec<MemberInfo> = redeemed
         .roster
@@ -548,6 +574,7 @@ pub(crate) async fn handle_redeem_group_invite(
             RemoteRequest::GroupMemberAdded {
                 group_id: broadcast_group_id.clone(),
                 member: newcomer,
+                roster_epoch,
             },
             Some(&newcomer_id),
         )
@@ -557,6 +584,7 @@ pub(crate) async fn handle_redeem_group_invite(
         group_id,
         group_name,
         members,
+        roster_epoch,
     })
 }
 
@@ -692,9 +720,16 @@ pub(crate) async fn handle_member_removed(
     context: &Arc<DaemonContext>,
     group_id: &str,
     removed_peer: &str,
+    roster_epoch: i64,
 ) -> Result<RemoteResponse> {
+    // Stale removal: a newer roster state already reached us (the peer
+    // rejoined after this kick was sent), so the kick must not apply.
+    if roster_epoch <= context.store.roster_epoch(group_id)? {
+        return Ok(RemoteResponse::GroupAck);
+    }
     if removed_peer == context.identity.id() {
-        // We were kicked (or the owner disbanded the group).
+        // We were kicked (or the owner disbanded the group). The group row is
+        // gone, so there is no local watermark to adopt.
         drop_group(context, group_id).await?;
     } else {
         revoke_member_access(
@@ -704,6 +739,7 @@ pub(crate) async fn handle_member_removed(
             removed_peer,
         )?;
         context.store.remove_member(group_id, removed_peer)?;
+        context.store.adopt_roster_epoch(group_id, roster_epoch)?;
     }
     Ok(RemoteResponse::GroupAck)
 }
@@ -727,6 +763,7 @@ pub(crate) async fn handle_leave(
     if let Some(owner) = members_before.iter().find(|row| row.role.is_owner()) {
         revoke_member_access(&context.store, group_id, &owner.peer_id, sender)?;
     }
+    let roster_epoch = context.store.bump_roster_epoch(group_id)?;
     broadcast(
         context,
         group_id,
@@ -734,6 +771,7 @@ pub(crate) async fn handle_leave(
             group_id: group_id.to_string(),
             peer_id: leaver.peer_id.clone(),
             peer_name: leaver.peer_name.clone(),
+            roster_epoch,
         },
         None,
     )
@@ -1124,13 +1162,67 @@ mod tests {
             "member",
             vec![(s2.id.clone(), s2.name.clone())],
         );
-        merge_member(&context, "team", &stale_push).expect("merge");
+        merge_member(&context, "team", &stale_push, 1).expect("merge");
         let shares = store.group_shares("team", &bob_id).expect("shares");
         assert!(
             shares.iter().any(|share| share.share_id == s3.id),
             "an add-only push must never prune a share broadcast concurrently"
         );
         assert!(shares.iter().any(|share| share.share_id == s2.id));
+    }
+
+    #[tokio::test]
+    async fn stale_owner_broadcasts_are_ignored() {
+        let (temp, context, _self_id) = context_with_members().await;
+        let store = &context.store;
+        let workspace = temp.path().join("workspace");
+        let bob_id = store
+            .members("team")
+            .expect("members")
+            .into_iter()
+            .find(|member| member.peer_name == "bob")
+            .expect("bob")
+            .peer_id;
+        let s = store
+            .add_share("workspace-bob", &workspace, "bob-ws", true)
+            .expect("share");
+        // Fresh join push (epoch 5) applies and registers Bob's share.
+        merge_member(
+            &context,
+            "team",
+            &member_info(
+                &bob_id,
+                "bob",
+                "member",
+                vec![(s.id.clone(), s.name.clone())],
+            ),
+            5,
+        )
+        .expect("join push");
+        // A stale kick (epoch 4, sent before the rejoin) must not remove Bob.
+        handle_member_removed(&context, "team", &bob_id, 4)
+            .await
+            .expect("stale kick ignored");
+        assert!(
+            store
+                .members("team")
+                .expect("members")
+                .iter()
+                .any(|member| member.peer_id == bob_id),
+            "a stale kick must not remove a member that rejoined"
+        );
+        // A fresh kick (epoch 6) does remove Bob and revokes his grants.
+        handle_member_removed(&context, "team", &bob_id, 6)
+            .await
+            .expect("fresh kick");
+        assert!(
+            !store
+                .members("team")
+                .expect("members")
+                .iter()
+                .any(|member| member.peer_id == bob_id),
+            "a fresh kick removes the member"
+        );
     }
 
     #[tokio::test]
