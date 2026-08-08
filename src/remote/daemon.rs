@@ -586,41 +586,19 @@ async fn process_remote(
             peer_name: _,
             share_id,
             share_name,
-        } => {
-            // Only a member may register contributions, and only its own: a
-            // forged peer_id would otherwise let an outsider attach arbitrary
-            // shares to other members' rosters.
-            if !context.store.is_member(&group_id, peer_id)? {
-                bail!("Only group members may register shares");
-            }
-            if contributor != peer_id {
-                bail!("Only the contributor may register its own share");
-            }
-            // The contributor granted everyone access locally; members only
-            // need to register the new contribution so fan-out can reach it.
-            context
-                .store
-                .add_group_share(&group_id, &contributor, &share_id, &share_name)?;
-            Ok(RemoteResponse::GroupAck)
-        }
+        } => group::handle_share_added(
+            context,
+            &group_id,
+            peer_id,
+            &contributor,
+            &share_id,
+            &share_name,
+        ),
         RemoteRequest::GroupShareRemoved {
             group_id,
             peer_id: contributor,
             share_id,
-        } => {
-            if !context.store.is_member(&group_id, peer_id)? {
-                bail!("Only group members may withdraw shares");
-            }
-            if contributor != peer_id {
-                bail!("Only the contributor may withdraw its own share");
-            }
-            // The share is no longer part of the group; drop the local
-            // registration so fan-out stops dialing it.
-            context
-                .store
-                .remove_group_share(&group_id, &contributor, &share_id)?;
-            Ok(RemoteResponse::GroupAck)
-        }
+        } => group::handle_share_removed(context, &group_id, peer_id, &contributor, &share_id),
         RemoteRequest::GroupMemberRemoved {
             group_id,
             peer_id: removed_peer,
