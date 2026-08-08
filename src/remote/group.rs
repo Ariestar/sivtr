@@ -633,18 +633,52 @@ pub(crate) async fn adjust_group_shares(
     Ok(())
 }
 
-/// Require `sender` to be a member and the named contributor before a share
-/// add/remove broadcast is applied locally.
-fn require_own_share_change(
-    store: &StateStore,
-    group_id: &str,
-    sender: &str,
-    contributor: &str,
-    action: &str,
-) -> Result<()> {
-    if !store.is_member(group_id, sender)? {
-        bail!("Only group members may {action} shares");
+/// Access rule a remote request must satisfy before dispatch. Evaluated once
+/// in the router; the arms then do domain work only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AccessRule {
+    /// No role gate; the request carries its own credential (invite secret,
+    /// share grant, or the roster gate inside GroupSync).
+    Open,
+    /// Only the group owner may call.
+    Owner,
+    /// The sender must be a group member (any role).
+    Member,
+}
+
+/// Classify a remote request by its access rule.
+pub(crate) fn access_rule(request: &RemoteRequest) -> AccessRule {
+    match request {
+        RemoteRequest::RedeemInvite { .. }
+        | RemoteRequest::RedeemGroupInvite { .. }
+        | RemoteRequest::Query { .. }
+        | RemoteRequest::Probe { .. }
+        | RemoteRequest::GroupSync { .. } => AccessRule::Open,
+        RemoteRequest::GroupMemberAdded { .. } | RemoteRequest::GroupMemberRemoved { .. } => {
+            AccessRule::Owner
+        }
+        RemoteRequest::GroupShareAdded { .. }
+        | RemoteRequest::GroupShareRemoved { .. }
+        | RemoteRequest::GroupLeave { .. } => AccessRule::Member,
     }
+}
+
+/// The group a group-scoped request targets.
+pub(crate) fn request_group_id(request: &RemoteRequest) -> Option<&str> {
+    match request {
+        RemoteRequest::GroupMemberAdded { group_id, .. }
+        | RemoteRequest::GroupMemberRemoved { group_id, .. }
+        | RemoteRequest::GroupShareAdded { group_id, .. }
+        | RemoteRequest::GroupShareRemoved { group_id, .. }
+        | RemoteRequest::GroupLeave { group_id }
+        | RemoteRequest::GroupSync { group_id } => Some(group_id),
+        _ => None,
+    }
+}
+
+/// Require `sender` to be the named contributor before a share add/remove
+/// broadcast is applied locally (membership is gated by the access matrix).
+fn require_own_share_change(sender: &str, contributor: &str, action: &str) -> Result<()> {
     if contributor != sender {
         bail!("Only the contributor may {action} its own share");
     }
@@ -662,7 +696,9 @@ pub(crate) fn handle_share_added(
     share_id: &str,
     share_name: &str,
 ) -> Result<RemoteResponse> {
-    require_own_share_change(&context.store, group_id, sender, contributor, "register")?;
+    // A forged contributor id would let an outsider attach arbitrary shares
+    // to other members' rosters.
+    require_own_share_change(sender, contributor, "register")?;
     context
         .store
         .add_group_share(group_id, contributor, share_id, share_name)?;
@@ -678,7 +714,7 @@ pub(crate) fn handle_share_removed(
     contributor: &str,
     share_id: &str,
 ) -> Result<RemoteResponse> {
-    require_own_share_change(&context.store, group_id, sender, contributor, "withdraw")?;
+    require_own_share_change(sender, contributor, "withdraw")?;
     context
         .store
         .remove_group_share(group_id, contributor, share_id)?;
@@ -981,6 +1017,116 @@ mod tests {
         let (_temp, store) = group_store();
         let error = require_group_owner(&store, "missing", "self-1").expect_err("unknown group");
         assert!(error.to_string().contains("Unknown group"));
+    }
+
+    #[test]
+    fn access_matrix_classifies_every_request() {
+        use crate::remote::protocol::RemoteRequest as R;
+        let id = iroh::SecretKey::generate().public();
+        let member = MemberInfo {
+            peer_id: id.to_string(),
+            peer_name: "peer".to_string(),
+            shares: Vec::new(),
+            role: "member".to_string(),
+            endpoint: iroh::EndpointAddr::new(id),
+        };
+        let cases: Vec<(R, AccessRule)> = vec![
+            (
+                R::RedeemInvite {
+                    invite_id: String::new(),
+                    secret: String::new(),
+                    peer_name: String::new(),
+                },
+                AccessRule::Open,
+            ),
+            (
+                R::RedeemGroupInvite {
+                    invite_id: String::new(),
+                    secret: String::new(),
+                    peer_name: String::new(),
+                    shares: Vec::new(),
+                    endpoint: member.endpoint.clone(),
+                },
+                AccessRule::Open,
+            ),
+            (
+                R::Query {
+                    share_id: String::new(),
+                    source: String::new(),
+                    filter: Default::default(),
+                },
+                AccessRule::Open,
+            ),
+            (
+                R::Probe {
+                    share_id: String::new(),
+                },
+                AccessRule::Open,
+            ),
+            (
+                R::GroupSync {
+                    group_id: String::new(),
+                },
+                AccessRule::Open,
+            ),
+            (
+                R::GroupMemberAdded {
+                    group_id: String::new(),
+                    member: member.clone(),
+                    roster_epoch: 0,
+                },
+                AccessRule::Owner,
+            ),
+            (
+                R::GroupMemberRemoved {
+                    group_id: String::new(),
+                    peer_id: String::new(),
+                    peer_name: String::new(),
+                    roster_epoch: 0,
+                },
+                AccessRule::Owner,
+            ),
+            (
+                R::GroupShareAdded {
+                    group_id: String::new(),
+                    peer_id: String::new(),
+                    peer_name: String::new(),
+                    share_id: String::new(),
+                    share_name: String::new(),
+                },
+                AccessRule::Member,
+            ),
+            (
+                R::GroupShareRemoved {
+                    group_id: String::new(),
+                    peer_id: String::new(),
+                    share_id: String::new(),
+                },
+                AccessRule::Member,
+            ),
+            (
+                R::GroupLeave {
+                    group_id: String::new(),
+                },
+                AccessRule::Member,
+            ),
+        ];
+        for (request, expected) in cases {
+            assert_eq!(access_rule(&request), expected, "{request:?}");
+        }
+        // Group-scoped variants expose their group id; others expose none.
+        assert_eq!(
+            request_group_id(&R::GroupLeave {
+                group_id: "team".to_string(),
+            }),
+            Some("team")
+        );
+        assert_eq!(
+            request_group_id(&R::Probe {
+                share_id: String::new()
+            }),
+            None
+        );
     }
 
     #[test]
