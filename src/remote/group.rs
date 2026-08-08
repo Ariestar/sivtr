@@ -375,9 +375,10 @@ pub(crate) async fn remove_group_member(
             .store
             .revoke_group_grant(&group.id, &share.share_id, &target.peer_id)?;
     }
-    context.store.remove_member(&group.id, &target.peer_id)?;
-    // Everyone hears about the removal - the removed peer clears the group
-    // locally when it sees its own peer_id.
+    // Notify everyone, including the removed peer, before dropping it from
+    // the roster: broadcast reads the member list from the store, so the
+    // target must still be listed to receive its own removal and clear the
+    // group locally. Offline peers converge on their next sync.
     broadcast(
         context,
         &group.id,
@@ -389,6 +390,7 @@ pub(crate) async fn remove_group_member(
         None,
     )
     .await;
+    context.store.remove_member(&group.id, &target.peer_id)?;
     Ok(())
 }
 
