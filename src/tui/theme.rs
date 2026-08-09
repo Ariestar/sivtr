@@ -207,20 +207,18 @@ thread_local! {
     static ACTIVE: Cell<Theme> = const { Cell::new(Theme::dark()) };
 }
 
-/// Pick the palette for this process from the config preference
-/// (auto-detect from the environment when not overridden).
+/// Pick the palette for this process from the config preference. The
+/// preference decides light vs dark (auto-detecting the background), and the
+/// terminal's truecolor support decides RGB vs ANSI - so a forced light/dark
+/// mode still falls back to the ANSI palette when `COLORTERM` is absent,
+/// instead of emitting RGB sequences a non-truecolor terminal cannot render.
 pub(crate) fn apply(preference: ThemeMode) {
-    let theme = match preference {
-        ThemeMode::Auto => detect(),
-        ThemeMode::Dark => Theme::dark(),
-        ThemeMode::Light => Theme::light(),
+    let light = match preference {
+        ThemeMode::Auto => light_background(),
+        ThemeMode::Dark => false,
+        ThemeMode::Light => true,
     };
-    ACTIVE.set(theme);
-}
-
-fn detect() -> Theme {
-    let light = light_background();
-    if supports_truecolor() {
+    let theme = if supports_truecolor() {
         if light {
             Theme::light()
         } else {
@@ -232,7 +230,8 @@ fn detect() -> Theme {
         Theme::ansi_light()
     } else {
         Theme::ansi()
-    }
+    };
+    ACTIVE.set(theme);
 }
 
 /// Truecolor when the terminal advertises it (`COLORTERM=truecolor|24bit`).
