@@ -333,10 +333,20 @@ pub(crate) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> Str
 }
 
 /// Print a prompt and block until the user presses Enter.
+///
+/// On Windows the TUI binds a redirected stdin to `CONIN$` and restores the
+/// original handle during cleanup; rebind the console here so the prompt still
+/// reads from the console the user is looking at instead of a redirect.
 pub(crate) fn wait_for_enter(prompt: &str) {
     eprintln!("{prompt}");
+    #[cfg(windows)]
+    let _console = if io::stdin().is_terminal() {
+        None
+    } else {
+        ConsoleInputHandle::ensure_console().ok().flatten()
+    };
     let mut input = String::new();
-    let _ = std::io::stdin().read_line(&mut input);
+    let _ = io::stdin().read_line(&mut input);
 }
 
 /// Temporarily exit the TUI while an external program runs, then re-enter it.

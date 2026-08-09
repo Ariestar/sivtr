@@ -25,7 +25,6 @@ pub(crate) use text::{filter_lines_by_spec, record_text_to_pair, select_lines};
 
 use anyhow::{anyhow, Context, Result};
 use sivtr_core::ai::AgentProvider;
-use std::io::{self, IsTerminal};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use crate::tui::terminal::{
@@ -149,12 +148,11 @@ fn run_picker_guarded(
         Err(payload) => {
             let message = panic_payload_message(&payload);
             let restored = restore_tui(terminal).is_ok();
-            eprintln!("sivtr: TUI panicked: {message}");
-            // Only prompt after a successful restore: while raw mode is still
-            // active a blocking read may never see a newline, and the later
-            // finish_tui retry must get a chance to run and report the
-            // cleanup failure.
-            if restored && wait_after_panic && io::stdin().is_terminal() {
+            // The caller (cli_main / show_pick_error_and_wait) reports the
+            // error once; just pause so the user can see the restored screen
+            // before the report scrolls past. `wait_for_enter` reads from the
+            // console itself, so a redirected stdin cannot skip the prompt.
+            if restored && wait_after_panic {
                 wait_for_enter("press Enter to continue");
             }
             Err(anyhow!("TUI panicked: {message}"))
