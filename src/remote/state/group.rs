@@ -57,7 +57,12 @@ impl StateStore {
         validate_alias(new_name, "group name")?;
         let new_name = new_name.to_ascii_lowercase();
         let group = self.group(group_name_or_id)?;
-        if new_name != group.name && self.group_opt(&new_name)?.is_some() {
+        // The group's own id is a valid identifier and resolves through the
+        // same lookup, so exclude the target row from the collision check.
+        let collides = self
+            .group_opt(&new_name)?
+            .is_some_and(|other| other.id != group.id);
+        if new_name != group.name && collides {
             bail!("A group named `{new_name}` already exists");
         }
         self.connect()?.execute(
@@ -273,6 +278,9 @@ impl StateStore {
                 params![group_id, row.peer_id, row.role, timestamp],
             )?;
             for (share_id, share_name) in &row.shares {
+                // Remotely supplied roster entries land here; reject reserved
+                // scope segments before they produce non-round-trippable refs.
+                validate_alias(share_name, "contributed share name")?;
                 transaction.execute(
                     "INSERT INTO group_shares(group_id, peer_id, share_id, share_name, added_at) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(group_id, peer_id, share_id) DO NOTHING",
                     params![group_id, row.peer_id, share_id, share_name, timestamp],
@@ -377,7 +385,9 @@ impl StateStore {
             .map_err(Into::into)
     }
 
-    /// Register one contributed workspace for a member (idempotent).
+    /// Register one contributed workspace for a member (idempotent). The name
+    /// becomes a scope segment in group refs, so it must not use a reserved
+    /// scheme name (`local`/`sivtr`) that ref parsing rejects.
     pub fn add_group_share(
         &self,
         group_name_or_id: &str,
@@ -385,6 +395,7 @@ impl StateStore {
         share_id: &str,
         share_name: &str,
     ) -> Result<()> {
+        validate_alias(share_name, "contributed share name")?;
         let group = self.group(group_name_or_id)?;
         self.connect()?.execute(
             "INSERT INTO group_shares(group_id, peer_id, share_id, share_name, added_at) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(group_id, peer_id, share_id) DO NOTHING",

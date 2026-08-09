@@ -81,10 +81,12 @@ pub enum RemoteRequest {
     },
     /// Group owner → existing members: a new member joined; grant them access
     /// to your group shares. Members also treat this for their own peer_id as a
-    /// revocation signal (kicked).
+    /// revocation signal (kicked). Carries the full post-join roster snapshot:
+    /// a newer broadcast supersedes an older one wholesale, so a member who
+    /// joined between two broadcasts is never dropped by an epoch guard.
     GroupMemberAdded {
         group_id: String,
-        member: MemberInfo,
+        members: Vec<MemberInfo>,
         /// Owner's roster version after this join.
         roster_epoch: i64,
     },
@@ -114,8 +116,11 @@ pub enum RemoteRequest {
         group_id: String,
     },
     /// Member → group owner: pull the authoritative roster for reconciliation.
+    /// `shares` is the sender's current contribution list, which the owner
+    /// treats as authoritative for that member when repairing its roster.
     GroupSync {
         group_id: String,
+        shares: Vec<(String, String)>,
     },
     /// Run the same local query the peer would run: load `source` then apply `filter`.
     Query {
@@ -215,6 +220,9 @@ pub struct DaemonStatus {
     pub started_at: String,
     pub shares: usize,
     pub peers: usize,
+    /// The protocol this daemon speaks; clients restart a mismatched daemon
+    /// instead of sending requests it cannot deserialize.
+    pub protocol_version: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

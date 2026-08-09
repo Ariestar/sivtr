@@ -197,7 +197,16 @@ impl StateStore {
     }
 
     fn initialize(&self) -> Result<()> {
-        self.connect()?.execute_batch(
+        let connection = self.connect()?;
+        // Detect installs that predate the group-domain grant-sources table
+        // (the schema below would create it) so the migration can backfill
+        // existing grants exactly once, on the pass that introduces it.
+        let had_grant_sources: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'grant_sources'",
+            [],
+            |row| row.get(0),
+        )?;
+        connection.execute_batch(
             r#"
             PRAGMA journal_mode = WAL;
 
@@ -304,7 +313,6 @@ impl StateStore {
         // Idempotent migration for installs that predate group invites.
         // `CREATE TABLE IF NOT EXISTS` cannot add columns, so ALTER and ignore
         // the "duplicate column name" error on already-migrated databases.
-        let connection = self.connect()?;
         for statement in [
             "ALTER TABLE invites ADD COLUMN kind TEXT NOT NULL DEFAULT 'share'",
             "ALTER TABLE invites ADD COLUMN group_id TEXT",
@@ -374,6 +382,16 @@ impl StateStore {
                     SELECT group_id, peer_id, share_id, share_name, added_at FROM group_shares_old;
                 DROP TABLE group_shares_old;
                 "#,
+            )?;
+        }
+        // The pass that introduces `grant_sources` backfills the already-active
+        // grants as direct sources: without a source row, withdrawing the same
+        // share from a later group would revoke a still-valid direct grant.
+        if had_grant_sources == 0 {
+            connection.execute_batch(
+                "INSERT INTO grant_sources(share_id, peer_id, via, group_id, created_at)
+                 SELECT share_id, peer_id, 'direct', NULL, created_at FROM grants
+                 WHERE revoked_at IS NULL",
             )?;
         }
         Ok(())
@@ -647,8 +665,13 @@ impl StateStore {
                 groups.join(", ")
             );
         }
-        self.connect()?
-            .execute("DELETE FROM peers WHERE id = ?1", [&peer.id])?;
+        // `grant_sources` has no foreign key on peers, so the cascade cannot
+        // clean it: drop every source this peer authorized through. Otherwise
+        // a later rejoin + kick would see the stale source and preserve the
+        // grant, leaving the forgotten peer queryable forever.
+        let connection = self.connect()?;
+        connection.execute("DELETE FROM grant_sources WHERE peer_id = ?1", [&peer.id])?;
+        connection.execute("DELETE FROM peers WHERE id = ?1", [&peer.id])?;
         Ok(peer)
     }
 
@@ -1532,6 +1555,30 @@ mod tests {
     }
 
     #[test]
+    fn forgetting_a_peer_clears_its_grant_sources() {
+        let (_temp, store, share) = group_store();
+        // A direct redeem records a `grant_sources` row that has no foreign
+        // key on peers; forgetting the peer must drop it or the stale source
+        // would keep a later rejoin's grant alive after a kick.
+        store.save_remote_peer("peer-9", "zoe", "{}").unwrap();
+        let invite = store.create_invite(&share.name, 60).unwrap();
+        store
+            .redeem_invite(&invite.id, &invite.secret, "peer-9", "zoe")
+            .unwrap();
+        store.forget_peer("peer-9").unwrap();
+        let remaining: i64 = store
+            .connect()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM grant_sources WHERE peer_id = ?1",
+                ["peer-9"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 0, "forgetting a peer clears its grant sources");
+    }
+
+    #[test]
     fn group_names_reject_reserved_schemes() {
         let temp = tempfile::tempdir().unwrap();
         let store = StateStore::open(temp.path().join("state.db")).unwrap();
@@ -1545,5 +1592,78 @@ mod tests {
         assert!(error.to_string().contains("reserved"));
         // Ordinary names still work.
         store.add_group("team", "self-1", "self").unwrap();
+    }
+
+    #[test]
+    fn rename_to_own_id_is_not_a_collision() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = StateStore::open(temp.path().join("state.db")).unwrap();
+        let group = store.add_group("team", "self-1", "self").unwrap();
+        // The group's own id satisfies the identifier rules and resolves
+        // through the same lookup; renaming to it is not a collision.
+        let renamed = store.rename_group("team", &group.id).unwrap();
+        assert_eq!(renamed.name, group.id);
+        // A real collision is still rejected.
+        store.add_group("other", "self-1", "self").unwrap();
+        let error = store
+            .rename_group(&group.id, "other")
+            .expect_err("collision");
+        assert!(error.to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn contributed_share_names_reject_reserved_schemes() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = StateStore::open(temp.path().join("state.db")).unwrap();
+        store.add_group("team", "self-1", "self").unwrap();
+        let error = store
+            .add_group_share("team", "self-1", "sh-1", "local")
+            .expect_err("reserved");
+        assert!(error.to_string().contains("reserved"));
+        let error = store
+            .add_group_share("team", "self-1", "sh-1", "sivtr")
+            .expect_err("reserved");
+        assert!(error.to_string().contains("reserved"));
+        store
+            .add_group_share("team", "self-1", "sh-1", "bob-ws")
+            .unwrap();
+    }
+
+    #[test]
+    fn migration_backfills_legacy_direct_grants() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = temp.path().join("state.db");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        // Simulate an install from before `grant_sources`: no table, but an
+        // active grant issued by a direct redeem.
+        let store = StateStore::open(db.clone()).unwrap();
+        let share = store.add_share("ws-key", &workspace, "proj", true).unwrap();
+        store.save_remote_peer("peer-1", "bob", "{}").unwrap();
+        {
+            let connection = store.connect().unwrap();
+            connection
+                .execute_batch(&format!(
+                    "DROP TABLE grant_sources;
+                     INSERT INTO grants(peer_id, share_id, permission, created_at)
+                     VALUES ('peer-1', '{}', 'read_memory', '2026-01-01T00:00:00Z');",
+                    share.id
+                ))
+                .unwrap();
+        }
+        // Reopening runs the migration: the table is recreated and the active
+        // grant gets a direct source, so a later group withdrawal cannot
+        // revoke it.
+        let store = StateStore::open(db.clone()).unwrap();
+        let backfilled: i64 = store
+            .connect()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM grant_sources WHERE peer_id = 'peer-1' AND via = 'direct'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(backfilled, 1, "legacy active grants become direct sources");
     }
 }

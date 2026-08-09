@@ -192,6 +192,7 @@ async fn process_local(
             started_at: context.started_at.clone(),
             shares: context.store.shares()?.len(),
             peers: context.store.peers()?.len(),
+            protocol_version: PROTOCOL_VERSION,
         }),
         LocalRequest::Shutdown => return Ok((LocalResponse::Ok, true)),
         LocalRequest::ShareAdd {
@@ -502,10 +503,10 @@ async fn process_remote(
         }
         RemoteRequest::GroupMemberAdded {
             group_id,
-            member,
+            members,
             roster_epoch,
         } => {
-            groups::merge_member(context, &group_id, &member, roster_epoch)?;
+            groups::merge_member(context, &group_id, &members, roster_epoch)?;
             Ok(RemoteResponse::GroupAck)
         }
         RemoteRequest::GroupShareAdded {
@@ -537,7 +538,7 @@ async fn process_remote(
             groups::handle_leave(context, &group_id, peer_id).await?;
             Ok(RemoteResponse::GroupAck)
         }
-        RemoteRequest::GroupSync { group_id } => {
+        RemoteRequest::GroupSync { group_id, shares } => {
             let Some((group_name, members)) = groups::roster_for(context, &group_id, peer_id)?
             else {
                 return Ok(RemoteResponse::GroupSynced {
@@ -556,6 +557,14 @@ async fn process_remote(
                     roster_epoch,
                 });
             }
+            // The member is the authority on its own contributions: repair the
+            // roster from the reported list (the add/withdraw broadcast may
+            // have been missed while we were offline), then answer with the
+            // fresh roster so the member converges immediately.
+            groups::sync_member_shares(&context.store, &group_id, peer_id, &shares)?;
+            let roster_epoch = context.store.roster_epoch(&group_id)?;
+            let (group_name, members) = groups::roster_for(context, &group_id, peer_id)?
+                .context("Group disappeared during roster sync")?;
             Ok(RemoteResponse::GroupSynced {
                 group_name,
                 member: true,
