@@ -10,18 +10,47 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Once;
 
 thread_local! {
-    /// Closure that restores the terminal, registered by the TUI on the thread that owns it.
-    static TERMINAL_RESTORE: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+    /// Stack of panic-time restore closures, innermost (most recent) session
+    /// last. A session's entry is cleared when that session restores or drops,
+    /// so a later panic in a still-live outer session pops the outer closure.
+    static TERMINAL_RESTORE: RestoreSlots = const { RefCell::new(Vec::new()) };
 }
 
+/// Registered restore closures; see [`TERMINAL_RESTORE`].
+type RestoreSlots = RefCell<Vec<Option<Box<dyn FnOnce()>>>>;
+
 static INSTALL: Once = Once::new();
+
+/// A session's panic-restore registration. Dropping it (TUI finish/drop)
+/// clears this session's slot without shifting later indices; the panic hook
+/// takes the innermost live closure.
+pub struct RestoreRegistration {
+    index: usize,
+}
 
 /// Register the closure the panic hook runs to restore the terminal.
 ///
 /// The closure is stored on the calling thread and only runs when that thread panics, so a panic
-/// on a background thread cannot tear down a TUI that is still drawing on the main thread.
-pub fn register_restore(restore: Box<dyn FnOnce()>) {
-    TERMINAL_RESTORE.with(|slot| slot.replace(Some(restore)));
+/// on a background thread cannot tear down a TUI that is still drawing on the main thread. Nested
+/// TUI sessions stack on their owning thread; drop the returned registration when the session
+/// ends so a later panic in an outer session still restores the outer state.
+pub fn register_restore(restore: Box<dyn FnOnce()>) -> RestoreRegistration {
+    let index = TERMINAL_RESTORE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        slot.push(Some(restore));
+        slot.len() - 1
+    });
+    RestoreRegistration { index }
+}
+
+impl Drop for RestoreRegistration {
+    fn drop(&mut self) {
+        TERMINAL_RESTORE.with(|slot| {
+            if let Some(entry) = slot.borrow_mut().get_mut(self.index) {
+                *entry = None;
+            }
+        });
+    }
 }
 
 /// Install a panic hook that restores the terminal before reporting the panic.
@@ -32,8 +61,11 @@ pub fn install() {
     INSTALL.call_once(|| {
         let default_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            let restore = TERMINAL_RESTORE
-                .with(|slot| slot.try_borrow_mut().ok().and_then(|mut slot| slot.take()));
+            let restore = TERMINAL_RESTORE.with(|slot| {
+                slot.try_borrow_mut()
+                    .ok()
+                    .and_then(|mut slot| slot.iter_mut().rev().find_map(|entry| entry.take()))
+            });
             if let Some(restore) = restore {
                 // A restore that panics (e.g. I/O against a dying console) must not abort the
                 // process before the panic is reported.
@@ -57,12 +89,42 @@ mod tests {
         install();
         let restored = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&restored);
-        register_restore(Box::new(move || {
+        let _registration = register_restore(Box::new(move || {
             flag.store(true, Ordering::Relaxed);
         }));
 
         let result = std::panic::catch_unwind(|| panic!("deliberate panic"));
         assert!(result.is_err());
         assert!(restored.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn ended_session_clears_its_restore_and_keeps_the_outer_one() {
+        install();
+        let inner = Arc::new(AtomicBool::new(false));
+        let outer = Arc::new(AtomicBool::new(false));
+        // An inner session registers and ends normally: its slot must clear,
+        // so a later panic in the still-live outer session pops the outer
+        // closure instead of the stale inner one.
+        let inner_flag = Arc::clone(&inner);
+        let registration = register_restore(Box::new(move || {
+            inner_flag.store(true, Ordering::Relaxed);
+        }));
+        let outer_flag = Arc::clone(&outer);
+        let _outer_registration = register_restore(Box::new(move || {
+            outer_flag.store(true, Ordering::Relaxed);
+        }));
+        drop(registration);
+
+        let result = std::panic::catch_unwind(|| panic!("deliberate panic"));
+        assert!(result.is_err());
+        assert!(
+            !inner.load(Ordering::Relaxed),
+            "inner restore must be cleared"
+        );
+        assert!(
+            outer.load(Ordering::Relaxed),
+            "outer restore must still run"
+        );
     }
 }

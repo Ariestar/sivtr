@@ -35,6 +35,9 @@ pub struct Tui {
     /// Shared with the panic hook so a crash restores the terminal exactly as `Drop` would.
     /// The TUI and its panic restore live on the same thread, so the state never leaves it.
     state: Rc<RefCell<TerminalState>>,
+    /// Clears this session's panic-restore slot when the `Tui` ends, so a later
+    /// panic in an outer session still pops the outer closure.
+    _panic_restore: panic::RestoreRegistration,
     #[cfg(windows)]
     previous_frame_had_wide_cells: bool,
     #[cfg(windows)]
@@ -52,31 +55,6 @@ impl Deref for Tui {
 impl DerefMut for Tui {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.terminal
-    }
-}
-
-impl Tui {
-    /// Register the terminal restore with the panic hook, replacing any previous registration.
-    ///
-    /// Called by [`init`] for every new terminal session. The previous session's state was
-    /// already restored (or its `Tui` is still alive and owns its own registration path), so
-    /// replacing the closure is safe.
-    fn register_panic_restore(&self) {
-        let state = Rc::clone(&self.state);
-        panic::register_restore(Box::new(move || {
-            // Restore in place: successful cleanup steps are disarmed, so an
-            // unwinding `Drop` afterwards retries only the steps that failed here.
-            // The state may be mutably borrowed by the frame that is unwinding,
-            // so borrow non-panicking: the `Drop` path is the safety net.
-            let Ok(mut state) = state.try_borrow_mut() else {
-                return;
-            };
-            // A library caller may catch the panic itself and keep using this
-            // `Tui`; mark it so a later `draw` cannot paint onto the restored
-            // normal screen, and a later panic knows cleanup already ran.
-            state.panic_restored = true;
-            let _ = restore_terminal_state(&mut state);
-        }));
     }
 }
 
@@ -152,19 +130,37 @@ pub fn init() -> Result<Tui> {
         Err(error) => return setup.fail(error),
     };
 
+    let state = Rc::new(RefCell::new(setup.commit()));
+    let panic_restore = panic::register_restore(Box::new({
+        let state = Rc::clone(&state);
+        move || {
+            // Restore in place: successful cleanup steps are disarmed, so an
+            // unwinding `Drop` afterwards retries only the steps that failed
+            // here. The state may be mutably borrowed by the frame that is
+            // unwinding, so borrow non-panicking: the `Drop` path is the
+            // safety net.
+            let Ok(mut state) = state.try_borrow_mut() else {
+                return;
+            };
+            // A library caller may catch the panic itself and keep using this
+            // `Tui`; mark it so a later `draw` cannot paint onto the restored
+            // normal screen, and a later panic knows cleanup already ran.
+            state.panic_restored = true;
+            let _ = restore_terminal_state(&mut state);
+        }
+    }));
     let tui = Tui {
         terminal,
         drawing_active: true,
-        state: Rc::new(RefCell::new(setup.commit())),
+        state,
+        _panic_restore: panic_restore,
         #[cfg(windows)]
         previous_frame_had_wide_cells: false,
         #[cfg(windows)]
         synchronized_updates_supported,
     };
-    tui.register_panic_restore();
     Ok(tui)
 }
-
 /// Draw one TUI frame.
 ///
 /// Windows terminals can leave stale trailing cells when an incremental diff replaces CJK or
@@ -190,7 +186,7 @@ where
         let force_full_redraw = resized || terminal.previous_frame_had_wide_cells;
 
         let draw_result = if terminal.synchronized_updates_supported {
-            let update = SynchronizedUpdateGuard::begin()?;
+            let update = SynchronizedUpdateGuard::begin(&terminal.state)?;
             let result = draw_terminal_frame(&mut terminal.terminal, force_full_redraw, render)
                 .context("Failed to draw a Windows terminal frame");
             combine_results(
@@ -368,6 +364,14 @@ fn restore_owned_state(failures: &mut CleanupFailures, state: &mut TerminalState
         // Windows. Keep virtual-terminal output enabled until every such sequence succeeds, so a
         // later Drop retry can still take effect instead of merely writing inert escape bytes.
         if display_commands_restored {
+            // A panic can leave the synchronized-update guard armed; end the update while VT
+            // output is still enabled, before restoring the original mode (which may disable the
+            // processing the end sequence needs).
+            #[cfg(windows)]
+            if state.synchronized_update_active {
+                let _ = execute!(io::stdout(), EndSynchronizedUpdate);
+                state.synchronized_update_active = false;
+            }
             let output_result = modes.restore_output();
             failures.record("restore console output mode", output_result);
         }
@@ -412,6 +416,11 @@ struct TerminalState {
     /// Set when the panic hook already restored the terminal for a `Tui` that
     /// survived the unwind (library callers may catch the panic themselves).
     panic_restored: bool,
+    /// A synchronized update is open on the output; the panic restore ends it
+    /// before restoring the original console mode (which may disable the
+    /// virtual-terminal processing the end sequence needs).
+    #[cfg(windows)]
+    synchronized_update_active: bool,
 }
 
 impl TerminalState {
@@ -881,16 +890,21 @@ fn win32_console_call(operation: &str, succeeded: i32) -> Result<()> {
 #[cfg(windows)]
 struct SynchronizedUpdateGuard {
     active: bool,
+    state: Rc<RefCell<TerminalState>>,
 }
 
 #[cfg(windows)]
 impl SynchronizedUpdateGuard {
-    fn begin() -> Result<Self> {
+    fn begin(state: &Rc<RefCell<TerminalState>>) -> Result<Self> {
         // Arm before writing Begin: an I/O error can occur after bytes have partially reached the
         // terminal, so Drop must still attempt End.
-        let guard = Self { active: true };
+        let guard = Self {
+            active: true,
+            state: Rc::clone(state),
+        };
         execute!(io::stdout(), BeginSynchronizedUpdate)
             .context("Failed to begin synchronized terminal update")?;
+        state.borrow_mut().synchronized_update_active = true;
         Ok(guard)
     }
 
@@ -898,6 +912,7 @@ impl SynchronizedUpdateGuard {
         let result = execute!(io::stdout(), EndSynchronizedUpdate)
             .context("Failed to end synchronized terminal update");
         if result.is_ok() {
+            self.state.borrow_mut().synchronized_update_active = false;
             self.active = false;
         }
         result
@@ -907,10 +922,14 @@ impl SynchronizedUpdateGuard {
 #[cfg(windows)]
 impl Drop for SynchronizedUpdateGuard {
     fn drop(&mut self) {
-        if self.active {
+        // The panic restore ends the update itself and clears the shared flag;
+        // end here only while the update is still open, so the restore's End
+        // is not echoed a second time after VT output has been restored.
+        if self.active && self.state.borrow().synchronized_update_active {
             let _ = execute!(io::stdout(), EndSynchronizedUpdate);
-            self.active = false;
+            self.state.borrow_mut().synchronized_update_active = false;
         }
+        self.active = false;
     }
 }
 
