@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use sivtr_core::origin::Reach;
-use sivtr_core::query::load_workspace_source;
+use sivtr_core::query::{load_workspace_source, NO_RECORD_FOR_SELECTOR};
 use sivtr_core::record::{expand_source, WorkPath, WorkRecord, WorkRef};
 
 use crate::commands::memory::filter::{self, Filter};
@@ -19,10 +19,9 @@ use super::WorkSet;
 /// Default deadline for one remote source inside [`query_many`].
 pub const REMOTE_QUERY_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Minimum deadline for one group fan-out inside [`query`]; a group query
-/// fans out to every member, so it needs headroom beyond a single remote hop.
-/// Must stay >= the daemon's group sync pull budget plus the per-share
-/// fan-out budget (`remote::groups` constants).
+/// Socket-read headroom for one group fan-out inside [`query`]: the daemon
+/// dials every member in parallel under its own per-share budget, so this
+/// must stay above that budget plus local query time.
 const GROUP_QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How one source is scheduled inside [`query_many`].
@@ -126,7 +125,7 @@ pub fn query(source: &str, filter: Filter, cwd: Option<&Path>) -> Result<WorkSet
             None => match try_group(&scope, path, filter, &cwd)? {
                 Some(set) => Ok(set),
                 None => anyhow::bail!(
-                    "unknown scope `{scope}`; use `sivtr ws list` for local workspaces or `sivtr remote list` for remotes"
+                    "unknown scope `{scope}`; use `sivtr ws list` for local workspaces, `sivtr remote list` for remotes, or `sivtr group list` for groups"
                 ),
             },
         };
@@ -168,7 +167,7 @@ pub fn query_many(
             Err(error) => {
                 let message = error.to_string();
                 // Empty selector is normal for browse; keep parity with single-source callers.
-                if message.starts_with("No record found for ref selector") {
+                if message.starts_with(NO_RECORD_FOR_SELECTOR) {
                     results[idx] = Some(QuerySourceResult::Ok(WorkSet::with_anchors(
                         cwd.display().to_string(),
                         Vec::new(),
@@ -200,7 +199,7 @@ pub fn query_many(
                 Ok(set) => Ok(set),
                 Err(error) => {
                     let message = error.to_string();
-                    if message.starts_with("No record found for ref selector") {
+                    if message.starts_with(NO_RECORD_FOR_SELECTOR) {
                         Ok(WorkSet::with_anchors(
                             cwd.display().to_string(),
                             Vec::new(),
@@ -313,11 +312,7 @@ pub fn run_on_share(
             }
             Ok((set.records, set.anchors))
         }
-        Err(error)
-            if error
-                .to_string()
-                .starts_with("No record found for ref selector") =>
-        {
+        Err(error) if error.to_string().starts_with(NO_RECORD_FOR_SELECTOR) => {
             Ok((Vec::new(), Vec::new()))
         }
         Err(error) => Err(error),
@@ -369,19 +364,11 @@ fn try_remote_timed(
     }
 }
 
+/// Group fan-out: `team:...` (all members), `team/alice:...` (one member), or
+/// `team/alice/proj-b:...` (one member, one contributed share). Returns
+/// `Ok(None)` when `scope` is not a group on this device so the caller can
+/// continue the scope cascade.
 fn try_group(scope: &str, path: &str, filter: Filter, cwd: &Path) -> Result<Option<WorkSet>> {
-    try_group_timed(scope, path, filter, cwd, GROUP_QUERY_TIMEOUT)
-}
-
-/// Group fan-out with a deadline. Returns `Ok(None)` when `scope` is not a
-/// group on this device so the caller can continue the scope cascade.
-fn try_group_timed(
-    scope: &str,
-    path: &str,
-    filter: Filter,
-    cwd: &Path,
-    read_timeout: Duration,
-) -> Result<Option<WorkSet>> {
     use crate::remote::ipc;
     use crate::remote::protocol::{LocalRequest, LocalResponse};
 
@@ -390,6 +377,9 @@ fn try_group_timed(
     };
     crate::commands::remote::serve::ensure_running()
         .context("failed to start the sivtr daemon for a group query")?;
+    // The daemon answers `None` for an unknown group; the fan-out happens
+    // inside it (parallel per-member dials), so the socket read gets enough
+    // headroom beyond the daemon's per-peer budget.
     match ipc::call_with_read_timeout(
         LocalRequest::GroupQuery {
             group,
@@ -398,11 +388,10 @@ fn try_group_timed(
             source: path.to_string(),
             filter,
         },
-        read_timeout,
+        GROUP_QUERY_TIMEOUT,
     )
     .context("group query failed")?
     {
-        // Unknown group: fall through to the rest of the scope cascade.
         LocalResponse::GroupQuery(None) => Ok(None),
         LocalResponse::GroupQuery(Some(response)) => {
             if !response.skipped.is_empty() {
