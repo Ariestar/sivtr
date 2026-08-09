@@ -6,10 +6,9 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use sivtr_core::origin::OriginKind;
+use sivtr_core::origin::Reach;
 use sivtr_core::query::load_workspace_source;
 use sivtr_core::record::{expand_source, WorkPath, WorkRecord, WorkRef};
-use sivtr_core::workspace;
 
 use crate::commands::memory::filter::{self, Filter};
 use crate::commands::memory::records::warn_skipped;
@@ -103,33 +102,26 @@ pub fn query(source: &str, filter: Filter, cwd: Option<&Path>) -> Result<WorkSet
         let scope = scope.to_ascii_lowercase();
 
         // One lookup: the registry is the single alias table (local workspaces,
-        // remote mounts, cloud) and its construction order is the resolution
-        // order. Groups (`team`, `team/alice`) are a roster fan-out over many
-        // devices, not a single origin, so they are tried only on a miss.
+        // remote mounts, cloud), each entry carrying its reach payload, and its
+        // construction order is the resolution order. Groups (`team`,
+        // `team/alice`) are a roster fan-out over many devices, not a single
+        // origin, so they are tried only on a miss.
         let registry = crate::origins::collect(&cwd)?;
-        return match registry.resolve(&scope) {
-            Some(origin) => match origin.kind {
-                OriginKind::Local => {
-                    let root =
-                        crate::commands::remote::workspace::resolve_local_workspace_by_name(
-                            &origin.name,
-                        )?
-                        .with_context(|| {
-                            format!("local workspace `{}` disappeared", origin.name)
-                        })?;
-                    run_local(path, &root, filter)
+        return match registry.resolve(&scope)? {
+            Some(entry) => match &entry.reach {
+                Reach::Local { root } => run_local(path, Path::new(root), filter),
+                Reach::Remote { workspace_key, alias } => try_remote_timed(
+                    workspace_key,
+                    alias,
+                    path,
+                    filter,
+                    &cwd,
+                    Duration::from_secs(30),
+                )
+                .with_context(|| format!("remote mount `{alias}` unavailable")),
+                Reach::Cloud => {
+                    anyhow::bail!("cloud source `{}` is not available yet", entry.origin.name)
                 }
-                OriginKind::Remote => {
-                    let ws = workspace::resolve_workspace_for_dir(&cwd)?.with_context(|| {
-                        format!("remote `{}` needs a current workspace", origin.name)
-                    })?;
-                    try_remote(&ws.key, &origin.name, path, filter, &cwd)?
-                        .with_context(|| format!("remote mount `{}` unavailable", origin.name))
-                }
-                OriginKind::Cloud => {
-                    anyhow::bail!("cloud source `{}` is not available yet", origin.name)
-                }
-                _ => anyhow::bail!("unknown origin kind for `{}`", origin.name),
             },
             None => match try_group(&scope, path, filter, &cwd)? {
                 Some(set) => Ok(set),
@@ -280,16 +272,17 @@ fn query_remote_bounded(
         return query(selector, filter, Some(cwd));
     }
     let registry = crate::origins::collect(cwd)?;
-    if let Some(origin) = registry
-        .resolve(scope)
-        .filter(|origin| origin.kind == OriginKind::Remote)
-    {
-        let ws = workspace::resolve_workspace_for_dir(cwd)?
-            .with_context(|| format!("remote `{}` needs a current workspace", origin.name))?;
-        return try_remote_timed(&ws.key, &origin.name, path, filter, cwd, read_timeout)?
-            .with_context(|| format!("remote mount `{}` unavailable", origin.name));
+    let Some(entry) = registry.resolve(scope)? else {
+        return query(selector, filter, Some(cwd));
+    };
+    match &entry.reach {
+        Reach::Remote {
+            workspace_key,
+            alias,
+        } => try_remote_timed(workspace_key, alias, path, filter, cwd, read_timeout)
+            .with_context(|| format!("remote mount `{alias}` unavailable")),
+        _ => query(selector, filter, Some(cwd)),
     }
-    query(selector, filter, Some(cwd))
 }
 
 fn is_timeout_error(message: &str) -> bool {
@@ -344,62 +337,34 @@ fn apply_loaded(set: WorkSet, filter: Filter) -> Result<WorkSet> {
     filter::apply(PathBuf::from(&set.cwd), set.records, set.anchors, filter)
 }
 
-fn try_remote(
-    workspace_key: &str,
-    remote_name: &str,
-    path: &str,
-    filter: Filter,
-    cwd: &Path,
-) -> Result<Option<WorkSet>> {
-    try_remote_timed(
-        workspace_key,
-        remote_name,
-        path,
-        filter,
-        cwd,
-        Duration::from_secs(30),
-    )
-}
-
 fn try_remote_timed(
     workspace_key: &str,
-    remote_name: &str,
+    alias: &str,
     path: &str,
     filter: Filter,
     cwd: &Path,
     read_timeout: Duration,
-) -> Result<Option<WorkSet>> {
+) -> Result<WorkSet> {
     use crate::remote::ipc;
     use crate::remote::protocol::{LocalRequest, LocalResponse};
 
+    // The registry already confirmed the mount; ensure the daemon is up so a
+    // stale socket yields a clear error instead of a confusing one.
     crate::commands::remote::serve::ensure_running()?;
-    let mounts = match ipc::call(LocalRequest::RemoteList {
-        workspace_key: workspace_key.to_string(),
-    })? {
-        LocalResponse::Mounts(mounts) => mounts,
-        _ => return Ok(None),
-    };
-    if !mounts
-        .iter()
-        .any(|mount| mount.alias.eq_ignore_ascii_case(remote_name))
-    {
-        return Ok(None);
-    }
-
     match ipc::call_with_read_timeout(
         LocalRequest::RemoteQuery {
             workspace_key: workspace_key.to_string(),
-            alias: remote_name.to_ascii_lowercase(),
+            alias: alias.to_ascii_lowercase(),
             source: path.to_string(),
             filter,
         },
         read_timeout,
     )? {
-        LocalResponse::Query(response) => Ok(Some(WorkSet::with_anchors(
+        LocalResponse::Query(response) => Ok(WorkSet::with_anchors(
             cwd.display().to_string(),
             response.records,
             response.anchors,
-        ))),
+        )),
         response => anyhow::bail!("Unexpected daemon response: {response:?}"),
     }
 }

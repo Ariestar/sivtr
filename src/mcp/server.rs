@@ -249,7 +249,7 @@ fn collect_status(cwd: Option<&str>) -> anyhow::Result<StatusResult> {
     let shell_hooks_installed = shell_hooks_installed();
     let providers = provider_status();
     let (daemon_running, daemon_node_id) = daemon_status();
-    let origins = crate::origins::collect(&cwd)?.all().to_vec();
+    let origins = crate::origins::collect(&cwd)?.all().cloned().collect();
     let vars = workset::list_saved().ok().map(|list| {
         list.into_iter()
             .map(|var| VarStatus {
