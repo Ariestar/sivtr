@@ -6,6 +6,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use sivtr_core::origin::OriginKind;
 use sivtr_core::query::load_workspace_source;
 use sivtr_core::record::{expand_source, WorkPath, WorkRecord, WorkRef};
 use sivtr_core::workspace;
@@ -101,30 +102,42 @@ pub fn query(source: &str, filter: Filter, cwd: Option<&Path>) -> Result<WorkSet
         }
         let scope = scope.to_ascii_lowercase();
 
-        if let Some(ws) = workspace::resolve_workspace_for_dir(&cwd)? {
-            if let Some(set) = try_remote(&ws.key, &scope, path, filter.clone(), &cwd)? {
-                return Ok(set);
-            }
-        }
-
-        // Group fan-out: `team:terminal` (all members) or `team/alice:terminal`
-        // (one member). Groups are device-global, resolved after mounts so a
-        // mount alias always wins over a same-named group.
-        if let Some(set) = try_group(&scope, path, filter.clone(), &cwd)? {
-            return Ok(set);
-        }
-
-        if !scope.contains('/') {
-            if let Some(root) =
-                crate::commands::remote::workspace::resolve_local_workspace_by_name(&scope)?
-            {
-                return run_local(path, &root, filter);
-            }
-        }
-
-        anyhow::bail!(
-            "unknown scope `{scope}`; use `sivtr remote list` for remotes or `sivtr ws list` for local workspaces"
-        );
+        // One lookup: the registry is the single alias table (local workspaces,
+        // remote mounts, cloud) and its construction order is the resolution
+        // order. Groups (`team`, `team/alice`) are a roster fan-out over many
+        // devices, not a single origin, so they are tried only on a miss.
+        let registry = crate::origins::collect(&cwd)?;
+        return match registry.resolve(&scope) {
+            Some(origin) => match origin.kind {
+                OriginKind::Local => {
+                    let root =
+                        crate::commands::remote::workspace::resolve_local_workspace_by_name(
+                            &origin.name,
+                        )?
+                        .with_context(|| {
+                            format!("local workspace `{}` disappeared", origin.name)
+                        })?;
+                    run_local(path, &root, filter)
+                }
+                OriginKind::Remote => {
+                    let ws = workspace::resolve_workspace_for_dir(&cwd)?.with_context(|| {
+                        format!("remote `{}` needs a current workspace", origin.name)
+                    })?;
+                    try_remote(&ws.key, &origin.name, path, filter, &cwd)?
+                        .with_context(|| format!("remote mount `{}` unavailable", origin.name))
+                }
+                OriginKind::Cloud => {
+                    anyhow::bail!("cloud source `{}` is not available yet", origin.name)
+                }
+                _ => anyhow::bail!("unknown origin kind for `{}`", origin.name),
+            },
+            None => match try_group(&scope, path, filter, &cwd)? {
+                Some(set) => Ok(set),
+                None => anyhow::bail!(
+                    "unknown scope `{scope}`; use `sivtr ws list` for local workspaces or `sivtr remote list` for remotes"
+                ),
+            },
+        };
     }
 
     run_local(&source, &cwd, filter)
@@ -256,27 +269,26 @@ fn query_remote_bounded(
     cwd: &Path,
     read_timeout: Duration,
 ) -> Result<WorkSet> {
-    // Prefer the timed IPC path for `scope:path` remotes so the daemon socket
-    // itself respects the interactive deadline.
-    if let Some((scope, path)) = selector.split_once(':') {
-        if !path.is_empty() && !path.starts_with('/') && !scope.eq_ignore_ascii_case("local") {
-            if !scope.contains('/') {
-                if let Some(ws) = workspace::resolve_workspace_for_dir(cwd)? {
-                    if let Some(set) =
-                        try_remote_timed(&ws.key, scope, path, filter.clone(), cwd, read_timeout)?
-                    {
-                        return Ok(set);
-                    }
-                }
-            }
-            // Groups (`team` or `team/alice`) are device-global; mount aliases
-            // are workspace-scoped and were checked above.
-            if let Some(set) = try_group_timed(scope, path, filter.clone(), cwd, read_timeout)? {
-                return Ok(set);
-            }
-        }
+    // Only confirmed mounts need the timed IPC path, so the daemon socket
+    // itself respects the interactive deadline. Everything else — groups,
+    // named local workspaces, plain selectors — goes through the unified
+    // [`query`], which resolves it in one registry lookup.
+    let Some((scope, path)) = selector.split_once(':') else {
+        return query(selector, filter, Some(cwd));
+    };
+    if path.is_empty() || path.starts_with('/') || scope.eq_ignore_ascii_case("local") {
+        return query(selector, filter, Some(cwd));
     }
-    // Fall back to the normal query (named local workspace, etc.).
+    let registry = crate::origins::collect(cwd)?;
+    if let Some(origin) = registry
+        .resolve(scope)
+        .filter(|origin| origin.kind == OriginKind::Remote)
+    {
+        let ws = workspace::resolve_workspace_for_dir(cwd)?
+            .with_context(|| format!("remote `{}` needs a current workspace", origin.name))?;
+        return try_remote_timed(&ws.key, &origin.name, path, filter, cwd, read_timeout)?
+            .with_context(|| format!("remote mount `{}` unavailable", origin.name));
+    }
     query(selector, filter, Some(cwd))
 }
 

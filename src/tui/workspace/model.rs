@@ -3,6 +3,7 @@
 use ratatui::prelude::Color;
 use ratatui::widgets::ListState;
 use sivtr_core::ai::AgentProvider;
+use sivtr_core::origin::OriginKind;
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
 use std::collections::HashSet;
 use std::time::SystemTime;
@@ -71,11 +72,17 @@ pub(crate) struct WorkspaceSource {
     /// Named scope (`desk`, `docs`); `None` = current local workspace.
     pub(crate) scope: Option<String>,
     pub(crate) kind: WorkspaceSourceKind,
+    /// Origin category this source belongs to, set by its constructor.
+    pub(crate) origin_kind: OriginKind,
 }
 
 impl WorkspaceSource {
     pub(crate) fn local(kind: WorkspaceSourceKind) -> Self {
-        Self { scope: None, kind }
+        Self {
+            scope: None,
+            kind,
+            origin_kind: OriginKind::Local,
+        }
     }
 
     pub(crate) fn terminal() -> Self {
@@ -86,10 +93,12 @@ impl WorkspaceSource {
         Self::local(WorkspaceSourceKind::Agent(provider))
     }
 
-    pub(crate) fn scoped(scope: impl Into<String>, kind: WorkspaceSourceKind) -> Self {
+    /// A source on another device, addressed by its mount alias.
+    pub(crate) fn remote(scope: impl Into<String>, kind: WorkspaceSourceKind) -> Self {
         Self {
             scope: Some(scope.into()),
             kind,
+            origin_kind: OriginKind::Remote,
         }
     }
 
@@ -117,8 +126,14 @@ impl WorkspaceSource {
         self.kind.color()
     }
 
+    /// Origin category of this source.
+    pub(crate) fn origin_kind(&self) -> OriginKind {
+        self.origin_kind
+    }
+
+    /// Whether this source needs remote transport (mount on another device).
     pub(crate) fn is_remote(&self) -> bool {
-        self.scope.is_some()
+        self.origin_kind == OriginKind::Remote
     }
 
     pub(crate) fn is_agent(&self) -> bool {

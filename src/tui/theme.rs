@@ -2,6 +2,7 @@
 
 use ratatui::prelude::{Color, Modifier, Style};
 use sivtr_core::ai::AgentProvider;
+use sivtr_core::origin::OriginKind;
 
 /// Active panel chrome (focused border / scrollbar).
 pub(crate) fn accent() -> Color {
@@ -26,6 +27,11 @@ pub(crate) fn local_origin() -> Color {
 /// Remote origin marker.
 pub(crate) fn remote_origin() -> Color {
     Color::Rgb(244, 114, 182) // pink-400
+}
+
+/// Cloud origin marker.
+pub(crate) fn cloud_origin() -> Color {
+    Color::Rgb(125, 211, 252) // sky-300
 }
 
 /// Cursor / focus highlight on a list row.
@@ -72,20 +78,22 @@ pub(crate) fn terminal_color() -> Color {
     Color::Rgb(148, 163, 184) // slate-400
 }
 
-/// Local `·` / remote `↗` glyph.
-pub(crate) fn origin_glyph(remote: bool) -> &'static str {
-    if remote {
-        "↗"
-    } else {
-        "·"
+/// Origin glyph by kind: local `·`, remote `↗`, cloud `☁`.
+pub(crate) fn origin_glyph(kind: OriginKind) -> &'static str {
+    match kind {
+        OriginKind::Local => "·",
+        OriginKind::Remote => "↗",
+        OriginKind::Cloud => "☁",
+        _ => "?",
     }
 }
 
-pub(crate) fn origin_style(remote: bool) -> Style {
-    Style::default().fg(if remote {
-        remote_origin()
-    } else {
-        local_origin()
+pub(crate) fn origin_style(kind: OriginKind) -> Style {
+    Style::default().fg(match kind {
+        OriginKind::Local => local_origin(),
+        OriginKind::Remote => remote_origin(),
+        OriginKind::Cloud => cloud_origin(),
+        _ => dim(),
     })
 }
 

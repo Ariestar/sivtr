@@ -688,12 +688,12 @@ pub fn workspace_source_catalog(
         sources.push(WorkspaceSource::agent(*provider));
     }
     for alias in list_remote_aliases(cwd)? {
-        sources.push(WorkspaceSource::scoped(
+        sources.push(WorkspaceSource::remote(
             &alias,
             WorkspaceSourceKind::Terminal,
         ));
         for provider in providers {
-            sources.push(WorkspaceSource::scoped(
+            sources.push(WorkspaceSource::remote(
                 &alias,
                 WorkspaceSourceKind::Agent(*provider),
             ));

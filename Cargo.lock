@@ -4550,6 +4550,7 @@ dependencies = [
  "regex",
  "rmp-serde",
  "rusqlite",
+ "schemars",
  "serde",
  "serde_json",
  "shell-words",

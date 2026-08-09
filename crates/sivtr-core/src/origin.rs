@@ -12,13 +12,17 @@
 //! [`OriginRegistry`] is the single lookup surface: enumerate every
 //! addressable origin, or resolve one by its logical name.
 
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
 /// Major source category.
 ///
 /// `#[non_exhaustive]`: adding a category (WSL, container, archive, …) only
 /// requires a new variant plus a `label()` arm here; code outside this crate
 /// is forced to handle the wildcard, so nothing downstream breaks.
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum OriginKind {
     /// Local files on this machine (workspaces).
     Local,
@@ -43,7 +47,7 @@ impl OriginKind {
 ///
 /// All fields exist for every kind; `detail` is the display projection the
 /// source composed when it was constructed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Origin {
     /// Logical name (scope name / alias), used by [`OriginRegistry::resolve`].
     pub name: String,
@@ -143,5 +147,18 @@ mod tests {
             assert!(!origin.detail.is_empty());
             assert!(matches!(origin.kind.label(), "local" | "remote" | "cloud"));
         }
+    }
+
+    #[test]
+    fn kind_serializes_as_lowercase_label() {
+        assert_eq!(
+            serde_json::to_string(&OriginKind::Remote).expect("serialize kind"),
+            "\"remote\""
+        );
+        let origin = sample().all()[1].clone();
+        let json = serde_json::to_string(&origin).expect("serialize origin");
+        assert!(json.contains("\"kind\":\"remote\""));
+        let round: Origin = serde_json::from_str(&json).expect("deserialize origin");
+        assert_eq!(round, origin);
     }
 }

@@ -21,6 +21,10 @@ use crate::remote::protocol::{LocalRequest, LocalResponse};
 pub fn collect(cwd: &Path) -> Result<OriginRegistry> {
     let mut origins = Vec::new();
 
+    // Register `cwd` when it is a git repo, so the current workspace is part
+    // of the registry even before its first capture.
+    let _ = workspace::ensure_workspace_for_dir(cwd);
+
     let current_key = workspace::resolve_workspace_for_dir(cwd)?.map(|paths| paths.key);
     for meta in workspace::list_workspaces()? {
         let current = current_key.as_deref() == Some(meta.key.as_str());

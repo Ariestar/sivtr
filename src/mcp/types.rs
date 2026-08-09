@@ -4,6 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::cli::{FilterArgs, SearchArgs, ShowArgs, ZoomArgs};
+use sivtr_core::origin::Origin;
 use sivtr_core::record::WorkOutcome;
 use sivtr_core::search::{Field, PartKind};
 
@@ -195,8 +196,8 @@ pub struct StatusResult {
     pub providers: Vec<ProviderStatus>,
     pub daemon_running: bool,
     pub daemon_node_id: Option<String>,
-    pub local_workspaces: Vec<WorkspaceOrigin>,
-    pub mounts: Vec<MountStatus>,
+    /// Every addressable memory source through the unified [`Origin`] shape.
+    pub origins: Vec<Origin>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vars: Option<Vec<VarStatus>>,
 }
@@ -207,21 +208,6 @@ pub struct ProviderStatus {
     pub sessions: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-pub struct WorkspaceOrigin {
-    pub name: String,
-    pub root: String,
-    pub key: String,
-    pub current: bool,
-}
-
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-pub struct MountStatus {
-    pub alias: String,
-    pub peer_name: String,
-    pub share_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
