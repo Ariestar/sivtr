@@ -346,9 +346,13 @@ pub(crate) fn run(
             }
 
             let source_markers = sessions_pane.markers();
-            let body_failures: HashSet<String> = sessions
+            let body_failures: HashSet<(WorkspaceSource, String)> = sessions
                 .iter()
-                .filter_map(|s| sessions_pane.body_failure(s).map(|_| s.session_id.clone()))
+                .filter_map(|s| {
+                    sessions_pane
+                        .body_failure(s)
+                        .map(|_| (s.source.clone(), s.session_id.clone()))
+                })
                 .collect();
             terminal.draw(|frame| {
                 render_workspace(

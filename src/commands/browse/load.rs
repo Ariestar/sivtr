@@ -640,6 +640,9 @@ impl Pane for SessionColumn {
     }
 
     fn is_fetching(&self) -> bool {
+        // Body hydration runs past metadata loading; keep the poll cycle alive
+        // until every in-flight body job reports, so completion and failure
+        // events do not sit undrained behind a one-hour idle timeout.
         self.states.iter().any(SourceLoadState::is_fetching) || self.pump.has_inflight_bodies()
     }
 }

@@ -689,7 +689,7 @@ fn render_session_list(
     selected_sources: &[bool],
     selected_sessions: &[bool],
     state: &ListState,
-    body_failures: &HashSet<String>,
+    body_failures: &HashSet<(WorkspaceSource, String)>,
     search: Option<&WorkspaceSearchView<'_>>,
     search_regex: Option<&Regex>,
     active: bool,
@@ -718,7 +718,7 @@ fn render_session_list(
                 active,
                 base_style,
                 highlight,
-                body_failures.contains(&choice.session_id),
+                body_failures.contains(&(choice.source.clone(), choice.session_id.clone())),
             ))
         })
         .collect();
