@@ -1,36 +1,32 @@
-//! Group mode domain: membership choreography, roster convergence, and query
-//! fan-out.
+//! Group mode domain: membership choreography and roster convergence.
 //!
 //! A group is a roster overlay on the share/grant/mount model. The owner is
 //! the roster's source of truth; members pull-sync on a TTL, and membership
-//! changes are broadcast so peers converge between syncs. Every local group
-//! behavior lives here - the daemon module only routes wire messages in and
-//! out, and the state module only stores.
+//! changes are broadcast so peers converge between syncs. Query fan-out over
+//! the roster lives in [`super::fanout`]. Every local group behavior lives
+//! here - the daemon module only routes wire messages in and out, and the
+//! state module only stores.
 
-use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use chrono::Utc;
 use iroh::EndpointAddr;
 use tokio::task::JoinSet;
 
 use super::context::DaemonContext;
 use super::net;
-use super::protocol::{
-    qualify_query_scope, GroupQueryResponse, InviteTicket, MemberInfo, QueryResponse,
-    RemoteRequest, RemoteResponse,
-};
-use super::state::{GroupInfo, GroupMemberInfo, RosterRow, StateStore};
+use super::protocol::{InviteTicket, LocalResponse, MemberInfo, RemoteRequest, RemoteResponse};
+use super::state::{GroupMemberInfo, RosterRow, StateStore};
 use crate::commands::memory::filter::Filter;
 
 /// Time budgets for group convergence. The client-side IPC read timeout
 /// (`workset::GROUP_QUERY_TIMEOUT`) must stay at least [`SYNC_PULL_TIMEOUT`]
-/// plus the per-share fan-out budget, so a query is never cut off mid-flight.
+/// plus the per-share fan-out budget (`fanout::PER_SHARE_QUERY_TIMEOUT`), so
+/// a query is never cut off mid-flight.
 const SYNC_PULL_TIMEOUT: Duration = Duration::from_secs(5);
 const BROADCAST_TIMEOUT: Duration = Duration::from_secs(3);
-const PER_SHARE_QUERY_TIMEOUT: Duration = Duration::from_millis(2500);
 /// The cached roster is re-pulled from the owner after this many seconds.
 const SYNC_TTL_SECS: i64 = 300;
 
@@ -39,7 +35,7 @@ const SYNC_TTL_SECS: i64 = 300;
 /// sender prevents a member from forging additions (which would grant an
 /// attacker read access to other members' contributions) or removals.
 pub(crate) fn require_group_owner(store: &StateStore, group_id: &str, sender: &str) -> Result<()> {
-    if !store.is_owner(group_id, sender)? {
+    if !store.is_group_owner(group_id, sender)? {
         bail!("Only the group owner may perform this operation");
     }
     Ok(())
@@ -59,7 +55,7 @@ fn revoke_member_access(
     Ok(())
 }
 
-fn member_info_from_store(
+pub(crate) fn member_info_from_store(
     store: &StateStore,
     group_id: &str,
     member: &GroupMemberInfo,
@@ -787,202 +783,188 @@ pub(crate) async fn handle_leave(
     Ok(())
 }
 
-/// One (member, share) fan-out target. The local member's contributions run
-/// in-process; every other member's are dialed over the wire.
-enum QueryTarget {
-    /// In-process query over a local share; a failure is a real error.
-    Local { root: PathBuf, redact: bool },
-    /// Wire query to a peer's share under the per-share budget.
-    Remote { share_id: String },
+/// Local IPC handlers (delegated from the daemon's router). Each is the
+/// daemon-boundary body for one `LocalRequest::Group*` arm: parse, validate,
+/// call the domain, and shape the response. The wire-side handlers above
+/// mirror these for remote peers.
+pub(crate) async fn local_group_create(
+    context: &Arc<DaemonContext>,
+    name: String,
+    share_id: String,
+    share_name: String,
+) -> Result<LocalResponse> {
+    let group = context
+        .store
+        .add_group(&name, &context.identity.id(), &context.identity.name)?;
+    // The owner's first contribution is the workspace they created from.
+    context
+        .store
+        .add_group_share(&group.id, &context.identity.id(), &share_id, &share_name)?;
+    Ok(LocalResponse::Group(group))
 }
 
-/// Fan out a group query: the caller's own contributions run in-process (a
-/// failure is a real error), every remote (member, share) is dialed in parallel
-/// under a per-share budget, and results are merged qualified per member and
-/// share. Members that did not answer are reported as skipped.
-pub(crate) async fn group_fan_out(
+pub(crate) async fn local_group_list(context: &Arc<DaemonContext>) -> Result<LocalResponse> {
+    for group in context.store.groups()? {
+        // Background pull; the cached roster is returned immediately.
+        maybe_sync_group(context, &group.name);
+    }
+    Ok(LocalResponse::Groups(context.store.groups()?))
+}
+
+pub(crate) async fn local_group_members(
     context: &Arc<DaemonContext>,
-    group_name: &str,
-    members: &[MemberInfo],
-    source: &str,
-    filter: Filter,
-) -> Result<GroupQueryResponse> {
-    // Shares only bound the set (pattern/status/time/...). Ordering, the
-    // `latest` window, and `limit` are group-wide: pushed down, they would
-    // return a per-share top-k (five per share for `--latest 5`) instead of
-    // the group's global top results, so they are applied once on the merged
-    // corpus below.
-    let full = filter.for_remote_peer();
-    let mut bounds = full.clone();
-    bounds.rank = None;
-    bounds.latest = None;
-    bounds.limit = None;
+    group: String,
+) -> Result<LocalResponse> {
+    maybe_sync_group(context, &group);
+    Ok(LocalResponse::Members(context.store.members(&group)?))
+}
 
-    let self_id = context.identity.id();
-    // Expand the fan-out list once; the local/remote split below only decides
-    // how each target executes.
-    let mut targets: Vec<(QueryTarget, String, String)> = Vec::new();
-    for member in members {
-        for (share_id, share_name) in &member.shares {
-            let peer_id = member.peer_id.clone();
-            let target = if peer_id == self_id {
-                let share = context.store.share(share_id)?;
-                QueryTarget::Local {
-                    root: PathBuf::from(share.root),
-                    redact: share.redact,
-                }
-            } else {
-                QueryTarget::Remote {
-                    share_id: share_id.clone(),
-                }
-            };
-            targets.push((target, peer_id, share_name.clone()));
-        }
-    }
-
-    let mut records = Vec::new();
-    let mut anchors = Vec::new();
-    // Every result is scoped `team/<peer-id>/proj-b` so members stay apart and
-    // records round-trip through show/zoom/nav. The member segment is the
-    // stable peer id, not the display name: two devices can share a hostname
-    // (and a workspace name), and a name-based scope would collide and make
-    // the refs ambiguous.
-    let mut merge = |peer_id: &str, share_name: &str, mut query: QueryResponse| {
-        qualify_query_scope(&format!("{group_name}/{peer_id}/{share_name}"), &mut query);
-        records.extend(query.records);
-        anchors.extend(query.anchors);
+pub(crate) async fn local_group_shares(
+    context: &Arc<DaemonContext>,
+    group: String,
+) -> Result<LocalResponse> {
+    // First-time join runs before any local group row exists; an
+    // unknown group simply means nothing is contributed yet.
+    let shares = match context.store.group_opt(&group)? {
+        Some(group) => context
+            .store
+            .group_shares(&group.id, &context.identity.id())?,
+        None => Vec::new(),
     };
+    Ok(LocalResponse::GroupShares(shares))
+}
 
-    // The local member's contributions are part of the group, so they are
-    // queried like any other share - just in-process instead of over the wire.
-    // Local failures propagate before any remote dial; they are not "offline".
-    for (target, peer_id, share_name) in &targets {
-        if let QueryTarget::Local { root, redact } = target {
-            let query = tokio::task::spawn_blocking({
-                let root = root.clone();
-                let redact = *redact;
-                let source = source.to_string();
-                let filter = bounds.clone();
-                move || {
-                    let (records, anchors) = crate::commands::memory::workset::run_on_share(
-                        std::path::Path::new(&root),
-                        &source,
-                        filter,
-                        redact,
-                    )?;
-                    Ok::<_, anyhow::Error>(QueryResponse { records, anchors })
-                }
-            })
-            .await??;
-            merge(peer_id, share_name, query);
-        }
+pub(crate) async fn local_group_invite(
+    context: &Arc<DaemonContext>,
+    group: String,
+    valid_for_seconds: i64,
+    max_uses: Option<i64>,
+) -> Result<LocalResponse> {
+    // Only the owner may mint join links: a member-created invite
+    // would let anyone join without the owner's consent.
+    require_group_owner(&context.store, &group, &context.identity.id())?;
+    let invite = context
+        .store
+        .create_group_invite(&group, valid_for_seconds, max_uses)?;
+    let ticket = InviteTicket {
+        version: 1,
+        endpoint: context.endpoint.addr(),
+        share_id: String::new(),
+        group_id: Some(invite.share_id.clone()),
+        invite_id: invite.id,
+        secret: invite.secret,
+        expires_at: invite.expires_at,
     }
-
-    let mut tasks = JoinSet::new();
-    for (target, peer_id, share_name) in targets {
-        if let QueryTarget::Remote { share_id } = target {
-            let context = context.clone();
-            let source = source.to_string();
-            let filter = bounds.clone();
-            tasks.spawn(async move {
-                let result = tokio::time::timeout(
-                    PER_SHARE_QUERY_TIMEOUT,
-                    net::exchange_with_peer(
-                        &context.store,
-                        &context.endpoint,
-                        &peer_id,
-                        RemoteRequest::Query {
-                            share_id,
-                            source,
-                            filter,
-                        },
-                    ),
-                )
-                .await;
-                (peer_id, share_name, result)
-            });
-        }
-    }
-    // A member is online when any of its shares answered, decided only after
-    // every share task completes so a later failure cannot reclassify a peer
-    // whose records were already merged.
-    let mut online: HashSet<String> = HashSet::new();
-    while let Some(joined) = tasks.join_next().await {
-        let Ok((peer_id, share_name, result)) = joined else {
-            continue;
-        };
-        if let Ok(Ok(RemoteResponse::Query(query))) = result {
-            merge(&peer_id, &share_name, query);
-            online.insert(peer_id);
-        }
-    }
-    let skipped: Vec<String> = members
-        .iter()
-        .filter(|member| member.peer_id != self_id && !online.contains(&member.peer_id))
-        .map(|member| member.peer_name.clone())
-        .collect();
-
-    // Order the merged corpus once, as one group: `latest` window -> sort ->
-    // `limit`. Re-running the pipeline here is idempotent for the bounds each
-    // share already applied; the shared code also ranks the merged corpus as
-    // a whole when the sort is relevance.
-    let merged = crate::commands::memory::filter::apply(PathBuf::new(), records, anchors, full)?;
-    Ok(GroupQueryResponse {
-        query: QueryResponse {
-            records: merged.records,
-            anchors: merged.anchors,
-        },
-        skipped,
+    .encode()?;
+    Ok(LocalResponse::Invitation {
+        share_name: invite.share_name,
+        ticket,
+        expires_at: invite.expires_at,
     })
 }
 
-/// Resolve which (member, share) pairs a group query fans out to. The caller's
-/// own contribution is a target like any other member's - the local member is
-/// queried in-process by [`group_fan_out`]. `member` and `share` pin the
-/// three-segment scopes `team/alice` and `team/alice/proj-b`.
-pub(crate) fn group_targets(
-    store: &StateStore,
-    group: &GroupInfo,
-    member: Option<&str>,
-    share: Option<&str>,
-) -> Result<Vec<MemberInfo>> {
-    let all: Vec<MemberInfo> = store
-        .members(&group.id)?
-        .iter()
-        .map(|member| member_info_from_store(store, &group.id, member))
-        .collect::<Result<_>>()?;
-    let mut targets: Vec<MemberInfo> = match member {
-        Some(name) => {
-            let needle = name.to_ascii_lowercase();
-            let matches: Vec<MemberInfo> = all
-                .into_iter()
-                .filter(|member| {
-                    member.peer_name.to_ascii_lowercase() == needle || member.peer_id == needle
-                })
-                .collect();
-            if matches.is_empty() {
-                bail!("No group member named `{name}` in `{}`", group.name);
-            }
-            matches
-        }
-        None => all,
-    };
-    // `team/alice/proj-b` pins one contributed share per member.
-    if let Some(share_name) = share {
-        for target in &mut targets {
-            target
-                .shares
-                .retain(|(_, name)| name.eq_ignore_ascii_case(share_name));
-        }
-        targets.retain(|target| !target.shares.is_empty());
-        if targets.is_empty() {
-            bail!(
-                "No member contributes a share named `{share_name}` in `{}`",
-                group.name
-            );
-        }
+pub(crate) async fn local_group_join(
+    context: &Arc<DaemonContext>,
+    invite: String,
+    shares: Vec<(String, String)>,
+) -> Result<LocalResponse> {
+    // The ticket is parsed once at the daemon boundary; validation is
+    // done here and the parsed ticket is passed down (never re-parsed).
+    let ticket = InviteTicket::parse(&invite)?;
+    if ticket.expires_at < Utc::now().timestamp() {
+        bail!("Invitation is expired");
     }
-    Ok(targets)
+    let group_id = ticket
+        .group_id
+        .as_deref()
+        .context("Invitation is not a group invite")?;
+    // A known member re-running join adjusts contributions (multi-select
+    // checkboxes: additions register + grant, withdrawals revoke).
+    let member_group = context.store.group(group_id).ok().filter(|group| {
+        context.store.members(&group.id).is_ok_and(|members| {
+            members
+                .iter()
+                .any(|member| member.peer_id == context.identity.id())
+        })
+    });
+    if let Some(group) = member_group {
+        adjust_group_shares(context, &group.id, &shares).await?;
+        Ok(LocalResponse::GroupJoined {
+            group_name: group.name,
+            member_count: group.member_count as usize,
+        })
+    } else {
+        let (group_name, member_count) = redeem_group_remote(context, &ticket, &shares).await?;
+        Ok(LocalResponse::GroupJoined {
+            group_name,
+            member_count,
+        })
+    }
+}
+
+pub(crate) async fn local_group_leave(
+    context: &Arc<DaemonContext>,
+    group: String,
+) -> Result<LocalResponse> {
+    leave_group(context, &group).await?;
+    Ok(LocalResponse::Ok)
+}
+
+pub(crate) async fn local_group_remove_member(
+    context: &Arc<DaemonContext>,
+    group: String,
+    peer: String,
+) -> Result<LocalResponse> {
+    remove_group_member(context, &group, &peer).await?;
+    Ok(LocalResponse::Ok)
+}
+
+pub(crate) async fn local_group_rename(
+    context: &Arc<DaemonContext>,
+    group: String,
+    name: String,
+) -> Result<LocalResponse> {
+    let info = context.store.group(&group)?;
+    require_group_owner(&context.store, &info.id, &context.identity.id())?;
+    let renamed = context.store.rename_group(&info.id, &name)?;
+    // The rename reaches members on their next roster pull; bump the
+    // epoch so that pull carries a fresh watermark.
+    context.store.bump_roster_epoch(&info.id)?;
+    Ok(LocalResponse::Group(renamed))
+}
+
+pub(crate) async fn local_group_sync(
+    context: &Arc<DaemonContext>,
+    group: String,
+) -> Result<LocalResponse> {
+    sync_group(context, &group).await?;
+    Ok(LocalResponse::Group(context.store.group(&group)?))
+}
+
+pub(crate) async fn local_group_query(
+    context: &Arc<DaemonContext>,
+    group: String,
+    member: Option<String>,
+    share: Option<String>,
+    source: String,
+    filter: Filter,
+) -> Result<LocalResponse> {
+    // Unknown group: answer `None` so the caller can continue its
+    // scope cascade instead of failing the query.
+    let Some(group_info) = context.store.group_opt(&group)? else {
+        return Ok(LocalResponse::GroupQuery(None));
+    };
+    // Background pull; the fan-out below uses the cached roster.
+    maybe_sync_group(context, &group);
+    let targets = super::fanout::group_targets(
+        &context.store,
+        &group_info,
+        member.as_deref(),
+        share.as_deref(),
+    )?;
+    let response =
+        super::fanout::group_fan_out(context, &group_info.name, &targets, &source, filter).await?;
+    Ok(LocalResponse::GroupQuery(Some(response)))
 }
 
 #[cfg(test)]
@@ -1127,68 +1109,6 @@ mod tests {
             }),
             None
         );
-    }
-
-    #[test]
-    fn group_targets_include_the_local_member() {
-        let (_temp, store, self_id) = group_with_members();
-        let group = store.group("team").expect("group");
-        let targets = group_targets(&store, &group, None, None).expect("targets");
-        assert!(
-            targets.iter().any(|member| member.peer_id == self_id),
-            "the caller's own contribution is a fan-out target"
-        );
-        assert!(targets.iter().any(|member| member.peer_name == "bob"));
-    }
-
-    #[test]
-    fn group_targets_pin_one_member_by_name_or_id() {
-        let (_temp, store, self_id) = group_with_members();
-        let group = store.group("team").expect("group");
-        let targets = group_targets(&store, &group, Some("self"), None).expect("targets");
-        assert_eq!(targets.len(), 1);
-        assert_eq!(
-            targets[0].peer_id, self_id,
-            "self-query resolves to the local member"
-        );
-        let error =
-            group_targets(&store, &group, Some("nobody"), None).expect_err("unknown member");
-        assert!(error.to_string().contains("No group member named"));
-    }
-
-    #[test]
-    fn group_targets_pin_one_contributed_share() {
-        let (_temp, store, _self_id) = group_with_members();
-        let group = store.group("team").expect("group");
-        let targets = group_targets(&store, &group, None, Some("project")).expect("targets");
-        assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].peer_name, "self");
-        assert_eq!(targets[0].shares.len(), 1);
-
-        let error =
-            group_targets(&store, &group, None, Some("missing")).expect_err("unknown share");
-        assert!(error.to_string().contains("No member contributes a share"));
-    }
-
-    /// Group with the owner contributing `project` and a second member `bob`,
-    /// using real node ids so `member_info_from_store` can build fan-out targets.
-    fn group_with_members() -> (tempfile::TempDir, StateStore, String) {
-        let temp = tempfile::tempdir().expect("temp dir");
-        let workspace = temp.path().join("workspace");
-        std::fs::create_dir(&workspace).expect("workspace dir");
-        let store = StateStore::open(temp.path().join("state.db")).expect("store");
-        let share = store
-            .add_share("workspace-key", &workspace, "project", true)
-            .expect("share");
-        let self_id = iroh::SecretKey::generate().public().to_string();
-        let bob_id = iroh::SecretKey::generate().public().to_string();
-        store.add_group("team", &self_id, "self").expect("group");
-        store
-            .add_group_share("team", &self_id, &share.id, &share.name)
-            .expect("contribution");
-        store.save_remote_peer(&bob_id, "bob", "{}").expect("peer");
-        store.add_member("team", &bob_id, "member").expect("member");
-        (temp, store, self_id)
     }
 
     /// Real daemon context (bound endpoint, temp store, generated identity)

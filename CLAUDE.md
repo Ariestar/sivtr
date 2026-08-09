@@ -121,7 +121,7 @@ sivtr group list / members team # roster with last-seen
 sivtr group remove team alice   # owner kicks (members self-heal on next sync)
 sivtr group leave team          # leave; owner leaving disbands the group
 sivtr s team:terminal "q"       # fan out to all members, merged
-sivtr s team/alice:terminal "q" # one member (device/workspace scope form)
+sivtr s team/alice:terminal "q" # one member (group/member scope form)
 ```
 Group membership is a roster overlay on share/grant/mount: join = one multi-use invite with the owner, mirror roster locally, grant every member read on your group share. Owner is the roster source of truth; members pull-sync on a 5-min TTL (`GroupSync`), kicked devices drop the group on the next sync. `team:` refs are qualified per member (`team/alice:...`) so `show`/`zoom`/`nav` round-trip.
 
