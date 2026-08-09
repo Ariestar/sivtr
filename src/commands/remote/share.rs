@@ -6,10 +6,10 @@ use sivtr_core::workspace::{self, WorkspaceMetadata};
 
 use crate::cli::{ShareAction, ShareCommand};
 use crate::commands::interactive;
-use crate::commands::remote::workspace::workspace_display_name;
 use crate::output;
 use crate::remote::ipc;
 use crate::remote::protocol::{LocalRequest, LocalResponse, ShareInfo};
+use sivtr_core::workspace::workspace_display_name;
 
 use super::serve;
 

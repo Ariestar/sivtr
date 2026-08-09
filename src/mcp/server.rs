@@ -15,9 +15,9 @@ use sivtr_core::ai::AgentProvider;
 use sivtr_core::workspace;
 
 use crate::commands::memory::{filter, search, show, workset, zoom};
-use crate::commands::remote::workspace::workspace_display_name;
 use crate::remote::ipc;
 use crate::remote::protocol::{LocalRequest, LocalResponse};
+use sivtr_core::workspace::workspace_display_name;
 
 use super::types::{
     memory_result, show_result, to_filter_args, to_search_args, to_show_args, to_zoom_args,

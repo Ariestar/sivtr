@@ -6,6 +6,7 @@ pub mod capture;
 pub mod config;
 pub mod export;
 pub mod history;
+pub mod origin;
 pub mod parse;
 pub mod query;
 pub mod record;

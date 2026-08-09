@@ -14,6 +14,25 @@ pub struct WorkspaceMetadata {
     pub last_seen_at: String,
 }
 
+/// Human origin label for a workspace: directory basename, lowercased.
+/// Accepts both `/` and `\` so Windows roots still yield a useful label on Unix.
+pub fn workspace_display_name(meta: &WorkspaceMetadata) -> String {
+    path_basename(&meta.root)
+        .unwrap_or(meta.key.as_str())
+        .to_ascii_lowercase()
+}
+
+fn path_basename(path: &str) -> Option<&str> {
+    let trimmed = path.trim_end_matches(['/', '\\']);
+    if trimmed.is_empty() {
+        return None;
+    }
+    trimmed
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|segment| !segment.is_empty())
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkspacePaths {
     pub key: String,
@@ -399,8 +418,8 @@ fn modified_time(path: &Path) -> std::time::SystemTime {
 #[cfg(test)]
 mod tests {
     use super::{
-        git_root, inspect_workspace_keys, migrate_workspace_keys, terminal_session_id_from_path,
-        workspace_key, WorkspaceMetadata,
+        git_root, inspect_workspace_keys, migrate_workspace_keys, path_basename,
+        terminal_session_id_from_path, workspace_display_name, workspace_key, WorkspaceMetadata,
     };
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -413,6 +432,34 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("sivtr-{name}-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("test dir should be created");
         dir
+    }
+
+    fn meta(key: &str, root: &str) -> WorkspaceMetadata {
+        WorkspaceMetadata {
+            key: key.to_string(),
+            root: root.to_string(),
+            created_at: "t".to_string(),
+            last_seen_at: "t".to_string(),
+        }
+    }
+
+    #[test]
+    fn display_name_uses_basename() {
+        assert_eq!(
+            workspace_display_name(&meta("abc", "/home/user/Coding/sivtr")),
+            "sivtr"
+        );
+        assert_eq!(
+            workspace_display_name(&meta("abc", r"D:\Coding\sivtr")),
+            "sivtr"
+        );
+    }
+
+    #[test]
+    fn basename_trims_trailing_separators() {
+        assert_eq!(path_basename(r"D:\Coding\sivtr\"), Some("sivtr"));
+        assert_eq!(path_basename("/home/user/sivtr/"), Some("sivtr"));
+        assert_eq!(path_basename("/"), None);
     }
 
     #[test]

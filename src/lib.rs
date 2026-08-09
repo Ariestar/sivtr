@@ -6,6 +6,7 @@
 pub mod cli;
 pub mod commands;
 pub mod mcp;
+pub mod origins;
 pub mod output;
 pub mod pane;
 pub mod remote;
