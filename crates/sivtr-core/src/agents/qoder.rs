@@ -11,9 +11,10 @@ use crate::agents::{
 
 const PROVIDER_NAME: &str = "Qoder";
 
-/// Qoder CLI sessions.
+/// Qoder CLI sessions (global channel, `qodercli`).
 ///
-/// Layout (`QODER_HOME`, default `~/.qoder`):
+/// The global CLI shares its home with the Qoder IDE, so one provider covers
+/// both. Layout (default `~/.qoder`):
 /// ```text
 /// projects/<cwd-slug>/<session-uuid>.jsonl
 /// ```
@@ -21,55 +22,20 @@ const PROVIDER_NAME: &str = "Qoder";
 #[derive(Debug, Clone, Copy, Default)]
 pub struct QoderProvider;
 
+/// Qoder CLI CN sessions (`qoderclicn`).
+///
+/// Same JSONL schema as the global CLI, separate home (default `~/.qoder-cn`);
+/// only the home directory differs.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct QoderCnProvider;
+
 impl AgentSessionProvider for QoderProvider {
     fn provider(&self) -> AgentProvider {
         AgentProvider::Qoder
     }
 
     fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
-        let root = qoder_projects_dir();
-        if !root.exists() {
-            return Ok(Vec::new());
-        }
-
-        let mut sessions = Vec::new();
-        for bucket in fs::read_dir(&root)
-            .with_context(|| format!("Failed to read Qoder projects dir {}", root.display()))?
-        {
-            let bucket = bucket?;
-            let bucket_path = bucket.path();
-            if !bucket_path.is_dir() {
-                continue;
-            }
-            for entry in fs::read_dir(&bucket_path)
-                .with_context(|| format!("Failed to read Qoder bucket {}", bucket_path.display()))?
-            {
-                let entry = entry?;
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                    continue;
-                }
-                match parse_session_meta(&path) {
-                    Ok(meta) => {
-                        let modified = fs::metadata(&path)
-                            .and_then(|m| m.modified())
-                            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                        sessions.push(AgentSessionInfo {
-                            path,
-                            id: meta.id,
-                            cwd: meta.cwd,
-                            title: meta.title,
-                            modified,
-                        });
-                    }
-                    Err(_) => continue,
-                }
-            }
-        }
-
-        sessions.sort_by_key(|s| s.modified);
-        sessions.reverse();
-        Ok(filter_sessions_by_workspace(sessions, cwd))
+        list_recent_sessions_in(&qoder_projects_dir(), cwd)
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
@@ -77,17 +43,85 @@ impl AgentSessionProvider for QoderProvider {
     }
 }
 
-pub fn qoder_home() -> PathBuf {
-    if let Ok(path) = std::env::var("QODER_HOME") {
-        return PathBuf::from(path);
+impl AgentSessionProvider for QoderCnProvider {
+    fn provider(&self) -> AgentProvider {
+        AgentProvider::QoderCn
     }
+
+    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
+        list_recent_sessions_in(&qoder_cn_projects_dir(), cwd)
+    }
+
+    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
+        parse_jsonl_session(path, PROVIDER_NAME, apply_event)
+    }
+}
+
+/// Scan `projects/<cwd-slug>/<session>.jsonl` under `root`, newest first.
+/// Shared by the global and CN Qoder providers; only `root` differs.
+fn list_recent_sessions_in(root: &Path, cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut sessions = Vec::new();
+    for bucket in fs::read_dir(root)
+        .with_context(|| format!("Failed to read Qoder projects dir {}", root.display()))?
+    {
+        let bucket = bucket?;
+        let bucket_path = bucket.path();
+        if !bucket_path.is_dir() {
+            continue;
+        }
+        for entry in fs::read_dir(&bucket_path)
+            .with_context(|| format!("Failed to read Qoder bucket {}", bucket_path.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            match parse_session_meta(&path) {
+                Ok(meta) => {
+                    let modified = fs::metadata(&path)
+                        .and_then(|m| m.modified())
+                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                    sessions.push(AgentSessionInfo {
+                        path,
+                        id: meta.id,
+                        cwd: meta.cwd,
+                        title: meta.title,
+                        modified,
+                    });
+                }
+                Err(_) => continue,
+            }
+        }
+    }
+
+    sessions.sort_by_key(|s| s.modified);
+    sessions.reverse();
+    Ok(filter_sessions_by_workspace(sessions, cwd))
+}
+
+pub fn qoder_home() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".qoder")
 }
 
+pub fn qoder_cn_home() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".qoder-cn")
+}
+
 fn qoder_projects_dir() -> PathBuf {
     qoder_home().join("projects")
+}
+
+fn qoder_cn_projects_dir() -> PathBuf {
+    qoder_cn_home().join("projects")
 }
 
 fn parse_session_meta(path: &Path) -> Result<AgentSessionMeta> {
@@ -246,7 +280,7 @@ fn push_content_blocks(
 
 #[cfg(test)]
 mod tests {
-    use super::QoderProvider;
+    use super::{QoderCnProvider, QoderProvider};
     use crate::agents::{format_blocks, AgentBlockKind, AgentSessionProvider};
 
     #[test]
@@ -317,5 +351,26 @@ mod tests {
         let session = QoderProvider.parse_session_file(&path).unwrap();
 
         assert_eq!(session.cwd.as_deref(), Some("D:\\Coding\\sivtr"));
+    }
+
+    #[test]
+    fn cn_provider_parses_identical_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"type":"workspace-directories","sessionId":"cn-1","directories":["D:\\repo"]}
+{"type":"user","sessionId":"cn-1","cwd":"D:\\repo","timestamp":"2026-07-01T00:00:00Z","message":{"role":"user","content":"hello"}}
+{"type":"assistant","sessionId":"cn-1","cwd":"D:\\repo","timestamp":"2026-07-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}
+"#,
+        )
+        .unwrap();
+
+        let session = QoderCnProvider.parse_session_file(&path).unwrap();
+
+        assert_eq!(session.id.as_deref(), Some("cn-1"));
+        assert_eq!(session.cwd.as_deref(), Some("D:\\repo"));
+        assert_eq!(session.blocks.len(), 2);
+        assert_eq!(format_blocks(&session.blocks), "hello\n\ndone");
     }
 }

@@ -20,6 +20,7 @@ pub enum AgentProvider {
     OpenCode,
     Pi,
     Qoder,
+    QoderCn,
     Qwen,
 }
 

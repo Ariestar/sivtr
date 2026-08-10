@@ -40,6 +40,7 @@ impl WorkspaceSourceKind {
             Self::Agent(AgentProvider::Grok) => "grk",
             Self::Agent(AgentProvider::Pi) => "pi",
             Self::Agent(AgentProvider::Qoder) => "qdr",
+            Self::Agent(AgentProvider::QoderCn) => "qcn",
             Self::Agent(AgentProvider::Gemini) => "gmi",
             Self::Agent(AgentProvider::Goose) => "gse",
             Self::Agent(AgentProvider::Qwen) => "qwn",
