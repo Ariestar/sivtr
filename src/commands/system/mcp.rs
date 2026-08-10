@@ -391,18 +391,8 @@ fn print_config(target: AgentProvider) {
         McpConfigKind::Toml => {
             println!("{}", toml_mcp_snippet());
         }
-        McpConfigKind::Yaml { key, .. } => {
-            let mut root = serde_yaml::Mapping::new();
-            let mut servers = serde_yaml::Mapping::new();
-            servers.insert(
-                serde_yaml::Value::String(SERVER_NAME.to_string()),
-                hermes_entry(),
-            );
-            root.insert(
-                serde_yaml::Value::String(key.to_string()),
-                serde_yaml::Value::Mapping(servers),
-            );
-            println!("{}", serde_yaml::to_string(&root).unwrap_or_default());
+        McpConfigKind::Yaml { key, entry } => {
+            println!("{}", yaml_config_snippet(key, entry()));
         }
         McpConfigKind::JsonNested {
             outer,
@@ -422,6 +412,17 @@ fn print_config(target: AgentProvider) {
             );
         }
     }
+}
+
+fn yaml_config_snippet(key: &str, entry: serde_yaml::Value) -> String {
+    let mut root = serde_yaml::Mapping::new();
+    let mut servers = serde_yaml::Mapping::new();
+    servers.insert(serde_yaml::Value::String(SERVER_NAME.to_string()), entry);
+    root.insert(
+        serde_yaml::Value::String(key.to_string()),
+        serde_yaml::Value::Mapping(servers),
+    );
+    serde_yaml::to_string(&root).unwrap_or_default()
 }
 
 fn install_json(path: PathBuf, key: &str, entry: Value, provider: AgentProvider) -> Result<()> {
@@ -1095,5 +1096,17 @@ mod tests {
         let out = serde_yaml::to_string(&root).unwrap();
         assert!(out.contains("mcp_servers:"));
         assert!(!out.contains("sivtr"));
+    }
+
+    #[test]
+    fn prints_provider_specific_yaml_config() {
+        let goose = yaml_config_snippet("extensions", goose_entry());
+        assert!(goose.contains("enabled: true"));
+        assert!(goose.contains("type: stdio"));
+        assert!(goose.contains("cmd: sivtr"));
+        assert!(!goose.contains("command: sivtr"));
+
+        let hermes = yaml_config_snippet("mcp_servers", hermes_entry());
+        assert!(hermes.contains("command: sivtr"));
     }
 }
