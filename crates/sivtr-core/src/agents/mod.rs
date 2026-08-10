@@ -8,6 +8,8 @@
 pub mod claude;
 pub mod codex;
 pub mod cursor;
+pub mod gemini;
+pub mod goose;
 pub mod grok;
 pub mod hermes;
 pub mod jsonl;
@@ -16,9 +18,13 @@ pub mod openclaw;
 pub mod opencode;
 pub mod pi;
 pub mod qoder;
+pub mod qwen;
 pub mod sqlite;
 
-pub use jsonl::{jsonl_files, list_recent_jsonl_sessions, parse_jsonl_meta, parse_jsonl_session};
+pub use jsonl::{
+    jsonl_files, list_chat_recording_sessions, list_recent_jsonl_sessions, parse_jsonl_meta,
+    parse_jsonl_session,
+};
 pub use model::*;
 pub use sqlite::{open_readonly_db, system_time_from_millis, system_time_from_unix_secs};
 
@@ -105,6 +111,30 @@ const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
         current_session_id_env: None,
         factory: qoder_provider,
     },
+    AgentProviderSpec {
+        provider: AgentProvider::Gemini,
+        name: "Gemini",
+        command_name: "gemini",
+        current_transcript_env: None,
+        current_session_id_env: None,
+        factory: gemini_provider,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::Goose,
+        name: "Goose",
+        command_name: "goose",
+        current_transcript_env: None,
+        current_session_id_env: None,
+        factory: goose_provider,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::Qwen,
+        name: "Qwen",
+        command_name: "qwen",
+        current_transcript_env: None,
+        current_session_id_env: None,
+        factory: qwen_provider,
+    },
 ];
 
 fn codex_provider() -> Box<dyn AgentSessionProvider> {
@@ -141,6 +171,18 @@ fn pi_provider() -> Box<dyn AgentSessionProvider> {
 
 fn qoder_provider() -> Box<dyn AgentSessionProvider> {
     Box::new(crate::agents::qoder::QoderProvider)
+}
+
+fn gemini_provider() -> Box<dyn AgentSessionProvider> {
+    Box::new(crate::agents::gemini::GeminiProvider)
+}
+
+fn goose_provider() -> Box<dyn AgentSessionProvider> {
+    Box::new(crate::agents::goose::GooseProvider)
+}
+
+fn qwen_provider() -> Box<dyn AgentSessionProvider> {
+    Box::new(crate::agents::qwen::QwenProvider)
 }
 
 impl AgentProvider {

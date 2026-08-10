@@ -12,12 +12,15 @@ pub enum AgentProvider {
     Claude,
     Codex,
     Cursor,
+    Gemini,
+    Goose,
     Grok,
     Hermes,
     OpenClaw,
     OpenCode,
     Pi,
     Qoder,
+    Qwen,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,6 +139,21 @@ impl AgentSessionMeta {
         }
     }
 
+    /// Fall back to the first line of the first user message as the title
+    /// when no explicit title (summary / user-set name) was captured.
+    pub fn fallback_title(&mut self, first_user_text: Option<&str>) {
+        if self.title.is_some() {
+            return;
+        }
+        let Some(text) = first_user_text else {
+            return;
+        };
+        let title = text.lines().next().unwrap_or(text).trim();
+        if !title.is_empty() {
+            self.title = Some(title.to_string());
+        }
+    }
+
     pub(crate) fn cwd_candidates(&self) -> impl Iterator<Item = &str> {
         self.cwd_history.iter().map(String::as_str).chain(
             self.cwd
@@ -242,6 +260,76 @@ pub fn push_tool_block(
             text,
         });
     }
+}
+
+/// Push Gemini-API-style content parts as blocks: `text` parts become the
+/// given dialogue kind, `thought` parts become `Thinking`, and
+/// `functionCall` / `functionResponse` parts become `ToolCall` / `ToolOutput`.
+///
+/// Shared by the Gemini CLI and Qwen Code providers, whose transcripts both
+/// store content as Gemini API `Part` objects. Plain string content is pushed
+/// as a single block of `kind`.
+pub fn push_parts_blocks(
+    session: &mut AgentSession,
+    kind: AgentBlockKind,
+    timestamp: Option<String>,
+    content: &Value,
+) {
+    match content {
+        Value::String(text) => push_block(session, kind, timestamp, None, text),
+        Value::Array(items) => {
+            for item in items {
+                if item.get("thought").and_then(Value::as_bool) == Some(true) {
+                    push_block(
+                        session,
+                        AgentBlockKind::Thinking,
+                        timestamp.clone(),
+                        None,
+                        extract_content_text(item),
+                    );
+                } else if let Some(call) = item.get("functionCall") {
+                    push_tool_block(
+                        session,
+                        AgentBlockKind::ToolCall,
+                        timestamp.clone(),
+                        part_id(item, call),
+                        call.get("name").and_then(Value::as_str).map(str::to_string),
+                        pretty_json_value(call.get("args").unwrap_or(&Value::Null)),
+                    );
+                } else if let Some(response) = item.get("functionResponse") {
+                    let body = response.get("response").unwrap_or(&Value::Null);
+                    let text = extract_content_text(body);
+                    push_tool_block(
+                        session,
+                        AgentBlockKind::ToolOutput,
+                        timestamp.clone(),
+                        part_id(item, response),
+                        response
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        text,
+                    );
+                } else {
+                    push_block(
+                        session,
+                        kind,
+                        timestamp.clone(),
+                        None,
+                        extract_content_text(item),
+                    );
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn part_id(item: &Value, nested: &Value) -> Option<String> {
+    item.get("id")
+        .and_then(Value::as_str)
+        .or_else(|| nested.get("id").and_then(Value::as_str))
+        .map(str::to_string)
 }
 
 pub fn extract_content_text(content: &Value) -> String {
