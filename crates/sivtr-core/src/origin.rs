@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 /// requires a new variant plus a `label()` arm here; code outside this crate
 /// is forced to handle the wildcard, so nothing downstream breaks.
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum OriginKind {
     /// Local files on this machine (workspaces).
@@ -110,22 +110,44 @@ impl OriginRegistry {
     }
 
     /// Resolve an origin by logical name, case-insensitively, returning its
-    /// entry (display [`Origin`] + [`Reach`]). Errors when more than one
-    /// origin shares the name.
+    /// entry (display [`Origin`] + [`Reach`]). When the name collides across
+    /// kinds — a mount alias may equal a local workspace's basename — the
+    /// higher-priority kind wins, matching the lookup order that predated the
+    /// registry. Collisions within one kind are an error.
     pub fn resolve(&self, name: &str) -> Result<Option<&Entry>> {
         let mut matched = self
             .entries
             .iter()
-            .filter(|entry| entry.origin.name.eq_ignore_ascii_case(name));
-        let Some(first) = matched.next() else {
+            .filter(|entry| entry.origin.name.eq_ignore_ascii_case(name))
+            .collect::<Vec<_>>();
+        if matched.is_empty() {
             return Ok(None);
-        };
-        if let Some(second) = matched.next() {
-            let mut details = vec![first.origin.detail.as_str(), second.origin.detail.as_str()];
-            details.extend(matched.map(|entry| entry.origin.detail.as_str()));
+        }
+        // Remote before local before cloud: the higher-priority kind wins a
+        // cross-kind collision; within one kind the name is still ambiguous.
+        matched.sort_by_key(|entry| kind_priority(entry.origin.kind));
+        if matched.len() > 1
+            && kind_priority(matched[0].origin.kind) == kind_priority(matched[1].origin.kind)
+        {
+            let details: Vec<&str> = matched
+                .iter()
+                .map(|entry| entry.origin.detail.as_str())
+                .collect();
             bail!("ambiguous origin `{name}`; matches: {}", details.join(", "));
         }
-        Ok(Some(first))
+        Ok(Some(matched[0]))
+    }
+}
+
+/// Resolution priority when a name collides across kinds. A remote mount
+/// wins over a local workspace of the same name — remote lookup ran before
+/// local workspace resolution before the registry existed — and cloud is
+/// reserved, resolving last.
+fn kind_priority(kind: OriginKind) -> u8 {
+    match kind {
+        OriginKind::Remote => 0,
+        OriginKind::Local => 1,
+        OriginKind::Cloud => 2,
     }
 }
 
@@ -223,6 +245,43 @@ mod tests {
         ]);
         let error = registry.resolve("return").expect_err("ambiguous");
         assert!(error.to_string().contains("ambiguous origin `return`"));
+    }
+
+    #[test]
+    fn remote_mount_wins_over_colliding_local_workspace() {
+        // A mount alias may equal a local workspace's basename; the mount
+        // resolves (remote lookup ran before local workspaces pre-registry).
+        let registry = OriginRegistry::new(vec![
+            Entry {
+                origin: Origin {
+                    name: "proj".to_string(),
+                    kind: OriginKind::Local,
+                    current: true,
+                    detail: "D:\\a\\proj (k1)".to_string(),
+                },
+                reach: Reach::Local {
+                    root: "D:\\a\\proj".to_string(),
+                },
+            },
+            Entry {
+                origin: Origin {
+                    name: "proj".to_string(),
+                    kind: OriginKind::Remote,
+                    current: false,
+                    detail: "alice/proj".to_string(),
+                },
+                reach: Reach::Remote {
+                    workspace_key: "k1".to_string(),
+                    alias: "proj".to_string(),
+                },
+            },
+        ]);
+        let entry = registry.resolve("proj").expect("resolve").expect("found");
+        assert_eq!(entry.origin.kind, OriginKind::Remote);
+        assert!(matches!(
+            &entry.reach,
+            Reach::Remote { alias, .. } if alias == "proj"
+        ));
     }
 
     #[test]

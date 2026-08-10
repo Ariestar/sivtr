@@ -2,8 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
-use std::fs;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -383,7 +382,9 @@ pub fn normalize_path_for_match(path: &Path) -> String {
 /// Policy (all providers):
 /// - `cwd == None` → keep every session
 /// - session has no cwd metadata → **keep** (unbound / weixin / cron / missing)
-/// - session has cwd → keep only when it matches the target path **or** shares a git remote
+/// - session has cwd → keep only when it resolves to the same repository
+///   (commondir identity) as the target, or exactly matches the target path
+///   when neither side is inside a git checkout
 pub fn filter_sessions_by_workspace(
     sessions: Vec<AgentSessionInfo>,
     cwd: Option<&Path>,
@@ -419,16 +420,16 @@ pub(crate) fn workspace_matches_candidates(
 
 pub(crate) struct WorkspaceMatchTarget {
     normalized_path: String,
-    remote_keys: HashSet<String>,
-    candidate_remote_keys: RefCell<HashMap<String, HashSet<String>>>,
+    identity: Option<String>,
+    candidate_identities: RefCell<HashMap<String, Option<String>>>,
 }
 
 impl WorkspaceMatchTarget {
     pub(crate) fn new(path: &Path) -> Self {
         Self {
             normalized_path: normalize_path_for_match(path),
-            remote_keys: git_remote_keys(path),
-            candidate_remote_keys: RefCell::new(HashMap::new()),
+            identity: crate::workspace::repo_identity(path),
+            candidate_identities: RefCell::new(HashMap::new()),
         }
     }
 
@@ -437,138 +438,23 @@ impl WorkspaceMatchTarget {
         if normalized_candidate == self.normalized_path {
             return true;
         }
-
-        if self.remote_keys.is_empty() {
-            return false;
+        let candidate_identity = self.candidate_identity(&normalized_candidate, candidate);
+        match (&self.identity, candidate_identity) {
+            (Some(target), Some(candidate)) => *target == candidate,
+            _ => false,
         }
+    }
 
-        {
-            let cache = self.candidate_remote_keys.borrow();
-            if let Some(candidate_keys) = cache.get(&normalized_candidate) {
-                return candidate_keys
-                    .iter()
-                    .any(|candidate_key| self.remote_keys.contains(candidate_key));
-            }
+    fn candidate_identity(&self, key: &str, path: &Path) -> Option<String> {
+        if let Some(existing) = self.candidate_identities.borrow().get(key) {
+            return existing.clone();
         }
-
-        let candidate_keys = git_remote_keys(candidate);
-        let matches = candidate_keys
-            .iter()
-            .any(|candidate_key| self.remote_keys.contains(candidate_key));
-        self.candidate_remote_keys
+        let identity = crate::workspace::repo_identity(path);
+        self.candidate_identities
             .borrow_mut()
-            .insert(normalized_candidate, candidate_keys);
-        matches
+            .insert(key.to_string(), identity.clone());
+        identity
     }
-}
-
-fn git_remote_keys(path: &Path) -> HashSet<String> {
-    let Some(root) = git_root(path) else {
-        return HashSet::new();
-    };
-    let Some(config_path) = git_config_path(&root) else {
-        return HashSet::new();
-    };
-    parse_git_remote_keys(&config_path)
-}
-
-fn git_root(path: &Path) -> Option<PathBuf> {
-    let mut dir = if path.is_dir() {
-        path.to_path_buf()
-    } else {
-        path.parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| path.to_path_buf())
-    };
-
-    loop {
-        if dir.join(".git").exists() {
-            return Some(dir);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
-
-fn git_config_path(root: &Path) -> Option<PathBuf> {
-    let dot_git = root.join(".git");
-    if dot_git.is_dir() {
-        return Some(dot_git.join("config"));
-    }
-
-    let gitdir = fs::read_to_string(&dot_git).ok()?;
-    let relative = gitdir.trim().strip_prefix("gitdir:")?.trim();
-    let git_dir = resolve_gitdir(root, relative);
-    Some(git_dir.join("config"))
-}
-
-fn resolve_gitdir(root: &Path, gitdir: &str) -> PathBuf {
-    let path = PathBuf::from(gitdir);
-    if path.is_absolute() {
-        path
-    } else {
-        root.join(path)
-    }
-}
-
-fn parse_git_remote_keys(config_path: &Path) -> HashSet<String> {
-    fs::read_to_string(config_path)
-        .ok()
-        .map(|config| {
-            config
-                .lines()
-                .filter_map(remote_key_from_config_line)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn remote_key_from_config_line(line: &str) -> Option<String> {
-    let trimmed = line.trim();
-    let url = trimmed.strip_prefix("url")?.trim_start();
-    let url = url.strip_prefix('=')?.trim();
-    normalize_remote_url(url)
-}
-
-fn normalize_remote_url(url: &str) -> Option<String> {
-    let trimmed = url.trim().trim_end_matches('/');
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let without_suffix = trimmed.strip_suffix(".git").unwrap_or(trimmed);
-    let normalized = if let Some((_, rest)) = without_suffix.split_once("://") {
-        normalize_remote_authority_path(rest).unwrap_or_else(|| without_suffix.to_string())
-    } else if let Some((authority, path)) = split_scp_like_remote(without_suffix) {
-        format!(
-            "{}/{}",
-            authority.rsplit('@').next().unwrap_or(authority),
-            path.trim_start_matches('/')
-        )
-    } else {
-        without_suffix.to_string()
-    };
-
-    Some(normalized.replace('\\', "/").to_lowercase())
-}
-
-fn normalize_remote_authority_path(rest: &str) -> Option<String> {
-    let (authority, path) = rest.split_once('/')?;
-    let host = authority.rsplit('@').next()?.trim();
-    let path = path.trim_start_matches('/').trim();
-    if host.is_empty() || path.is_empty() {
-        return None;
-    }
-    Some(format!("{host}/{path}"))
-}
-
-fn split_scp_like_remote(remote: &str) -> Option<(&str, &str)> {
-    let (authority, path) = remote.split_once(':')?;
-    if !authority.contains('@') || path.trim().is_empty() {
-        return None;
-    }
-    Some((authority, path))
 }
 
 pub fn select_blocks(session: &AgentSession, selection: AgentSelection) -> Vec<AgentBlock> {
@@ -672,48 +558,8 @@ pub fn is_structure_block(kind: AgentBlockKind) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_fixtures::{make_repo, make_worktree};
     use std::fs;
-
-    fn write_git_remote(repo: &Path, name: &str, url: &str) {
-        fs::create_dir_all(repo.join(".git")).unwrap();
-        fs::write(
-            repo.join(".git").join("config"),
-            format!("[remote \"{name}\"]\n\turl = {url}\n"),
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn normalizes_common_github_remote_url_forms() {
-        assert_eq!(
-            normalize_remote_url("https://github.com/Ariestar/sivtr.git").as_deref(),
-            Some("github.com/ariestar/sivtr")
-        );
-        assert_eq!(
-            normalize_remote_url("git@github.com:Ariestar/sivtr.git").as_deref(),
-            Some("github.com/ariestar/sivtr")
-        );
-        assert_eq!(
-            normalize_remote_url("ssh://git@github.com/Ariestar/sivtr.git/").as_deref(),
-            Some("github.com/ariestar/sivtr")
-        );
-    }
-
-    #[test]
-    fn normalizes_generic_git_remote_url_forms() {
-        assert_eq!(
-            normalize_remote_url("https://gitlab.example.com/team/sivtr.git").as_deref(),
-            Some("gitlab.example.com/team/sivtr")
-        );
-        assert_eq!(
-            normalize_remote_url("git@gitlab.example.com:team/sivtr.git").as_deref(),
-            Some("gitlab.example.com/team/sivtr")
-        );
-        assert_eq!(
-            normalize_remote_url("ssh://git@gitlab.example.com:2222/team/sivtr.git").as_deref(),
-            Some("gitlab.example.com:2222/team/sivtr")
-        );
-    }
 
     #[test]
     fn cwd_candidates_do_not_duplicate_the_primary_cwd() {
@@ -733,49 +579,56 @@ mod tests {
     }
 
     #[test]
-    fn matches_repositories_with_shared_remote() {
+    fn matches_sessions_across_worktrees_of_same_repo() {
         let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("oh-my-ppt-fork");
-        let candidate = dir.path().join("oh-my-ppt");
-        fs::create_dir_all(&target).unwrap();
-        fs::create_dir_all(&candidate).unwrap();
-        write_git_remote(
-            &target,
-            "upstream",
-            "https://github.com/arcsin1/oh-my-ppt.git",
-        );
-        write_git_remote(&candidate, "origin", "git@github.com:arcsin1/oh-my-ppt.git");
+        let main = dir.path().join("sivtr");
+        let worktree = dir.path().join("sivtr-tui-stack");
+        make_repo(&main);
+        make_worktree(&main, &worktree, "sivtr-tui-stack");
 
-        assert!(WorkspaceMatchTarget::new(&target).matches(&candidate));
+        // A session recorded in the main checkout is visible from the worktree
+        // and vice versa: they share one repository identity.
+        assert!(WorkspaceMatchTarget::new(&main).matches(&worktree));
+        assert!(WorkspaceMatchTarget::new(&worktree).matches(&main));
     }
 
     #[test]
-    fn does_not_match_unrelated_repositories() {
+    fn matches_subdirectories_of_same_repo() {
         let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("oh-my-ppt-fork");
-        let candidate = dir.path().join("sivtr");
-        fs::create_dir_all(&target).unwrap();
-        fs::create_dir_all(&candidate).unwrap();
-        write_git_remote(
-            &target,
-            "upstream",
-            "https://github.com/arcsin1/oh-my-ppt.git",
-        );
-        write_git_remote(
-            &candidate,
-            "origin",
-            "https://github.com/Ariestar/sivtr.git",
-        );
+        let repo = dir.path().join("sivtr");
+        make_repo(&repo);
+        let subdir = repo.join("crates").join("core");
+        fs::create_dir_all(&subdir).unwrap();
+        assert!(WorkspaceMatchTarget::new(&repo).matches(&subdir));
+    }
 
-        assert!(!WorkspaceMatchTarget::new(&target).matches(&candidate));
+    #[test]
+    fn does_not_match_different_repos() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("sivtr");
+        let second = dir.path().join("md-dragger");
+        make_repo(&first);
+        make_repo(&second);
+        assert!(!WorkspaceMatchTarget::new(&first).matches(&second));
+    }
+
+    #[test]
+    fn does_not_match_sessions_outside_any_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        make_repo(&repo);
+        // A session recorded in a non-repo parent (e.g. `D:\Coding`) must not
+        // leak into a repo workspace.
+        assert!(!WorkspaceMatchTarget::new(&repo).matches(dir.path()));
+        // ...but it still matches when browsing that parent dir itself.
+        assert!(WorkspaceMatchTarget::new(dir.path()).matches(dir.path()));
     }
 
     #[test]
     fn filter_sessions_keeps_unbound_and_matching_cwd() {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("repo");
-        fs::create_dir_all(&repo).unwrap();
-        write_git_remote(&repo, "origin", "https://github.com/Ariestar/sivtr.git");
+        make_repo(&repo);
 
         let sessions = vec![
             AgentSessionInfo {
@@ -807,5 +660,40 @@ mod tests {
             .filter_map(|session| session.id.as_deref())
             .collect();
         assert_eq!(ids, vec!["u", "m"]);
+    }
+
+    #[test]
+    fn filter_keeps_sessions_recorded_in_linked_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("sivtr");
+        let worktree = dir.path().join("sivtr-tui-stack");
+        make_repo(&main);
+        make_worktree(&main, &worktree, "sivtr-tui-stack");
+
+        // A session recorded in the main checkout shows up when browsing the
+        // worktree, and one recorded in the worktree shows up from the main.
+        let main_session = vec![AgentSessionInfo {
+            path: PathBuf::from("main-session"),
+            id: Some("m".into()),
+            cwd: Some(main.to_string_lossy().into_owned()),
+            title: None,
+            modified: SystemTime::UNIX_EPOCH,
+        }];
+        assert_eq!(
+            filter_sessions_by_workspace(main_session, Some(&worktree)).len(),
+            1
+        );
+
+        let worktree_session = vec![AgentSessionInfo {
+            path: PathBuf::from("wt-session"),
+            id: Some("w".into()),
+            cwd: Some(worktree.to_string_lossy().into_owned()),
+            title: None,
+            modified: SystemTime::UNIX_EPOCH,
+        }];
+        assert_eq!(
+            filter_sessions_by_workspace(worktree_session, Some(&main)).len(),
+            1
+        );
     }
 }

@@ -361,6 +361,10 @@ pub enum Commands {
     #[command(visible_alias = "g")]
     Group(GroupCommand),
 
+    /// Manage source origins: one name for every addressable memory source
+    /// (local workspace alias or remote mount), renamed through one command
+    Origin(OriginCommand),
+
     /// Manage configuration
     Config(ConfigCommand),
 

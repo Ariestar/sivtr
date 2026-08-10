@@ -102,6 +102,9 @@ fn run() -> Result<()> {
         Some(Commands::Group(cmd)) => {
             commands::remote::group::execute(cmd)?;
         }
+        Some(Commands::Origin(cmd)) => {
+            commands::remote::origin::execute(cmd)?;
+        }
         Some(Commands::Hotkey(cmd)) => {
             commands::system::hotkey::execute(cmd)?;
         }

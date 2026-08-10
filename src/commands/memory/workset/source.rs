@@ -12,6 +12,7 @@ use sivtr_core::record::{expand_source, WorkPath, WorkRecord, WorkRef};
 
 use crate::commands::memory::filter::{self, Filter};
 use crate::commands::memory::records::warn_skipped;
+use crate::commands::remote::serve;
 use crate::output;
 
 use super::WorkSet;
@@ -100,11 +101,14 @@ pub fn query(source: &str, filter: Filter, cwd: Option<&Path>) -> Result<WorkSet
         }
         let scope = scope.to_ascii_lowercase();
 
-        // One lookup: the registry is the single alias table (local workspaces,
-        // remote mounts, cloud), each entry carrying its reach payload, and its
-        // construction order is the resolution order. Groups (`team`,
-        // `team/alice`) are a roster fan-out over many devices, not a single
-        // origin, so they are tried only on a miss.
+        // A scoped query may address a remote mount; the daemon must be up
+        // before the passive registry lookup can see its mounts.
+        serve::ensure_running()?;
+        // One lookup: the registry is the single alias table (local
+        // workspaces, remote mounts, cloud), each entry carrying its reach
+        // payload; resolution applies kind precedence on name collisions.
+        // Groups (`team`, `team/alice`) are a roster fan-out over many
+        // devices, not a single origin, so they are tried only on a miss.
         let registry = crate::origins::collect(&cwd)?;
         return match registry.resolve(&scope)? {
             Some(entry) => match &entry.reach {
@@ -270,6 +274,8 @@ fn query_remote_bounded(
     if path.is_empty() || path.starts_with('/') || scope.eq_ignore_ascii_case("local") {
         return query(selector, filter, Some(cwd));
     }
+    // Remote mounts need the daemon; start it before the passive lookup.
+    serve::ensure_running()?;
     let registry = crate::origins::collect(cwd)?;
     let Some(entry) = registry.resolve(scope)? else {
         return query(selector, filter, Some(cwd));

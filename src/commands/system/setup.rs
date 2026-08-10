@@ -31,15 +31,6 @@ pub fn execute() -> Result<()> {
         },
     )?;
 
-    run_step("migrating legacy workspace keys", || {
-        let report = workspace::migrate_workspace_keys()?;
-        if report.migrated.is_empty() {
-            Ok(format!("{} workspace(s) on current scheme", report.current))
-        } else {
-            Ok(format!("migrated {} workspace(s)", report.migrated.len()))
-        }
-    })?;
-
     if !mcp_targets.is_empty() {
         run_step("installing MCP for selected agent hosts", || {
             for target in &mcp_targets {

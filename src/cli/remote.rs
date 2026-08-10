@@ -127,6 +127,24 @@ pub enum WorkspaceAction {
 }
 
 #[derive(Parser, Debug)]
+pub struct OriginCommand {
+    #[command(subcommand)]
+    pub action: OriginAction,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum OriginAction {
+    /// Rename any origin by name: a local workspace alias or a remote mount
+    /// (unified — one command for both, resolved through the origin registry).
+    Rename {
+        /// Current origin name (from `sivtr ws list` / `sivtr remote list`)
+        name: String,
+        /// New name used in `name:body` refs
+        new_name: String,
+    },
+}
+
+#[derive(Parser, Debug)]
 pub struct GroupCommand {
     #[command(subcommand)]
     pub action: GroupAction,

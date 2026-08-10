@@ -354,15 +354,6 @@ mod tests {
         format!("{}\n", json!({ "sessionId": id, "cwd": cwd }))
     }
 
-    fn write_git_remote(repo: &Path, name: &str, url: &str) {
-        fs::create_dir_all(repo.join(".git")).unwrap();
-        fs::write(
-            repo.join(".git").join("config"),
-            format!("[remote \"{name}\"]\n\turl = {url}\n"),
-        )
-        .unwrap();
-    }
-
     #[test]
     fn includes_sessions_with_later_matching_cwd_metadata() {
         let _guard = env_lock();
@@ -370,21 +361,11 @@ mod tests {
         let previous = std::env::var_os("SIVTR_DATA_DIR");
         std::env::set_var("SIVTR_DATA_DIR", dir.path().join("data"));
         let sessions = dir.path().join("sessions");
-        let target = dir.path().join("oh-my-ppt-fork");
-        let candidate = dir.path().join("oh-my-ppt");
+        let target = dir.path().join("sivtr");
+        let candidate = dir.path().join("sivtr-worktree");
         fs::create_dir_all(&sessions).unwrap();
-        fs::create_dir_all(&target).unwrap();
-        fs::create_dir_all(&candidate).unwrap();
-        write_git_remote(
-            &target,
-            "upstream",
-            "https://github.com/arcsin1/oh-my-ppt.git",
-        );
-        write_git_remote(
-            &candidate,
-            "origin",
-            "https://github.com/arcsin1/oh-my-ppt.git",
-        );
+        crate::test_fixtures::make_repo(&target);
+        crate::test_fixtures::make_worktree(&target, &candidate, "sivtr-worktree");
         let transcript = sessions.join("session.jsonl");
         let first_event = serde_json::json!({
             "sessionId": "abc",

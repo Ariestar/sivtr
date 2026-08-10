@@ -18,7 +18,9 @@ use sivtr_core::record::WorkRecord;
 
 use crate::commands::browse;
 use crate::output;
-use crate::tui::workspace::{WorkspaceFocus, WorkspaceSession, WorkspaceSource};
+use crate::tui::workspace::{
+    WorkspaceFocus, WorkspaceSession, WorkspaceSource, WorkspaceSourceKind,
+};
 
 use export::finish_text_pairs;
 use load::load_for_plan;
@@ -113,10 +115,15 @@ fn execute_pick(plan: &CopyPlan) -> Result<()> {
 
 fn session_source_from_records(records: &[WorkRecord]) -> Option<WorkspaceSource> {
     let record = records.first()?;
-    if let Some(provider) = record.work_ref.provider() {
-        Some(WorkspaceSource::agent(provider))
-    } else {
-        Some(WorkspaceSource::terminal())
+    let kind = match record.work_ref.provider() {
+        Some(provider) => WorkspaceSourceKind::Agent(provider),
+        None => WorkspaceSourceKind::Terminal,
+    };
+    // The records keep their named scope (`desk:`, `team/alice:`), so a
+    // remote pick renders with the remote origin, not a local glyph.
+    match record.work_ref.scope_name() {
+        Some(scope) => Some(WorkspaceSource::remote(scope, kind)),
+        None => Some(WorkspaceSource::local(kind)),
     }
 }
 

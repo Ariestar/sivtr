@@ -25,6 +25,9 @@ pub use agents::openclaw;
 pub use agents::opencode;
 pub use agents::pi;
 
+#[cfg(test)]
+pub(crate) mod test_fixtures;
+
 /// Serialize tests that mutate process-global env vars.
 ///
 /// `std::env` is process-global, so any two tests that point e.g.
