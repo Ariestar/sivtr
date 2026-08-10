@@ -11,7 +11,7 @@ pub enum McpAction {
     /// Run the read-only MCP server on stdio
     Serve(McpServeArgs),
 
-    /// Install sivtr MCP into agent hosts
+    /// Install sivtr MCP into agent hosts (interactively picks hosts when -p is omitted)
     Install(McpInstallArgs),
 
     /// Remove sivtr MCP from agent hosts
@@ -38,7 +38,7 @@ pub struct McpServeArgs {
 pub struct McpInstallArgs {
     /// Provider host(s) to inject (comma-separated or repeated).
     /// Use registered command names, or `all`.
-    /// Default: detect installed hosts.
+    /// Omit to pick hosts interactively; with -y, installs to detected hosts.
     #[arg(
         short = 'p',
         long = "provider",
@@ -51,7 +51,7 @@ pub struct McpInstallArgs {
     #[arg(short = 'l', long = "location", value_enum, default_value_t = McpLocation::Global)]
     pub location: McpLocation,
 
-    /// Non-interactive defaults
+    /// Non-interactive: skip the host picker and install to detected hosts
     #[arg(short = 'y', long = "yes")]
     pub yes: bool,
 }

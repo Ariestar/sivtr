@@ -9,6 +9,7 @@ use sivtr_core::ai::AgentProvider;
 use sivtr_core::config::SivtrConfig;
 
 use crate::cli::{McpAction, McpCommand, McpInstallArgs, McpLocation};
+use crate::commands::interactive;
 use crate::mcp;
 use crate::output;
 
@@ -212,14 +213,48 @@ pub fn execute(command: McpCommand) -> Result<()> {
 }
 
 pub fn install(args: &McpInstallArgs) -> Result<()> {
-    let targets = resolve_targets(&args.providers)?;
+    // No explicit `-p` and no `-y`: let the user pick hosts interactively.
+    // Falls back to detected hosts when stdin is not a TTY.
+    let targets = if args.providers.is_empty() && !args.yes {
+        pick_targets()?
+    } else {
+        resolve_targets(&args.providers)?
+    };
     if targets.is_empty() {
-        bail!("no install targets resolved");
+        bail!("no install targets selected; pass -p with host names, or -p all");
     }
     for target in targets {
         install_target(target, args.location)?;
     }
     Ok(())
+}
+
+/// Interactive host multi-select, mirroring `npx skills`: all MCP-capable
+/// hosts listed, detected ones pre-checked. Returns `Ok(defaults)` when not
+/// interactive, so `doctor --fix` / `setup` (which pass `yes: true`) never
+/// prompt and CI pipes keep the old auto-detect behavior.
+fn pick_targets() -> Result<Vec<AgentProvider>> {
+    let detected = detect_targets();
+    let labels: Vec<String> = MCP_HOSTS
+        .iter()
+        .map(|host| {
+            format!(
+                "{} ({})",
+                host.provider.name(),
+                host.provider.command_name()
+            )
+        })
+        .collect();
+    let defaults: Vec<usize> = detected
+        .iter()
+        .filter_map(|target| MCP_HOSTS.iter().position(|host| host.provider == *target))
+        .collect();
+    let picked = interactive::multi_select(
+        "Install sivtr MCP into which agent hosts?",
+        &labels,
+        &defaults,
+    )?;
+    Ok(picked.into_iter().map(|i| MCP_HOSTS[i].provider).collect())
 }
 
 fn uninstall(args: &McpInstallArgs) -> Result<()> {
