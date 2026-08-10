@@ -5,9 +5,8 @@
 //! <data-dir>/sessions/sessions.db    tables: sessions + messages
 //! ```
 //! The data dir follows `etcetera`'s app layout for `Block/goose`:
-//! Windows `%APPDATA%\Block\goose\data`, macOS
-//! `~/Library/Application Support/Block/goose/data`, Linux
-//! `~/.local/share/goose/data` (XDG uses the app name only).
+//! Windows `%APPDATA%\Block\goose\data`; macOS and Linux use
+//! `$XDG_DATA_HOME/goose` (default `~/.local/share/goose`).
 //! `GOOSE_PATH_ROOT` (absolute) overrides the root; sessions then live under
 //! `<root>/data/sessions/`.
 //!
@@ -126,24 +125,24 @@ pub fn goose_db_path() -> PathBuf {
             .join("data")
             .join("sessions")
             .join("sessions.db")
-    } else if cfg!(target_os = "macos") {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("Library")
-            .join("Application Support")
-            .join("Block")
-            .join("goose")
-            .join("data")
-            .join("sessions")
-            .join("sessions.db")
     } else {
-        dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
+        xdg_data_dir()
             .join("goose")
-            .join("data")
             .join("sessions")
             .join("sessions.db")
     }
+}
+
+fn xdg_data_dir() -> PathBuf {
+    std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".local")
+                .join("share")
+        })
 }
 
 fn goose_path_root() -> Option<PathBuf> {
@@ -321,6 +320,32 @@ mod tests {
     use super::*;
     use crate::agents::AgentSessionProvider;
     use rusqlite::Connection;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn uses_xdg_data_home_for_default_db_path() {
+        let _guard = crate::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let data_home = dir.path().join("data");
+        let previous_root = std::env::var_os("GOOSE_PATH_ROOT");
+        let previous_data_home = std::env::var_os("XDG_DATA_HOME");
+        std::env::remove_var("GOOSE_PATH_ROOT");
+        std::env::set_var("XDG_DATA_HOME", &data_home);
+
+        assert_eq!(
+            goose_db_path(),
+            data_home.join("goose").join("sessions").join("sessions.db")
+        );
+
+        match previous_root {
+            Some(value) => std::env::set_var("GOOSE_PATH_ROOT", value),
+            None => std::env::remove_var("GOOSE_PATH_ROOT"),
+        }
+        match previous_data_home {
+            Some(value) => std::env::set_var("XDG_DATA_HOME", value),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+    }
 
     fn seed_db(db_path: &Path) {
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();

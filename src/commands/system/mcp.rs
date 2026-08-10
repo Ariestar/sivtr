@@ -900,8 +900,8 @@ fn qwen_host_present() -> bool {
 
 /// Goose loads MCP servers from `config.yaml` under `extensions:` (the
 /// ExtensionConfig shape written by `goose configure`). Paths follow
-/// etcetera's app layout for `Block/goose` (Windows/macOS) or plain
-/// `goose` (XDG on Linux).
+/// etcetera's app layout for `Block/goose` on Windows or plain `goose`
+/// under XDG config on macOS and Linux.
 fn goose_config_path() -> PathBuf {
     if cfg!(windows) {
         dirs::data_dir()
@@ -910,19 +910,8 @@ fn goose_config_path() -> PathBuf {
             .join("goose")
             .join("config")
             .join("config.yaml")
-    } else if cfg!(target_os = "macos") {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("Library")
-            .join("Application Support")
-            .join("Block")
-            .join("goose")
-            .join("config.yaml")
     } else {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("goose")
-            .join("config.yaml")
+        node_config_dir().join("goose").join("config.yaml")
     }
 }
 
@@ -1023,6 +1012,25 @@ fn write_text(path: &Path, text: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn goose_config_uses_xdg_config_home() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_home = dir.path().join("config");
+        let previous = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", &config_home);
+
+        assert_eq!(
+            goose_config_path(),
+            config_home.join("goose").join("config.yaml")
+        );
+
+        match previous {
+            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+    }
 
     #[test]
     fn resolves_default_named_and_all_targets() {
