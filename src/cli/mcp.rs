@@ -29,7 +29,8 @@ pub struct McpServeArgs {
     /// Exit the server process after this many seconds with no tool calls.
     /// The host respawns the server on the next tool use, so an idle server
     /// never lingers (each agent session otherwise keeps one alive until it
-    /// exits). 0 / absent = stay alive until the host closes stdin.
+    /// exits). 0 = stay alive until the host closes stdin. Absent = the
+    /// `[mcp] idle_exit_secs` config value (default 60; 0 disables).
     #[arg(long, value_name = "SECS")]
     pub idle_exit: Option<u64>,
 }

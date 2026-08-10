@@ -566,7 +566,7 @@ sivtr mcp serve
 sivtr mcp serve --idle-exit 60
 ```
 
-`--idle-exit <SECS>` 让 server 在连续多少秒没有 tool call 后退出；host 会在下次使用工具时重新拉起，空闲 server 因此不会常驻（否则每个 agent session 会各保留一个直到退出）。`0` / 缺省 = 直到 host 关闭 stdin 才退出。也可以用全局配置键 `[mcp] idle_exit_secs` 设置同样的值；CLI flag 优先于配置。
+`--idle-exit <SECS>` 让 server 在连续多少秒没有 tool call 后退出；host 会在下次使用工具时重新拉起，空闲 server 因此不会常驻（否则每个 agent session 会各保留一个直到退出）。`0` = 直到 host 关闭 stdin 才退出。也可以用全局配置键 `[mcp] idle_exit_secs` 设置同样的值，默认 `60`（默认开启；设为 `0` 关闭）；CLI flag 优先于配置。
 
 工具：
 

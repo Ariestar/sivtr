@@ -190,8 +190,9 @@ pub fn execute(command: McpCommand) -> Result<()> {
         McpAction::Serve(args) => {
             // Idle-exit precedence: CLI `--idle-exit` overrides the unified
             // `[mcp] idle_exit_secs` config, which all host registrations
-            // share (hosts run plain `sivtr mcp serve`).
-            let idle_secs = args.idle_exit.or_else(|| {
+            // share (hosts run plain `sivtr mcp serve`). Both accept 0 to
+            // mean "never exit on idle"; the config default is 60.
+            let idle_secs = args.idle_exit.filter(|&secs| secs > 0).or_else(|| {
                 SivtrConfig::load()
                     .ok()
                     .map(|config| config.mcp.idle_exit_secs)
