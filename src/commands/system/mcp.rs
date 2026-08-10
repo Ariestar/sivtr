@@ -141,6 +141,16 @@ const MCP_HOSTS: &[McpHostSpec] = &[
         host_present: qoder_host_present,
     },
     McpHostSpec {
+        provider: AgentProvider::QoderCn,
+        location: McpLocationSupport::GlobalOnly,
+        kind: McpConfigKind::Json {
+            key: "mcpServers",
+            entry: claude_cursor_entry,
+        },
+        config_path: |_loc| qoder_cn_config_path(),
+        host_present: qoder_cn_host_present,
+    },
+    McpHostSpec {
         provider: AgentProvider::Gemini,
         location: McpLocationSupport::GlobalOnly,
         kind: McpConfigKind::Json {
@@ -874,11 +884,19 @@ fn pi_host_present() -> bool {
 }
 
 fn qoder_config_path() -> PathBuf {
-    sivtr_core::agents::qoder::qoder_home().join("mcp.json")
+    sivtr_core::agents::qoder::qoder_home().join("settings.json")
 }
 
 fn qoder_host_present() -> bool {
     qoder_config_path().exists() || sivtr_core::agents::qoder::qoder_home().exists()
+}
+
+fn qoder_cn_config_path() -> PathBuf {
+    sivtr_core::agents::qoder::qoder_cn_home().join("settings.json")
+}
+
+fn qoder_cn_host_present() -> bool {
+    qoder_cn_config_path().exists() || sivtr_core::agents::qoder::qoder_cn_home().exists()
 }
 
 /// Gemini CLI reads MCP servers from `settings.json` (`mcpServers` key).

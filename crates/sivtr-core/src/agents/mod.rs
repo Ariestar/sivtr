@@ -112,6 +112,14 @@ const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
         factory: qoder_provider,
     },
     AgentProviderSpec {
+        provider: AgentProvider::QoderCn,
+        name: "Qoder-CN",
+        command_name: "qoder-cn",
+        current_transcript_env: None,
+        current_session_id_env: None,
+        factory: qoder_cn_provider,
+    },
+    AgentProviderSpec {
         provider: AgentProvider::Gemini,
         name: "Gemini",
         command_name: "gemini",
@@ -171,6 +179,10 @@ fn pi_provider() -> Box<dyn AgentSessionProvider> {
 
 fn qoder_provider() -> Box<dyn AgentSessionProvider> {
     Box::new(crate::agents::qoder::QoderProvider)
+}
+
+fn qoder_cn_provider() -> Box<dyn AgentSessionProvider> {
+    Box::new(crate::agents::qoder::QoderCnProvider)
 }
 
 fn gemini_provider() -> Box<dyn AgentSessionProvider> {
