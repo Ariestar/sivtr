@@ -10,9 +10,11 @@ use crossterm::{
     terminal::{enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{buffer::CellDiffOption, prelude::*};
+#[cfg(windows)]
+use std::cell::Cell;
 use std::io::IsTerminal;
 use std::{
-    cell::{Cell, RefCell},
+    cell::RefCell,
     fmt::Display,
     io::{self, Stdout},
     mem,
