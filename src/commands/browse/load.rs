@@ -433,17 +433,15 @@ impl SourceLoadPump {
                 });
             });
         if let Err(error) = spawned {
-            // The OS refused to start the loader thread. Record the failure
-            // directly instead of routing it through the channel: the body
-            // event path used to discard such errors, leaving the session
-            // silently unloaded and re-spawned on every sync_bodies pass.
-            let ik = format!("{idx}\0{session_id}");
-            self.body_inflight.remove(&ik);
-            // The failure is rendered as a `[!]` marker from `body_failed`;
-            // writing to stderr while the TUI owns the terminal would corrupt
-            // the frame buffer.
-            self.body_failed
-                .insert(ik, format!("failed to spawn body loader thread: {error}"));
+            let _ = self.tx.send(JobEvent {
+                index: idx,
+                gen,
+                kind: JobKind::Body {
+                    session_id: session_id.to_string(),
+                },
+                result: Err(format!("failed to spawn body loader thread: {error}")),
+                exhausted: true,
+            });
         }
     }
 
