@@ -419,17 +419,22 @@ pub(crate) fn run(
         }
 
         // Wait for input. While a load is in flight, keep a short poll so the
-        // spinner animates and results repaint without a keypress. When
-        // nothing is loading, block until an event arrives instead of
-        // redrawing the whole frame at a fixed rate.
+        // spinner animates and results repaint without a keypress. In auto
+        // theme mode, poll periodically so a system appearance change swaps
+        // the palette while the TUI stays up. When nothing is loading and the
+        // theme is fixed, block until an event arrives instead of redrawing
+        // the whole frame at a fixed rate.
         let poll_timeout = if sessions_pane.is_fetching() {
             std::time::Duration::from_millis(100)
         } else {
-            std::time::Duration::from_secs(3600)
+            crate::tui::theme::auto_interval().unwrap_or(std::time::Duration::from_secs(3600))
         };
         if !event::poll(poll_timeout)? {
             if sessions_pane.is_fetching() {
                 loading_tick = loading_tick.wrapping_add(1);
+                redraw = true;
+            }
+            if crate::tui::theme::refresh_if_changed() {
                 redraw = true;
             }
             continue;
