@@ -486,13 +486,17 @@ impl SourceLoadPump {
                             self.body_failed.insert(ik, "no body content".into());
                             return true;
                         }
-                        let mut changed = false;
+                        let mut requested_applied = false;
                         for s in sessions {
-                            if state.pane.apply_body(&s.session_id, s.records) {
-                                changed = true;
+                            let requested = s.session_id == session_id;
+                            if state.pane.apply_body(&s.session_id, s.records) && requested {
+                                requested_applied = true;
                             }
                         }
-                        changed
+                        if !requested_applied {
+                            self.body_failed.insert(ik, "session not found".into());
+                        }
+                        true
                     }
                     Err(message) => {
                         // The body query itself failed (timeout, remote error,
@@ -928,6 +932,67 @@ mod tests {
         assert!(column.pump.body_failed.contains_key("0\0s1"));
 
         // And a sync pass must not re-spawn the settled key.
+        let keep: HashSet<(usize, String)> = [(0, "s1".into())].into();
+        column.pump.sync_bodies(&sources, &mut column.states, &keep);
+        assert!(column.pump.body_inflight.is_empty());
+    }
+
+    #[test]
+    fn unmatched_body_result_is_terminal_and_not_retried() {
+        let source = WorkspaceSource::agent(AgentProvider::Codex);
+        let sources = vec![source.clone()];
+        let meta = SessionMeta {
+            source: source.clone(),
+            session_id: "s1".into(),
+            modified: UNIX_EPOCH,
+            title: "s1".into(),
+            search_title: "s1".into(),
+        };
+        let other_meta = SessionMeta {
+            source: source.clone(),
+            session_id: "other".into(),
+            modified: UNIX_EPOCH,
+            title: "other".into(),
+            search_title: "other".into(),
+        };
+        let state = SourceLoadState {
+            pane: SessionPane::ready(
+                vec![
+                    WindowRow::meta_only("s1".into(), meta),
+                    WindowRow::meta_only("other".into(), other_meta),
+                ],
+                10,
+                true,
+            ),
+        };
+        let mut column = SessionColumn::new(sources.clone(), vec![state], PathBuf::from("."));
+
+        column.pump.body_inflight.insert("0\0s1".into());
+        let unmatched = JobEvent {
+            index: 0,
+            gen: 0,
+            kind: JobKind::Body {
+                session_id: "s1".into(),
+            },
+            result: Ok(vec![WorkspaceSession {
+                source,
+                session_id: "other".into(),
+                modified: UNIX_EPOCH,
+                title: "other".into(),
+                search_title: "other".into(),
+                records: vec![],
+                body_loaded: true,
+            }]),
+            exhausted: true,
+        };
+
+        assert!(column.pump.apply(unmatched, &mut column.states));
+        assert!(column.pump.body_inflight.is_empty());
+        assert_eq!(
+            column.pump.body_failed.get("0\0s1").map(String::as_str),
+            Some("session not found")
+        );
+
         let keep: HashSet<(usize, String)> = [(0, "s1".into())].into();
         column.pump.sync_bodies(&sources, &mut column.states, &keep);
         assert!(column.pump.body_inflight.is_empty());
