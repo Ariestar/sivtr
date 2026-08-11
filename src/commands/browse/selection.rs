@@ -110,13 +110,19 @@ pub(super) fn select_sources(
     selected_sources: &mut [bool],
     selection: WorkspaceSourceSelection,
 ) {
-    debug_assert_eq!(sources.len(), selected_sources.len());
-    for (idx, source) in sources.iter().enumerate() {
+    // The mask is normally built from `sources`, but a length mismatch must
+    // not index out of bounds in release builds (debug_assert! is compiled
+    // out): apply over the overlap and clear any stale flags beyond it.
+    let overlap = sources.len().min(selected_sources.len());
+    for (idx, source) in sources.iter().take(overlap).enumerate() {
         selected_sources[idx] = match selection {
             WorkspaceSourceSelection::All => true,
             WorkspaceSourceSelection::Agents => source.is_agent(),
             WorkspaceSourceSelection::Terminal => source.is_terminal(),
         };
+    }
+    for flag in &mut selected_sources[overlap..] {
+        *flag = false;
     }
 }
 
