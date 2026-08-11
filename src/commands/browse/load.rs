@@ -439,7 +439,9 @@ impl SourceLoadPump {
             // silently unloaded and re-spawned on every sync_bodies pass.
             let ik = format!("{idx}\0{session_id}");
             self.body_inflight.remove(&ik);
-            eprintln!("sivtr: failed to load session body: {error}");
+            // The failure is rendered as a `[!]` marker from `body_failed`;
+            // writing to stderr while the TUI owns the terminal would corrupt
+            // the frame buffer.
             self.body_failed
                 .insert(ik, format!("failed to spawn body loader thread: {error}"));
         }
@@ -477,6 +479,15 @@ impl SourceLoadPump {
                 self.body_inflight.remove(&ik);
                 match ev.result {
                     Ok(sessions) => {
+                        if sessions.is_empty() {
+                            // A successful query that returned no records is
+                            // still a terminal outcome: leave the key out of
+                            // the retry set instead of respawning it on every
+                            // sync_bodies pass. `true` wakes the picker so the
+                            // `[!]` marker is noticed.
+                            self.body_failed.insert(ik, "no body content".into());
+                            return true;
+                        }
                         let mut changed = false;
                         for s in sessions {
                             if state.pane.apply_body(&s.session_id, s.records) {
@@ -490,7 +501,6 @@ impl SourceLoadPump {
                         // ...). Keep the message instead of discarding it and
                         // stop the pump from retrying a key that cannot load.
                         // `true` wakes the picker so the change is noticed.
-                        eprintln!("sivtr: failed to load session body: {message}");
                         self.body_failed.insert(ik, message);
                         true
                     }
@@ -885,6 +895,44 @@ mod tests {
             column.pump.body_failed.get("0\0s1").map(String::as_str),
             Some("boom")
         );
+    }
+
+    #[test]
+    fn empty_body_result_is_terminal_and_not_retried() {
+        let source = WorkspaceSource::agent(AgentProvider::Codex);
+        let sources = vec![source.clone()];
+        let meta = SessionMeta {
+            source: source.clone(),
+            session_id: "s1".into(),
+            modified: UNIX_EPOCH,
+            title: "s1".into(),
+            search_title: "s1".into(),
+        };
+        let state = SourceLoadState {
+            pane: SessionPane::ready(vec![WindowRow::meta_only("s1".into(), meta)], 10, true),
+        };
+        let mut column = SessionColumn::new(sources.clone(), vec![state], PathBuf::from("."));
+
+        // A successful body query that returns no records must still settle
+        // the key instead of respawning it on every sync_bodies pass.
+        column.pump.body_inflight.insert("0\0s1".into());
+        let empty = JobEvent {
+            index: 0,
+            gen: 0,
+            kind: JobKind::Body {
+                session_id: "s1".into(),
+            },
+            result: Ok(vec![]),
+            exhausted: true,
+        };
+        assert!(column.pump.apply(empty, &mut column.states));
+        assert!(column.pump.body_inflight.is_empty());
+        assert!(column.pump.body_failed.contains_key("0\0s1"));
+
+        // And a sync pass must not re-spawn the settled key.
+        let keep: HashSet<(usize, String)> = [(0, "s1".into())].into();
+        column.pump.sync_bodies(&sources, &mut column.states, &keep);
+        assert!(column.pump.body_inflight.is_empty());
     }
 
     #[test]
