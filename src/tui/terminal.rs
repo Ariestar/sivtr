@@ -378,16 +378,25 @@ fn restore_owned_state(failures: &mut CleanupFailures, state: &mut TerminalState
         // Windows. Keep virtual-terminal output enabled until every such sequence succeeds, so a
         // later Drop retry can still take effect instead of merely writing inert escape bytes.
         if display_commands_restored {
-            // A panic can leave the synchronized-update guard armed; end the update while VT
-            // output is still enabled, before restoring the original mode (which may disable the
-            // processing the end sequence needs). The flag is a Cell shared with the guard, so
-            // reading and clearing it cannot borrow the state.
             #[cfg(windows)]
-            if state.update_active.replace(false) {
-                let _ = execute!(io::stdout(), EndSynchronizedUpdate);
+            let update_ended = if state.update_active.get() {
+                let result = execute!(io::stdout(), EndSynchronizedUpdate);
+                let succeeded = result.is_ok();
+                failures.record("end synchronized terminal update", result);
+                if succeeded {
+                    state.update_active.set(false);
+                }
+                succeeded
+            } else {
+                true
+            };
+            #[cfg(not(windows))]
+            let update_ended = true;
+
+            if update_ended {
+                let output_result = modes.restore_output();
+                failures.record("restore console output mode", output_result);
             }
-            let output_result = modes.restore_output();
-            failures.record("restore console output mode", output_result);
         }
 
         if modes.is_restored() {
@@ -439,12 +448,18 @@ struct TerminalState {
 
 impl TerminalState {
     fn has_pending_cleanup(&self) -> bool {
+        #[cfg(windows)]
+        let update_pending = self.update_active.get();
+        #[cfg(not(windows))]
+        let update_pending = false;
+
         self.mouse_capture
             || self.alternate_screen
             || self.cursor_restore_pending
             || self.modes.is_some()
             || self.code_pages.is_some()
             || self.console_input.is_some()
+            || update_pending
     }
 }
 
@@ -940,8 +955,10 @@ impl Drop for SynchronizedUpdateGuard {
         // here only while the update is still open so the restore's End is
         // not echoed a second time after VT output has been restored. The
         // flag is a Cell, so this cannot borrow or panic during unwinding.
-        if self.active && self.update_active.get() {
-            let _ = execute!(io::stdout(), EndSynchronizedUpdate);
+        if self.active
+            && self.update_active.get()
+            && execute!(io::stdout(), EndSynchronizedUpdate).is_ok()
+        {
             self.update_active.set(false);
         }
         self.active = false;
