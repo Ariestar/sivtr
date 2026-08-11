@@ -4,15 +4,32 @@
 //! sites (`accent()`, `focus_row()`, …) stay unchanged while the palette is
 //! chosen once at TUI startup from the terminal environment and the optional
 //! `[theme]` config section.
+//!
+//! Agent label colors live in a single table, [`provider_colors`]: one row per
+//! agent holding all four palette variants. Adding an agent means adding one
+//! row there — the compiler enforces the table stays complete because the
+//! match is exhaustive over `AgentProvider`.
 
 use ratatui::prelude::{Color, Modifier, Style};
 use sivtr_core::ai::AgentProvider;
 use sivtr_core::config::ThemeMode;
 use std::cell::Cell;
 
+/// Which of the four color schemes is active. Chrome colors and agent label
+/// colors are selected from this together, so a single `ACTIVE` cell drives
+/// both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PaletteMode {
+    Dark,
+    Light,
+    Ansi,
+    AnsiLight,
+}
+
 /// One palette: chrome, text, and selection colors for a color scheme.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Theme {
+    pub(crate) mode: PaletteMode,
     pub(crate) accent: Color,
     pub(crate) muted: Color,
     pub(crate) dim: Color,
@@ -29,38 +46,101 @@ pub(crate) struct Theme {
     pub(crate) footer: Color,
     pub(crate) text_primary: Color,
     pub(crate) failure: Color,
-    /// Per-agent label colors, chosen per palette so light and ANSI
-    /// terminals get readable, non-RGB variants.
-    pub(crate) provider: ProviderPalette,
 }
 
-/// Per-agent label colors for one palette.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct ProviderPalette {
-    pub(crate) codex: Color,
-    pub(crate) claude: Color,
-    pub(crate) cursor: Color,
-    pub(crate) opencode: Color,
-    pub(crate) openclaw: Color,
-    pub(crate) hermes: Color,
-    pub(crate) grok: Color,
-    pub(crate) pi: Color,
-    pub(crate) qoder: Color,
+/// The four agent-label colors for one provider, one per palette. Chosen by
+/// hand so light and ANSI terminals get readable, non-RGB variants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProviderColors {
+    pub(crate) dark: Color,
+    pub(crate) light: Color,
+    pub(crate) ansi: Color,
+    pub(crate) ansi_light: Color,
 }
 
-impl ProviderPalette {
-    pub(crate) const fn color(self, provider: AgentProvider) -> Color {
-        match provider {
-            AgentProvider::Codex => self.codex,
-            AgentProvider::Claude => self.claude,
-            AgentProvider::Cursor => self.cursor,
-            AgentProvider::OpenCode => self.opencode,
-            AgentProvider::OpenClaw => self.openclaw,
-            AgentProvider::Hermes => self.hermes,
-            AgentProvider::Grok => self.grok,
-            AgentProvider::Pi => self.pi,
-            AgentProvider::Qoder => self.qoder,
-        }
+/// One row per agent: the four curated label colors, selected by the active
+/// palette. Exhaustive by construction — adding a provider to `AgentProvider`
+/// makes the compiler demand its row here.
+pub(crate) const fn provider_colors(provider: AgentProvider) -> ProviderColors {
+    match provider {
+        AgentProvider::Codex => ProviderColors {
+            dark: Color::Rgb(129, 140, 248), // indigo-400
+            light: Color::Rgb(79, 70, 229),  // indigo-600
+            ansi: Color::Blue,
+            ansi_light: Color::Blue,
+        },
+        AgentProvider::Claude => ProviderColors {
+            dark: Color::Rgb(251, 146, 60), // orange-400
+            light: Color::Rgb(234, 88, 12), // orange-600
+            ansi: Color::Yellow,
+            ansi_light: Color::Yellow,
+        },
+        AgentProvider::Cursor => ProviderColors {
+            dark: Color::Rgb(167, 139, 250), // violet-400
+            light: Color::Rgb(124, 58, 237), // violet-600
+            ansi: Color::Magenta,
+            ansi_light: Color::Magenta,
+        },
+        AgentProvider::OpenCode => ProviderColors {
+            dark: Color::Rgb(45, 212, 191),  // teal-400
+            light: Color::Rgb(13, 148, 136), // teal-600
+            ansi: Color::Cyan,
+            ansi_light: Color::Cyan,
+        },
+        AgentProvider::OpenClaw => ProviderColors {
+            dark: Color::Rgb(248, 113, 113), // red-400
+            light: Color::Rgb(220, 38, 38),  // red-600
+            ansi: Color::Red,
+            ansi_light: Color::Red,
+        },
+        AgentProvider::Hermes => ProviderColors {
+            dark: Color::Rgb(250, 204, 21), // yellow-400
+            light: Color::Rgb(202, 138, 4), // yellow-600
+            ansi: Color::LightYellow,
+            ansi_light: Color::Gray,
+        },
+        AgentProvider::Grok => ProviderColors {
+            dark: Color::Rgb(244, 114, 182), // pink-400
+            light: Color::Rgb(219, 39, 119), // pink-600
+            ansi: Color::LightMagenta,
+            ansi_light: Color::DarkGray,
+        },
+        AgentProvider::Pi => ProviderColors {
+            dark: Color::Rgb(74, 222, 128), // green-400
+            light: Color::Rgb(22, 163, 74), // green-600
+            ansi: Color::Green,
+            ansi_light: Color::Green,
+        },
+        AgentProvider::Qoder => ProviderColors {
+            dark: Color::Rgb(34, 211, 238), // cyan-400
+            light: Color::Rgb(8, 145, 178), // cyan-600
+            ansi: Color::LightCyan,
+            ansi_light: Color::Cyan,
+        },
+        AgentProvider::QoderCn => ProviderColors {
+            dark: Color::Rgb(125, 211, 252), // sky-300
+            light: Color::Rgb(3, 105, 161),  // sky-600
+            ansi: Color::LightCyan,
+            ansi_light: Color::Cyan,
+        },
+        AgentProvider::Gemini => ProviderColors {
+            dark: Color::Rgb(96, 165, 250), // blue-400
+            light: Color::Rgb(37, 99, 235), // blue-600
+            ansi: Color::LightBlue,
+            ansi_light: Color::Blue,
+        },
+        AgentProvider::Goose => ProviderColors {
+            dark: Color::Rgb(251, 191, 36), // amber-400
+            light: Color::Rgb(217, 119, 6), // amber-600
+            ansi: Color::LightYellow,
+            ansi_light: Color::Yellow,
+        },
+        AgentProvider::Qwen => ProviderColors {
+            dark: Color::Rgb(232, 121, 249), // fuchsia-400
+            light: Color::Rgb(192, 38, 211), // fuchsia-600
+            ansi: Color::LightMagenta,
+            ansi_light: Color::Magenta,
+        },
     }
 }
 
@@ -68,6 +148,7 @@ impl Theme {
     /// Dark-background palette (the default).
     pub(crate) const fn dark() -> Self {
         Self {
+            mode: PaletteMode::Dark,
             accent: Color::Rgb(56, 189, 248),         // sky-400
             muted: Color::Rgb(100, 116, 139),         // slate-500
             dim: Color::Rgb(71, 85, 105),             // slate-600
@@ -84,23 +165,13 @@ impl Theme {
             footer: Color::Rgb(148, 163, 184),        // slate-400
             text_primary: Color::Rgb(226, 232, 240),  // slate-200
             failure: Color::Rgb(248, 113, 113),       // red-400
-            provider: ProviderPalette {
-                codex: Color::Rgb(129, 140, 248),    // indigo-400
-                claude: Color::Rgb(251, 146, 60),    // orange-400
-                cursor: Color::Rgb(167, 139, 250),   // violet-400
-                opencode: Color::Rgb(45, 212, 191),  // teal-400
-                openclaw: Color::Rgb(248, 113, 113), // red-400
-                hermes: Color::Rgb(250, 204, 21),    // yellow-400
-                grok: Color::Rgb(244, 114, 182),     // pink-400
-                pi: Color::Rgb(74, 222, 128),        // green-400
-                qoder: Color::Rgb(34, 211, 238),     // cyan-400
-            },
         }
     }
 
     /// Light-background palette (darker variants of the same hues).
     pub(crate) const fn light() -> Self {
         Self {
+            mode: PaletteMode::Light,
             accent: Color::Rgb(2, 132, 199),         // sky-600
             muted: Color::Rgb(100, 116, 139),        // slate-500
             dim: Color::Rgb(148, 163, 184),          // slate-400
@@ -117,17 +188,6 @@ impl Theme {
             footer: Color::Rgb(71, 85, 105),         // slate-600
             text_primary: Color::Rgb(30, 41, 59),    // slate-800
             failure: Color::Rgb(220, 38, 38),        // red-600
-            provider: ProviderPalette {
-                codex: Color::Rgb(79, 70, 229),     // indigo-600
-                claude: Color::Rgb(234, 88, 12),    // orange-600
-                cursor: Color::Rgb(124, 58, 237),   // violet-600
-                opencode: Color::Rgb(13, 148, 136), // teal-600
-                openclaw: Color::Rgb(220, 38, 38),  // red-600
-                hermes: Color::Rgb(202, 138, 4),    // yellow-600
-                grok: Color::Rgb(219, 39, 119),     // pink-600
-                pi: Color::Rgb(22, 163, 74),        // green-600
-                qoder: Color::Rgb(8, 145, 178),     // cyan-600
-            },
         }
     }
 
@@ -136,6 +196,7 @@ impl Theme {
     /// ignored or mis-mapped by older terminals.
     pub(crate) const fn ansi() -> Self {
         Self {
+            mode: PaletteMode::Ansi,
             accent: Color::Cyan,
             muted: Color::DarkGray,
             dim: Color::DarkGray,
@@ -152,17 +213,6 @@ impl Theme {
             footer: Color::Gray,
             text_primary: Color::Gray,
             failure: Color::Red,
-            provider: ProviderPalette {
-                codex: Color::Blue,
-                claude: Color::Yellow,
-                cursor: Color::Magenta,
-                opencode: Color::Cyan,
-                openclaw: Color::Red,
-                hermes: Color::LightYellow,
-                grok: Color::LightMagenta,
-                pi: Color::Green,
-                qoder: Color::LightCyan,
-            },
         }
     }
 
@@ -172,6 +222,7 @@ impl Theme {
     /// would wash out).
     pub(crate) const fn ansi_light() -> Self {
         Self {
+            mode: PaletteMode::AnsiLight,
             accent: Color::Blue,
             muted: Color::DarkGray,
             dim: Color::Gray,
@@ -188,17 +239,6 @@ impl Theme {
             footer: Color::DarkGray,
             text_primary: Color::Black,
             failure: Color::Red,
-            provider: ProviderPalette {
-                codex: Color::Blue,
-                claude: Color::Yellow,
-                cursor: Color::Magenta,
-                opencode: Color::Cyan,
-                openclaw: Color::Red,
-                hermes: Color::Gray,
-                grok: Color::DarkGray,
-                pi: Color::Green,
-                qoder: Color::Cyan,
-            },
         }
     }
 }
@@ -297,8 +337,16 @@ pub(crate) fn range_row() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
+/// Agent label color for the active palette. Reads the per-provider row from
+/// [`provider_colors`] and picks the variant that matches the active scheme.
 pub(crate) fn provider_color(provider: AgentProvider) -> Color {
-    ACTIVE.get().provider.color(provider)
+    let colors = provider_colors(provider);
+    match ACTIVE.get().mode {
+        PaletteMode::Dark => colors.dark,
+        PaletteMode::Light => colors.light,
+        PaletteMode::Ansi => colors.ansi,
+        PaletteMode::AnsiLight => colors.ansi_light,
+    }
 }
 
 pub(crate) fn terminal_color() -> Color {
@@ -372,13 +420,13 @@ mod tests {
     }
 
     #[test]
-    fn provider_colors_follow_the_active_palette() {
+    fn provider_colors_cover_every_agent_with_distinct_schemes() {
         for spec in AgentProvider::all() {
-            let provider = spec.provider;
+            let colors = provider_colors(spec.provider);
             assert_ne!(
-                Theme::dark().provider.color(provider),
-                Theme::light().provider.color(provider),
-                "{provider:?} must have a light variant distinct from its dark one"
+                colors.dark, colors.light,
+                "{} must have a light variant distinct from its dark one",
+                spec.name
             );
         }
         apply(ThemeMode::Dark);
@@ -388,14 +436,14 @@ mod tests {
     }
 
     #[test]
-    fn ansi_provider_palette_emits_no_rgb() {
-        for palette in [Theme::ansi().provider, Theme::ansi_light().provider] {
-            for spec in AgentProvider::all() {
-                let color = palette.color(spec.provider);
+    fn ansi_provider_colors_emit_no_rgb() {
+        for spec in AgentProvider::all() {
+            let colors = provider_colors(spec.provider);
+            for color in [colors.ansi, colors.ansi_light] {
                 assert!(
                     !matches!(color, Color::Rgb(..)),
-                    "{:?} leaks RGB through the ANSI fallback: {color:?}",
-                    spec.provider
+                    "{} leaks RGB through the ANSI fallback: {color:?}",
+                    spec.name
                 );
             }
         }
