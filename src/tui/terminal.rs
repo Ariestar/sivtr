@@ -12,7 +12,7 @@ use crossterm::{
 use ratatui::{buffer::CellDiffOption, prelude::*};
 use std::io::IsTerminal;
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     fmt::Display,
     io::{self, Stdout},
     mem,
@@ -35,6 +35,12 @@ pub struct Tui {
     /// Shared with the panic hook so a crash restores the terminal exactly as `Drop` would.
     /// The TUI and its panic restore live on the same thread, so the state never leaves it.
     state: Rc<RefCell<TerminalState>>,
+    /// Whether a synchronized update is open, shared with the guard and the
+    /// panic restore. A `Cell` (not a field behind the `RefCell`) so cleanup
+    /// paths can read and clear it without a borrow that could panic during
+    /// unwinding.
+    #[cfg(windows)]
+    update_active: Rc<Cell<bool>>,
     /// Clears this session's panic-restore slot when the `Tui` ends, so a later
     /// panic in an outer session still pops the outer closure.
     _panic_restore: panic::RestoreRegistration,
@@ -102,6 +108,10 @@ pub fn init() -> Result<Tui> {
         .modes
         .as_ref()
         .is_some_and(TerminalModes::enable_virtual_terminal_processing);
+    // Shared with the synchronized-update guard and the panic restore so they
+    // can read and clear the open-update flag without borrowing the RefCell.
+    #[cfg(windows)]
+    let update_active = Rc::clone(&setup.state.update_active);
     if let Err(error) = enable_raw_mode().context("Failed to enable terminal raw mode") {
         return setup.fail(error);
     }
@@ -153,6 +163,8 @@ pub fn init() -> Result<Tui> {
         terminal,
         drawing_active: true,
         state,
+        #[cfg(windows)]
+        update_active,
         _panic_restore: panic_restore,
         #[cfg(windows)]
         previous_frame_had_wide_cells: false,
@@ -186,7 +198,7 @@ where
         let force_full_redraw = resized || terminal.previous_frame_had_wide_cells;
 
         let draw_result = if terminal.synchronized_updates_supported {
-            let update = SynchronizedUpdateGuard::begin(&terminal.state)?;
+            let update = SynchronizedUpdateGuard::begin(&terminal.update_active)?;
             let result = draw_terminal_frame(&mut terminal.terminal, force_full_redraw, render)
                 .context("Failed to draw a Windows terminal frame");
             combine_results(
@@ -366,11 +378,11 @@ fn restore_owned_state(failures: &mut CleanupFailures, state: &mut TerminalState
         if display_commands_restored {
             // A panic can leave the synchronized-update guard armed; end the update while VT
             // output is still enabled, before restoring the original mode (which may disable the
-            // processing the end sequence needs).
+            // processing the end sequence needs). The flag is a Cell shared with the guard, so
+            // reading and clearing it cannot borrow the state.
             #[cfg(windows)]
-            if state.synchronized_update_active {
+            if state.update_active.replace(false) {
                 let _ = execute!(io::stdout(), EndSynchronizedUpdate);
-                state.synchronized_update_active = false;
             }
             let output_result = modes.restore_output();
             failures.record("restore console output mode", output_result);
@@ -416,11 +428,11 @@ struct TerminalState {
     /// Set when the panic hook already restored the terminal for a `Tui` that
     /// survived the unwind (library callers may catch the panic themselves).
     panic_restored: bool,
-    /// A synchronized update is open on the output; the panic restore ends it
-    /// before restoring the original console mode (which may disable the
-    /// virtual-terminal processing the end sequence needs).
+    /// Whether a synchronized update is open on the output. Shared with the
+    /// guard behind an `Rc<Cell<bool>>` so cleanup paths can read and clear it
+    /// without a `RefCell` borrow that could panic during unwinding.
     #[cfg(windows)]
-    synchronized_update_active: bool,
+    update_active: Rc<Cell<bool>>,
 }
 
 impl TerminalState {
@@ -890,21 +902,21 @@ fn win32_console_call(operation: &str, succeeded: i32) -> Result<()> {
 #[cfg(windows)]
 struct SynchronizedUpdateGuard {
     active: bool,
-    state: Rc<RefCell<TerminalState>>,
+    update_active: Rc<Cell<bool>>,
 }
 
 #[cfg(windows)]
 impl SynchronizedUpdateGuard {
-    fn begin(state: &Rc<RefCell<TerminalState>>) -> Result<Self> {
+    fn begin(update_active: &Rc<Cell<bool>>) -> Result<Self> {
         // Arm before writing Begin: an I/O error can occur after bytes have partially reached the
         // terminal, so Drop must still attempt End.
         let guard = Self {
             active: true,
-            state: Rc::clone(state),
+            update_active: Rc::clone(update_active),
         };
+        update_active.set(true);
         execute!(io::stdout(), BeginSynchronizedUpdate)
             .context("Failed to begin synchronized terminal update")?;
-        state.borrow_mut().synchronized_update_active = true;
         Ok(guard)
     }
 
@@ -912,7 +924,7 @@ impl SynchronizedUpdateGuard {
         let result = execute!(io::stdout(), EndSynchronizedUpdate)
             .context("Failed to end synchronized terminal update");
         if result.is_ok() {
-            self.state.borrow_mut().synchronized_update_active = false;
+            self.update_active.set(false);
             self.active = false;
         }
         result
@@ -922,12 +934,13 @@ impl SynchronizedUpdateGuard {
 #[cfg(windows)]
 impl Drop for SynchronizedUpdateGuard {
     fn drop(&mut self) {
-        // The panic restore ends the update itself and clears the shared flag;
-        // end here only while the update is still open, so the restore's End
-        // is not echoed a second time after VT output has been restored.
-        if self.active && self.state.borrow().synchronized_update_active {
+        // The panic restore ends the update itself and clears the flag; end
+        // here only while the update is still open so the restore's End is
+        // not echoed a second time after VT output has been restored. The
+        // flag is a Cell, so this cannot borrow or panic during unwinding.
+        if self.active && self.update_active.get() {
             let _ = execute!(io::stdout(), EndSynchronizedUpdate);
-            self.state.borrow_mut().synchronized_update_active = false;
+            self.update_active.set(false);
         }
         self.active = false;
     }

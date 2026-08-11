@@ -45,11 +45,15 @@ pub fn register_restore(restore: Box<dyn FnOnce()>) -> RestoreRegistration {
 
 impl Drop for RestoreRegistration {
     fn drop(&mut self) {
-        TERMINAL_RESTORE.with(|slot| {
-            if let Some(entry) = slot.borrow_mut().get_mut(self.index) {
-                *entry = None;
-            }
-        });
+        // Teardown-safe: the thread-local may be destroyed when this runs at
+        // process exit; a panic here would abort the process.
+        TERMINAL_RESTORE
+            .try_with(|slot| {
+                if let Some(entry) = slot.borrow_mut().get_mut(self.index) {
+                    *entry = None;
+                }
+            })
+            .ok();
     }
 }
 
@@ -61,11 +65,17 @@ pub fn install() {
     INSTALL.call_once(|| {
         let default_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            let restore = TERMINAL_RESTORE.with(|slot| {
-                slot.try_borrow_mut()
-                    .ok()
-                    .and_then(|mut slot| slot.iter_mut().rev().find_map(|entry| entry.take()))
-            });
+            // Teardown-safe: the thread-local may already be destroyed when
+            // the hook runs at process exit; a panic here would abort the
+            // report of the original panic.
+            let restore = TERMINAL_RESTORE
+                .try_with(|slot| {
+                    slot.try_borrow_mut()
+                        .ok()
+                        .and_then(|mut slot| slot.iter_mut().rev().find_map(|entry| entry.take()))
+                })
+                .ok()
+                .flatten();
             if let Some(restore) = restore {
                 // A restore that panics (e.g. I/O against a dying console) must not abort the
                 // process before the panic is reported.
