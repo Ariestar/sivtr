@@ -7,7 +7,8 @@ use std::path::PathBuf;
 
 use crate::tui::content::view::{content_link_at, ContentViewMode};
 use crate::tui::search::{
-    workspace_search_has_query, workspace_search_scope, WorkspaceSearchIndex, WorkspaceSearchOutput,
+    workspace_search_fingerprint, workspace_search_has_query, workspace_search_scope,
+    WorkspaceSearchIndex, WorkspaceSearchOutput,
 };
 use crate::tui::terminal::read_interaction;
 use crate::tui::workspace::{
@@ -122,7 +123,12 @@ pub(crate) fn run(
                 // Rebuild the search corpus and index only when the loaded
                 // corpus changed; both are cached across keystrokes so typing
                 // does not clone every hydrated session per keypress.
-                let fingerprint = search_corpus_fingerprint(&all_sessions, &sessions_pane);
+                let fingerprint = workspace_search_fingerprint(
+                    &all_sessions,
+                    all_sessions
+                        .iter()
+                        .map(|session| sessions_pane.body_for(session).unwrap_or(&[])),
+                );
                 if let Some((index, corpus)) = search_engine
                     .as_ref()
                     .filter(|(index, _)| index.fingerprint() == fingerprint)
@@ -1025,24 +1031,6 @@ fn is_repeat_safe(code: KeyCode, modifiers: KeyModifiers, text_input: bool) -> b
     )
 }
 
-/// Fingerprint of the loaded search corpus without cloning it: hashes every
-/// hydrated record ref in corpus order. Matches `WorkspaceSearchIndex`'s
-/// internal fingerprint, so an equal value means the cached corpus is still
-/// current and neither the corpus clone nor the BM25 index need rebuilding.
-fn search_corpus_fingerprint(sessions: &[WorkspaceSession], pane: &SessionColumn) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    for session in sessions {
-        if let Some(records) = pane.body_for(session) {
-            for record in records {
-                record.work_ref.whole().hash(&mut hasher);
-            }
-        }
-    }
-    hasher.finish()
-}
-
 #[cfg(test)]
 mod tests {
     fn tool_test_value(text: String) -> serde_json::Value {
@@ -1062,8 +1050,8 @@ mod tests {
     use crate::pane::{Pane, PaneInput, Viewport};
     use crate::tui::content::view::ContentViewMode;
     use crate::tui::search::{
-        workspace_search_query, workspace_search_regex, WorkspaceSearchIndex, WorkspaceSearchMatch,
-        WorkspaceSearchScope,
+        workspace_search_fingerprint, workspace_search_query, workspace_search_regex,
+        WorkspaceSearchIndex, WorkspaceSearchMatch, WorkspaceSearchScope,
     };
     use crate::tui::workspace::{
         ContentIoFocus, ContentScrolls, TextPair, WorkspaceCopyParts, WorkspaceDialogue,
@@ -1322,6 +1310,54 @@ mod tests {
         assert_eq!(dialogue_results.matches.len(), 1);
         assert_eq!(dialogue_results.matches[0].dialogue_index, 0);
         assert!(content_results.sessions.is_empty());
+    }
+
+    #[test]
+    fn workspace_search_fingerprint_tracks_searchable_fields() {
+        let source = WorkspaceSource::agent(AgentProvider::Codex);
+        let sessions = vec![workspace_test_session("session", source, &["dialogue"])];
+        let fingerprint = workspace_search_fingerprint(
+            &sessions,
+            sessions.iter().map(|session| session.records.as_slice()),
+        );
+
+        let mut session_title_changed = sessions.clone();
+        session_title_changed[0].search_title = "renamed session".into();
+        assert_ne!(
+            fingerprint,
+            workspace_search_fingerprint(
+                &session_title_changed,
+                session_title_changed
+                    .iter()
+                    .map(|session| session.records.as_slice()),
+            )
+        );
+
+        let mut dialogue_title_changed = sessions.clone();
+        dialogue_title_changed[0].records[0].title = "renamed dialogue".into();
+        assert_ne!(
+            fingerprint,
+            workspace_search_fingerprint(
+                &dialogue_title_changed,
+                dialogue_title_changed
+                    .iter()
+                    .map(|session| session.records.as_slice()),
+            )
+        );
+
+        let mut body_changed = sessions;
+        body_changed[0].records[0].parts[0].data = sivtr_core::record::WorkPartData::User {
+            content: "changed body".into(),
+        };
+        assert_ne!(
+            fingerprint,
+            workspace_search_fingerprint(
+                &body_changed,
+                body_changed
+                    .iter()
+                    .map(|session| session.records.as_slice()),
+            )
+        );
     }
 
     #[test]

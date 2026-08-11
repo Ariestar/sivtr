@@ -83,13 +83,24 @@ pub(crate) struct WorkspaceSearchIndex {
     fingerprint: u64,
 }
 
-/// Fingerprint of the loaded dialogue corpus: hash of every record ref.
-/// Identical when the corpus has the same records in the same order.
-fn workspace_records_fingerprint(sessions: &[WorkspaceSession]) -> u64 {
+/// Fingerprint of every value consumed by [`WorkspaceSearchIndex`].
+pub(crate) fn workspace_search_fingerprint<'a>(
+    sessions: &[WorkspaceSession],
+    body_records: impl Iterator<Item = &'a [WorkRecord]>,
+) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    for session in sessions {
-        for record in &session.records {
+    sessions.len().hash(&mut hasher);
+    for (session, records) in sessions.iter().zip(body_records) {
+        session.search_title.hash(&mut hasher);
+        records.len().hash(&mut hasher);
+        for record in records {
             record.work_ref.whole().hash(&mut hasher);
+            record.title.hash(&mut hasher);
+            for part in &record.parts {
+                part.seq.hash(&mut hasher);
+                std::mem::discriminant(&part.kind()).hash(&mut hasher);
+                part.text().hash(&mut hasher);
+            }
         }
     }
     hasher.finish()
@@ -132,7 +143,10 @@ impl WorkspaceSearchIndex {
             }
         }
 
-        let fingerprint = workspace_records_fingerprint(sessions);
+        let fingerprint = workspace_search_fingerprint(
+            sessions,
+            sessions.iter().map(|session| session.records.as_slice()),
+        );
         Self {
             sessions: session_entries,
             dialogues: dialogue_entries,
