@@ -427,7 +427,7 @@ pub(crate) fn run(
                     // into a space so a trailing newline (common when copying
                     // a line) or a multi-line clipboard searches as one query
                     // instead of silently matching nothing.
-                    let pasted = text.replace(['\r', '\n'], " ");
+                    let pasted = normalize_search_paste(&text);
                     let pasted = pasted.trim_end();
                     search_query_edited(
                         |query| query.push_str(pasted),
@@ -950,6 +950,10 @@ pub(crate) fn run(
             _ => {}
         }
     }
+}
+
+fn normalize_search_paste(text: &str) -> String {
+    text.replace("\r\n", " ").replace(['\r', '\n'], " ")
 }
 
 /// A search input edit (typed character, backspace, or paste) changed the
@@ -1799,6 +1803,11 @@ mod tests {
         handle_line_filter_paste("alpha beta\n", &mut filter, &mut error);
         assert_eq!(filter, "1,3:5");
         assert!(error.is_some());
+    }
+
+    #[test]
+    fn search_paste_normalizes_crlf_as_one_space() {
+        assert_eq!(super::normalize_search_paste("foo\r\nbar"), "foo bar");
     }
 
     #[test]
