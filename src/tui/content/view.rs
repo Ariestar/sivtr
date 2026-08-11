@@ -517,7 +517,7 @@ fn selection_range_for_line(
 }
 
 fn visual_selection_style() -> Style {
-    Style::default().fg(Color::White).bg(Color::DarkGray)
+    crate::tui::theme::selected_row()
 }
 
 fn style_line_columns(
@@ -980,10 +980,9 @@ fn separator_lines(height: usize, visible: &[ContentLine]) -> Text<'static> {
 fn gutter_style(kind: Option<MarkdownLineKind>) -> Style {
     match kind {
         Some(MarkdownLineKind::CodeBlock | MarkdownLineKind::CodeFence) => {
-            Style::default().fg(Color::Blue)
+            Style::default().fg(crate::tui::theme::accent())
         }
-        Some(MarkdownLineKind::Table) => Style::default().fg(Color::DarkGray),
-        _ => Style::default().fg(Color::DarkGray),
+        _ => Style::default().fg(crate::tui::theme::dim()),
     }
 }
 
@@ -1018,7 +1017,9 @@ pub(crate) fn highlight_spans(
         }
         spans.push(Span::styled(
             text[matched.start()..matched.end()].to_string(),
-            base_style.fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            base_style
+                .fg(crate::tui::theme::range_fg())
+                .add_modifier(Modifier::BOLD),
         ));
         cursor = matched.end();
     }
@@ -1101,7 +1102,9 @@ fn split_span_by_matches(
         }
         pieces.push(Span::styled(
             text[start - span_start..end - span_start].to_string(),
-            span.style.fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            span.style
+                .fg(crate::tui::theme::range_fg())
+                .add_modifier(Modifier::BOLD),
         ));
         cursor = end;
     }
@@ -1147,7 +1150,7 @@ mod tests {
     use crate::tui::pane::Panel;
     use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
-    use ratatui::prelude::{Color, Modifier};
+    use ratatui::prelude::Modifier;
     use ratatui::text::Text;
     use ratatui::Terminal;
     use regex::Regex;
@@ -1217,13 +1220,19 @@ mod tests {
         assert_eq!(rendered.lines.len(), 2);
         assert_eq!(rendered.lines[0].spans[0].content.as_ref(), "## ");
         assert_eq!(rendered.lines[0].spans[1].content.as_ref(), "User");
-        assert_eq!(rendered.lines[0].spans[1].style.fg, Some(Color::Cyan));
+        assert_eq!(
+            rendered.lines[0].spans[1].style.fg,
+            Some(crate::tui::theme::user())
+        );
         assert!(rendered.lines[1].spans[0]
             .style
             .add_modifier
             .contains(Modifier::BOLD));
         assert_eq!(rendered.lines[1].spans[2].content.as_ref(), "code");
-        assert_eq!(rendered.lines[1].spans[2].style.fg, Some(Color::Gray));
+        assert_eq!(
+            rendered.lines[1].spans[2].style.fg,
+            Some(crate::tui::theme::code())
+        );
         assert_eq!(rendered.lines[1].spans[2].style.bg, None);
         assert_eq!(line_count("## User\n**bold** and `code`"), 2);
     }
@@ -1240,7 +1249,10 @@ mod tests {
         );
 
         assert_eq!(rendered.lines[0].spans[0].content.as_ref(), "bold");
-        assert_eq!(rendered.lines[0].spans[0].style.fg, Some(Color::Yellow));
+        assert_eq!(
+            rendered.lines[0].spans[0].style.fg,
+            Some(crate::tui::theme::range_fg())
+        );
         assert!(rendered.lines[0].spans[0]
             .style
             .add_modifier
@@ -1455,8 +1467,14 @@ mod tests {
 
         assert_eq!(rendered.lines[0].spans[1].content.as_ref(), "bcd");
         assert_eq!(rendered.lines[1].spans[1].content.as_ref(), "vwx");
-        assert_eq!(rendered.lines[0].spans[1].style.bg, Some(Color::DarkGray));
-        assert_eq!(rendered.lines[1].spans[1].style.bg, Some(Color::DarkGray));
+        assert_eq!(
+            rendered.lines[0].spans[1].style.bg,
+            crate::tui::theme::selected_row().bg
+        );
+        assert_eq!(
+            rendered.lines[1].spans[1].style.bg,
+            crate::tui::theme::selected_row().bg
+        );
     }
 
     #[test]
@@ -1474,7 +1492,10 @@ mod tests {
 
         assert_eq!(rendered_line_text(&rendered, 0), "alpha");
         assert_eq!(rendered.lines[0].spans[1].content.as_ref(), "lph");
-        assert_eq!(rendered.lines[0].spans[1].style.bg, Some(Color::DarkGray));
+        assert_eq!(
+            rendered.lines[0].spans[1].style.bg,
+            crate::tui::theme::selected_row().bg
+        );
     }
 
     #[test]

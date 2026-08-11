@@ -1,19 +1,25 @@
-//! Shared TUI palette — keep panel chrome and list accents consistent.
+//! Shared TUI palette — single source for every color.
 //!
-//! The active palette lives in a thread-local so the existing accessor call
+//! The active palette lives in a thread-local so existing accessor call
 //! sites (`accent()`, `focus_row()`, …) stay unchanged while the palette is
-//! chosen once at TUI startup from the terminal environment and the optional
-//! `[theme]` config section.
+//! chosen at TUI startup and swapped at runtime when the system appearance
+//! changes.
 //!
-//! Agent label colors live in a single table, [`provider_colors`]: one row per
-//! agent holding all four palette variants. Adding an agent means adding one
-//! row there — the compiler enforces the table stays complete because the
-//! match is exhaustive over `AgentProvider`.
+//! Light/dark follows the desktop session's appearance (macOS, Linux XDG
+//! portal, Windows registry) via `dark-light`; RGB vs ANSI rendering is
+//! decided by the terminal's truecolor advertisement. Agent label colors
+//! live in a single table, [`provider_colors`]: one row per agent holding
+//! all four palette variants.
 
+use dark_light::Mode;
 use ratatui::prelude::{Color, Modifier, Style};
 use sivtr_core::ai::AgentProvider;
 use sivtr_core::config::ThemeMode;
 use std::cell::Cell;
+use std::time::Duration;
+
+/// How often the event loop re-checks the system appearance in auto mode.
+pub(crate) const AUTO_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Which of the four color schemes is active. Chrome colors and agent label
 /// colors are selected from this together, so a single `ACTIVE` cell drives
@@ -26,7 +32,7 @@ pub(crate) enum PaletteMode {
     AnsiLight,
 }
 
-/// One palette: chrome, text, and selection colors for a color scheme.
+/// One palette: chrome, text, selection, and markdown colors for a scheme.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Theme {
     pub(crate) mode: PaletteMode,
@@ -46,6 +52,14 @@ pub(crate) struct Theme {
     pub(crate) footer: Color,
     pub(crate) text_primary: Color,
     pub(crate) failure: Color,
+    pub(crate) code: Color,
+    pub(crate) link: Color,
+    pub(crate) quote: Color,
+    pub(crate) success: Color,
+    pub(crate) user: Color,
+    pub(crate) output: Color,
+    pub(crate) structure: Color,
+    pub(crate) structure_result: Color,
 }
 
 /// The four agent-label colors for one provider, one per palette. Chosen by
@@ -73,7 +87,7 @@ pub(crate) const fn provider_colors(provider: AgentProvider) -> ProviderColors {
             dark: Color::Rgb(251, 146, 60), // orange-400
             light: Color::Rgb(234, 88, 12), // orange-600
             ansi: Color::Yellow,
-            ansi_light: Color::Yellow,
+            ansi_light: Color::Red,
         },
         AgentProvider::Cursor => ProviderColors {
             dark: Color::Rgb(167, 139, 250), // violet-400
@@ -85,7 +99,7 @@ pub(crate) const fn provider_colors(provider: AgentProvider) -> ProviderColors {
             dark: Color::Rgb(45, 212, 191),  // teal-400
             light: Color::Rgb(13, 148, 136), // teal-600
             ansi: Color::Cyan,
-            ansi_light: Color::Cyan,
+            ansi_light: Color::Blue,
         },
         AgentProvider::OpenClaw => ProviderColors {
             dark: Color::Rgb(248, 113, 113), // red-400
@@ -97,7 +111,7 @@ pub(crate) const fn provider_colors(provider: AgentProvider) -> ProviderColors {
             dark: Color::Rgb(250, 204, 21), // yellow-400
             light: Color::Rgb(202, 138, 4), // yellow-600
             ansi: Color::LightYellow,
-            ansi_light: Color::Gray,
+            ansi_light: Color::DarkGray,
         },
         AgentProvider::Grok => ProviderColors {
             dark: Color::Rgb(244, 114, 182), // pink-400
@@ -109,19 +123,19 @@ pub(crate) const fn provider_colors(provider: AgentProvider) -> ProviderColors {
             dark: Color::Rgb(74, 222, 128), // green-400
             light: Color::Rgb(22, 163, 74), // green-600
             ansi: Color::Green,
-            ansi_light: Color::Green,
+            ansi_light: Color::Blue,
         },
         AgentProvider::Qoder => ProviderColors {
             dark: Color::Rgb(34, 211, 238), // cyan-400
             light: Color::Rgb(8, 145, 178), // cyan-600
             ansi: Color::LightCyan,
-            ansi_light: Color::Cyan,
+            ansi_light: Color::Blue,
         },
         AgentProvider::QoderCn => ProviderColors {
             dark: Color::Rgb(125, 211, 252), // sky-300
             light: Color::Rgb(3, 105, 161),  // sky-600
             ansi: Color::LightCyan,
-            ansi_light: Color::Cyan,
+            ansi_light: Color::Blue,
         },
         AgentProvider::Gemini => ProviderColors {
             dark: Color::Rgb(96, 165, 250), // blue-400
@@ -133,7 +147,7 @@ pub(crate) const fn provider_colors(provider: AgentProvider) -> ProviderColors {
             dark: Color::Rgb(251, 191, 36), // amber-400
             light: Color::Rgb(217, 119, 6), // amber-600
             ansi: Color::LightYellow,
-            ansi_light: Color::Yellow,
+            ansi_light: Color::Red,
         },
         AgentProvider::Qwen => ProviderColors {
             dark: Color::Rgb(232, 121, 249), // fuchsia-400
@@ -149,22 +163,30 @@ impl Theme {
     pub(crate) const fn dark() -> Self {
         Self {
             mode: PaletteMode::Dark,
-            accent: Color::Rgb(56, 189, 248),         // sky-400
-            muted: Color::Rgb(100, 116, 139),         // slate-500
-            dim: Color::Rgb(71, 85, 105),             // slate-600
-            local_origin: Color::Rgb(52, 211, 153),   // emerald-400
-            remote_origin: Color::Rgb(244, 114, 182), // pink-400
-            focus_bg: Color::Rgb(30, 64, 175),        // blue-800
-            focus_fg: Color::Rgb(240, 249, 255),      // slate-50
-            selected_bg: Color::Rgb(51, 65, 85),      // slate-700
-            selected_fg: Color::Rgb(226, 232, 240),   // slate-200
-            range_fg: Color::Rgb(251, 191, 36),       // amber-400
-            title_active: Color::Rgb(224, 242, 254),  // sky-100
-            muted_text: Color::Rgb(203, 213, 225),    // slate-300
-            key_hint: Color::Rgb(125, 211, 252),      // sky-300
-            footer: Color::Rgb(148, 163, 184),        // slate-400
-            text_primary: Color::Rgb(226, 232, 240),  // slate-200
-            failure: Color::Rgb(248, 113, 113),       // red-400
+            accent: Color::Rgb(56, 189, 248),           // sky-400
+            muted: Color::Rgb(100, 116, 139),           // slate-500
+            dim: Color::Rgb(71, 85, 105),               // slate-600
+            local_origin: Color::Rgb(52, 211, 153),     // emerald-400
+            remote_origin: Color::Rgb(244, 114, 182),   // pink-400
+            focus_bg: Color::Rgb(30, 64, 175),          // blue-800
+            focus_fg: Color::Rgb(240, 249, 255),        // slate-50
+            selected_bg: Color::Rgb(51, 65, 85),        // slate-700
+            selected_fg: Color::Rgb(226, 232, 240),     // slate-200
+            range_fg: Color::Rgb(251, 191, 36),         // amber-400
+            title_active: Color::Rgb(224, 242, 254),    // sky-100
+            muted_text: Color::Rgb(203, 213, 225),      // slate-300
+            key_hint: Color::Rgb(125, 211, 252),        // sky-300
+            footer: Color::Rgb(148, 163, 184),          // slate-400
+            text_primary: Color::Rgb(226, 232, 240),    // slate-200
+            failure: Color::Rgb(248, 113, 113),         // red-400
+            code: Color::Rgb(148, 163, 184),            // slate-400
+            link: Color::Rgb(125, 211, 252),            // sky-300
+            quote: Color::Rgb(52, 211, 153),            // emerald-400
+            success: Color::Rgb(74, 222, 128),          // green-400
+            user: Color::Rgb(34, 211, 238),             // cyan-400
+            output: Color::Rgb(96, 165, 250),           // blue-400
+            structure: Color::Rgb(251, 191, 36),        // amber-400
+            structure_result: Color::Rgb(56, 189, 248), // sky-400
         }
     }
 
@@ -172,22 +194,30 @@ impl Theme {
     pub(crate) const fn light() -> Self {
         Self {
             mode: PaletteMode::Light,
-            accent: Color::Rgb(2, 132, 199),         // sky-600
-            muted: Color::Rgb(100, 116, 139),        // slate-500
-            dim: Color::Rgb(148, 163, 184),          // slate-400
-            local_origin: Color::Rgb(5, 150, 105),   // emerald-600
-            remote_origin: Color::Rgb(219, 39, 119), // pink-600
-            focus_bg: Color::Rgb(219, 234, 254),     // blue-100
-            focus_fg: Color::Rgb(30, 41, 59),        // slate-800
-            selected_bg: Color::Rgb(226, 232, 240),  // slate-200
-            selected_fg: Color::Rgb(51, 65, 85),     // slate-700
-            range_fg: Color::Rgb(217, 119, 6),       // amber-600
-            title_active: Color::Rgb(15, 23, 42),    // slate-900
-            muted_text: Color::Rgb(100, 116, 139),   // slate-500
-            key_hint: Color::Rgb(3, 105, 161),       // sky-700
-            footer: Color::Rgb(71, 85, 105),         // slate-600
-            text_primary: Color::Rgb(30, 41, 59),    // slate-800
-            failure: Color::Rgb(220, 38, 38),        // red-600
+            accent: Color::Rgb(2, 132, 199),           // sky-600
+            muted: Color::Rgb(100, 116, 139),          // slate-500
+            dim: Color::Rgb(148, 163, 184),            // slate-400
+            local_origin: Color::Rgb(5, 150, 105),     // emerald-600
+            remote_origin: Color::Rgb(219, 39, 119),   // pink-600
+            focus_bg: Color::Rgb(219, 234, 254),       // blue-100
+            focus_fg: Color::Rgb(30, 41, 59),          // slate-800
+            selected_bg: Color::Rgb(226, 232, 240),    // slate-200
+            selected_fg: Color::Rgb(51, 65, 85),       // slate-700
+            range_fg: Color::Rgb(217, 119, 6),         // amber-600
+            title_active: Color::Rgb(15, 23, 42),      // slate-900
+            muted_text: Color::Rgb(100, 116, 139),     // slate-500
+            key_hint: Color::Rgb(3, 105, 161),         // sky-700
+            footer: Color::Rgb(71, 85, 105),           // slate-600
+            text_primary: Color::Rgb(30, 41, 59),      // slate-800
+            failure: Color::Rgb(220, 38, 38),          // red-600
+            code: Color::Rgb(71, 85, 105),             // slate-600
+            link: Color::Rgb(3, 105, 161),             // sky-700
+            quote: Color::Rgb(5, 150, 105),            // emerald-600
+            success: Color::Rgb(22, 163, 74),          // green-600
+            user: Color::Rgb(8, 145, 178),             // cyan-600
+            output: Color::Rgb(37, 99, 235),           // blue-600
+            structure: Color::Rgb(217, 119, 6),        // amber-600
+            structure_result: Color::Rgb(2, 132, 199), // sky-600
         }
     }
 
@@ -213,6 +243,14 @@ impl Theme {
             footer: Color::Gray,
             text_primary: Color::Gray,
             failure: Color::Red,
+            code: Color::Gray,
+            link: Color::Blue,
+            quote: Color::Green,
+            success: Color::Green,
+            user: Color::Cyan,
+            output: Color::Blue,
+            structure: Color::Yellow,
+            structure_result: Color::Blue,
         }
     }
 
@@ -225,36 +263,46 @@ impl Theme {
             mode: PaletteMode::AnsiLight,
             accent: Color::Blue,
             muted: Color::DarkGray,
-            dim: Color::Gray,
-            local_origin: Color::Green,
+            dim: Color::DarkGray,
+            local_origin: Color::Blue,
             remote_origin: Color::Magenta,
             focus_bg: Color::Blue,
             focus_fg: Color::White,
             selected_bg: Color::DarkGray,
             selected_fg: Color::White,
-            range_fg: Color::Yellow,
+            range_fg: Color::Blue,
             title_active: Color::Black,
             muted_text: Color::DarkGray,
             key_hint: Color::Blue,
             footer: Color::DarkGray,
             text_primary: Color::Black,
             failure: Color::Red,
+            code: Color::DarkGray,
+            link: Color::Blue,
+            quote: Color::DarkGray,
+            success: Color::Blue,
+            user: Color::Magenta,
+            output: Color::Blue,
+            structure: Color::Red,
+            structure_result: Color::Blue,
         }
     }
 }
 
 thread_local! {
     static ACTIVE: Cell<Theme> = const { Cell::new(Theme::dark()) };
+    static PREFERENCE: Cell<ThemeMode> = const { Cell::new(ThemeMode::Auto) };
 }
 
-/// Pick the palette for this process from the config preference. The
-/// preference decides light vs dark (auto-detecting the background), and the
-/// terminal's truecolor support decides RGB vs ANSI - so a forced light/dark
-/// mode still falls back to the ANSI palette when `COLORTERM` is absent,
-/// instead of emitting RGB sequences a non-truecolor terminal cannot render.
+/// Pick the palette for this process. The preference decides light vs dark —
+/// auto follows the system appearance via desktop APIs — and the terminal's
+/// truecolor support decides RGB vs ANSI, so a forced light/dark mode still
+/// falls back to the ANSI palette when `COLORTERM` is absent, instead of
+/// emitting RGB sequences a non-truecolor terminal cannot render.
 pub(crate) fn apply(preference: ThemeMode) {
+    PREFERENCE.set(preference);
     let light = match preference {
-        ThemeMode::Auto => light_background(),
+        ThemeMode::Auto => light_from_system(),
         ThemeMode::Dark => false,
         ThemeMode::Light => true,
     };
@@ -282,22 +330,29 @@ fn supports_truecolor() -> bool {
     )
 }
 
-/// Light background when `COLORFGBG`'s background half is a bright ANSI
-/// color (8–15); anything else — dark 256-color indexes such as 16 or 232,
-/// unset, `default` — stays dark.
-fn light_background() -> bool {
-    std::env::var("COLORFGBG")
-        .ok()
-        .is_some_and(|value| colorfgbg_is_light(&value))
+/// Light when the desktop session reports a light appearance. Cross-platform
+/// (macOS / Linux XDG portal / Windows registry) via `dark-light`; anything
+/// else — dark, unspecified, or a detection error — stays dark.
+fn light_from_system() -> bool {
+    matches!(dark_light::detect(), Ok(Mode::Light))
 }
 
-/// Whether a `COLORFGBG` value ("fg;bg") denotes a light background.
-fn colorfgbg_is_light(value: &str) -> bool {
-    value
-        .rsplit(';')
-        .next()
-        .and_then(|background| background.parse::<u8>().ok())
-        .is_some_and(|background| (8..=15).contains(&background))
+/// Poll interval for appearance changes while the theme is in auto mode.
+/// `None` when a fixed dark/light palette is active, so the event loop does
+/// not wake up to re-check.
+pub(crate) fn auto_interval() -> Option<Duration> {
+    (PREFERENCE.get() == ThemeMode::Auto).then_some(AUTO_POLL_INTERVAL)
+}
+
+/// Re-check the system appearance and swap the palette when it changed.
+/// Returns true when the next frame must be redrawn. No-op outside auto mode.
+pub(crate) fn refresh_if_changed() -> bool {
+    if PREFERENCE.get() != ThemeMode::Auto {
+        return false;
+    }
+    let before = ACTIVE.get().mode;
+    apply(ThemeMode::Auto);
+    ACTIVE.get().mode != before
 }
 
 /// Active panel chrome (focused border / scrollbar).
@@ -335,6 +390,11 @@ pub(crate) fn range_row() -> Style {
     Style::default()
         .fg(ACTIVE.get().range_fg)
         .add_modifier(Modifier::BOLD)
+}
+
+/// Range / search-highlight foreground.
+pub(crate) fn range_fg() -> Color {
+    ACTIVE.get().range_fg
 }
 
 /// Agent label color for the active palette. Reads the per-provider row from
@@ -405,6 +465,56 @@ pub(crate) fn failure() -> Color {
     ACTIVE.get().failure
 }
 
+/// Inline code and code-block content.
+pub(crate) fn code() -> Color {
+    ACTIVE.get().code
+}
+
+/// Clickable links (underlined).
+pub(crate) fn link_style() -> Style {
+    Style::default()
+        .fg(ACTIVE.get().link)
+        .add_modifier(Modifier::UNDERLINED)
+}
+
+/// Blockquote content.
+pub(crate) fn quote() -> Color {
+    ACTIVE.get().quote
+}
+
+/// Completed-task and assistant-success markers.
+pub(crate) fn success() -> Color {
+    ACTIVE.get().success
+}
+
+/// User role headings.
+pub(crate) fn user() -> Color {
+    ACTIVE.get().user
+}
+
+/// Output role headings.
+pub(crate) fn output() -> Color {
+    ACTIVE.get().output
+}
+
+/// Structural marker color for a `<:channel:…:>` role. Result channels
+/// (`… result:>`) lean blue, everything else yellow.
+pub(crate) fn structure_color(is_result: bool) -> Color {
+    let theme = ACTIVE.get();
+    if is_result {
+        theme.structure_result
+    } else {
+        theme.structure
+    }
+}
+
+/// Structural markers: `<:tool:…:>`, `<:skill:…:>`, `<:thinking:…:>`.
+pub(crate) fn structure_style(is_result: bool) -> Style {
+    Style::default()
+        .fg(structure_color(is_result))
+        .add_modifier(Modifier::BOLD)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,18 +565,16 @@ mod tests {
         let light = Theme::ansi_light();
         assert_ne!(light.text_primary, dark.text_primary);
         assert_ne!(light.title_active, dark.title_active);
-        // The light ANSI palette must avoid the bright foregrounds that wash
-        // out against a light default background.
-        for color in [
-            light.text_primary,
-            light.title_active,
-            light.footer,
-            light.muted_text,
-        ] {
+        // These ANSI colors can wash out against a light default background.
+        let assert_dark_foreground = |name: &str, color: Color| {
             assert!(
                 !matches!(
                     color,
                     Color::White
+                        | Color::Yellow
+                        | Color::Green
+                        | Color::Cyan
+                        | Color::Gray
                         | Color::LightRed
                         | Color::LightGreen
                         | Color::LightYellow
@@ -474,18 +582,49 @@ mod tests {
                         | Color::LightMagenta
                         | Color::LightCyan
                 ),
-                "bright foreground on a light ANSI background: {color:?}"
+                "low-contrast foreground for {name} on a light ANSI background: {color:?}"
             );
+        };
+        for (name, color) in [
+            ("text", light.text_primary),
+            ("title", light.title_active),
+            ("footer", light.footer),
+            ("muted text", light.muted_text),
+            ("range", light.range_fg),
+            ("local origin", light.local_origin),
+            ("remote origin", light.remote_origin),
+            ("code", light.code),
+            ("link", light.link),
+            ("quote", light.quote),
+            ("success", light.success),
+            ("user", light.user),
+            ("output", light.output),
+            ("structure", light.structure),
+            ("structure result", light.structure_result),
+        ] {
+            assert_dark_foreground(name, color);
+        }
+        for spec in AgentProvider::all() {
+            assert_dark_foreground(spec.name, provider_colors(spec.provider).ansi_light);
         }
     }
 
     #[test]
-    fn only_bright_ansi_backgrounds_count_as_light() {
-        assert!(colorfgbg_is_light("0;15"), "bright white background");
-        assert!(!colorfgbg_is_light("15;0"), "black background");
-        assert!(!colorfgbg_is_light("15;16"), "256-color dark blue");
-        assert!(!colorfgbg_is_light("15;232"), "256-color near-black");
-        assert!(!colorfgbg_is_light("15;default"));
-        assert!(!colorfgbg_is_light("garbage"));
+    fn fixed_preference_disables_auto_polling() {
+        assert!(auto_interval().is_some(), "auto mode polls by default");
+        apply(ThemeMode::Dark);
+        assert_eq!(auto_interval(), None, "fixed dark does not poll");
+        apply(ThemeMode::Light);
+        assert_eq!(auto_interval(), None, "fixed light does not poll");
+        apply(ThemeMode::Auto);
+        assert!(auto_interval().is_some());
+    }
+
+    #[test]
+    fn refresh_outside_auto_mode_never_swaps() {
+        apply(ThemeMode::Dark);
+        assert!(!refresh_if_changed());
+        apply(ThemeMode::Light);
+        assert!(!refresh_if_changed());
     }
 }
