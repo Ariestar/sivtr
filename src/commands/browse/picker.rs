@@ -101,6 +101,9 @@ pub(crate) fn run(
     // that skip redrawing (idle with no state change).
     let mut dialogues: Vec<WorkspaceDialogue> = Vec::new();
     let mut content_frame = ContentIoFrame::default();
+    // (engine generation, selected mask, focused index) for the projection in
+    // `dialogues`; unchanged redraws reuse it instead of re-cloning bodies.
+    let mut dialogues_key: Option<(u64, Vec<bool>, usize)> = None;
 
     loop {
         // ── Unified pane poll/ensure ───────────────────────────────────────
@@ -285,11 +288,24 @@ pub(crate) fn run(
             dialogue_idx,
         );
 
+        // Materialize the dialogue projection only when the engine, the
+        // selected mask, or the focused row changed. Content scrolling and
+        // other-pane activity reuse the last projection instead of cloning
+        // dialogue bodies on every redraw.
+        let materialize_key = (
+            dialogue_pane.generation(),
+            selected_dialogues.clone(),
+            dialogue_idx,
+        );
+        if dialogues_key.as_ref() != Some(&materialize_key) {
+            dialogue_pane.materialize_into(&selected_dialogues, dialogue_idx, &mut dialogues);
+            dialogues_key = Some(materialize_key);
+        }
+
         if redraw {
             redraw = false;
             // List: title borrows. Content/copy: materialize (body only for focus∪select).
             let dialogue_titles: Vec<&str> = dialogue_pane.titles().collect();
-            dialogues = dialogue_pane.materialize(&selected_dialogues, dialogue_idx);
 
             // Resolve where the pending search match lands *before* building the
             // frame: the frame weights geometry toward the focused half, so a
@@ -404,7 +420,20 @@ pub(crate) fn run(
         redraw = true;
         match read_interaction()? {
             Event::Key(key) => {
-                if key.kind != KeyEventKind::Press {
+                if key.kind == KeyEventKind::Release {
+                    continue;
+                }
+                // Held keys auto-repeat as Repeat events. Navigation and text
+                // input repeat naturally; one-shot toggles (Enter, Esc, v, r,
+                // Tab, Space, …) stay press-only so a held key cannot
+                // double-fire a commit or toggle.
+                if key.kind == KeyEventKind::Repeat
+                    && !is_repeat_safe(
+                        key.code,
+                        key.modifiers,
+                        show_search || line_filter_input_open,
+                    )
+                {
                     continue;
                 }
 
@@ -895,6 +924,42 @@ pub(crate) fn run(
     }
 }
 
+/// Keys that safely auto-repeat when held. Navigation and scrolling repeat
+/// naturally; toggles and one-shot actions (Enter, Esc, v, r, Tab, Space,
+/// focus digits, …) stay press-only so a held key cannot double-fire.
+/// Inside a text input every character, Backspace, and Delete repeat so
+/// holding a key types continuously.
+fn is_repeat_safe(code: KeyCode, modifiers: KeyModifiers, text_input: bool) -> bool {
+    if text_input
+        && matches!(
+            code,
+            KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete
+        )
+    {
+        return true;
+    }
+    if modifiers.contains(KeyModifiers::CONTROL) {
+        return matches!(code, KeyCode::Char('d') | KeyCode::Char('u'));
+    }
+    matches!(
+        code,
+        KeyCode::Up
+            | KeyCode::Down
+            | KeyCode::Left
+            | KeyCode::Right
+            | KeyCode::PageUp
+            | KeyCode::PageDown
+            | KeyCode::Home
+            | KeyCode::End
+            | KeyCode::Char('j')
+            | KeyCode::Char('k')
+            | KeyCode::Char('h')
+            | KeyCode::Char('l')
+            | KeyCode::Char('n')
+            | KeyCode::Char('N')
+    )
+}
+
 /// Fingerprint of the loaded search corpus without cloning it: hashes every
 /// hydrated record ref in corpus order. Matches `WorkspaceSearchIndex`'s
 /// internal fingerprint, so an equal value means the cached corpus is still
@@ -938,7 +1003,7 @@ mod tests {
         ContentIoFocus, ContentScrolls, TextPair, WorkspaceCopyParts, WorkspaceDialogue,
         WorkspaceFocus, WorkspaceSession, WorkspaceSource, WorkspaceSourceKind,
     };
-    use crossterm::event::KeyCode;
+    use crossterm::event::{KeyCode, KeyModifiers};
     use ratatui::widgets::ListState;
     use sivtr_core::ai::AgentProvider;
     use sivtr_core::record::{WorkAt, WorkRef};
@@ -947,6 +1012,66 @@ mod tests {
         RECORD_SCHEMA_VERSION,
     };
     use std::time::SystemTime;
+
+    #[test]
+    fn repeat_safety_allows_navigation_and_text_input_only() {
+        use super::is_repeat_safe;
+
+        // Navigation and scrolling repeat when held.
+        assert!(is_repeat_safe(
+            KeyCode::Char('j'),
+            KeyModifiers::NONE,
+            false
+        ));
+        assert!(is_repeat_safe(
+            KeyCode::Char('k'),
+            KeyModifiers::NONE,
+            false
+        ));
+        assert!(is_repeat_safe(KeyCode::Down, KeyModifiers::NONE, false));
+        assert!(is_repeat_safe(KeyCode::PageDown, KeyModifiers::NONE, false));
+        assert!(is_repeat_safe(
+            KeyCode::Char('n'),
+            KeyModifiers::NONE,
+            false
+        ));
+        assert!(is_repeat_safe(
+            KeyCode::Char('d'),
+            KeyModifiers::CONTROL,
+            false
+        ));
+        assert!(is_repeat_safe(
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL,
+            false
+        ));
+
+        // Commits and toggles stay press-only.
+        assert!(!is_repeat_safe(KeyCode::Enter, KeyModifiers::NONE, false));
+        assert!(!is_repeat_safe(KeyCode::Esc, KeyModifiers::NONE, false));
+        assert!(!is_repeat_safe(KeyCode::Tab, KeyModifiers::NONE, false));
+        assert!(!is_repeat_safe(
+            KeyCode::Char('v'),
+            KeyModifiers::NONE,
+            false
+        ));
+        assert!(!is_repeat_safe(
+            KeyCode::Char('r'),
+            KeyModifiers::NONE,
+            false
+        ));
+        assert!(!is_repeat_safe(
+            KeyCode::Char(' '),
+            KeyModifiers::NONE,
+            false
+        ));
+
+        // Inside a text input, characters and Backspace type continuously;
+        // Enter still commits only once.
+        assert!(is_repeat_safe(KeyCode::Char('e'), KeyModifiers::NONE, true));
+        assert!(is_repeat_safe(KeyCode::Backspace, KeyModifiers::NONE, true));
+        assert!(!is_repeat_safe(KeyCode::Enter, KeyModifiers::NONE, true));
+    }
 
     fn dialogues_for_test(
         sessions: &[WorkspaceSession],
