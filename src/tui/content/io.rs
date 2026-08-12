@@ -154,22 +154,23 @@ pub(crate) struct ActiveHalf<'a> {
     pub(crate) scroll: &'a mut usize,
 }
 
-/// Borrowed view of both halves for one frame (texts computed once).
-pub(crate) struct ContentIoFrame<'a> {
-    pub(crate) texts: &'a ContentIoTexts,
+/// Owned view of both halves for one frame (texts computed once).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ContentIoFrame {
+    pub(crate) texts: ContentIoTexts,
     pub(crate) areas: ContentIoAreas,
     pub(crate) input_lines: usize,
     pub(crate) output_lines: usize,
 }
 
-impl<'a> ContentIoFrame<'a> {
+impl ContentIoFrame {
     pub(crate) fn build(
         area: Rect,
-        texts: &'a ContentIoTexts,
+        texts: ContentIoTexts,
         mode: ContentViewMode,
         focus: ContentIoFocus,
     ) -> Self {
-        let areas = content_io_layout(area, texts, mode, focus);
+        let areas = content_io_layout(area, &texts, mode, focus);
         let input_lines =
             content_view_line_count(areas.input, texts.display(ContentIoFocus::Input), mode).max(1);
         let output_lines =
@@ -190,7 +191,7 @@ impl<'a> ContentIoFrame<'a> {
         }
     }
 
-    pub(crate) fn active(
+    pub(crate) fn active<'a>(
         &'a self,
         half: ContentIoFocus,
         scrolls: &'a mut ContentScrolls,

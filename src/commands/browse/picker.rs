@@ -13,8 +13,8 @@ use crate::tui::terminal::read_interaction;
 use crate::tui::workspace::{
     help_action_for_key, panel_inner_rows, render_workspace, search_match_half, selected_index,
     workspace_help_entries, workspace_hit_test, workspace_layout, ContentIoFocus, ContentIoFrame,
-    ContentScrolls, WorkspaceFocus, WorkspacePickedContent, WorkspaceSearchView, WorkspaceSession,
-    WorkspaceSource, WorkspaceView,
+    ContentScrolls, WorkspaceDialogue, WorkspaceFocus, WorkspacePickedContent, WorkspaceSearchView,
+    WorkspaceSession, WorkspaceSource, WorkspaceView,
 };
 
 use super::content::{
@@ -93,6 +93,14 @@ pub(crate) fn run(
     let mut fullscreen = None;
     let mut visual_select_mode = None;
     let mut loading_tick = 0u8;
+    // Redraw when an event changed state, a background load landed, or the
+    // loading spinner ticked. When idle with no load in flight, block on
+    // input instead of redrawing the whole frame at a fixed rate.
+    let mut redraw = true;
+    // Last-rendered content values, reused by event handlers on iterations
+    // that skip redrawing (idle with no state change).
+    let mut dialogues: Vec<WorkspaceDialogue> = Vec::new();
+    let mut content_frame = ContentIoFrame::default();
 
     loop {
         // ── Unified pane poll/ensure ───────────────────────────────────────
@@ -100,6 +108,7 @@ pub(crate) fn run(
         if sessions_pane.poll() {
             sessions_dirty = true;
             search_dirty = true;
+            redraw = true;
         }
         if sessions_dirty {
             all_sessions = sessions_pane.collect(&selected_sources);
@@ -267,11 +276,6 @@ pub(crate) fn run(
         if pending_match.is_some() {
             range_anchor = None;
         }
-
-        // List: title borrows. Content/copy: materialize (body only for focus∪select).
-        let dialogue_titles: Vec<&str> = dialogue_pane.titles().collect();
-        let dialogues = dialogue_pane.materialize(&selected_dialogues, dialogue_idx);
-
         let active_content_at = active_workspace_content_at(
             search_has_query,
             &search_output,
@@ -280,94 +284,115 @@ pub(crate) fn run(
             &selected_dialogues,
             dialogue_idx,
         );
-        let io_texts = content_pane.ensure(ContentCtx {
-            dialogues: &dialogues,
-            selected_dialogues: &selected_dialogues,
-            highlighted_idx: dialogue_idx,
-            mode: content_mode,
-            target: active_content_at,
-            area: layout.content,
-            io_focus: content_io_focus,
-        });
-        // One frame geometry/metrics for handlers below (same texts/layout as ensure).
-        let content_frame =
-            ContentIoFrame::build(layout.content, &io_texts, content_mode, content_io_focus);
-        content_scrolls.clamp_to(content_frame.input_lines, content_frame.output_lines);
-        if let Some(matched) = pending_match {
-            let input = dialogues
-                .get(dialogue_idx)
-                .and_then(|dialogue| dialogue.record.as_ref())
-                .and_then(|record| record.part_for_at(matched.at))
-                .is_none_or(|part| part.kind().is_input());
-            let (half, scroll) = search_match_half(input, matched.matched_line);
-            content_io_focus = half;
-            let total = content_frame.line_count(half);
-            content_scrolls.set(half, scroll.min(total.saturating_sub(1)));
-            search_apply_pending = false;
-        }
 
-        let source_markers = sessions_pane.markers();
-        terminal.draw(|frame| {
-            render_workspace(
-                frame,
-                WorkspaceView {
-                    sources: &sources,
-                    selected_sources: &selected_sources,
-                    source_markers: &source_markers,
-                    loading_tick,
-                    source_state: &source_state,
-                    sessions: &sessions,
-                    selected_sessions: &selected_sessions,
-                    session_state: &session_state,
-                    dialogue_titles: &dialogue_titles,
+        if redraw {
+            redraw = false;
+            // List: title borrows. Content/copy: materialize (body only for focus∪select).
+            let dialogue_titles: Vec<&str> = dialogue_pane.titles().collect();
+            dialogues = dialogue_pane.materialize(&selected_dialogues, dialogue_idx);
+
+            content_frame = ContentIoFrame::build(
+                layout.content,
+                content_pane.ensure(ContentCtx {
                     dialogues: &dialogues,
-                    dialogue_state: &dialogue_state,
                     selected_dialogues: &selected_dialogues,
-                    range_anchor,
-                    focus,
-                    content_scrolls,
-                    content_io_focus,
-                    content_mode,
-                    content_at: active_content_at,
-                    show_help,
-                    help_state: &help_state,
-                    search: (show_search || search_has_query).then_some(WorkspaceSearchView {
-                        query: &search_query,
-                        scope: workspace_search_scope(&search_query),
-                        result_count: sessions.len(),
-                        current_match: (!search_output.matches.is_empty()).then_some(search_cursor),
-                        match_count: search_output.matches.len(),
-                        current_target: search_output
-                            .matches
-                            .get(search_cursor)
-                            .and_then(|matched| {
-                                workspace_search_target_ref(&sessions, matched, &|s| {
-                                    sessions_pane.body_for(s)
+                    highlighted_idx: dialogue_idx,
+                    mode: content_mode,
+                    target: active_content_at,
+                    area: layout.content,
+                    io_focus: content_io_focus,
+                }),
+                content_mode,
+                content_io_focus,
+            );
+            content_scrolls.clamp_to(content_frame.input_lines, content_frame.output_lines);
+            if let Some(matched) = pending_match {
+                let input = dialogues
+                    .get(dialogue_idx)
+                    .and_then(|dialogue| dialogue.record.as_ref())
+                    .and_then(|record| record.part_for_at(matched.at))
+                    .is_none_or(|part| part.kind().is_input());
+                let (half, scroll) = search_match_half(input, matched.matched_line);
+                content_io_focus = half;
+                let total = content_frame.line_count(half);
+                content_scrolls.set(half, scroll.min(total.saturating_sub(1)));
+                search_apply_pending = false;
+            }
+
+            let source_markers = sessions_pane.markers();
+            terminal.draw(|frame| {
+                render_workspace(
+                    frame,
+                    WorkspaceView {
+                        sources: &sources,
+                        selected_sources: &selected_sources,
+                        source_markers: &source_markers,
+                        loading_tick,
+                        source_state: &source_state,
+                        sessions: &sessions,
+                        selected_sessions: &selected_sessions,
+                        session_state: &session_state,
+                        dialogue_titles: &dialogue_titles,
+                        dialogues: &dialogues,
+                        dialogue_state: &dialogue_state,
+                        selected_dialogues: &selected_dialogues,
+                        range_anchor,
+                        focus,
+                        content_scrolls,
+                        content_io_focus,
+                        content_mode,
+                        content_at: active_content_at,
+                        show_help,
+                        help_state: &help_state,
+                        search: (show_search || search_has_query).then_some(WorkspaceSearchView {
+                            query: &search_query,
+                            scope: workspace_search_scope(&search_query),
+                            result_count: sessions.len(),
+                            current_match: (!search_output.matches.is_empty())
+                                .then_some(search_cursor),
+                            match_count: search_output.matches.len(),
+                            current_target: search_output
+                                .matches
+                                .get(search_cursor)
+                                .and_then(|matched| {
+                                    workspace_search_target_ref(&sessions, matched, &|s| {
+                                        sessions_pane.body_for(s)
+                                    })
                                 })
-                            })
-                            .map(|work_ref| work_ref.to_string()),
-                        input_open: show_search,
-                    }),
-                    line_filter_input_open,
-                    line_filter: (!line_filter.is_empty()).then_some(line_filter.as_str()),
-                    line_filter_error: line_filter_error.as_deref(),
-                    fullscreen,
-                    content_selection: visual_select_mode
-                        .map(|mode: VisualSelectMode| mode.selection),
-                },
-            )
-        })?;
-        if visual_select_mode.is_some() {
-            terminal.show_cursor()?;
+                                .map(|work_ref| work_ref.to_string()),
+                            input_open: show_search,
+                        }),
+                        line_filter_input_open,
+                        line_filter: (!line_filter.is_empty()).then_some(line_filter.as_str()),
+                        line_filter_error: line_filter_error.as_deref(),
+                        fullscreen,
+                        content_selection: visual_select_mode
+                            .map(|mode: VisualSelectMode| mode.selection),
+                    },
+                )
+            })?;
+            if visual_select_mode.is_some() {
+                terminal.show_cursor()?;
+            }
         }
 
-        // Poll so background loads can repaint without waiting for a key.
-        if !event::poll(std::time::Duration::from_millis(100))? {
+        // Wait for input. While a load is in flight, keep a short poll so the
+        // spinner animates and results repaint without a keypress. When
+        // nothing is loading, block until an event arrives instead of
+        // redrawing the whole frame at a fixed rate.
+        let poll_timeout = if sessions_pane.is_fetching() {
+            std::time::Duration::from_millis(100)
+        } else {
+            std::time::Duration::from_secs(3600)
+        };
+        if !event::poll(poll_timeout)? {
             if sessions_pane.is_fetching() {
                 loading_tick = loading_tick.wrapping_add(1);
+                redraw = true;
             }
             continue;
         }
+        redraw = true;
         match read_interaction()? {
             Event::Key(key) => {
                 if key.kind != KeyEventKind::Press {
