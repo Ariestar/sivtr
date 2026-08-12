@@ -725,10 +725,12 @@ fn agent_heading_style(text: &str) -> Option<Style> {
 
 /// Style for `<:channel:…:>` structure markers (tools/skills/thinking/mcp).
 fn structure_marker_style(text: &str) -> Option<Style> {
-    if !(text.starts_with("<:") || text.starts_with("<:/")) {
+    // `<:/…:>` and ` result:>` are subsumed by the broader `<:` / ` result:`
+    // forms below, so they need no extra alternatives of their own.
+    if !text.starts_with("<:") {
         return None;
     }
-    let is_result = text.contains(" result:>") || text.contains(" result:");
+    let is_result = text.contains(" result:");
     Some(crate::tui::theme::structure_style(is_result))
 }
 

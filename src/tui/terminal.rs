@@ -94,7 +94,7 @@ pub fn init() -> Result<Tui> {
     // terminal environment. A missing config file already yields defaults;
     // a real read/parse failure must surface instead of silently looking
     // like the theme setting was ignored.
-    let config = SivtrConfig::load().context("Failed to load theme config")?;
+    let config = SivtrConfig::load().context("Failed to load the sivtr config file")?;
     theme::apply(config.theme.mode);
 
     let mut setup = TerminalSetup::default();
