@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
@@ -86,6 +86,9 @@ impl SourceLoadState {
             StorePhase::Idle => SourceLoadMarker::Idle,
             StorePhase::Booting => SourceLoadMarker::Loading,
             StorePhase::Ready if store.list_inflight => SourceLoadMarker::Loading,
+            // A refresh or pagination failure with rows still on screen:
+            // keep the stale list visible but flag the failed load.
+            StorePhase::Ready if store.fail_message.is_some() => SourceLoadMarker::Failed,
             StorePhase::Ready => SourceLoadMarker::Ready,
             StorePhase::Failed => SourceLoadMarker::Failed,
         }
@@ -149,16 +152,27 @@ pub struct SourceLoadPump {
     rx: Receiver<JobEvent>,
     cwd: PathBuf,
     body_inflight: HashSet<String>,
+    /// `{source_idx}\0{session_id}` → error message for body loads that failed
+    /// (thread spawn refused or the body query errored). Failed keys are not
+    /// retried by [`SourceLoadPump::sync_bodies`] until an explicit refresh or
+    /// the source is reselected.
+    body_failed: HashMap<String, String>,
+    /// Per-source generation for body jobs. Bumped when a source is dropped so
+    /// events from a canceled job cannot apply bodies or record failures
+    /// against a newer selection of the same source.
+    body_generation: Vec<u64>,
 }
 
 impl SourceLoadPump {
-    pub fn new(_source_count: usize, cwd: PathBuf) -> Self {
+    pub fn new(source_count: usize, cwd: PathBuf) -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
             tx,
             rx,
             cwd,
             body_inflight: HashSet::new(),
+            body_failed: HashMap::new(),
+            body_generation: vec![0; source_count],
         }
     }
 
@@ -196,6 +210,11 @@ impl SourceLoadPump {
             if !selected.get(idx).copied().unwrap_or(false) {
                 continue;
             }
+            // An explicit refresh is a retry: drop recorded body failures so
+            // transient errors (remote timeouts, temporary transport issues)
+            // get another chance once connectivity recovers.
+            self.body_failed
+                .retain(|k, _| !k.starts_with(&format!("{idx}\0")));
             if let Some(need) = states[idx].pane.force_meta(viewport) {
                 self.spawn_meta(idx, source, need.gen, need.budget);
             }
@@ -270,7 +289,7 @@ impl SourceLoadPump {
             };
             for session_id in missing {
                 let ik = format!("{source_idx}\0{session_id}");
-                if self.body_inflight.contains(&ik) {
+                if self.body_inflight.contains(&ik) || self.body_failed.contains_key(&ik) {
                     continue;
                 }
                 self.body_inflight.insert(ik);
@@ -289,6 +308,13 @@ impl SourceLoadPump {
             }
             self.body_inflight
                 .retain(|k| !k.starts_with(&format!("{idx}\0")));
+            self.body_failed
+                .retain(|k, _| !k.starts_with(&format!("{idx}\0")));
+            // Invalidate body jobs spawned for this source: their results
+            // must not touch the state of a later re-selection.
+            if let Some(gen) = self.body_generation.get_mut(idx) {
+                *gen = gen.saturating_add(1);
+            }
         }
     }
 
@@ -308,88 +334,115 @@ impl SourceLoadPump {
         let cwd = self.cwd.clone();
         let tx = self.tx.clone();
         let source = source.clone();
-        thread::spawn(move || {
-            let qs = if remote {
-                QuerySource::remote(selector)
-            } else {
-                QuerySource::local(selector)
-            };
-            let (result, exhausted) = match workset::query_many(
-                &[qs],
-                Filter::browse_session_page(budget),
-                Some(&cwd),
-                REMOTE_QUERY_TIMEOUT,
-            ) {
-                Ok(mut results) => match results.pop() {
-                    Some(QuerySourceResult::Ok(set)) => {
-                        let n = set.records.len();
-                        let mut sessions = sessions_from_records(&source, set.records);
-                        for s in &mut sessions {
-                            s.records.clear();
-                            s.body_loaded = false;
+        let spawned = thread::Builder::new()
+            .name(format!("sivtr-meta-{idx}"))
+            .spawn(move || {
+                let qs = if remote {
+                    QuerySource::remote(selector)
+                } else {
+                    QuerySource::local(selector)
+                };
+                let (result, exhausted) = match workset::query_many(
+                    &[qs],
+                    Filter::browse_session_page(budget),
+                    Some(&cwd),
+                    REMOTE_QUERY_TIMEOUT,
+                ) {
+                    Ok(mut results) => match results.pop() {
+                        Some(QuerySourceResult::Ok(set)) => {
+                            let n = set.records.len();
+                            let mut sessions = sessions_from_records(&source, set.records);
+                            for s in &mut sessions {
+                                s.records.clear();
+                                s.body_loaded = false;
+                            }
+                            sessions.sort_by_key(|s| std::cmp::Reverse(s.modified));
+                            (Ok(sessions), n < budget)
                         }
-                        sessions.sort_by_key(|s| std::cmp::Reverse(s.modified));
-                        (Ok(sessions), n < budget)
-                    }
-                    Some(QuerySourceResult::Err(m)) => (Err(m), false),
-                    None => (Err("empty query".into()), false),
-                },
-                Err(e) => (Err(format!("{e:#}")), false),
-            };
-            let _ = tx.send(JobEvent {
+                        Some(QuerySourceResult::Err(m)) => (Err(m), false),
+                        None => (Err("empty query".into()), false),
+                    },
+                    Err(e) => (Err(format!("{e:#}")), false),
+                };
+                let _ = tx.send(JobEvent {
+                    index: idx,
+                    gen,
+                    kind: JobKind::Meta { budget },
+                    result,
+                    exhausted,
+                });
+            });
+        if let Err(error) = spawned {
+            // Without this event the pane would wait forever for a page that
+            // will never arrive; surface the spawn failure like any other
+            // query error.
+            let _ = self.tx.send(JobEvent {
                 index: idx,
                 gen,
                 kind: JobKind::Meta { budget },
-                result,
-                exhausted,
+                result: Err(format!("failed to spawn meta loader thread: {error}")),
+                exhausted: false,
             });
-        });
+        }
     }
 
     fn spawn_body(&mut self, idx: usize, source: &WorkspaceSource, session_id: &str) {
-        let gen = sources_list_gen_placeholder();
+        let gen = self.body_generation.get(idx).copied().unwrap_or(0);
         let selector = source.selector();
         let remote = source.is_remote();
         let cwd = self.cwd.clone();
         let tx = self.tx.clone();
         let source = source.clone();
-        let session_id = session_id.to_string();
-        thread::spawn(move || {
-            let sel = format!("{selector}/{session_id}");
-            let qs = if remote {
-                QuerySource::remote(sel)
-            } else {
-                QuerySource::local(sel)
-            };
-            let result = match workset::query_many(
-                &[qs],
-                Filter::none(),
-                Some(&cwd),
-                REMOTE_QUERY_TIMEOUT,
-            ) {
-                Ok(mut results) => match results.pop() {
-                    Some(QuerySourceResult::Ok(set)) => {
-                        let mut sessions = sessions_from_records(&source, set.records);
-                        for s in &mut sessions {
-                            s.body_loaded = !s.records.is_empty();
+        let session_id_owned = session_id.to_string();
+        let spawned = thread::Builder::new()
+            .name(format!("sivtr-body-{idx}"))
+            .spawn(move || {
+                let sel = format!("{selector}/{session_id_owned}");
+                let qs = if remote {
+                    QuerySource::remote(sel)
+                } else {
+                    QuerySource::local(sel)
+                };
+                let result = match workset::query_many(
+                    &[qs],
+                    Filter::none(),
+                    Some(&cwd),
+                    REMOTE_QUERY_TIMEOUT,
+                ) {
+                    Ok(mut results) => match results.pop() {
+                        Some(QuerySourceResult::Ok(set)) => {
+                            let mut sessions = sessions_from_records(&source, set.records);
+                            for s in &mut sessions {
+                                s.body_loaded = !s.records.is_empty();
+                            }
+                            Ok(sessions)
                         }
-                        Ok(sessions)
-                    }
-                    Some(QuerySourceResult::Err(m)) => Err(m),
-                    None => Err("empty body".into()),
-                },
-                Err(e) => Err(format!("{e:#}")),
-            };
-            let _ = tx.send(JobEvent {
+                        Some(QuerySourceResult::Err(m)) => Err(m),
+                        None => Err("empty body".into()),
+                    },
+                    Err(e) => Err(format!("{e:#}")),
+                };
+                let _ = tx.send(JobEvent {
+                    index: idx,
+                    gen,
+                    kind: JobKind::Body {
+                        session_id: session_id_owned.clone(),
+                    },
+                    result,
+                    exhausted: true,
+                });
+            });
+        if let Err(error) = spawned {
+            let _ = self.tx.send(JobEvent {
                 index: idx,
                 gen,
                 kind: JobKind::Body {
-                    session_id: session_id.clone(),
+                    session_id: session_id.to_string(),
                 },
-                result,
+                result: Err(format!("failed to spawn body loader thread: {error}")),
                 exhausted: true,
             });
-        });
+        }
     }
 
     pub fn drain(&mut self, states: &mut [SourceLoadState]) -> bool {
@@ -414,18 +467,46 @@ impl SourceLoadPump {
         };
         match ev.kind {
             JobKind::Body { session_id } => {
-                self.body_inflight
-                    .remove(&format!("{}\0{session_id}", ev.index));
-                let Ok(sessions) = ev.result else {
+                // Ignore events from a canceled body job: after the source was
+                // dropped and reselected, an old thread's result must neither
+                // apply bodies nor record failures against the new selection.
+                if self.body_generation.get(ev.index).copied().unwrap_or(0) != ev.gen {
                     return false;
-                };
-                let mut changed = false;
-                for s in sessions {
-                    if state.pane.apply_body(&s.session_id, s.records) {
-                        changed = true;
+                }
+                let ik = format!("{}\0{session_id}", ev.index);
+                self.body_inflight.remove(&ik);
+                match ev.result {
+                    Ok(sessions) => {
+                        if sessions.is_empty() {
+                            // A successful query that returned no records is
+                            // still a terminal outcome: leave the key out of
+                            // the retry set instead of respawning it on every
+                            // sync_bodies pass. `true` wakes the picker so the
+                            // `[!]` marker is noticed.
+                            self.body_failed.insert(ik, "no body content".into());
+                            return true;
+                        }
+                        let mut requested_applied = false;
+                        for s in sessions {
+                            let requested = s.session_id == session_id;
+                            if state.pane.apply_body(&s.session_id, s.records) && requested {
+                                requested_applied = true;
+                            }
+                        }
+                        if !requested_applied {
+                            self.body_failed.insert(ik, "session not found".into());
+                        }
+                        true
+                    }
+                    Err(message) => {
+                        // The body query itself failed (timeout, remote error,
+                        // ...). Keep the message instead of discarding it and
+                        // stop the pump from retrying a key that cannot load.
+                        // `true` wakes the picker so the change is noticed.
+                        self.body_failed.insert(ik, message);
+                        true
                     }
                 }
-                changed
             }
             JobKind::Meta { budget } => match ev.result {
                 Ok(sessions) => {
@@ -450,11 +531,6 @@ impl SourceLoadPump {
             },
         }
     }
-}
-
-/// Body jobs do not use list_gen cancellation; placeholder keeps the event shape.
-fn sources_list_gen_placeholder() -> u64 {
-    0
 }
 
 // ── Session column as unified [`Pane`] ──────────────────────────────────
@@ -507,6 +583,13 @@ impl SessionColumn {
     pub fn body_for(&self, session: &WorkspaceSession) -> Option<&[WorkRecord]> {
         let idx = source_index_for_session(&self.sources, session)?;
         self.states.get(idx)?.body(&session.session_id)
+    }
+
+    /// Error message for a session whose body hydration failed, if any.
+    pub fn body_failure(&self, session: &WorkspaceSession) -> Option<&str> {
+        let idx = source_index_for_session(&self.sources, session)?;
+        let ik = format!("{}\0{}", idx, session.session_id);
+        self.pump.body_failed.get(&ik).map(String::as_str)
     }
 
     /// Bootstrap / force-load selected sources.
@@ -569,6 +652,9 @@ impl Pane for SessionColumn {
     }
 
     fn is_fetching(&self) -> bool {
+        // Body hydration runs past metadata loading; keep the poll cycle alive
+        // until every in-flight body job reports, so completion and failure
+        // events do not sit undrained behind a one-hour idle timeout.
         self.states.iter().any(SourceLoadState::is_fetching) || self.pump.has_inflight_bodies()
     }
 }
@@ -778,6 +864,189 @@ mod tests {
         assert!(keep.contains(&(0, "a".into())));
         assert!(keep.contains(&(0, "b".into())));
         assert!(keep.contains(&(0, "c".into())));
+    }
+
+    #[test]
+    fn body_load_failure_is_preserved_and_not_retried() {
+        let source = WorkspaceSource::agent(AgentProvider::Codex);
+        let sources = vec![source.clone()];
+        let meta = SessionMeta {
+            source: source.clone(),
+            session_id: "s1".into(),
+            modified: UNIX_EPOCH,
+            title: "s1".into(),
+            search_title: "s1".into(),
+        };
+        let state = SourceLoadState {
+            pane: SessionPane::ready(vec![WindowRow::meta_only("s1".into(), meta)], 10, true),
+        };
+        let mut column = SessionColumn::new(sources.clone(), vec![state], PathBuf::from("."));
+
+        // Simulate a refused spawn / failed query for session "s1".
+        column
+            .pump
+            .body_failed
+            .insert("0\0s1".into(), "boom".into());
+
+        // The body is still missing from the pane, but a sync pass must not
+        // re-spawn the failed key or clear its recorded error.
+        let keep: HashSet<(usize, String)> = [(0, "s1".into())].into();
+        column.pump.sync_bodies(&sources, &mut column.states, &keep);
+        assert!(column.pump.body_inflight.is_empty());
+        assert_eq!(
+            column.pump.body_failed.get("0\0s1").map(String::as_str),
+            Some("boom")
+        );
+    }
+
+    #[test]
+    fn empty_body_result_is_terminal_and_not_retried() {
+        let source = WorkspaceSource::agent(AgentProvider::Codex);
+        let sources = vec![source.clone()];
+        let meta = SessionMeta {
+            source: source.clone(),
+            session_id: "s1".into(),
+            modified: UNIX_EPOCH,
+            title: "s1".into(),
+            search_title: "s1".into(),
+        };
+        let state = SourceLoadState {
+            pane: SessionPane::ready(vec![WindowRow::meta_only("s1".into(), meta)], 10, true),
+        };
+        let mut column = SessionColumn::new(sources.clone(), vec![state], PathBuf::from("."));
+
+        // A successful body query that returns no records must still settle
+        // the key instead of respawning it on every sync_bodies pass.
+        column.pump.body_inflight.insert("0\0s1".into());
+        let empty = JobEvent {
+            index: 0,
+            gen: 0,
+            kind: JobKind::Body {
+                session_id: "s1".into(),
+            },
+            result: Ok(vec![]),
+            exhausted: true,
+        };
+        assert!(column.pump.apply(empty, &mut column.states));
+        assert!(column.pump.body_inflight.is_empty());
+        assert!(column.pump.body_failed.contains_key("0\0s1"));
+
+        // And a sync pass must not re-spawn the settled key.
+        let keep: HashSet<(usize, String)> = [(0, "s1".into())].into();
+        column.pump.sync_bodies(&sources, &mut column.states, &keep);
+        assert!(column.pump.body_inflight.is_empty());
+    }
+
+    #[test]
+    fn unmatched_body_result_is_terminal_and_not_retried() {
+        let source = WorkspaceSource::agent(AgentProvider::Codex);
+        let sources = vec![source.clone()];
+        let meta = SessionMeta {
+            source: source.clone(),
+            session_id: "s1".into(),
+            modified: UNIX_EPOCH,
+            title: "s1".into(),
+            search_title: "s1".into(),
+        };
+        let other_meta = SessionMeta {
+            source: source.clone(),
+            session_id: "other".into(),
+            modified: UNIX_EPOCH,
+            title: "other".into(),
+            search_title: "other".into(),
+        };
+        let state = SourceLoadState {
+            pane: SessionPane::ready(
+                vec![
+                    WindowRow::meta_only("s1".into(), meta),
+                    WindowRow::meta_only("other".into(), other_meta),
+                ],
+                10,
+                true,
+            ),
+        };
+        let mut column = SessionColumn::new(sources.clone(), vec![state], PathBuf::from("."));
+
+        column.pump.body_inflight.insert("0\0s1".into());
+        let unmatched = JobEvent {
+            index: 0,
+            gen: 0,
+            kind: JobKind::Body {
+                session_id: "s1".into(),
+            },
+            result: Ok(vec![WorkspaceSession {
+                source,
+                session_id: "other".into(),
+                modified: UNIX_EPOCH,
+                title: "other".into(),
+                search_title: "other".into(),
+                records: vec![],
+                body_loaded: true,
+            }]),
+            exhausted: true,
+        };
+
+        assert!(column.pump.apply(unmatched, &mut column.states));
+        assert!(column.pump.body_inflight.is_empty());
+        assert_eq!(
+            column.pump.body_failed.get("0\0s1").map(String::as_str),
+            Some("session not found")
+        );
+
+        let keep: HashSet<(usize, String)> = [(0, "s1".into())].into();
+        column.pump.sync_bodies(&sources, &mut column.states, &keep);
+        assert!(column.pump.body_inflight.is_empty());
+    }
+
+    #[test]
+    fn refresh_clears_failed_bodies_and_stale_jobs_are_ignored() {
+        let source = WorkspaceSource::agent(AgentProvider::Codex);
+        let sources = vec![source.clone()];
+        let meta = SessionMeta {
+            source: source.clone(),
+            session_id: "s1".into(),
+            modified: UNIX_EPOCH,
+            title: "s1".into(),
+            search_title: "s1".into(),
+        };
+        let state = SourceLoadState {
+            pane: SessionPane::ready(vec![WindowRow::meta_only("s1".into(), meta)], 10, true),
+        };
+        let mut column = SessionColumn::new(sources.clone(), vec![state], PathBuf::from("."));
+
+        // A recorded failure is retried by an explicit refresh ...
+        column
+            .pump
+            .body_failed
+            .insert("0\0s1".into(), "boom".into());
+        column.pump.refresh_selected(
+            &sources,
+            &[true],
+            &mut column.states,
+            Viewport {
+                first: 0,
+                visible: 10,
+            },
+        );
+        assert!(column.pump.body_failed.is_empty());
+
+        // ... and events from a body job spawned before a source was dropped
+        // must not record failures against the newer selection.
+        column.pump.drop_unselected(&[false], &mut column.states); // gen 0 -> 1
+        column.pump.body_inflight.insert("0\0s1".into()); // new selection re-spawned
+        let stale = JobEvent {
+            index: 0,
+            gen: 0,
+            kind: JobKind::Body {
+                session_id: "s1".into(),
+            },
+            result: Err("stale job failed".into()),
+            exhausted: true,
+        };
+        assert!(!column.pump.apply(stale, &mut column.states));
+        assert!(!column.pump.body_failed.contains_key("0\0s1"));
+        // The fresh in-flight marker for the new job is untouched.
+        assert!(column.pump.body_inflight.contains("0\0s1"));
     }
 
     fn test_record(session: &str, index: usize, title: &str, ended: &str) -> WorkRecord {

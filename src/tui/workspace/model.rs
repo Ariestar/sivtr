@@ -4,6 +4,7 @@ use ratatui::prelude::Color;
 use ratatui::widgets::ListState;
 use sivtr_core::ai::AgentProvider;
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
+use std::collections::HashSet;
 use std::time::SystemTime;
 
 use crate::commands::select::CommandSelection;
@@ -14,7 +15,7 @@ use crate::tui::search::WorkspaceSearchScope;
 use crate::tui::theme;
 
 /// Kind of memory source (local path body before any `scope:` prefix).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum WorkspaceSourceKind {
     Terminal,
     Agent(AgentProvider),
@@ -65,7 +66,7 @@ impl WorkspaceSourceKind {
 
 /// One selectable Source pane entry. Local and remote share the same shape —
 /// remote is only a named scope that `workset::query` already understands.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct WorkspaceSource {
     /// Named scope (`desk`, `docs`); `None` = current local workspace.
     pub(crate) scope: Option<String>,
@@ -372,6 +373,11 @@ pub(crate) struct WorkspaceView<'a> {
     pub(crate) sessions: &'a [WorkspaceSession],
     pub(crate) selected_sessions: &'a [bool],
     pub(crate) session_state: &'a ListState,
+    /// `(source, session id)` pairs whose body hydration failed (spawn or
+    /// query error). Rows render an error marker and the loader does not retry
+    /// them. Source-qualified so a local session sharing an id with a remote
+    /// mirror does not mark the healthy row.
+    pub(crate) body_failures: HashSet<(WorkspaceSource, String)>,
     /// Dialogue list titles only (no body materialize on paint).
     pub(crate) dialogue_titles: &'a [&'a str],
     /// Materialized dialogues for content/copy (focus ∪ multi-select bodies).
