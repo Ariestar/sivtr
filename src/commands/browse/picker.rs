@@ -18,8 +18,8 @@ use crate::tui::workspace::{
 };
 
 use super::content::{
-    active_workspace_content_at, handle_line_filter_key, line_filter_spec,
-    workspace_search_target_ref,
+    active_workspace_content_at, handle_line_filter_key, handle_line_filter_paste,
+    line_filter_spec, workspace_search_target_ref,
 };
 use super::help::{apply_workspace_help_action, set_focus, HelpDispatch};
 use super::load::{SessionColumn, SessionCtx, SourceLoadState};
@@ -419,6 +419,33 @@ pub(crate) fn run(
         }
         redraw = true;
         match read_interaction()? {
+            Event::Paste(text) => {
+                // Bracketed paste delivers the whole clipboard as one event;
+                // route it to the open text input (search or line filter).
+                if show_search {
+                    // Search terms match single lines: fold every line break
+                    // into a space so a trailing newline (common when copying
+                    // a line) or a multi-line clipboard searches as one query
+                    // instead of silently matching nothing.
+                    let pasted = normalize_search_paste(&text);
+                    let pasted = pasted.trim_end();
+                    search_query_edited(
+                        |query| query.push_str(pasted),
+                        &mut search_query,
+                        &mut search_dirty,
+                        &mut search_cursor,
+                        &mut search_apply_pending,
+                        &mut session_state,
+                        &mut selected_sessions,
+                        &mut dialogue_state,
+                        &mut selected_dialogues,
+                        &mut range_anchor,
+                        &mut content_scrolls,
+                    );
+                } else if line_filter_input_open {
+                    handle_line_filter_paste(&text, &mut line_filter, &mut line_filter_error);
+                }
+            }
             Event::Key(key) => {
                 if key.kind == KeyEventKind::Release {
                     continue;
@@ -518,26 +545,28 @@ pub(crate) fn run(
                                 content_io_focus,
                             );
                         }
-                        KeyCode::Backspace => {
-                            search_query.pop();
-                            search_dirty = true;
-                            search_cursor = 0;
-                            search_apply_pending = true;
-                            reset_workspace_search_state(
-                                &mut session_state,
-                                &mut selected_sessions,
-                                &mut dialogue_state,
-                                &mut selected_dialogues,
-                                &mut range_anchor,
-                                &mut content_scrolls,
-                            );
-                        }
+                        KeyCode::Backspace => search_query_edited(
+                            |query| {
+                                query.pop();
+                            },
+                            &mut search_query,
+                            &mut search_dirty,
+                            &mut search_cursor,
+                            &mut search_apply_pending,
+                            &mut session_state,
+                            &mut selected_sessions,
+                            &mut dialogue_state,
+                            &mut selected_dialogues,
+                            &mut range_anchor,
+                            &mut content_scrolls,
+                        ),
                         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            search_query.clear();
-                            search_dirty = true;
-                            search_cursor = 0;
-                            search_apply_pending = true;
-                            reset_workspace_search_state(
+                            search_query_edited(
+                                |query| query.clear(),
+                                &mut search_query,
+                                &mut search_dirty,
+                                &mut search_cursor,
+                                &mut search_apply_pending,
                                 &mut session_state,
                                 &mut selected_sessions,
                                 &mut dialogue_state,
@@ -546,20 +575,19 @@ pub(crate) fn run(
                                 &mut content_scrolls,
                             );
                         }
-                        KeyCode::Char(ch) => {
-                            search_query.push(ch);
-                            search_dirty = true;
-                            search_cursor = 0;
-                            search_apply_pending = true;
-                            reset_workspace_search_state(
-                                &mut session_state,
-                                &mut selected_sessions,
-                                &mut dialogue_state,
-                                &mut selected_dialogues,
-                                &mut range_anchor,
-                                &mut content_scrolls,
-                            );
-                        }
+                        KeyCode::Char(ch) => search_query_edited(
+                            |query| query.push(ch),
+                            &mut search_query,
+                            &mut search_dirty,
+                            &mut search_cursor,
+                            &mut search_apply_pending,
+                            &mut session_state,
+                            &mut selected_sessions,
+                            &mut dialogue_state,
+                            &mut selected_dialogues,
+                            &mut range_anchor,
+                            &mut content_scrolls,
+                        ),
                         _ => {}
                     }
                     continue;
@@ -924,6 +952,42 @@ pub(crate) fn run(
     }
 }
 
+fn normalize_search_paste(text: &str) -> String {
+    text.replace("\r\n", " ").replace(['\r', '\n'], " ")
+}
+
+/// A search input edit (typed character, backspace, or paste) changed the
+/// query: mark the corpus dirty, restart at the first match, and drop the
+/// previous result's selection so a shrinking match set cannot leave
+/// dangling highlights.
+#[allow(clippy::too_many_arguments)]
+fn search_query_edited(
+    edit: impl FnOnce(&mut String),
+    search_query: &mut String,
+    search_dirty: &mut bool,
+    search_cursor: &mut usize,
+    search_apply_pending: &mut bool,
+    session_state: &mut ListState,
+    selected_sessions: &mut Vec<bool>,
+    dialogue_state: &mut ListState,
+    selected_dialogues: &mut Vec<bool>,
+    range_anchor: &mut Option<usize>,
+    content_scrolls: &mut ContentScrolls,
+) {
+    edit(search_query);
+    *search_dirty = true;
+    *search_cursor = 0;
+    *search_apply_pending = true;
+    reset_workspace_search_state(
+        session_state,
+        selected_sessions,
+        dialogue_state,
+        selected_dialogues,
+        range_anchor,
+        content_scrolls,
+    );
+}
+
 /// Keys that safely auto-repeat when held. Navigation and scrolling repeat
 /// naturally; toggles and one-shot actions (Enter, Esc, v, r, Tab, Space,
 /// focus digits, …) stay press-only so a held key cannot double-fire.
@@ -985,8 +1049,9 @@ mod tests {
     }
 
     use super::super::content::{
-        handle_line_filter_key, workspace_dialogue_vim_view, workspace_picked_content,
-        workspace_picked_content_for_copy, workspace_picked_content_for_copy_with_line_filter,
+        handle_line_filter_key, handle_line_filter_paste, workspace_dialogue_vim_view,
+        workspace_picked_content, workspace_picked_content_for_copy,
+        workspace_picked_content_for_copy_with_line_filter,
         workspace_picked_content_with_line_filter, workspace_search_target_ref,
         WorkspaceCopyShortcut,
     };
@@ -1721,6 +1786,28 @@ mod tests {
 
         assert_eq!(filter, "2:3");
         assert!(open);
+    }
+
+    #[test]
+    fn line_filter_paste_strips_disallowed_characters() {
+        let mut filter = String::new();
+        let mut error = Some("previous error".into());
+
+        // Clipboard trailing newline and stray text must not leak into the spec.
+        handle_line_filter_paste("1,3:5\n", &mut filter, &mut error);
+        assert_eq!(filter, "1,3:5");
+        assert!(error.is_none());
+
+        // Fully invalid paste is dropped and the previous error is kept.
+        let mut error = Some("previous error".into());
+        handle_line_filter_paste("alpha beta\n", &mut filter, &mut error);
+        assert_eq!(filter, "1,3:5");
+        assert!(error.is_some());
+    }
+
+    #[test]
+    fn search_paste_normalizes_crlf_as_one_space() {
+        assert_eq!(super::normalize_search_paste("foo\r\nbar"), "foo bar");
     }
 
     #[test]

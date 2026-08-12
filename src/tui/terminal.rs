@@ -5,7 +5,10 @@ use crossterm::terminal::disable_raw_mode;
 use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 use crossterm::{
     cursor::Show,
-    event::{DisableMouseCapture, EnableMouseCapture, Event, MouseEvent, MouseEventKind},
+    event::{
+        DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, MouseEvent, MouseEventKind,
+    },
     execute,
     terminal::{enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -131,6 +134,15 @@ pub fn init() -> Result<Tui> {
     setup.state.mouse_capture = true;
     if let Err(error) =
         execute!(stdout, EnableMouseCapture).context("Failed to enable terminal mouse capture")
+    {
+        return setup.fail(error);
+    }
+
+    // Bracketed paste keeps pasted text intact (newlines, tab, UTF-8) and
+    // arrives as a single Event::Paste instead of a stream of key events.
+    setup.state.bracketed_paste = true;
+    if let Err(error) =
+        execute!(stdout, EnableBracketedPaste).context("Failed to enable terminal bracketed paste")
     {
         return setup.fail(error);
     }
@@ -345,6 +357,13 @@ fn restore_terminal_state(state: &mut TerminalState) -> Result<()> {
             execute!(stdout, DisableMouseCapture),
         );
     }
+    if state.bracketed_paste {
+        failures.record_flag(
+            "disable bracketed paste",
+            &mut state.bracketed_paste,
+            execute!(stdout, DisableBracketedPaste),
+        );
+    }
     if state.alternate_screen {
         failures.record_flag(
             "leave alternate screen",
@@ -365,8 +384,10 @@ fn restore_terminal_state(state: &mut TerminalState) -> Result<()> {
 }
 
 fn restore_owned_state(failures: &mut CleanupFailures, state: &mut TerminalState) {
-    let display_commands_restored =
-        !state.mouse_capture && !state.alternate_screen && !state.cursor_restore_pending;
+    let display_commands_restored = !state.mouse_capture
+        && !state.alternate_screen
+        && !state.cursor_restore_pending
+        && !state.bracketed_paste;
     let mut input_mode_restored = true;
 
     if let Some(modes) = state.modes.as_mut() {
@@ -433,6 +454,7 @@ struct TerminalState {
     mouse_capture: bool,
     alternate_screen: bool,
     cursor_restore_pending: bool,
+    bracketed_paste: bool,
     modes: Option<TerminalModes>,
     code_pages: Option<ConsoleCodePages>,
     console_input: Option<ConsoleInputHandle>,
@@ -456,6 +478,7 @@ impl TerminalState {
         self.mouse_capture
             || self.alternate_screen
             || self.cursor_restore_pending
+            || self.bracketed_paste
             || self.modes.is_some()
             || self.code_pages.is_some()
             || self.console_input.is_some()
