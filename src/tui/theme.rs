@@ -292,9 +292,6 @@ impl Theme {
 thread_local! {
     static ACTIVE: Cell<Theme> = const { Cell::new(Theme::dark()) };
     static PREFERENCE: Cell<ThemeMode> = const { Cell::new(ThemeMode::Auto) };
-    /// Latched once `dark_light::detect()` errors, so the event loop stops
-    /// re-probing an unavailable desktop portal on every poll.
-    static DETECT_FAILED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Pick the palette for this process. The preference decides light vs dark —
@@ -339,32 +336,22 @@ fn supports_truecolor() -> bool {
 
 /// Light when the desktop session reports a light appearance. Cross-platform
 /// (macOS / Linux XDG portal / Windows registry) via `dark-light`; anything
-/// else — dark, unspecified, or a detection error — stays dark. The first
-/// error is latched so the event loop stops re-probing the portal.
+/// else — dark, unspecified, or a detection error — stays dark.
 fn light_from_system() -> bool {
-    match dark_light::detect() {
-        Ok(Mode::Light) => true,
-        Ok(_) => false,
-        Err(_) => {
-            DETECT_FAILED.set(true);
-            false
-        }
-    }
+    matches!(dark_light::detect(), Ok(Mode::Light))
 }
 
 /// Poll interval for appearance changes while the theme is in auto mode.
-/// `None` when a fixed dark/light palette is active or detection has failed,
-/// so the event loop does not wake up to re-check.
+/// `None` when a fixed dark/light palette is active, so the event loop does
+/// not wake up to re-check.
 pub(crate) fn auto_interval() -> Option<Duration> {
-    let auto = PREFERENCE.get() == ThemeMode::Auto && !DETECT_FAILED.get();
-    auto.then_some(AUTO_POLL_INTERVAL)
+    (PREFERENCE.get() == ThemeMode::Auto).then_some(AUTO_POLL_INTERVAL)
 }
 
 /// Re-check the system appearance and swap the palette when it changed.
-/// Returns true when the next frame must be redrawn. No-op outside auto mode
-/// or once detection has failed.
+/// Returns true when the next frame must be redrawn. No-op outside auto mode.
 pub(crate) fn refresh_if_changed() -> bool {
-    if PREFERENCE.get() != ThemeMode::Auto || DETECT_FAILED.get() {
+    if PREFERENCE.get() != ThemeMode::Auto {
         return false;
     }
     let before = ACTIVE.get().mode;
