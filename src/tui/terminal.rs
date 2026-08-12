@@ -10,14 +10,20 @@ use crossterm::{
     terminal::{enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{buffer::CellDiffOption, prelude::*};
+#[cfg(windows)]
+use std::cell::Cell;
 use std::io::IsTerminal;
 use std::{
+    cell::RefCell,
     fmt::Display,
     io::{self, Stdout},
     mem,
     ops::{Deref, DerefMut},
+    rc::Rc,
 };
 use unicode_width::UnicodeWidthStr;
+
+use super::panic;
 
 type InnerTui = Terminal<CrosstermBackend<Stdout>>;
 
@@ -28,7 +34,18 @@ type InnerTui = Terminal<CrosstermBackend<Stdout>>;
 pub struct Tui {
     terminal: InnerTui,
     drawing_active: bool,
-    state: TerminalState,
+    /// Shared with the panic hook so a crash restores the terminal exactly as `Drop` would.
+    /// The TUI and its panic restore live on the same thread, so the state never leaves it.
+    state: Rc<RefCell<TerminalState>>,
+    /// Whether a synchronized update is open, shared with the guard and the
+    /// panic restore. A `Cell` (not a field behind the `RefCell`) so cleanup
+    /// paths can read and clear it without a borrow that could panic during
+    /// unwinding.
+    #[cfg(windows)]
+    update_active: Rc<Cell<bool>>,
+    /// Clears this session's panic-restore slot when the `Tui` ends, so a later
+    /// panic in an outer session still pops the outer closure.
+    _panic_restore: panic::RestoreRegistration,
     #[cfg(windows)]
     previous_frame_had_wide_cells: bool,
     #[cfg(windows)]
@@ -51,8 +68,9 @@ impl DerefMut for Tui {
 
 impl Drop for Tui {
     fn drop(&mut self) {
-        if self.state.has_pending_cleanup() {
-            let _ = restore_terminal_state(&mut self.state);
+        let mut state = self.state.borrow_mut();
+        if state.has_pending_cleanup() {
+            let _ = restore_terminal_state(&mut state);
         }
         self.drawing_active = false;
     }
@@ -60,6 +78,10 @@ impl Drop for Tui {
 
 /// Initialize the terminal for TUI rendering.
 pub fn init() -> Result<Tui> {
+    // The panic hook that restores the terminal is normally installed by `cli_main`; library
+    // callers (e.g. `commands::browse::run_with_sessions`) never pass through it, so install
+    // here too. `install` is idempotent, and `register_panic_restore` below arms the closure.
+    panic::install();
     ensure_tui_stdout()?;
 
     let mut setup = TerminalSetup::default();
@@ -88,6 +110,10 @@ pub fn init() -> Result<Tui> {
         .modes
         .as_ref()
         .is_some_and(TerminalModes::enable_virtual_terminal_processing);
+    // Shared with the synchronized-update guard and the panic restore so they
+    // can read and clear the open-update flag without borrowing the RefCell.
+    #[cfg(windows)]
+    let update_active = Rc::clone(&setup.state.update_active);
     if let Err(error) = enable_raw_mode().context("Failed to enable terminal raw mode") {
         return setup.fail(error);
     }
@@ -116,17 +142,39 @@ pub fn init() -> Result<Tui> {
         Err(error) => return setup.fail(error),
     };
 
-    Ok(Tui {
+    let state = Rc::new(RefCell::new(setup.commit()));
+    let panic_restore = panic::register_restore(Box::new({
+        let state = Rc::clone(&state);
+        move || {
+            // Restore in place: successful cleanup steps are disarmed, so an
+            // unwinding `Drop` afterwards retries only the steps that failed
+            // here. The state may be mutably borrowed by the frame that is
+            // unwinding, so borrow non-panicking: the `Drop` path is the
+            // safety net.
+            let Ok(mut state) = state.try_borrow_mut() else {
+                return;
+            };
+            // A library caller may catch the panic itself and keep using this
+            // `Tui`; mark it so a later `draw` cannot paint onto the restored
+            // normal screen, and a later panic knows cleanup already ran.
+            state.panic_restored = true;
+            let _ = restore_terminal_state(&mut state);
+        }
+    }));
+    let tui = Tui {
         terminal,
         drawing_active: true,
-        state: setup.commit(),
+        state,
+        #[cfg(windows)]
+        update_active,
+        _panic_restore: panic_restore,
         #[cfg(windows)]
         previous_frame_had_wide_cells: false,
         #[cfg(windows)]
         synchronized_updates_supported,
-    })
+    };
+    Ok(tui)
 }
-
 /// Draw one TUI frame.
 ///
 /// Windows terminals can leave stale trailing cells when an incremental diff replaces CJK or
@@ -139,6 +187,9 @@ where
     if !terminal.drawing_active {
         bail!("Cannot draw while the terminal session is suspended");
     }
+    if terminal.state.borrow().panic_restored {
+        bail!("Cannot draw after the terminal was restored by a panic");
+    }
 
     #[cfg(windows)]
     {
@@ -149,7 +200,7 @@ where
         let force_full_redraw = resized || terminal.previous_frame_had_wide_cells;
 
         let draw_result = if terminal.synchronized_updates_supported {
-            let update = SynchronizedUpdateGuard::begin()?;
+            let update = SynchronizedUpdateGuard::begin(&terminal.update_active)?;
             let result = draw_terminal_frame(&mut terminal.terminal, force_full_redraw, render)
                 .context("Failed to draw a Windows terminal frame");
             combine_results(
@@ -245,7 +296,8 @@ fn apply_full_redraw_policy(buffer: &mut Buffer) {
 /// cleanup is pending because crossterm can write its cached raw mode during a retry.
 pub fn restore(terminal: &mut Tui) -> Result<()> {
     terminal.drawing_active = false;
-    restore_terminal_state(&mut terminal.state)
+    let mut state = terminal.state.borrow_mut();
+    restore_terminal_state(&mut state)
 }
 
 /// Restore a terminal and preserve both the operation error and a cleanup error, if both occur.
@@ -326,8 +378,25 @@ fn restore_owned_state(failures: &mut CleanupFailures, state: &mut TerminalState
         // Windows. Keep virtual-terminal output enabled until every such sequence succeeds, so a
         // later Drop retry can still take effect instead of merely writing inert escape bytes.
         if display_commands_restored {
-            let output_result = modes.restore_output();
-            failures.record("restore console output mode", output_result);
+            #[cfg(windows)]
+            let update_ended = if state.update_active.get() {
+                let result = execute!(io::stdout(), EndSynchronizedUpdate);
+                let succeeded = result.is_ok();
+                failures.record("end synchronized terminal update", result);
+                if succeeded {
+                    state.update_active.set(false);
+                }
+                succeeded
+            } else {
+                true
+            };
+            #[cfg(not(windows))]
+            let update_ended = true;
+
+            if update_ended {
+                let output_result = modes.restore_output();
+                failures.record("restore console output mode", output_result);
+            }
         }
 
         if modes.is_restored() {
@@ -367,16 +436,30 @@ struct TerminalState {
     modes: Option<TerminalModes>,
     code_pages: Option<ConsoleCodePages>,
     console_input: Option<ConsoleInputHandle>,
+    /// Set when the panic hook already restored the terminal for a `Tui` that
+    /// survived the unwind (library callers may catch the panic themselves).
+    panic_restored: bool,
+    /// Whether a synchronized update is open on the output. Shared with the
+    /// guard behind an `Rc<Cell<bool>>` so cleanup paths can read and clear it
+    /// without a `RefCell` borrow that could panic during unwinding.
+    #[cfg(windows)]
+    update_active: Rc<Cell<bool>>,
 }
 
 impl TerminalState {
     fn has_pending_cleanup(&self) -> bool {
+        #[cfg(windows)]
+        let update_pending = self.update_active.get();
+        #[cfg(not(windows))]
+        let update_pending = false;
+
         self.mouse_capture
             || self.alternate_screen
             || self.cursor_restore_pending
             || self.modes.is_some()
             || self.code_pages.is_some()
             || self.console_input.is_some()
+            || update_pending
     }
 }
 
@@ -836,14 +919,19 @@ fn win32_console_call(operation: &str, succeeded: i32) -> Result<()> {
 #[cfg(windows)]
 struct SynchronizedUpdateGuard {
     active: bool,
+    update_active: Rc<Cell<bool>>,
 }
 
 #[cfg(windows)]
 impl SynchronizedUpdateGuard {
-    fn begin() -> Result<Self> {
+    fn begin(update_active: &Rc<Cell<bool>>) -> Result<Self> {
         // Arm before writing Begin: an I/O error can occur after bytes have partially reached the
         // terminal, so Drop must still attempt End.
-        let guard = Self { active: true };
+        let guard = Self {
+            active: true,
+            update_active: Rc::clone(update_active),
+        };
+        update_active.set(true);
         execute!(io::stdout(), BeginSynchronizedUpdate)
             .context("Failed to begin synchronized terminal update")?;
         Ok(guard)
@@ -853,6 +941,7 @@ impl SynchronizedUpdateGuard {
         let result = execute!(io::stdout(), EndSynchronizedUpdate)
             .context("Failed to end synchronized terminal update");
         if result.is_ok() {
+            self.update_active.set(false);
             self.active = false;
         }
         result
@@ -862,10 +951,17 @@ impl SynchronizedUpdateGuard {
 #[cfg(windows)]
 impl Drop for SynchronizedUpdateGuard {
     fn drop(&mut self) {
-        if self.active {
-            let _ = execute!(io::stdout(), EndSynchronizedUpdate);
-            self.active = false;
+        // The panic restore ends the update itself and clears the flag; end
+        // here only while the update is still open so the restore's End is
+        // not echoed a second time after VT output has been restored. The
+        // flag is a Cell, so this cannot borrow or panic during unwinding.
+        if self.active
+            && self.update_active.get()
+            && execute!(io::stdout(), EndSynchronizedUpdate).is_ok()
+        {
+            self.update_active.set(false);
         }
+        self.active = false;
     }
 }
 

@@ -27,6 +27,7 @@ use std::process::ExitCode;
 
 /// Binary entry — keeps `main.rs` a one-liner so benches can depend on the lib.
 pub fn cli_main() -> ExitCode {
+    tui::panic::install();
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) if commands::browse::is_pick_cancelled(&error) => ExitCode::SUCCESS,
