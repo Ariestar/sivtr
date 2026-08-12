@@ -433,8 +433,9 @@ pub(crate) fn run(
             if sessions_pane.is_fetching() {
                 loading_tick = loading_tick.wrapping_add(1);
                 redraw = true;
-            }
-            if crate::tui::theme::refresh_if_changed() {
+            } else if crate::tui::theme::refresh_if_changed() {
+                // Idle polls already honor `auto_interval`; a loading poll is
+                // too fast to re-probe the desktop portal on every tick.
                 redraw = true;
             }
             continue;

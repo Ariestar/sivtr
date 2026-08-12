@@ -292,6 +292,9 @@ impl Theme {
 thread_local! {
     static ACTIVE: Cell<Theme> = const { Cell::new(Theme::dark()) };
     static PREFERENCE: Cell<ThemeMode> = const { Cell::new(ThemeMode::Auto) };
+    /// Latched once `dark_light::detect()` errors, so the event loop stops
+    /// re-probing an unavailable desktop portal on every poll.
+    static DETECT_FAILED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Pick the palette for this process. The preference decides light vs dark —
@@ -322,32 +325,46 @@ pub(crate) fn apply(preference: ThemeMode) {
     ACTIVE.set(theme);
 }
 
-/// Truecolor when the terminal advertises it (`COLORTERM=truecolor|24bit`).
+/// Truecolor when the terminal advertises it: `COLORTERM=truecolor|24bit`,
+/// or a `-direct` terminfo name (`xterm-direct`, …) for terminals that do
+/// not export `COLORTERM` (tmux and screen often strip it).
 fn supports_truecolor() -> bool {
     matches!(
         std::env::var("COLORTERM").as_deref(),
         Ok("truecolor") | Ok("24bit")
-    )
+    ) || std::env::var("TERM")
+        .as_deref()
+        .is_ok_and(|term| term.ends_with("-direct"))
 }
 
 /// Light when the desktop session reports a light appearance. Cross-platform
 /// (macOS / Linux XDG portal / Windows registry) via `dark-light`; anything
-/// else — dark, unspecified, or a detection error — stays dark.
+/// else — dark, unspecified, or a detection error — stays dark. The first
+/// error is latched so the event loop stops re-probing the portal.
 fn light_from_system() -> bool {
-    matches!(dark_light::detect(), Ok(Mode::Light))
+    match dark_light::detect() {
+        Ok(Mode::Light) => true,
+        Ok(_) => false,
+        Err(_) => {
+            DETECT_FAILED.set(true);
+            false
+        }
+    }
 }
 
 /// Poll interval for appearance changes while the theme is in auto mode.
-/// `None` when a fixed dark/light palette is active, so the event loop does
-/// not wake up to re-check.
+/// `None` when a fixed dark/light palette is active or detection has failed,
+/// so the event loop does not wake up to re-check.
 pub(crate) fn auto_interval() -> Option<Duration> {
-    (PREFERENCE.get() == ThemeMode::Auto).then_some(AUTO_POLL_INTERVAL)
+    let auto = PREFERENCE.get() == ThemeMode::Auto && !DETECT_FAILED.get();
+    auto.then_some(AUTO_POLL_INTERVAL)
 }
 
 /// Re-check the system appearance and swap the palette when it changed.
-/// Returns true when the next frame must be redrawn. No-op outside auto mode.
+/// Returns true when the next frame must be redrawn. No-op outside auto mode
+/// or once detection has failed.
 pub(crate) fn refresh_if_changed() -> bool {
-    if PREFERENCE.get() != ThemeMode::Auto {
+    if PREFERENCE.get() != ThemeMode::Auto || DETECT_FAILED.get() {
         return false;
     }
     let before = ACTIVE.get().mode;
