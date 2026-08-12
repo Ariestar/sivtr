@@ -30,7 +30,7 @@ fn io_body_text(record: &WorkRecord, reading: bool, input: bool) -> String {
 }
 
 /// Reading: dialogue in order; each adjacent structure run folds into a
-/// per-channel summary at its position (tools / mcp / skills / thinking).
+/// marker-only line at its position, identical markers counting as `xN`.
 fn structured_parts_text(parts: &[&sivtr_core::record::WorkPart]) -> String {
     let mut chunks = Vec::new();
     let mut run: Vec<&sivtr_core::record::WorkPart> = Vec::new();
@@ -79,73 +79,33 @@ fn structure_fold_label(part: &sivtr_core::record::WorkPart) -> String {
         .unwrap_or_else(|| "<:structure:>".to_string())
 }
 
-/// Per-channel summary of a structure run: tools / mcp / skills / thinking.
-/// Tool results are dropped (a call implies its result).
+/// One line of original markers; identical labels become `label xN`.
+/// Tool results are dropped (a call marker implies its result).
 fn collapse_structure_markers(parts: &[&sivtr_core::record::WorkPart]) -> String {
-    use sivtr_core::record::WorkPartKind;
-
-    let mut tools: Vec<(String, usize)> = Vec::new();
-    let mut mcp: Vec<(String, usize)> = Vec::new();
-    let mut skills: Vec<(String, usize)> = Vec::new();
-    let mut thinking = 0usize;
-
+    use sivtr_core::ai::AgentBlockKind;
+    let mut counts: Vec<(String, usize)> = Vec::new();
     for part in parts {
-        match part.kind() {
-            WorkPartKind::ToolCall => {
-                let label = part.label().unwrap_or("tool");
-                match label.strip_prefix("mcp__") {
-                    Some(rest) => bump(&mut mcp, rest.rsplit("__").next().unwrap_or(rest)),
-                    None => bump(&mut tools, label),
-                }
-            }
-            WorkPartKind::Skill => bump(&mut skills, part.label().unwrap_or("skill")),
-            WorkPartKind::Thinking => thinking += 1,
-            _ => {}
+        if part.kind().as_agent_block_kind() == Some(AgentBlockKind::ToolOutput) {
+            continue;
+        }
+        let label = structure_fold_label(part);
+        if let Some((_, count)) = counts.iter_mut().find(|(existing, _)| *existing == label) {
+            *count += 1;
+        } else {
+            counts.push((label, 1));
         }
     }
-
-    let mut lines = Vec::new();
-    if let Some(line) = channel_line("tools", &tools) {
-        lines.push(line);
-    }
-    if let Some(line) = channel_line("mcp", &mcp) {
-        lines.push(line);
-    }
-    if let Some(line) = channel_line("skills", &skills) {
-        lines.push(line);
-    }
-    if thinking > 0 {
-        lines.push(format!("thinking{}", count_suffix(thinking)));
-    }
-    lines.join("\n")
-}
-
-fn bump(counts: &mut Vec<(String, usize)>, name: &str) {
-    if let Some((_, count)) = counts.iter_mut().find(|(existing, _)| existing == name) {
-        *count += 1;
-    } else {
-        counts.push((name.to_string(), 1));
-    }
-}
-
-fn channel_line(label: &str, counts: &[(String, usize)]) -> Option<String> {
-    if counts.is_empty() {
-        return None;
-    }
-    let names = counts
+    counts
         .iter()
-        .map(|(name, count)| format!("{name}{}", count_suffix(*count)))
+        .map(|(label, count)| {
+            if *count == 1 {
+                label.clone()
+            } else {
+                format!("{label} x{count}")
+            }
+        })
         .collect::<Vec<_>>()
-        .join(", ");
-    Some(format!("{label}: {names}"))
-}
-
-fn count_suffix(count: usize) -> String {
-    if count > 1 {
-        format!(" x{count}")
-    } else {
-        String::new()
-    }
+        .join(" ")
 }
 
 pub(crate) fn workspace_content_text(

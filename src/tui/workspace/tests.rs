@@ -200,8 +200,8 @@ fn reading_mode_folds_structure_and_raw_expands() {
         None,
     );
     assert!(reading_io.input.contains("question"));
-    // Fold summarizes tool activity by channel; results are dropped.
-    assert!(reading_io.output.contains("tools: Bash"));
+    // Fold keeps the structural marker so the content renderer can color it.
+    assert!(reading_io.output.contains("<:tool:Bash call:>"));
     assert!(!reading_io.output.contains("result"));
     assert!(reading_io.output.contains("answer"));
     assert!(!reading.contains("cargo test"));
@@ -293,21 +293,21 @@ fn reading_mode_collapses_adjacent_structure_runs() {
         None,
     );
     assert!(reading_io.input.contains("do it"));
-    // Tool calls fold to one channel line in the output half; skills to one in the input half.
+    // Tool calls and skills fold to marker-only lines in their respective halves.
     let tool_fold = reading_io
         .output
         .lines()
-        .find(|line| line.starts_with("tools:"))
+        .find(|line| line.starts_with("<:tool:"))
         .expect("tools channel line");
-    assert!(tool_fold.contains("Bash"));
-    assert!(tool_fold.contains("Read"));
+    assert!(tool_fold.contains("<:tool:Bash call:>"));
+    assert!(tool_fold.contains("<:tool:Read call:>"));
     let skill_fold = reading_io
         .input
         .lines()
-        .find(|line| line.starts_with("skills:"))
+        .find(|line| line.starts_with("<:skill:"))
         .expect("skills channel line");
-    assert!(skill_fold.contains("review"));
-    assert!(skill_fold.contains("deploy"));
+    assert!(skill_fold.contains("<:skill:review:>"));
+    assert!(skill_fold.contains("<:skill:deploy:>"));
     assert!(reading_io.output.contains("done"));
     assert!(!reading.contains("file"));
     assert!(!reading.contains("skill body"));
@@ -366,15 +366,15 @@ fn reading_mode_counts_identical_structure_markers_regardless_of_order() {
         ContentViewMode::Reading,
         None,
     );
-    // Repeated tool names count as xN within the single tools channel line.
-    assert!(reading.contains("tools: Bash x3, Read"));
+    // Repeated tool names count as xN within the single marker line.
+    assert!(reading.contains("<:tool:Bash call:> x3 <:tool:Read call:>"));
     assert!(reading.contains("middle note"));
     assert!(!reading.contains("file"));
     assert!(!reading.contains("pwd"));
     // Single tools line for the section (not split by the dialogue part).
     let fold_hits = reading
         .lines()
-        .filter(|line| line.starts_with("tools:"))
+        .filter(|line| line.starts_with("<:tool:"))
         .count();
     assert_eq!(fold_hits, 1);
 }
@@ -429,7 +429,7 @@ fn reading_mode_keeps_structure_runs_in_call_order() {
     // Fold sits between the assistant chunks, matching the call order.
     let output = &reading_io.output;
     let first_text = output.find("checking first").expect("first assistant text");
-    let fold = output.find("tools: Bash").expect("tool fold line");
+    let fold = output.find("<:tool:Bash call:>").expect("tool fold line");
     let last_text = output.find("all done").expect("last assistant text");
     assert!(first_text < fold);
     assert!(fold < last_text);

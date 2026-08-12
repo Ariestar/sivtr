@@ -1,13 +1,13 @@
 use anyhow::Result;
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::agents::{
     extract_content_text, jsonl_files, list_recent_jsonl_sessions, normalize_path_for_match,
     parse_jsonl_meta, parse_jsonl_session, pretty_json_string, pretty_json_value, push_block,
-    AgentBlockKind, AgentProvider, AgentSession, AgentSessionInfo, AgentSessionMeta,
-    AgentSessionProvider,
+    push_tool_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionInfo,
+    AgentSessionMeta, AgentSessionProvider,
 };
 use crate::config::SivtrConfig;
 
@@ -46,6 +46,7 @@ impl AgentSessionProvider for CodexProvider {
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
         let mut saw_response_item = false;
         let mut event_fallback_indices = Vec::new();
+        let mut tool_labels = HashMap::new();
         let mut session = parse_jsonl_session(path, PROVIDER_NAME, |session, value| {
             let timestamp = value
                 .get("timestamp")
@@ -66,7 +67,7 @@ impl AgentSessionProvider for CodexProvider {
                 }
                 Some("response_item") => {
                     saw_response_item = true;
-                    apply_response_item(session, payload, timestamp.clone());
+                    apply_response_item(session, payload, timestamp.clone(), &mut tool_labels);
                 }
                 Some("event_msg") => {
                     let start = session.blocks.len();
@@ -179,7 +180,12 @@ fn parse_session_meta(path: &Path) -> Result<AgentSessionMeta> {
     })
 }
 
-fn apply_response_item(session: &mut AgentSession, payload: &Value, timestamp: Option<String>) {
+fn apply_response_item(
+    session: &mut AgentSession,
+    payload: &Value,
+    timestamp: Option<String>,
+    tool_labels: &mut HashMap<String, String>,
+) {
     match payload.get("type").and_then(Value::as_str) {
         Some("message") => {
             let kind = match payload.get("role").and_then(Value::as_str) {
@@ -201,27 +207,45 @@ fn apply_response_item(session: &mut AgentSession, payload: &Value, timestamp: O
                 clean_codex_message_text(kind, text),
             );
         }
-        Some("function_call") => push_block(
-            session,
-            AgentBlockKind::ToolCall,
-            timestamp,
-            payload
+        Some("function_call" | "custom_tool_call") => {
+            let call_id = payload
+                .get("call_id")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let label = payload
                 .get("name")
                 .and_then(Value::as_str)
-                .map(str::to_string),
-            extract_tool_call_text(payload),
-        ),
-        Some("function_call_output") => push_block(
-            session,
-            AgentBlockKind::ToolOutput,
-            timestamp,
-            None,
-            payload
-                .get("output")
+                .map(str::to_string);
+            if let (Some(call_id), Some(label)) = (call_id.as_ref(), label.as_ref()) {
+                tool_labels.insert(call_id.clone(), label.clone());
+            }
+            push_tool_block(
+                session,
+                AgentBlockKind::ToolCall,
+                timestamp,
+                call_id,
+                label,
+                extract_tool_call_text(payload),
+            );
+        }
+        Some("function_call_output" | "custom_tool_call_output") => {
+            let call_id = payload
+                .get("call_id")
                 .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-        ),
+                .map(str::to_string);
+            let label = call_id
+                .as_deref()
+                .and_then(|id| tool_labels.get(id))
+                .cloned();
+            push_tool_block(
+                session,
+                AgentBlockKind::ToolOutput,
+                timestamp,
+                call_id,
+                label,
+                extract_tool_output_text(payload),
+            );
+        }
         _ => {}
     }
 }
@@ -276,10 +300,25 @@ fn strip_trailing_oai_memory_citation(text: String) -> String {
 }
 
 fn extract_tool_call_text(payload: &Value) -> String {
-    match payload.get("arguments") {
+    match payload.get("arguments").or_else(|| payload.get("input")) {
         Some(Value::String(arguments)) => pretty_json_string(arguments),
         Some(arguments) => pretty_json_value(arguments),
         None => pretty_json_value(payload),
+    }
+}
+
+fn extract_tool_output_text(payload: &Value) -> String {
+    let Some(output) = payload.get("output") else {
+        return String::new();
+    };
+    if let Some(text) = output.as_str() {
+        return text.to_string();
+    }
+    let text = extract_content_text(output);
+    if text.trim().is_empty() {
+        pretty_json_value(output)
+    } else {
+        text
     }
 }
 
@@ -374,6 +413,35 @@ mod tests {
         assert_eq!(session.blocks[1].kind, AgentBlockKind::ToolCall);
         assert_eq!(session.blocks[2].kind, AgentBlockKind::ToolOutput);
         assert_eq!(session.blocks[3].kind, AgentBlockKind::Assistant);
+    }
+
+    #[test]
+    fn parses_codex_custom_tool_calls_and_outputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"type":"session_meta","payload":{"id":"abc"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}
+{"type":"response_item","payload":{"type":"custom_tool_call","id":"ctc_1","call_id":"call_1","name":"exec","input":"ls"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","id":"ctco_1","call_id":"call_1","output":[{"type":"input_text","text":"file.txt"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}
+"#,
+        )
+        .unwrap();
+
+        let session = CodexProvider.parse_session_file(&path).unwrap();
+
+        assert_eq!(session.blocks.len(), 4);
+        assert_eq!(session.blocks[1].kind, AgentBlockKind::ToolCall);
+        assert_eq!(session.blocks[1].label.as_deref(), Some("exec"));
+        assert_eq!(session.blocks[1].call_id.as_deref(), Some("call_1"));
+        assert_eq!(session.blocks[1].text, "ls");
+        assert_eq!(session.blocks[2].kind, AgentBlockKind::ToolOutput);
+        assert_eq!(session.blocks[2].label.as_deref(), Some("exec"));
+        assert_eq!(session.blocks[2].call_id.as_deref(), Some("call_1"));
+        assert_eq!(session.blocks[2].text, "file.txt");
+        assert!(format_blocks(&session.blocks).contains("<:tool:exec call:>"));
     }
 
     #[test]
