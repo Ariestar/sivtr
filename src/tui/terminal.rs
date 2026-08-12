@@ -321,6 +321,34 @@ pub fn finish<T>(terminal: &mut Tui, operation: Result<T>) -> Result<T> {
     )
 }
 
+/// Extract a panic payload's message for user-facing reporting.
+pub(crate) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic".to_string()
+    }
+}
+
+/// Print a prompt and block until the user presses Enter.
+///
+/// On Windows the TUI binds a redirected stdin to `CONIN$` and restores the
+/// original handle during cleanup; rebind the console here so the prompt still
+/// reads from the console the user is looking at instead of a redirect.
+pub(crate) fn wait_for_enter(prompt: &str) {
+    eprintln!("{prompt}");
+    #[cfg(windows)]
+    let _console = if io::stdin().is_terminal() {
+        None
+    } else {
+        ConsoleInputHandle::ensure_console().ok().flatten()
+    };
+    let mut input = String::new();
+    let _ = io::stdin().read_line(&mut input);
+}
+
 /// Temporarily exit the TUI while an external program runs, then re-enter it.
 ///
 /// The outer result reports suspend/resume failures. The inner result is the external operation's

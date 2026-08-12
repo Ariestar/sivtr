@@ -11,6 +11,7 @@ use crate::cli::{
 };
 use crate::commands::browse;
 use crate::commands::memory::copy;
+use crate::tui::terminal::{panic_payload_message, wait_for_enter};
 use crate::tui::workspace::WorkspaceFocus;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,7 +61,11 @@ pub fn pick_agent(args: &HotkeyPickAgentArgs) -> Result<()> {
         let providers = args.provider.providers();
         // Hotkey owns the browse product surface; copy only exports the pick.
         let _ = args.current_session;
-        let picked = browse::run(&providers, args.all, WorkspaceFocus::Sessions)?;
+        // The no-wait variant: this handler reports errors (and waits) itself,
+        // so a panic recovered inside the picker must not consume an Enter
+        // before show_pick_error_and_wait prompts.
+        let picked =
+            browse::run_without_panic_wait(&providers, args.all, WorkspaceFocus::Sessions)?;
         copy::export_picked(&picked, false, None, None, false)
     });
 
@@ -72,10 +77,10 @@ pub fn pick_agent(args: &HotkeyPickAgentArgs) -> Result<()> {
             }
         }
         Err(panic) => {
-            let message = panic_message(&panic);
+            let message = panic_payload_message(&panic);
             eprintln!("sivtr: AI session picker panicked");
             eprintln!("{message}");
-            wait_for_enter();
+            wait_for_enter("Press Enter to close this window.");
         }
     }
 
@@ -178,24 +183,7 @@ fn state_path() -> Result<PathBuf> {
 fn show_pick_error_and_wait(error: &anyhow::Error) {
     eprintln!("sivtr: AI session picker failed");
     eprintln!("{error:#}");
-    wait_for_enter();
-}
-
-fn wait_for_enter() {
-    eprintln!();
-    eprintln!("Press Enter to close this window.");
-    let mut input = String::new();
-    let _ = std::io::stdin().read_line(&mut input);
-}
-
-fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
-    if let Some(message) = panic.downcast_ref::<&str>() {
-        (*message).to_string()
-    } else if let Some(message) = panic.downcast_ref::<String>() {
-        message.clone()
-    } else {
-        "unknown panic payload".to_string()
-    }
+    wait_for_enter("Press Enter to close this window.");
 }
 
 #[cfg(windows)]
