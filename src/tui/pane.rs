@@ -185,10 +185,6 @@ pub(crate) fn active_item_style() -> Style {
     theme::focus_row()
 }
 
-pub(crate) fn selected_item_style() -> Style {
-    theme::selected_row()
-}
-
 pub(crate) fn inactive_highlight_style() -> Style {
     Style::default()
 }

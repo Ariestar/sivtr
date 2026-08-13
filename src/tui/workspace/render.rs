@@ -14,8 +14,7 @@ use crate::tui::content::view::{
     ContentViewMode,
 };
 use crate::tui::pane::{
-    active_item_style, panel_block, render_list_panel, render_panel_scrollbar, selected_item_style,
-    Panel, PanelScroll,
+    active_item_style, panel_block, render_list_panel, render_panel_scrollbar, Panel, PanelScroll,
 };
 use crate::tui::search::{workspace_search_query, workspace_search_regex, WorkspaceSearchScope};
 use crate::tui::theme;
@@ -321,11 +320,11 @@ fn footer_status_spans(label: &str) -> Vec<Span<'static>> {
 /// Compact session row: `· cdx  title…` (origin glyph + short badge + title).
 ///
 /// `·` = local, `↗` = remote (named scope on the source or work_ref). A ` [!]`
-/// suffix marks a session whose body failed to hydrate.
+/// suffix marks a session whose body failed to hydrate. The selection dot
+/// (`●` / `○`) is always visible so it survives pane switches.
 fn session_row_line(
     choice: &WorkspaceSession,
     selected: bool,
-    active_panel: bool,
     base_style: Style,
     highlight: Option<&Regex>,
     body_failed: bool,
@@ -335,15 +334,7 @@ fn session_row_line(
             .records
             .first()
             .is_some_and(|record| !record.work_ref.is_local());
-    let check = if active_panel {
-        if selected {
-            "● "
-        } else {
-            "○ "
-        }
-    } else {
-        ""
-    };
+    let check = if selected { "● " } else { "○ " };
     let origin = theme::origin_glyph(remote);
     let badge = choice.source.badge();
     let title = compact_session_title(choice);
@@ -609,8 +600,6 @@ fn render_source_list(
             let marker = load.status_glyph(selected, loading_tick);
             let style = if focused {
                 active_item_style()
-            } else if selected {
-                selected_item_style()
             } else {
                 Style::default().fg(source.color())
             };
@@ -701,16 +690,13 @@ fn render_session_list(
     active: bool,
 ) {
     let cursor_idx = selected_index(state);
-    let has_selection = selected_sessions.iter().any(|selected| *selected);
     let mut items: Vec<ListItem> = choices
         .iter()
         .enumerate()
         .map(|(idx, choice)| {
             let selected = selected_sessions.get(idx).copied().unwrap_or(false);
-            let focused = active && !has_selection && idx == cursor_idx;
-            let base_style = if selected {
-                selected_item_style()
-            } else if focused {
+            let focused = active && idx == cursor_idx;
+            let base_style = if focused {
                 active_item_style()
             } else {
                 Style::default()
@@ -721,7 +707,6 @@ fn render_session_list(
             ListItem::new(session_row_line(
                 choice,
                 selected,
-                active,
                 base_style,
                 highlight,
                 body_failures.contains(&(choice.source.clone(), choice.session_id.clone())),
@@ -762,7 +747,6 @@ fn render_dialogue_list(
     active: bool,
 ) {
     let highlighted_idx = selected_index(state);
-    let has_selection = selected_dialogues.iter().any(|selected| *selected);
     let mut items: Vec<ListItem> = titles
         .iter()
         .enumerate()
@@ -773,28 +757,16 @@ fn render_dialogue_list(
                 })
                 .unwrap_or(false);
             let selected = selected_dialogues.get(idx).copied().unwrap_or(false);
-            let marker = if active {
-                if selected {
-                    "● "
-                } else {
-                    "○ "
-                }
-            } else {
-                ""
-            };
+            // Selection is shown by the dot alone (● = selected, ○ = not),
+            // always visible so it survives pane switches.
+            let marker = if selected { "● " } else { "○ " };
             let line = format!("{marker}{title}");
             let highlight = search
                 .filter(|search| search.scope == WorkspaceSearchScope::Dialogue)
                 .and(search_regex);
             if in_range {
                 ListItem::new(Line::from(Span::styled(line, theme::range_row())))
-            } else if selected {
-                ListItem::new(Line::from(highlight_spans(
-                    &line,
-                    highlight,
-                    selected_item_style(),
-                )))
-            } else if !has_selection && idx == highlighted_idx {
+            } else if active && idx == highlighted_idx {
                 ListItem::new(Line::from(highlight_spans(
                     &line,
                     highlight,
@@ -994,7 +966,7 @@ mod tests {
             records: Vec::new(),
             body_loaded: false,
         };
-        let line = session_row_line(&session, false, true, Style::default(), None, false);
+        let line = session_row_line(&session, false, Style::default(), None, false);
         // Non-selected session rows paint body text with the terminal default
         // foreground, matching dialogue rows and the content pane.
         let title_span = line
