@@ -89,6 +89,15 @@ impl AgentSessionProvider for GrokProvider {
             if session.title.is_none() {
                 session.title = meta.title;
             }
+            // chat_history has no per-line timestamps; give every block the
+            // session's last activity so records sort by recency like other
+            // providers instead of sinking below timestamped records.
+            if session.blocks.iter().all(|block| block.timestamp.is_none()) {
+                let stamp = rfc3339_from_system_time(meta.modified);
+                for block in &mut session.blocks {
+                    block.timestamp = Some(stamp.clone());
+                }
+            }
         }
         if session.id.is_none() {
             session.id = session_dir
@@ -181,8 +190,11 @@ fn read_summary(path: &Path) -> Result<Option<SummaryMeta>> {
     }
     let text = fs::read_to_string(path)
         .with_context(|| format!("Failed to read Grok summary {}", path.display()))?;
-    let value: Value = serde_json::from_str(&text)
-        .with_context(|| format!("Failed to parse Grok summary {}", path.display()))?;
+    // A corrupt summary is supplementary metadata: skip it (fall back to the
+    // directory name) rather than failing discovery of every other session.
+    let Ok(value) = serde_json::from_str::<Value>(&text) else {
+        return Ok(None);
+    };
 
     let info = value.get("info").unwrap_or(&value);
     let id = info
@@ -418,6 +430,11 @@ fn parse_rfc3339(value: Option<&str>) -> Option<SystemTime> {
         return Some(UNIX_EPOCH);
     }
     Some(UNIX_EPOCH + Duration::new(secs as u64, nanos))
+}
+
+fn rfc3339_from_system_time(time: SystemTime) -> String {
+    let dt: chrono::DateTime<chrono::Utc> = time.into();
+    dt.to_rfc3339()
 }
 
 #[cfg(test)]
