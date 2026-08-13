@@ -166,7 +166,7 @@ impl Theme {
             dim: Color::Rgb(71, 85, 105),               // slate-600
             local_origin: Color::Rgb(52, 211, 153),     // emerald-400
             remote_origin: Color::Rgb(244, 114, 182),   // pink-400
-            focus_bg: Color::Rgb(100, 116, 139),        // slate-500 (light gray tint)
+            focus_bg: Color::Rgb(148, 163, 184),        // slate-400 (faint gray tint)
             selected_bg: Color::Rgb(51, 65, 85),        // slate-700
             selected_fg: Color::Rgb(226, 232, 240),     // slate-200
             range_fg: Color::Rgb(251, 191, 36),         // amber-400
@@ -195,7 +195,7 @@ impl Theme {
             dim: Color::Rgb(148, 163, 184),            // slate-400
             local_origin: Color::Rgb(5, 150, 105),     // emerald-600
             remote_origin: Color::Rgb(219, 39, 119),   // pink-600
-            focus_bg: Color::Rgb(226, 232, 240),       // slate-200 (light gray tint)
+            focus_bg: Color::Rgb(241, 245, 249),       // slate-100 (faint gray tint)
             selected_bg: Color::Rgb(226, 232, 240),    // slate-200
             selected_fg: Color::Rgb(51, 65, 85),       // slate-700
             range_fg: Color::Rgb(217, 119, 6),         // amber-600
