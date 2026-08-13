@@ -45,9 +45,11 @@ pub fn remove_daemon_info() {
     let _ = std::fs::remove_file(daemon_info_path());
 }
 
+/// Default read timeout for daemon control calls.
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub fn call(request: LocalRequest) -> Result<LocalResponse> {
-    let info = read_daemon_info()?;
-    call_with_info(&info, request)
+    call_with_read_timeout(request, DEFAULT_READ_TIMEOUT)
 }
 
 /// Like [`call`], but caps how long we wait for the daemon response.
@@ -60,10 +62,6 @@ pub fn call_with_read_timeout(
 ) -> Result<LocalResponse> {
     let info = read_daemon_info()?;
     call_with_info_and_read_timeout(&info, request, read_timeout)
-}
-
-pub fn call_with_info(info: &DaemonInfo, request: LocalRequest) -> Result<LocalResponse> {
-    call_with_info_and_read_timeout(info, request, Duration::from_secs(30))
 }
 
 fn call_with_info_and_read_timeout(
@@ -98,11 +96,8 @@ fn call_with_info_and_read_timeout(
 }
 
 pub fn running() -> bool {
-    let Ok(info) = read_daemon_info() else {
-        return false;
-    };
     matches!(
-        call_with_info(&info, LocalRequest::Status),
+        call_with_read_timeout(LocalRequest::Status, DEFAULT_READ_TIMEOUT),
         Ok(LocalResponse::Status(_))
     )
 }

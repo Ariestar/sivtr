@@ -281,7 +281,7 @@ fn push_content_blocks(
 #[cfg(test)]
 mod tests {
     use super::{QoderCnProvider, QoderProvider};
-    use crate::agents::{format_blocks, AgentBlockKind, AgentSessionProvider};
+    use crate::agents::{AgentBlockKind, AgentSessionProvider};
 
     #[test]
     fn parses_qoder_messages_and_tools() {
@@ -332,7 +332,8 @@ mod tests {
 
         assert_eq!(session.title.as_deref(), Some("My Session"));
         assert_eq!(session.blocks.len(), 2);
-        assert_eq!(format_blocks(&session.blocks), "real task\n\ndone");
+        assert_eq!(session.blocks[0].text.trim(), "real task");
+        assert_eq!(session.blocks[1].text.trim(), "done");
     }
 
     #[test]
@@ -371,6 +372,7 @@ mod tests {
         assert_eq!(session.id.as_deref(), Some("cn-1"));
         assert_eq!(session.cwd.as_deref(), Some("D:\\repo"));
         assert_eq!(session.blocks.len(), 2);
-        assert_eq!(format_blocks(&session.blocks), "hello\n\ndone");
+        assert_eq!(session.blocks[0].text.trim(), "hello");
+        assert_eq!(session.blocks[1].text.trim(), "done");
     }
 }

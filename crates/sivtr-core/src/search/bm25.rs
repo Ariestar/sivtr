@@ -313,22 +313,6 @@ impl Bm25Index {
         self.df.get(token).copied().unwrap_or(0.0) / self.n.max(1) as f64
     }
 
-    /// Rank the corpus by BM25 relevance to `query`, best first. Only records
-    /// sharing at least one query token appear in the result.
-    pub fn rank(&self, query: &str) -> Vec<(WorkRef, f32)> {
-        let terms = SimpleTokenizer
-            .tokenize(query)
-            .into_iter()
-            .map(|token| (token, 1.0))
-            .collect::<Vec<_>>();
-        self.rank_terms(&terms)
-    }
-
-    /// Rank with explicit per-term weights (expansion terms carry `lambda`).
-    pub fn rank_terms(&self, terms: &[(String, f64)]) -> Vec<(WorkRef, f32)> {
-        self.rank_terms_with(terms, TITLE_WEIGHT)
-    }
-
     /// Rank with explicit per-term weights and a configurable title-passage
     /// weight. Single-token queries pass 0.0 so a lone keyword is not boosted
     /// into unrelated terminal records; multi-token command queries keep the
@@ -341,19 +325,6 @@ impl Bm25Index {
         self.score_terms(terms, title_weight)
             .into_iter()
             .map(|(doc_id, score)| (self.refs[doc_id].clone(), score as f32))
-            .collect()
-    }
-
-    /// Ranked document ids (aligned with `records`) for the same term weights.
-    pub fn ranked_ids(&self, terms: &[(String, f64)]) -> Vec<usize> {
-        self.ranked_ids_with(terms, TITLE_WEIGHT)
-    }
-
-    /// Ranked document ids with a configurable title weight.
-    pub fn ranked_ids_with(&self, terms: &[(String, f64)], title_weight: f64) -> Vec<usize> {
-        self.score_terms(terms, title_weight)
-            .into_iter()
-            .map(|(doc_id, _)| doc_id)
             .collect()
     }
 
@@ -436,6 +407,16 @@ mod tests {
         WorkChannel, WorkOutcome, WorkPart, WorkPartData, WorkRecord, WorkRecordKind,
         WorkSessionRef, WorkSource, WorkStatus, WorkTime, RECORD_SCHEMA_VERSION,
     };
+
+    /// Rank a plain query string (test convenience over [`rank_terms_with`]).
+    fn rank_query(index: &Bm25Index, query: &str) -> Vec<(WorkRef, f32)> {
+        let terms = SimpleTokenizer
+            .tokenize(query)
+            .into_iter()
+            .map(|token| (token, 1.0))
+            .collect::<Vec<_>>();
+        index.rank_terms_with(&terms, TITLE_WEIGHT)
+    }
 
     fn record(session: &str, index: usize, title: &str, text: &str) -> WorkRecord {
         WorkRecord {
@@ -579,7 +560,7 @@ mod tests {
             record("dev", 2, "cargo build", "Finished dev profile"),
         ];
         let index = Bm25Index::build(&corpus);
-        let ranked = index.rank("重构");
+        let ranked = rank_query(&index, "重构");
         assert_eq!(ranked[0].0.to_string(), "terminal/dev/1");
     }
 
@@ -601,7 +582,7 @@ mod tests {
             record("dev", 3, "git log", "7227bd8 refactor tui"),
         ];
         let index = Bm25Index::build(&corpus);
-        let ranked = index.rank("rollback");
+        let ranked = rank_query(&index, "rollback");
         assert_eq!(ranked[0].0.to_string(), "terminal/dev/2");
     }
 
@@ -609,7 +590,7 @@ mod tests {
     fn unmatched_query_scores_nothing() {
         let corpus = vec![record("dev", 1, "cargo build", "Finished dev profile")];
         let index = Bm25Index::build(&corpus);
-        assert!(index.rank("zzzznothing").is_empty());
+        assert!(rank_query(&index, "zzzznothing").is_empty());
     }
 
     #[test]
@@ -623,7 +604,7 @@ mod tests {
             record("dev", 3, "setup log", long_noise),
         ];
         let index = Bm25Index::build(&corpus);
-        let ranked = index.rank("command not found");
+        let ranked = rank_query(&index, "command not found");
         assert_eq!(ranked[0].0.to_string(), "terminal/dev/1");
     }
 
@@ -634,7 +615,7 @@ mod tests {
             record("dev", 2, "unrelated", "the found command ran fine"),
         ];
         let index = Bm25Index::build(&corpus);
-        let ranked = index.rank("command not found");
+        let ranked = rank_query(&index, "command not found");
         assert_eq!(ranked[0].0.to_string(), "terminal/dev/1");
     }
 
@@ -650,7 +631,7 @@ mod tests {
             record("dev", 2, "short chatter", "no signal here at all"),
         ];
         let index = Bm25Index::build(&corpus);
-        let ranked = index.rank("panicked");
+        let ranked = rank_query(&index, "panicked");
         assert_eq!(ranked[0].0.to_string(), "terminal/dev/1");
     }
 
@@ -668,7 +649,7 @@ mod tests {
             record("dev", 2, "short unrelated", "just a short line"),
         ];
         let index = Bm25Index::build(&corpus);
-        let ranked = index.rank("kubectl");
+        let ranked = rank_query(&index, "kubectl");
         assert_eq!(ranked[0].0.to_string(), "terminal/dev/1");
         assert_eq!(ranked.len(), 1, "non-matching doc must not score");
     }
@@ -685,7 +666,7 @@ mod tests {
             ),
         ];
         let index = Bm25Index::build(&corpus);
-        let ranked = index.rank("sivtr serve status");
+        let ranked = rank_query(&index, "sivtr serve status");
         assert_eq!(ranked[0].0.to_string(), "terminal/dev/1");
     }
 
@@ -697,7 +678,7 @@ mod tests {
         ];
         let index = Bm25Index::build(&corpus);
         let terms = vec![("cargo".to_string(), 1.0), ("panicked".to_string(), 1.0)];
-        let ranked = index.rank_terms(&terms);
+        let ranked = index.rank_terms_with(&terms, TITLE_WEIGHT);
         assert_eq!(ranked[0].0.to_string(), "terminal/dev/1");
     }
 
@@ -727,7 +708,7 @@ mod tests {
             ),
         ];
         let index = Bm25Index::build(&corpus);
-        let ranked = index.rank("kubectl");
+        let ranked = rank_query(&index, "kubectl");
         assert_eq!(
             ranked[0].0.to_string(),
             "terminal/dev/2",
@@ -766,7 +747,7 @@ mod tests {
             ),
         ];
         let index = Bm25Index::build(&corpus);
-        let ranked = index.rank("sivtr serve status");
+        let ranked = rank_query(&index, "sivtr serve status");
         assert_eq!(ranked[0].0.to_string(), "terminal/dev/1");
     }
 
@@ -793,7 +774,7 @@ mod tests {
             ),
         ];
         let index = Bm25Index::build(&corpus);
-        let ranked = index.rank("connection refused");
+        let ranked = rank_query(&index, "connection refused");
         assert_eq!(ranked[0].0.to_string(), "terminal/dev/1");
     }
 }

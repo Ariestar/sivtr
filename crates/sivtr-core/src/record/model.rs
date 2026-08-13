@@ -547,30 +547,10 @@ impl WorkRecord {
     }
 
     pub fn copy_parts(&self, include_prompt: bool) -> WorkRecordCopyParts {
-        self.copy_parts_with_prompt(include_prompt, None)
-    }
-
-    pub fn copy_parts_with_prompt(
-        &self,
-        include_prompt: bool,
-        prompt_override: Option<&str>,
-    ) -> WorkRecordCopyParts {
         WorkRecordCopyParts {
-            input: self.copy_text_with_prompt(
-                RecordTextMode::Input,
-                include_prompt,
-                prompt_override,
-            ),
-            output: self.copy_text_with_prompt(
-                RecordTextMode::Output,
-                include_prompt,
-                prompt_override,
-            ),
-            block: self.copy_text_with_prompt(
-                RecordTextMode::Combined,
-                include_prompt,
-                prompt_override,
-            ),
+            input: self.copy_text_with_prompt(RecordTextMode::Input, include_prompt, None),
+            output: self.copy_text_with_prompt(RecordTextMode::Output, include_prompt, None),
+            block: self.copy_text_with_prompt(RecordTextMode::Combined, include_prompt, None),
             command: self.copy_text_with_prompt(RecordTextMode::Command, false, None),
         }
     }
