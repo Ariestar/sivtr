@@ -37,7 +37,7 @@ use super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane, SourcePan
 use super::selection::{has_selected_sessions, refresh_next_level};
 use super::visual::{
     apply_workspace_mouse_scroll, handle_content_mouse_select, handle_visual_select_key,
-    scroll_list_state_down, scroll_list_state_up, VisualContentContext, VisualSelectMode,
+    VisualContentContext, VisualSelectMode, MOUSE_SCROLL_LINES,
 };
 use super::PICK_CANCELLED_MESSAGE;
 use crate::pane::{Pane, PaneInput, Viewport};
@@ -473,10 +473,13 @@ pub(crate) fn run(
                 )
             })?;
             // Ratatui reveals the cursor after every frame. Keep it visible
-            // only while typing in an overlay or selecting text; hide it
-            // otherwise so it does not blink at a stale position during
-            // normal browsing.
-            if show_search || line_filter_input_open || visual_select_mode.is_some() {
+            // only while typing in an overlay or while selecting text — a
+            // plain click (no drag) never shows it.
+            if show_search
+                || line_filter_input_open
+                || visual_select_mode
+                    .is_some_and(|mode| mode.selection.anchor != mode.selection.cursor)
+            {
                 terminal.show_cursor()?;
             } else {
                 terminal.hide_cursor()?;
@@ -909,9 +912,17 @@ pub(crate) fn run(
                 }
             }
             Event::Mouse(mouse) if show_help && !show_search => match mouse.kind {
-                MouseEventKind::ScrollUp => scroll_list_state_up(&mut help_state),
+                MouseEventKind::ScrollUp => {
+                    for _ in 0..MOUSE_SCROLL_LINES {
+                        help_state.select(Some(selected_index(&help_state).saturating_sub(1)));
+                    }
+                }
                 MouseEventKind::ScrollDown => {
-                    scroll_list_state_down(&mut help_state, workspace_help_entries().len())
+                    let len = workspace_help_entries().len();
+                    for _ in 0..MOUSE_SCROLL_LINES {
+                        let next = (selected_index(&help_state) + 1).min(len.saturating_sub(1));
+                        help_state.select((len > 0).then_some(next));
+                    }
                 }
                 _ => {}
             },
@@ -1068,6 +1079,13 @@ pub(crate) fn run(
                         if let Some(scroll_focus) =
                             workspace_hit_test(layout, mouse.column, mouse.row)
                         {
+                            // The wheel scrolls the content half under the
+                            // cursor; anywhere else falls back to the focused
+                            // half (hit_test is already None off-content).
+                            let scroll_half = content_frame
+                                .areas
+                                .hit_test(mouse.column, mouse.row)
+                                .unwrap_or(content_io_focus);
                             apply_workspace_mouse_scroll(
                                 scroll_focus,
                                 matches!(mouse.kind, MouseEventKind::ScrollUp),
@@ -1081,7 +1099,7 @@ pub(crate) fn run(
                                 &mut selected_dialogues,
                                 &mut range_anchor,
                                 &mut content_scrolls,
-                                content_io_focus,
+                                scroll_half,
                                 &mut content_cursor,
                                 content_frame.texts.block_slices(),
                             );

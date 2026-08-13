@@ -11,14 +11,16 @@ use crate::tui::content::view::{
     ContentPosition, ContentSelection, ContentSelectionKind, ContentViewMode,
 };
 use crate::tui::workspace::{
-    selected_index, ContentIoFocus, ContentScrolls, WorkspaceDialogue, WorkspaceFocus,
-    WorkspacePickedContent, WorkspaceSession, WorkspaceSource,
+    ContentIoFocus, ContentScrolls, WorkspaceDialogue, WorkspaceFocus, WorkspacePickedContent,
+    WorkspaceSession, WorkspaceSource,
 };
 
 use super::content::workspace_picked_content;
 use super::nav::{move_workspace_cursor_down, move_workspace_cursor_up};
 
-const MOUSE_SCROLL_LINES: usize = 1;
+/// Lines per wheel notch: web-like scroll steps (lists move selection by the
+/// same amount, content by the same line count).
+pub(super) const MOUSE_SCROLL_LINES: usize = 3;
 #[derive(Clone, Copy)]
 pub(super) struct VisualSelectMode {
     pub(super) selection: ContentSelection,
@@ -338,19 +340,6 @@ pub(super) fn workspace_picked_content_for_visual_selection(
     }
 }
 
-pub(super) fn scroll_list_state_up(state: &mut ListState) {
-    for _ in 0..MOUSE_SCROLL_LINES {
-        state.select(Some(selected_index(state).saturating_sub(1)));
-    }
-}
-
-pub(super) fn scroll_list_state_down(state: &mut ListState, len: usize) {
-    for _ in 0..MOUSE_SCROLL_LINES {
-        let next = (selected_index(state) + 1).min(len.saturating_sub(1));
-        state.select((len > 0).then_some(next));
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn apply_workspace_mouse_scroll(
     focus: WorkspaceFocus,
@@ -373,9 +362,9 @@ pub(super) fn apply_workspace_mouse_scroll(
         // The wheel keeps smooth line scrolling; j/k navigates blocks.
         let scroll = content_scrolls.get(content_io_focus);
         let next = if scroll_up {
-            scroll.saturating_sub(1)
+            scroll.saturating_sub(MOUSE_SCROLL_LINES)
         } else {
-            scroll.saturating_add(1)
+            scroll.saturating_add(MOUSE_SCROLL_LINES)
         };
         content_scrolls.set(content_io_focus, next);
         return;
