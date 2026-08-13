@@ -185,6 +185,16 @@ fn markdown_line_parts(line: &str) -> MarkdownLineParts<'_> {
         };
     }
 
+    // Read-mode fold summaries ("tools: Bash x2", "thinking x7").
+    if let Some(style) = fold_summary_style(trimmed) {
+        return MarkdownLineParts {
+            prefix: leading.to_string(),
+            prefix_style: Style::default(),
+            content: trimmed,
+            content_style: style,
+        };
+    }
+
     if let Some(rest) = trimmed.strip_prefix("> ") {
         return MarkdownLineParts {
             prefix: format!("{leading}> "),
@@ -723,15 +733,33 @@ fn agent_heading_style(text: &str) -> Option<Style> {
     Some(Style::default().fg(color).add_modifier(Modifier::BOLD))
 }
 
-/// Style for `<:channel:…:>` structure markers (tools/skills/thinking/mcp).
+/// Style for `<:channel:…:>` structure markers (tools/skills/thinking/mcp)
+/// and read-mode fold summaries: structural content renders in a subdued
+/// gray in every content mode, distinct from the default-foreground body.
 fn structure_marker_style(text: &str) -> Option<Style> {
-    // `<:/…:>` and ` result:>` are subsumed by the broader `<:` / ` result:`
-    // forms below, so they need no extra alternatives of their own.
     if !text.starts_with("<:") {
         return None;
     }
-    let is_result = text.contains(" result:");
-    Some(crate::tui::theme::structure_style(is_result))
+    Some(structural_gray_style())
+}
+
+/// Read-mode fold summaries produced by `collapse_structure_markers`
+/// (content/text.rs): `tools: …`, `mcp: …`, `skills: …`, `thinking xN`.
+fn fold_summary_style(text: &str) -> Option<Style> {
+    let channel = ["tools:", "mcp:", "skills:"]
+        .iter()
+        .any(|prefix| text.starts_with(prefix));
+    let thinking = text.strip_prefix("thinking").is_some_and(|rest| {
+        rest.is_empty()
+            || rest.strip_prefix(" x").is_some_and(|count| {
+                !count.is_empty() && count.chars().all(|ch| ch.is_ascii_digit())
+            })
+    });
+    (channel || thinking).then(structural_gray_style)
+}
+
+fn structural_gray_style() -> Style {
+    Style::default().fg(crate::tui::theme::muted())
 }
 
 fn heading_style(level: usize) -> Style {
@@ -816,27 +844,43 @@ mod tests {
         assert_eq!(
             lines[0].line.spans[1].style.fg,
             Some(crate::tui::theme::structure_color(false))
-        ); // Command
-        assert_eq!(
-            lines[1].line.spans[0].style.fg,
-            Some(crate::tui::theme::structure_color(false))
-        ); // tool call
-        assert_eq!(
-            lines[2].line.spans[0].style.fg,
-            Some(crate::tui::theme::structure_color(true))
-        ); // tool result
-        assert_eq!(
-            lines[3].line.spans[0].style.fg,
-            Some(crate::tui::theme::structure_color(false))
-        ); // skill
-        assert_eq!(
-            lines[4].line.spans[0].style.fg,
-            Some(crate::tui::theme::structure_color(false))
-        ); // thinking
+        ); // Command heading stays amber
+        for marker in [1, 2, 3, 4] {
+            assert_eq!(
+                lines[marker].line.spans[0].style.fg,
+                Some(crate::tui::theme::muted()),
+                "structure marker line {marker} must render gray"
+            );
+        }
         assert_eq!(
             lines[5].line.spans[1].style.fg,
             Some(crate::tui::theme::failure())
         ); // Error
+    }
+
+    #[test]
+    fn renders_read_mode_fold_summaries_in_gray() {
+        let lines = render_markdown_window(
+            &[
+                "tools: Bash x2",
+                "mcp: read_file",
+                "skills: sivtr-memory",
+                "thinking",
+                "thinking x7",
+            ],
+            0,
+            5,
+            80,
+        );
+
+        for line in lines {
+            assert_eq!(
+                line.line.spans[0].style.fg,
+                Some(crate::tui::theme::muted()),
+                "fold summary must render gray: {:?}",
+                line.line.spans[0].content
+            );
+        }
     }
 
     #[test]

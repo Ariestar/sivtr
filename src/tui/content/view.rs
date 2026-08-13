@@ -374,17 +374,16 @@ fn visible_content_lines(
         .collect()
 }
 
+/// Lay the document out per mode. Read/fold renders markdown (tables, code
+/// fences, headings, links); raw/full keeps the text literal but still
+/// styles structure markers in gray — so both modes share one body/structure
+/// color treatment and differ only in markdown layout.
 fn all_content_lines(text: &str, width: usize, mode: ContentViewMode) -> Vec<ContentLine> {
     let lines = raw_lines(text);
     let logical_lines = match mode {
         ContentViewMode::Raw => lines
             .iter()
-            .map(|line| Line::from((*line).to_string()))
-            .map(|line| ContentLine {
-                line,
-                kind: MarkdownLineKind::Normal,
-                links: Vec::new(),
-            })
+            .map(|line| raw_content_line(line))
             .collect::<Vec<_>>(),
         ContentViewMode::Reading => render_markdown_lines(&lines, width)
             .into_iter()
@@ -408,6 +407,22 @@ fn all_content_lines(text: &str, width: usize, mode: ContentViewMode) -> Vec<Con
         .into_iter()
         .flat_map(|line| fit_content_line(line, width))
         .collect()
+}
+
+/// Literal rendering for raw/full content: no markdown layout, but
+/// `<:channel:…:>` structure markers use the same structural gray as
+/// read/fold summaries so the two modes stay visually consistent.
+fn raw_content_line(line: &str) -> ContentLine {
+    let style = if line.starts_with("<:") {
+        Style::default().fg(crate::tui::theme::muted())
+    } else {
+        Style::default()
+    };
+    ContentLine {
+        line: Line::from(Span::styled(line.to_string(), style)),
+        kind: MarkdownLineKind::Normal,
+        links: Vec::new(),
+    }
 }
 
 /// Lay out the document and converge the gutter width (digit count of the
@@ -1395,13 +1410,34 @@ mod tests {
     }
 
     #[test]
-    fn raw_content_lines_preserve_markdown_syntax() {
-        let rendered =
-            render_content_lines("```text\n**bold**\n```", 0, 3, None, ContentViewMode::Raw);
+    fn raw_mode_keeps_literal_layout_but_styles_markers_gray() {
+        // Raw/full renders tables, code fences, and inline markup literally —
+        // no markdown layout — while `<:…:>` structure markers share the same
+        // structural gray as read-mode fold summaries.
+        let rendered = render_content_lines(
+            "plain body\n<:tool:bash call:>\n```\n**bold**\n```\n| a | b |",
+            0,
+            6,
+            None,
+            ContentViewMode::Raw,
+        );
 
-        assert_eq!(rendered.lines[0].spans[0].content.as_ref(), "```text");
-        assert_eq!(rendered.lines[1].spans[0].content.as_ref(), "**bold**");
+        assert_eq!(rendered.lines[0].spans[0].content.as_ref(), "plain body");
+        assert_eq!(rendered.lines[0].spans[0].style.fg, None);
+        assert_eq!(
+            rendered.lines[1].spans[0].content.as_ref(),
+            "<:tool:bash call:>"
+        );
+        assert_eq!(
+            rendered.lines[1].spans[0].style.fg,
+            Some(crate::tui::theme::muted())
+        );
+        // Literal: fences, emphasis, and table pipes stay as-is.
         assert_eq!(rendered.lines[2].spans[0].content.as_ref(), "```");
+        assert_eq!(rendered.lines[3].spans[0].content.as_ref(), "**bold**");
+        assert_eq!(rendered.lines[4].spans[0].content.as_ref(), "```");
+        assert_eq!(rendered.lines[5].spans[0].content.as_ref(), "| a | b |");
+        assert_eq!(rendered.lines[5].spans[0].style.fg, None);
     }
 
     #[test]
