@@ -228,7 +228,8 @@ fn reading_mode_folds_structure_and_raw_expands() {
     assert!(raw_io.output.contains("cargo test"));
     assert!(raw_io.output.contains("<:tool:Bash call:>"));
     assert!(raw_io.output.contains("<:/tool:Bash call:>"));
-    assert!(raw_io.output.contains("<:tool:Bash result:>"));
+    // Known results use the `>` output format.
+    assert!(raw_io.output.contains("> ok"));
     assert!(raw_io.output.contains("ok"));
     assert!(raw_io.output.contains("answer"));
     assert!(!raw.contains("codex/session"));
@@ -302,7 +303,7 @@ fn reading_mode_collapses_adjacent_structure_runs() {
     assert!(reading_io.input.contains("do it"));
     // Adjacent same-kind structure parts fold into one run tag each.
     let output = &reading_io.output;
-    assert!(output.contains("<:tool x2:>"));
+    assert!(output.contains("<:bash, read:>"));
     assert!(!output.contains("<:tool:Bash call:>"));
     assert!(!output.contains("<:tool:Read call:>"));
     let input = &reading_io.input;
@@ -372,7 +373,7 @@ fn reading_mode_folds_consecutive_same_kind_runs() {
     // The four output-half tool calls fold into one run tag.
     assert!(reading_io.input.contains("middle note"));
     let output = &reading_io.output;
-    assert!(output.contains("<:tool x4:>"));
+    assert!(output.contains("<:bash x3, read:>"));
     assert!(!output.contains("<:tool:Bash call:>"));
     assert!(!output.contains("file"));
     assert!(!output.contains("pwd"));

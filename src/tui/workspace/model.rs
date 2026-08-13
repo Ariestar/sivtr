@@ -264,7 +264,7 @@ impl WorkspaceDialogue {
             let segment = BlockText {
                 id: 0,
                 text: if shown {
-                    sivtr_core::record::format_work_part(part)
+                    crate::tui::content::tool::part_body_text(part)
                 } else {
                     fold_label_for_part(part)
                 },

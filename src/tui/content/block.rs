@@ -12,6 +12,7 @@
 use sivtr_core::record::{WorkPart, WorkPartData, WorkPartKind, WorkRecord};
 
 use crate::tui::content::io::{ContentIoFocus, ExpandedBlocks};
+use crate::tui::content::tool::{part_body_text, tool_display_name, tool_tag_for_part};
 
 /// A foldable content block: the parts it owns, the kind that drives its
 /// fold default and collapsed tag (the first part's kind), and — for runs —
@@ -54,26 +55,24 @@ impl Block {
     pub(crate) fn body(&self, record: &WorkRecord) -> String {
         self.parts
             .iter()
-            .map(|&idx| {
-                let part = &record.parts[idx];
-                if part.kind().is_structure() {
-                    sivtr_core::record::format_work_part(part)
-                } else {
-                    part.text().into_owned()
-                }
-            })
+            .map(|&idx| part_body_text(&record.parts[idx]))
             .collect::<Vec<_>>()
             .join("\n")
     }
 
     /// Collapsed tag: `<:kind xN:>` for a run. Members list every kind in
     /// order with its count, repeats collapsed to `kind xN` and singles as
-    /// the bare kind — `<:tool x2, thinking:>` — instead of a `+` mashup.
+    /// the bare kind — `<:bash, thinking, read:>` — instead of a `+` mashup.
     pub(crate) fn fold_label(&self, record: &WorkRecord) -> String {
         if !self.children.is_empty() {
-            let mut kinds: Vec<(&str, usize)> = Vec::new();
+            let mut kinds: Vec<(String, usize)> = Vec::new();
             for child in &self.children {
-                let name = kind_name(child.kind);
+                let name = match &record.parts[child.parts[0]].data {
+                    WorkPartData::ToolCall { tool, .. } | WorkPartData::ToolResult { tool, .. } => {
+                        tool_display_name(tool.as_deref().unwrap_or_default())
+                    }
+                    _ => kind_name(child.kind).to_string(),
+                };
                 match kinds.iter_mut().find(|(kind, _)| *kind == name) {
                     Some((_, count)) => *count += 1,
                     None => kinds.push((name, 1)),
@@ -85,7 +84,7 @@ impl Block {
                     if count > 1 {
                         format!("{name} x{count}")
                     } else {
-                        name.to_string()
+                        name
                     }
                 })
                 .collect::<Vec<_>>()
@@ -182,9 +181,13 @@ fn assign_ids(block: &mut Block, next: &mut usize) {
     }
 }
 
-/// Collapsed tag for one part: the structure marker with the tool
-/// description when present, or a plain `<:kind:>` tag for body parts.
+/// Collapsed tag for one part: the per-tool tag (`<:read: path:>`) for known
+/// tools, otherwise the structure marker with the tool description when
+/// present, or a plain `<:kind:>` tag for body parts.
 pub(crate) fn fold_label_for_part(part: &WorkPart) -> String {
+    if let Some(tag) = tool_tag_for_part(part) {
+        return tag;
+    }
     if part.kind().is_structure() {
         let marker = part
             .kind()
@@ -423,7 +426,7 @@ mod tests {
         let blocks = half_blocks(&rec, false);
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].children.len(), 2);
-        assert_eq!(blocks[0].fold_label(&rec), "<:tool x2:>");
+        assert_eq!(blocks[0].fold_label(&rec), "<:bash, read:>");
     }
 
     #[test]
@@ -436,7 +439,7 @@ mod tests {
         let blocks = half_blocks(&rec, false);
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].children.len(), 3);
-        assert_eq!(blocks[0].fold_label(&rec), "<:tool x2, thinking:>");
+        assert_eq!(blocks[0].fold_label(&rec), "<:bash, thinking, read:>");
         // A body part after the series starts a new block.
         let rec = record(vec![
             tool_part(1, "Bash", "ls"),
@@ -469,7 +472,7 @@ mod tests {
         let output = render_half(&rec, false, true, &expanded);
         // Body block shows its text; the tool block folds to its tag.
         assert_eq!(texts(input), vec!["question"]);
-        assert_eq!(texts(output), vec!["<:tool:Bash call:>"]);
+        assert_eq!(texts(output), vec!["<:bash: ls:>"]);
     }
 
     #[test]
@@ -490,9 +493,7 @@ mod tests {
         let input = render_half(&rec, true, false, &expanded);
         let output = render_half(&rec, false, false, &expanded);
         assert_eq!(texts(input), vec!["question"]);
-        assert!(output[0].text.contains("<:tool:Bash call:>"));
-        assert!(output[0].text.contains("ls"));
-        assert!(output[0].text.contains("<:/tool:Bash call:>"));
+        assert_eq!(output[0].text, "$ ls");
     }
 
     #[test]
@@ -510,14 +511,14 @@ mod tests {
         let mut expanded = ExpandedBlocks::default();
         // Folded: the run collapses to its tag.
         let folded = render_half(&rec, false, true, &expanded);
-        assert_eq!(texts(folded), vec!["<:tool x2:>"]);
+        assert_eq!(texts(folded), vec!["<:bash, read:>"]);
         // Expanded: the tag stays as the group header, members below it as
         // folded lines, joined without blank lines (tight).
         expanded.toggle(ContentIoFocus::Output, 0);
         let shown = render_half(&rec, false, true, &expanded);
         assert_eq!(
             texts(shown.clone()),
-            vec!["<:tool x2:>", "<:tool:Bash call:>", "<:tool:Read call:>"]
+            vec!["<:bash, read:>", "<:bash: ls:>", "<:tool:Read call:>"]
         );
         // Members join on adjacent lines; only the last segment closes the
         // group with a blank line.
@@ -535,9 +536,8 @@ mod tests {
         expanded.toggle(ContentIoFocus::Output, 1); // first member open
         let shown = render_half(&rec, false, true, &expanded);
         assert_eq!(shown.len(), 3);
-        assert_eq!(shown[0].text, "<:tool x2:>");
-        assert!(shown[1].text.contains("ls"));
-        assert!(shown[1].text.contains("<:/tool:Bash call:>"));
+        assert_eq!(shown[0].text, "<:bash, read:>");
+        assert_eq!(shown[1].text, "$ ls");
         assert_eq!(shown[2].text, "<:tool:Read call:>");
     }
 

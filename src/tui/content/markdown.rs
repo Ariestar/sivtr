@@ -272,6 +272,17 @@ fn markdown_line_parts(line: &str) -> MarkdownLineParts<'_> {
         };
     }
 
+    // Tool input line (`$ read src/main.rs:12-30`): the `$` marker is the
+    // highlighted prompt; the command itself reads in the default color.
+    if let Some(rest) = trimmed.strip_prefix("$ ") {
+        return MarkdownLineParts {
+            prefix: format!("{leading}$ "),
+            prefix_style: tool_input_marker_style(),
+            content: rest,
+            content_style: Style::default(),
+        };
+    }
+
     if let Some(rest) = trimmed.strip_prefix("> ") {
         return MarkdownLineParts {
             prefix: format!("{leading}> "),
@@ -824,6 +835,14 @@ fn structural_gray_style() -> Style {
     Style::default().fg(crate::tui::theme::muted())
 }
 
+/// The `$` prompt marker of a tool input line: muted but bold so the
+/// instruction stands out from surrounding output.
+fn tool_input_marker_style() -> Style {
+    Style::default()
+        .fg(crate::tui::theme::muted())
+        .add_modifier(Modifier::BOLD)
+}
+
 fn heading_style(level: usize) -> Style {
     match level {
         1 => Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
@@ -1080,6 +1099,25 @@ mod tests {
         assert_eq!(
             lines[5].line.spans[0].content.as_ref(),
             "└───────┴──────────────┘"
+        );
+    }
+
+    #[test]
+    fn styles_tool_input_lines_with_a_marker_prefix() {
+        let lines = render_markdown_window(&["$ read src/main.rs:12-30"], 0, 1, 80);
+
+        assert_eq!(lines[0].line.spans[0].content.as_ref(), "$ ");
+        assert_eq!(
+            lines[0].line.spans[0].style.fg,
+            Some(crate::tui::theme::muted())
+        );
+        assert!(lines[0].line.spans[0]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD));
+        assert_eq!(
+            lines[0].line.spans[1].content.as_ref(),
+            "read src/main.rs:12-30"
         );
     }
 

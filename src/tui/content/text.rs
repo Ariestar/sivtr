@@ -164,7 +164,7 @@ mod tests {
         let io = content_io_from_record(&rec, true, &ExpandedBlocks::default());
         let output = &io.output;
         // The two consecutive tool calls fold into one run tag.
-        assert!(output.contains("<:tool x2:>"));
+        assert!(output.contains("<:bash, read:>"));
         assert!(!output.contains("ls"));
         assert!(!output.contains("file"));
 
@@ -173,15 +173,15 @@ mod tests {
         let io = content_io_from_record(&rec, true, &expanded);
         let output = &io.output;
         // The run opens to its member tags; bodies stay folded.
-        assert!(output.contains("<:tool:Bash call:>"));
+        assert!(output.contains("<:bash: ls:>"));
         assert!(output.contains("<:tool:Read call:>"));
-        assert!(!output.contains("ls"));
+        assert!(!output.contains("$ ls"));
         assert!(!output.contains("file"));
 
         // Opening a member shows its body.
         expanded.toggle(ContentIoFocus::Output, 1);
         let io = content_io_from_record(&rec, true, &expanded);
-        assert!(io.output.contains("ls"));
+        assert!(io.output.contains("$ ls"));
     }
 
     #[test]
@@ -190,9 +190,7 @@ mod tests {
         let mut expanded = ExpandedBlocks::default();
         expanded.toggle(ContentIoFocus::Output, 0);
         let io = content_io_from_record(&rec, false, &expanded);
-        assert!(io.output.contains("<:tool:Bash call:>"));
-        assert!(io.output.contains("ls"));
-        assert!(io.output.contains("<:/tool:Bash call:>"));
+        assert_eq!(io.output, "$ ls");
     }
 
     #[test]
@@ -206,7 +204,7 @@ mod tests {
         let output = &io.output;
         // Collapsed: the call+result pair and the Read call fold into one
         // run tag; the result payload stays hidden.
-        assert!(output.contains("<:tool x2:>"));
+        assert!(output.contains("<:bash, read:>"));
         assert!(!output.contains("<:tool:Bash result:>"));
         assert!(!output.contains("ok"));
         assert!(!output.contains("file"));
@@ -219,7 +217,7 @@ mod tests {
         let output = &io.output;
         // The call+result pair is one member; its collapsed tag is the call
         // tag, so the result marker only appears once the member opens.
-        assert!(output.contains("<:tool:Bash call:>"));
+        assert!(output.contains("<:bash: ls:>"));
         assert!(output.contains("<:tool:Read call:>"));
         assert!(!output.contains("<:tool:Bash result:>"));
         assert!(!output.contains("ok"));
@@ -232,7 +230,7 @@ mod tests {
     }
 
     #[test]
-    fn fold_label_shows_tool_description_when_present() {
+    fn fold_label_uses_input_expression_over_description() {
         let rec = record(vec![WorkPart {
             seq: 1,
             occurred_at: None,
@@ -246,33 +244,14 @@ mod tests {
             },
         }]);
         let io = content_io_from_record(&rec, true, &ExpandedBlocks::default());
-        assert!(io
-            .output
-            .contains("<:tool:Bash call: Review working tree:>"));
+        // The input expression replaces the description in the tag.
+        assert!(io.output.contains("<:bash: git diff:>"));
+        assert!(!io.output.contains("Review working tree"));
 
-        // Long descriptions are truncated to fit the tag line.
-        let rec = record(vec![WorkPart {
-            seq: 1,
-            occurred_at: None,
-            data: WorkPartData::ToolCall {
-                call_id: None,
-                tool: Some("Bash".to_string()),
-                input: serde_json::json!({
-                    "command": "git diff",
-                    "description": "Review working tree and diff size for this change, then summarize",
-                }),
-            },
-        }]);
-        let io = content_io_from_record(&rec, true, &ExpandedBlocks::default());
-        let tag = io.output.find("<:tool:Bash call: ").expect("tag");
-        let line = &io.output[tag..];
-        assert!(line.starts_with("<:tool:Bash call: Review working tree and diff size for th…:>"));
-        assert!(!line.starts_with("<:tool:Bash call: Review working tree and diff size for this"));
-
-        // No description: the plain tag stays.
+        // A plain tool part still folds to its expression tag.
         let rec = record(vec![tool_part(1, "Bash", "ls")]);
         let io = content_io_from_record(&rec, true, &ExpandedBlocks::default());
-        assert!(io.output.contains("<:tool:Bash call:>"));
+        assert!(io.output.contains("<:bash: ls:>"));
     }
 
     #[test]
