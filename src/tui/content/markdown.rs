@@ -51,19 +51,90 @@ struct MarkdownLineParts<'a> {
 }
 
 pub(crate) fn render_markdown_lines(lines: &[&str], width: usize) -> Vec<MarkdownLine> {
-    let mut in_code_block = false;
     let table_rows = aligned_table_rows(lines);
     let mut rendered = Vec::with_capacity(lines.len());
+    let mut idx = 0;
 
-    lines.iter().enumerate().for_each(|(idx, line)| {
+    while idx < lines.len() {
         if let Some(table_rows) = &table_rows[idx] {
             rendered.extend(table_rows.iter().map(render_table_row));
-        } else {
-            rendered.push(render_markdown_line(line, &mut in_code_block, width));
+            idx += 1;
+            continue;
         }
-    });
+        let line = lines[idx];
+        // Fenced code blocks are gathered as one unit so diff-aware coloring
+        // can see the whole block before deciding how to paint its lines.
+        if let Some(language) = code_fence_language(line) {
+            rendered.push(MarkdownLine {
+                line: code_fence_line(language.clone()),
+                kind: MarkdownLineKind::CodeFence,
+                links: Vec::new(),
+            });
+            let mut body = Vec::new();
+            idx += 1;
+            while idx < lines.len() && code_fence_language(lines[idx]).is_none() {
+                body.push(lines[idx]);
+                idx += 1;
+            }
+            rendered.extend(render_code_block(&body, language.as_deref()));
+            if idx < lines.len() {
+                rendered.push(MarkdownLine {
+                    line: code_fence_line(None),
+                    kind: MarkdownLineKind::CodeFence,
+                    links: Vec::new(),
+                });
+                idx += 1;
+            }
+            continue;
+        }
+        rendered.push(render_markdown_line(line, width));
+        idx += 1;
+    }
 
     rendered
+}
+
+/// One fenced block: ` ```rust ` … ` ``` `. Diff-aware when the fence names
+/// `diff` or the body carries a unified-diff hunk header (`@@ …`).
+fn render_code_block(body: &[&str], language: Option<&str>) -> Vec<MarkdownLine> {
+    let is_diff = language == Some("diff") || body.iter().any(|line| is_diff_hunk_header(line));
+    body.iter()
+        .map(|line| MarkdownLine {
+            line: Line::from(vec![
+                Span::styled(CODE_INDENT, code_block_margin_style()),
+                Span::styled(line.to_string(), code_line_style(line, is_diff)),
+            ]),
+            kind: MarkdownLineKind::CodeBlock,
+            links: Vec::new(),
+        })
+        .collect()
+}
+
+/// Unified-diff hunk header: `@@ -1,3 +1,4 @@`.
+fn is_diff_hunk_header(line: &str) -> bool {
+    line.trim_start().starts_with("@@")
+}
+
+fn code_line_style(line: &str, is_diff: bool) -> Style {
+    if !is_diff {
+        return code_block_style();
+    }
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("@@") {
+        Style::default()
+            .fg(crate::tui::theme::accent())
+            .add_modifier(Modifier::BOLD)
+    } else if trimmed.starts_with("+++") || trimmed.starts_with("---") {
+        Style::default()
+            .fg(crate::tui::theme::muted())
+            .add_modifier(Modifier::BOLD)
+    } else if trimmed.starts_with('+') {
+        Style::default().fg(crate::tui::theme::success())
+    } else if trimmed.starts_with('-') {
+        Style::default().fg(crate::tui::theme::failure())
+    } else {
+        code_block_style()
+    }
 }
 
 #[cfg(test)]
@@ -80,28 +151,7 @@ fn render_markdown_window(
         .collect()
 }
 
-fn render_markdown_line(line: &str, in_code_block: &mut bool, width: usize) -> MarkdownLine {
-    if let Some(language) = code_fence_language(line) {
-        let opening = !*in_code_block;
-        *in_code_block = !*in_code_block;
-        return MarkdownLine {
-            line: code_fence_line(opening.then_some(language).flatten()),
-            kind: MarkdownLineKind::CodeFence,
-            links: Vec::new(),
-        };
-    }
-
-    if *in_code_block {
-        return MarkdownLine {
-            line: Line::from(vec![
-                Span::styled(CODE_INDENT, code_block_margin_style()),
-                Span::styled(line.to_string(), code_block_style()),
-            ]),
-            kind: MarkdownLineKind::CodeBlock,
-            links: Vec::new(),
-        };
-    }
-
+fn render_markdown_line(line: &str, width: usize) -> MarkdownLine {
     if is_horizontal_rule(line) {
         return MarkdownLine {
             line: Line::from(Span::styled(
@@ -1032,5 +1082,78 @@ mod tests {
 
         assert_eq!(lines[0].kind, MarkdownLineKind::CodeFence);
         assert_eq!(lines[0].line.spans[0].content.as_ref(), "  sql");
+    }
+
+    #[test]
+    fn renders_diff_fenced_blocks_with_change_colors() {
+        let lines = render_markdown_window(
+            &[
+                "```diff",
+                "@@ -1,3 +1,4 @@",
+                " base",
+                "-removed",
+                "+added",
+                "+++ b/file",
+                "```",
+            ],
+            0,
+            6,
+            80,
+        );
+
+        assert_eq!(lines[0].line.spans[0].content.as_ref(), "  diff");
+        assert_eq!(
+            lines[1].line.spans[1].style.fg,
+            Some(crate::tui::theme::accent())
+        ); // @@ hunk
+        assert_eq!(
+            lines[2].line.spans[1].style.fg,
+            Some(crate::tui::theme::code())
+        ); // context
+        assert_eq!(
+            lines[3].line.spans[1].style.fg,
+            Some(crate::tui::theme::failure())
+        ); // - removed
+        assert_eq!(
+            lines[4].line.spans[1].style.fg,
+            Some(crate::tui::theme::success())
+        ); // + added
+        assert!(lines[5].line.spans[1]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn auto_detects_unified_diffs_in_plain_fenced_blocks() {
+        let lines = render_markdown_window(&["```", "@@ -1 +1 @@", "-a", "+b", "```"], 0, 5, 80);
+
+        assert_eq!(
+            lines[1].line.spans[1].style.fg,
+            Some(crate::tui::theme::accent())
+        );
+        assert_eq!(
+            lines[2].line.spans[1].style.fg,
+            Some(crate::tui::theme::failure())
+        );
+        assert_eq!(
+            lines[3].line.spans[1].style.fg,
+            Some(crate::tui::theme::success())
+        );
+    }
+
+    #[test]
+    fn non_diff_code_blocks_keep_plain_code_style() {
+        let lines = render_markdown_window(&["```text", "- not a diff", "+ nope", "```"], 0, 3, 80);
+
+        // No hunk header: the block is not a diff, so +/- lines stay code-colored.
+        assert_eq!(
+            lines[1].line.spans[1].style.fg,
+            Some(crate::tui::theme::code())
+        );
+        assert_eq!(
+            lines[2].line.spans[1].style.fg,
+            Some(crate::tui::theme::code())
+        );
     }
 }
