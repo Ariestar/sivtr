@@ -523,11 +523,7 @@ impl WorkRecord {
         }
     }
 
-    pub fn copy_text(&self, mode: RecordTextMode, include_prompt: bool) -> RecordText {
-        self.copy_text_with_prompt(mode, include_prompt, None)
-    }
-
-    pub fn copy_text_with_prompt(
+    pub fn copy_text(
         &self,
         mode: RecordTextMode,
         include_prompt: bool,
@@ -548,10 +544,10 @@ impl WorkRecord {
 
     pub fn copy_parts(&self, include_prompt: bool) -> WorkRecordCopyParts {
         WorkRecordCopyParts {
-            input: self.copy_text_with_prompt(RecordTextMode::Input, include_prompt, None),
-            output: self.copy_text_with_prompt(RecordTextMode::Output, include_prompt, None),
-            block: self.copy_text_with_prompt(RecordTextMode::Combined, include_prompt, None),
-            command: self.copy_text_with_prompt(RecordTextMode::Command, false, None),
+            input: self.copy_text(RecordTextMode::Input, include_prompt, None),
+            output: self.copy_text(RecordTextMode::Output, include_prompt, None),
+            block: self.copy_text(RecordTextMode::Combined, include_prompt, None),
+            command: self.copy_text(RecordTextMode::Command, false, None),
         }
     }
 
@@ -694,19 +690,20 @@ fn terminal_input_text(
 
     let plain_prompt = render_input(prompt, command);
     let ansi_prompt = render_input(prompt_ansi.unwrap_or(prompt), command);
+    // The override only rewrites the prompt when there is a command to attach
+    // it to; otherwise both branches fall back to the recorded prompt, keeping
+    // the ANSI rendering intact.
     let plain = match prompt_override {
         Some(prompt_override) if !command.is_empty() => {
             render_prompt_override(prompt_override, command)
         }
-        Some(_) => plain_prompt.clone(),
-        None => plain_prompt.clone(),
+        _ => plain_prompt,
     };
     let ansi = match prompt_override {
         Some(prompt_override) if !command.is_empty() => {
             render_prompt_override(prompt_override, command)
         }
-        Some(_) => plain_prompt,
-        None => ansi_prompt,
+        _ => ansi_prompt,
     };
     RecordText::with_ansi(plain, ansi)
 }

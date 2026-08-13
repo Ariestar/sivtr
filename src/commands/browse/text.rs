@@ -78,7 +78,7 @@ pub fn record_to_copy_parts(
 ) -> WorkspaceCopyParts {
     match selection_mode {
         AgentSelection::LastBlocks(_) | AgentSelection::All => WorkspaceCopyParts::from_block(
-            record_text_to_pair(record.copy_text(RecordTextMode::Combined, false)),
+            record_text_to_pair(record.copy_text(RecordTextMode::Combined, false, None)),
         ),
         _ => WorkspaceCopyParts::from(record.copy_parts(false)),
     }

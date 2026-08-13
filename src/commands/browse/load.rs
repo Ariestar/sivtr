@@ -760,7 +760,12 @@ pub fn sessions_from_records(
             .max()
             .unwrap_or(UNIX_EPOCH);
         let search_title = session_search_title(&session_id, &records);
-        let title = session_title_with_id(search_title.clone(), Some(session_id.as_str()));
+        let short_id = session_id.chars().take(8).collect::<String>();
+        let title = if short_id.is_empty() {
+            search_title.clone()
+        } else {
+            format!("{search_title}  [{short_id}]")
+        };
         let body_loaded = !records.is_empty();
         sessions.push(WorkspaceSession {
             source: source.clone(),
@@ -787,14 +792,6 @@ fn session_search_title(session_id: &str, records: &[WorkRecord]) -> String {
             }
         })
         .unwrap_or_else(|| session_id.to_string())
-}
-
-fn session_title_with_id(title: String, id: Option<&str>) -> String {
-    let id = id.map(|value| value.chars().take(8).collect::<String>());
-    match id {
-        Some(id) if !id.is_empty() => format!("{title}  [{id}]"),
-        _ => title,
-    }
 }
 
 fn record_modified(record: &WorkRecord) -> Option<SystemTime> {
