@@ -166,7 +166,7 @@ impl Theme {
             dim: Color::Rgb(71, 85, 105),               // slate-600
             local_origin: Color::Rgb(52, 211, 153),     // emerald-400
             remote_origin: Color::Rgb(244, 114, 182),   // pink-400
-            focus_bg: Color::Rgb(148, 163, 184),        // slate-400 (faint gray tint)
+            focus_bg: Color::Rgb(203, 213, 225),        // slate-300 (light gray tint)
             selected_bg: Color::Rgb(51, 65, 85),        // slate-700
             selected_fg: Color::Rgb(226, 232, 240),     // slate-200
             range_fg: Color::Rgb(251, 191, 36),         // amber-400
