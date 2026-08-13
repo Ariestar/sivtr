@@ -36,13 +36,11 @@ impl ContentViewMode {
 }
 
 pub(crate) struct ContentView<'a> {
-    pub(crate) text: &'a str,
-    /// Per-block display segments (tag or body) that the text joins; drives
-    /// block hit-testing and the cursor highlight range.
-    pub(crate) blocks: &'a [BlockText],
+    /// Precomputed layout (lines + ownership + kinds) of the displayed text;
+    /// scroll only slices it.
+    pub(crate) layout: &'a ContentLayout,
     pub(crate) scroll: usize,
     pub(crate) search_regex: Option<&'a Regex>,
-    pub(crate) mode: ContentViewMode,
     pub(crate) selection: Option<ContentSelection>,
     /// Block under the keyboard/mouse cursor; its displayed line range is
     /// highlighted with the list-row focus style.
@@ -71,17 +69,85 @@ pub(crate) enum ContentSelectionKind {
 }
 
 #[derive(Clone)]
-struct ContentLine {
-    line: Line<'static>,
-    kind: MarkdownLineKind,
-    links: Vec<ContentLink>,
+pub(crate) struct ContentLine {
+    pub(crate) line: Line<'static>,
+    pub(crate) kind: MarkdownLineKind,
+    pub(crate) links: Vec<ContentLink>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct ContentLink {
-    start: usize,
-    end: usize,
-    target: String,
+pub(crate) struct ContentLink {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) target: String,
+}
+
+/// Precomputed display layout of one content half: the markdown+wrap lines,
+/// the block ownership per line, and the block-kind colors for the dot
+/// gutter. Scroll only slices [`Self::lines`]; the layout is rebuilt when
+/// the content changes, so wheel events never re-lay-out the text.
+#[derive(Clone, Default)]
+pub(crate) struct ContentLayout {
+    pub(crate) lines: Vec<ContentLine>,
+    pub(crate) ownership: Vec<Option<usize>>,
+    /// Dot color per block id (dense DFS ids; hidden ids keep a placeholder).
+    pub(crate) kinds: Vec<WorkPartKind>,
+}
+
+/// Lay one half out once: lines, per-line block ownership, and per-block
+/// kinds, all derived from the same content width so scroll, dots, and
+/// hit-testing agree.
+pub(crate) fn layout_content(
+    area: Rect,
+    text: &str,
+    blocks: &[BlockText],
+    mode: ContentViewMode,
+) -> ContentLayout {
+    let inner = panel_block(&Panel::new("", "", false)).inner(area);
+    let width = inner.width.saturating_sub(GUTTER_WIDTH) as usize;
+    let lines = all_content_lines(text, width, mode);
+    let mut kinds = vec![WorkPartKind::User; marked_mask_len(blocks)];
+    for block in blocks {
+        kinds[block.id] = block.kind;
+    }
+    ContentLayout {
+        lines,
+        ownership: block_ownership(width, blocks, mode),
+        kinds,
+    }
+}
+
+fn marked_mask_len(blocks: &[BlockText]) -> usize {
+    blocks
+        .iter()
+        .map(|block| block.id)
+        .max()
+        .map_or(0, |max| max + 1)
+}
+
+/// Map every displayed line of a half to the block that owns it. Each block
+/// is laid out independently and followed by one unowned separator line,
+/// which matches the `"\n\n"` join the pane text uses between segments; run
+/// members join on adjacent lines with no separator.
+fn block_ownership(
+    width: usize,
+    blocks: &[BlockText],
+    mode: ContentViewMode,
+) -> Vec<Option<usize>> {
+    let mut ownership = Vec::new();
+    for (idx, segment) in blocks.iter().enumerate() {
+        for _ in all_content_lines(&segment.text, width, mode) {
+            ownership.push(Some(segment.id));
+        }
+        if idx + 1 < blocks.len() && !segment.tight {
+            ownership.push(None);
+        }
+    }
+    if ownership.is_empty() {
+        // An empty half renders `<empty>`: one unowned line.
+        ownership.push(None);
+    }
+    ownership
 }
 
 pub(crate) fn render_content_view(
@@ -97,14 +163,15 @@ pub(crate) fn render_content_view(
         return;
     }
 
-    // Lay out the whole document once; the line count drives the gutter and
-    // the visible window is a slice of the same layout.
-    let (lines, chunks) = content_layout(area, view.text, view.mode);
-
+    // Scroll slices the cached layout; the layout itself is rebuilt only
+    // when the content changes.
+    let chunks = content_chunks(inner);
     let visible_height = inner.height as usize;
-    let total_lines = lines.len().max(1);
+    let total_lines = view.layout.lines.len().max(1);
     let scroll = view.scroll.min(total_lines.saturating_sub(1));
-    let visible: Vec<ContentLine> = lines
+    let visible: Vec<ContentLine> = view
+        .layout
+        .lines
         .iter()
         .skip(scroll)
         .take(visible_height)
@@ -112,17 +179,9 @@ pub(crate) fn render_content_view(
         .collect();
     let block_highlight = view
         .cursor_block
-        .and_then(|block| content_block_range(area, view.text, view.blocks, view.mode, block));
+        .and_then(|block| content_block_range(view.layout, block));
     frame.render_widget(
-        Paragraph::new(block_dot_lines(
-            area,
-            view.text,
-            view.blocks,
-            view.mode,
-            view.marked,
-            scroll,
-            &visible,
-        )),
+        Paragraph::new(block_dot_lines(view.layout, view.marked, scroll, &visible)),
         chunks[0],
     );
     frame.render_widget(
@@ -144,8 +203,24 @@ pub(crate) fn render_content_view(
     );
 }
 
-pub(crate) fn content_text_area(area: Rect, text: &str, mode: ContentViewMode) -> Rect {
-    content_layout(area, text, mode).1[1]
+/// Horizontal split of a panel's inner area: fixed dot gutter + content.
+fn content_chunks(inner: Rect) -> Rc<[Rect]> {
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(GUTTER_WIDTH), Constraint::Min(1)])
+        .split(inner)
+}
+
+/// Content column rect (the panel's inner area minus the fixed dot gutter);
+/// pure geometry, no layout.
+pub(crate) fn content_text_area(area: Rect) -> Rect {
+    let inner = panel_block(&Panel::new("", "", false)).inner(area);
+    Rect {
+        x: inner.x.saturating_add(GUTTER_WIDTH),
+        y: inner.y,
+        width: inner.width.saturating_sub(GUTTER_WIDTH),
+        height: inner.height,
+    }
 }
 
 pub(crate) fn content_link_at(
@@ -194,7 +269,7 @@ pub(crate) fn content_position_at(
     column: u16,
     row: u16,
 ) -> Option<ContentPosition> {
-    let content_area = content_text_area(area, text, mode);
+    let content_area = content_text_area(area);
     if content_area.width == 0
         || content_area.height == 0
         || column < content_area.x
@@ -238,59 +313,25 @@ pub(crate) fn content_row_in_text(
 /// between members of the same run), so every displayed line maps directly
 /// onto the block that produced it — tags, bodies, and close markers all
 /// belong to the same block.
-pub(crate) fn content_block_at(
-    area: Rect,
-    text: &str,
-    blocks: &[BlockText],
-    mode: ContentViewMode,
-    line: usize,
-) -> Option<usize> {
-    block_ownership(area, text, blocks, mode)
-        .get(line)
-        .copied()
-        .flatten()
+pub(crate) fn content_block_at(layout: &ContentLayout, line: usize) -> Option<usize> {
+    layout.ownership.get(line).copied().flatten()
 }
 
 /// Displayed line range (start..end, end exclusive) owned by `block`, if the
 /// block is present in the layout.
 pub(crate) fn content_block_range(
-    area: Rect,
-    text: &str,
-    blocks: &[BlockText],
-    mode: ContentViewMode,
+    layout: &ContentLayout,
     block: usize,
 ) -> Option<std::ops::Range<usize>> {
-    let ownership = block_ownership(area, text, blocks, mode);
-    let start = ownership.iter().position(|owner| *owner == Some(block))?;
-    let end = ownership.iter().rposition(|owner| *owner == Some(block))?;
+    let start = layout
+        .ownership
+        .iter()
+        .position(|owner| *owner == Some(block))?;
+    let end = layout
+        .ownership
+        .iter()
+        .rposition(|owner| *owner == Some(block))?;
     Some(start..end + 1)
-}
-
-/// Map every displayed line of a half to the block that owns it. Each block
-/// is laid out independently and followed by one unowned separator line,
-/// which matches the `"\n\n"` join the pane text uses between segments; run
-/// members join on adjacent lines with no separator.
-fn block_ownership(
-    area: Rect,
-    text: &str,
-    blocks: &[BlockText],
-    mode: ContentViewMode,
-) -> Vec<Option<usize>> {
-    let width = content_text_area(area, text, mode).width as usize;
-    let mut ownership = Vec::new();
-    for (idx, segment) in blocks.iter().enumerate() {
-        for _ in all_content_lines(&segment.text, width, mode) {
-            ownership.push(Some(segment.id));
-        }
-        if idx + 1 < blocks.len() && !segment.tight {
-            ownership.push(None);
-        }
-    }
-    if ownership.is_empty() {
-        // An empty half renders `<empty>`: one unowned line.
-        ownership.push(None);
-    }
-    ownership
 }
 
 pub(crate) fn content_position_in_text_row(
@@ -302,7 +343,7 @@ pub(crate) fn content_position_in_text_row(
     row: u16,
 ) -> Option<ContentPosition> {
     let inner = panel_block(&Panel::new("", "", false)).inner(area);
-    let content_area = content_text_area(area, text, mode);
+    let content_area = content_text_area(area);
     if inner.width == 0
         || inner.height == 0
         || content_area.width == 0
@@ -332,12 +373,10 @@ pub(crate) fn content_position_in_text_row(
 
 pub(crate) fn content_cursor_position(
     area: Rect,
-    text: &str,
     scroll: usize,
-    mode: ContentViewMode,
     position: ContentPosition,
 ) -> Option<Position> {
-    let content_area = content_text_area(area, text, mode);
+    let content_area = content_text_area(area);
     if content_area.width == 0
         || content_area.height == 0
         || position.line < scroll
@@ -363,7 +402,7 @@ pub(crate) fn clamp_content_position(
     mode: ContentViewMode,
     position: ContentPosition,
 ) -> ContentPosition {
-    let content_area = content_text_area(area, text, mode);
+    let content_area = content_text_area(area);
     let width = content_area.width as usize;
     let lines = all_content_lines(text, width, mode);
     let line = position.line.min(lines.len().saturating_sub(1));
@@ -380,7 +419,7 @@ pub(crate) fn selected_content_text(
     mode: ContentViewMode,
     selection: ContentSelection,
 ) -> String {
-    let content_area = content_text_area(area, text, mode);
+    let content_area = content_text_area(area);
     let width = content_area.width as usize;
     let lines = all_content_lines(text, width, mode);
     if lines.is_empty() {
@@ -414,7 +453,7 @@ fn clamp_content_selection(
         };
     }
 
-    let content_area = content_text_area(area, text, mode);
+    let content_area = content_text_area(area);
     let lines = all_content_lines(text, content_area.width as usize, mode);
     let max_line = lines.len().saturating_sub(1);
     let max_column = content_area.width.saturating_sub(1) as usize;
@@ -1088,17 +1127,12 @@ fn text_width(text: &str) -> usize {
 /// displayed line. Filled dots mark blocks selected for batch copy; the dot
 /// color follows the block kind so a conversation reads like a chat list.
 fn block_dot_lines(
-    area: Rect,
-    text: &str,
-    blocks: &[BlockText],
-    mode: ContentViewMode,
+    layout: &ContentLayout,
     marked: &[bool],
     scroll: usize,
     visible: &[ContentLine],
 ) -> Text<'static> {
-    let ownership = block_ownership(area, text, blocks, mode);
-    let kinds: std::collections::HashMap<usize, WorkPartKind> =
-        blocks.iter().map(|block| (block.id, block.kind)).collect();
+    let ownership = &layout.ownership;
     let lines = (scroll..scroll.saturating_add(visible.len()))
         .map(|idx| {
             let owner = ownership.get(idx).copied().flatten();
@@ -1111,7 +1145,7 @@ fn block_dot_lines(
                     let glyph = if marked { "●" } else { "○" };
                     Line::from(Span::styled(
                         glyph,
-                        Style::default().fg(block_dot_color(kinds.get(&block))),
+                        Style::default().fg(block_dot_color(layout.kinds.get(block))),
                     ))
                 }
                 _ => Line::from("  "),
@@ -1143,15 +1177,13 @@ fn block_dot_color(kind: Option<&WorkPartKind>) -> Color {
 /// is a click target for marking.
 pub(crate) fn content_dot_at(
     area: Rect,
-    text: &str,
-    blocks: &[BlockText],
-    mode: ContentViewMode,
+    layout: &ContentLayout,
     scroll: usize,
     column: u16,
     row: u16,
 ) -> Option<usize> {
     let inner = panel_block(&Panel::new("", "", false)).inner(area);
-    let content_area = content_text_area(area, text, mode);
+    let content_area = content_text_area(area);
     if content_area.width == 0
         || content_area.height == 0
         || column < inner.x
@@ -1162,7 +1194,7 @@ pub(crate) fn content_dot_at(
         return None;
     }
     let line = scroll.saturating_add((row - content_area.y) as usize);
-    content_block_at(area, text, blocks, mode, line)
+    content_block_at(layout, line)
 }
 
 fn styled_content_line(line: Line<'static>, search_regex: Option<&Regex>) -> Line<'static> {
@@ -1318,9 +1350,9 @@ fn raw_lines(text: &str) -> Vec<&str> {
 mod tests {
     use super::{
         content_block_at, content_dot_at, content_lines, content_link_at, content_position_at,
-        content_position_in_text_row, line_count, render_content_view, selected_content_text,
-        visible_content_lines, ContentPosition, ContentSelection, ContentSelectionKind,
-        ContentView, ContentViewMode,
+        content_position_in_text_row, layout_content, line_count, render_content_view,
+        selected_content_text, visible_content_lines, ContentPosition, ContentSelection,
+        ContentSelectionKind, ContentView, ContentViewMode,
     };
     use crate::tui::content::block::BlockText;
     use crate::tui::pane::Panel;
@@ -1737,8 +1769,10 @@ mod tests {
     fn render_content_view_shows_block_dots_in_the_gutter() {
         let backend = TestBackend::new(24, 6);
         let mut terminal = Terminal::new(backend).unwrap();
+        let area = Rect::new(0, 0, 24, 6);
         let blocks = vec![test_block(0, "alpha\nbeta"), test_block(1, "omega")];
         let text = blocks_text(&blocks);
+        let layout = layout_content(area, &text, &blocks, ContentViewMode::Reading);
         // Marked mask indexed by block id: block 1 is marked.
         let marked = [false, true];
 
@@ -1746,14 +1780,12 @@ mod tests {
             .draw(|frame| {
                 render_content_view(
                     frame,
-                    Rect::new(0, 0, 24, 6),
+                    area,
                     Panel::new("3", "Content (read)", true),
                     ContentView {
-                        text: &text,
-                        blocks: &blocks,
+                        layout: &layout,
                         scroll: 0,
                         search_regex: None,
-                        mode: ContentViewMode::Reading,
                         selection: None,
                         cursor_block: None,
                         marked: &marked,
@@ -1775,52 +1807,43 @@ mod tests {
         let area = Rect::new(0, 0, 24, 8);
         let blocks = vec![test_block(0, "alpha\nbeta"), test_block(1, "omega")];
         let text = blocks_text(&blocks);
+        let layout = layout_content(area, &text, &blocks, ContentViewMode::Reading);
         // Columns 1..3 are the dot gutter (column 0 is the panel border):
         // any line of a block maps to it.
-        assert_eq!(
-            content_dot_at(area, &text, &blocks, ContentViewMode::Reading, 0, 1, 1),
-            Some(0)
-        );
-        assert_eq!(
-            content_dot_at(area, &text, &blocks, ContentViewMode::Reading, 0, 2, 2),
-            Some(0)
-        );
-        assert_eq!(
-            content_dot_at(area, &text, &blocks, ContentViewMode::Reading, 0, 1, 4),
-            Some(1)
-        );
+        assert_eq!(content_dot_at(area, &layout, 0, 1, 1), Some(0));
+        assert_eq!(content_dot_at(area, &layout, 0, 2, 2), Some(0));
+        assert_eq!(content_dot_at(area, &layout, 0, 1, 4), Some(1));
         // The content column is not the dot gutter.
-        assert_eq!(
-            content_dot_at(area, &text, &blocks, ContentViewMode::Reading, 0, 3, 1),
-            None
-        );
+        assert_eq!(content_dot_at(area, &layout, 0, 3, 1), None);
         // The panel border is not the dot gutter.
-        assert_eq!(
-            content_dot_at(area, &text, &blocks, ContentViewMode::Reading, 0, 0, 1),
-            None
-        );
+        assert_eq!(content_dot_at(area, &layout, 0, 0, 1), None);
     }
 
     #[test]
     fn render_content_view_highlights_the_cursor_block() {
         let backend = TestBackend::new(40, 8);
         let mut terminal = Terminal::new(backend).expect("terminal from test backend");
+        let area = Rect::new(0, 0, 40, 8);
         let blocks = vec![
             test_block(0, "<:tool:Bash call:>\nbody\n<:/tool:Bash call:>"),
             test_block(1, "<:tool:Read call:>"),
         ];
+        let layout = layout_content(
+            area,
+            &blocks_text(&blocks),
+            &blocks,
+            ContentViewMode::Reading,
+        );
         terminal
             .draw(|frame| {
                 render_content_view(
                     frame,
-                    Rect::new(0, 0, 40, 8),
+                    area,
                     Panel::new("3", "Content (read)", true),
                     ContentView {
-                        text: &blocks_text(&blocks),
-                        blocks: &blocks,
+                        layout: &layout,
                         scroll: 0,
                         search_regex: None,
-                        mode: ContentViewMode::Reading,
                         selection: None,
                         cursor_block: Some(0),
                         marked: &[],
@@ -1896,7 +1919,8 @@ mod tests {
             test_block(2, "<:tool:B call:>"),
         ];
         let text = blocks_text(&blocks);
-        let (lines, _) = super::content_layout(area, &text, ContentViewMode::Reading);
+        let layout = layout_content(area, &text, &blocks, ContentViewMode::Reading);
+        let lines = &layout.lines;
         let tag_lines: Vec<usize> = lines
             .iter()
             .enumerate()
@@ -1915,19 +1939,10 @@ mod tests {
         // their raw text-line indices; the block lookup must follow the
         // display, not `text.lines()`.
         assert_ne!(tag_lines[0], 1, "wrapped body shifts the tag line index");
-        assert_eq!(
-            content_block_at(area, &text, &blocks, ContentViewMode::Reading, tag_lines[0]),
-            Some(1)
-        );
-        assert_eq!(
-            content_block_at(area, &text, &blocks, ContentViewMode::Reading, tag_lines[1]),
-            Some(2)
-        );
+        assert_eq!(content_block_at(&layout, tag_lines[0]), Some(1));
+        assert_eq!(content_block_at(&layout, tag_lines[1]), Some(2));
         // A wrapped body line belongs to its own block (every part is one).
-        assert_eq!(
-            content_block_at(area, &text, &blocks, ContentViewMode::Reading, 0),
-            Some(0)
-        );
+        assert_eq!(content_block_at(&layout, 0), Some(0));
     }
 
     #[test]
@@ -1938,17 +1953,12 @@ mod tests {
             test_block(1, "<:tool:Read call:>\nplain"),
         ];
         let text = blocks_text(&blocks);
-        let (lines, _) = super::content_layout(area, &text, ContentViewMode::Reading);
+        let layout = layout_content(area, &text, &blocks, ContentViewMode::Reading);
+        let lines = &layout.lines;
         // The tag, the expanded body, and the close marker all own block 0.
         for needle in ["<:tool:Bash call:>", "output line", "<:/tool:Bash call:>"] {
             assert_eq!(
-                content_block_at(
-                    area,
-                    &text,
-                    &blocks,
-                    ContentViewMode::Reading,
-                    displayed_line_of(&lines, needle)
-                ),
+                content_block_at(&layout, displayed_line_of(lines, needle)),
                 Some(0),
                 "{needle} should belong to block 0"
             );
@@ -1956,13 +1966,7 @@ mod tests {
         // The next block owns its tag and its plain body.
         for needle in ["<:tool:Read call:>", "plain"] {
             assert_eq!(
-                content_block_at(
-                    area,
-                    &text,
-                    &blocks,
-                    ContentViewMode::Reading,
-                    displayed_line_of(&lines, needle)
-                ),
+                content_block_at(&layout, displayed_line_of(lines, needle)),
                 Some(1),
                 "{needle} should belong to block 1"
             );
@@ -1981,7 +1985,8 @@ mod tests {
             test_block(1, "<:tool:Read call:>"),
         ];
         let text = blocks_text(&blocks);
-        let (lines, _) = super::content_layout(area, &text, ContentViewMode::Reading);
+        let layout = layout_content(area, &text, &blocks, ContentViewMode::Reading);
+        let lines = &layout.lines;
         // Everything from the call tag through the result close is block 0.
         for needle in [
             "<:tool:Bash call:>",
@@ -1991,20 +1996,17 @@ mod tests {
             "output",
             "<:/tool:Bash result:>",
         ] {
-            let line = displayed_line_of(&lines, needle);
+            let line = displayed_line_of(lines, needle);
             assert_eq!(
-                content_block_at(area, &text, &blocks, ContentViewMode::Reading, line),
+                content_block_at(&layout, line),
                 Some(0),
                 "line {line} ({needle}) should belong to the merged tool group"
             );
         }
         assert_eq!(
             content_block_at(
-                area,
-                &text,
-                &blocks,
-                ContentViewMode::Reading,
-                displayed_line_of(&lines, "<:tool:Read call:>")
+                &layout,
+                displayed_line_of(lines, "<:tool:Read call:>")
             ),
             Some(1)
         );

@@ -7,7 +7,9 @@ use ratatui::layout::Rect;
 use std::collections::HashSet;
 
 use crate::tui::content::block::BlockText;
-use crate::tui::content::view::{content_view_line_count, ContentViewMode};
+use crate::tui::content::view::{
+    content_view_line_count, layout_content, ContentLayout, ContentViewMode,
+};
 
 const EMPTY: &str = "<empty>";
 /// Min pane height: top border + 1 content row + bottom border.
@@ -219,13 +221,15 @@ pub(crate) struct ActiveHalf<'a> {
     pub(crate) scroll: &'a mut usize,
 }
 
-/// Owned view of both halves for one frame (texts computed once).
-#[derive(Clone, Debug, Default)]
+/// Owned view of both halves for one frame: texts, areas, and the cached
+/// per-half layouts (rebuilt only when the content changes; scroll reuses
+/// them, so wheel events never re-lay-out the text).
+#[derive(Clone, Default)]
 pub(crate) struct ContentIoFrame {
     pub(crate) texts: ContentIoTexts,
     pub(crate) areas: ContentIoAreas,
-    pub(crate) input_lines: usize,
-    pub(crate) output_lines: usize,
+    pub(crate) input_layout: ContentLayout,
+    pub(crate) output_layout: ContentLayout,
 }
 
 impl ContentIoFrame {
@@ -236,24 +240,35 @@ impl ContentIoFrame {
         focus: ContentIoFocus,
     ) -> Self {
         let areas = content_io_layout(area, &texts, mode, focus);
-        let input_lines =
-            content_view_line_count(areas.input, texts.display(ContentIoFocus::Input), mode).max(1);
-        let output_lines =
-            content_view_line_count(areas.output, texts.display(ContentIoFocus::Output), mode)
-                .max(1);
+        let input_layout = layout_content(
+            areas.input,
+            texts.display(ContentIoFocus::Input),
+            &texts.input_blocks,
+            mode,
+        );
+        let output_layout = layout_content(
+            areas.output,
+            texts.display(ContentIoFocus::Output),
+            &texts.output_blocks,
+            mode,
+        );
         Self {
             texts,
             areas,
-            input_lines,
-            output_lines,
+            input_layout,
+            output_layout,
+        }
+    }
+
+    pub(crate) fn layout(&self, half: ContentIoFocus) -> &ContentLayout {
+        match half {
+            ContentIoFocus::Input => &self.input_layout,
+            ContentIoFocus::Output => &self.output_layout,
         }
     }
 
     pub(crate) fn line_count(&self, half: ContentIoFocus) -> usize {
-        match half {
-            ContentIoFocus::Input => self.input_lines,
-            ContentIoFocus::Output => self.output_lines,
-        }
+        self.layout(half).lines.len().max(1)
     }
 
     pub(crate) fn active<'a>(

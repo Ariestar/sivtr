@@ -8,11 +8,12 @@ use regex::Regex;
 use std::collections::HashSet;
 use unicode_width::UnicodeWidthStr;
 
-use crate::tui::content::block::BlockText;
 use crate::tui::content::io::ContentIoFocus;
+#[cfg(test)]
+use crate::tui::content::view::ContentViewMode;
 use crate::tui::content::view::{
-    content_cursor_position, highlight_spans, render_content_view, ContentSelection, ContentView,
-    ContentViewMode,
+    content_cursor_position, highlight_spans, render_content_view, ContentLayout, ContentSelection,
+    ContentView,
 };
 use crate::tui::pane::{
     active_item_style, panel_block, render_list_panel, render_panel_scrollbar, Panel, PanelScroll,
@@ -105,10 +106,6 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
             ContentIoFocus::Input => "Input",
             ContentIoFocus::Output => "Output",
         };
-        let blocks = match half {
-            ContentIoFocus::Input => &frame_io.texts.input_blocks[..],
-            ContentIoFocus::Output => &frame_io.texts.output_blocks[..],
-        };
         // The block cursor highlights only the focused half, like the cursor
         // row in the session/dialogue lists.
         let cursor_block = view
@@ -123,10 +120,8 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
                 format!("{half_title} ({}){title_suffix}", view.content_mode.label()),
                 content_active && view.content_io_focus == half,
             ),
-            frame_io.texts.display(half),
-            blocks,
+            frame_io.layout(half),
             view.content_scrolls.get(half),
-            view.content_mode,
             view.content_selection
                 .filter(|_| view.content_io_focus == half),
             content_search,
@@ -159,13 +154,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
     if let Some(selection) = view.content_selection {
         let mut scrolls = view.content_scrolls;
         let active = frame_io.active(view.content_io_focus, &mut scrolls);
-        if let Some(pos) = content_cursor_position(
-            active.area,
-            active.text,
-            *active.scroll,
-            view.content_mode,
-            selection.cursor,
-        ) {
+        if let Some(pos) = content_cursor_position(active.area, *active.scroll, selection.cursor) {
             frame.set_cursor_position(pos);
         }
     }
@@ -857,10 +846,8 @@ fn render_content_panel(
     frame: &mut Frame,
     area: Rect,
     panel: Panel,
-    text: &str,
-    blocks: &[BlockText],
+    layout: &ContentLayout,
     scroll: usize,
-    mode: ContentViewMode,
     selection: Option<ContentSelection>,
     search_regex: Option<&Regex>,
     cursor_block: Option<usize>,
@@ -871,11 +858,9 @@ fn render_content_panel(
         area,
         panel,
         ContentView {
-            text,
-            blocks,
+            layout,
             scroll,
             search_regex,
-            mode,
             selection,
             cursor_block,
             marked,

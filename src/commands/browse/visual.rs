@@ -164,7 +164,7 @@ pub(super) fn handle_visual_select_key(
         }
         _ => {}
     }
-    ensure_visual_cursor_visible(mode, content_area, text, content_mode, content_scroll);
+    ensure_visual_cursor_visible(mode, content_area, content_scroll);
     Ok(None)
 }
 
@@ -186,17 +186,15 @@ pub(super) fn move_visual_cursor(
         content_mode,
         ContentPosition { line, column },
     );
-    ensure_visual_cursor_visible(mode, content_area, text, content_mode, content_scroll);
+    ensure_visual_cursor_visible(mode, content_area, content_scroll);
 }
 
 pub(super) fn ensure_visual_cursor_visible(
     mode: &VisualSelectMode,
     content_area: ratatui::layout::Rect,
-    text: &str,
-    content_mode: ContentViewMode,
     content_scroll: &mut usize,
 ) {
-    let text_area = content_text_area(content_area, text, content_mode);
+    let text_area = content_text_area(content_area);
     let height = text_area.height as usize;
     if height == 0 {
         return;

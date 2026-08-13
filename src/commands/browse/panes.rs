@@ -11,8 +11,8 @@ use crate::pane::{Pane, PaneInput, Selection, SlidingPane, WindowRow};
 use crate::tui::content::block::BlockText;
 use crate::tui::content::view::ContentViewMode;
 use crate::tui::workspace::{
-    workspace_content_io_texts, ContentIoFocus, ContentIoFrame, ContentIoTexts, ExpandedBlocks,
-    WorkspaceDialogue, WorkspaceSession, WorkspaceSource,
+    workspace_content_io_texts, ContentIoFocus, ContentIoFrame, ExpandedBlocks, WorkspaceDialogue,
+    WorkspaceSession, WorkspaceSource,
 };
 use sivtr_core::ai::AgentSelection;
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
@@ -452,9 +452,10 @@ impl ContentPane {
         }
     }
 
-    /// Build texts + dynamic layout metrics for this frame, resizing the
-    /// block selection masks to the shown dialogue's block ids.
-    pub fn ensure(&mut self, ctx: ContentCtx<'_>) -> ContentIoTexts {
+    /// Build the frame for this context, resizing the block selection masks
+    /// to the shown dialogue's block ids. Rebuilds the cached layouts; call
+    /// it only when the content actually changed.
+    pub fn ensure(&mut self, ctx: ContentCtx<'_>) -> ContentIoFrame {
         let texts = workspace_content_io_texts(
             ctx.dialogues,
             ctx.selected_dialogues,
@@ -464,13 +465,13 @@ impl ContentPane {
             ctx.expanded,
         );
         let frame = ContentIoFrame::build(ctx.area, texts, ctx.mode, ctx.io_focus);
-        self.input_lines = frame.input_lines;
-        self.output_lines = frame.output_lines;
+        self.input_lines = frame.line_count(ContentIoFocus::Input);
+        self.output_lines = frame.line_count(ContentIoFocus::Output);
         self.marked_input
             .resize(marked_mask_len(&frame.texts.input_blocks));
         self.marked_output
             .resize(marked_mask_len(&frame.texts.output_blocks));
-        frame.texts
+        frame
     }
 
     /// Marked block mask of one half (`mask[block_id]` = marked).

@@ -85,6 +85,9 @@ pub(crate) fn run(
     let mut content_mode = ContentViewMode::Reading;
     let mut expanded_blocks = ExpandedBlocks::default();
     let mut expanded_key = None;
+    // Content frame inputs of the last rebuild; scroll reuses the cached
+    // layouts (scroll only slices), so wheel events never re-lay-out text.
+    let mut last_content_key = None;
     // Block multi-select lives in the content pane (native pane selection);
     // cleared with the fold state whenever the shown dialogue changes.
     // Block under a pending click; toggled on mouse release unless a drag
@@ -317,7 +320,7 @@ pub(crate) fn run(
         );
         if dialogues_key.as_ref() != Some(&materialize_key) {
             dialogue_pane.materialize_into(&selected_dialogues, dialogue_idx, &mut dialogues);
-            dialogues_key = Some(materialize_key);
+            dialogues_key = Some(materialize_key.clone());
         }
 
         if redraw {
@@ -360,9 +363,20 @@ pub(crate) fn run(
                 content_pane.clear_marks();
                 expanded_key = Some(expand_key);
             }
-            content_frame = ContentIoFrame::build(
+            // Rebuild the content frame (texts + cached layouts) only when
+            // the shown dialogue, mode, focus, target, expansion, or pane
+            // size changed. Scroll events reuse the cached layouts — wheel
+            // input never re-lays-out the text, so it stays responsive.
+            let content_key = (
+                materialize_key.clone(),
+                active_content_at,
+                content_mode,
+                content_io_focus,
                 layout.content,
-                content_pane.ensure(ContentCtx {
+                expanded_blocks.clone(),
+            );
+            if last_content_key.as_ref() != Some(&content_key) {
+                content_frame = content_pane.ensure(ContentCtx {
                     dialogues: &dialogues,
                     selected_dialogues: &selected_dialogues,
                     highlighted_idx: dialogue_idx,
@@ -371,25 +385,20 @@ pub(crate) fn run(
                     area: layout.content,
                     io_focus: content_io_focus,
                     expanded: &expanded_blocks,
-                }),
-                content_mode,
-                content_io_focus,
-            );
-            content_scrolls.clamp_to(content_frame.input_lines, content_frame.output_lines);
+                });
+                content_scrolls.clamp_to(
+                    content_frame.line_count(ContentIoFocus::Input),
+                    content_frame.line_count(ContentIoFocus::Output),
+                );
+                last_content_key = Some(content_key);
+            }
             // Keyboard moves ask the next redraw to keep the cursor block in
             // view; clicks never set `follow`, so they keep the scroll as-is.
             if content_cursor.follow {
                 content_cursor.follow = false;
                 if let Some((half, block)) = content_cursor.focused(content_io_focus) {
-                    let blocks = content_frame.texts.half_blocks(half);
                     let area = content_frame.areas.area(half);
-                    if let Some(range) = content_block_range(
-                        area,
-                        content_frame.texts.display(half),
-                        blocks,
-                        content_mode,
-                        block,
-                    ) {
+                    if let Some(range) = content_block_range(content_frame.layout(half), block) {
                         let visible = area.height.saturating_sub(2) as usize;
                         let scroll = content_scrolls.get(half);
                         if range.start < scroll {
@@ -944,9 +953,7 @@ pub(crate) fn run(
                             let active = content_frame.active(half, &mut content_scrolls);
                             if let Some(block) = content_dot_at(
                                 active.area,
-                                active.text,
-                                content_frame.texts.half_blocks(half),
-                                content_mode,
+                                content_frame.layout(half),
                                 *active.scroll,
                                 mouse.column,
                                 mouse.row,
@@ -998,15 +1005,9 @@ pub(crate) fn run(
                                 // Record the block under the click and toggle
                                 // it on release, so a drag still selects text
                                 // instead of collapsing the block.
-                                let blocks = content_frame.texts.half_blocks(half);
-                                pending_block_toggle = content_block_at(
-                                    active.area,
-                                    active.text,
-                                    blocks,
-                                    content_mode,
-                                    position.line,
-                                )
-                                .map(|block| (half, block));
+                                pending_block_toggle =
+                                    content_block_at(content_frame.layout(half), position.line)
+                                        .map(|block| (half, block));
                             }
                         }
                         // A drag selects text and cancels the pending block toggle.
