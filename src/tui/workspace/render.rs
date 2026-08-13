@@ -118,6 +118,9 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
             view.content_mode,
             content_selection_for_half(view.content_selection, view.content_io_focus, half),
             content_search,
+            view.content_active_block
+                .filter(|(focus, _)| *focus == half)
+                .map(|(_, block)| block),
         );
     }
 
@@ -852,6 +855,7 @@ fn render_content_panel(
     mode: ContentViewMode,
     selection: Option<ContentSelection>,
     search_regex: Option<&Regex>,
+    active_block: Option<usize>,
 ) {
     render_content_view(
         frame,
@@ -863,6 +867,7 @@ fn render_content_panel(
             search_regex,
             mode,
             selection,
+            active_block,
         },
     );
 }

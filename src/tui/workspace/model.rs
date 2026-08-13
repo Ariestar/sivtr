@@ -403,6 +403,8 @@ pub(crate) struct WorkspaceView<'a> {
     pub(crate) line_filter_error: Option<&'a str>,
     pub(crate) fullscreen: Option<WorkspaceFocus>,
     pub(crate) content_selection: Option<ContentSelection>,
+    /// Last clicked structure block per half, highlighted like a list row.
+    pub(crate) content_active_block: Option<(ContentIoFocus, usize)>,
     /// Dual IO layout + display texts, computed once per redraw by the picker
     /// and shared with the renderer (no per-frame duplicate layout).
     pub(crate) content_frame: &'a ContentIoFrame,

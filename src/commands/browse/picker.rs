@@ -87,6 +87,8 @@ pub(crate) fn run(
     // Block under a pending click; toggled on mouse release unless a drag
     // turned the gesture into a text selection.
     let mut pending_block_toggle: Option<(ContentIoFocus, usize)> = None;
+    // Last clicked structure block, highlighted like a list row.
+    let mut active_block: Option<(ContentIoFocus, usize)> = None;
     let mut show_help = false;
     let mut show_search = false;
     let mut search_query = String::new();
@@ -337,6 +339,7 @@ pub(crate) fn run(
             if expanded_key.as_ref() != Some(&expand_key) {
                 expanded_blocks.clear();
                 pending_block_toggle = None;
+                active_block = None;
                 expanded_key = Some(expand_key);
             }
             content_frame = ContentIoFrame::build(
@@ -419,6 +422,7 @@ pub(crate) fn run(
                         fullscreen,
                         content_selection: visual_select_mode
                             .map(|mode: VisualSelectMode| mode.selection),
+                        content_active_block: active_block,
                         content_frame: &content_frame,
                     },
                 )
@@ -920,9 +924,11 @@ pub(crate) fn run(
                             if visual_select_mode.is_some() {
                                 set_focus(&mut focus, &mut fullscreen, WorkspaceFocus::Content);
                             }
-                            // Pure click (no drag): release toggles the block.
+                            // Pure click (no drag): release toggles the block
+                            // and marks it as the active highlight.
                             if matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left)) {
                                 if let Some((half, block)) = pending_block_toggle.take() {
+                                    active_block = Some((half, block));
                                     expanded_blocks.toggle(half, block);
                                     redraw = true;
                                 }

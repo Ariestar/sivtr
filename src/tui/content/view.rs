@@ -39,6 +39,8 @@ pub(crate) struct ContentView<'a> {
     pub(crate) search_regex: Option<&'a Regex>,
     pub(crate) mode: ContentViewMode,
     pub(crate) selection: Option<ContentSelection>,
+    /// Structure block ordinal to highlight (its displayed line range), if any.
+    pub(crate) active_block: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,12 +111,16 @@ pub(crate) fn render_content_view(
         Paragraph::new(separator_lines(visible_height, &visible)),
         chunks[1],
     );
+    let block_highlight = view
+        .active_block
+        .and_then(|block| content_structure_block_range(area, view.text, view.mode, block));
     frame.render_widget(
         Paragraph::new(content_lines(
             visible,
             scroll,
             view.search_regex,
             view.selection,
+            block_highlight,
         )),
         chunks[2],
     );
@@ -209,6 +215,27 @@ pub(crate) fn content_structure_block_at(
     mode: ContentViewMode,
     line: usize,
 ) -> Option<usize> {
+    content_block_ownership(area, text, mode)
+        .get(line)
+        .copied()
+        .flatten()
+}
+
+/// Displayed line range (start..end, end exclusive) owned by `block`, if the
+/// block is present in the layout.
+pub(crate) fn content_structure_block_range(
+    area: Rect,
+    text: &str,
+    mode: ContentViewMode,
+    block: usize,
+) -> Option<std::ops::Range<usize>> {
+    let ownership = content_block_ownership(area, text, mode);
+    let start = ownership.iter().position(|owner| *owner == Some(block))?;
+    let end = ownership.iter().rposition(|owner| *owner == Some(block))?;
+    Some(start..end + 1)
+}
+
+fn content_block_ownership(area: Rect, text: &str, mode: ContentViewMode) -> Vec<Option<usize>> {
     let content_area = content_text_area(area, text, mode);
     let width = content_area.width as usize;
     let lines = all_content_lines(text, width, mode);
@@ -252,7 +279,7 @@ pub(crate) fn content_structure_block_at(
         block += 1;
         idx = end + 1;
     }
-    ownership.get(line).copied().flatten()
+    ownership
 }
 
 fn is_open_marker(text: &str) -> bool {
@@ -534,6 +561,7 @@ fn content_lines(
     scroll: usize,
     search_regex: Option<&Regex>,
     selection: Option<ContentSelection>,
+    block_highlight: Option<std::ops::Range<usize>>,
 ) -> Text<'static> {
     let lines = visible
         .into_iter()
@@ -541,10 +569,37 @@ fn content_lines(
         .map(|(idx, line)| {
             let line_idx = scroll.saturating_add(idx);
             let line = styled_content_line(line.line, search_regex);
-            styled_selection_line(line, selection, line_idx)
+            let line = styled_selection_line(line, selection, line_idx);
+            style_block_line(line, block_highlight.as_ref(), line_idx)
         })
         .collect::<Vec<_>>();
     Text::from(lines)
+}
+
+/// Tint every line of the active structure block, matching the row highlight
+/// used by the session/dialogue lists, so clicking a block in content reads
+/// as selecting it.
+fn style_block_line(
+    line: Line<'static>,
+    highlight: Option<&std::ops::Range<usize>>,
+    line_idx: usize,
+) -> Line<'static> {
+    let Some(range) = highlight else {
+        return line;
+    };
+    if !range.contains(&line_idx) {
+        return line;
+    }
+    let overlay = visual_selection_style();
+    Line {
+        spans: line
+            .spans
+            .into_iter()
+            .map(|span| Span::styled(span.content, span.style.patch(overlay)))
+            .collect(),
+        style: line.style.patch(overlay),
+        alignment: line.alignment,
+    }
 }
 
 fn styled_selection_line(
@@ -1256,6 +1311,7 @@ mod tests {
             scroll,
             search_regex,
             None,
+            None,
         )
     }
 
@@ -1354,6 +1410,7 @@ mod tests {
             0,
             None,
             None,
+            None,
         );
 
         assert_eq!(rendered.lines.len(), 2);
@@ -1372,7 +1429,7 @@ mod tests {
             16,
             ContentViewMode::Reading,
         );
-        let rendered = content_lines(visible.clone(), 0, None, None);
+        let rendered = content_lines(visible.clone(), 0, None, None, None);
 
         assert_eq!(rendered.lines.len(), 2);
         assert_eq!(rendered_line_text(&rendered, 0), "docker-compose.f");
@@ -1468,6 +1525,7 @@ mod tests {
                 ContentViewMode::Reading,
             ),
             0,
+            None,
             None,
             None,
         );
@@ -1572,6 +1630,7 @@ mod tests {
                 cursor: ContentPosition { line: 1, column: 3 },
                 kind: ContentSelectionKind::Block,
             }),
+            None,
         );
 
         assert_eq!(rendered.lines[0].spans[1].content.as_ref(), "bcd");
@@ -1597,6 +1656,7 @@ mod tests {
                 cursor: ContentPosition { line: 0, column: 3 },
                 kind: ContentSelectionKind::Linear,
             }),
+            None,
         );
 
         assert_eq!(rendered_line_text(&rendered, 0), "alpha");
@@ -1624,6 +1684,7 @@ mod tests {
                         search_regex: None,
                         mode: ContentViewMode::Reading,
                         selection: None,
+                        active_block: None,
                     },
                 );
             })
@@ -1632,6 +1693,43 @@ mod tests {
         let backend = terminal.backend();
         assert!(backend_row(backend, 1).contains("1|alpha"));
         assert!(backend_row(backend, 2).contains("2|beta"));
+    }
+
+    #[test]
+    fn render_content_view_highlights_the_active_block() {
+        let backend = TestBackend::new(40, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                render_content_view(
+                    frame,
+                    Rect::new(0, 0, 40, 8),
+                    Panel::new("3", "Content (read)", true),
+                    ContentView {
+                        text: "<:tool:Bash call:>\nbody\n<:/tool:Bash call:>\n<:tool:Read call:>",
+                        scroll: 0,
+                        search_regex: None,
+                        mode: ContentViewMode::Reading,
+                        selection: None,
+                        active_block: Some(0),
+                    },
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        // Block 0 spans the tag, body, and close rows; its lines use the same
+        // selected-row background as the session/dialogue lists.
+        let selected_bg = super::visual_selection_style().bg;
+        for row in 1..=3 {
+            let cell = buffer.cell((4, row)).unwrap();
+            assert_eq!(
+                cell.style().bg, selected_bg,
+                "row {row} should be highlighted"
+            );
+        }
+        // The next block's tag is not part of the highlight.
+        let cell = buffer.cell((4, 4)).unwrap();
+        assert_ne!(cell.style().bg, selected_bg);
     }
 
     #[test]
