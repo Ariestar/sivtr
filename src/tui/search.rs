@@ -37,10 +37,6 @@ pub(crate) fn workspace_search_query(query: &str) -> (WorkspaceSearchScope, &str
     }
 }
 
-pub(crate) fn workspace_search_scope(query: &str) -> WorkspaceSearchScope {
-    workspace_search_query(query).0
-}
-
 pub(crate) fn workspace_search_has_query(query: &str) -> bool {
     !workspace_search_query(query).1.is_empty()
 }
@@ -51,11 +47,6 @@ pub(crate) fn workspace_search_regex(term: &str) -> Option<Regex> {
         return None;
     }
     RegexBuilder::new(term).case_insensitive(true).build().ok()
-}
-
-pub(crate) fn workspace_search_regex_for_query(query: &str) -> Option<Regex> {
-    let (_, term) = workspace_search_query(query);
-    workspace_search_regex(term)
 }
 
 #[derive(Clone)]

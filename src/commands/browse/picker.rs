@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use crate::tui::content::view::{content_link_at, ContentViewMode};
 use crate::tui::search::{
-    workspace_search_fingerprint, workspace_search_has_query, workspace_search_scope,
+    workspace_search_fingerprint, workspace_search_has_query, workspace_search_query,
     WorkspaceSearchIndex, WorkspaceSearchOutput,
 };
 use crate::tui::terminal::read_interaction;
@@ -381,7 +381,7 @@ pub(crate) fn run(
                         help_state: &help_state,
                         search: (show_search || search_has_query).then_some(WorkspaceSearchView {
                             query: &search_query,
-                            scope: workspace_search_scope(&search_query),
+                            scope: workspace_search_query(&search_query).0,
                             result_count: sessions.len(),
                             current_match: (!search_output.matches.is_empty())
                                 .then_some(search_cursor),
@@ -1293,7 +1293,7 @@ mod tests {
         assert_eq!(output.matches[0].dialogue_index, 0);
         assert_eq!(
             sessions[1].records[0]
-                .copy_text(sivtr_core::record::RecordTextMode::Combined, false)
+                .copy_text(sivtr_core::record::RecordTextMode::Combined, false, None)
                 .plain,
             "target session:lighting"
         );
@@ -2028,9 +2028,11 @@ mod tests {
             plain,
             0,
         );
-        let pair = crate::commands::browse::text::record_text_to_pair(
-            record.copy_text(sivtr_core::record::RecordTextMode::Combined, false),
-        );
+        let pair = crate::commands::browse::text::record_text_to_pair(record.copy_text(
+            sivtr_core::record::RecordTextMode::Combined,
+            false,
+            None,
+        ));
         WorkspaceDialogue {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(record.work_ref.clone()),

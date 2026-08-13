@@ -17,7 +17,7 @@ use crate::tui::pane::{
     active_item_style, panel_block, render_list_panel, render_panel_scrollbar, selected_item_style,
     Panel, PanelScroll,
 };
-use crate::tui::search::{workspace_search_regex_for_query, WorkspaceSearchScope};
+use crate::tui::search::{workspace_search_query, workspace_search_regex, WorkspaceSearchScope};
 use crate::tui::theme;
 use crate::tui::workspace::help::{workspace_footer_hotkeys, workspace_help_entries};
 use crate::tui::workspace::layout::{selected_index, workspace_layout};
@@ -48,7 +48,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
     let search_regex = view
         .search
         .as_ref()
-        .and_then(|search| workspace_search_regex_for_query(search.query));
+        .and_then(|search| workspace_search_regex(workspace_search_query(search.query).1));
 
     render_source_list(
         frame,
@@ -116,7 +116,8 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
             frame_io.texts.display(half),
             view.content_scrolls.get(half),
             view.content_mode,
-            content_selection_for_half(view.content_selection, view.content_io_focus, half),
+            view.content_selection
+                .filter(|_| view.content_io_focus == half),
             content_search,
         );
     }
@@ -869,14 +870,6 @@ fn render_content_panel(
             selection,
         },
     );
-}
-
-fn content_selection_for_half(
-    selection: Option<ContentSelection>,
-    active: ContentIoFocus,
-    half: ContentIoFocus,
-) -> Option<ContentSelection> {
-    selection.filter(|_| active == half)
 }
 
 fn selected_parent_title(
