@@ -396,11 +396,7 @@ fn mount_status(cwd: &Path) -> Vec<MountStatus> {
                 .flatten()
                 .map(|paths| paths.key)
         });
-    mount_status_for_key(key.as_deref())
-}
-
-fn mount_status_for_key(workspace_key: Option<&str>) -> Vec<MountStatus> {
-    let Some(workspace_key) = workspace_key else {
+    let Some(workspace_key) = key.as_deref() else {
         return Vec::new();
     };
     match ipc::call(LocalRequest::RemoteList {

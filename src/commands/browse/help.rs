@@ -232,7 +232,7 @@ pub(super) fn apply_workspace_help_action(
             );
         }
         WorkspaceHelpAction::ScrollContentTop if *focus == WorkspaceFocus::Content => {
-            content_scrolls.clear_half(*content_io_focus);
+            content_scrolls.set(*content_io_focus, 0);
         }
         WorkspaceHelpAction::ScrollContentBottom if *focus == WorkspaceFocus::Content => {
             let lines = match *content_io_focus {
@@ -245,7 +245,10 @@ pub(super) fn apply_workspace_help_action(
             *content_mode = content_mode.toggle();
         }
         WorkspaceHelpAction::ToggleContentIo if *focus == WorkspaceFocus::Content => {
-            *content_io_focus = content_io_focus.toggle();
+            *content_io_focus = match *content_io_focus {
+                ContentIoFocus::Input => ContentIoFocus::Output,
+                ContentIoFocus::Output => ContentIoFocus::Input,
+            };
         }
         WorkspaceHelpAction::ToggleBlockFold if *focus == WorkspaceFocus::Content => {
             if *content_mode == ContentViewMode::Reading {

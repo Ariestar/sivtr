@@ -78,22 +78,6 @@ pub(crate) enum ContentIoFocus {
     Output,
 }
 
-impl ContentIoFocus {
-    pub(crate) fn toggle(self) -> Self {
-        match self {
-            Self::Input => Self::Output,
-            Self::Output => Self::Input,
-        }
-    }
-
-    pub(crate) fn title(self) -> &'static str {
-        match self {
-            Self::Input => "Input",
-            Self::Output => "Output",
-        }
-    }
-}
-
 /// Independent scroll offsets for the dual content panes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ContentScrolls {
@@ -125,10 +109,6 @@ impl ContentScrolls {
 
     pub(crate) fn clear(&mut self) {
         *self = Self::default();
-    }
-
-    pub(crate) fn clear_half(&mut self, focus: ContentIoFocus) {
-        self.set(focus, 0);
     }
 
     pub(crate) fn clamp_to(&mut self, input_lines: usize, output_lines: usize) {
@@ -172,11 +152,6 @@ impl ExpandedBlocks {
         if !set.insert(block) {
             set.remove(&block);
         }
-    }
-
-    pub(crate) fn clear(&mut self) {
-        self.input.clear();
-        self.output.clear();
     }
 }
 

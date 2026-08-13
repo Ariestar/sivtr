@@ -25,10 +25,6 @@ pub(crate) struct Block {
 }
 
 impl Block {
-    pub(crate) fn is_structure(&self) -> bool {
-        self.kind.is_structure()
-    }
-
     /// Full body: every part formatted as in the current content text. Run
     /// members join on adjacent lines — same-kind calls read as one series.
     pub(crate) fn body(&self, record: &WorkRecord) -> String {
@@ -51,30 +47,27 @@ impl Block {
     /// blocks, `<:kind:>` for body blocks.
     pub(crate) fn fold_label(&self, record: &WorkRecord) -> String {
         if self.count > 1 {
-            format!("<:{} x{}:>", run_kind_name(self.kind), self.count)
+            format!("<:{} x{}:>", kind_name(self.kind), self.count)
         } else {
             fold_label_for_part(&record.parts[self.parts[0]])
         }
     }
 }
 
-/// The run identity for structure blocks: consecutive parts with the same
-/// identity fold into one `kind xN` block.
-fn run_kind(kind: WorkPartKind) -> u8 {
+/// Short display name for a kind: body tags use it (`<:user:>`), structure
+/// runs use it for the count label (`<:tool x2:>`), and it drives run
+/// grouping (consecutive parts with the same name fold together).
+fn kind_name(kind: WorkPartKind) -> &'static str {
     match kind {
-        WorkPartKind::ToolCall | WorkPartKind::ToolResult => 0,
-        WorkPartKind::Skill => 1,
-        WorkPartKind::Thinking => 2,
-        _ => 3,
-    }
-}
-
-fn run_kind_name(kind: WorkPartKind) -> &'static str {
-    match kind {
+        WorkPartKind::Prompt => "prompt",
+        WorkPartKind::Command => "command",
+        WorkPartKind::User => "user",
+        WorkPartKind::Assistant => "assistant",
         WorkPartKind::ToolCall | WorkPartKind::ToolResult => "tool",
         WorkPartKind::Skill => "skill",
         WorkPartKind::Thinking => "thinking",
-        _ => "block",
+        WorkPartKind::Output => "output",
+        WorkPartKind::Error => "error",
     }
 }
 
@@ -119,7 +112,7 @@ pub(crate) fn half_blocks(record: &WorkRecord, input: bool) -> Vec<Block> {
     for unit in units {
         let same_run = unit.kind.is_structure()
             && blocks.last().is_some_and(|last| {
-                last.kind.is_structure() && run_kind(last.kind) == run_kind(unit.kind)
+                last.kind.is_structure() && kind_name(last.kind) == kind_name(unit.kind)
             });
         if same_run {
             let last = blocks.last_mut().expect("run block exists");
@@ -149,23 +142,7 @@ pub(crate) fn fold_label_for_part(part: &WorkPart) -> String {
             None => marker,
         }
     } else {
-        format!("<:{}:>", fold_kind_name(part.kind()))
-    }
-}
-
-fn fold_kind_name(kind: WorkPartKind) -> &'static str {
-    match kind {
-        WorkPartKind::Prompt => "prompt",
-        WorkPartKind::Command => "command",
-        WorkPartKind::User => "user",
-        WorkPartKind::Assistant => "assistant",
-        WorkPartKind::Output => "output",
-        WorkPartKind::Error => "error",
-        // Structure kinds keep their own markers above; unreachable here.
-        WorkPartKind::ToolCall
-        | WorkPartKind::ToolResult
-        | WorkPartKind::Skill
-        | WorkPartKind::Thinking => "body",
+        format!("<:{}:>", kind_name(part.kind()))
     }
 }
 
@@ -217,7 +194,7 @@ pub(crate) fn render_half(
         .into_iter()
         .enumerate()
         .map(|(idx, block)| {
-            let shown = !reading || expanded.expanded(focus, idx, block.is_structure());
+            let shown = !reading || expanded.expanded(focus, idx, block.kind.is_structure());
             if shown {
                 block.body(record)
             } else {

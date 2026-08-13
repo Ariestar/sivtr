@@ -607,7 +607,12 @@ fn styled_selection_line(
     let Some(range) = selection_range_for_line(selection, start, end, line_idx, width) else {
         return line;
     };
-    style_line_columns(line, range.start, range.end, visual_selection_style())
+    style_line_columns(
+        line,
+        range.start,
+        range.end,
+        crate::tui::theme::selected_row(),
+    )
 }
 
 fn normalized_selection(selection: ContentSelection) -> (ContentPosition, ContentPosition) {
@@ -649,10 +654,6 @@ fn selection_range_for_line(
         0..fallback_width
     };
     (range.start < range.end).then_some(range)
-}
-
-fn visual_selection_style() -> Style {
-    crate::tui::theme::selected_row()
 }
 
 fn style_line_columns(

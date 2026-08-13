@@ -352,7 +352,8 @@ pub(crate) fn run(
                 selected_dialogues.clone(),
             );
             if expanded_key.as_ref() != Some(&expand_key) {
-                expanded_blocks.clear();
+                expanded_blocks.input.clear();
+                expanded_blocks.output.clear();
                 pending_block_toggle = None;
                 last_block_click = None;
                 content_cursor.clear();

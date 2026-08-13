@@ -100,6 +100,10 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         if area.height == 0 {
             continue;
         }
+        let half_title = match half {
+            ContentIoFocus::Input => "Input",
+            ContentIoFocus::Output => "Output",
+        };
         let blocks = match half {
             ContentIoFocus::Input => &frame_io.texts.input_blocks[..],
             ContentIoFocus::Output => &frame_io.texts.output_blocks[..],
@@ -115,11 +119,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
             area,
             Panel::new(
                 WorkspaceFocus::Content.key(),
-                format!(
-                    "{} ({}){title_suffix}",
-                    half.title(),
-                    view.content_mode.label()
-                ),
+                format!("{half_title} ({}){title_suffix}", view.content_mode.label()),
                 content_active && view.content_io_focus == half,
             ),
             frame_io.texts.display(half),
