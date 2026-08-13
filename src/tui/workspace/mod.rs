@@ -15,9 +15,7 @@ pub(crate) use crate::tui::content::io::{
     search_match_half, ContentIoFocus, ContentIoFrame, ContentIoTexts, ContentScrolls,
     ExpandedBlocks,
 };
-pub(crate) use crate::tui::content::text::{
-    structure_block_index, workspace_content_io_texts, workspace_content_text,
-};
+pub(crate) use crate::tui::content::text::{workspace_content_io_texts, workspace_content_text};
 
 #[cfg(test)]
 mod tests;

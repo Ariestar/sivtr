@@ -197,6 +197,36 @@ pub(crate) fn content_position_at(
     ))
 }
 
+/// Structure block ordinal for the open-marker line at `line` (a displayed
+/// line index), if any. Walks the wrapped display so scroll/wrap cannot
+/// shift the block mapping.
+pub(crate) fn content_structure_block_at(
+    area: Rect,
+    text: &str,
+    mode: ContentViewMode,
+    line: usize,
+) -> Option<usize> {
+    let content_area = content_text_area(area, text, mode);
+    let width = content_area.width as usize;
+    let lines = all_content_lines(text, width, mode);
+    let mut block = 0usize;
+    for (idx, content_line) in lines.iter().enumerate() {
+        let joined: String = content_line
+            .line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        if crate::tui::content::text::is_structure_marker(&joined) && !joined.starts_with("<:/") {
+            if idx == line {
+                return Some(block);
+            }
+            block += 1;
+        }
+    }
+    None
+}
+
 pub(crate) fn content_position_in_text_row(
     area: Rect,
     text: &str,
@@ -1159,9 +1189,9 @@ fn raw_lines(text: &str) -> Vec<&str> {
 mod tests {
     use super::{
         content_lines, content_link_at, content_position_at, content_position_in_text_row,
-        line_count, line_number_width, render_content_view, selected_content_text,
-        visible_content_lines, ContentPosition, ContentSelection, ContentSelectionKind,
-        ContentView, ContentViewMode,
+        content_structure_block_at, line_count, line_number_width, render_content_view,
+        selected_content_text, visible_content_lines, ContentPosition, ContentSelection,
+        ContentSelectionKind, ContentView, ContentViewMode,
     };
     use crate::tui::pane::Panel;
     use ratatui::backend::TestBackend;
@@ -1594,5 +1624,44 @@ mod tests {
                 chunks[2].width
             );
         }
+    }
+
+    #[test]
+    fn structure_block_at_maps_displayed_lines_with_wrapping() {
+        let area = Rect::new(0, 0, 24, 10);
+        let long = "alpha ".repeat(20);
+        let text = format!("{long}\n<:tool:A call:>\n<:tool:B call:>");
+        let (lines, _) = super::content_layout(area, &text, ContentViewMode::Reading);
+        let tag_lines: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, line)| {
+                let joined: String = line
+                    .line
+                    .spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect();
+                joined.starts_with("<:tool:").then_some(idx)
+            })
+            .collect();
+        assert_eq!(tag_lines.len(), 2);
+        // The long body wraps, so the tags' displayed lines are no longer
+        // their raw text-line indices; the block lookup must follow the
+        // display, not `text.lines()`.
+        assert_ne!(tag_lines[0], 1, "wrapped body shifts the tag line index");
+        assert_eq!(
+            content_structure_block_at(area, &text, ContentViewMode::Reading, tag_lines[0]),
+            Some(0)
+        );
+        assert_eq!(
+            content_structure_block_at(area, &text, ContentViewMode::Reading, tag_lines[1]),
+            Some(1)
+        );
+        // A body line is not an open marker.
+        assert_eq!(
+            content_structure_block_at(area, &text, ContentViewMode::Reading, 0),
+            None
+        );
     }
 }

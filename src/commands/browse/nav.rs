@@ -162,9 +162,15 @@ pub(super) fn move_workspace_cursor_down(
     }
 }
 
-pub(super) fn row_list_index(area: ratatui::layout::Rect, row: u16, len: usize) -> Option<usize> {
+pub(super) fn row_list_index(
+    area: ratatui::layout::Rect,
+    row: u16,
+    len: usize,
+    offset: usize,
+) -> Option<usize> {
     let row = row.checked_sub(area.y.saturating_add(1))? as usize;
-    (row < len).then_some(row)
+    let index = row.saturating_add(offset);
+    (index < len).then_some(index)
 }
 
 pub(super) fn source_list_index(
@@ -173,10 +179,11 @@ pub(super) fn source_list_index(
     row: u16,
     sources: &[WorkspaceSource],
     vertical: bool,
+    offset: usize,
 ) -> Option<usize> {
     if vertical {
         // List panel: one source per row (same as sessions/dialogues).
-        return row_list_index(area, row, sources.len());
+        return row_list_index(area, row, sources.len(), offset);
     }
     // Compact strip: single content row, labels laid out left→right.
     if row != area.y.saturating_add(1)
@@ -209,4 +216,24 @@ pub(super) fn reset_workspace_dialogue_state(
     selected_dialogues.clear();
     selected_dialogues.resize(dialogue_count, false);
     *range_anchor = None;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::row_list_index;
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn row_list_index_includes_scroll_offset() {
+        let area = Rect::new(0, 0, 30, 10);
+        // Row 1 is the first content row below the panel title.
+        assert_eq!(row_list_index(area, 1, 100, 0), Some(0));
+        // A scrolled list maps the clicked row onto the offset index.
+        assert_eq!(row_list_index(area, 1, 100, 50), Some(50));
+        assert_eq!(row_list_index(area, 4, 100, 50), Some(53));
+        // Indices beyond the list end are rejected.
+        assert_eq!(row_list_index(area, 4, 100, 98), None);
+        // The title row is not a selectable row.
+        assert_eq!(row_list_index(area, 0, 100, 0), None);
+    }
 }

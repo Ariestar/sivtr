@@ -17,7 +17,7 @@ use crate::tui::workspace::{
 use super::content::workspace_picked_content;
 use super::nav::{move_workspace_cursor_down, move_workspace_cursor_up};
 
-const MOUSE_SCROLL_LINES: usize = 3;
+const MOUSE_SCROLL_LINES: usize = 1;
 #[derive(Clone, Copy)]
 pub(super) struct VisualSelectMode {
     pub(super) selection: ContentSelection,

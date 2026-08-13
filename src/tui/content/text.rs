@@ -148,35 +148,14 @@ pub(crate) fn workspace_content_io_texts(
     }
 }
 
-/// Index of the structure block whose open marker sits on `line` of the
-/// displayed text, if any. Every block contributes exactly one open marker
-/// line — collapsed (tag only) or expanded — so the marker ordinal is the
-/// block index.
-pub(crate) fn structure_block_index(text: &str, line: usize) -> Option<usize> {
-    let mut block = 0usize;
-    for (idx, text_line) in text.lines().enumerate() {
-        if is_structure_open_marker(text_line) {
-            if idx == line {
-                return Some(block);
-            }
-            block += 1;
-        }
-    }
-    None
-}
-
 /// A line that opens or closes a structure block (`<:tool:…:>` / `<:/…:>`).
 pub(crate) fn is_structure_marker(line: &str) -> bool {
     line.starts_with("<:")
 }
 
-fn is_structure_open_marker(line: &str) -> bool {
-    is_structure_marker(line) && !line.starts_with("<:/")
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{content_io_from_record, structure_block_index};
+    use super::content_io_from_record;
     use crate::tui::content::io::{ContentIoFocus, ExpandedBlocks};
     use sivtr_core::ai::AgentProvider;
     use sivtr_core::record::{WorkPart, WorkPartData, WorkRecord, WorkRef};
@@ -247,13 +226,5 @@ mod tests {
         assert!(io.output.contains("<:tool:Bash call:>"));
         assert!(io.output.contains("ls"));
         assert!(io.output.contains("<:/tool:Bash call:>"));
-    }
-
-    #[test]
-    fn block_index_maps_displayed_markers() {
-        let text = "<:tool:A call:>\nbody\n\n<:tool:B call:>";
-        assert_eq!(structure_block_index(text, 0), Some(0));
-        assert_eq!(structure_block_index(text, 3), Some(1));
-        assert_eq!(structure_block_index(text, 1), None);
     }
 }

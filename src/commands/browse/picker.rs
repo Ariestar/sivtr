@@ -6,7 +6,9 @@ use ratatui::widgets::ListState;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use crate::tui::content::view::{content_link_at, content_position_at, ContentViewMode};
+use crate::tui::content::view::{
+    content_link_at, content_position_at, content_structure_block_at, ContentViewMode,
+};
 use crate::tui::search::{
     workspace_search_fingerprint, workspace_search_has_query, workspace_search_scope,
     WorkspaceSearchIndex, WorkspaceSearchOutput,
@@ -14,10 +16,9 @@ use crate::tui::search::{
 use crate::tui::terminal::read_interaction;
 use crate::tui::workspace::{
     help_action_for_key, panel_inner_rows, render_workspace, search_match_half, selected_index,
-    structure_block_index, workspace_help_entries, workspace_hit_test, workspace_layout,
-    ContentIoFocus, ContentIoFrame, ContentScrolls, ExpandedBlocks, WorkspaceDialogue,
-    WorkspaceFocus, WorkspacePickedContent, WorkspaceSearchView, WorkspaceSession, WorkspaceSource,
-    WorkspaceView,
+    workspace_help_entries, workspace_hit_test, workspace_layout, ContentIoFocus, ContentIoFrame,
+    ContentScrolls, ExpandedBlocks, WorkspaceDialogue, WorkspaceFocus, WorkspacePickedContent,
+    WorkspaceSearchView, WorkspaceSession, WorkspaceSource, WorkspaceView,
 };
 
 use super::content::{
@@ -881,9 +882,12 @@ pub(crate) fn run(
                                     mouse.column,
                                     mouse.row,
                                 ) {
-                                    if let Some(block) =
-                                        structure_block_index(active.text, position.line)
-                                    {
+                                    if let Some(block) = content_structure_block_at(
+                                        active.area,
+                                        active.text,
+                                        content_mode,
+                                        position.line,
+                                    ) {
                                         expanded_blocks.toggle(half, block);
                                         redraw = true;
                                         continue;
@@ -968,14 +972,18 @@ pub(crate) fn run(
                                         mouse.row,
                                         &sources,
                                         vertical,
+                                        source_state.offset(),
                                     ) {
                                         source_state.select(Some(idx));
                                     }
                                 }
                                 WorkspaceFocus::Sessions => {
-                                    if let Some(idx) =
-                                        row_list_index(layout.sessions, mouse.row, sessions.len())
-                                    {
+                                    if let Some(idx) = row_list_index(
+                                        layout.sessions,
+                                        mouse.row,
+                                        sessions.len(),
+                                        session_state.offset(),
+                                    ) {
                                         session_state.select(Some(idx));
                                         if !has_selected_sessions(&selected_sessions) {
                                             reset_workspace_dialogue_state(
@@ -989,9 +997,12 @@ pub(crate) fn run(
                                     }
                                 }
                                 WorkspaceFocus::Dialogues => {
-                                    if let Some(idx) =
-                                        row_list_index(layout.dialogues, mouse.row, dialogue_count)
-                                    {
+                                    if let Some(idx) = row_list_index(
+                                        layout.dialogues,
+                                        mouse.row,
+                                        dialogue_count,
+                                        dialogue_state.offset(),
+                                    ) {
                                         dialogue_state.select(Some(idx));
                                         content_scrolls.clear();
                                     }
