@@ -201,7 +201,8 @@ pub(crate) fn content_position_at(
 /// Walks the wrapped display and maps each line onto the block whose open
 /// marker owns it: the tag line, the expanded body, and the close marker all
 /// belong to the same block, so clicking anywhere on an expanded block (or
-/// on its tag) toggles it.
+/// on its tag) toggles it. A merged tool group's `result:` section stays
+/// inside the same block as its `call:` section.
 pub(crate) fn content_structure_block_at(
     area: Rect,
     text: &str,
@@ -220,8 +221,9 @@ pub(crate) fn content_structure_block_at(
             .collect::<String>()
     };
 
-    // Map each displayed line to the block that owns it. Collapsed blocks own
-    // only their tag line; expanded blocks own the tag, body, and close marker.
+    // Map each displayed line to the block that owns it. A block runs from
+    // its open marker to the last close marker before the next block's open;
+    // a collapsed block owns only its tag line.
     let mut ownership = vec![None; lines.len()];
     let mut block = 0usize;
     let mut idx = 0usize;
@@ -232,19 +234,15 @@ pub(crate) fn content_structure_block_at(
             continue;
         }
         ownership[idx] = Some(block);
-        // An expanded block ends at its matching close marker (before the next
-        // open marker); a collapsed block is just the tag line.
-        let inner = open_marker_inner(&text);
         let mut end = idx;
         let mut scan = idx + 1;
         while scan < lines.len() {
             let candidate = joined(scan);
-            if is_open_marker(&candidate) {
+            if is_open_marker(&candidate) && !is_result_section(&candidate) {
                 break;
             }
-            if close_marker_inner(&candidate) == inner {
+            if candidate.starts_with("<:/") {
                 end = scan;
-                break;
             }
             scan += 1;
         }
@@ -261,12 +259,14 @@ fn is_open_marker(text: &str) -> bool {
     crate::tui::content::text::is_structure_marker(text) && !text.starts_with("<:/")
 }
 
-fn open_marker_inner(text: &str) -> Option<&str> {
-    text.strip_prefix("<:")?.strip_suffix(":>")
+/// A `result:` section marker (`<:tool:… result:>`) belongs to the preceding
+/// `call:` block, not a new block.
+fn is_result_section(text: &str) -> bool {
+    open_marker_inner(text).is_some_and(|inner| inner.ends_with(" result"))
 }
 
-fn close_marker_inner(text: &str) -> Option<&str> {
-    text.strip_prefix("<:/")?.strip_suffix(":>")
+fn open_marker_inner(text: &str) -> Option<&str> {
+    text.strip_prefix("<:")?.strip_suffix(":>")
 }
 
 pub(crate) fn content_position_in_text_row(
@@ -1755,6 +1755,55 @@ mod tests {
         assert_eq!(
             content_structure_block_at(area, text, ContentViewMode::Reading, plain),
             None
+        );
+    }
+
+    #[test]
+    fn structure_block_at_keeps_tool_result_section_inside_the_group() {
+        let area = Rect::new(0, 0, 40, 20);
+        // A merged tool group: call section + result section share one block.
+        let text = "<:tool:Bash call:>\ninput\n<:/tool:Bash call:>\n<:tool:Bash result:>\noutput\n<:/tool:Bash result:>\n<:tool:Read call:>";
+        let (lines, _) = super::content_layout(area, text, ContentViewMode::Reading);
+        let displayed_of = |needle: &str| {
+            lines
+                .iter()
+                .enumerate()
+                .find_map(|(idx, line)| {
+                    let joined: String = line
+                        .line
+                        .spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect();
+                    joined.contains(needle).then_some(idx)
+                })
+                .unwrap()
+        };
+        let call_tag = displayed_of("<:tool:Bash call:>");
+        let call_body = displayed_of("input");
+        let call_close = displayed_of("<:/tool:Bash call:>");
+        let result_tag = displayed_of("<:tool:Bash result:>");
+        let result_body = displayed_of("output");
+        let result_close = displayed_of("<:/tool:Bash result:>");
+        let next_tag = displayed_of("<:tool:Read call:>");
+        // Everything from the call tag through the result close is block 0.
+        for line in [
+            call_tag,
+            call_body,
+            call_close,
+            result_tag,
+            result_body,
+            result_close,
+        ] {
+            assert_eq!(
+                content_structure_block_at(area, text, ContentViewMode::Reading, line),
+                Some(0),
+                "line {line} should belong to the merged tool group"
+            );
+        }
+        assert_eq!(
+            content_structure_block_at(area, text, ContentViewMode::Reading, next_tag),
+            Some(1)
         );
     }
 }

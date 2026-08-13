@@ -36,22 +36,63 @@ fn io_body_text(
     }
     let mut block = 0usize;
     let mut chunks = Vec::new();
-    for part in &parts {
+    let mut idx = 0usize;
+    while idx < parts.len() {
+        let part = parts[idx];
         if part.kind().is_structure() {
-            let idx = block;
+            // A ToolCall and its matching ToolResult fold into one block, so a
+            // tool invocation reads as a single unit: one tag when collapsed,
+            // the call and its result side by side when expanded.
+            let group_end = structure_group_end(&parts, idx);
+            let block_idx = block;
             block += 1;
             // Raw mode always shows full blocks; read mode folds to the tag
             // unless the block was expanded.
-            if !reading || expanded.contains(&idx) {
-                chunks.push(sivtr_core::record::format_work_part(part));
+            if !reading || expanded.contains(&block_idx) {
+                let mut body = Vec::new();
+                for grouped in &parts[idx..=group_end] {
+                    body.push(sivtr_core::record::format_work_part(grouped));
+                }
+                chunks.push(body.join("\n\n"));
             } else {
                 chunks.push(structure_fold_label(part));
             }
+            idx = group_end + 1;
         } else {
             chunks.push(part.text().into_owned());
+            idx += 1;
         }
     }
     chunks.join("\n\n")
+}
+
+/// Last part of the structure group starting at `start`: a ToolCall followed
+/// by a ToolResult with the same call id is one group; anything else is a
+/// single-part group.
+fn structure_group_end(parts: &[&sivtr_core::record::WorkPart], start: usize) -> usize {
+    if !matches!(
+        parts[start].kind(),
+        sivtr_core::record::WorkPartKind::ToolCall
+    ) {
+        return start;
+    }
+    match parts.get(start + 1) {
+        Some(result)
+            if matches!(result.kind(), sivtr_core::record::WorkPartKind::ToolResult)
+                && part_call_id(result) == part_call_id(parts[start]) =>
+        {
+            start + 1
+        }
+        _ => start,
+    }
+}
+
+fn part_call_id(part: &sivtr_core::record::WorkPart) -> Option<&str> {
+    match &part.data {
+        sivtr_core::record::WorkPartData::ToolCall { call_id, .. }
+        | sivtr_core::record::WorkPartData::ToolResult { call_id, .. } => call_id.as_deref(),
+        _ => None,
+    }
 }
 
 pub(crate) fn structured_part_text(part: &sivtr_core::record::WorkPart) -> String {
@@ -63,10 +104,39 @@ pub(crate) fn structured_part_text(part: &sivtr_core::record::WorkPart) -> Strin
 }
 
 fn structure_fold_label(part: &sivtr_core::record::WorkPart) -> String {
-    part.kind()
+    let marker = part
+        .kind()
         .as_agent_block_kind()
         .and_then(|kind| kind.open_marker(part.label()))
-        .unwrap_or_else(|| "<:structure:>".to_string())
+        .unwrap_or_else(|| "<:structure:>".to_string());
+    match tool_description(part) {
+        Some(description) => match marker.strip_suffix(":>") {
+            Some(base) => format!("{base}: {description}:>"),
+            None => marker,
+        },
+        None => marker,
+    }
+}
+
+/// Human description from a tool call's input (`description` field), if any,
+/// truncated to fit the tag line.
+fn tool_description(part: &sivtr_core::record::WorkPart) -> Option<String> {
+    let sivtr_core::record::WorkPartData::ToolCall { input, .. } = &part.data else {
+        return None;
+    };
+    let description = input
+        .get("description")
+        .and_then(serde_json::Value::as_str)?;
+    let description = description.trim();
+    if description.is_empty() {
+        return None;
+    }
+    const MAX: usize = 40;
+    let mut truncated: String = description.chars().take(MAX).collect();
+    if description.chars().count() > MAX {
+        truncated.push('…');
+    }
+    Some(truncated)
 }
 
 pub(crate) fn workspace_content_text(
@@ -172,6 +242,18 @@ mod tests {
         }
     }
 
+    fn tool_result_part(seq: usize, tool: &str, output: &str) -> WorkPart {
+        WorkPart {
+            seq,
+            occurred_at: None,
+            data: WorkPartData::ToolResult {
+                call_id: None,
+                tool: Some(tool.to_string()),
+                output: serde_json::json!({ "stdout": output }),
+            },
+        }
+    }
+
     fn record(parts: Vec<WorkPart>) -> WorkRecord {
         WorkRecord {
             schema_version: 2,
@@ -226,5 +308,80 @@ mod tests {
         assert!(io.output.contains("<:tool:Bash call:>"));
         assert!(io.output.contains("ls"));
         assert!(io.output.contains("<:/tool:Bash call:>"));
+    }
+
+    #[test]
+    fn tool_call_and_result_fold_into_one_tag() {
+        let rec = record(vec![
+            tool_part(1, "Bash", "ls"),
+            tool_result_part(2, "Bash", "ok"),
+            tool_part(3, "Read", "file"),
+        ]);
+        let io = content_io_from_record(&rec, true, &ExpandedBlocks::default());
+        let output = &io.output;
+        // Collapsed: one tag for the call+result group, then the Read tag;
+        // the result payload stays hidden.
+        assert!(output.contains("<:tool:Bash call:>"));
+        assert!(!output.contains("<:tool:Bash result:>"));
+        assert!(!output.contains("ok"));
+        assert!(output.contains("<:tool:Read call:>"));
+        let bash = output.find("<:tool:Bash call:>").expect("bash tag");
+        let read = output.find("<:tool:Read call:>").expect("read tag");
+        assert!(bash < read);
+
+        // Expanding the group reveals the result inside the same block.
+        let mut expanded = ExpandedBlocks::default();
+        expanded.toggle(ContentIoFocus::Output, 0);
+        let io = content_io_from_record(&rec, true, &expanded);
+        let output = &io.output;
+        assert!(output.contains("<:tool:Bash result:>"));
+        assert!(output.contains("ok"));
+        assert!(output.contains("<:/tool:Bash result:>"));
+        // The Read block is untouched.
+        assert!(!output.contains("file"));
+    }
+
+    #[test]
+    fn fold_label_shows_tool_description_when_present() {
+        let rec = record(vec![WorkPart {
+            seq: 1,
+            occurred_at: None,
+            data: WorkPartData::ToolCall {
+                call_id: None,
+                tool: Some("Bash".to_string()),
+                input: serde_json::json!({
+                    "command": "git diff",
+                    "description": "Review working tree",
+                }),
+            },
+        }]);
+        let io = content_io_from_record(&rec, true, &ExpandedBlocks::default());
+        assert!(io
+            .output
+            .contains("<:tool:Bash call: Review working tree:>"));
+
+        // Long descriptions are truncated to fit the tag line.
+        let rec = record(vec![WorkPart {
+            seq: 1,
+            occurred_at: None,
+            data: WorkPartData::ToolCall {
+                call_id: None,
+                tool: Some("Bash".to_string()),
+                input: serde_json::json!({
+                    "command": "git diff",
+                    "description": "Review working tree and diff size for this change, then summarize",
+                }),
+            },
+        }]);
+        let io = content_io_from_record(&rec, true, &ExpandedBlocks::default());
+        let tag = io.output.find("<:tool:Bash call: ").expect("tag");
+        let line = &io.output[tag..];
+        assert!(line.starts_with("<:tool:Bash call: Review working tree and diff size for th…:>"));
+        assert!(!line.starts_with("<:tool:Bash call: Review working tree and diff size for this"));
+
+        // No description: the plain tag stays.
+        let rec = record(vec![tool_part(1, "Bash", "ls")]);
+        let io = content_io_from_record(&rec, true, &ExpandedBlocks::default());
+        assert!(io.output.contains("<:tool:Bash call:>"));
     }
 }

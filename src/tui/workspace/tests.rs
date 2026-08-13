@@ -203,9 +203,10 @@ fn reading_mode_folds_structure_and_raw_expands() {
         &ExpandedBlocks::default(),
     );
     assert!(reading_io.input.contains("question"));
-    // Reading folds each structure part to its tag line; payloads are dropped.
+    // Reading folds each structure group to its tag line; the call+result
+    // pair collapses to one tag, so the result tag and payload are dropped.
     assert!(reading_io.output.contains("<:tool:Bash call:>"));
-    assert!(reading_io.output.contains("<:tool:Bash result:>"));
+    assert!(!reading_io.output.contains("<:tool:Bash result:>"));
     assert!(reading_io.output.contains("answer"));
     assert!(!reading.contains("cargo test"));
     assert!(!reading.contains("ok"));
