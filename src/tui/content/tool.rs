@@ -1,11 +1,12 @@
 //! Shape-driven tool display for the content pane.
 //!
-//! Tool calls get per-tool names and input expressions instead of the generic
-//! `<:tool:Name call:>` marker: `<:read: src/main.rs:12-30:>`, expanded to a
-//! `$` input line with a code/diff preview, and `>` output lines. The
-//! formatter keys off the normalized `tool` name and the `input` / `output`
-//! JSON, so every provider (claude, grok, codex, …) flows through one code
-//! path — display only; evidence export keeps its original markers.
+//! Tool calls are classified by category — command (`$ cmd`), read (`$ read
+//! path` + code preview), search (`$ grep pattern`), edit (diff preview),
+//! web (`$ webfetch url`) — and get per-tool tags (`<:read: src/main.rs:12-30:>`)
+//! instead of the generic `<:tool:Name call:>` marker. The formatter keys off
+//! the normalized `tool` name and the `input` / `output` JSON, so every
+//! provider (claude, grok, codex, opencode, …) flows through one code path —
+//! display only; evidence export keeps its original markers.
 
 use serde_json::Value;
 use sivtr_core::record::{WorkPart, WorkPartData};
@@ -13,24 +14,82 @@ use sivtr_core::record::{WorkPart, WorkPartData};
 /// Long input expressions are truncated to fit a tag line.
 const MAX_EXPR: usize = 40;
 
-/// Canonical short name for known tools (`Read` → `read`, `apply_patch` →
-/// `patch`); `None` for unknown tools that keep the generic tool marker.
-/// Covers provider tool names: claude (`Read`), opencode (`read`), codex
-/// (`apply_patch`), grok build (`read_file`, `run_terminal_command`,
-/// `search_replace`).
-fn known_name(tool: &str) -> Option<&'static str> {
-    match tool.to_ascii_lowercase().as_str() {
-        "read" | "read_file" => Some("read"),
-        "grep" | "search_files" => Some("grep"),
-        "edit" | "search_replace" => Some("edit"),
-        "write" => Some("write"),
-        "bash" | "shell" | "run_terminal_command" => Some("bash"),
-        "apply_patch" | "patch" => Some("patch"),
-        "webfetch" | "web_fetch" => Some("webfetch"),
-        "websearch" | "web_search" => Some("websearch"),
-        "notebookedit" | "notebook_edit" => Some("notebook-edit"),
-        _ => None,
-    }
+/// Tool category: drives how a tool call is displayed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolCategory {
+    /// Shell-like: `$ command` is the whole instruction (`bash`, `exec`,
+    /// `run_terminal_command`, `shell_command`).
+    Command,
+    /// File read: `$ read path:lines`, code preview from the result.
+    Read,
+    /// Text search: `$ grep pattern`.
+    Search,
+    /// File modification: diff preview from the input (`edit`, `write`,
+    /// `apply_patch`).
+    Edit,
+    /// Remote fetch: `$ webfetch url`.
+    Web,
+}
+
+/// Display spec of a known tool: its category and canonical tag name.
+struct ToolSpec {
+    category: ToolCategory,
+    name: &'static str,
+}
+
+/// Known tools by provider name (claude `Read`, opencode `read`, codex
+/// `apply_patch`/`exec`, grok build `read_file`/`run_terminal_command`/
+/// `search_replace`); `None` for unknown tools that keep the generic marker.
+fn tool_spec(tool: &str) -> Option<&'static ToolSpec> {
+    use ToolCategory::*;
+    Some(match tool.to_ascii_lowercase().as_str() {
+        "bash"
+        | "shell"
+        | "run_terminal_command"
+        | "shell_command"
+        | "run_command"
+        | "run_command_or_subagent" => &ToolSpec {
+            category: Command,
+            name: "bash",
+        },
+        "exec" => &ToolSpec {
+            category: Command,
+            name: "exec",
+        },
+        "read" | "read_file" => &ToolSpec {
+            category: Read,
+            name: "read",
+        },
+        "grep" | "search_files" => &ToolSpec {
+            category: Search,
+            name: "grep",
+        },
+        "edit" | "search_replace" => &ToolSpec {
+            category: Edit,
+            name: "edit",
+        },
+        "write" => &ToolSpec {
+            category: Edit,
+            name: "write",
+        },
+        "apply_patch" | "patch" => &ToolSpec {
+            category: Edit,
+            name: "patch",
+        },
+        "notebookedit" | "notebook_edit" => &ToolSpec {
+            category: Edit,
+            name: "notebook-edit",
+        },
+        "webfetch" | "web_fetch" => &ToolSpec {
+            category: Web,
+            name: "webfetch",
+        },
+        "websearch" | "web_search" => &ToolSpec {
+            category: Web,
+            name: "websearch",
+        },
+        _ => return None,
+    })
 }
 
 /// Grok's MCP dispatcher: `use_tool` calls a `server__tool` by name.
@@ -46,14 +105,14 @@ pub(crate) fn tool_display_name(tool: &str) -> String {
             return format!("{server}: {name}");
         }
     }
-    known_name(tool)
-        .map(str::to_string)
+    tool_spec(tool)
+        .map(|spec| spec.name.to_string())
         .unwrap_or_else(|| tool.to_ascii_lowercase())
 }
 
 /// Whether the tool gets the new per-tool rendering (known names + MCP).
 fn is_known_tool(tool: &str) -> bool {
-    known_name(tool).is_some() || tool.starts_with("mcp__") || is_use_tool(tool)
+    tool_spec(tool).is_some() || tool.starts_with("mcp__") || is_use_tool(tool)
 }
 
 /// Display name of a call: `use_tool` shows its target tool, others the
@@ -69,18 +128,18 @@ fn tool_call_name(tool: &str, input: &Value) -> String {
 /// Folded tag for a tool *call*: MCP tools always (`<:sivtr: sivtr_search:>`),
 /// `use_tool` as its target tool, known tools when the input shape is
 /// understood (`<:bash: ls:>`); `None` keeps the generic `<:tool:Name call:>`
-/// marker.
+/// marker. Long expressions are truncated to fit the tag line.
 pub(crate) fn tool_tag(tool: &str, value: &Value) -> Option<String> {
     if tool.starts_with("mcp__") || is_use_tool(tool) {
         return Some(format!("<:{}:>", tool_call_name(tool, value)));
     }
-    let name = known_name(tool)?;
-    if name == "patch" {
+    let spec = tool_spec(tool)?;
+    if spec.name == "patch" {
         // apply_patch always carries a raw patch string; no short expr.
-        return Some(format!("<:{name}:>"));
+        return Some("<:patch:>".to_string());
     }
     let expr = tool_input_expr(tool, value)?;
-    Some(format!("<:{name}: {expr}:>"))
+    Some(format!("<:{}: {}:>", spec.name, truncate(expr)))
 }
 
 /// New-style folded tag for a tool part, when the tool is known: calls get
@@ -112,7 +171,6 @@ fn tool_renderable_call(tool: &str, input: &Value) -> bool {
         || tool_input_expr(tool, input).is_some()
         || diff_preview(tool, input).is_some()
 }
-
 /// Display body of one part: the `$`/`>` tool format for understood tool
 /// shapes, the evidence format otherwise.
 pub(crate) fn part_body_text(part: &WorkPart) -> String {
@@ -149,35 +207,49 @@ fn use_tool_name(input: &Value) -> Option<String> {
 
 /// Input expression from a tool call's input JSON: `src/main.rs:12-30`,
 /// `export function foo`, `cd src && make`… `None` when the shape is unknown.
+/// Full text; callers truncate for tag lines.
 fn tool_input_expr(tool: &str, input: &Value) -> Option<String> {
-    let name = known_name(tool)?;
-    if name == "patch" {
-        return None; // apply_patch carries a raw patch string, no short expr.
-    }
-    let obj = input.as_object()?;
-    let expr = match name {
-        "read" => {
+    let spec = tool_spec(tool)?;
+    let expr = match spec.category {
+        ToolCategory::Command => match input {
+            Value::String(script) => script.trim().to_string(),
+            _ => input
+                .as_object()?
+                .get("command")?
+                .as_str()?
+                .trim()
+                .to_string(),
+        },
+        ToolCategory::Read => {
+            let obj = input.as_object()?;
             let path = path_field(obj)?;
             match line_range(obj) {
                 Some(range) => format!("{path}:{range}"),
                 None => path.to_string(),
             }
         }
-        "grep" => obj.get("pattern")?.as_str()?.trim().to_string(),
-        "edit" | "write" => path_field(obj)?.to_string(),
-        "bash" => obj.get("command")?.as_str()?.trim().to_string(),
-        "webfetch" | "websearch" => obj
-            .get("url")
-            .or_else(|| obj.get("query"))?
+        ToolCategory::Search => input
+            .as_object()?
+            .get("pattern")?
             .as_str()?
             .trim()
             .to_string(),
-        _ => return None,
+        ToolCategory::Edit => match spec.name {
+            "patch" => return None,
+            _ => path_field(input.as_object()?)?.to_string(),
+        },
+        ToolCategory::Web => input
+            .as_object()?
+            .get("url")
+            .or_else(|| input.as_object()?.get("query"))?
+            .as_str()?
+            .trim()
+            .to_string(),
     };
     if expr.is_empty() {
         return None;
     }
-    Some(truncate(expr))
+    Some(expr)
 }
 
 /// File path field: `file_path` (claude/grok), `filePath` (opencode),
@@ -212,11 +284,11 @@ fn line_range(obj: &serde_json::Map<String, Value>) -> Option<String> {
 }
 
 /// Expanded body of a tool call: the `$` input line, plus a diff preview
-/// for write/edit (which carry content in the input).
+/// for edit/write (which carry content in the input).
 pub(crate) fn tool_call_text(tool: &str, input: &Value) -> String {
     let name = tool_call_name(tool, input);
     let expr = tool_input_expr(tool, input);
-    let line = if known_name(tool) == Some("bash") {
+    let line = if tool_spec(tool).is_some_and(|spec| spec.category == ToolCategory::Command) {
         // `$` is the shell prompt: the command is the whole instruction.
         format!("$ {}", expr.unwrap_or(name))
     } else {
@@ -232,28 +304,36 @@ pub(crate) fn tool_call_text(tool: &str, input: &Value) -> String {
 }
 
 /// Diff preview from the tool input: `+` lines for write content, `-`/`+`
-/// for edit old/new strings, inside a ```diff fence the pane colors.
+/// for edit old/new strings, the raw unified diff for apply_patch, inside a
+/// ```diff fence the pane colors.
 fn diff_preview(tool: &str, input: &Value) -> Option<String> {
-    let name = known_name(tool)?;
-    if name == "patch" {
-        // apply_patch (codex) carries the whole unified diff as a string.
-        let Value::String(patch) = input else {
-            return None;
-        };
-        let patch = patch.trim_end();
-        if patch.is_empty() {
-            return None;
-        }
-        return Some(format!("```diff\n{patch}\n```"));
+    let spec = tool_spec(tool)?;
+    if spec.category != ToolCategory::Edit {
+        return None;
     }
-    let obj = input.as_object()?;
-    let mut diff = Vec::new();
-    match name {
-        "write" => {
-            let content = obj.get("content")?.as_str()?;
-            diff.extend(content.lines().map(|line| format!("+ {line}")));
+    let diff = match spec.name {
+        "patch" => {
+            let Value::String(patch) = input else {
+                return None;
+            };
+            let patch = patch.trim_end();
+            if patch.is_empty() {
+                return None;
+            }
+            patch.to_string()
         }
-        "edit" => {
+        "write" => {
+            let content = input.as_object()?.get("content")?.as_str()?;
+            content
+                .lines()
+                .map(|line| format!("+ {line}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+        _ => {
+            // edit / notebook-edit: old_string → `-`, new_string → `+`.
+            let obj = input.as_object()?;
+            let mut diff = Vec::new();
             if let Some(old_string) = obj
                 .get("old_string")
                 .or_else(|| obj.get("oldString"))
@@ -268,13 +348,13 @@ fn diff_preview(tool: &str, input: &Value) -> Option<String> {
             {
                 diff.extend(new_string.lines().map(|line| format!("+ {line}")));
             }
+            if diff.is_empty() {
+                return None;
+            }
+            diff.join("\n")
         }
-        _ => return None,
-    }
-    if diff.is_empty() {
-        return None;
-    }
-    Some(format!("```diff\n{}\n```", diff.join("\n")))
+    };
+    Some(format!("```diff\n{diff}\n```"))
 }
 
 /// Expanded body of a tool result: `>` output lines, or a code block for
@@ -284,7 +364,7 @@ pub(crate) fn tool_result_text(tool: &str, output: &Value) -> String {
         Value::String(text) => text.clone(),
         _ => serde_json::to_string_pretty(output).unwrap_or_default(),
     };
-    if known_name(tool) == Some("read") {
+    if tool_spec(tool).is_some_and(|spec| spec.category == ToolCategory::Read) {
         format!("```\n{}\n```", text.trim_end())
     } else {
         text.lines()
@@ -515,6 +595,26 @@ mod tests {
             part_body_text(&patch),
             "$ patch\n```diff\n*** Begin Patch\n*** Update File: a.rs\n@@\n-old\n+new\n```"
         );
+    }
+
+    #[test]
+    fn exec_is_a_command_like_bash() {
+        let script =
+            "const skill = await tools.shell_command({command:\"cargo build\"});\ntext(skill);";
+        let exec = call("exec", serde_json::json!(script));
+        // Command category: `$` line with the command, tag with the tool
+        // name, long scripts truncated to fit the tag line.
+        let tag = tool_tag_for_part(&exec).unwrap();
+        assert!(tag.starts_with("<:exec: const skill = await tools.shell_command("));
+        assert!(tag.ends_with("…:>"));
+        assert_eq!(part_body_text(&exec), format!("$ {script}"));
+
+        let shell = call(
+            "shell_command",
+            serde_json::json!({"command": "cargo test"}),
+        );
+        assert_eq!(tool_tag_for_part(&shell).unwrap(), "<:bash: cargo test:>");
+        assert_eq!(part_body_text(&shell), "$ cargo test");
     }
 
     #[test]

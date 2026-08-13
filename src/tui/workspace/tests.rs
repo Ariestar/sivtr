@@ -205,10 +205,10 @@ fn reading_mode_folds_structure_and_raw_expands() {
     assert!(reading_io.input.contains("question"));
     // Reading folds each structure group to its tag line; the call+result
     // pair collapses to one tag, so the result tag and payload are dropped.
-    assert!(reading_io.output.contains("<:tool:Bash call:>"));
+    assert!(reading_io.output.contains("<:bash: cargo test:>"));
     assert!(!reading_io.output.contains("<:tool:Bash result:>"));
     assert!(reading_io.output.contains("answer"));
-    assert!(!reading.contains("cargo test"));
+    assert!(!reading.contains("$ cargo test"));
     assert!(!reading.contains("ok"));
     assert!(!reading.contains("codex/session"));
     assert!(!reading.contains("## User"));
@@ -226,8 +226,7 @@ fn reading_mode_folds_structure_and_raw_expands() {
     let raw = workspace_content_text(&[dialogue], &[false], 0, ContentViewMode::Raw, None);
     assert!(raw_io.input.contains("question"));
     assert!(raw_io.output.contains("cargo test"));
-    assert!(raw_io.output.contains("<:tool:Bash call:>"));
-    assert!(raw_io.output.contains("<:/tool:Bash call:>"));
+    assert!(raw_io.output.contains("$ cargo test"));
     // Known results use the `>` output format.
     assert!(raw_io.output.contains("> ok"));
     assert!(raw_io.output.contains("ok"));
@@ -431,7 +430,7 @@ fn reading_mode_keeps_structure_runs_in_call_order() {
     // Tags sit between the assistant chunks, matching the call order.
     let output = &reading_io.output;
     let first_text = output.find("checking first").expect("first assistant text");
-    let tag = output.find("<:tool:Bash call:>").expect("tool tag");
+    let tag = output.find("<:bash: ls:>").expect("tool tag");
     let last_text = output.find("all done").expect("last assistant text");
     assert!(first_text < tag);
     assert!(tag < last_text);
