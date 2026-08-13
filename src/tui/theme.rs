@@ -42,7 +42,6 @@ pub(crate) struct Theme {
     pub(crate) local_origin: Color,
     pub(crate) remote_origin: Color,
     pub(crate) focus_bg: Color,
-    pub(crate) focus_fg: Color,
     pub(crate) selected_bg: Color,
     pub(crate) selected_fg: Color,
     pub(crate) range_fg: Color,
@@ -167,8 +166,7 @@ impl Theme {
             dim: Color::Rgb(71, 85, 105),               // slate-600
             local_origin: Color::Rgb(52, 211, 153),     // emerald-400
             remote_origin: Color::Rgb(244, 114, 182),   // pink-400
-            focus_bg: Color::Rgb(71, 85, 105),          // slate-600 (gray, lighter than selection)
-            focus_fg: Color::Rgb(241, 245, 249),        // slate-100
+            focus_bg: Color::Rgb(100, 116, 139),        // slate-500 (light gray tint)
             selected_bg: Color::Rgb(51, 65, 85),        // slate-700
             selected_fg: Color::Rgb(226, 232, 240),     // slate-200
             range_fg: Color::Rgb(251, 191, 36),         // amber-400
@@ -197,8 +195,7 @@ impl Theme {
             dim: Color::Rgb(148, 163, 184),            // slate-400
             local_origin: Color::Rgb(5, 150, 105),     // emerald-600
             remote_origin: Color::Rgb(219, 39, 119),   // pink-600
-            focus_bg: Color::Rgb(203, 213, 225),       // slate-300 (gray, darker than selection)
-            focus_fg: Color::Rgb(30, 41, 59),          // slate-800
+            focus_bg: Color::Rgb(226, 232, 240),       // slate-200 (light gray tint)
             selected_bg: Color::Rgb(226, 232, 240),    // slate-200
             selected_fg: Color::Rgb(51, 65, 85),       // slate-700
             range_fg: Color::Rgb(217, 119, 6),         // amber-600
@@ -230,7 +227,6 @@ impl Theme {
             local_origin: Color::Green,
             remote_origin: Color::Magenta,
             focus_bg: Color::Gray,
-            focus_fg: Color::Black,
             selected_bg: Color::DarkGray,
             selected_fg: Color::White,
             range_fg: Color::Yellow,
@@ -263,7 +259,6 @@ impl Theme {
             local_origin: Color::Blue,
             remote_origin: Color::Magenta,
             focus_bg: Color::Gray,
-            focus_fg: Color::Black,
             selected_bg: Color::DarkGray,
             selected_fg: Color::White,
             range_fg: Color::Blue,
@@ -369,13 +364,10 @@ pub(crate) fn dim() -> Color {
     ACTIVE.get().dim
 }
 
-/// Cursor / focus highlight on a list row.
+/// Cursor / focus highlight on a list row or content block: a subtle gray
+/// tint that leaves the text foreground untouched, so reading is unaffected.
 pub(crate) fn focus_row() -> Style {
-    let theme = ACTIVE.get();
-    Style::default()
-        .bg(theme.focus_bg)
-        .fg(theme.focus_fg)
-        .add_modifier(Modifier::BOLD)
+    Style::default().bg(ACTIVE.get().focus_bg)
 }
 
 /// Multi-selected row (not necessarily focused).
