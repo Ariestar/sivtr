@@ -300,13 +300,15 @@ fn reading_mode_collapses_adjacent_structure_runs() {
         None,
     );
     assert!(reading_io.input.contains("do it"));
-    // Every structure part folds to its own tag line in the reading text.
+    // Adjacent same-kind structure parts fold into one run tag each.
     let output = &reading_io.output;
-    assert!(output.contains("<:tool:Bash call:>"));
-    assert!(output.contains("<:tool:Read call:>"));
+    assert!(output.contains("<:tool x2:>"));
+    assert!(!output.contains("<:tool:Bash call:>"));
+    assert!(!output.contains("<:tool:Read call:>"));
     let input = &reading_io.input;
-    assert!(input.contains("<:skill:review:>"));
-    assert!(input.contains("<:skill:deploy:>"));
+    assert!(input.contains("<:skill x2:>"));
+    assert!(!input.contains("<:skill:review:>"));
+    assert!(!input.contains("<:skill:deploy:>"));
     assert!(reading_io.output.contains("done"));
     assert!(!reading.contains("file"));
     assert!(!reading.contains("skill body"));
@@ -314,9 +316,10 @@ fn reading_mode_collapses_adjacent_structure_runs() {
 }
 
 #[test]
-fn reading_mode_counts_identical_structure_markers_regardless_of_order() {
+fn reading_mode_folds_consecutive_same_kind_runs() {
     let record = chat_record(vec![
-        // Interleaved with dialogue — still one IO-section fold, same markers count.
+        // Interleaved with dialogue — the output half still sees the tool
+        // calls as one consecutive run.
         part(
             1,
             sivtr_core::record::WorkPartData::ToolCall {
@@ -366,20 +369,14 @@ fn reading_mode_counts_identical_structure_markers_regardless_of_order() {
         None,
         &ExpandedBlocks::default(),
     );
-    // Every structure part keeps its own tag line, in call order.
+    // The four output-half tool calls fold into one run tag.
     assert!(reading_io.input.contains("middle note"));
     let output = &reading_io.output;
-    assert!(output.contains("<:tool:Bash call:>"));
-    assert!(output.contains("<:tool:Read call:>"));
+    assert!(output.contains("<:tool x4:>"));
+    assert!(!output.contains("<:tool:Bash call:>"));
     assert!(!output.contains("file"));
     assert!(!output.contains("pwd"));
     assert!(!output.contains("date"));
-    // Tags stay in call order within the output half.
-    let first = output.find("<:tool:Bash call:>").expect("first bash tag");
-    let read = output.find("<:tool:Read call:>").expect("read tag");
-    let second_bash = output.rfind("<:tool:Bash call:>").expect("later bash tag");
-    assert!(first < read);
-    assert!(read < second_bash);
 }
 
 #[test]

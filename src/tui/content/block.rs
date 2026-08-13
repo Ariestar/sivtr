@@ -2,7 +2,9 @@
 //!
 //! A block is the smallest unit the content pane highlights, navigates, and
 //! folds: one workpart, or a ToolCall + ToolResult pair with the same call id
-//! (they read as one tool invocation). Structure blocks default to their
+//! (they read as one tool invocation). Consecutive structure parts of the
+//! same kind (thinking / skill / tool) fold into one run block that
+//! collapses to a single `kind xN` tag. Structure blocks default to their
 //! `<:…:>` tag; body blocks default to their full text — one fold model, no
 //! structure-only special cases.
 
@@ -17,6 +19,9 @@ pub(crate) struct Block {
     /// Indices into the record's parts, in display order.
     pub(crate) parts: Vec<usize>,
     pub(crate) kind: WorkPartKind,
+    /// Number of folded units (tool call+result pairs, thinking, skill…);
+    /// drives the `kind xN` fold label.
+    pub(crate) count: usize,
 }
 
 impl Block {
@@ -24,7 +29,8 @@ impl Block {
         self.kind.is_structure()
     }
 
-    /// Full body: every part formatted as in the current content text.
+    /// Full body: every part formatted as in the current content text. Run
+    /// members join on adjacent lines — same-kind calls read as one series.
     pub(crate) fn body(&self, record: &WorkRecord) -> String {
         self.parts
             .iter()
@@ -37,19 +43,45 @@ impl Block {
                 }
             })
             .collect::<Vec<_>>()
-            .join("\n\n")
+            .join("\n")
     }
 
-    /// Collapsed tag: the structure marker (with tool description when
-    /// present) for structure blocks, `<:kind:>` for body blocks.
+    /// Collapsed tag: `<:kind xN:>` for a run of N > 1, otherwise the
+    /// structure marker (with tool description when present) for structure
+    /// blocks, `<:kind:>` for body blocks.
     pub(crate) fn fold_label(&self, record: &WorkRecord) -> String {
-        fold_label_for_part(&record.parts[self.parts[0]])
+        if self.count > 1 {
+            format!("<:{} x{}:>", run_kind_name(self.kind), self.count)
+        } else {
+            fold_label_for_part(&record.parts[self.parts[0]])
+        }
+    }
+}
+
+/// The run identity for structure blocks: consecutive parts with the same
+/// identity fold into one `kind xN` block.
+fn run_kind(kind: WorkPartKind) -> u8 {
+    match kind {
+        WorkPartKind::ToolCall | WorkPartKind::ToolResult => 0,
+        WorkPartKind::Skill => 1,
+        WorkPartKind::Thinking => 2,
+        _ => 3,
+    }
+}
+
+fn run_kind_name(kind: WorkPartKind) -> &'static str {
+    match kind {
+        WorkPartKind::ToolCall | WorkPartKind::ToolResult => "tool",
+        WorkPartKind::Skill => "skill",
+        WorkPartKind::Thinking => "thinking",
+        _ => "block",
     }
 }
 
 /// Partition one IO half's parts into blocks: a ToolCall followed by a
-/// ToolResult with the same call id folds into one block; anything else is
-/// one part per block.
+/// ToolResult with the same call id folds into one unit, and consecutive
+/// structure units of the same kind fold into one run; anything else is one
+/// part per block.
 pub(crate) fn half_blocks(record: &WorkRecord, input: bool) -> Vec<Block> {
     let parts: Vec<usize> = record
         .parts
@@ -59,7 +91,7 @@ pub(crate) fn half_blocks(record: &WorkRecord, input: bool) -> Vec<Block> {
         .map(|(idx, _)| idx)
         .collect();
 
-    let mut blocks = Vec::new();
+    let mut units: Vec<Block> = Vec::new();
     let mut idx = 0usize;
     while idx < parts.len() {
         let first = parts[idx];
@@ -75,11 +107,27 @@ pub(crate) fn half_blocks(record: &WorkRecord, input: bool) -> Vec<Block> {
         } else {
             idx
         };
-        blocks.push(Block {
+        units.push(Block {
             parts: parts[idx..=group_end].to_vec(),
             kind,
+            count: 1,
         });
         idx = group_end + 1;
+    }
+
+    let mut blocks: Vec<Block> = Vec::new();
+    for unit in units {
+        let same_run = unit.kind.is_structure()
+            && blocks.last().is_some_and(|last| {
+                last.kind.is_structure() && run_kind(last.kind) == run_kind(unit.kind)
+            });
+        if same_run {
+            let last = blocks.last_mut().expect("run block exists");
+            last.parts.extend(unit.parts);
+            last.count += unit.count;
+        } else {
+            blocks.push(unit);
+        }
     }
     blocks
 }
@@ -223,6 +271,16 @@ mod tests {
         }
     }
 
+    fn thinking_part(seq: usize, content: &str) -> WorkPart {
+        WorkPart {
+            seq,
+            occurred_at: None,
+            data: WorkPartData::Thinking {
+                content: content.to_string(),
+            },
+        }
+    }
+
     fn record(parts: Vec<WorkPart>) -> WorkRecord {
         WorkRecord {
             schema_version: RECORD_SCHEMA_VERSION,
@@ -262,10 +320,39 @@ mod tests {
             user_part(4, "question"),
         ]);
         let blocks = half_blocks(&rec, false);
-        assert_eq!(blocks.len(), 2);
+        // The matching pair and the following Read call fold into one tool run.
+        assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].kind, WorkPartKind::ToolCall);
-        assert_eq!(blocks[0].parts, vec![0, 1]);
-        assert_eq!(blocks[1].parts, vec![2]);
+        assert_eq!(blocks[0].parts, vec![0, 1, 2]);
+        assert_eq!(blocks[0].count, 2);
+    }
+
+    #[test]
+    fn consecutive_same_kind_structure_parts_fold_to_one_run() {
+        let rec = record(vec![
+            tool_part(1, "Bash", "ls"),
+            tool_part(2, "Read", "file"),
+        ]);
+        let blocks = half_blocks(&rec, false);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].count, 2);
+        assert_eq!(blocks[0].fold_label(&rec), "<:tool x2:>");
+        // Run members join on adjacent lines — no blank line between calls.
+        assert!(!blocks[0].body(&rec).contains("\n\n"));
+    }
+
+    #[test]
+    fn different_kinds_do_not_merge_into_one_run() {
+        let rec = record(vec![
+            tool_part(1, "Bash", "ls"),
+            thinking_part(2, "reasoning"),
+            tool_part(3, "Read", "file"),
+        ]);
+        let blocks = half_blocks(&rec, false);
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0].fold_label(&rec), "<:tool:Bash call:>");
+        assert_eq!(blocks[1].fold_label(&rec), "<:thinking:>");
+        assert_eq!(blocks[2].fold_label(&rec), "<:tool:Read call:>");
     }
 
     #[test]

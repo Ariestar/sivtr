@@ -156,26 +156,27 @@ mod tests {
     }
 
     #[test]
-    fn reading_folds_to_tags_and_expanded_blocks_show_full() {
+    fn reading_folds_runs_to_tags_and_expanded_runs_show_full() {
         let rec = record(vec![
             tool_part(1, "Bash", "ls"),
             tool_part(2, "Read", "file"),
         ]);
         let io = content_io_from_record(&rec, true, &ExpandedBlocks::default());
         let output = &io.output;
-        assert!(output.contains("<:tool:Bash call:>"));
-        assert!(output.contains("<:tool:Read call:>"));
+        // The two consecutive tool calls fold into one run tag.
+        assert!(output.contains("<:tool x2:>"));
         assert!(!output.contains("ls"));
         assert!(!output.contains("file"));
 
         let mut expanded = ExpandedBlocks::default();
-        expanded.toggle(ContentIoFocus::Output, 1);
+        expanded.toggle(ContentIoFocus::Output, 0);
         let io = content_io_from_record(&rec, true, &expanded);
         let output = &io.output;
+        assert!(output.contains("<:tool:Bash call:>"));
+        assert!(output.contains("<:/tool:Bash call:>"));
         assert!(output.contains("<:tool:Read call:>"));
-        assert!(output.contains("<:/tool:Read call:>"));
+        assert!(output.contains("ls"));
         assert!(output.contains("file"));
-        assert!(!output.contains("ls"));
     }
 
     #[test]
@@ -190,7 +191,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_call_and_result_fold_into_one_tag() {
+    fn tool_call_and_result_fold_into_one_run() {
         let rec = record(vec![
             tool_part(1, "Bash", "ls"),
             tool_result_part(2, "Bash", "ok"),
@@ -198,17 +199,15 @@ mod tests {
         ]);
         let io = content_io_from_record(&rec, true, &ExpandedBlocks::default());
         let output = &io.output;
-        // Collapsed: one tag for the call+result group, then the Read tag;
-        // the result payload stays hidden.
-        assert!(output.contains("<:tool:Bash call:>"));
+        // Collapsed: the call+result pair and the Read call fold into one
+        // run tag; the result payload stays hidden.
+        assert!(output.contains("<:tool x2:>"));
         assert!(!output.contains("<:tool:Bash result:>"));
         assert!(!output.contains("ok"));
-        assert!(output.contains("<:tool:Read call:>"));
-        let bash = output.find("<:tool:Bash call:>").expect("bash tag");
-        let read = output.find("<:tool:Read call:>").expect("read tag");
-        assert!(bash < read);
+        assert!(!output.contains("file"));
 
-        // Expanding the group reveals the result inside the same block.
+        // Expanding the run reveals the result inside the same block, with
+        // the second call on the next line (no blank line between).
         let mut expanded = ExpandedBlocks::default();
         expanded.toggle(ContentIoFocus::Output, 0);
         let io = content_io_from_record(&rec, true, &expanded);
@@ -216,8 +215,8 @@ mod tests {
         assert!(output.contains("<:tool:Bash result:>"));
         assert!(output.contains("ok"));
         assert!(output.contains("<:/tool:Bash result:>"));
-        // The Read block is untouched.
-        assert!(!output.contains("file"));
+        assert!(output.contains("<:tool:Read call:>"));
+        assert!(output.contains("file"));
     }
 
     #[test]
