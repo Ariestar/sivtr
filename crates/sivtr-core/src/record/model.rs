@@ -1045,6 +1045,11 @@ fn terminal_parts(entry: &SessionEntry, command: &str, output: &str) -> Vec<Work
 
 fn agent_parts(blocks: &[AgentBlock]) -> Vec<WorkPart> {
     let mut parts = Vec::new();
+    // Tool name for results that omit it: borrowed from the matching call —
+    // same call id when both carry one, else the nearest preceding call
+    // (the block model's adjacency pairing rule).
+    let mut last_call_name: Option<String> = None;
+    let mut last_call_id: Option<Option<String>> = None;
     for block in blocks {
         let text = block.text.trim();
         if text.is_empty() {
@@ -1074,24 +1079,37 @@ fn agent_parts(blocks: &[AgentBlock]) -> Vec<WorkPart> {
                     push_agent_part(&mut parts, block.timestamp.clone(), data);
                 }
             }
-            AgentBlockKind::ToolCall => push_agent_part(
-                &mut parts,
-                block.timestamp.clone(),
-                WorkPartData::ToolCall {
-                    call_id: block.call_id.clone(),
-                    tool: block.label.clone(),
-                    input: tool_value(text),
-                },
-            ),
-            AgentBlockKind::ToolOutput => push_agent_part(
-                &mut parts,
-                block.timestamp.clone(),
-                WorkPartData::ToolResult {
-                    call_id: block.call_id.clone(),
-                    tool: block.label.clone(),
-                    output: tool_value(text),
-                },
-            ),
+            AgentBlockKind::ToolCall => {
+                last_call_name = block.label.clone();
+                last_call_id = Some(block.call_id.clone());
+                push_agent_part(
+                    &mut parts,
+                    block.timestamp.clone(),
+                    WorkPartData::ToolCall {
+                        call_id: block.call_id.clone(),
+                        tool: block.label.clone(),
+                        input: tool_value(text),
+                    },
+                );
+            }
+            AgentBlockKind::ToolOutput => {
+                let tool = block.label.clone().or_else(|| {
+                    if last_call_id.as_ref() == Some(&block.call_id) {
+                        last_call_name.clone()
+                    } else {
+                        None
+                    }
+                });
+                push_agent_part(
+                    &mut parts,
+                    block.timestamp.clone(),
+                    WorkPartData::ToolResult {
+                        call_id: block.call_id.clone(),
+                        tool,
+                        output: tool_value(text),
+                    },
+                );
+            }
             AgentBlockKind::Skill => push_agent_part(
                 &mut parts,
                 block.timestamp.clone(),
@@ -1308,6 +1326,44 @@ mod tests {
             parse_timestamp("2026-05-23T12:03:00Z")
         );
         assert_eq!(records[0].time.duration_ms, Some(120_000));
+    }
+
+    #[test]
+    fn tool_results_without_a_label_borrow_the_call_tool_name() {
+        let session = AgentSession {
+            path: PathBuf::from("pi-session.jsonl"),
+            id: Some("abcdef123456".to_string()),
+            cwd: Some("D:\\sivtr".to_string()),
+            title: None,
+            blocks: vec![
+                AgentBlock {
+                    kind: AgentBlockKind::User,
+                    timestamp: None,
+                    label: None,
+                    call_id: None,
+                    text: "read a.rs".to_string(),
+                },
+                AgentBlock {
+                    kind: AgentBlockKind::ToolCall,
+                    timestamp: None,
+                    label: Some("read".to_string()),
+                    call_id: Some("c1".to_string()),
+                    text: "{\"file_path\":\"a.rs\"}".to_string(),
+                },
+                AgentBlock {
+                    kind: AgentBlockKind::ToolOutput,
+                    timestamp: None,
+                    label: None,
+                    call_id: Some("c1".to_string()),
+                    text: "content".to_string(),
+                },
+            ],
+        };
+
+        let records = WorkRecord::chat_turns(AgentProvider::Pi, &session);
+        let output = records[0].output_text().unwrap_or_default();
+        // The result carries the call's tool name instead of "unknown".
+        assert!(output.contains("<:tool:read result:>"));
     }
 
     #[test]

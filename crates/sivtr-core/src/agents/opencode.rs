@@ -330,7 +330,7 @@ fn push_tool_part(session: &mut AgentSession, timestamp: Option<String>, part: &
             session,
             AgentBlockKind::ToolOutput,
             timestamp,
-            None,
+            label,
             extract_opencode_text(output),
         );
     }
