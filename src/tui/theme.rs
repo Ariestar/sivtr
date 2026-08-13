@@ -166,7 +166,7 @@ impl Theme {
             dim: Color::Rgb(71, 85, 105),               // slate-600
             local_origin: Color::Rgb(52, 211, 153),     // emerald-400
             remote_origin: Color::Rgb(244, 114, 182),   // pink-400
-            focus_bg: Color::Rgb(203, 213, 225),        // slate-300 (light gray tint)
+            focus_bg: Color::Rgb(15, 23, 42),           // slate-900 (veil tint)
             selected_bg: Color::Rgb(51, 65, 85),        // slate-700
             selected_fg: Color::Rgb(226, 232, 240),     // slate-200
             range_fg: Color::Rgb(251, 191, 36),         // amber-400
@@ -364,8 +364,9 @@ pub(crate) fn dim() -> Color {
     ACTIVE.get().dim
 }
 
-/// Cursor / focus highlight on a list row or content block: a subtle gray
-/// tint that leaves the text foreground untouched, so reading is unaffected.
+/// Cursor / focus highlight on a list row or content block: a tint close to
+/// the terminal background (thin-veil look, the terminal's stand-in for a
+/// low-alpha overlay) that leaves the text foreground untouched.
 pub(crate) fn focus_row() -> Style {
     Style::default().bg(ACTIVE.get().focus_bg)
 }
