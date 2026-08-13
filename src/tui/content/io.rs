@@ -4,6 +4,7 @@
 //! so picker / render / help don't re-copy the same match arms.
 
 use ratatui::layout::Rect;
+use std::collections::HashSet;
 
 use crate::tui::content::view::{content_view_line_count, ContentViewMode};
 
@@ -114,6 +115,35 @@ impl ContentScrolls {
     pub(crate) fn clamp_to(&mut self, input_lines: usize, output_lines: usize) {
         self.input = self.input.min(input_lines.saturating_sub(1));
         self.output = self.output.min(output_lines.saturating_sub(1));
+    }
+}
+
+/// Which structure blocks the user expanded, per content half. Read mode
+/// defaults every block to its `<:…:>` tag line; a block in this set shows
+/// its full payload instead. Raw mode always shows full blocks and ignores
+/// this state. A block index is the ordinal of the block's open marker line
+/// within that half's text — stable because every block shows exactly one
+/// open marker line whether collapsed or expanded.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ExpandedBlocks {
+    pub(crate) input: HashSet<usize>,
+    pub(crate) output: HashSet<usize>,
+}
+
+impl ExpandedBlocks {
+    pub(crate) fn toggle(&mut self, focus: ContentIoFocus, block: usize) {
+        let set = match focus {
+            ContentIoFocus::Input => &mut self.input,
+            ContentIoFocus::Output => &mut self.output,
+        };
+        if !set.insert(block) {
+            set.remove(&block);
+        }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.input.clear();
+        self.output.clear();
     }
 }
 

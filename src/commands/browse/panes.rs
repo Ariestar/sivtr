@@ -10,8 +10,8 @@
 use crate::pane::{Pane, PaneInput, SlidingPane, WindowRow};
 use crate::tui::content::view::ContentViewMode;
 use crate::tui::workspace::{
-    workspace_content_io_texts, ContentIoFocus, ContentIoFrame, ContentIoTexts, WorkspaceDialogue,
-    WorkspaceSession, WorkspaceSource,
+    workspace_content_io_texts_expanded, ContentIoFocus, ContentIoFrame, ContentIoTexts,
+    ExpandedBlocks, WorkspaceDialogue, WorkspaceSession, WorkspaceSource,
 };
 use sivtr_core::ai::AgentSelection;
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
@@ -419,6 +419,7 @@ pub struct ContentCtx<'a> {
     pub target: Option<WorkAt>,
     pub area: ratatui::layout::Rect,
     pub io_focus: ContentIoFocus,
+    pub expanded: ExpandedBlocks,
 }
 
 /// Tracks layout line counts for Input / Output halves separately.
@@ -438,12 +439,13 @@ impl ContentPane {
 
     /// Build texts + dynamic layout metrics for this frame.
     pub fn ensure(&mut self, ctx: ContentCtx<'_>) -> ContentIoTexts {
-        let texts = workspace_content_io_texts(
+        let texts = workspace_content_io_texts_expanded(
             ctx.dialogues,
             ctx.selected_dialogues,
             ctx.highlighted_idx,
             ctx.mode,
             ctx.target,
+            &ctx.expanded,
         );
         let frame = ContentIoFrame::build(ctx.area, texts, ctx.mode, ctx.io_focus);
         self.input_lines = frame.input_lines;

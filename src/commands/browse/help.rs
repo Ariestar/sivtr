@@ -8,9 +8,10 @@ use ratatui::widgets::ListState;
 use crate::tui::content::view::ContentViewMode;
 use crate::tui::terminal::suspend;
 use crate::tui::workspace::{
-    can_open_dialogue_vim, selected_index, workspace_content_io_texts, workspace_content_text,
-    workspace_layout, ContentIoFocus, ContentIoFrame, ContentScrolls, WorkspaceDialogue,
-    WorkspaceFocus, WorkspaceHelpAction, WorkspacePickedContent, WorkspaceSession, WorkspaceSource,
+    can_open_dialogue_vim, selected_index, workspace_content_io_texts_expanded,
+    workspace_content_text, workspace_layout, ContentIoFocus, ContentIoFrame, ContentScrolls,
+    ExpandedBlocks, WorkspaceDialogue, WorkspaceFocus, WorkspaceHelpAction, WorkspacePickedContent,
+    WorkspaceSession, WorkspaceSource,
 };
 use sivtr_core::record::WorkAt;
 
@@ -51,6 +52,7 @@ pub(super) fn apply_workspace_help_action(
     content_scrolls: &mut ContentScrolls,
     content_io_focus: &mut ContentIoFocus,
     content_mode: &mut ContentViewMode,
+    expanded: &ExpandedBlocks,
     content_input_lines: usize,
     content_output_lines: usize,
     show_help: &mut bool,
@@ -246,12 +248,13 @@ pub(super) fn apply_workspace_help_action(
                 *focus,
                 *fullscreen,
             );
-            let io = workspace_content_io_texts(
+            let io = workspace_content_io_texts_expanded(
                 dialogues,
                 selected_dialogues,
                 dialogue_idx,
                 *content_mode,
                 content_at,
+                expanded,
             );
             let frame = ContentIoFrame::build(layout.content, io, *content_mode, *content_io_focus);
             let active = frame.active(*content_io_focus, content_scrolls);

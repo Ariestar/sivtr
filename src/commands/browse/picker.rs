@@ -6,7 +6,7 @@ use ratatui::widgets::ListState;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use crate::tui::content::view::{content_link_at, ContentViewMode};
+use crate::tui::content::view::{content_link_at, content_position_at, ContentViewMode};
 use crate::tui::search::{
     workspace_search_fingerprint, workspace_search_has_query, workspace_search_scope,
     WorkspaceSearchIndex, WorkspaceSearchOutput,
@@ -14,9 +14,10 @@ use crate::tui::search::{
 use crate::tui::terminal::read_interaction;
 use crate::tui::workspace::{
     help_action_for_key, panel_inner_rows, render_workspace, search_match_half, selected_index,
-    workspace_help_entries, workspace_hit_test, workspace_layout, ContentIoFocus, ContentIoFrame,
-    ContentScrolls, WorkspaceDialogue, WorkspaceFocus, WorkspacePickedContent, WorkspaceSearchView,
-    WorkspaceSession, WorkspaceSource, WorkspaceView,
+    structure_block_index, workspace_help_entries, workspace_hit_test, workspace_layout,
+    ContentIoFocus, ContentIoFrame, ContentScrolls, ExpandedBlocks, WorkspaceDialogue,
+    WorkspaceFocus, WorkspacePickedContent, WorkspaceSearchView, WorkspaceSession, WorkspaceSource,
+    WorkspaceView,
 };
 
 use super::content::{
@@ -80,6 +81,8 @@ pub(crate) fn run(
     let mut content_scrolls = ContentScrolls::default();
     let mut content_io_focus = ContentIoFocus::Input;
     let mut content_mode = ContentViewMode::Reading;
+    let mut expanded_blocks = ExpandedBlocks::default();
+    let mut expanded_key = None;
     let mut show_help = false;
     let mut show_search = false;
     let mut search_query = String::new();
@@ -324,6 +327,13 @@ pub(crate) fn run(
             if let Some((half, _)) = pending_half {
                 content_io_focus = half;
             }
+            // Expansion indices are per-dialogue; reset when the shown
+            // dialogue, target, or selection changes.
+            let expand_key = (dialogue_idx, active_content_at, selected_dialogues.clone());
+            if expanded_key.as_ref() != Some(&expand_key) {
+                expanded_blocks.clear();
+                expanded_key = Some(expand_key);
+            }
             content_frame = ContentIoFrame::build(
                 layout.content,
                 content_pane.ensure(ContentCtx {
@@ -334,6 +344,7 @@ pub(crate) fn run(
                     target: active_content_at,
                     area: layout.content,
                     io_focus: content_io_focus,
+                    expanded: expanded_blocks.clone(),
                 }),
                 content_mode,
                 content_io_focus,
@@ -650,6 +661,7 @@ pub(crate) fn run(
                                 &mut content_scrolls,
                                 &mut content_io_focus,
                                 &mut content_mode,
+                                &expanded_blocks,
                                 content_pane.line_count(ContentIoFocus::Input),
                                 content_pane.line_count(ContentIoFocus::Output),
                                 &mut show_help,
@@ -763,6 +775,7 @@ pub(crate) fn run(
                         &mut content_scrolls,
                         &mut content_io_focus,
                         &mut content_mode,
+                        &expanded_blocks,
                         content_pane.line_count(ContentIoFocus::Input),
                         content_pane.line_count(ContentIoFocus::Output),
                         &mut show_help,
@@ -856,6 +869,26 @@ pub(crate) fn run(
                             ) {
                                 let _ = open_link_target(&target);
                                 continue;
+                            }
+                            // Read mode: clicking a structure tag expands/collapses
+                            // that block (raw mode always shows full blocks).
+                            if content_mode == ContentViewMode::Reading {
+                                if let Some(position) = content_position_at(
+                                    active.area,
+                                    active.text,
+                                    *active.scroll,
+                                    content_mode,
+                                    mouse.column,
+                                    mouse.row,
+                                ) {
+                                    if let Some(block) =
+                                        structure_block_index(active.text, position.line)
+                                    {
+                                        expanded_blocks.toggle(half, block);
+                                        redraw = true;
+                                        continue;
+                                    }
+                                }
                             }
                         }
                         if handle_content_mouse_select(

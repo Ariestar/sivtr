@@ -8,8 +8,10 @@ use std::collections::HashSet;
 use std::time::SystemTime;
 
 use crate::commands::select::CommandSelection;
-use crate::tui::content::io::{ContentIoFocus, ContentIoFrame, ContentIoTexts, ContentScrolls};
-use crate::tui::content::text::{content_io_from_record, structured_part_text};
+use crate::tui::content::io::{
+    ContentIoFocus, ContentIoFrame, ContentIoTexts, ContentScrolls, ExpandedBlocks,
+};
+use crate::tui::content::text::{content_io_from_record_expanded, structured_part_text};
 use crate::tui::content::view::{ContentSelection, ContentViewMode};
 use crate::tui::search::WorkspaceSearchScope;
 use crate::tui::theme;
@@ -228,11 +230,22 @@ impl WorkspaceDialogue {
         self.content_io_texts(mode, target).join_displayed()
     }
 
-    /// Input / Output bodies for the dual content panes (no section headers).
+    /// Input / Output bodies for the dual content panes (default expand state).
     pub(crate) fn content_io_texts(
         &self,
         mode: ContentViewMode,
         target: Option<WorkAt>,
+    ) -> ContentIoTexts {
+        self.content_io_texts_expanded(mode, target, &ExpandedBlocks::default())
+    }
+
+    /// Input / Output bodies for the dual content panes with per-block
+    /// expansion (read mode shows full blocks for the listed indices).
+    pub(crate) fn content_io_texts_expanded(
+        &self,
+        mode: ContentViewMode,
+        target: Option<WorkAt>,
+        expanded: &ExpandedBlocks,
     ) -> ContentIoTexts {
         if let Some(target @ WorkAt::Part(_)) = target {
             let text = match mode {
@@ -279,7 +292,7 @@ impl WorkspaceDialogue {
             };
         }
         let reading = matches!(mode, ContentViewMode::Reading);
-        content_io_from_record(record, reading)
+        content_io_from_record_expanded(record, reading, expanded)
     }
 
     pub(crate) fn content_ref(&self, target: Option<WorkAt>) -> Option<WorkRef> {
