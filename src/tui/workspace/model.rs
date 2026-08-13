@@ -269,6 +269,7 @@ impl WorkspaceDialogue {
                     fold_label_for_part(part)
                 },
                 tight: false,
+                kind: part.kind(),
             };
             return if input {
                 ContentIoTexts::new(vec![segment], Vec::new())
@@ -390,6 +391,10 @@ pub(crate) struct WorkspaceView<'a> {
     /// Block under the keyboard/mouse cursor per half; highlighted like a
     /// list row when its half is focused.
     pub(crate) content_block_cursor: Option<(ContentIoFocus, usize)>,
+    /// Marked block masks per half (`mask[block_id]` = marked), owned by the
+    /// content pane's native selection; consumed by the dot gutter and copy.
+    pub(crate) content_marked_input: &'a [bool],
+    pub(crate) content_marked_output: &'a [bool],
     /// Dual IO layout + display texts, computed once per redraw by the picker
     /// and shared with the renderer (no per-frame duplicate layout).
     pub(crate) content_frame: &'a ContentIoFrame,
@@ -415,5 +420,7 @@ pub(crate) struct WorkspaceFooterView<'a> {
     pub(crate) fullscreen: Option<WorkspaceFocus>,
     pub(crate) content_mode: ContentViewMode,
     pub(crate) content_selection: Option<ContentSelection>,
+    /// Blocks marked for batch copy (footer hint), per the current dialogue.
+    pub(crate) marked_count: usize,
     pub(crate) current_ref: Option<&'a WorkRef>,
 }

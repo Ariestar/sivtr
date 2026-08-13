@@ -131,6 +131,10 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
                 .filter(|_| view.content_io_focus == half),
             content_search,
             cursor_block,
+            match half {
+                ContentIoFocus::Input => view.content_marked_input,
+                ContentIoFocus::Output => view.content_marked_output,
+            },
         );
     }
 
@@ -147,6 +151,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
             fullscreen: view.fullscreen,
             content_mode: view.content_mode,
             content_selection: view.content_selection,
+            marked_count: marked_count(&view),
             current_ref: current_ref.as_ref(),
         },
     );
@@ -209,6 +214,19 @@ fn position_overlay_cursor(frame: &mut Frame, area: Rect, text: &str) {
     frame.set_cursor_position(Position::new(inner.x.saturating_add(column), row));
 }
 
+/// Blocks marked for batch copy across both content halves.
+fn marked_count(view: &WorkspaceView<'_>) -> usize {
+    view.content_marked_input
+        .iter()
+        .filter(|marked| **marked)
+        .count()
+        + view
+            .content_marked_output
+            .iter()
+            .filter(|marked| **marked)
+            .count()
+}
+
 fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>) {
     let WorkspaceFooterView {
         focus,
@@ -220,6 +238,7 @@ fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>)
         fullscreen,
         content_mode,
         content_selection,
+        marked_count,
         current_ref,
     } = footer;
 
@@ -246,6 +265,11 @@ fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>)
             "j/k move  Enter execute  Esc/? close help  q cancel".to_string()
         } else {
             workspace_footer_hotkeys(focus)
+        };
+        let controls = if marked_count == 0 {
+            controls
+        } else {
+            format!("{controls}  ·  {marked_count} marked — y copies them together")
         };
         footer_control_spans(&controls)
     };
@@ -840,6 +864,7 @@ fn render_content_panel(
     selection: Option<ContentSelection>,
     search_regex: Option<&Regex>,
     cursor_block: Option<usize>,
+    marked: &[bool],
 ) {
     render_content_view(
         frame,
@@ -853,6 +878,7 @@ fn render_content_panel(
             mode,
             selection,
             cursor_block,
+            marked,
         },
     );
 }

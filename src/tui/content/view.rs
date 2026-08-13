@@ -9,6 +9,7 @@ use unicode_width::UnicodeWidthChar;
 use crate::tui::content::block::BlockText;
 use crate::tui::content::markdown::{render_markdown_lines, MarkdownLineKind};
 use crate::tui::pane::{panel_block, render_panel_scrollbar, Panel, PanelScroll};
+use sivtr_core::record::WorkPartKind;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ContentViewMode {
@@ -46,6 +47,8 @@ pub(crate) struct ContentView<'a> {
     /// Block under the keyboard/mouse cursor; its displayed line range is
     /// highlighted with the list-row focus style.
     pub(crate) cursor_block: Option<usize>,
+    /// Marked block mask (`mask[block_id]` = marked) for the batch-copy dots.
+    pub(crate) marked: &'a [bool],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,13 +110,21 @@ pub(crate) fn render_content_view(
         .take(visible_height)
         .cloned()
         .collect();
-    frame.render_widget(
-        Paragraph::new(line_number_lines(total_lines, scroll, &visible)),
-        chunks[0],
-    );
     let block_highlight = view
         .cursor_block
         .and_then(|block| content_block_range(area, view.text, view.blocks, view.mode, block));
+    frame.render_widget(
+        Paragraph::new(block_dot_lines(
+            area,
+            view.text,
+            view.blocks,
+            view.mode,
+            view.marked,
+            scroll,
+            &visible,
+        )),
+        chunks[0],
+    );
     frame.render_widget(
         Paragraph::new(content_lines(
             visible,
@@ -431,11 +442,14 @@ pub(crate) fn content_view_line_count(area: Rect, text: &str, mode: ContentViewM
         .max(1)
 }
 
+/// Gutter width: one dot column plus one trailing space — no line numbers.
+const GUTTER_WIDTH: u16 = 2;
+
 fn content_layout(area: Rect, text: &str, mode: ContentViewMode) -> (Vec<ContentLine>, Rc<[Rect]>) {
     let inner = panel_block(&Panel::new("", "", false)).inner(area);
     let (lines, gutter_width) = content_layout_lines_metrics(inner.width, text, mode);
-    // Gutter: right-aligned line numbers plus one trailing space — no
-    // separator bar between the numbers and the content.
+    // Gutter: dialogue dots per block, right-aligned dot plus one trailing
+    // space — no separator bar between the dots and the content.
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(gutter_width), Constraint::Min(1)])
@@ -509,37 +523,17 @@ fn raw_content_line(line: &str) -> ContentLine {
     }
 }
 
-/// Lay out the document and converge the gutter width (digit count of the
-/// line count) against the wrap width. The final layout is returned so the
-/// caller's metrics and its visible window share one markdown + wrap pass.
-/// The content column is the inner width minus the gutter (numbers + one
-/// trailing space).
+/// Lay the document out. The gutter is a fixed dot column, so no width
+/// convergence is needed: the content column is the inner width minus the
+/// gutter (dot + one trailing space).
 fn content_layout_lines_metrics(
     inner_width: u16,
     text: &str,
     mode: ContentViewMode,
 ) -> (Vec<ContentLine>, u16) {
-    let mut total_lines = line_count(text);
-    let mut gutter_width = line_number_width(total_lines).saturating_add(1);
-
-    for _ in 0..4 {
-        let content_width = inner_width.saturating_sub(gutter_width) as usize;
-        let lines = all_content_lines(text, content_width, mode);
-        let next_total_lines = lines.len().max(1);
-        let next_gutter_width = line_number_width(next_total_lines).saturating_add(1);
-        if next_total_lines == total_lines && next_gutter_width == gutter_width {
-            return (lines, gutter_width);
-        }
-        total_lines = next_total_lines;
-        gutter_width = next_gutter_width;
-    }
-
-    // Non-convergent narrow panes (the gutter width oscillates against the
-    // wrap width): recompute the lines for the final gutter so content and
-    // gutter stay consistent — otherwise the last pass may have run at a
-    // different width and the layout can drop the content entirely.
-    let content_width = inner_width.saturating_sub(gutter_width) as usize;
-    (all_content_lines(text, content_width, mode), gutter_width)
+    let content_width = inner_width.saturating_sub(GUTTER_WIDTH) as usize;
+    let lines = all_content_lines(text, content_width, mode);
+    (lines, GUTTER_WIDTH)
 }
 
 fn content_lines(
@@ -1090,26 +1084,85 @@ fn text_width(text: &str) -> usize {
     text.chars().map(char_width).sum()
 }
 
-fn line_number_lines(total_lines: usize, scroll: usize, visible: &[ContentLine]) -> Text<'static> {
-    let lines = (scroll..total_lines.min(scroll.saturating_add(visible.len())))
-        .enumerate()
-        .map(|(visible_idx, idx)| {
-            Line::from(Span::styled(
-                (idx + 1).to_string(),
-                gutter_style(visible.get(visible_idx).map(|line| line.kind)),
-            ))
+/// Gutter lines: one dialogue dot per block, shown on the block's first
+/// displayed line. Filled dots mark blocks selected for batch copy; the dot
+/// color follows the block kind so a conversation reads like a chat list.
+fn block_dot_lines(
+    area: Rect,
+    text: &str,
+    blocks: &[BlockText],
+    mode: ContentViewMode,
+    marked: &[bool],
+    scroll: usize,
+    visible: &[ContentLine],
+) -> Text<'static> {
+    let ownership = block_ownership(area, text, blocks, mode);
+    let kinds: std::collections::HashMap<usize, WorkPartKind> =
+        blocks.iter().map(|block| (block.id, block.kind)).collect();
+    let lines = (scroll..scroll.saturating_add(visible.len()))
+        .map(|idx| {
+            let owner = ownership.get(idx).copied().flatten();
+            let starts = owner.is_some_and(|block| {
+                idx == 0 || ownership.get(idx.saturating_sub(1)).copied().flatten() != Some(block)
+            });
+            match owner {
+                Some(block) if starts => {
+                    let marked = marked.get(block).copied().unwrap_or(false);
+                    let glyph = if marked { "●" } else { "○" };
+                    Line::from(Span::styled(
+                        glyph,
+                        Style::default().fg(block_dot_color(kinds.get(&block))),
+                    ))
+                }
+                _ => Line::from("  "),
+            }
         })
         .collect::<Vec<_>>();
     Text::from(lines)
 }
 
-fn gutter_style(kind: Option<MarkdownLineKind>) -> Style {
+/// Dot color by block kind: the same palette the pane uses for roles, so a
+/// conversation's dots read like chat bubbles (user, tool, thinking, ...).
+fn block_dot_color(kind: Option<&WorkPartKind>) -> Color {
+    use WorkPartKind::{
+        Assistant, Command, Error, Output, Prompt, Skill, Thinking, ToolCall, ToolResult, User,
+    };
     match kind {
-        Some(MarkdownLineKind::CodeBlock | MarkdownLineKind::CodeFence) => {
-            Style::default().fg(crate::tui::theme::accent())
-        }
-        _ => Style::default().fg(crate::tui::theme::dim()),
+        Some(User) => crate::tui::theme::user(),
+        Some(Output) => crate::tui::theme::output(),
+        Some(Error) => crate::tui::theme::failure(),
+        Some(ToolCall | Prompt | Command) => crate::tui::theme::structure_color(false),
+        Some(ToolResult) => crate::tui::theme::structure_color(true),
+        Some(Thinking | Skill) | None => crate::tui::theme::muted(),
+        Some(Assistant) => Color::Reset,
     }
+}
+
+/// Block under a click in the dot gutter (the column left of the content
+/// text): any line of a block maps to that block, so the whole gutter column
+/// is a click target for marking.
+pub(crate) fn content_dot_at(
+    area: Rect,
+    text: &str,
+    blocks: &[BlockText],
+    mode: ContentViewMode,
+    scroll: usize,
+    column: u16,
+    row: u16,
+) -> Option<usize> {
+    let inner = panel_block(&Panel::new("", "", false)).inner(area);
+    let content_area = content_text_area(area, text, mode);
+    if content_area.width == 0
+        || content_area.height == 0
+        || column < inner.x
+        || column >= content_area.x
+        || row < content_area.y
+        || row >= content_area.y.saturating_add(content_area.height)
+    {
+        return None;
+    }
+    let line = scroll.saturating_add((row - content_area.y) as usize);
+    content_block_at(area, text, blocks, mode, line)
 }
 
 fn styled_content_line(line: Line<'static>, search_regex: Option<&Regex>) -> Line<'static> {
@@ -1252,10 +1305,6 @@ pub(crate) fn line_count(text: &str) -> usize {
     raw_lines(text).len()
 }
 
-fn line_number_width(line_count: usize) -> u16 {
-    line_count.max(1).to_string().len() as u16
-}
-
 fn raw_lines(text: &str) -> Vec<&str> {
     let lines = text.lines().collect::<Vec<_>>();
     if lines.is_empty() {
@@ -1268,10 +1317,10 @@ fn raw_lines(text: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        content_block_at, content_lines, content_link_at, content_position_at,
-        content_position_in_text_row, line_count, line_number_width, render_content_view,
-        selected_content_text, visible_content_lines, ContentPosition, ContentSelection,
-        ContentSelectionKind, ContentView, ContentViewMode,
+        content_block_at, content_dot_at, content_lines, content_link_at, content_position_at,
+        content_position_in_text_row, line_count, render_content_view, selected_content_text,
+        visible_content_lines, ContentPosition, ContentSelection, ContentSelectionKind,
+        ContentView, ContentViewMode,
     };
     use crate::tui::content::block::BlockText;
     use crate::tui::pane::Panel;
@@ -1281,6 +1330,7 @@ mod tests {
     use ratatui::text::Text;
     use ratatui::Terminal;
     use regex::Regex;
+    use sivtr_core::record::WorkPartKind;
     use unicode_width::UnicodeWidthStr;
 
     /// Displayed line index of the first layout line containing `needle`.
@@ -1314,6 +1364,7 @@ mod tests {
             id,
             text: text.to_string(),
             tight: false,
+            kind: WorkPartKind::ToolCall,
         }
     }
 
@@ -1351,13 +1402,6 @@ mod tests {
     #[test]
     fn counts_empty_content_as_one_display_line() {
         assert_eq!(line_count(""), 1);
-    }
-
-    #[test]
-    fn line_number_width_scales_with_line_count() {
-        assert_eq!(line_number_width(9), 1);
-        assert_eq!(line_number_width(10), 2);
-        assert_eq!(line_number_width(100), 3);
     }
 
     #[test]
@@ -1482,7 +1526,7 @@ mod tests {
     }
 
     #[test]
-    fn content_position_at_rejects_line_number_gutter() {
+    fn content_position_at_rejects_dot_gutter() {
         let position = content_position_at(
             Rect::new(0, 0, 24, 5),
             "alpha\nbeta",
@@ -1522,11 +1566,10 @@ mod tests {
     }
 
     #[test]
-    fn oscillating_gutter_recomputes_lines_for_the_final_width() {
-        // inner_width == 3 makes the gutter width oscillate between 2 and 3
-        // for a ten-character unbroken line (content widths 1 and 0). The
-        // layout must return lines generated at the final gutter width
-        // instead of the single blank line produced at width 0.
+    fn fixed_gutter_reserves_two_columns() {
+        // inner_width == 3 leaves a single content column; the fixed two-column
+        // gutter (dot + space) means a ten-character unbroken line wraps to
+        // ten rows instead of oscillating against the digit width.
         let (lines, gutter_width) =
             super::content_layout_lines_metrics(3, "0123456789", ContentViewMode::Reading);
         assert_eq!(gutter_width, 2);
@@ -1609,7 +1652,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_content_text_never_includes_line_number_gutter() {
+    fn selected_content_text_never_includes_dot_gutter() {
         let selected = selected_content_text(
             Rect::new(0, 0, 24, 5),
             "alpha\nbeta",
@@ -1691,9 +1734,13 @@ mod tests {
     }
 
     #[test]
-    fn render_content_view_shows_line_numbers_in_the_visible_gutter() {
+    fn render_content_view_shows_block_dots_in_the_gutter() {
         let backend = TestBackend::new(24, 6);
         let mut terminal = Terminal::new(backend).unwrap();
+        let blocks = vec![test_block(0, "alpha\nbeta"), test_block(1, "omega")];
+        let text = blocks_text(&blocks);
+        // Marked mask indexed by block id: block 1 is marked.
+        let marked = [false, true];
 
         terminal
             .draw(|frame| {
@@ -1702,21 +1749,56 @@ mod tests {
                     Rect::new(0, 0, 24, 6),
                     Panel::new("3", "Content (read)", true),
                     ContentView {
-                        text: "alpha\nbeta",
-                        blocks: &[],
+                        text: &text,
+                        blocks: &blocks,
                         scroll: 0,
                         search_regex: None,
                         mode: ContentViewMode::Reading,
                         selection: None,
                         cursor_block: None,
+                        marked: &marked,
                     },
                 );
             })
             .unwrap();
 
         let backend = terminal.backend();
-        assert!(backend_row(backend, 1).contains("1 alpha"));
-        assert!(backend_row(backend, 2).contains("2 beta"));
+        // Block 0 starts on row 1 (unmarked ○), block 1 on row 4 (marked ●);
+        // the block's other lines keep a blank gutter.
+        assert!(backend_row(backend, 1).contains("○ alpha"));
+        assert!(backend_row(backend, 2).contains("  beta"));
+        assert!(backend_row(backend, 4).contains("● omega"));
+    }
+
+    #[test]
+    fn content_dot_at_hits_blocks_in_the_gutter_column() {
+        let area = Rect::new(0, 0, 24, 8);
+        let blocks = vec![test_block(0, "alpha\nbeta"), test_block(1, "omega")];
+        let text = blocks_text(&blocks);
+        // Columns 1..3 are the dot gutter (column 0 is the panel border):
+        // any line of a block maps to it.
+        assert_eq!(
+            content_dot_at(area, &text, &blocks, ContentViewMode::Reading, 0, 1, 1),
+            Some(0)
+        );
+        assert_eq!(
+            content_dot_at(area, &text, &blocks, ContentViewMode::Reading, 0, 2, 2),
+            Some(0)
+        );
+        assert_eq!(
+            content_dot_at(area, &text, &blocks, ContentViewMode::Reading, 0, 1, 4),
+            Some(1)
+        );
+        // The content column is not the dot gutter.
+        assert_eq!(
+            content_dot_at(area, &text, &blocks, ContentViewMode::Reading, 0, 3, 1),
+            None
+        );
+        // The panel border is not the dot gutter.
+        assert_eq!(
+            content_dot_at(area, &text, &blocks, ContentViewMode::Reading, 0, 0, 1),
+            None
+        );
     }
 
     #[test]
@@ -1741,6 +1823,7 @@ mod tests {
                         mode: ContentViewMode::Reading,
                         selection: None,
                         cursor_block: Some(0),
+                        marked: &[],
                     },
                 );
             })

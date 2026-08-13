@@ -404,12 +404,14 @@ pub(crate) fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sivtr_core::record::WorkPartKind;
 
     fn seg(text: &str) -> BlockText {
         BlockText {
             id: 0,
             text: text.to_string(),
             tight: false,
+            kind: WorkPartKind::ToolCall,
         }
     }
 
@@ -430,11 +432,13 @@ mod tests {
                     id: 1,
                     text: "b".to_string(),
                     tight: true,
+                    kind: WorkPartKind::ToolCall,
                 },
                 BlockText {
                     id: 2,
                     text: "c".to_string(),
                     tight: false,
+                    kind: WorkPartKind::ToolCall,
                 },
                 seg("d"),
             ],

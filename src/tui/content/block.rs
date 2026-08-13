@@ -37,6 +37,8 @@ pub(crate) struct BlockText {
     pub(crate) id: usize,
     pub(crate) text: String,
     pub(crate) tight: bool,
+    /// Kind of the block's first part; drives the dot-gutter color.
+    pub(crate) kind: WorkPartKind,
 }
 
 impl Block {
@@ -273,6 +275,7 @@ fn render_block(
                 id: block.id,
                 text: block.body(record),
                 tight: false,
+                kind: block.kind,
             });
         } else {
             for child in &block.children {
@@ -290,6 +293,7 @@ fn render_block(
                 block.fold_label(record)
             },
             tight: false,
+            kind: block.kind,
         });
     } else {
         // Run: the aggregate tag stays as the group header; expanding the
@@ -299,6 +303,7 @@ fn render_block(
             id: block.id,
             text: block.fold_label(record),
             tight: false, // rewritten below: all but the last segment join tight
+            kind: block.kind,
         });
         if shown {
             for child in &block.children {

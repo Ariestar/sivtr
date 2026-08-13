@@ -7,7 +7,8 @@
 //!
 //! Do **not** reimplement viewport growth, keep/evict, or blanking rules.
 
-use crate::pane::{Pane, PaneInput, SlidingPane, WindowRow};
+use crate::pane::{Pane, PaneInput, Selection, SlidingPane, WindowRow};
+use crate::tui::content::block::BlockText;
 use crate::tui::content::view::ContentViewMode;
 use crate::tui::workspace::{
     workspace_content_io_texts, ContentIoFocus, ContentIoFrame, ContentIoTexts, ExpandedBlocks,
@@ -422,11 +423,25 @@ pub struct ContentCtx<'a> {
     pub expanded: &'a ExpandedBlocks,
 }
 
-/// Tracks layout line counts for Input / Output halves separately.
+/// Tracks layout line counts for Input / Output halves separately and owns
+/// the per-half block multi-select (native pane selection): clicking a
+/// block's dot toggles its id, and content (copy, fold) consumes the mask.
 #[derive(Default)]
 pub struct ContentPane {
     input_lines: usize,
     output_lines: usize,
+    /// Marked block ids per half, indexed by block id (dense DFS ids).
+    marked_input: Selection,
+    marked_output: Selection,
+}
+
+/// Largest block id in a half's display segments plus one, for mask sizing.
+fn marked_mask_len(blocks: &[BlockText]) -> usize {
+    blocks
+        .iter()
+        .map(|block| block.id)
+        .max()
+        .map_or(0, |max| max + 1)
 }
 
 impl ContentPane {
@@ -437,7 +452,8 @@ impl ContentPane {
         }
     }
 
-    /// Build texts + dynamic layout metrics for this frame.
+    /// Build texts + dynamic layout metrics for this frame, resizing the
+    /// block selection masks to the shown dialogue's block ids.
     pub fn ensure(&mut self, ctx: ContentCtx<'_>) -> ContentIoTexts {
         let texts = workspace_content_io_texts(
             ctx.dialogues,
@@ -450,7 +466,35 @@ impl ContentPane {
         let frame = ContentIoFrame::build(ctx.area, texts, ctx.mode, ctx.io_focus);
         self.input_lines = frame.input_lines;
         self.output_lines = frame.output_lines;
+        self.marked_input
+            .resize(marked_mask_len(&frame.texts.input_blocks));
+        self.marked_output
+            .resize(marked_mask_len(&frame.texts.output_blocks));
         frame.texts
+    }
+
+    /// Marked block mask of one half (`mask[block_id]` = marked).
+    pub fn marked(&self, half: ContentIoFocus) -> &[bool] {
+        match half {
+            ContentIoFocus::Input => self.marked_input.mask(),
+            ContentIoFocus::Output => self.marked_output.mask(),
+        }
+    }
+
+    pub fn toggle_mark(&mut self, half: ContentIoFocus, block: usize) {
+        match half {
+            ContentIoFocus::Input => self.marked_input.toggle(block),
+            ContentIoFocus::Output => self.marked_output.toggle(block),
+        }
+    }
+
+    pub fn clear_marks(&mut self) {
+        self.marked_input.clear();
+        self.marked_output.clear();
+    }
+
+    pub fn marked_count(&self) -> usize {
+        self.marked_input.count() + self.marked_output.count()
     }
 }
 

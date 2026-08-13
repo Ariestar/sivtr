@@ -4,11 +4,14 @@ use anyhow::Result;
 use crossterm::event::KeyCode;
 
 use crate::commands::select::CommandSelection;
+use crate::tui::content::block::half_blocks;
+use crate::tui::content::io::ContentIoFocus;
 use crate::tui::content::view::{line_count, ContentViewMode};
 use crate::tui::search::{WorkspaceSearchMatch, WorkspaceSearchOutput};
 use crate::tui::workspace::{WorkspaceDialogue, WorkspacePickedContent, WorkspaceSession};
 use sivtr_core::record::{WorkAt, WorkRef};
 
+use super::panes::ContentPane;
 use super::text::filter_lines_by_spec;
 use super::vim::{VimBlock, VimView};
 
@@ -116,6 +119,48 @@ pub(super) fn workspace_picked_content(
         target,
     )
     .expect("workspace copy without a line filter should not fail")
+}
+
+/// Picked content from the content pane's marked blocks: every selected
+/// block's full body (regardless of fold state), joined in display order.
+/// `None` when nothing is marked or the focused dialogue has no record.
+pub(super) fn workspace_picked_content_for_marked_blocks(
+    dialogues: &[WorkspaceDialogue],
+    selected_dialogues: &[bool],
+    dialogue_idx: usize,
+    content_pane: &ContentPane,
+) -> Option<WorkspacePickedContent> {
+    let dialogue = dialogues.get(dialogue_idx)?;
+    let record = dialogue.record.as_ref()?;
+    let mut texts = Vec::new();
+    for (input, half) in [
+        (true, ContentIoFocus::Input),
+        (false, ContentIoFocus::Output),
+    ] {
+        for block in half_blocks(record, input) {
+            if content_pane
+                .marked(half)
+                .get(block.id)
+                .copied()
+                .unwrap_or(false)
+            {
+                texts.push(block.body(record));
+            }
+        }
+    }
+    if texts.is_empty() {
+        return None;
+    }
+    let plain = texts.join("\n\n");
+    let source = workspace_picked_content(dialogues, selected_dialogues, dialogue_idx, None).source;
+    Some(WorkspacePickedContent {
+        source,
+        units: vec![crate::tui::workspace::TextPair {
+            ansi: plain.clone(),
+            plain,
+        }],
+        selection: CommandSelection::RecentExplicit(vec![1]),
+    })
 }
 
 pub(super) fn line_filter_spec(line_filter: &str) -> Option<&str> {

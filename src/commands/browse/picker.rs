@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::tui::content::view::{
-    content_block_at, content_block_range, content_link_at, content_position_at,
+    content_block_at, content_block_range, content_dot_at, content_link_at, content_position_at,
     content_row_in_text, ContentViewMode,
 };
 use crate::tui::search::{
@@ -18,13 +18,13 @@ use crate::tui::terminal::read_interaction;
 use crate::tui::workspace::{
     help_action_for_key, panel_inner_rows, render_workspace, search_match_half, selected_index,
     workspace_help_entries, workspace_hit_test, workspace_layout, ContentIoFocus, ContentIoFrame,
-    ContentScrolls, ExpandedBlocks, WorkspaceDialogue, WorkspaceFocus, WorkspacePickedContent,
-    WorkspaceSearchView, WorkspaceSession, WorkspaceSource, WorkspaceView,
+    ContentScrolls, ExpandedBlocks, WorkspaceDialogue, WorkspaceFocus, WorkspaceHelpAction,
+    WorkspacePickedContent, WorkspaceSearchView, WorkspaceSession, WorkspaceSource, WorkspaceView,
 };
 
 use super::content::{
     active_workspace_content_at, handle_line_filter_key, handle_line_filter_paste,
-    line_filter_spec, workspace_search_target_ref,
+    line_filter_spec, workspace_picked_content_for_marked_blocks, workspace_search_target_ref,
 };
 use super::help::{apply_workspace_help_action, set_focus, HelpDispatch};
 use super::load::{SessionColumn, SessionCtx, SourceLoadState};
@@ -85,6 +85,8 @@ pub(crate) fn run(
     let mut content_mode = ContentViewMode::Reading;
     let mut expanded_blocks = ExpandedBlocks::default();
     let mut expanded_key = None;
+    // Block multi-select lives in the content pane (native pane selection);
+    // cleared with the fold state whenever the shown dialogue changes.
     // Block under a pending click; toggled on mouse release unless a drag
     // turned the gesture into a text selection.
     let mut pending_block_toggle: Option<(ContentIoFocus, usize)> = None;
@@ -355,6 +357,7 @@ pub(crate) fn run(
                 pending_block_toggle = None;
                 last_block_click = None;
                 content_cursor.clear();
+                content_pane.clear_marks();
                 expanded_key = Some(expand_key);
             }
             content_frame = ContentIoFrame::build(
@@ -463,6 +466,8 @@ pub(crate) fn run(
                         content_selection: visual_select_mode
                             .map(|mode: VisualSelectMode| mode.selection),
                         content_block_cursor: content_cursor.focused(content_io_focus),
+                        content_marked_input: content_pane.marked(ContentIoFocus::Input),
+                        content_marked_output: content_pane.marked(ContentIoFocus::Output),
                         content_frame: &content_frame,
                     },
                 )
@@ -815,6 +820,18 @@ pub(crate) fn run(
 
                 // Table-driven bindings: help registry is the only key declaration.
                 if let Some(action) = help_action_for_key(key.code, key.modifiers, focus) {
+                    // Marked blocks take over the block-copy action: y joins
+                    // every marked block's body instead of copying one block.
+                    if action == WorkspaceHelpAction::CopyBlock && content_pane.marked_count() > 0 {
+                        if let Some(picked) = workspace_picked_content_for_marked_blocks(
+                            &dialogues,
+                            &selected_dialogues,
+                            dialogue_idx,
+                            &content_pane,
+                        ) {
+                            return Ok(picked);
+                        }
+                    }
                     match apply_workspace_help_action(
                         action,
                         &mut focus,
@@ -911,6 +928,22 @@ pub(crate) fn run(
                     if let Some(half) = hit_half {
                         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
                             content_io_focus = half;
+                            // Dot-gutter click: toggle the block's mark for
+                            // batch copy (y copies every marked block).
+                            let active = content_frame.active(half, &mut content_scrolls);
+                            if let Some(block) = content_dot_at(
+                                active.area,
+                                active.text,
+                                content_frame.texts.half_blocks(half),
+                                content_mode,
+                                *active.scroll,
+                                mouse.column,
+                                mouse.row,
+                            ) {
+                                content_pane.toggle_mark(half, block);
+                                content_cursor.set(half, block);
+                                continue;
+                            }
                         }
                         let active = content_frame.active(half, &mut content_scrolls);
                         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
@@ -1199,11 +1232,11 @@ mod tests {
         handle_line_filter_key, handle_line_filter_paste, workspace_dialogue_vim_view,
         workspace_picked_content, workspace_picked_content_for_copy,
         workspace_picked_content_for_copy_with_line_filter,
-        workspace_picked_content_with_line_filter, workspace_search_target_ref,
-        WorkspaceCopyShortcut,
+        workspace_picked_content_for_marked_blocks, workspace_picked_content_with_line_filter,
+        workspace_search_target_ref, WorkspaceCopyShortcut,
     };
     use super::super::nav::{clamp_list_state, move_workspace_cursor_up};
-    use super::super::panes::{DialogueCtx, DialoguePane};
+    use super::super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane};
     use crate::commands::select::CommandSelection;
     use crate::pane::{Pane, PaneInput, Viewport};
     use crate::tui::content::view::ContentViewMode;
@@ -1220,8 +1253,8 @@ mod tests {
     use sivtr_core::ai::AgentProvider;
     use sivtr_core::record::{WorkAt, WorkRef};
     use sivtr_core::record::{
-        WorkChannel, WorkPart, WorkRecord, WorkRecordKind, WorkSessionRef, WorkSource, WorkTime,
-        RECORD_SCHEMA_VERSION,
+        WorkChannel, WorkPart, WorkPartData, WorkRecord, WorkRecordKind, WorkSessionRef,
+        WorkSource, WorkTime, RECORD_SCHEMA_VERSION,
     };
     use std::time::SystemTime;
 
@@ -1399,6 +1432,82 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["codex/test/1", "codex/test/2", "claude/test/1"]
         );
+    }
+
+    #[test]
+    fn marked_blocks_copy_joins_selected_block_bodies() {
+        let mut record = workspace_test_record(
+            WorkspaceSource::agent(AgentProvider::Codex),
+            "cmd",
+            "user text",
+            0,
+        );
+        record.parts.push(WorkPart {
+            seq: 2,
+            occurred_at: None,
+            data: WorkPartData::ToolCall {
+                call_id: Some("c1".to_string()),
+                tool: Some("Bash".to_string()),
+                input: serde_json::json!({ "command": "ls" }),
+            },
+        });
+        record.parts.push(WorkPart {
+            seq: 3,
+            occurred_at: None,
+            data: WorkPartData::ToolResult {
+                call_id: Some("c1".to_string()),
+                tool: Some("Bash".to_string()),
+                output: serde_json::json!({ "stdout": "ok" }),
+            },
+        });
+        let dialogue = WorkspaceDialogue {
+            source: WorkspaceSource::agent(AgentProvider::Codex),
+            work_ref: Some(record.work_ref.clone()),
+            record: Some(record.clone()),
+            copy: WorkspaceCopyParts::default(),
+        };
+        let dialogues = [dialogue.clone()];
+        let selected = [true];
+        let mut pane = ContentPane::default();
+        pane.ensure(ContentCtx {
+            dialogues: &dialogues,
+            selected_dialogues: &selected,
+            highlighted_idx: 0,
+            mode: ContentViewMode::Reading,
+            target: None,
+            area: ratatui::layout::Rect::new(0, 0, 60, 20),
+            io_focus: ContentIoFocus::Input,
+            expanded: &crate::tui::content::io::ExpandedBlocks::default(),
+        });
+
+        // Nothing marked: the copy path yields None.
+        assert!(
+            workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane).is_none()
+        );
+
+        // Mark the tool block (output half): copy joins the call + result bodies.
+        pane.toggle_mark(ContentIoFocus::Output, 0);
+        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
+            .expect("marked copy");
+        assert_eq!(picked.units.len(), 1);
+        let text = &picked.units[0].plain;
+        assert!(text.contains("$ ls"), "tool call body missing: {text}");
+        assert!(
+            text.contains("\"stdout\""),
+            "tool result body missing: {text}"
+        );
+        assert!(
+            !text.contains("user text"),
+            "unmarked input block leaked: {text}"
+        );
+
+        // Mark the user block (input half): both marked blocks are joined.
+        pane.toggle_mark(ContentIoFocus::Input, 0);
+        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
+            .expect("marked copy");
+        let text = &picked.units[0].plain;
+        assert!(text.contains("user text"));
+        assert!(text.contains("$ ls"));
     }
 
     #[test]
