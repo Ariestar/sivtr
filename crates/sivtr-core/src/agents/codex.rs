@@ -325,7 +325,7 @@ fn dedup_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 mod tests {
     use super::{configured_codex_session_dirs, CodexProvider};
     use crate::agents::{
-        format_blocks, normalize_path_for_match, select_blocks, AgentBlockKind, AgentSelection,
+        normalize_path_for_match, select_blocks, AgentBlockKind, AgentSelection,
         AgentSessionProvider,
     };
     use crate::config::SivtrConfig;
@@ -402,11 +402,9 @@ mod tests {
         assert_eq!(blocks[1].kind, AgentBlockKind::ToolOutput);
         assert_eq!(blocks[2].text, "new");
         assert_eq!(blocks[2].kind, AgentBlockKind::Assistant);
-        let formatted = format_blocks(&blocks);
-        assert!(formatted.contains("second"));
-        assert!(formatted.contains("<:tool:unknown result:>"));
-        assert!(formatted.contains("debug"));
-        assert!(formatted.contains("new"));
+        // The tool output block keeps its payload; "unknown result" is the
+        // default label the structure marker derives from a bare output.
+        assert!(blocks[1].text.contains("debug"));
     }
 
     #[test]

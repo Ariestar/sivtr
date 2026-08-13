@@ -166,15 +166,6 @@ impl WorkspaceSearchIndex {
         query: &str,
     ) -> WorkspaceSearchOutput {
         let (scope, term) = workspace_search_query(query);
-        self.search_with_scope(all_sessions, scope, term)
-    }
-
-    pub(crate) fn search_with_scope(
-        &self,
-        all_sessions: &[WorkspaceSession],
-        scope: WorkspaceSearchScope,
-        term: &str,
-    ) -> WorkspaceSearchOutput {
         let Some(regex) = workspace_search_regex(term) else {
             return WorkspaceSearchOutput::default();
         };

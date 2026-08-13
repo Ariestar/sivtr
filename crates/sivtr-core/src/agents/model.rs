@@ -587,27 +587,6 @@ pub fn select_blocks(session: &AgentSession, selection: AgentSelection) -> Vec<A
     }
 }
 
-pub fn format_blocks(blocks: &[AgentBlock]) -> String {
-    format_blocks_with_text(blocks, |block| block.text.trim().to_string())
-}
-
-pub fn format_blocks_with_text(
-    blocks: &[AgentBlock],
-    text_for_block: impl Fn(&AgentBlock) -> String,
-) -> String {
-    if blocks.len() == 1 {
-        return text_for_block(&blocks[0]).trim().to_string();
-    }
-
-    blocks
-        .iter()
-        .filter_map(|block| format_block_with_heading(block, &text_for_block(block)))
-        .collect::<Vec<_>>()
-        .join("\n\n")
-        .trim()
-        .to_string()
-}
-
 fn select_last_kind(blocks: &[AgentBlock], kind: AgentBlockKind) -> Vec<AgentBlock> {
     blocks
         .iter()
@@ -639,18 +618,6 @@ fn select_last_turn(blocks: &[AgentBlock]) -> Vec<AgentBlock> {
 
     // Keep the full turn: user, tools/skills/thinking/mcp, assistant — never strip structure.
     blocks[user_idx..=assistant_idx].to_vec()
-}
-
-fn format_block_with_heading(block: &AgentBlock, text: &str) -> Option<String> {
-    let text = text.trim();
-    if text.is_empty() && block.kind.is_dialogue() {
-        return None;
-    }
-    Some(format_structured_block(
-        block.kind,
-        block.label.as_deref(),
-        text,
-    ))
 }
 
 /// Serialize a block for human/machine-readable evidence (not Markdown dialogue headings).
