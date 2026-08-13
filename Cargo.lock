@@ -4988,7 +4988,6 @@ dependencies = [
  "shell-words",
  "strip-ansi-escapes",
  "tempfile",
- "thiserror 2.0.20",
  "toml",
  "unicode-width",
  "uuid",
