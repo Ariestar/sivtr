@@ -501,8 +501,8 @@ pub(crate) fn output() -> Color {
     ACTIVE.get().output
 }
 
-/// Structural marker color for a `<:channel:…:>` role. Result channels
-/// (`… result:>`) lean blue, everything else yellow.
+/// Color for the `## Command` dialogue heading and structural roles. Result
+/// channels (`… result:>`) lean blue, everything else yellow.
 pub(crate) fn structure_color(is_result: bool) -> Color {
     let theme = ACTIVE.get();
     if is_result {
@@ -510,13 +510,6 @@ pub(crate) fn structure_color(is_result: bool) -> Color {
     } else {
         theme.structure
     }
-}
-
-/// Structural markers: `<:tool:…:>`, `<:skill:…:>`, `<:thinking:…:>`.
-pub(crate) fn structure_style(is_result: bool) -> Style {
-    Style::default()
-        .fg(structure_color(is_result))
-        .add_modifier(Modifier::BOLD)
 }
 
 #[cfg(test)]
