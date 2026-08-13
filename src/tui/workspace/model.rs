@@ -8,10 +8,11 @@ use std::collections::HashSet;
 use std::time::SystemTime;
 
 use crate::commands::select::CommandSelection;
+use crate::tui::content::block::fold_label_for_part;
 use crate::tui::content::io::{
     ContentIoFocus, ContentIoFrame, ContentIoTexts, ContentScrolls, ExpandedBlocks,
 };
-use crate::tui::content::text::{content_io_from_record, structured_part_text};
+use crate::tui::content::text::content_io_from_record;
 use crate::tui::content::view::{ContentSelection, ContentViewMode};
 use crate::tui::search::WorkspaceSearchScope;
 use crate::tui::theme;
@@ -231,8 +232,9 @@ impl WorkspaceDialogue {
             .join_displayed()
     }
 
-    /// Input / Output bodies for the dual content panes with per-block
-    /// expansion (read mode shows full blocks for the listed indices).
+    /// Input / Output bodies for the dual content panes with per-block fold
+    /// state (every workpart is a block; structure blocks fold by default in
+    /// read mode).
     pub(crate) fn content_io_texts(
         &self,
         mode: ContentViewMode,
@@ -240,48 +242,42 @@ impl WorkspaceDialogue {
         expanded: &ExpandedBlocks,
     ) -> ContentIoTexts {
         if let Some(target @ WorkAt::Part(_)) = target {
-            let text = match mode {
-                ContentViewMode::Raw => self.targeted_plain_text(target),
-                ContentViewMode::Reading => self.targeted_structured_text(target),
-            }
-            .unwrap_or_else(|| "<empty>".to_string());
-            // Targeted part lives in its own IO half; the other stays empty.
+            // A targeted part lives alone in its own IO half as one block.
             let Some(record) = self.record.as_ref() else {
-                return ContentIoTexts {
-                    input: text,
-                    output: String::new(),
-                };
+                return ContentIoTexts::new(Vec::new(), Vec::new());
             };
             let Some(part) = record.part_for_at(target) else {
-                return ContentIoTexts {
-                    input: text,
-                    output: String::new(),
-                };
+                return ContentIoTexts::new(Vec::new(), Vec::new());
             };
-            return if part.kind().is_input() {
-                ContentIoTexts {
-                    input: text,
-                    output: String::new(),
+            let input = part.kind().is_input();
+            let shown = match mode {
+                ContentViewMode::Raw => true,
+                ContentViewMode::Reading => {
+                    let focus = if input {
+                        ContentIoFocus::Input
+                    } else {
+                        ContentIoFocus::Output
+                    };
+                    expanded.expanded(focus, 0, part.kind().is_structure())
                 }
+            };
+            let segment = if shown {
+                sivtr_core::record::format_work_part(part)
             } else {
-                ContentIoTexts {
-                    input: String::new(),
-                    output: text,
-                }
+                fold_label_for_part(part)
+            };
+            return if input {
+                ContentIoTexts::new(vec![segment], Vec::new())
+            } else {
+                ContentIoTexts::new(Vec::new(), vec![segment])
             };
         }
 
         let Some(record) = self.record.as_ref() else {
-            return ContentIoTexts {
-                input: "<empty>".to_string(),
-                output: String::new(),
-            };
+            return ContentIoTexts::new(Vec::new(), Vec::new());
         };
         if record.parts.is_empty() {
-            return ContentIoTexts {
-                input: "<empty>".to_string(),
-                output: String::new(),
-            };
+            return ContentIoTexts::new(Vec::new(), Vec::new());
         }
         let reading = matches!(mode, ContentViewMode::Reading);
         content_io_from_record(record, reading, expanded)
@@ -294,22 +290,6 @@ impl WorkspaceDialogue {
             _ => return Some(work_ref.clone()),
         };
         Some(work_ref.with_at(target))
-    }
-
-    fn targeted_plain_text(&self, target: WorkAt) -> Option<String> {
-        let WorkAt::Part(_) = target else {
-            return None;
-        };
-        let part = self.record.as_ref()?.part_for_at(target)?;
-        Some(sivtr_core::record::format_work_part(part))
-    }
-
-    fn targeted_structured_text(&self, target: WorkAt) -> Option<String> {
-        let WorkAt::Part(_) = target else {
-            return None;
-        };
-        let part = self.record.as_ref()?.part_for_at(target)?;
-        Some(structured_part_text(part))
     }
 }
 
@@ -403,8 +383,9 @@ pub(crate) struct WorkspaceView<'a> {
     pub(crate) line_filter_error: Option<&'a str>,
     pub(crate) fullscreen: Option<WorkspaceFocus>,
     pub(crate) content_selection: Option<ContentSelection>,
-    /// Last clicked structure block per half, highlighted like a list row.
-    pub(crate) content_active_block: Option<(ContentIoFocus, usize)>,
+    /// Block under the keyboard/mouse cursor per half; highlighted like a
+    /// list row when its half is focused.
+    pub(crate) content_block_cursor: Option<(ContentIoFocus, usize)>,
     /// Dual IO layout + display texts, computed once per redraw by the picker
     /// and shared with the renderer (no per-frame duplicate layout).
     pub(crate) content_frame: &'a ContentIoFrame,

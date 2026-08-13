@@ -101,6 +101,16 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         if area.height == 0 {
             continue;
         }
+        let blocks = match half {
+            ContentIoFocus::Input => &frame_io.texts.input_blocks[..],
+            ContentIoFocus::Output => &frame_io.texts.output_blocks[..],
+        };
+        // The block cursor highlights only the focused half, like the cursor
+        // row in the session/dialogue lists.
+        let cursor_block = view
+            .content_block_cursor
+            .filter(|(focus, _)| content_active && *focus == half)
+            .map(|(_, block)| block);
         render_content_panel(
             frame,
             area,
@@ -114,13 +124,12 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
                 content_active && view.content_io_focus == half,
             ),
             frame_io.texts.display(half),
+            blocks,
             view.content_scrolls.get(half),
             view.content_mode,
             content_selection_for_half(view.content_selection, view.content_io_focus, half),
             content_search,
-            view.content_active_block
-                .filter(|(focus, _)| *focus == half)
-                .map(|(_, block)| block),
+            cursor_block,
         );
     }
 
@@ -851,11 +860,12 @@ fn render_content_panel(
     area: Rect,
     panel: Panel,
     text: &str,
+    blocks: &[String],
     scroll: usize,
     mode: ContentViewMode,
     selection: Option<ContentSelection>,
     search_regex: Option<&Regex>,
-    active_block: Option<usize>,
+    cursor_block: Option<usize>,
 ) {
     render_content_view(
         frame,
@@ -863,11 +873,12 @@ fn render_content_panel(
         panel,
         ContentView {
             text,
+            blocks,
             scroll,
             search_regex,
             mode,
             selection,
-            active_block,
+            cursor_block,
         },
     );
 }

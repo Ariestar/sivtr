@@ -365,7 +365,20 @@ pub(super) fn apply_workspace_mouse_scroll(
     range_anchor: &mut Option<usize>,
     content_scrolls: &mut ContentScrolls,
     content_io_focus: ContentIoFocus,
+    content_cursor: &mut super::nav::ContentBlockCursor,
+    content_block_counts: (usize, usize),
 ) {
+    if focus == WorkspaceFocus::Content {
+        // The wheel keeps smooth line scrolling; j/k navigates blocks.
+        let scroll = content_scrolls.get(content_io_focus);
+        let next = if scroll_up {
+            scroll.saturating_sub(1)
+        } else {
+            scroll.saturating_add(1)
+        };
+        content_scrolls.set(content_io_focus, next);
+        return;
+    }
     for _ in 0..MOUSE_SCROLL_LINES {
         if scroll_up {
             move_workspace_cursor_up(
@@ -381,6 +394,8 @@ pub(super) fn apply_workspace_mouse_scroll(
                 range_anchor,
                 content_scrolls,
                 content_io_focus,
+                content_cursor,
+                content_block_counts,
             );
         } else {
             move_workspace_cursor_down(
@@ -396,6 +411,8 @@ pub(super) fn apply_workspace_mouse_scroll(
                 range_anchor,
                 content_scrolls,
                 content_io_focus,
+                content_cursor,
+                content_block_counts,
             );
         }
     }

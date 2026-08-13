@@ -24,6 +24,8 @@ pub(crate) enum WorkspaceHelpAction {
     ToggleContentMode,
     /// Switch focused content half (Input ↔ Output).
     ToggleContentIo,
+    /// Content half: expand/collapse the cursor block.
+    ToggleBlockFold,
     VisualTextSelect,
     Copy,
     CopyInput,
@@ -278,10 +280,18 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
         },
         WorkspaceHelpEntry {
             key: "Enter",
+            description: "expand/collapse block",
+            action: WorkspaceHelpAction::ToggleBlockFold,
+            footer_label: Some("fold"),
+            footer_panes: CNT,
+        },
+        WorkspaceHelpEntry {
+            key: "Enter",
             description: "confirm / open next / copy",
             action: WorkspaceHelpAction::Copy,
             footer_label: Some("enter"),
-            footer_panes: NAV,
+            // Content's Enter folds blocks (see ToggleBlockFold above).
+            footer_panes: &[Source, Sessions, Dialogues],
         },
         WorkspaceHelpEntry {
             key: "z",

@@ -13,13 +13,32 @@ const EMPTY: &str = "<empty>";
 const MIN_PANE_H: u16 = 3;
 
 /// Body text for one IO half (no section headers — panes own titles).
+/// `input` / `output` are the per-block segments joined with a blank line;
+/// the segments stay available so the content pane can map displayed lines
+/// back to their owning block (highlight / hit-test / navigation).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ContentIoTexts {
     pub(crate) input: String,
     pub(crate) output: String,
+    /// Display text of each block in the input half (tag or body), in order.
+    pub(crate) input_blocks: Vec<String>,
+    /// Display text of each block in the output half (tag or body), in order.
+    pub(crate) output_blocks: Vec<String>,
 }
 
 impl ContentIoTexts {
+    /// Build from per-block segments; the pane text is the segments joined
+    /// with a blank line between blocks (the block separator also drives the
+    /// content layout's line ownership).
+    pub(crate) fn new(input_blocks: Vec<String>, output_blocks: Vec<String>) -> Self {
+        ContentIoTexts {
+            input: input_blocks.join("\n\n"),
+            input_blocks,
+            output: output_blocks.join("\n\n"),
+            output_blocks,
+        }
+    }
+
     pub(crate) fn join_displayed(&self) -> String {
         match (self.input_blank(), self.output_blank()) {
             (true, true) => EMPTY.to_string(),
@@ -118,12 +137,13 @@ impl ContentScrolls {
     }
 }
 
-/// Which structure blocks the user expanded, per content half. Read mode
-/// defaults every block to its `<:…:>` tag line; a block in this set shows
-/// its full payload instead. Raw mode always shows full blocks and ignores
-/// this state. A block index is the ordinal of the block's open marker line
-/// within that half's text — stable because every block shows exactly one
-/// open marker line whether collapsed or expanded.
+/// Which blocks show their full body instead of their `<:…:>` tag, per
+/// content half. Structure blocks (tool/skill/thinking) default to collapsed,
+/// body blocks default to expanded; a block in the set flips the kind
+/// default (structure expanded, body collapsed). Raw mode always shows full
+/// blocks and ignores this state. A block index is the ordinal of the block
+/// within that half's segment list — stable because every block renders
+/// exactly one segment whether collapsed or expanded.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ExpandedBlocks {
     pub(crate) input: HashSet<usize>,
@@ -131,6 +151,19 @@ pub(crate) struct ExpandedBlocks {
 }
 
 impl ExpandedBlocks {
+    /// Whether `block` in `focus` shows its full body.
+    pub(crate) fn expanded(&self, focus: ContentIoFocus, block: usize, structure: bool) -> bool {
+        let set = match focus {
+            ContentIoFocus::Input => &self.input,
+            ContentIoFocus::Output => &self.output,
+        };
+        if structure {
+            set.contains(&block)
+        } else {
+            !set.contains(&block)
+        }
+    }
+
     pub(crate) fn toggle(&mut self, focus: ContentIoFocus, block: usize) {
         let set = match focus {
             ContentIoFocus::Input => &mut self.input,
@@ -368,10 +401,7 @@ mod tests {
 
     #[test]
     fn display_uses_trim_for_empty() {
-        let texts = ContentIoTexts {
-            input: "  \n".to_string(),
-            output: "ok".to_string(),
-        };
+        let texts = ContentIoTexts::new(vec!["  \n".to_string()], vec!["ok".to_string()]);
         assert!(texts.input_blank());
         assert_eq!(texts.display(ContentIoFocus::Input), EMPTY);
         assert_eq!(texts.display(ContentIoFocus::Output), "ok");

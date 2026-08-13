@@ -30,6 +30,44 @@ pub(super) fn open_link_target(target: &str) -> Result<()> {
     Ok(())
 }
 
+/// Keyboard/mouse cursor over content blocks, one position per half (each
+/// half keeps its own, like the session/dialogue lists). `follow` asks the
+/// picker to keep the cursor block visible on the next redraw; keyboard
+/// moves set it, clicks do not (a clicked line is already visible).
+#[derive(Default)]
+pub(super) struct ContentBlockCursor {
+    pub(super) input: Option<usize>,
+    pub(super) output: Option<usize>,
+    pub(super) follow: bool,
+}
+
+impl ContentBlockCursor {
+    pub(super) fn get(&self, half: ContentIoFocus) -> Option<usize> {
+        match half {
+            ContentIoFocus::Input => self.input,
+            ContentIoFocus::Output => self.output,
+        }
+    }
+
+    pub(super) fn set(&mut self, half: ContentIoFocus, block: usize) {
+        match half {
+            ContentIoFocus::Input => self.input = Some(block),
+            ContentIoFocus::Output => self.output = Some(block),
+        }
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.input = None;
+        self.output = None;
+        self.follow = false;
+    }
+
+    /// `(half, block)` of the focused half, for the view highlight.
+    pub(super) fn focused(&self, focus: ContentIoFocus) -> Option<(ContentIoFocus, usize)> {
+        self.get(focus).map(|block| (focus, block))
+    }
+}
+
 pub(super) fn reset_workspace_after_source_change(
     session_state: &mut ListState,
     selected_sessions: &mut Vec<bool>,
@@ -79,6 +117,8 @@ pub(super) fn move_workspace_cursor_up(
     range_anchor: &mut Option<usize>,
     content_scrolls: &mut ContentScrolls,
     content_io_focus: ContentIoFocus,
+    content_cursor: &mut ContentBlockCursor,
+    content_block_counts: (usize, usize),
 ) {
     match focus {
         WorkspaceFocus::Source => {
@@ -106,8 +146,7 @@ pub(super) fn move_workspace_cursor_up(
             content_scrolls.clear();
         }
         WorkspaceFocus::Content => {
-            let next = content_scrolls.get(content_io_focus).saturating_sub(1);
-            content_scrolls.set(content_io_focus, next);
+            move_content_cursor(true, content_cursor, content_block_counts, content_io_focus);
         }
     }
 }
@@ -126,6 +165,8 @@ pub(super) fn move_workspace_cursor_down(
     range_anchor: &mut Option<usize>,
     content_scrolls: &mut ContentScrolls,
     content_io_focus: ContentIoFocus,
+    content_cursor: &mut ContentBlockCursor,
+    content_block_counts: (usize, usize),
 ) {
     match focus {
         WorkspaceFocus::Source => {
@@ -156,10 +197,38 @@ pub(super) fn move_workspace_cursor_down(
             content_scrolls.clear();
         }
         WorkspaceFocus::Content => {
-            let next = content_scrolls.get(content_io_focus).saturating_add(1);
-            content_scrolls.set(content_io_focus, next);
+            move_content_cursor(
+                false,
+                content_cursor,
+                content_block_counts,
+                content_io_focus,
+            );
         }
     }
+}
+
+/// Move the content block cursor within the focused half, clamped like a
+/// list selection; the next redraw keeps the cursor block visible.
+fn move_content_cursor(
+    up: bool,
+    cursor: &mut ContentBlockCursor,
+    counts: (usize, usize),
+    focus: ContentIoFocus,
+) {
+    let count = match focus {
+        ContentIoFocus::Input => counts.0,
+        ContentIoFocus::Output => counts.1,
+    };
+    if count == 0 {
+        return;
+    }
+    let next = match cursor.get(focus) {
+        Some(idx) if up => idx.saturating_sub(1),
+        Some(idx) => (idx + 1).min(count - 1),
+        None => 0,
+    };
+    cursor.set(focus, next);
+    cursor.follow = true;
 }
 
 pub(super) fn row_list_index(

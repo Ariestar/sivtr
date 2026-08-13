@@ -21,7 +21,7 @@ use super::content::{
 };
 use super::nav::{
     move_workspace_cursor_down, move_workspace_cursor_up, reset_workspace_after_source_change,
-    reset_workspace_dialogue_state,
+    reset_workspace_dialogue_state, ContentBlockCursor,
 };
 use super::selection::{select_sources, WorkspaceSourceSelection};
 use super::vim::open_vim_view;
@@ -52,9 +52,11 @@ pub(super) fn apply_workspace_help_action(
     content_scrolls: &mut ContentScrolls,
     content_io_focus: &mut ContentIoFocus,
     content_mode: &mut ContentViewMode,
-    expanded: &ExpandedBlocks,
+    expanded: &mut ExpandedBlocks,
     content_input_lines: usize,
     content_output_lines: usize,
+    content_cursor: &mut ContentBlockCursor,
+    content_block_counts: (usize, usize),
     show_help: &mut bool,
     show_search: &mut bool,
     search_query: &mut String,
@@ -93,6 +95,8 @@ pub(super) fn apply_workspace_help_action(
             range_anchor,
             content_scrolls,
             *content_io_focus,
+            content_cursor,
+            content_block_counts,
         ),
         WorkspaceHelpAction::MoveDown => move_workspace_cursor_down(
             *focus,
@@ -107,6 +111,8 @@ pub(super) fn apply_workspace_help_action(
             range_anchor,
             content_scrolls,
             *content_io_focus,
+            content_cursor,
+            content_block_counts,
         ),
         WorkspaceHelpAction::PreviousPane => {
             if let Some(next_focus) = focus.previous(dialogue_count) {
@@ -240,6 +246,14 @@ pub(super) fn apply_workspace_help_action(
         }
         WorkspaceHelpAction::ToggleContentIo if *focus == WorkspaceFocus::Content => {
             *content_io_focus = content_io_focus.toggle();
+        }
+        WorkspaceHelpAction::ToggleBlockFold if *focus == WorkspaceFocus::Content => {
+            if *content_mode == ContentViewMode::Reading {
+                if let Some((half, block)) = content_cursor.focused(*content_io_focus) {
+                    expanded.toggle(half, block);
+                    content_cursor.follow = true;
+                }
+            }
         }
         WorkspaceHelpAction::VisualTextSelect if *focus == WorkspaceFocus::Content => {
             let size = terminal.size()?;
@@ -378,6 +392,7 @@ pub(super) fn apply_workspace_help_action(
         | WorkspaceHelpAction::ScrollContentBottom
         | WorkspaceHelpAction::ToggleContentMode
         | WorkspaceHelpAction::ToggleContentIo
+        | WorkspaceHelpAction::ToggleBlockFold
         | WorkspaceHelpAction::VisualTextSelect
         | WorkspaceHelpAction::CopyInput
         | WorkspaceHelpAction::CopyOutput

@@ -7,8 +7,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::tui::content::view::{
-    content_link_at, content_position_at, content_row_in_text, content_structure_block_at,
-    ContentViewMode,
+    content_block_at, content_block_range, content_link_at, content_position_at,
+    content_row_in_text, ContentViewMode,
 };
 use crate::tui::search::{
     workspace_search_fingerprint, workspace_search_has_query, workspace_search_scope,
@@ -31,7 +31,7 @@ use super::load::{SessionColumn, SessionCtx, SourceLoadState};
 use super::nav::{
     clamp_list_state, move_workspace_cursor_down, move_workspace_cursor_up, open_link_target,
     reset_workspace_after_source_change, reset_workspace_dialogue_state,
-    resize_workspace_dialogue_selection, row_list_index, source_list_index,
+    resize_workspace_dialogue_selection, row_list_index, source_list_index, ContentBlockCursor,
 };
 use super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane, SourcePane};
 use super::selection::{has_selected_sessions, refresh_next_level};
@@ -88,8 +88,11 @@ pub(crate) fn run(
     // Block under a pending click; toggled on mouse release unless a drag
     // turned the gesture into a text selection.
     let mut pending_block_toggle: Option<(ContentIoFocus, usize)> = None;
-    // Last clicked structure block, highlighted like a list row.
-    let mut active_block: Option<(ContentIoFocus, usize)> = None;
+    // Block cursor (keyboard j/k + click), highlighted like a list row; one
+    // position per half.
+    let mut content_cursor = ContentBlockCursor::default();
+    // Per-half block counts of the last frame; drive j/k navigation.
+    let mut content_block_counts = (0usize, 0usize);
     let mut show_help = false;
     let mut show_search = false;
     let mut search_query = String::new();
@@ -348,7 +351,7 @@ pub(crate) fn run(
             if expanded_key.as_ref() != Some(&expand_key) {
                 expanded_blocks.clear();
                 pending_block_toggle = None;
-                active_block = None;
+                content_cursor.clear();
                 expanded_key = Some(expand_key);
             }
             content_frame = ContentIoFrame::build(
@@ -367,6 +370,38 @@ pub(crate) fn run(
                 content_io_focus,
             );
             content_scrolls.clamp_to(content_frame.input_lines, content_frame.output_lines);
+            content_block_counts = (
+                content_frame.texts.input_blocks.len(),
+                content_frame.texts.output_blocks.len(),
+            );
+            // Keyboard moves ask the next redraw to keep the cursor block in
+            // view; clicks never set `follow`, so they keep the scroll as-is.
+            if content_cursor.follow {
+                content_cursor.follow = false;
+                if let Some((half, block)) = content_cursor.focused(content_io_focus) {
+                    let blocks = match half {
+                        ContentIoFocus::Input => &content_frame.texts.input_blocks[..],
+                        ContentIoFocus::Output => &content_frame.texts.output_blocks[..],
+                    };
+                    let area = content_frame.areas.area(half);
+                    if let Some(range) = content_block_range(
+                        area,
+                        content_frame.texts.display(half),
+                        blocks,
+                        content_mode,
+                        block,
+                    ) {
+                        let visible = area.height.saturating_sub(2) as usize;
+                        let scroll = content_scrolls.get(half);
+                        if range.start < scroll {
+                            content_scrolls.set(half, range.start);
+                        } else if range.start >= scroll.saturating_add(visible) {
+                            content_scrolls
+                                .set(half, range.start.saturating_add(1).saturating_sub(visible));
+                        }
+                    }
+                }
+            }
             if let Some((half, scroll)) = pending_half {
                 let total = content_frame.line_count(half);
                 content_scrolls.set(half, scroll.min(total.saturating_sub(1)));
@@ -431,7 +466,7 @@ pub(crate) fn run(
                         fullscreen,
                         content_selection: visual_select_mode
                             .map(|mode: VisualSelectMode| mode.selection),
-                        content_active_block: active_block,
+                        content_block_cursor: content_cursor.focused(content_io_focus),
                         content_frame: &content_frame,
                     },
                 )
@@ -579,6 +614,8 @@ pub(crate) fn run(
                                 &mut range_anchor,
                                 &mut content_scrolls,
                                 content_io_focus,
+                                &mut content_cursor,
+                                content_block_counts,
                             );
                         }
                         KeyCode::Down => {
@@ -595,6 +632,8 @@ pub(crate) fn run(
                                 &mut range_anchor,
                                 &mut content_scrolls,
                                 content_io_focus,
+                                &mut content_cursor,
+                                content_block_counts,
                             );
                         }
                         KeyCode::Backspace => search_query_edited(
@@ -679,9 +718,11 @@ pub(crate) fn run(
                                 &mut content_scrolls,
                                 &mut content_io_focus,
                                 &mut content_mode,
-                                &expanded_blocks,
+                                &mut expanded_blocks,
                                 content_pane.line_count(ContentIoFocus::Input),
                                 content_pane.line_count(ContentIoFocus::Output),
+                                &mut content_cursor,
+                                content_block_counts,
                                 &mut show_help,
                                 &mut show_search,
                                 &mut search_query,
@@ -793,9 +834,11 @@ pub(crate) fn run(
                         &mut content_scrolls,
                         &mut content_io_focus,
                         &mut content_mode,
-                        &expanded_blocks,
+                        &mut expanded_blocks,
                         content_pane.line_count(ContentIoFocus::Input),
                         content_pane.line_count(ContentIoFocus::Output),
+                        &mut content_cursor,
+                        content_block_counts,
                         &mut show_help,
                         &mut show_search,
                         &mut search_query,
@@ -888,40 +931,47 @@ pub(crate) fn run(
                                 let _ = open_link_target(&target);
                                 continue;
                             }
-                            // Read mode: clicking a structure tag expands/collapses
-                            // that block (raw mode always shows full blocks).
-                            if content_mode == ContentViewMode::Reading {
-                                if let Some(position) = content_position_at(
+                            // Clicking a block highlights it in any mode; in
+                            // read mode it also expands/collapses (raw mode
+                            // always shows full blocks). Every workpart is a
+                            // block, so body text folds too.
+                            if let Some(position) = content_position_at(
+                                active.area,
+                                active.text,
+                                *active.scroll,
+                                content_mode,
+                                mouse.column,
+                                mouse.row,
+                            ) {
+                                // Clicks below the last rendered line clamp
+                                // to it in `content_position_at`; ignore
+                                // them instead of toggling the last block.
+                                if !content_row_in_text(
                                     active.area,
                                     active.text,
-                                    *active.scroll,
                                     content_mode,
-                                    mouse.column,
+                                    *active.scroll,
                                     mouse.row,
                                 ) {
-                                    // Clicks below the last rendered line clamp
-                                    // to it in `content_position_at`; ignore
-                                    // them instead of toggling the last block.
-                                    if !content_row_in_text(
-                                        active.area,
-                                        active.text,
-                                        content_mode,
-                                        *active.scroll,
-                                        mouse.row,
-                                    ) {
-                                        continue;
-                                    }
-                                    // Record the block under the click and toggle
-                                    // it on release, so a drag still selects text
-                                    // instead of collapsing the block.
-                                    pending_block_toggle = content_structure_block_at(
-                                        active.area,
-                                        active.text,
-                                        content_mode,
-                                        position.line,
-                                    )
-                                    .map(|block| (half, block));
+                                    continue;
                                 }
+                                // Record the block under the click and toggle
+                                // it on release, so a drag still selects text
+                                // instead of collapsing the block.
+                                let blocks = match half {
+                                    ContentIoFocus::Input => &content_frame.texts.input_blocks[..],
+                                    ContentIoFocus::Output => {
+                                        &content_frame.texts.output_blocks[..]
+                                    }
+                                };
+                                pending_block_toggle = content_block_at(
+                                    active.area,
+                                    active.text,
+                                    blocks,
+                                    content_mode,
+                                    position.line,
+                                )
+                                .map(|block| (half, block));
                             }
                         }
                         // A drag selects text and cancels the pending block toggle.
@@ -945,12 +995,14 @@ pub(crate) fn run(
                             if visual_select_mode.is_some() {
                                 set_focus(&mut focus, &mut fullscreen, WorkspaceFocus::Content);
                             }
-                            // Pure click (no drag): release toggles the block
-                            // and marks it as the active highlight.
+                            // Pure click (no drag): release highlights the
+                            // block and, in read mode, folds it.
                             if matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left)) {
                                 if let Some((half, block)) = pending_block_toggle.take() {
-                                    active_block = Some((half, block));
-                                    expanded_blocks.toggle(half, block);
+                                    content_cursor.set(half, block);
+                                    if content_mode == ContentViewMode::Reading {
+                                        expanded_blocks.toggle(half, block);
+                                    }
                                     redraw = true;
                                 }
                             }
@@ -995,6 +1047,8 @@ pub(crate) fn run(
                                 &mut range_anchor,
                                 &mut content_scrolls,
                                 content_io_focus,
+                                &mut content_cursor,
+                                content_block_counts,
                             );
                         }
                     }
@@ -1741,6 +1795,8 @@ mod tests {
             &mut range_anchor,
             &mut content_scrolls,
             ContentIoFocus::Input,
+            &mut super::super::nav::ContentBlockCursor::default(),
+            (0, 0),
         );
 
         assert_eq!(dialogue_state.selected(), None);

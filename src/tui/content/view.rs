@@ -35,12 +35,16 @@ impl ContentViewMode {
 
 pub(crate) struct ContentView<'a> {
     pub(crate) text: &'a str,
+    /// Per-block display segments (tag or body) that the text joins; drives
+    /// block hit-testing and the cursor highlight range.
+    pub(crate) blocks: &'a [String],
     pub(crate) scroll: usize,
     pub(crate) search_regex: Option<&'a Regex>,
     pub(crate) mode: ContentViewMode,
     pub(crate) selection: Option<ContentSelection>,
-    /// Structure block ordinal to highlight (its displayed line range), if any.
-    pub(crate) active_block: Option<usize>,
+    /// Block under the keyboard/mouse cursor; its displayed line range is
+    /// highlighted with the list-row focus style.
+    pub(crate) cursor_block: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,8 +116,8 @@ pub(crate) fn render_content_view(
         chunks[1],
     );
     let block_highlight = view
-        .active_block
-        .and_then(|block| content_structure_block_range(area, view.text, view.mode, block));
+        .cursor_block
+        .and_then(|block| content_block_range(area, view.text, view.blocks, view.mode, block));
     frame.render_widget(
         Paragraph::new(content_lines(
             visible,
@@ -221,19 +225,18 @@ pub(crate) fn content_row_in_text(
     raw_line < content_view_line_count(area, text, mode)
 }
 
-/// Structure block ordinal covering `line` (a displayed line index), if any.
-/// Walks the wrapped display and maps each line onto the block whose open
-/// marker owns it: the tag line, the expanded body, and the close marker all
-/// belong to the same block, so clicking anywhere on an expanded block (or
-/// on its tag) toggles it. A merged tool group's `result:` section stays
-/// inside the same block as its `call:` section.
-pub(crate) fn content_structure_block_at(
+/// Block owning `line` (a displayed line index), if any. Blocks are laid out
+/// from their own segments (one blank separator line between blocks), so
+/// every displayed line maps directly onto the block that produced it —
+/// tags, bodies, and close markers all belong to the same block.
+pub(crate) fn content_block_at(
     area: Rect,
     text: &str,
+    blocks: &[String],
     mode: ContentViewMode,
     line: usize,
 ) -> Option<usize> {
-    content_block_ownership(area, text, mode)
+    block_ownership(area, text, blocks, mode)
         .get(line)
         .copied()
         .flatten()
@@ -241,81 +244,43 @@ pub(crate) fn content_structure_block_at(
 
 /// Displayed line range (start..end, end exclusive) owned by `block`, if the
 /// block is present in the layout.
-pub(crate) fn content_structure_block_range(
+pub(crate) fn content_block_range(
     area: Rect,
     text: &str,
+    blocks: &[String],
     mode: ContentViewMode,
     block: usize,
 ) -> Option<std::ops::Range<usize>> {
-    let ownership = content_block_ownership(area, text, mode);
+    let ownership = block_ownership(area, text, blocks, mode);
     let start = ownership.iter().position(|owner| *owner == Some(block))?;
     let end = ownership.iter().rposition(|owner| *owner == Some(block))?;
     Some(start..end + 1)
 }
 
-fn content_block_ownership(area: Rect, text: &str, mode: ContentViewMode) -> Vec<Option<usize>> {
-    let content_area = content_text_area(area, text, mode);
-    let width = content_area.width as usize;
-    let lines = all_content_lines(text, width, mode);
-    let joined = |idx: usize| {
-        lines[idx]
-            .line
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect::<String>()
-    };
-
-    // Map each displayed line to the block that owns it. A block runs from
-    // its open marker to the last close marker before the next block's open;
-    // a collapsed block owns only its tag line.
-    let mut ownership = vec![None; lines.len()];
-    let mut block = 0usize;
-    let mut idx = 0usize;
-    while idx < lines.len() {
-        let text = joined(idx);
-        if !is_open_marker(&text) {
-            idx += 1;
-            continue;
+/// Map every displayed line of a half to the block that owns it. Each block
+/// is laid out independently and followed by one unowned separator line,
+/// which matches the `"\n\n"` join the pane text uses between segments.
+fn block_ownership(
+    area: Rect,
+    text: &str,
+    blocks: &[String],
+    mode: ContentViewMode,
+) -> Vec<Option<usize>> {
+    let width = content_text_area(area, text, mode).width as usize;
+    let mut ownership = Vec::new();
+    for (idx, segment) in blocks.iter().enumerate() {
+        for _ in all_content_lines(segment, width, mode) {
+            ownership.push(Some(idx));
         }
-        ownership[idx] = Some(block);
-        let mut end = idx;
-        let mut scan = idx + 1;
-        while scan < lines.len() {
-            let candidate = joined(scan);
-            if is_open_marker(&candidate) && !is_result_section(&candidate) {
-                break;
-            }
-            // Close markers get the same validation as open ones: plain text
-            // that merely starts with "<:/" must not extend the block.
-            if crate::tui::content::text::is_structure_marker(&candidate)
-                && candidate.starts_with("<:/")
-            {
-                end = scan;
-            }
-            scan += 1;
+        if idx + 1 < blocks.len() {
+            ownership.push(None);
         }
-        for owned in ownership[idx + 1..=end].iter_mut() {
-            *owned = Some(block);
-        }
-        block += 1;
-        idx = end + 1;
+    }
+    if ownership.is_empty() {
+        // An empty half renders `<empty>`: one unowned line.
+        ownership.push(None);
     }
     ownership
-}
-
-fn is_open_marker(text: &str) -> bool {
-    crate::tui::content::text::is_structure_marker(text) && !text.starts_with("<:/")
-}
-
-/// A `result:` section marker (`<:tool:… result:>`) belongs to the preceding
-/// `call:` block, not a new block.
-fn is_result_section(text: &str) -> bool {
-    open_marker_inner(text).is_some_and(|inner| inner.ends_with(" result"))
-}
-
-fn open_marker_inner(text: &str) -> Option<&str> {
-    text.strip_prefix("<:")?.strip_suffix(":>")
 }
 
 pub(crate) fn content_position_in_text_row(
@@ -598,9 +563,9 @@ fn content_lines(
     Text::from(lines)
 }
 
-/// Tint every line of the active structure block, matching the row highlight
-/// used by the session/dialogue lists, so clicking a block in content reads
-/// as selecting it.
+/// Tint every line of the cursor block with the list-row focus style, so
+/// navigating blocks in content reads exactly like navigating rows in the
+/// session/dialogue lists.
 fn style_block_line(
     line: Line<'static>,
     highlight: Option<&std::ops::Range<usize>>,
@@ -612,7 +577,7 @@ fn style_block_line(
     if !range.contains(&line_idx) {
         return line;
     }
-    let overlay = visual_selection_style();
+    let overlay = crate::tui::theme::focus_row();
     Line {
         spans: line
             .spans
@@ -1307,8 +1272,8 @@ fn raw_lines(text: &str) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        content_lines, content_link_at, content_position_at, content_position_in_text_row,
-        content_structure_block_at, line_count, line_number_width, render_content_view,
+        content_block_at, content_lines, content_link_at, content_position_at,
+        content_position_in_text_row, line_count, line_number_width, render_content_view,
         selected_content_text, visible_content_lines, ContentPosition, ContentSelection,
         ContentSelectionKind, ContentView, ContentViewMode,
     };
@@ -1719,11 +1684,12 @@ mod tests {
                     Panel::new("3", "Content (read)", true),
                     ContentView {
                         text: "alpha\nbeta",
+                        blocks: &[],
                         scroll: 0,
                         search_regex: None,
                         mode: ContentViewMode::Reading,
                         selection: None,
-                        active_block: None,
+                        cursor_block: None,
                     },
                 );
             })
@@ -1735,9 +1701,13 @@ mod tests {
     }
 
     #[test]
-    fn render_content_view_highlights_the_active_block() {
+    fn render_content_view_highlights_the_cursor_block() {
         let backend = TestBackend::new(40, 8);
         let mut terminal = Terminal::new(backend).expect("terminal from test backend");
+        let blocks = vec![
+            "<:tool:Bash call:>\nbody\n<:/tool:Bash call:>".to_string(),
+            "<:tool:Read call:>".to_string(),
+        ];
         terminal
             .draw(|frame| {
                 render_content_view(
@@ -1745,31 +1715,30 @@ mod tests {
                     Rect::new(0, 0, 40, 8),
                     Panel::new("3", "Content (read)", true),
                     ContentView {
-                        text: "<:tool:Bash call:>\nbody\n<:/tool:Bash call:>\n<:tool:Read call:>",
+                        text: &blocks.join("\n\n"),
+                        blocks: &blocks,
                         scroll: 0,
                         search_regex: None,
                         mode: ContentViewMode::Reading,
                         selection: None,
-                        active_block: Some(0),
+                        cursor_block: Some(0),
                     },
                 );
             })
             .expect("draw content frame");
         let buffer = terminal.backend().buffer();
         // Block 0 spans the tag, body, and close rows; its lines use the same
-        // selected-row background as the session/dialogue lists.
-        let selected_bg = super::visual_selection_style().bg;
+        // focus-row style as the session/dialogue list cursor.
+        let focus_bg = crate::tui::theme::focus_row().bg;
         for row in 1..=3 {
             let cell = buffer.cell((4, row)).expect("cell within buffer bounds");
-            assert_eq!(
-                cell.style().bg,
-                selected_bg,
-                "row {row} should be highlighted"
-            );
+            assert_eq!(cell.style().bg, focus_bg, "row {row} should be highlighted");
         }
-        // The next block's tag is not part of the highlight.
-        let cell = buffer.cell((4, 4)).expect("cell within buffer bounds");
-        assert_ne!(cell.style().bg, selected_bg);
+        // The separator and the next block's tag are not part of the highlight.
+        for row in 4..=5 {
+            let cell = buffer.cell((4, row)).expect("cell within buffer bounds");
+            assert_ne!(cell.style().bg, focus_bg);
+        }
     }
 
     #[test]
@@ -1807,10 +1776,15 @@ mod tests {
     }
 
     #[test]
-    fn structure_block_at_maps_displayed_lines_with_wrapping() {
+    fn content_block_at_maps_displayed_lines_with_wrapping() {
         let area = Rect::new(0, 0, 24, 10);
         let long = "alpha ".repeat(20);
-        let text = format!("{long}\n<:tool:A call:>\n<:tool:B call:>");
+        let blocks = vec![
+            long.clone(),
+            "<:tool:A call:>".to_string(),
+            "<:tool:B call:>".to_string(),
+        ];
+        let text = blocks.join("\n\n");
         let (lines, _) = super::content_layout(area, &text, ContentViewMode::Reading);
         let tag_lines: Vec<usize> = lines
             .iter()
@@ -1831,112 +1805,93 @@ mod tests {
         // display, not `text.lines()`.
         assert_ne!(tag_lines[0], 1, "wrapped body shifts the tag line index");
         assert_eq!(
-            content_structure_block_at(area, &text, ContentViewMode::Reading, tag_lines[0]),
-            Some(0)
-        );
-        assert_eq!(
-            content_structure_block_at(area, &text, ContentViewMode::Reading, tag_lines[1]),
+            content_block_at(area, &text, &blocks, ContentViewMode::Reading, tag_lines[0]),
             Some(1)
         );
-        // A body line is not an open marker.
         assert_eq!(
-            content_structure_block_at(area, &text, ContentViewMode::Reading, 0),
-            None
+            content_block_at(area, &text, &blocks, ContentViewMode::Reading, tag_lines[1]),
+            Some(2)
+        );
+        // A wrapped body line belongs to its own block (every part is one).
+        assert_eq!(
+            content_block_at(area, &text, &blocks, ContentViewMode::Reading, 0),
+            Some(0)
         );
     }
 
     #[test]
-    fn structure_block_at_owns_expanded_body_and_close_marker() {
+    fn content_block_at_owns_every_line_of_a_block() {
         let area = Rect::new(0, 0, 40, 20);
-        // Block 0 expanded (tag + body + close); block 1 collapsed (tag only).
-        let text =
-            "<:tool:Bash call:>\noutput line\n<:/tool:Bash call:>\n<:tool:Read call:>\nplain";
-        let (lines, _) = super::content_layout(area, text, ContentViewMode::Reading);
-        let tag = displayed_line_of(&lines, "<:tool:Bash call:>");
-        let body = displayed_line_of(&lines, "output line");
-        let close = displayed_line_of(&lines, "<:/tool:Bash call:>");
-        let next_tag = displayed_line_of(&lines, "<:tool:Read call:>");
-        let plain = displayed_line_of(&lines, "plain");
+        let blocks = vec![
+            "<:tool:Bash call:>\noutput line\n<:/tool:Bash call:>".to_string(),
+            "<:tool:Read call:>\nplain".to_string(),
+        ];
+        let text = blocks.join("\n\n");
+        let (lines, _) = super::content_layout(area, &text, ContentViewMode::Reading);
         // The tag, the expanded body, and the close marker all own block 0.
-        assert_eq!(
-            content_structure_block_at(area, text, ContentViewMode::Reading, tag),
-            Some(0)
-        );
-        assert_eq!(
-            content_structure_block_at(area, text, ContentViewMode::Reading, body),
-            Some(0)
-        );
-        assert_eq!(
-            content_structure_block_at(area, text, ContentViewMode::Reading, close),
-            Some(0)
-        );
-        assert_eq!(
-            content_structure_block_at(area, text, ContentViewMode::Reading, next_tag),
-            Some(1)
-        );
-        // Plain text after a collapsed tag belongs to no block.
-        assert_eq!(
-            content_structure_block_at(area, text, ContentViewMode::Reading, plain),
-            None
-        );
+        for needle in ["<:tool:Bash call:>", "output line", "<:/tool:Bash call:>"] {
+            assert_eq!(
+                content_block_at(
+                    area,
+                    &text,
+                    &blocks,
+                    ContentViewMode::Reading,
+                    displayed_line_of(&lines, needle)
+                ),
+                Some(0),
+                "{needle} should belong to block 0"
+            );
+        }
+        // The next block owns its tag and its plain body.
+        for needle in ["<:tool:Read call:>", "plain"] {
+            assert_eq!(
+                content_block_at(
+                    area,
+                    &text,
+                    &blocks,
+                    ContentViewMode::Reading,
+                    displayed_line_of(&lines, needle)
+                ),
+                Some(1),
+                "{needle} should belong to block 1"
+            );
+        }
     }
 
     #[test]
-    fn structure_block_ignores_plain_text_starting_with_close_prefix() {
-        let area = Rect::new(0, 0, 40, 20);
-        // A collapsed block followed by plain text that starts like a close
-        // marker but is not a valid structure marker.
-        let text = "<:tool:Bash call:>\n<:/ not a marker\n<:tool:Read call:>";
-        let (lines, _) = super::content_layout(area, text, ContentViewMode::Reading);
-        let bash = displayed_line_of(&lines, "<:tool:Bash call:>");
-        let fake_close = displayed_line_of(&lines, "<:/ not a marker");
-        let read = displayed_line_of(&lines, "<:tool:Read call:>");
-        // Only the real tag lines are clickable blocks; the fake close line
-        // extends nothing.
-        assert_eq!(
-            content_structure_block_at(area, text, ContentViewMode::Reading, bash),
-            Some(0)
-        );
-        assert_eq!(
-            content_structure_block_at(area, text, ContentViewMode::Reading, fake_close),
-            None
-        );
-        assert_eq!(
-            content_structure_block_at(area, text, ContentViewMode::Reading, read),
-            Some(1)
-        );
-    }
-
-    #[test]
-    fn structure_block_at_keeps_tool_result_section_inside_the_group() {
+    fn content_block_at_keeps_merged_tool_group_as_one_block() {
         let area = Rect::new(0, 0, 40, 20);
         // A merged tool group: call section + result section share one block.
-        let text = "<:tool:Bash call:>\ninput\n<:/tool:Bash call:>\n<:tool:Bash result:>\noutput\n<:/tool:Bash result:>\n<:tool:Read call:>";
-        let (lines, _) = super::content_layout(area, text, ContentViewMode::Reading);
-        let call_tag = displayed_line_of(&lines, "<:tool:Bash call:>");
-        let call_body = displayed_line_of(&lines, "input");
-        let call_close = displayed_line_of(&lines, "<:/tool:Bash call:>");
-        let result_tag = displayed_line_of(&lines, "<:tool:Bash result:>");
-        let result_body = displayed_line_of(&lines, "output");
-        let result_close = displayed_line_of(&lines, "<:/tool:Bash result:>");
-        let next_tag = displayed_line_of(&lines, "<:tool:Read call:>");
+        let blocks = vec![
+            "<:tool:Bash call:>\ninput\n<:/tool:Bash call:>\n<:tool:Bash result:>\noutput\n<:/tool:Bash result:>".to_string(),
+            "<:tool:Read call:>".to_string(),
+        ];
+        let text = blocks.join("\n\n");
+        let (lines, _) = super::content_layout(area, &text, ContentViewMode::Reading);
         // Everything from the call tag through the result close is block 0.
-        for line in [
-            call_tag,
-            call_body,
-            call_close,
-            result_tag,
-            result_body,
-            result_close,
+        for needle in [
+            "<:tool:Bash call:>",
+            "input",
+            "<:/tool:Bash call:>",
+            "<:tool:Bash result:>",
+            "output",
+            "<:/tool:Bash result:>",
         ] {
+            let line = displayed_line_of(&lines, needle);
             assert_eq!(
-                content_structure_block_at(area, text, ContentViewMode::Reading, line),
+                content_block_at(area, &text, &blocks, ContentViewMode::Reading, line),
                 Some(0),
-                "line {line} should belong to the merged tool group"
+                "line {line} ({needle}) should belong to the merged tool group"
             );
         }
         assert_eq!(
-            content_structure_block_at(area, text, ContentViewMode::Reading, next_tag),
+            content_block_at(
+                area,
+                &text,
+                &blocks,
+                ContentViewMode::Reading,
+                displayed_line_of(&lines, "<:tool:Read call:>")
+            ),
             Some(1)
         );
     }
