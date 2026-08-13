@@ -194,9 +194,9 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
         },
         WorkspaceHelpEntry {
             key: "r",
-            description: "toggle fold/full content",
+            description: "toggle read/raw content",
             action: WorkspaceHelpAction::ToggleContentMode,
-            footer_label: Some("fold/full"),
+            footer_label: Some("read/raw"),
             footer_panes: CNT,
         },
         WorkspaceHelpEntry {

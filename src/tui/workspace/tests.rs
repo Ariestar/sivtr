@@ -200,11 +200,12 @@ fn reading_mode_folds_structure_and_raw_expands() {
         None,
     );
     assert!(reading_io.input.contains("question"));
-    // Fold summarizes tool activity by channel; results are dropped.
-    assert!(reading_io.output.contains("tools: Bash"));
-    assert!(!reading_io.output.contains("result"));
+    // Reading folds each structure part to its tag line; payloads are dropped.
+    assert!(reading_io.output.contains("<:tool:Bash call:>"));
+    assert!(reading_io.output.contains("<:tool:Bash result:>"));
     assert!(reading_io.output.contains("answer"));
     assert!(!reading.contains("cargo test"));
+    assert!(!reading.contains("ok"));
     assert!(!reading.contains("codex/session"));
     assert!(!reading.contains("## User"));
     assert!(!reading.contains("## Input"));
@@ -293,21 +294,13 @@ fn reading_mode_collapses_adjacent_structure_runs() {
         None,
     );
     assert!(reading_io.input.contains("do it"));
-    // Tool calls fold to one channel line in the output half; skills to one in the input half.
-    let tool_fold = reading_io
-        .output
-        .lines()
-        .find(|line| line.starts_with("tools:"))
-        .expect("tools channel line");
-    assert!(tool_fold.contains("Bash"));
-    assert!(tool_fold.contains("Read"));
-    let skill_fold = reading_io
-        .input
-        .lines()
-        .find(|line| line.starts_with("skills:"))
-        .expect("skills channel line");
-    assert!(skill_fold.contains("review"));
-    assert!(skill_fold.contains("deploy"));
+    // Every structure part folds to its own tag line in the reading text.
+    let output = &reading_io.output;
+    assert!(output.contains("<:tool:Bash call:>"));
+    assert!(output.contains("<:tool:Read call:>"));
+    let input = &reading_io.input;
+    assert!(input.contains("<:skill:review:>"));
+    assert!(input.contains("<:skill:deploy:>"));
     assert!(reading_io.output.contains("done"));
     assert!(!reading.contains("file"));
     assert!(!reading.contains("skill body"));
@@ -359,24 +352,27 @@ fn reading_mode_counts_identical_structure_markers_regardless_of_order() {
     ]);
     let dialogue = codex_dialogue(record);
 
-    let reading = workspace_content_text(
+    let reading_io = workspace_content_io_texts(
         std::slice::from_ref(&dialogue),
         &[false],
         0,
         ContentViewMode::Reading,
         None,
     );
-    // Repeated tool names count as xN within the single tools channel line.
-    assert!(reading.contains("tools: Bash x3, Read"));
-    assert!(reading.contains("middle note"));
-    assert!(!reading.contains("file"));
-    assert!(!reading.contains("pwd"));
-    // Single tools line for the section (not split by the dialogue part).
-    let fold_hits = reading
-        .lines()
-        .filter(|line| line.starts_with("tools:"))
-        .count();
-    assert_eq!(fold_hits, 1);
+    // Every structure part keeps its own tag line, in call order.
+    assert!(reading_io.input.contains("middle note"));
+    let output = &reading_io.output;
+    assert!(output.contains("<:tool:Bash call:>"));
+    assert!(output.contains("<:tool:Read call:>"));
+    assert!(!output.contains("file"));
+    assert!(!output.contains("pwd"));
+    assert!(!output.contains("date"));
+    // Tags stay in call order within the output half.
+    let first = output.find("<:tool:Bash call:>").expect("first bash tag");
+    let read = output.find("<:tool:Read call:>").expect("read tag");
+    let second_bash = output.rfind("<:tool:Bash call:>").expect("later bash tag");
+    assert!(first < read);
+    assert!(read < second_bash);
 }
 
 #[test]
@@ -426,25 +422,26 @@ fn reading_mode_keeps_structure_runs_in_call_order() {
         ContentViewMode::Reading,
         None,
     );
-    // Fold sits between the assistant chunks, matching the call order.
+    // Tags sit between the assistant chunks, matching the call order.
     let output = &reading_io.output;
     let first_text = output.find("checking first").expect("first assistant text");
-    let fold = output.find("tools: Bash").expect("tool fold line");
+    let tag = output.find("<:tool:Bash call:>").expect("tool tag");
     let last_text = output.find("all done").expect("last assistant text");
-    assert!(first_text < fold);
-    assert!(fold < last_text);
-    assert!(!output.contains("result"));
+    assert!(first_text < tag);
+    assert!(tag < last_text);
+    // Payloads are dropped: the tag line mentions result, the body never shows.
+    assert!(!output.contains("ok"));
 }
 
 #[test]
 fn content_title_includes_view_mode() {
     assert_eq!(
         content_title(ContentViewMode::Reading, &[false, false], None),
-        "Content (read/fold)"
+        "Content (read)"
     );
     assert_eq!(
         content_title(ContentViewMode::Raw, &[true, false], None),
-        "Content (raw/full): 1 dialogue selected"
+        "Content (raw): 1 dialogue selected"
     );
 }
 
@@ -454,7 +451,7 @@ fn content_title_includes_current_dialogue_ref() {
 
     assert_eq!(
         content_title(ContentViewMode::Reading, &[false], Some(&work_ref)),
-        "Content (read/fold) [codex/session/2]"
+        "Content (read) [codex/session/2]"
     );
 }
 

@@ -25,9 +25,10 @@ impl ContentViewMode {
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            // Reading = structure folded; Raw = full payloads with <:…:> markers.
-            Self::Raw => "raw/full",
-            Self::Reading => "read/fold",
+            // Read folds structure blocks to their `<:…:>` tags; raw shows
+            // full payloads. Both render tags with the same gray style.
+            Self::Raw => "raw",
+            Self::Reading => "read",
         }
     }
 }

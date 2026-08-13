@@ -29,30 +29,17 @@ fn io_body_text(record: &WorkRecord, reading: bool, input: bool) -> String {
     }
 }
 
-/// Reading: dialogue in order; each adjacent structure run folds into a
-/// per-channel summary at its position (tools / mcp / skills / thinking).
+/// Reading: dialogue in order; each structure part collapses to its
+/// `<:…:>` open-marker tag line (same gray style as raw markers).
 fn structured_parts_text(parts: &[&sivtr_core::record::WorkPart]) -> String {
     let mut chunks = Vec::new();
-    let mut run: Vec<&sivtr_core::record::WorkPart> = Vec::new();
-    let flush = |run: &mut Vec<&sivtr_core::record::WorkPart>, chunks: &mut Vec<String>| {
-        if run.is_empty() {
-            return;
-        }
-        let fold = collapse_structure_markers(run);
-        run.clear();
-        if !fold.is_empty() {
-            chunks.push(fold);
-        }
-    };
     for part in parts {
         if part.kind().is_structure() {
-            run.push(part);
-            continue;
+            chunks.push(structure_fold_label(part));
+        } else {
+            chunks.push(part.text().into_owned());
         }
-        flush(&mut run, &mut chunks);
-        chunks.push(part.text().into_owned());
     }
-    flush(&mut run, &mut chunks);
     chunks.join("\n\n")
 }
 
@@ -77,75 +64,6 @@ fn structure_fold_label(part: &sivtr_core::record::WorkPart) -> String {
         .as_agent_block_kind()
         .and_then(|kind| kind.open_marker(part.label()))
         .unwrap_or_else(|| "<:structure:>".to_string())
-}
-
-/// Per-channel summary of a structure run: tools / mcp / skills / thinking.
-/// Tool results are dropped (a call implies its result).
-fn collapse_structure_markers(parts: &[&sivtr_core::record::WorkPart]) -> String {
-    use sivtr_core::record::WorkPartKind;
-
-    let mut tools: Vec<(String, usize)> = Vec::new();
-    let mut mcp: Vec<(String, usize)> = Vec::new();
-    let mut skills: Vec<(String, usize)> = Vec::new();
-    let mut thinking = 0usize;
-
-    for part in parts {
-        match part.kind() {
-            WorkPartKind::ToolCall => {
-                let label = part.label().unwrap_or("tool");
-                match label.strip_prefix("mcp__") {
-                    Some(rest) => bump(&mut mcp, rest.rsplit("__").next().unwrap_or(rest)),
-                    None => bump(&mut tools, label),
-                }
-            }
-            WorkPartKind::Skill => bump(&mut skills, part.label().unwrap_or("skill")),
-            WorkPartKind::Thinking => thinking += 1,
-            _ => {}
-        }
-    }
-
-    let mut lines = Vec::new();
-    if let Some(line) = channel_line("tools", &tools) {
-        lines.push(line);
-    }
-    if let Some(line) = channel_line("mcp", &mcp) {
-        lines.push(line);
-    }
-    if let Some(line) = channel_line("skills", &skills) {
-        lines.push(line);
-    }
-    if thinking > 0 {
-        lines.push(format!("thinking{}", count_suffix(thinking)));
-    }
-    lines.join("\n")
-}
-
-fn bump(counts: &mut Vec<(String, usize)>, name: &str) {
-    if let Some((_, count)) = counts.iter_mut().find(|(existing, _)| existing == name) {
-        *count += 1;
-    } else {
-        counts.push((name.to_string(), 1));
-    }
-}
-
-fn channel_line(label: &str, counts: &[(String, usize)]) -> Option<String> {
-    if counts.is_empty() {
-        return None;
-    }
-    let names = counts
-        .iter()
-        .map(|(name, count)| format!("{name}{}", count_suffix(*count)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    Some(format!("{label}: {names}"))
-}
-
-fn count_suffix(count: usize) -> String {
-    if count > 1 {
-        format!(" x{count}")
-    } else {
-        String::new()
-    }
 }
 
 pub(crate) fn workspace_content_text(

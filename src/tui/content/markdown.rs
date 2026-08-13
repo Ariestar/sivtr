@@ -185,16 +185,6 @@ fn markdown_line_parts(line: &str) -> MarkdownLineParts<'_> {
         };
     }
 
-    // Read-mode fold summaries ("tools: Bash x2", "thinking x7").
-    if let Some(style) = fold_summary_style(trimmed) {
-        return MarkdownLineParts {
-            prefix: leading.to_string(),
-            prefix_style: Style::default(),
-            content: trimmed,
-            content_style: style,
-        };
-    }
-
     if let Some(rest) = trimmed.strip_prefix("> ") {
         return MarkdownLineParts {
             prefix: format!("{leading}> "),
@@ -733,29 +723,14 @@ fn agent_heading_style(text: &str) -> Option<Style> {
     Some(Style::default().fg(color).add_modifier(Modifier::BOLD))
 }
 
-/// Style for `<:channel:…:>` structure markers (tools/skills/thinking/mcp)
-/// and read-mode fold summaries: structural content renders in a subdued
-/// gray in every content mode, distinct from the default-foreground body.
+/// Style for `<:channel:…:>` structure markers (tools/skills/thinking/mcp):
+/// structural content renders in a subdued gray, distinct from the
+/// default-foreground body.
 fn structure_marker_style(text: &str) -> Option<Style> {
     if !text.starts_with("<:") {
         return None;
     }
     Some(structural_gray_style())
-}
-
-/// Read-mode fold summaries produced by `collapse_structure_markers`
-/// (content/text.rs): `tools: …`, `mcp: …`, `skills: …`, `thinking xN`.
-fn fold_summary_style(text: &str) -> Option<Style> {
-    let channel = ["tools:", "mcp:", "skills:"]
-        .iter()
-        .any(|prefix| text.starts_with(prefix));
-    let thinking = text.strip_prefix("thinking").is_some_and(|rest| {
-        rest.is_empty()
-            || rest.strip_prefix(" x").is_some_and(|count| {
-                !count.is_empty() && count.chars().all(|ch| ch.is_ascii_digit())
-            })
-    });
-    (channel || thinking).then(structural_gray_style)
 }
 
 fn structural_gray_style() -> Style {
@@ -856,31 +831,6 @@ mod tests {
             lines[5].line.spans[1].style.fg,
             Some(crate::tui::theme::failure())
         ); // Error
-    }
-
-    #[test]
-    fn renders_read_mode_fold_summaries_in_gray() {
-        let lines = render_markdown_window(
-            &[
-                "tools: Bash x2",
-                "mcp: read_file",
-                "skills: sivtr-memory",
-                "thinking",
-                "thinking x7",
-            ],
-            0,
-            5,
-            80,
-        );
-
-        for line in lines {
-            assert_eq!(
-                line.line.spans[0].style.fg,
-                Some(crate::tui::theme::muted()),
-                "fold summary must render gray: {:?}",
-                line.line.spans[0].content
-            );
-        }
     }
 
     #[test]
