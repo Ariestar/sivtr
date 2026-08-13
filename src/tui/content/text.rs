@@ -9,7 +9,7 @@ use crate::tui::workspace::model::WorkspaceDialogue;
 /// Read mode folds every structure part to its `<:…:>` tag; parts listed in
 /// `expanded` show their full block instead. Raw mode always shows full
 /// blocks (the expand state only affects reading).
-pub(crate) fn content_io_from_record_expanded(
+pub(crate) fn content_io_from_record(
     record: &WorkRecord,
     reading: bool,
     expanded: &ExpandedBlocks,
@@ -42,12 +42,7 @@ fn io_body_text(
             block += 1;
             // Raw mode always shows full blocks; read mode folds to the tag
             // unless the block was expanded.
-            let show_full = if reading {
-                expanded.contains(&idx)
-            } else {
-                true
-            };
-            if show_full {
+            if !reading || expanded.contains(&idx) {
                 chunks.push(sivtr_core::record::format_work_part(part));
             } else {
                 chunks.push(structure_fold_label(part));
@@ -81,19 +76,7 @@ pub(crate) fn workspace_content_text(
     mode: ContentViewMode,
     target: Option<WorkAt>,
 ) -> String {
-    workspace_content_io_texts(dialogues, selected_dialogues, highlighted_idx, mode, target)
-        .join_displayed()
-}
-
-/// Input / Output bodies for the dual content panes (default expand state).
-pub(crate) fn workspace_content_io_texts(
-    dialogues: &[WorkspaceDialogue],
-    selected_dialogues: &[bool],
-    highlighted_idx: usize,
-    mode: ContentViewMode,
-    target: Option<WorkAt>,
-) -> ContentIoTexts {
-    workspace_content_io_texts_expanded(
+    workspace_content_io_texts(
         dialogues,
         selected_dialogues,
         highlighted_idx,
@@ -101,10 +84,11 @@ pub(crate) fn workspace_content_io_texts(
         target,
         &ExpandedBlocks::default(),
     )
+    .join_displayed()
 }
 
 /// Input / Output bodies for the dual content panes with per-block expansion.
-pub(crate) fn workspace_content_io_texts_expanded(
+pub(crate) fn workspace_content_io_texts(
     dialogues: &[WorkspaceDialogue],
     selected_dialogues: &[bool],
     highlighted_idx: usize,
@@ -128,7 +112,7 @@ pub(crate) fn workspace_content_io_texts_expanded(
     if selected.is_empty() {
         return dialogues
             .get(highlighted_idx)
-            .map(|dialogue| dialogue.content_io_texts_expanded(mode, target, expanded))
+            .map(|dialogue| dialogue.content_io_texts(mode, target, expanded))
             .unwrap_or_else(|| ContentIoTexts {
                 input: "<empty>".to_string(),
                 output: String::new(),
@@ -142,7 +126,7 @@ pub(crate) fn workspace_content_io_texts_expanded(
         let Some(dialogue) = dialogues.get(dialogue_idx) else {
             continue;
         };
-        let io = dialogue.content_io_texts_expanded(mode, None, expanded);
+        let io = dialogue.content_io_texts(mode, None, expanded);
         if !io.input.trim().is_empty() {
             input.push(io.input);
         }
@@ -181,13 +165,18 @@ pub(crate) fn structure_block_index(text: &str, line: usize) -> Option<usize> {
     None
 }
 
+/// A line that opens or closes a structure block (`<:tool:…:>` / `<:/…:>`).
+pub(crate) fn is_structure_marker(line: &str) -> bool {
+    line.starts_with("<:")
+}
+
 fn is_structure_open_marker(line: &str) -> bool {
-    line.starts_with("<:") && !line.starts_with("<:/")
+    is_structure_marker(line) && !line.starts_with("<:/")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{content_io_from_record_expanded, structure_block_index};
+    use super::{content_io_from_record, structure_block_index};
     use crate::tui::content::io::{ContentIoFocus, ExpandedBlocks};
     use sivtr_core::ai::AgentProvider;
     use sivtr_core::record::{WorkPart, WorkPartData, WorkRecord, WorkRef};
@@ -232,7 +221,7 @@ mod tests {
             tool_part(1, "Bash", "ls"),
             tool_part(2, "Read", "file"),
         ]);
-        let io = content_io_from_record_expanded(&rec, true, &ExpandedBlocks::default());
+        let io = content_io_from_record(&rec, true, &ExpandedBlocks::default());
         let output = &io.output;
         assert!(output.contains("<:tool:Bash call:>"));
         assert!(output.contains("<:tool:Read call:>"));
@@ -241,7 +230,7 @@ mod tests {
 
         let mut expanded = ExpandedBlocks::default();
         expanded.toggle(ContentIoFocus::Output, 1);
-        let io = content_io_from_record_expanded(&rec, true, &expanded);
+        let io = content_io_from_record(&rec, true, &expanded);
         let output = &io.output;
         assert!(output.contains("<:tool:Read call:>"));
         assert!(output.contains("<:/tool:Read call:>"));
@@ -254,7 +243,7 @@ mod tests {
         let rec = record(vec![tool_part(1, "Bash", "ls")]);
         let mut expanded = ExpandedBlocks::default();
         expanded.toggle(ContentIoFocus::Output, 0);
-        let io = content_io_from_record_expanded(&rec, false, &expanded);
+        let io = content_io_from_record(&rec, false, &expanded);
         assert!(io.output.contains("<:tool:Bash call:>"));
         assert!(io.output.contains("ls"));
         assert!(io.output.contains("<:/tool:Bash call:>"));

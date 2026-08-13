@@ -344,7 +344,7 @@ pub(crate) fn run(
                     target: active_content_at,
                     area: layout.content,
                     io_focus: content_io_focus,
-                    expanded: expanded_blocks.clone(),
+                    expanded: &expanded_blocks,
                 }),
                 content_mode,
                 content_io_focus,

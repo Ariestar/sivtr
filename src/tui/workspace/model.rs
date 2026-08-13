@@ -11,7 +11,7 @@ use crate::commands::select::CommandSelection;
 use crate::tui::content::io::{
     ContentIoFocus, ContentIoFrame, ContentIoTexts, ContentScrolls, ExpandedBlocks,
 };
-use crate::tui::content::text::{content_io_from_record_expanded, structured_part_text};
+use crate::tui::content::text::{content_io_from_record, structured_part_text};
 use crate::tui::content::view::{ContentSelection, ContentViewMode};
 use crate::tui::search::WorkspaceSearchScope;
 use crate::tui::theme;
@@ -227,21 +227,13 @@ impl WorkspaceDialogue {
     }
 
     pub(crate) fn content_text(&self, mode: ContentViewMode, target: Option<WorkAt>) -> String {
-        self.content_io_texts(mode, target).join_displayed()
-    }
-
-    /// Input / Output bodies for the dual content panes (default expand state).
-    pub(crate) fn content_io_texts(
-        &self,
-        mode: ContentViewMode,
-        target: Option<WorkAt>,
-    ) -> ContentIoTexts {
-        self.content_io_texts_expanded(mode, target, &ExpandedBlocks::default())
+        self.content_io_texts(mode, target, &ExpandedBlocks::default())
+            .join_displayed()
     }
 
     /// Input / Output bodies for the dual content panes with per-block
     /// expansion (read mode shows full blocks for the listed indices).
-    pub(crate) fn content_io_texts_expanded(
+    pub(crate) fn content_io_texts(
         &self,
         mode: ContentViewMode,
         target: Option<WorkAt>,
@@ -292,7 +284,7 @@ impl WorkspaceDialogue {
             };
         }
         let reading = matches!(mode, ContentViewMode::Reading);
-        content_io_from_record_expanded(record, reading, expanded)
+        content_io_from_record(record, reading, expanded)
     }
 
     pub(crate) fn content_ref(&self, target: Option<WorkAt>) -> Option<WorkRef> {

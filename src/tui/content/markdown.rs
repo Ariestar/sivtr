@@ -814,7 +814,7 @@ fn agent_heading_style(text: &str) -> Option<Style> {
 /// structural content renders in a subdued gray, distinct from the
 /// default-foreground body.
 fn structure_marker_style(text: &str) -> Option<Style> {
-    if !text.starts_with("<:") {
+    if !crate::tui::content::text::is_structure_marker(text) {
         return None;
     }
     Some(structural_gray_style())

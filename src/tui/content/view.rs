@@ -414,7 +414,7 @@ fn all_content_lines(text: &str, width: usize, mode: ContentViewMode) -> Vec<Con
 /// `<:channel:…:>` structure markers use the same structural gray as
 /// read/fold summaries so the two modes stay visually consistent.
 fn raw_content_line(line: &str) -> ContentLine {
-    let style = if line.starts_with("<:") {
+    let style = if crate::tui::content::text::is_structure_marker(line) {
         Style::default().fg(crate::tui::theme::muted())
     } else {
         Style::default()

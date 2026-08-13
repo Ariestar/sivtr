@@ -16,7 +16,7 @@ pub(crate) use crate::tui::content::io::{
     ExpandedBlocks,
 };
 pub(crate) use crate::tui::content::text::{
-    structure_block_index, workspace_content_io_texts_expanded, workspace_content_text,
+    structure_block_index, workspace_content_io_texts, workspace_content_text,
 };
 
 #[cfg(test)]

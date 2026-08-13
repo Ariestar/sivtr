@@ -9,6 +9,7 @@ use super::render::{
     content_title, current_content_dialogue, current_content_ref, line_filter_prompt_text,
     search_box_body, search_box_title,
 };
+use crate::tui::content::io::ExpandedBlocks;
 use crate::tui::content::text::{workspace_content_io_texts, workspace_content_text};
 use crate::tui::content::view::ContentViewMode;
 use crate::tui::search::WorkspaceSearchScope;
@@ -90,6 +91,7 @@ fn content_preview_text_preserves_raw_text_without_line_number_prefixes() {
         0,
         ContentViewMode::Raw,
         None,
+        &ExpandedBlocks::default(),
     );
     let text = workspace_content_text(&[dialogue], &[false], 0, ContentViewMode::Raw, None);
     assert_eq!(io.input.trim(), "alpha");
@@ -198,6 +200,7 @@ fn reading_mode_folds_structure_and_raw_expands() {
         0,
         ContentViewMode::Reading,
         None,
+        &ExpandedBlocks::default(),
     );
     assert!(reading_io.input.contains("question"));
     // Reading folds each structure part to its tag line; payloads are dropped.
@@ -217,6 +220,7 @@ fn reading_mode_folds_structure_and_raw_expands() {
         0,
         ContentViewMode::Raw,
         None,
+        &ExpandedBlocks::default(),
     );
     let raw = workspace_content_text(&[dialogue], &[false], 0, ContentViewMode::Raw, None);
     assert!(raw_io.input.contains("question"));
@@ -285,6 +289,7 @@ fn reading_mode_collapses_adjacent_structure_runs() {
         0,
         ContentViewMode::Reading,
         None,
+        &ExpandedBlocks::default(),
     );
     let reading = workspace_content_text(
         std::slice::from_ref(&dialogue),
@@ -358,6 +363,7 @@ fn reading_mode_counts_identical_structure_markers_regardless_of_order() {
         0,
         ContentViewMode::Reading,
         None,
+        &ExpandedBlocks::default(),
     );
     // Every structure part keeps its own tag line, in call order.
     assert!(reading_io.input.contains("middle note"));
@@ -421,6 +427,7 @@ fn reading_mode_keeps_structure_runs_in_call_order() {
         0,
         ContentViewMode::Reading,
         None,
+        &ExpandedBlocks::default(),
     );
     // Tags sit between the assistant chunks, matching the call order.
     let output = &reading_io.output;

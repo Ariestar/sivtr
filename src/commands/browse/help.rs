@@ -8,9 +8,9 @@ use ratatui::widgets::ListState;
 use crate::tui::content::view::ContentViewMode;
 use crate::tui::terminal::suspend;
 use crate::tui::workspace::{
-    can_open_dialogue_vim, selected_index, workspace_content_io_texts_expanded,
-    workspace_content_text, workspace_layout, ContentIoFocus, ContentIoFrame, ContentScrolls,
-    ExpandedBlocks, WorkspaceDialogue, WorkspaceFocus, WorkspaceHelpAction, WorkspacePickedContent,
+    can_open_dialogue_vim, selected_index, workspace_content_io_texts, workspace_content_text,
+    workspace_layout, ContentIoFocus, ContentIoFrame, ContentScrolls, ExpandedBlocks,
+    WorkspaceDialogue, WorkspaceFocus, WorkspaceHelpAction, WorkspacePickedContent,
     WorkspaceSession, WorkspaceSource,
 };
 use sivtr_core::record::WorkAt;
@@ -248,7 +248,7 @@ pub(super) fn apply_workspace_help_action(
                 *focus,
                 *fullscreen,
             );
-            let io = workspace_content_io_texts_expanded(
+            let io = workspace_content_io_texts(
                 dialogues,
                 selected_dialogues,
                 dialogue_idx,
