@@ -303,13 +303,27 @@ fn apply_part(
     }
 }
 
+/// OpenCode records MCP tools as `server_tool` (single underscore:
+/// `sivtr_sivtr_search`, `playwright_browser_run_code_unsafe`) while every
+/// native tool is underscore-free (`bash`, `read`, `edit`, `grep`, ...).
+/// Rewrite MCP names to the canonical `mcp__server__tool` form so the TUI
+/// renders them as `server: tool`.
+fn normalize_opencode_tool(tool: &str) -> String {
+    match tool.split_once('_') {
+        Some((server, name)) if !server.is_empty() && !name.is_empty() => {
+            format!("mcp__{server}__{name}")
+        }
+        _ => tool.to_string(),
+    }
+}
+
 fn push_tool_part(session: &mut AgentSession, timestamp: Option<String>, part: &Value) {
     let state = part.get("state").unwrap_or(part);
     let label = part
         .get("tool")
         .or_else(|| part.get("name"))
         .and_then(Value::as_str)
-        .map(str::to_string);
+        .map(normalize_opencode_tool);
 
     if let Some(input) = state.get("input").or_else(|| part.get("input")) {
         push_block(
@@ -461,6 +475,77 @@ mod tests {
         assert_eq!(sessions[0].id.as_deref(), Some("open-session"));
         assert_eq!(sessions[0].cwd.as_deref(), Some("D:\\sivtr"));
         assert_eq!(sessions[0].title.as_deref(), Some("Greeting"));
+    }
+
+    #[test]
+    fn mcp_tools_are_normalized_to_server_tool_form() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            r#"
+            create table session (
+                id text primary key,
+                directory text not null,
+                title text not null,
+                time_updated integer not null
+            );
+            create table message (
+                id text primary key,
+                session_id text not null,
+                time_created integer not null,
+                data text not null
+            );
+            create table part (
+                id text primary key,
+                message_id text not null,
+                session_id text not null,
+                time_created integer not null,
+                data text not null
+            );
+            create table session_message (
+                id text primary key,
+                session_id text not null,
+                type text not null,
+                time_created integer not null,
+                data text not null
+            );
+            "#,
+        )
+        .unwrap();
+        conn.execute(
+            "insert into session (id, directory, title, time_updated) values (?1, ?2, ?3, ?4)",
+            params!["mcp-session", "D:\\sivtr", "MCP", 1000_i64],
+        )
+        .unwrap();
+        conn.execute(
+            "insert into message (id, session_id, time_created, data) values (?1, ?2, ?3, ?4)",
+            params!["m1", "mcp-session", 1001_i64, r#"{"role":"assistant"}"#],
+        )
+        .unwrap();
+        conn.execute(
+            "insert into part (id, message_id, session_id, time_created, data) values (?1, ?2, ?3, ?4, ?5)",
+            params!["p1", "m1", "mcp-session", 1002_i64, r#"{"type":"tool","tool":"sivtr_sivtr_search","state":{"input":{"source":"claude"},"output":"{\"count\": 1}"}}"#],
+        )
+        .unwrap();
+        drop(conn);
+
+        let provider = OpenCodeProvider::with_db_path(path);
+        let session = provider
+            .parse_session_file(&provider.find_session_by_id("mcp-session").unwrap().unwrap())
+            .unwrap();
+
+        assert_eq!(session.blocks.len(), 2);
+        assert_eq!(session.blocks[0].kind, AgentBlockKind::ToolCall);
+        assert_eq!(
+            session.blocks[0].label.as_deref(),
+            Some("mcp__sivtr__sivtr_search")
+        );
+        assert_eq!(session.blocks[1].kind, AgentBlockKind::ToolOutput);
+        assert_eq!(
+            session.blocks[1].label.as_deref(),
+            Some("mcp__sivtr__sivtr_search")
+        );
     }
 
     #[test]
