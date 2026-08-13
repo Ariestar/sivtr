@@ -197,9 +197,11 @@ pub(crate) fn content_position_at(
     ))
 }
 
-/// Structure block ordinal for the open-marker line at `line` (a displayed
-/// line index), if any. Walks the wrapped display so scroll/wrap cannot
-/// shift the block mapping.
+/// Structure block ordinal covering `line` (a displayed line index), if any.
+/// Walks the wrapped display and maps each line onto the block whose open
+/// marker owns it: the tag line, the expanded body, and the close marker all
+/// belong to the same block, so clicking anywhere on an expanded block (or
+/// on its tag) toggles it.
 pub(crate) fn content_structure_block_at(
     area: Rect,
     text: &str,
@@ -209,22 +211,62 @@ pub(crate) fn content_structure_block_at(
     let content_area = content_text_area(area, text, mode);
     let width = content_area.width as usize;
     let lines = all_content_lines(text, width, mode);
-    let mut block = 0usize;
-    for (idx, content_line) in lines.iter().enumerate() {
-        let joined: String = content_line
+    let joined = |idx: usize| {
+        lines[idx]
             .line
             .spans
             .iter()
             .map(|span| span.content.as_ref())
-            .collect();
-        if crate::tui::content::text::is_structure_marker(&joined) && !joined.starts_with("<:/") {
-            if idx == line {
-                return Some(block);
-            }
-            block += 1;
+            .collect::<String>()
+    };
+
+    // Map each displayed line to the block that owns it. Collapsed blocks own
+    // only their tag line; expanded blocks own the tag, body, and close marker.
+    let mut ownership = vec![None; lines.len()];
+    let mut block = 0usize;
+    let mut idx = 0usize;
+    while idx < lines.len() {
+        let text = joined(idx);
+        if !is_open_marker(&text) {
+            idx += 1;
+            continue;
         }
+        ownership[idx] = Some(block);
+        // An expanded block ends at its matching close marker (before the next
+        // open marker); a collapsed block is just the tag line.
+        let inner = open_marker_inner(&text);
+        let mut end = idx;
+        let mut scan = idx + 1;
+        while scan < lines.len() {
+            let candidate = joined(scan);
+            if is_open_marker(&candidate) {
+                break;
+            }
+            if close_marker_inner(&candidate) == inner {
+                end = scan;
+                break;
+            }
+            scan += 1;
+        }
+        for owned in ownership[idx + 1..=end].iter_mut() {
+            *owned = Some(block);
+        }
+        block += 1;
+        idx = end + 1;
     }
-    None
+    ownership.get(line).copied().flatten()
+}
+
+fn is_open_marker(text: &str) -> bool {
+    crate::tui::content::text::is_structure_marker(text) && !text.starts_with("<:/")
+}
+
+fn open_marker_inner(text: &str) -> Option<&str> {
+    text.strip_prefix("<:")?.strip_suffix(":>")
+}
+
+fn close_marker_inner(text: &str) -> Option<&str> {
+    text.strip_prefix("<:/")?.strip_suffix(":>")
 }
 
 pub(crate) fn content_position_in_text_row(
@@ -1661,6 +1703,57 @@ mod tests {
         // A body line is not an open marker.
         assert_eq!(
             content_structure_block_at(area, &text, ContentViewMode::Reading, 0),
+            None
+        );
+    }
+
+    #[test]
+    fn structure_block_at_owns_expanded_body_and_close_marker() {
+        let area = Rect::new(0, 0, 40, 20);
+        // Block 0 expanded (tag + body + close); block 1 collapsed (tag only).
+        let text =
+            "<:tool:Bash call:>\noutput line\n<:/tool:Bash call:>\n<:tool:Read call:>\nplain";
+        let (lines, _) = super::content_layout(area, text, ContentViewMode::Reading);
+        let displayed_of = |needle: &str| {
+            lines
+                .iter()
+                .enumerate()
+                .find_map(|(idx, line)| {
+                    let joined: String = line
+                        .line
+                        .spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect();
+                    joined.contains(needle).then_some(idx)
+                })
+                .unwrap()
+        };
+        let tag = displayed_of("<:tool:Bash call:>");
+        let body = displayed_of("output line");
+        let close = displayed_of("<:/tool:Bash call:>");
+        let next_tag = displayed_of("<:tool:Read call:>");
+        let plain = displayed_of("plain");
+        // The tag, the expanded body, and the close marker all own block 0.
+        assert_eq!(
+            content_structure_block_at(area, text, ContentViewMode::Reading, tag),
+            Some(0)
+        );
+        assert_eq!(
+            content_structure_block_at(area, text, ContentViewMode::Reading, body),
+            Some(0)
+        );
+        assert_eq!(
+            content_structure_block_at(area, text, ContentViewMode::Reading, close),
+            Some(0)
+        );
+        assert_eq!(
+            content_structure_block_at(area, text, ContentViewMode::Reading, next_tag),
+            Some(1)
+        );
+        // Plain text after a collapsed tag belongs to no block.
+        assert_eq!(
+            content_structure_block_at(area, text, ContentViewMode::Reading, plain),
             None
         );
     }

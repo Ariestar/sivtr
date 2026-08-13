@@ -84,6 +84,9 @@ pub(crate) fn run(
     let mut content_mode = ContentViewMode::Reading;
     let mut expanded_blocks = ExpandedBlocks::default();
     let mut expanded_key = None;
+    // Block under a pending click; toggled on mouse release unless a drag
+    // turned the gesture into a text selection.
+    let mut pending_block_toggle: Option<(ContentIoFocus, usize)> = None;
     let mut show_help = false;
     let mut show_search = false;
     let mut search_query = String::new();
@@ -333,6 +336,7 @@ pub(crate) fn run(
             let expand_key = (dialogue_idx, active_content_at, selected_dialogues.clone());
             if expanded_key.as_ref() != Some(&expand_key) {
                 expanded_blocks.clear();
+                pending_block_toggle = None;
                 expanded_key = Some(expand_key);
             }
             content_frame = ContentIoFrame::build(
@@ -882,18 +886,22 @@ pub(crate) fn run(
                                     mouse.column,
                                     mouse.row,
                                 ) {
-                                    if let Some(block) = content_structure_block_at(
+                                    // Record the block under the click and toggle
+                                    // it on release, so a drag still selects text
+                                    // instead of collapsing the block.
+                                    pending_block_toggle = content_structure_block_at(
                                         active.area,
                                         active.text,
                                         content_mode,
                                         position.line,
-                                    ) {
-                                        expanded_blocks.toggle(half, block);
-                                        redraw = true;
-                                        continue;
-                                    }
+                                    )
+                                    .map(|block| (half, block));
                                 }
                             }
+                        }
+                        // A drag selects text and cancels the pending block toggle.
+                        if matches!(mouse.kind, MouseEventKind::Drag(MouseButton::Left)) {
+                            pending_block_toggle = None;
                         }
                         if handle_content_mouse_select(
                             &mut visual_select_mode,
@@ -911,6 +919,13 @@ pub(crate) fn run(
                         ) {
                             if visual_select_mode.is_some() {
                                 set_focus(&mut focus, &mut fullscreen, WorkspaceFocus::Content);
+                            }
+                            // Pure click (no drag): release toggles the block.
+                            if matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left)) {
+                                if let Some((half, block)) = pending_block_toggle.take() {
+                                    expanded_blocks.toggle(half, block);
+                                    redraw = true;
+                                }
                             }
                             continue;
                         }
