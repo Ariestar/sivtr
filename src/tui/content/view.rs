@@ -107,13 +107,8 @@ pub(crate) fn render_content_view(
         .cloned()
         .collect();
     frame.render_widget(
-        Paragraph::new(line_number_lines(total_lines, scroll, &visible))
-            .alignment(Alignment::Right),
+        Paragraph::new(line_number_lines(total_lines, scroll, &visible)),
         chunks[0],
-    );
-    frame.render_widget(
-        Paragraph::new(separator_lines(visible_height, &visible)),
-        chunks[1],
     );
     let block_highlight = view
         .cursor_block
@@ -125,8 +120,9 @@ pub(crate) fn render_content_view(
             view.search_regex,
             view.selection,
             block_highlight,
+            chunks[1].width as usize,
         )),
-        chunks[2],
+        chunks[1],
     );
     render_panel_scrollbar(
         frame,
@@ -137,7 +133,7 @@ pub(crate) fn render_content_view(
 }
 
 pub(crate) fn content_text_area(area: Rect, text: &str, mode: ContentViewMode) -> Rect {
-    content_layout(area, text, mode).1[2]
+    content_layout(area, text, mode).1[1]
 }
 
 pub(crate) fn content_link_at(
@@ -160,7 +156,7 @@ pub(crate) fn content_link_at(
     }
 
     let (lines, chunks) = content_layout(area, text, mode);
-    let content_area = chunks[2];
+    let content_area = chunks[1];
     if column < content_area.x
         || column >= content_area.x.saturating_add(content_area.width)
         || row < content_area.y
@@ -435,13 +431,11 @@ pub(crate) fn content_view_line_count(area: Rect, text: &str, mode: ContentViewM
 fn content_layout(area: Rect, text: &str, mode: ContentViewMode) -> (Vec<ContentLine>, Rc<[Rect]>) {
     let inner = panel_block(&Panel::new("", "", false)).inner(area);
     let (lines, gutter_width) = content_layout_lines_metrics(inner.width, text, mode);
+    // Gutter: right-aligned line numbers plus one trailing space — no
+    // separator bar between the numbers and the content.
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(gutter_width),
-            Constraint::Length(1),
-            Constraint::Min(1),
-        ])
+        .constraints([Constraint::Length(gutter_width), Constraint::Min(1)])
         .split(inner);
     (lines, chunks)
 }
@@ -515,6 +509,8 @@ fn raw_content_line(line: &str) -> ContentLine {
 /// Lay out the document and converge the gutter width (digit count of the
 /// line count) against the wrap width. The final layout is returned so the
 /// caller's metrics and its visible window share one markdown + wrap pass.
+/// The content column is the inner width minus the gutter (numbers + one
+/// trailing space).
 fn content_layout_lines_metrics(
     inner_width: u16,
     text: &str,
@@ -524,7 +520,7 @@ fn content_layout_lines_metrics(
     let mut gutter_width = line_number_width(total_lines).saturating_add(1);
 
     for _ in 0..4 {
-        let content_width = inner_width.saturating_sub(gutter_width.saturating_add(1)) as usize;
+        let content_width = inner_width.saturating_sub(gutter_width) as usize;
         let lines = all_content_lines(text, content_width, mode);
         let next_total_lines = lines.len().max(1);
         let next_gutter_width = line_number_width(next_total_lines).saturating_add(1);
@@ -539,7 +535,7 @@ fn content_layout_lines_metrics(
     // wrap width): recompute the lines for the final gutter so content and
     // gutter stay consistent — otherwise the last pass may have run at a
     // different width and the layout can drop the content entirely.
-    let content_width = inner_width.saturating_sub(gutter_width.saturating_add(1)) as usize;
+    let content_width = inner_width.saturating_sub(gutter_width) as usize;
     (all_content_lines(text, content_width, mode), gutter_width)
 }
 
@@ -549,6 +545,7 @@ fn content_lines(
     search_regex: Option<&Regex>,
     selection: Option<ContentSelection>,
     block_highlight: Option<std::ops::Range<usize>>,
+    width: usize,
 ) -> Text<'static> {
     let lines = visible
         .into_iter()
@@ -557,19 +554,20 @@ fn content_lines(
             let line_idx = scroll.saturating_add(idx);
             let line = styled_content_line(line.line, search_regex);
             let line = styled_selection_line(line, selection, line_idx);
-            style_block_line(line, block_highlight.as_ref(), line_idx)
+            style_block_line(line, block_highlight.as_ref(), line_idx, width)
         })
         .collect::<Vec<_>>();
     Text::from(lines)
 }
 
-/// Tint every line of the cursor block with the list-row focus style, so
-/// navigating blocks in content reads exactly like navigating rows in the
-/// session/dialogue lists.
+/// Tint every line of the cursor block with the list-row focus style and pad
+/// the remainder of the row so the whole block lights up, not just the text
+/// columns — the same full-width highlight the session/dialogue lists use.
 fn style_block_line(
     line: Line<'static>,
     highlight: Option<&std::ops::Range<usize>>,
     line_idx: usize,
+    width: usize,
 ) -> Line<'static> {
     let Some(range) = highlight else {
         return line;
@@ -577,13 +575,20 @@ fn style_block_line(
     if !range.contains(&line_idx) {
         return line;
     }
-    let overlay = crate::tui::theme::focus_row();
+    // One style entry point for every focus highlight (lists + content).
+    let overlay = crate::tui::pane::active_item_style();
+    let text_width = line_text_width(Some(&line));
+    let mut spans = line
+        .spans
+        .into_iter()
+        .map(|span| Span::styled(span.content, span.style.patch(overlay)))
+        .collect::<Vec<_>>();
+    let fill = width.saturating_sub(text_width);
+    if fill > 0 {
+        spans.push(Span::styled(" ".repeat(fill), overlay));
+    }
     Line {
-        spans: line
-            .spans
-            .into_iter()
-            .map(|span| Span::styled(span.content, span.style.patch(overlay)))
-            .collect(),
+        spans,
         style: line.style.patch(overlay),
         alignment: line.alignment,
     }
@@ -1094,19 +1099,6 @@ fn line_number_lines(total_lines: usize, scroll: usize, visible: &[ContentLine])
     Text::from(lines)
 }
 
-fn separator_lines(height: usize, visible: &[ContentLine]) -> Text<'static> {
-    Text::from(
-        (0..height)
-            .map(|idx| {
-                Line::from(Span::styled(
-                    "|",
-                    gutter_style(visible.get(idx).map(|line| line.kind)),
-                ))
-            })
-            .collect::<Vec<_>>(),
-    )
-}
-
 fn gutter_style(kind: Option<MarkdownLineKind>) -> Style {
     match kind {
         Some(MarkdownLineKind::CodeBlock | MarkdownLineKind::CodeFence) => {
@@ -1316,6 +1308,7 @@ mod tests {
             search_regex,
             None,
             None,
+            80,
         )
     }
 
@@ -1415,6 +1408,7 @@ mod tests {
             None,
             None,
             None,
+            4,
         );
 
         assert_eq!(rendered.lines.len(), 2);
@@ -1433,7 +1427,7 @@ mod tests {
             16,
             ContentViewMode::Reading,
         );
-        let rendered = content_lines(visible.clone(), 0, None, None, None);
+        let rendered = content_lines(visible.clone(), 0, None, None, None, 16);
 
         assert_eq!(rendered.lines.len(), 2);
         assert_eq!(rendered_line_text(&rendered, 0), "docker-compose.f");
@@ -1507,12 +1501,12 @@ mod tests {
 
     #[test]
     fn oscillating_gutter_recomputes_lines_for_the_final_width() {
-        // inner_width == 4 makes the gutter width oscillate between 2 and 3
+        // inner_width == 3 makes the gutter width oscillate between 2 and 3
         // for a ten-character unbroken line (content widths 1 and 0). The
         // layout must return lines generated at the final gutter width
         // instead of the single blank line produced at width 0.
         let (lines, gutter_width) =
-            super::content_layout_lines_metrics(4, "0123456789", ContentViewMode::Reading);
+            super::content_layout_lines_metrics(3, "0123456789", ContentViewMode::Reading);
         assert_eq!(gutter_width, 2);
         assert_eq!(lines.len(), 10, "one character per wrapped row");
         assert!(!lines[0].line.spans.is_empty(), "content must not vanish");
@@ -1532,6 +1526,7 @@ mod tests {
             None,
             None,
             None,
+            10,
         );
 
         assert!(!rendered.lines.is_empty());
@@ -1635,6 +1630,7 @@ mod tests {
                 kind: ContentSelectionKind::Block,
             }),
             None,
+            80,
         );
 
         assert_eq!(rendered.lines[0].spans[1].content.as_ref(), "bcd");
@@ -1661,6 +1657,7 @@ mod tests {
                 kind: ContentSelectionKind::Linear,
             }),
             None,
+            80,
         );
 
         assert_eq!(rendered_line_text(&rendered, 0), "alpha");
@@ -1696,8 +1693,8 @@ mod tests {
             .unwrap();
 
         let backend = terminal.backend();
-        assert!(backend_row(backend, 1).contains("1|alpha"));
-        assert!(backend_row(backend, 2).contains("2|beta"));
+        assert!(backend_row(backend, 1).contains("1 alpha"));
+        assert!(backend_row(backend, 2).contains("2 beta"));
     }
 
     #[test]
@@ -1739,6 +1736,15 @@ mod tests {
             let cell = buffer.cell((4, row)).expect("cell within buffer bounds");
             assert_ne!(cell.style().bg, focus_bg);
         }
+        // The highlight fills the whole row width, not just the text columns.
+        for row in 1..=3 {
+            let cell = buffer.cell((38, row)).unwrap();
+            assert_eq!(
+                cell.style().bg,
+                focus_bg,
+                "row {row} should be highlighted to the right edge"
+            );
+        }
     }
 
     #[test]
@@ -1747,7 +1753,7 @@ mod tests {
         let area = Rect::new(0, 0, 60, 20);
 
         let (lines, chunks) = super::content_layout(area, text, ContentViewMode::Reading);
-        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks.len(), 2);
         let inner_width = area.width.saturating_sub(2) as usize; // panel borders
         let column_widths = chunks.iter().map(|c| c.width as usize).sum::<usize>();
         assert_eq!(column_widths, inner_width);
@@ -1768,9 +1774,9 @@ mod tests {
                 .collect();
             let width = UnicodeWidthStr::width(joined.as_str());
             assert!(
-                width <= chunks[2].width as usize,
+                width <= chunks[1].width as usize,
                 "line {width} exceeds content width {}",
-                chunks[2].width
+                chunks[1].width
             );
         }
     }

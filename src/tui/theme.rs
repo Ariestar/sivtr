@@ -167,8 +167,8 @@ impl Theme {
             dim: Color::Rgb(71, 85, 105),               // slate-600
             local_origin: Color::Rgb(52, 211, 153),     // emerald-400
             remote_origin: Color::Rgb(244, 114, 182),   // pink-400
-            focus_bg: Color::Rgb(30, 64, 175),          // blue-800
-            focus_fg: Color::Rgb(240, 249, 255),        // slate-50
+            focus_bg: Color::Rgb(71, 85, 105),          // slate-600 (gray, lighter than selection)
+            focus_fg: Color::Rgb(241, 245, 249),        // slate-100
             selected_bg: Color::Rgb(51, 65, 85),        // slate-700
             selected_fg: Color::Rgb(226, 232, 240),     // slate-200
             range_fg: Color::Rgb(251, 191, 36),         // amber-400
@@ -197,7 +197,7 @@ impl Theme {
             dim: Color::Rgb(148, 163, 184),            // slate-400
             local_origin: Color::Rgb(5, 150, 105),     // emerald-600
             remote_origin: Color::Rgb(219, 39, 119),   // pink-600
-            focus_bg: Color::Rgb(219, 234, 254),       // blue-100
+            focus_bg: Color::Rgb(203, 213, 225),       // slate-300 (gray, darker than selection)
             focus_fg: Color::Rgb(30, 41, 59),          // slate-800
             selected_bg: Color::Rgb(226, 232, 240),    // slate-200
             selected_fg: Color::Rgb(51, 65, 85),       // slate-700
@@ -229,8 +229,8 @@ impl Theme {
             dim: Color::DarkGray,
             local_origin: Color::Green,
             remote_origin: Color::Magenta,
-            focus_bg: Color::Blue,
-            focus_fg: Color::White,
+            focus_bg: Color::Gray,
+            focus_fg: Color::Black,
             selected_bg: Color::DarkGray,
             selected_fg: Color::White,
             range_fg: Color::Yellow,
@@ -262,8 +262,8 @@ impl Theme {
             dim: Color::DarkGray,
             local_origin: Color::Blue,
             remote_origin: Color::Magenta,
-            focus_bg: Color::Blue,
-            focus_fg: Color::White,
+            focus_bg: Color::Gray,
+            focus_fg: Color::Black,
             selected_bg: Color::DarkGray,
             selected_fg: Color::White,
             range_fg: Color::Blue,

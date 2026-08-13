@@ -88,6 +88,9 @@ pub(crate) fn run(
     // Block under a pending click; toggled on mouse release unless a drag
     // turned the gesture into a text selection.
     let mut pending_block_toggle: Option<(ContentIoFocus, usize)> = None;
+    // Last single click on a block (time + target); a second click on the
+    // same block within the window folds it.
+    let mut last_block_click: Option<(std::time::Instant, ContentIoFocus, usize)> = None;
     // Block cursor (keyboard j/k + click), highlighted like a list row; one
     // position per half.
     let mut content_cursor = ContentBlockCursor::default();
@@ -351,6 +354,7 @@ pub(crate) fn run(
             if expanded_key.as_ref() != Some(&expand_key) {
                 expanded_blocks.clear();
                 pending_block_toggle = None;
+                last_block_click = None;
                 content_cursor.clear();
                 expanded_key = Some(expand_key);
             }
@@ -996,11 +1000,22 @@ pub(crate) fn run(
                                 set_focus(&mut focus, &mut fullscreen, WorkspaceFocus::Content);
                             }
                             // Pure click (no drag): release highlights the
-                            // block and, in read mode, folds it.
+                            // block; a second click on the same block within
+                            // the window folds it (read mode only).
                             if matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left)) {
                                 if let Some((half, block)) = pending_block_toggle.take() {
                                     content_cursor.set(half, block);
-                                    if content_mode == ContentViewMode::Reading {
+                                    let now = std::time::Instant::now();
+                                    let double_click = last_block_click.is_some_and(
+                                        |(at, last_half, last_block)| {
+                                            last_half == half
+                                                && last_block == block
+                                                && now.duration_since(at)
+                                                    < std::time::Duration::from_millis(400)
+                                        },
+                                    );
+                                    last_block_click = Some((now, half, block));
+                                    if double_click && content_mode == ContentViewMode::Reading {
                                         expanded_blocks.toggle(half, block);
                                     }
                                     redraw = true;
