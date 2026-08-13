@@ -361,11 +361,7 @@ fn session_row_line(
             .fg(choice.source.color())
             .add_modifier(Modifier::BOLD),
     ));
-    spans.extend(highlight_spans(
-        &title,
-        highlight,
-        Style::default().fg(theme::text_primary()),
-    ));
+    spans.extend(highlight_spans(&title, highlight, Style::default()));
     if body_failed {
         spans.push(Span::styled(" [!]", Style::default().fg(theme::failure())));
     }
@@ -795,7 +791,7 @@ fn render_dialogue_list(
                 ListItem::new(Line::from(highlight_spans(
                     &line,
                     highlight,
-                    Style::default().fg(theme::help_text()),
+                    Style::default(),
                 )))
             }
         })
@@ -970,5 +966,33 @@ mod tests {
         assert_eq!(cursor_for("1\n2\n3\n4"), (4, 3));
         // A line wider than the box clamps the column to the right edge.
         assert_eq!(cursor_for("1\n0123456789abcdefghij"), (15, 3));
+    }
+
+    #[test]
+    fn session_row_body_uses_default_foreground() {
+        use super::session_row_line;
+        use crate::tui::workspace::model::{WorkspaceSession, WorkspaceSource};
+        use ratatui::prelude::Style;
+        use sivtr_core::ai::AgentProvider;
+        use std::time::SystemTime;
+
+        let session = WorkspaceSession {
+            source: WorkspaceSource::agent(AgentProvider::Codex),
+            session_id: "abc123".to_string(),
+            modified: SystemTime::UNIX_EPOCH,
+            title: "title".to_string(),
+            search_title: "title".to_string(),
+            records: Vec::new(),
+            body_loaded: false,
+        };
+        let line = session_row_line(&session, false, true, Style::default(), None, false);
+        // Non-selected session rows paint body text with the terminal default
+        // foreground, matching dialogue rows and the content pane.
+        let title_span = line
+            .spans
+            .iter()
+            .find(|span| span.content == "title")
+            .expect("title span");
+        assert_eq!(title_span.style.fg, None);
     }
 }

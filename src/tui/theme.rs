@@ -50,7 +50,6 @@ pub(crate) struct Theme {
     pub(crate) muted_text: Color,
     pub(crate) key_hint: Color,
     pub(crate) footer: Color,
-    pub(crate) text_primary: Color,
     pub(crate) failure: Color,
     pub(crate) code: Color,
     pub(crate) link: Color,
@@ -177,7 +176,6 @@ impl Theme {
             muted_text: Color::Rgb(203, 213, 225),      // slate-300
             key_hint: Color::Rgb(125, 211, 252),        // sky-300
             footer: Color::Rgb(148, 163, 184),          // slate-400
-            text_primary: Color::Rgb(226, 232, 240),    // slate-200
             failure: Color::Rgb(248, 113, 113),         // red-400
             code: Color::Rgb(148, 163, 184),            // slate-400
             link: Color::Rgb(125, 211, 252),            // sky-300
@@ -208,7 +206,6 @@ impl Theme {
             muted_text: Color::Rgb(100, 116, 139),     // slate-500
             key_hint: Color::Rgb(3, 105, 161),         // sky-700
             footer: Color::Rgb(71, 85, 105),           // slate-600
-            text_primary: Color::Rgb(30, 41, 59),      // slate-800
             failure: Color::Rgb(220, 38, 38),          // red-600
             code: Color::Rgb(71, 85, 105),             // slate-600
             link: Color::Rgb(3, 105, 161),             // sky-700
@@ -241,7 +238,6 @@ impl Theme {
             muted_text: Color::Gray,
             key_hint: Color::Cyan,
             footer: Color::Gray,
-            text_primary: Color::Gray,
             failure: Color::Red,
             code: Color::Gray,
             link: Color::Blue,
@@ -275,7 +271,6 @@ impl Theme {
             muted_text: Color::DarkGray,
             key_hint: Color::Blue,
             footer: Color::DarkGray,
-            text_primary: Color::Black,
             failure: Color::Red,
             code: Color::DarkGray,
             link: Color::Blue,
@@ -454,11 +449,6 @@ pub(crate) fn footer_style() -> Style {
     Style::default().fg(ACTIVE.get().footer)
 }
 
-/// Primary content text (session titles, …).
-pub(crate) fn text_primary() -> Color {
-    ACTIVE.get().text_primary
-}
-
 /// Help / hint descriptions.
 pub(crate) fn help_text() -> Color {
     ACTIVE.get().muted_text
@@ -560,7 +550,6 @@ mod tests {
     fn ansi_light_uses_darker_foregrounds_for_light_backgrounds() {
         let dark = Theme::ansi();
         let light = Theme::ansi_light();
-        assert_ne!(light.text_primary, dark.text_primary);
         assert_ne!(light.title_active, dark.title_active);
         // These ANSI colors can wash out against a light default background.
         let assert_dark_foreground = |name: &str, color: Color| {
@@ -583,7 +572,6 @@ mod tests {
             );
         };
         for (name, color) in [
-            ("text", light.text_primary),
             ("title", light.title_active),
             ("footer", light.footer),
             ("muted text", light.muted_text),
