@@ -94,8 +94,6 @@ pub(crate) fn run(
     // Block cursor (keyboard j/k + click), highlighted like a list row; one
     // position per half.
     let mut content_cursor = ContentBlockCursor::default();
-    // Per-half block counts of the last frame; drive j/k navigation.
-    let mut content_block_counts = (0usize, 0usize);
     let mut show_help = false;
     let mut show_search = false;
     let mut search_query = String::new();
@@ -375,19 +373,12 @@ pub(crate) fn run(
                 content_io_focus,
             );
             content_scrolls.clamp_to(content_frame.input_lines, content_frame.output_lines);
-            content_block_counts = (
-                content_frame.texts.input_blocks.len(),
-                content_frame.texts.output_blocks.len(),
-            );
             // Keyboard moves ask the next redraw to keep the cursor block in
             // view; clicks never set `follow`, so they keep the scroll as-is.
             if content_cursor.follow {
                 content_cursor.follow = false;
                 if let Some((half, block)) = content_cursor.focused(content_io_focus) {
-                    let blocks = match half {
-                        ContentIoFocus::Input => &content_frame.texts.input_blocks[..],
-                        ContentIoFocus::Output => &content_frame.texts.output_blocks[..],
-                    };
+                    let blocks = content_frame.texts.half_blocks(half);
                     let area = content_frame.areas.area(half);
                     if let Some(range) = content_block_range(
                         area,
@@ -620,7 +611,7 @@ pub(crate) fn run(
                                 &mut content_scrolls,
                                 content_io_focus,
                                 &mut content_cursor,
-                                content_block_counts,
+                                content_frame.texts.block_slices(),
                             );
                         }
                         KeyCode::Down => {
@@ -638,7 +629,7 @@ pub(crate) fn run(
                                 &mut content_scrolls,
                                 content_io_focus,
                                 &mut content_cursor,
-                                content_block_counts,
+                                content_frame.texts.block_slices(),
                             );
                         }
                         KeyCode::Backspace => search_query_edited(
@@ -727,7 +718,7 @@ pub(crate) fn run(
                                 content_pane.line_count(ContentIoFocus::Input),
                                 content_pane.line_count(ContentIoFocus::Output),
                                 &mut content_cursor,
-                                content_block_counts,
+                                content_frame.texts.block_slices(),
                                 &mut show_help,
                                 &mut show_search,
                                 &mut search_query,
@@ -843,7 +834,7 @@ pub(crate) fn run(
                         content_pane.line_count(ContentIoFocus::Input),
                         content_pane.line_count(ContentIoFocus::Output),
                         &mut content_cursor,
-                        content_block_counts,
+                        content_frame.texts.block_slices(),
                         &mut show_help,
                         &mut show_search,
                         &mut search_query,
@@ -963,12 +954,7 @@ pub(crate) fn run(
                                 // Record the block under the click and toggle
                                 // it on release, so a drag still selects text
                                 // instead of collapsing the block.
-                                let blocks = match half {
-                                    ContentIoFocus::Input => &content_frame.texts.input_blocks[..],
-                                    ContentIoFocus::Output => {
-                                        &content_frame.texts.output_blocks[..]
-                                    }
-                                };
+                                let blocks = content_frame.texts.half_blocks(half);
                                 pending_block_toggle = content_block_at(
                                     active.area,
                                     active.text,
@@ -1064,7 +1050,7 @@ pub(crate) fn run(
                                 &mut content_scrolls,
                                 content_io_focus,
                                 &mut content_cursor,
-                                content_block_counts,
+                                content_frame.texts.block_slices(),
                             );
                         }
                     }
@@ -1812,7 +1798,7 @@ mod tests {
             &mut content_scrolls,
             ContentIoFocus::Input,
             &mut super::super::nav::ContentBlockCursor::default(),
-            (0, 0),
+            (&[], &[]),
         );
 
         assert_eq!(dialogue_state.selected(), None);

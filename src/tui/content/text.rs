@@ -156,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn reading_folds_runs_to_tags_and_expanded_runs_show_full() {
+    fn reading_folds_runs_and_expanding_reveals_member_tags() {
         let rec = record(vec![
             tool_part(1, "Bash", "ls"),
             tool_part(2, "Read", "file"),
@@ -172,11 +172,16 @@ mod tests {
         expanded.toggle(ContentIoFocus::Output, 0);
         let io = content_io_from_record(&rec, true, &expanded);
         let output = &io.output;
+        // The run opens to its member tags; bodies stay folded.
         assert!(output.contains("<:tool:Bash call:>"));
-        assert!(output.contains("<:/tool:Bash call:>"));
         assert!(output.contains("<:tool:Read call:>"));
-        assert!(output.contains("ls"));
-        assert!(output.contains("file"));
+        assert!(!output.contains("ls"));
+        assert!(!output.contains("file"));
+
+        // Opening a member shows its body.
+        expanded.toggle(ContentIoFocus::Output, 1);
+        let io = content_io_from_record(&rec, true, &expanded);
+        assert!(io.output.contains("ls"));
     }
 
     #[test]
@@ -206,17 +211,24 @@ mod tests {
         assert!(!output.contains("ok"));
         assert!(!output.contains("file"));
 
-        // Expanding the run reveals the result inside the same block, with
-        // the second call on the next line (no blank line between).
+        // Expanding the run reveals member tags on adjacent lines (no blank
+        // line between); the result payload stays folded.
         let mut expanded = ExpandedBlocks::default();
         expanded.toggle(ContentIoFocus::Output, 0);
         let io = content_io_from_record(&rec, true, &expanded);
         let output = &io.output;
-        assert!(output.contains("<:tool:Bash result:>"));
-        assert!(output.contains("ok"));
-        assert!(output.contains("<:/tool:Bash result:>"));
+        // The call+result pair is one member; its collapsed tag is the call
+        // tag, so the result marker only appears once the member opens.
+        assert!(output.contains("<:tool:Bash call:>"));
         assert!(output.contains("<:tool:Read call:>"));
-        assert!(output.contains("file"));
+        assert!(!output.contains("<:tool:Bash result:>"));
+        assert!(!output.contains("ok"));
+        assert!(!output.contains("file"));
+
+        // Opening the result member shows its payload.
+        expanded.toggle(ContentIoFocus::Output, 1);
+        let io = content_io_from_record(&rec, true, &expanded);
+        assert!(io.output.contains("ok"));
     }
 
     #[test]

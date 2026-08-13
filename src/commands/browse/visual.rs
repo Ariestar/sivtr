@@ -5,6 +5,7 @@ use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::widgets::ListState;
 
 use crate::commands::select::CommandSelection;
+use crate::tui::content::block::BlockText;
 use crate::tui::content::view::{
     clamp_content_position, content_position_in_text_row, content_text_area, selected_content_text,
     ContentPosition, ContentSelection, ContentSelectionKind, ContentViewMode,
@@ -366,7 +367,7 @@ pub(super) fn apply_workspace_mouse_scroll(
     content_scrolls: &mut ContentScrolls,
     content_io_focus: ContentIoFocus,
     content_cursor: &mut super::nav::ContentBlockCursor,
-    content_block_counts: (usize, usize),
+    content_blocks: (&[BlockText], &[BlockText]),
 ) {
     if focus == WorkspaceFocus::Content {
         // The wheel keeps smooth line scrolling; j/k navigates blocks.
@@ -395,7 +396,7 @@ pub(super) fn apply_workspace_mouse_scroll(
                 content_scrolls,
                 content_io_focus,
                 content_cursor,
-                content_block_counts,
+                content_blocks,
             );
         } else {
             move_workspace_cursor_down(
@@ -412,7 +413,7 @@ pub(super) fn apply_workspace_mouse_scroll(
                 content_scrolls,
                 content_io_focus,
                 content_cursor,
-                content_block_counts,
+                content_blocks,
             );
         }
     }

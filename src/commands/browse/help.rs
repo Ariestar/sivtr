@@ -5,6 +5,7 @@
 use anyhow::Result;
 use ratatui::widgets::ListState;
 
+use crate::tui::content::block::BlockText;
 use crate::tui::content::view::ContentViewMode;
 use crate::tui::terminal::suspend;
 use crate::tui::workspace::{
@@ -56,7 +57,7 @@ pub(super) fn apply_workspace_help_action(
     content_input_lines: usize,
     content_output_lines: usize,
     content_cursor: &mut ContentBlockCursor,
-    content_block_counts: (usize, usize),
+    content_blocks: (&[BlockText], &[BlockText]),
     show_help: &mut bool,
     show_search: &mut bool,
     search_query: &mut String,
@@ -96,7 +97,7 @@ pub(super) fn apply_workspace_help_action(
             content_scrolls,
             *content_io_focus,
             content_cursor,
-            content_block_counts,
+            content_blocks,
         ),
         WorkspaceHelpAction::MoveDown => move_workspace_cursor_down(
             *focus,
@@ -112,7 +113,7 @@ pub(super) fn apply_workspace_help_action(
             content_scrolls,
             *content_io_focus,
             content_cursor,
-            content_block_counts,
+            content_blocks,
         ),
         WorkspaceHelpAction::PreviousPane => {
             if let Some(next_focus) = focus.previous(dialogue_count) {

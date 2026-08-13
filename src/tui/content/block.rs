@@ -2,31 +2,55 @@
 //!
 //! A block is the smallest unit the content pane highlights, navigates, and
 //! folds: one workpart, or a ToolCall + ToolResult pair with the same call id
-//! (they read as one tool invocation). Consecutive structure parts of the
-//! same kind (thinking / skill / tool) fold into one run block that
-//! collapses to a single `kind xN` tag. Structure blocks default to their
-//! `<:…:>` tag; body blocks default to their full text — one fold model, no
-//! structure-only special cases.
+//! (they read as one tool invocation). Consecutive structure blocks fold
+//! into one run block that collapses to a single `kind xN` tag; expanding a
+//! run reveals its members below the tag, one call per line, each still
+//! folded and expandable in turn — two fold levels. Structure blocks default
+//! to their `<:…:>` tag; body blocks default to their full text — one fold
+//! model, no structure-only special cases.
 
 use sivtr_core::record::{WorkPart, WorkPartData, WorkPartKind, WorkRecord};
 
 use crate::tui::content::io::{ContentIoFocus, ExpandedBlocks};
 
-/// A foldable content block: the parts it owns and the kind that drives its
-/// fold default and collapsed tag (the first part's kind).
+/// A foldable content block: the parts it owns, the kind that drives its
+/// fold default and collapsed tag (the first part's kind), and — for runs —
+/// the member blocks revealed when the run is expanded.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Block {
+    /// Stable identity within one IO half (DFS pre-order), used by the fold
+    /// state and the content cursor; id 0 is the first block of the half.
+    pub(crate) id: usize,
     /// Indices into the record's parts, in display order.
     pub(crate) parts: Vec<usize>,
     pub(crate) kind: WorkPartKind,
-    /// Number of folded units (tool call+result pairs, thinking, skill…);
-    /// drives the `kind xN` fold label.
-    pub(crate) count: usize,
+    /// Member blocks of a run; empty for leaves.
+    pub(crate) children: Vec<Block>,
+}
+
+/// One rendered segment of a half's display text: a block's collapsed tag
+/// or full body. `tight` joins the next segment with a single newline
+/// instead of a blank line — members of one run read as a single series.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BlockText {
+    pub(crate) id: usize,
+    pub(crate) text: String,
+    pub(crate) tight: bool,
 }
 
 impl Block {
-    /// Full body: every part formatted as in the current content text. Run
-    /// members join on adjacent lines — same-kind calls read as one series.
+    /// A leaf (non-run) block; ids are assigned by `assign_ids` afterwards.
+    fn leaf(parts: Vec<usize>, kind: WorkPartKind) -> Self {
+        Block {
+            id: 0,
+            parts,
+            kind,
+            children: Vec::new(),
+        }
+    }
+
+    /// Full body of a leaf: every part formatted as in the current content
+    /// text, members joining on adjacent lines.
     pub(crate) fn body(&self, record: &WorkRecord) -> String {
         self.parts
             .iter()
@@ -42,12 +66,31 @@ impl Block {
             .join("\n")
     }
 
-    /// Collapsed tag: `<:kind xN:>` for a run of N > 1, otherwise the
-    /// structure marker (with tool description when present) for structure
-    /// blocks, `<:kind:>` for body blocks.
+    /// Collapsed tag: `<:kind xN:>` for a run. Members list every kind in
+    /// order with its count, repeats collapsed to `kind xN` and singles as
+    /// the bare kind — `<:tool x2, thinking:>` — instead of a `+` mashup.
     pub(crate) fn fold_label(&self, record: &WorkRecord) -> String {
-        if self.count > 1 {
-            format!("<:{} x{}:>", kind_name(self.kind), self.count)
+        if !self.children.is_empty() {
+            let mut kinds: Vec<(&str, usize)> = Vec::new();
+            for child in &self.children {
+                let name = kind_name(child.kind);
+                match kinds.iter_mut().find(|(kind, _)| *kind == name) {
+                    Some((_, count)) => *count += 1,
+                    None => kinds.push((name, 1)),
+                }
+            }
+            let label = kinds
+                .into_iter()
+                .map(|(name, count)| {
+                    if count > 1 {
+                        format!("{name} x{count}")
+                    } else {
+                        name.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("<:{label}:>")
         } else {
             fold_label_for_part(&record.parts[self.parts[0]])
         }
@@ -55,8 +98,7 @@ impl Block {
 }
 
 /// Short display name for a kind: body tags use it (`<:user:>`), structure
-/// runs use it for the count label (`<:tool x2:>`), and it drives run
-/// grouping (consecutive parts with the same name fold together).
+/// runs use it for the count label (`<:tool x2:>`).
 fn kind_name(kind: WorkPartKind) -> &'static str {
     match kind {
         WorkPartKind::Prompt => "prompt",
@@ -73,8 +115,9 @@ fn kind_name(kind: WorkPartKind) -> &'static str {
 
 /// Partition one IO half's parts into blocks: a ToolCall followed by a
 /// ToolResult with the same call id folds into one unit, and consecutive
-/// structure units of the same kind fold into one run; anything else is one
-/// part per block.
+/// structure units (tool / thinking / skill, mixed kinds allowed) fold
+/// into one run; anything else is one part per block. Blocks get stable
+/// DFS pre-order ids so the fold state and cursor survive folds.
 pub(crate) fn half_blocks(record: &WorkRecord, input: bool) -> Vec<Block> {
     let parts: Vec<usize> = record
         .parts
@@ -100,29 +143,43 @@ pub(crate) fn half_blocks(record: &WorkRecord, input: bool) -> Vec<Block> {
         } else {
             idx
         };
-        units.push(Block {
-            parts: parts[idx..=group_end].to_vec(),
-            kind,
-            count: 1,
-        });
+        units.push(Block::leaf(parts[idx..=group_end].to_vec(), kind));
         idx = group_end + 1;
     }
 
+    // Consecutive structure units fold into one run, whatever their kinds.
     let mut blocks: Vec<Block> = Vec::new();
     for unit in units {
-        let same_run = unit.kind.is_structure()
-            && blocks.last().is_some_and(|last| {
-                last.kind.is_structure() && kind_name(last.kind) == kind_name(unit.kind)
-            });
-        if same_run {
+        let merges =
+            unit.kind.is_structure() && blocks.last().is_some_and(|last| last.kind.is_structure());
+        if merges {
             let last = blocks.last_mut().expect("run block exists");
-            last.parts.extend(unit.parts);
-            last.count += unit.count;
+            if last.children.is_empty() {
+                // Promote the leaf into a run holding itself as first member.
+                last.children
+                    .push(Block::leaf(last.parts.clone(), last.kind));
+            }
+            last.parts.extend(unit.parts.iter().copied());
+            last.children.push(unit);
         } else {
             blocks.push(unit);
         }
     }
+
+    // Stable DFS pre-order ids for the fold state and the content cursor.
+    let mut next = 0usize;
+    for block in &mut blocks {
+        assign_ids(block, &mut next);
+    }
     blocks
+}
+
+fn assign_ids(block: &mut Block, next: &mut usize) {
+    block.id = *next;
+    *next += 1;
+    for child in &mut block.children {
+        assign_ids(child, next);
+    }
 }
 
 /// Collapsed tag for one part: the structure marker with the tool
@@ -176,32 +233,85 @@ fn part_call_id(part: &WorkPart) -> Option<&str> {
     }
 }
 
-/// Render one IO half's blocks to their display segments: the full body when
-/// shown, the collapsed tag otherwise. The pane text is the segments joined
-/// with a blank line between blocks.
+/// Render one IO half's blocks to their display segments, in display order:
+/// a block's full body when shown, its collapsed tag otherwise. Runs always
+/// show the aggregate tag; expanding a run reveals its members below it,
+/// each still folded, joined on adjacent lines.
 pub(crate) fn render_half(
     record: &WorkRecord,
     input: bool,
     reading: bool,
     expanded: &ExpandedBlocks,
-) -> Vec<String> {
+) -> Vec<BlockText> {
     let focus = if input {
         ContentIoFocus::Input
     } else {
         ContentIoFocus::Output
     };
-    half_blocks(record, input)
-        .into_iter()
-        .enumerate()
-        .map(|(idx, block)| {
-            let shown = !reading || expanded.expanded(focus, idx, block.kind.is_structure());
-            if shown {
+    let mut out = Vec::new();
+    for block in half_blocks(record, input) {
+        out.extend(render_block(record, &block, reading, focus, expanded));
+    }
+    out
+}
+
+fn render_block(
+    record: &WorkRecord,
+    block: &Block,
+    reading: bool,
+    focus: ContentIoFocus,
+    expanded: &ExpandedBlocks,
+) -> Vec<BlockText> {
+    let mut segs = Vec::new();
+    if !reading {
+        // Raw mode: every block shows its full body; runs expand flat.
+        if block.children.is_empty() {
+            segs.push(BlockText {
+                id: block.id,
+                text: block.body(record),
+                tight: false,
+            });
+        } else {
+            for child in &block.children {
+                segs.extend(render_block(record, child, reading, focus, expanded));
+            }
+        }
+    } else if block.children.is_empty() {
+        // Leaf: body or collapsed tag by the block's fold default.
+        let shown = expanded.expanded(focus, block.id, block.kind.is_structure());
+        segs.push(BlockText {
+            id: block.id,
+            text: if shown {
                 block.body(record)
             } else {
                 block.fold_label(record)
+            },
+            tight: false,
+        });
+    } else {
+        // Run: the aggregate tag stays as the group header; expanding the
+        // run reveals its members below it, each still folded.
+        let shown = expanded.expanded(focus, block.id, true);
+        segs.push(BlockText {
+            id: block.id,
+            text: block.fold_label(record),
+            tight: false, // rewritten below: all but the last segment join tight
+        });
+        if shown {
+            for child in &block.children {
+                segs.extend(render_block(record, child, reading, focus, expanded));
             }
-        })
-        .collect()
+        }
+    }
+    // Members of one run join on adjacent lines; the last segment closes
+    // the group with the usual blank line.
+    if !block.children.is_empty() {
+        let last = segs.len().saturating_sub(1);
+        for (i, seg) in segs.iter_mut().enumerate() {
+            seg.tight = i < last;
+        }
+    }
+    segs
 }
 
 #[cfg(test)]
@@ -301,7 +411,7 @@ mod tests {
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].kind, WorkPartKind::ToolCall);
         assert_eq!(blocks[0].parts, vec![0, 1, 2]);
-        assert_eq!(blocks[0].count, 2);
+        assert_eq!(blocks[0].children.len(), 2);
     }
 
     #[test]
@@ -312,24 +422,43 @@ mod tests {
         ]);
         let blocks = half_blocks(&rec, false);
         assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].count, 2);
+        assert_eq!(blocks[0].children.len(), 2);
         assert_eq!(blocks[0].fold_label(&rec), "<:tool x2:>");
-        // Run members join on adjacent lines — no blank line between calls.
-        assert!(!blocks[0].body(&rec).contains("\n\n"));
     }
 
     #[test]
-    fn different_kinds_do_not_merge_into_one_run() {
+    fn mixed_structure_kinds_fold_into_one_run() {
         let rec = record(vec![
             tool_part(1, "Bash", "ls"),
             thinking_part(2, "reasoning"),
             tool_part(3, "Read", "file"),
         ]);
         let blocks = half_blocks(&rec, false);
-        assert_eq!(blocks.len(), 3);
-        assert_eq!(blocks[0].fold_label(&rec), "<:tool:Bash call:>");
-        assert_eq!(blocks[1].fold_label(&rec), "<:thinking:>");
-        assert_eq!(blocks[2].fold_label(&rec), "<:tool:Read call:>");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].children.len(), 3);
+        assert_eq!(blocks[0].fold_label(&rec), "<:tool x2, thinking:>");
+        // A body part after the series starts a new block.
+        let rec = record(vec![
+            tool_part(1, "Bash", "ls"),
+            thinking_part(2, "reasoning"),
+            user_part(3, "question"),
+        ]);
+        assert_eq!(half_blocks(&rec, false).len(), 1);
+        assert_eq!(half_blocks(&rec, true).len(), 1);
+    }
+
+    #[test]
+    fn ids_follow_dfs_preorder() {
+        let rec = record(vec![
+            tool_part(1, "Bash", "ls"),
+            thinking_part(2, "reasoning"),
+            tool_part(3, "Read", "file"),
+        ]);
+        let blocks = half_blocks(&rec, false);
+        // run id 0, members 1..=3.
+        assert_eq!(blocks[0].id, 0);
+        let ids: Vec<usize> = blocks[0].children.iter().map(|c| c.id).collect();
+        assert_eq!(ids, vec![1, 2, 3]);
     }
 
     #[test]
@@ -339,8 +468,8 @@ mod tests {
         let input = render_half(&rec, true, true, &expanded);
         let output = render_half(&rec, false, true, &expanded);
         // Body block shows its text; the tool block folds to its tag.
-        assert_eq!(input, vec!["question"]);
-        assert_eq!(output, vec!["<:tool:Bash call:>"]);
+        assert_eq!(texts(input), vec!["question"]);
+        assert_eq!(texts(output), vec!["<:tool:Bash call:>"]);
     }
 
     #[test]
@@ -348,7 +477,10 @@ mod tests {
         let rec = record(vec![user_part(1, "question")]);
         let mut expanded = ExpandedBlocks::default();
         expanded.toggle(ContentIoFocus::Input, 0);
-        assert_eq!(render_half(&rec, true, true, &expanded), vec!["<:user:>"]);
+        assert_eq!(
+            texts(render_half(&rec, true, true, &expanded)),
+            vec!["<:user:>"]
+        );
     }
 
     #[test]
@@ -357,15 +489,60 @@ mod tests {
         let expanded = ExpandedBlocks::default();
         let input = render_half(&rec, true, false, &expanded);
         let output = render_half(&rec, false, false, &expanded);
-        assert_eq!(input, vec!["question"]);
-        assert!(output[0].contains("<:tool:Bash call:>"));
-        assert!(output[0].contains("ls"));
-        assert!(output[0].contains("<:/tool:Bash call:>"));
+        assert_eq!(texts(input), vec!["question"]);
+        assert!(output[0].text.contains("<:tool:Bash call:>"));
+        assert!(output[0].text.contains("ls"));
+        assert!(output[0].text.contains("<:/tool:Bash call:>"));
     }
 
     #[test]
     fn body_block_body_uses_plain_text() {
         let rec = record(vec![user_part(1, "hello\nworld")]);
         assert_eq!(half_blocks(&rec, true)[0].body(&rec), "hello\nworld");
+    }
+
+    #[test]
+    fn expanding_a_run_reveals_members_as_folded_lines() {
+        let rec = record(vec![
+            tool_part(1, "Bash", "ls"),
+            tool_part(2, "Read", "file"),
+        ]);
+        let mut expanded = ExpandedBlocks::default();
+        // Folded: the run collapses to its tag.
+        let folded = render_half(&rec, false, true, &expanded);
+        assert_eq!(texts(folded), vec!["<:tool x2:>"]);
+        // Expanded: the tag stays as the group header, members below it as
+        // folded lines, joined without blank lines (tight).
+        expanded.toggle(ContentIoFocus::Output, 0);
+        let shown = render_half(&rec, false, true, &expanded);
+        assert_eq!(
+            texts(shown.clone()),
+            vec!["<:tool x2:>", "<:tool:Bash call:>", "<:tool:Read call:>"]
+        );
+        // Members join on adjacent lines; only the last segment closes the
+        // group with a blank line.
+        assert!(shown[0].tight && shown[1].tight && !shown[2].tight);
+    }
+
+    #[test]
+    fn run_member_expands_to_its_own_body() {
+        let rec = record(vec![
+            tool_part(1, "Bash", "ls"),
+            tool_part(2, "Read", "file"),
+        ]);
+        let mut expanded = ExpandedBlocks::default();
+        expanded.toggle(ContentIoFocus::Output, 0); // run open
+        expanded.toggle(ContentIoFocus::Output, 1); // first member open
+        let shown = render_half(&rec, false, true, &expanded);
+        assert_eq!(shown.len(), 3);
+        assert_eq!(shown[0].text, "<:tool x2:>");
+        assert!(shown[1].text.contains("ls"));
+        assert!(shown[1].text.contains("<:/tool:Bash call:>"));
+        assert_eq!(shown[2].text, "<:tool:Read call:>");
+    }
+
+    /// Segment texts for compact assertions.
+    fn texts(segs: Vec<BlockText>) -> Vec<String> {
+        segs.into_iter().map(|seg| seg.text).collect()
     }
 }

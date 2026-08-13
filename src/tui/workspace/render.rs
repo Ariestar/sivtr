@@ -8,6 +8,7 @@ use regex::Regex;
 use std::collections::HashSet;
 use unicode_width::UnicodeWidthStr;
 
+use crate::tui::content::block::BlockText;
 use crate::tui::content::io::ContentIoFocus;
 use crate::tui::content::view::{
     content_cursor_position, highlight_spans, render_content_view, ContentSelection, ContentView,
@@ -833,7 +834,7 @@ fn render_content_panel(
     area: Rect,
     panel: Panel,
     text: &str,
-    blocks: &[String],
+    blocks: &[BlockText],
     scroll: usize,
     mode: ContentViewMode,
     selection: Option<ContentSelection>,

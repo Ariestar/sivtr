@@ -6,6 +6,7 @@
 use ratatui::layout::Rect;
 use std::collections::HashSet;
 
+use crate::tui::content::block::BlockText;
 use crate::tui::content::view::{content_view_line_count, ContentViewMode};
 
 const EMPTY: &str = "<empty>";
@@ -13,28 +14,29 @@ const EMPTY: &str = "<empty>";
 const MIN_PANE_H: u16 = 3;
 
 /// Body text for one IO half (no section headers — panes own titles).
-/// `input` / `output` are the per-block segments joined with a blank line;
-/// the segments stay available so the content pane can map displayed lines
-/// back to their owning block (highlight / hit-test / navigation).
+/// `input` / `output` are the per-block segments joined with a blank line
+/// (single line between members of the same run); the segments stay
+/// available so the content pane can map displayed lines back to their
+/// owning block (highlight / hit-test / navigation).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ContentIoTexts {
     pub(crate) input: String,
     pub(crate) output: String,
-    /// Display text of each block in the input half (tag or body), in order.
-    pub(crate) input_blocks: Vec<String>,
-    /// Display text of each block in the output half (tag or body), in order.
-    pub(crate) output_blocks: Vec<String>,
+    /// Display segments of the input half (tag or body), in order.
+    pub(crate) input_blocks: Vec<BlockText>,
+    /// Display segments of the output half (tag or body), in order.
+    pub(crate) output_blocks: Vec<BlockText>,
 }
 
 impl ContentIoTexts {
     /// Build from per-block segments; the pane text is the segments joined
     /// with a blank line between blocks (the block separator also drives the
-    /// content layout's line ownership).
-    pub(crate) fn new(input_blocks: Vec<String>, output_blocks: Vec<String>) -> Self {
+    /// content layout's line ownership), single newline within a run.
+    pub(crate) fn new(input_blocks: Vec<BlockText>, output_blocks: Vec<BlockText>) -> Self {
         ContentIoTexts {
-            input: input_blocks.join("\n\n"),
+            input: join_blocks(&input_blocks),
             input_blocks,
-            output: output_blocks.join("\n\n"),
+            output: join_blocks(&output_blocks),
             output_blocks,
         }
     }
@@ -68,6 +70,35 @@ impl ContentIoTexts {
             raw
         }
     }
+
+    /// One half's block segments, for fold-aware cursor movement.
+    pub(crate) fn half_blocks(&self, half: ContentIoFocus) -> &[BlockText] {
+        match half {
+            ContentIoFocus::Input => &self.input_blocks,
+            ContentIoFocus::Output => &self.output_blocks,
+        }
+    }
+
+    /// The two halves' block segments, for fold-aware cursor movement.
+    pub(crate) fn block_slices(&self) -> (&[BlockText], &[BlockText]) {
+        (
+            self.half_blocks(ContentIoFocus::Input),
+            self.half_blocks(ContentIoFocus::Output),
+        )
+    }
+}
+
+/// Join block segments: a blank line between blocks, a single newline
+/// between members of the same run (`tight`).
+fn join_blocks(blocks: &[BlockText]) -> String {
+    let mut text = String::new();
+    for (idx, segment) in blocks.iter().enumerate() {
+        text.push_str(&segment.text);
+        if idx + 1 < blocks.len() {
+            text.push_str(if segment.tight { "\n" } else { "\n\n" });
+        }
+    }
+    text
 }
 
 /// Which content half keyboard / selection targets.
@@ -118,12 +149,12 @@ impl ContentScrolls {
 }
 
 /// Which blocks show their full body instead of their `<:…:>` tag, per
-/// content half. Structure blocks (tool/skill/thinking) default to collapsed,
-/// body blocks default to expanded; a block in the set flips the kind
-/// default (structure expanded, body collapsed). Raw mode always shows full
-/// blocks and ignores this state. A block index is the ordinal of the block
-/// within that half's segment list — stable because every block renders
-/// exactly one segment whether collapsed or expanded.
+/// content half. Structure blocks (tool/skill/thinking, including runs)
+/// default to collapsed, body blocks default to expanded; a block in the
+/// set flips the kind default (structure expanded, body collapsed). Raw
+/// mode always shows full blocks and ignores this state. A block id is the
+/// block's stable DFS id within its half — stable because ids come from the
+/// block tree, not the rendered segment count.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ExpandedBlocks {
     pub(crate) input: HashSet<usize>,
@@ -374,12 +405,42 @@ pub(crate) fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
 mod tests {
     use super::*;
 
+    fn seg(text: &str) -> BlockText {
+        BlockText {
+            id: 0,
+            text: text.to_string(),
+            tight: false,
+        }
+    }
+
     #[test]
     fn display_uses_trim_for_empty() {
-        let texts = ContentIoTexts::new(vec!["  \n".to_string()], vec!["ok".to_string()]);
+        let texts = ContentIoTexts::new(vec![seg("  \n")], vec![seg("ok")]);
         assert!(texts.input_blank());
         assert_eq!(texts.display(ContentIoFocus::Input), EMPTY);
         assert_eq!(texts.display(ContentIoFocus::Output), "ok");
+    }
+
+    #[test]
+    fn join_uses_blank_lines_between_blocks_and_single_within_a_run() {
+        let texts = ContentIoTexts::new(
+            vec![
+                seg("a"),
+                BlockText {
+                    id: 1,
+                    text: "b".to_string(),
+                    tight: true,
+                },
+                BlockText {
+                    id: 2,
+                    text: "c".to_string(),
+                    tight: false,
+                },
+                seg("d"),
+            ],
+            Vec::new(),
+        );
+        assert_eq!(texts.input, "a\n\nb\nc\n\nd");
     }
 
     #[test]

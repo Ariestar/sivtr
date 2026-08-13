@@ -6,6 +6,7 @@ use regex::Regex;
 use std::rc::Rc;
 use unicode_width::UnicodeWidthChar;
 
+use crate::tui::content::block::BlockText;
 use crate::tui::content::markdown::{render_markdown_lines, MarkdownLineKind};
 use crate::tui::pane::{panel_block, render_panel_scrollbar, Panel, PanelScroll};
 
@@ -37,7 +38,7 @@ pub(crate) struct ContentView<'a> {
     pub(crate) text: &'a str,
     /// Per-block display segments (tag or body) that the text joins; drives
     /// block hit-testing and the cursor highlight range.
-    pub(crate) blocks: &'a [String],
+    pub(crate) blocks: &'a [BlockText],
     pub(crate) scroll: usize,
     pub(crate) search_regex: Option<&'a Regex>,
     pub(crate) mode: ContentViewMode,
@@ -222,13 +223,14 @@ pub(crate) fn content_row_in_text(
 }
 
 /// Block owning `line` (a displayed line index), if any. Blocks are laid out
-/// from their own segments (one blank separator line between blocks), so
-/// every displayed line maps directly onto the block that produced it —
-/// tags, bodies, and close markers all belong to the same block.
+/// from their own segments (one blank separator line between blocks, none
+/// between members of the same run), so every displayed line maps directly
+/// onto the block that produced it — tags, bodies, and close markers all
+/// belong to the same block.
 pub(crate) fn content_block_at(
     area: Rect,
     text: &str,
-    blocks: &[String],
+    blocks: &[BlockText],
     mode: ContentViewMode,
     line: usize,
 ) -> Option<usize> {
@@ -243,7 +245,7 @@ pub(crate) fn content_block_at(
 pub(crate) fn content_block_range(
     area: Rect,
     text: &str,
-    blocks: &[String],
+    blocks: &[BlockText],
     mode: ContentViewMode,
     block: usize,
 ) -> Option<std::ops::Range<usize>> {
@@ -255,20 +257,21 @@ pub(crate) fn content_block_range(
 
 /// Map every displayed line of a half to the block that owns it. Each block
 /// is laid out independently and followed by one unowned separator line,
-/// which matches the `"\n\n"` join the pane text uses between segments.
+/// which matches the `"\n\n"` join the pane text uses between segments; run
+/// members join on adjacent lines with no separator.
 fn block_ownership(
     area: Rect,
     text: &str,
-    blocks: &[String],
+    blocks: &[BlockText],
     mode: ContentViewMode,
 ) -> Vec<Option<usize>> {
     let width = content_text_area(area, text, mode).width as usize;
     let mut ownership = Vec::new();
     for (idx, segment) in blocks.iter().enumerate() {
-        for _ in all_content_lines(segment, width, mode) {
-            ownership.push(Some(idx));
+        for _ in all_content_lines(&segment.text, width, mode) {
+            ownership.push(Some(segment.id));
         }
-        if idx + 1 < blocks.len() {
+        if idx + 1 < blocks.len() && !segment.tight {
             ownership.push(None);
         }
     }
@@ -1270,6 +1273,7 @@ mod tests {
         selected_content_text, visible_content_lines, ContentPosition, ContentSelection,
         ContentSelectionKind, ContentView, ContentViewMode,
     };
+    use crate::tui::content::block::BlockText;
     use crate::tui::pane::Panel;
     use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
@@ -1294,6 +1298,23 @@ mod tests {
                 joined.contains(needle).then_some(idx)
             })
             .expect("needle appears in layout")
+    }
+
+    /// Join test blocks the way the pane text joins them.
+    fn blocks_text(blocks: &[BlockText]) -> String {
+        blocks
+            .iter()
+            .map(|block| block.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
+    fn test_block(id: usize, text: &str) -> BlockText {
+        BlockText {
+            id,
+            text: text.to_string(),
+            tight: false,
+        }
     }
 
     fn render_content_lines(
@@ -1703,8 +1724,8 @@ mod tests {
         let backend = TestBackend::new(40, 8);
         let mut terminal = Terminal::new(backend).expect("terminal from test backend");
         let blocks = vec![
-            "<:tool:Bash call:>\nbody\n<:/tool:Bash call:>".to_string(),
-            "<:tool:Read call:>".to_string(),
+            test_block(0, "<:tool:Bash call:>\nbody\n<:/tool:Bash call:>"),
+            test_block(1, "<:tool:Read call:>"),
         ];
         terminal
             .draw(|frame| {
@@ -1713,7 +1734,7 @@ mod tests {
                     Rect::new(0, 0, 40, 8),
                     Panel::new("3", "Content (read)", true),
                     ContentView {
-                        text: &blocks.join("\n\n"),
+                        text: &blocks_text(&blocks),
                         blocks: &blocks,
                         scroll: 0,
                         search_regex: None,
@@ -1787,11 +1808,11 @@ mod tests {
         let area = Rect::new(0, 0, 24, 10);
         let long = "alpha ".repeat(20);
         let blocks = vec![
-            long.clone(),
-            "<:tool:A call:>".to_string(),
-            "<:tool:B call:>".to_string(),
+            test_block(0, &long),
+            test_block(1, "<:tool:A call:>"),
+            test_block(2, "<:tool:B call:>"),
         ];
-        let text = blocks.join("\n\n");
+        let text = blocks_text(&blocks);
         let (lines, _) = super::content_layout(area, &text, ContentViewMode::Reading);
         let tag_lines: Vec<usize> = lines
             .iter()
@@ -1830,10 +1851,10 @@ mod tests {
     fn content_block_at_owns_every_line_of_a_block() {
         let area = Rect::new(0, 0, 40, 20);
         let blocks = vec![
-            "<:tool:Bash call:>\noutput line\n<:/tool:Bash call:>".to_string(),
-            "<:tool:Read call:>\nplain".to_string(),
+            test_block(0, "<:tool:Bash call:>\noutput line\n<:/tool:Bash call:>"),
+            test_block(1, "<:tool:Read call:>\nplain"),
         ];
-        let text = blocks.join("\n\n");
+        let text = blocks_text(&blocks);
         let (lines, _) = super::content_layout(area, &text, ContentViewMode::Reading);
         // The tag, the expanded body, and the close marker all own block 0.
         for needle in ["<:tool:Bash call:>", "output line", "<:/tool:Bash call:>"] {
@@ -1870,10 +1891,13 @@ mod tests {
         let area = Rect::new(0, 0, 40, 20);
         // A merged tool group: call section + result section share one block.
         let blocks = vec![
-            "<:tool:Bash call:>\ninput\n<:/tool:Bash call:>\n<:tool:Bash result:>\noutput\n<:/tool:Bash result:>".to_string(),
-            "<:tool:Read call:>".to_string(),
+            test_block(
+                0,
+                "<:tool:Bash call:>\ninput\n<:/tool:Bash call:>\n<:tool:Bash result:>\noutput\n<:/tool:Bash result:>",
+            ),
+            test_block(1, "<:tool:Read call:>"),
         ];
-        let text = blocks.join("\n\n");
+        let text = blocks_text(&blocks);
         let (lines, _) = super::content_layout(area, &text, ContentViewMode::Reading);
         // Everything from the call tag through the result close is block 0.
         for needle in [

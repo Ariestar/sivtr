@@ -4,6 +4,7 @@ use anyhow::Result;
 use ratatui::widgets::ListState;
 use std::process::Command;
 
+use crate::tui::content::block::BlockText;
 use crate::tui::workspace::{
     selected_index, ContentIoFocus, ContentScrolls, WorkspaceFocus, WorkspaceSession,
     WorkspaceSource,
@@ -118,7 +119,7 @@ pub(super) fn move_workspace_cursor_up(
     content_scrolls: &mut ContentScrolls,
     content_io_focus: ContentIoFocus,
     content_cursor: &mut ContentBlockCursor,
-    content_block_counts: (usize, usize),
+    content_blocks: (&[BlockText], &[BlockText]),
 ) {
     match focus {
         WorkspaceFocus::Source => {
@@ -146,7 +147,7 @@ pub(super) fn move_workspace_cursor_up(
             content_scrolls.clear();
         }
         WorkspaceFocus::Content => {
-            move_content_cursor(true, content_cursor, content_block_counts, content_io_focus);
+            move_content_cursor(true, content_cursor, content_blocks, content_io_focus);
         }
     }
 }
@@ -166,7 +167,7 @@ pub(super) fn move_workspace_cursor_down(
     content_scrolls: &mut ContentScrolls,
     content_io_focus: ContentIoFocus,
     content_cursor: &mut ContentBlockCursor,
-    content_block_counts: (usize, usize),
+    content_blocks: (&[BlockText], &[BlockText]),
 ) {
     match focus {
         WorkspaceFocus::Source => {
@@ -197,37 +198,38 @@ pub(super) fn move_workspace_cursor_down(
             content_scrolls.clear();
         }
         WorkspaceFocus::Content => {
-            move_content_cursor(
-                false,
-                content_cursor,
-                content_block_counts,
-                content_io_focus,
-            );
+            move_content_cursor(false, content_cursor, content_blocks, content_io_focus);
         }
     }
 }
 
 /// Move the content block cursor within the focused half, clamped like a
-/// list selection; the next redraw keeps the cursor block visible.
+/// list selection; the next redraw keeps the cursor block visible. The walk
+/// follows the *visible* block sequence (the rendered segments), so folds —
+/// which change which blocks are shown — resolve the cursor id against the
+/// current segments and clamp to the nearest visible block.
 fn move_content_cursor(
     up: bool,
     cursor: &mut ContentBlockCursor,
-    counts: (usize, usize),
+    blocks: (&[BlockText], &[BlockText]),
     focus: ContentIoFocus,
 ) {
-    let count = match focus {
-        ContentIoFocus::Input => counts.0,
-        ContentIoFocus::Output => counts.1,
+    let blocks = match focus {
+        ContentIoFocus::Input => blocks.0,
+        ContentIoFocus::Output => blocks.1,
     };
-    if count == 0 {
+    if blocks.is_empty() {
         return;
     }
-    let next = match cursor.get(focus) {
-        Some(idx) if up => idx.saturating_sub(1),
-        Some(idx) => (idx + 1).min(count - 1),
+    let position = cursor
+        .get(focus)
+        .and_then(|id| blocks.iter().position(|block| block.id == id));
+    let next = match position {
+        Some(pos) if up => pos.saturating_sub(1),
+        Some(pos) => (pos + 1).min(blocks.len() - 1),
         None => 0,
     };
-    cursor.set(focus, next);
+    cursor.set(focus, blocks[next].id);
     cursor.follow = true;
 }
 
