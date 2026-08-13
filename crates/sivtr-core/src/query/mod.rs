@@ -211,7 +211,7 @@ fn agent_records(
 }
 
 /// Bump when the cached record layout or agent parsing changes.
-const AGENT_CACHE_VERSION: u32 = 7;
+const AGENT_CACHE_VERSION: u32 = 8;
 
 /// On-disk cache entry for one parsed agent session file, keyed by the
 /// session file's (mtime, size). Reading back a stamp-matched blob is an

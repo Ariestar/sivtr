@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -12,6 +13,7 @@ use crate::agents::{
 
 const PROVIDER_NAME: &str = "Grok";
 const CHAT_HISTORY_FILE: &str = "chat_history.jsonl";
+const UPDATES_FILE: &str = "updates.jsonl";
 const SUMMARY_FILE: &str = "summary.json";
 
 /// Grok (xAI) coding agent sessions.
@@ -20,9 +22,15 @@ const SUMMARY_FILE: &str = "summary.json";
 /// ```text
 /// sessions/<url-encoded-cwd>/<session-id>/
 ///   summary.json
-///   chat_history.jsonl   ← conversation + tools (what we parse)
-///   updates.jsonl        ← ACP stream (ignored)
+///   chat_history.jsonl   ← conversation + tools (rebuilt on compaction)
+///   updates.jsonl        ← ACP stream, complete since session start
 /// ```
+///
+/// `chat_history.jsonl` is rebuilt when the session is compacted, so it only
+/// covers the recent turns. `updates.jsonl` keeps every stream event (user
+/// chunks, thoughts, tool calls, results, turn boundaries) — it is the
+/// primary parse source; `chat_history.jsonl` is the fallback for sessions
+/// without a stream.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GrokProvider;
 
@@ -68,37 +76,22 @@ impl AgentSessionProvider for GrokProvider {
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
         let session_dir = resolve_session_dir(path)?;
-        let history = session_dir.join(CHAT_HISTORY_FILE);
-        if !history.exists() {
-            anyhow::bail!(
-                "Grok session `{}` is missing {CHAT_HISTORY_FILE}",
-                session_dir.display()
-            );
-        }
-
-        let mut session = parse_jsonl_session(&history, PROVIDER_NAME, apply_event)?;
-        // Prefer summary.json for stable id/cwd/title; keep path as the session directory.
-        session.path = session_dir.clone();
-        if let Some(meta) = read_summary(&session_dir.join(SUMMARY_FILE))? {
-            if session.id.is_none() {
-                session.id = meta.id;
-            }
-            if session.cwd.is_none() {
-                session.cwd = meta.cwd;
-            }
-            if session.title.is_none() {
-                session.title = meta.title;
-            }
-            // chat_history has no per-line timestamps; give every block the
-            // session's last activity so records sort by recency like other
-            // providers instead of sinking below timestamped records.
-            if session.blocks.iter().all(|block| block.timestamp.is_none()) {
-                let stamp = rfc3339_from_system_time(meta.modified);
-                for block in &mut session.blocks {
-                    block.timestamp = Some(stamp.clone());
+        let mut session = if session_dir.join(UPDATES_FILE).exists() {
+            let mut parsed = parse_updates_session(&session_dir)?;
+            if parsed.blocks.is_empty() {
+                // Noise-only stream (e.g. a session that was never used):
+                // fall back to the conversation log.
+                if let Ok(history) = parse_chat_history_session(&session_dir) {
+                    parsed = history;
                 }
             }
-        }
+            parsed
+        } else {
+            parse_chat_history_session(&session_dir)?
+        };
+        // Prefer summary.json for stable id/cwd/title; keep path as the session directory.
+        session.path = session_dir.clone();
+        apply_summary_meta(&mut session, &session_dir)?;
         if session.id.is_none() {
             session.id = session_dir
                 .file_name()
@@ -366,6 +359,287 @@ fn apply_reasoning(session: &mut AgentSession, value: &Value) {
     push_block(session, AgentBlockKind::Thinking, None, None, text);
 }
 
+/// Fill id/cwd/title from summary.json and give timestamp-less blocks the
+/// session's last activity time so records sort by recency like other
+/// providers instead of sinking below timestamped records.
+fn apply_summary_meta(session: &mut AgentSession, session_dir: &Path) -> Result<()> {
+    if let Some(meta) = read_summary(&session_dir.join(SUMMARY_FILE))? {
+        if session.id.is_none() {
+            session.id = meta.id;
+        }
+        if session.cwd.is_none() {
+            session.cwd = meta.cwd;
+        }
+        if session.title.is_none() {
+            session.title = meta.title;
+        }
+        if session.blocks.iter().all(|block| block.timestamp.is_none()) {
+            let stamp = rfc3339_from_system_time(meta.modified);
+            for block in &mut session.blocks {
+                block.timestamp = Some(stamp.clone());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn parse_chat_history_session(session_dir: &Path) -> Result<AgentSession> {
+    let history = session_dir.join(CHAT_HISTORY_FILE);
+    if !history.exists() {
+        anyhow::bail!(
+            "Grok session `{}` is missing {CHAT_HISTORY_FILE}",
+            session_dir.display()
+        );
+    }
+    parse_jsonl_session(&history, PROVIDER_NAME, apply_event)
+}
+
+/// Parse the ACP stream (`updates.jsonl`), the complete session record.
+///
+/// Text chunks accumulate per kind and flush as blocks at tool events and
+/// turn boundaries; `tool_call` / `tool_call_update` events emit tool
+/// call/result blocks in stream order. Stream events that carry no record
+/// content (`hook_execution`, `plan`, `retry_state`, compaction markers, …)
+/// are ignored.
+fn parse_updates_session(session_dir: &Path) -> Result<AgentSession> {
+    let updates = session_dir.join(UPDATES_FILE);
+    let mut session = AgentSession {
+        path: session_dir.to_path_buf(),
+        id: None,
+        cwd: None,
+        title: None,
+        blocks: Vec::new(),
+    };
+    let mut parser = UpdatesParser::default();
+    for line in fs::read_to_string(&updates)
+        .with_context(|| format!("Failed to read Grok updates {}", updates.display()))?
+        .lines()
+    {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        parser.apply(&mut session, &value);
+    }
+    parser.flush(&mut session);
+    Ok(session)
+}
+
+/// Assembler for the ACP stream: pending text segments (in stream order, so
+/// interleaved thinking/message stays ordered) plus the toolCallId → tool
+/// name map used to label results.
+#[derive(Default)]
+struct UpdatesParser {
+    segments: Vec<(AgentBlockKind, String, Option<String>)>,
+    tool_names: HashMap<String, String>,
+    timestamp: Option<String>,
+}
+
+impl UpdatesParser {
+    fn apply(&mut self, session: &mut AgentSession, value: &Value) {
+        let Some(update) = value.get("params").and_then(|params| params.get("update")) else {
+            return;
+        };
+        self.timestamp = event_timestamp(value);
+        match update.get("sessionUpdate").and_then(Value::as_str) {
+            Some("user_message_chunk") => {
+                self.flush(session);
+                self.append(AgentBlockKind::User, update);
+            }
+            Some("agent_message_chunk") => {
+                self.flush_user(session);
+                self.append(AgentBlockKind::Assistant, update);
+            }
+            Some("agent_thought_chunk") => {
+                self.flush_user(session);
+                self.append(AgentBlockKind::Thinking, update);
+            }
+            Some("tool_call") => {
+                self.flush(session);
+                self.apply_tool_call(session, update);
+            }
+            Some("tool_call_update") => self.apply_tool_update(session, update),
+            Some("turn_completed") => self.flush(session),
+            _ => {}
+        }
+    }
+
+    fn append(&mut self, kind: AgentBlockKind, update: &Value) {
+        let text = chunk_text(update);
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        match self.segments.last_mut() {
+            Some((last_kind, last_text, _)) if *last_kind == kind => {
+                last_text.push('\n');
+                last_text.push_str(text);
+            }
+            _ => self
+                .segments
+                .push((kind, text.to_string(), self.timestamp.clone())),
+        }
+    }
+
+    /// Flush the pending user segment at the start of the assistant turn.
+    fn flush_user(&mut self, session: &mut AgentSession) {
+        if self
+            .segments
+            .first()
+            .is_some_and(|(kind, _, _)| *kind == AgentBlockKind::User)
+        {
+            self.flush(session);
+        }
+    }
+
+    /// Emit all pending text segments as blocks, in stream order.
+    fn flush(&mut self, session: &mut AgentSession) {
+        for (kind, text, timestamp) in self.segments.drain(..) {
+            push_block(session, kind, timestamp, None, text);
+        }
+    }
+
+    fn apply_tool_call(&mut self, session: &mut AgentSession, update: &Value) {
+        let tool_call_id = update.get("toolCallId").and_then(Value::as_str);
+        let name = update
+            .get("title")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                update
+                    .get("_meta")
+                    .and_then(|meta| meta.get("x.ai/tool"))
+                    .and_then(|tool| tool.get("name"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| "tool".to_string());
+        if let Some(id) = tool_call_id {
+            self.tool_names.insert(id.to_string(), name.clone());
+        }
+        let arguments = update
+            .get("rawInput")
+            .map(pretty_json_value)
+            .unwrap_or_else(|| pretty_json_value(update));
+        push_tool_block(
+            session,
+            AgentBlockKind::ToolCall,
+            self.timestamp.clone(),
+            tool_call_id.map(str::to_string),
+            Some(name),
+            arguments,
+        );
+    }
+
+    fn apply_tool_update(&mut self, session: &mut AgentSession, update: &Value) {
+        if !matches!(
+            update.get("status").and_then(Value::as_str),
+            Some("completed" | "failed")
+        ) {
+            return;
+        }
+        let text = tool_result_text(update);
+        if text.trim().is_empty() {
+            return;
+        }
+        let tool_call_id = update.get("toolCallId").and_then(Value::as_str);
+        let name = tool_call_id.and_then(|id| self.tool_names.get(id)).cloned();
+        push_tool_block(
+            session,
+            AgentBlockKind::ToolOutput,
+            self.timestamp.clone(),
+            tool_call_id.map(str::to_string),
+            name,
+            text,
+        );
+    }
+}
+
+/// Text of a message/thought chunk: `content.text` (or array of text items).
+fn chunk_text(update: &Value) -> String {
+    match update.get("content").unwrap_or(&Value::Null) {
+        Value::String(text) => text.clone(),
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|item| item.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        other => other
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    }
+}
+
+/// Result text of a completed tool update: the model-facing `content` text,
+/// else a summary field buried in `rawOutput` (shapes differ per tool type).
+fn tool_result_text(update: &Value) -> String {
+    if let Some(items) = update.get("content").and_then(Value::as_array) {
+        let text = items
+            .iter()
+            .filter_map(|item| {
+                item.get("content")
+                    .and_then(|content| content.get("text"))
+                    .and_then(Value::as_str)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !text.trim().is_empty() {
+            return text;
+        }
+    }
+    update
+        .get("rawOutput")
+        .and_then(find_summary_text)
+        .unwrap_or_default()
+}
+
+/// First non-empty string under a common summary key, recursing into nested
+/// objects (rawOutput structures differ per tool type).
+fn find_summary_text(value: &Value) -> Option<String> {
+    for key in ["summary_for_prompt", "text", "output", "stdout"] {
+        if let Some(candidate) = value.get(key) {
+            if let Some(text) = candidate.as_str() {
+                if !text.trim().is_empty() {
+                    return Some(text.to_string());
+                }
+            }
+        }
+    }
+    let object = value.as_object()?;
+    for nested in object.values() {
+        if let Some(found) = find_summary_text(nested) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Event time from the ACP envelope: precise `agentTimestampMs` when present,
+/// else the top-level unix-seconds `timestamp`.
+fn event_timestamp(value: &Value) -> Option<String> {
+    let millis = value
+        .get("params")
+        .and_then(|params| params.get("_meta"))
+        .and_then(|meta| meta.get("agentTimestampMs"))
+        .and_then(Value::as_i64)
+        .or_else(|| {
+            value
+                .get("timestamp")
+                .and_then(Value::as_i64)
+                .map(|secs| secs * 1000)
+        });
+    millis.map(rfc3339_from_millis)
+}
+
+fn rfc3339_from_millis(millis: i64) -> String {
+    let time = UNIX_EPOCH + Duration::from_millis(millis.max(0) as u64);
+    rfc3339_from_system_time(time)
+}
+
 fn push_one_tool_call(session: &mut AgentSession, tool_call: &Value) {
     let function = tool_call.get("function").unwrap_or(tool_call);
     let name = function
@@ -504,6 +778,95 @@ mod tests {
         assert_eq!(session.blocks[4].text, "file body");
         assert_eq!(session.blocks[5].kind, AgentBlockKind::Assistant);
         assert_eq!(session.blocks[5].text, "done");
+    }
+
+    #[test]
+    fn parses_updates_stream_with_tool_calls() {
+        let home = tempfile::tempdir().unwrap();
+        let session_id = "019ff6dd-e8db-7472-b6e8-8b122bc63a3b";
+        let dir = home.path().join("sessions").join("bucket").join(session_id);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join(UPDATES_FILE),
+            r#"{"timestamp":1000,"params":{"sessionId":"s1","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"fix it"}},"_meta":{"agentTimestampMs":1000000}}}
+{"timestamp":1001,"params":{"sessionId":"s1","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Plan: inspect a.rs"}},"_meta":{"agentTimestampMs":1001000}}}
+{"timestamp":1001,"params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Looking at the file"}},"_meta":{"agentTimestampMs":1002000}}}
+{"timestamp":1002,"params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"call-1","title":"read_file","rawInput":{"target_file":"a.rs","offset":0,"limit":10}},"_meta":{"agentTimestampMs":1003000}}}
+{"timestamp":1002,"params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-1","status":"completed","content":[{"type":"content","content":{"type":"text","text":"fn main() {}"}}]},"_meta":{"agentTimestampMs":1004000}}}
+{"timestamp":1003,"params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"call-2","title":"use_tool","rawInput":{"tool_name":"sivtr__sivtr_search","tool_input":{"source":"claude"}}},"_meta":{"agentTimestampMs":1005000}}}
+{"timestamp":1003,"params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"call-2","status":"completed","rawOutput":{"type":"Todo","TodosUpdated":{"summary_for_prompt":"count 3"}}},"_meta":{"agentTimestampMs":1006000}}}
+{"timestamp":1004,"params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"done"}},"_meta":{"agentTimestampMs":1007000}}}
+{"timestamp":1004,"params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"now"}},"_meta":{"agentTimestampMs":1007001}}}
+{"timestamp":1004,"params":{"sessionId":"s1","update":{"sessionUpdate":"turn_completed"},"_meta":{"agentTimestampMs":1008000}}}
+{"timestamp":1005,"params":{"sessionId":"s1","update":{"sessionUpdate":"hook_execution"}}}
+"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join(SUMMARY_FILE),
+            r#"{"info":{"id":"019ff6dd-e8db-7472-b6e8-8b122bc63a3b","cwd":"D:\\Coding\\sivtr-tui-stack"},"generated_title":"tool render","last_active_at":"2026-07-14T15:19:44Z"}"#,
+        )
+        .unwrap();
+
+        let _guard = EnvGuard::set("GROK_HOME", home.path());
+        let session = GrokProvider.parse_session_file(&dir).unwrap();
+
+        assert_eq!(session.id.as_deref(), Some(session_id));
+        assert_eq!(session.blocks.len(), 8);
+        assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
+        assert_eq!(session.blocks[0].text, "fix it");
+        assert_eq!(
+            session.blocks[0].timestamp.as_deref(),
+            Some("1970-01-01T00:16:40+00:00")
+        );
+        assert_eq!(session.blocks[1].kind, AgentBlockKind::Thinking);
+        assert_eq!(session.blocks[1].text, "Plan: inspect a.rs");
+        assert_eq!(session.blocks[2].kind, AgentBlockKind::Assistant);
+        assert_eq!(session.blocks[2].text, "Looking at the file");
+        assert_eq!(session.blocks[3].kind, AgentBlockKind::ToolCall);
+        assert_eq!(session.blocks[3].label.as_deref(), Some("read_file"));
+        assert!(session.blocks[3].text.contains("a.rs"));
+        assert_eq!(session.blocks[4].kind, AgentBlockKind::ToolOutput);
+        assert_eq!(session.blocks[4].label.as_deref(), Some("read_file"));
+        assert_eq!(session.blocks[4].text, "fn main() {}");
+        assert_eq!(session.blocks[5].kind, AgentBlockKind::ToolCall);
+        assert_eq!(session.blocks[5].label.as_deref(), Some("use_tool"));
+        assert!(session.blocks[5].text.contains("sivtr__sivtr_search"));
+        assert_eq!(session.blocks[6].kind, AgentBlockKind::ToolOutput);
+        assert_eq!(session.blocks[6].label.as_deref(), Some("use_tool"));
+        assert_eq!(session.blocks[6].text, "count 3");
+        assert_eq!(session.blocks[7].kind, AgentBlockKind::Assistant);
+        assert_eq!(session.blocks[7].text, "done\nnow");
+    }
+
+    #[test]
+    fn noise_only_updates_stream_falls_back_to_chat_history() {
+        let home = tempfile::tempdir().unwrap();
+        let session_id = "sess-fallback";
+        let dir = home.path().join("sessions").join("bucket").join(session_id);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join(UPDATES_FILE),
+            "{\"params\":{\"update\":{\"sessionUpdate\":\"hook_execution\"}}}\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join(CHAT_HISTORY_FILE),
+            r#"{"type":"user","content":[{"type":"text","text":"<user_query>\nhello\n</user_query>"}]}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join(SUMMARY_FILE),
+            r#"{"info":{"id":"sess-fallback","cwd":"/tmp"}}"#,
+        )
+        .unwrap();
+
+        let _guard = EnvGuard::set("GROK_HOME", home.path());
+        let session = GrokProvider.parse_session_file(&dir).unwrap();
+
+        assert_eq!(session.blocks.len(), 1);
+        assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
+        assert_eq!(session.blocks[0].text, "hello");
     }
 
     #[test]
