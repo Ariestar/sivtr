@@ -479,11 +479,14 @@ impl StateStore {
 
     pub fn remove_share(&self, name_or_id: &str) -> Result<ShareInfo> {
         let share = self.share(name_or_id)?;
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // A share that is still contributed to a group cannot be deleted: the
         // group's roster elsewhere keeps dialing it and a later sync would
         // resurrect the stale contribution. Withdraw it from the group first.
-        let groups: Vec<String> = self
-            .connect()?
+        // The check and the deletes share one transaction so a concurrent
+        // GroupJoin cannot slip a contribution in between them.
+        let groups: Vec<String> = transaction
             .prepare(
                 "SELECT g.name FROM group_shares gs JOIN groups g ON g.id = gs.group_id WHERE gs.share_id = ?1 ORDER BY g.name",
             )?
@@ -496,9 +499,9 @@ impl StateStore {
                 groups.join(", ")
             );
         }
-        let connection = self.connect()?;
-        connection.execute("DELETE FROM group_shares WHERE share_id = ?1", [&share.id])?;
-        connection.execute("DELETE FROM shares WHERE id = ?1", [&share.id])?;
+        transaction.execute("DELETE FROM group_shares WHERE share_id = ?1", [&share.id])?;
+        transaction.execute("DELETE FROM shares WHERE id = ?1", [&share.id])?;
+        transaction.commit()?;
         Ok(share)
     }
 
