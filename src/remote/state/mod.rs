@@ -245,7 +245,9 @@ impl StateStore {
                 share_id    TEXT NOT NULL,
                 peer_id     TEXT NOT NULL,
                 via         TEXT NOT NULL CHECK (via IN ('group', 'direct')),
-                group_id    TEXT,
+                -- Direct rows use '' as the sentinel so the primary key stays
+                -- unique (SQLite treats NULLs as distinct in UNIQUE indexes).
+                group_id    TEXT NOT NULL DEFAULT '',
                 created_at  TEXT NOT NULL,
                 PRIMARY KEY(share_id, peer_id, via, group_id)
             );
@@ -390,10 +392,17 @@ impl StateStore {
         if had_grant_sources == 0 {
             connection.execute_batch(
                 "INSERT INTO grant_sources(share_id, peer_id, via, group_id, created_at)
-                 SELECT share_id, peer_id, 'direct', NULL, created_at FROM grants
+                 SELECT share_id, peer_id, 'direct', '', created_at FROM grants
                  WHERE revoked_at IS NULL",
             )?;
         }
+        // Legacy `direct` rows stored NULL for group_id, which the primary key
+        // treats as distinct: normalize them to the sentinel so repeated
+        // direct redemptions deduplicate.
+        connection.execute(
+            "UPDATE grant_sources SET group_id = '' WHERE group_id IS NULL",
+            [],
+        )?;
         Ok(())
     }
 
@@ -555,7 +564,7 @@ impl StateStore {
         // A direct redeem is its own grant source, independent of any group:
         // withdrawing the same share from a group later must keep this grant.
         transaction.execute(
-            "INSERT INTO grant_sources(share_id, peer_id, via, group_id, created_at) VALUES (?1, ?2, 'direct', NULL, ?3) ON CONFLICT DO NOTHING",
+            "INSERT INTO grant_sources(share_id, peer_id, via, group_id, created_at) VALUES (?1, ?2, 'direct', '', ?3) ON CONFLICT DO NOTHING",
             params![share_id, peer_id, timestamp],
         )?;
         transaction.execute(
@@ -1569,6 +1578,32 @@ mod tests {
         // An explicit revoke removes it for good.
         store.revoke(&share.name, "peer-1").unwrap();
         assert!(store.authorize("peer-1", &share.id, "query").is_err());
+    }
+
+    #[test]
+    fn repeated_direct_redemption_does_not_duplicate_grant_sources() {
+        let (_temp, store, _share) = group_store();
+        let first = store.create_invite("project", 60).unwrap();
+        let second = store.create_invite("project", 60).unwrap();
+        store
+            .redeem_invite(&first.id, &first.secret, "peer-1", "alice")
+            .unwrap();
+        store
+            .redeem_invite(&second.id, &second.secret, "peer-1", "alice")
+            .unwrap();
+        let count: i64 = store
+            .connect()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM grant_sources WHERE peer_id = 'peer-1' AND via = 'direct'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "a second direct redeem of the same share must not append a duplicate source row"
+        );
     }
 
     #[test]
