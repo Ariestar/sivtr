@@ -197,7 +197,7 @@ impl StateStore {
     }
 
     fn initialize(&self) -> Result<()> {
-        let connection = self.connect()?;
+        let mut connection = self.connect()?;
         // Detect installs that predate the group-domain grant-sources table
         // (the schema below would create it) so the migration can backfill
         // existing grants exactly once, on the pass that introduces it.
@@ -338,7 +338,10 @@ impl StateStore {
             .query_map([], |row| row.get::<_, String>(1))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         if columns.iter().any(|column| column == "share_id") {
-            connection.execute_batch(
+            // The rename+recreate window must be one unit: a stop between the
+            // rename and the copy would leave only `group_members_old`.
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(
                 r#"
                 INSERT INTO group_shares(group_id, peer_id, share_id, share_name, added_at)
                     SELECT group_id, peer_id, share_id, share_name, joined_at
@@ -356,6 +359,7 @@ impl StateStore {
                 DROP TABLE group_members_old;
                 "#,
             )?;
+            transaction.commit()?;
         }
         // Rebuild `group_shares` without the share_id foreign key: mirrored
         // members' shares live on their own devices, so they never exist in
@@ -369,7 +373,9 @@ impl StateStore {
             |row| row.get(0),
         )?;
         if share_fks > 0 {
-            connection.execute_batch(
+            // Same single-unit window as the `group_members` split above.
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(
                 r#"
                 ALTER TABLE group_shares RENAME TO group_shares_old;
                 CREATE TABLE group_shares (
@@ -385,6 +391,7 @@ impl StateStore {
                 DROP TABLE group_shares_old;
                 "#,
             )?;
+            transaction.commit()?;
         }
         // The pass that introduces `grant_sources` backfills the already-active
         // grants as direct sources: without a source row, withdrawing the same
