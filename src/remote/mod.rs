@@ -1,6 +1,9 @@
+pub mod context;
 pub mod daemon;
+pub mod group;
 pub mod identity;
 pub mod ipc;
+pub mod net;
 pub mod protocol;
 pub mod redact;
 pub mod state;
