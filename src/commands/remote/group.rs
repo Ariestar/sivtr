@@ -35,6 +35,7 @@ pub fn execute(command: GroupCommand) -> Result<()> {
         GroupAction::List => list(),
         GroupAction::Members { group } => members(&group),
         GroupAction::Remove { group, peer } => remove(&group, &peer),
+        GroupAction::Rename { group, name } => rename(&group, &name),
         GroupAction::Leave { group } => leave(&group),
         GroupAction::Sync { group } => sync(&group),
     }
@@ -273,6 +274,23 @@ fn remove(group: &str, peer: &str) -> Result<()> {
     })? {
         LocalResponse::Ok => {
             output::success(format!("removed `{peer}` from `{group}`"));
+            Ok(())
+        }
+        response => bail!("Unexpected daemon response: {response:?}"),
+    }
+}
+
+fn rename(group: &str, name: &str) -> Result<()> {
+    match ipc::call(LocalRequest::GroupRename {
+        group: group.to_string(),
+        name: name.to_string(),
+    })? {
+        LocalResponse::Group(info) => {
+            output::success(format!("renamed group to `{}`", info.name));
+            output::hint(format!(
+                "query the group with: sivtr s {}:terminal --latest 5",
+                info.name
+            ));
             Ok(())
         }
         response => bail!("Unexpected daemon response: {response:?}"),

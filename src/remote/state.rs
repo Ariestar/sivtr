@@ -751,6 +751,26 @@ impl StateStore {
         self.group(name)
     }
 
+    /// Rename the group. The name is the ref segment (`team:...`) and is
+    /// stored once per device in `groups.name`; the owner renames and members
+    /// mirror the new name on their next roster sync. Collisions with another
+    /// local group are rejected (the `UNIQUE` constraint backs the check).
+    pub fn rename_group(&self, group_name_or_id: &str, new_name: &str) -> Result<GroupInfo> {
+        // The same rules as creation: a rename must not smuggle in a name
+        // `add_group` would reject (including reserved scheme names).
+        validate_alias(new_name, "group name")?;
+        let new_name = new_name.to_ascii_lowercase();
+        let group = self.group(group_name_or_id)?;
+        if new_name != group.name && self.group_opt(&new_name)?.is_some() {
+            bail!("A group named `{new_name}` already exists");
+        }
+        self.connect()?.execute(
+            "UPDATE groups SET name = ?1 WHERE id = ?2",
+            params![new_name, group.id],
+        )?;
+        self.group(&group.id)
+    }
+
     pub fn groups(&self) -> Result<Vec<GroupInfo>> {
         let connection = self.connect()?;
         let mut statement = connection.prepare(
@@ -1654,6 +1674,30 @@ mod tests {
         // Repeating the revoke stays a success: kick/leave must not fail just
         // because a peer already lost access.
         assert!(store.revoke(&share.name, "peer-1").unwrap().is_none());
+    }
+
+    #[test]
+    fn group_rename_updates_name_and_keeps_id() {
+        let (_temp, store, _share) = group_store();
+        let renamed = store.rename_group("team", "dev").unwrap();
+        assert_eq!(renamed.name, "dev");
+        assert_eq!(renamed.id, store.group("dev").unwrap().id);
+        assert!(store.group("team").is_err(), "old name no longer resolves");
+        // The renamed group still owns its membership and contributions.
+        assert_eq!(store.members("dev").unwrap().len(), 1);
+        assert_eq!(store.group_shares("dev", "self-1").unwrap().len(), 1);
+        // Renaming to the same name is a no-op.
+        store.rename_group("dev", "dev").unwrap();
+        // A collision with another local group is rejected.
+        store.add_group("docs", "self-1", "self").unwrap();
+        let error = store.rename_group("dev", "docs").expect_err("collision");
+        assert!(error.to_string().contains("already exists"));
+        // Identifier rules still apply.
+        let error = store.rename_group("dev", "bad name").expect_err("invalid");
+        assert!(error.to_string().contains("must be"));
+        // Reserved scheme names are rejected, same as creation.
+        let error = store.rename_group("dev", "sivtr").expect_err("reserved");
+        assert!(error.to_string().contains("reserved"));
     }
 
     #[test]
