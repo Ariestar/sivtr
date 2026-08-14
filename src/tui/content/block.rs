@@ -9,6 +9,8 @@
 //! to their `<:…:>` tag; body blocks default to their full text — one fold
 //! model, no structure-only special cases.
 
+use std::collections::HashMap;
+
 use sivtr_core::record::{WorkPart, WorkPartData, WorkPartKind, WorkRecord};
 
 use crate::tui::content::io::{ContentIoFocus, ExpandedBlocks};
@@ -114,11 +116,12 @@ fn kind_name(kind: WorkPartKind) -> &'static str {
     }
 }
 
-/// Partition one IO half's parts into blocks: a ToolCall followed by a
-/// ToolResult with the same call id folds into one unit, and consecutive
-/// structure units (tool / thinking / skill, mixed kinds allowed) fold
-/// into one run; anything else is one part per block. Blocks get stable
-/// DFS pre-order ids so the fold state and cursor survive folds.
+/// Partition one IO half's parts into blocks: a ToolCall and the ToolResult
+/// carrying the same call id fold into one unit — wherever the result lands,
+/// so interleaved parallel calls pair correctly — and consecutive structure
+/// units (tool / thinking / skill, mixed kinds allowed) fold into one run;
+/// anything else is one part per block. Blocks get stable DFS pre-order ids
+/// so the fold state and cursor survive folds.
 pub(crate) fn half_blocks(record: &WorkRecord, input: bool) -> Vec<Block> {
     let parts: Vec<usize> = record
         .parts
@@ -129,23 +132,39 @@ pub(crate) fn half_blocks(record: &WorkRecord, input: bool) -> Vec<Block> {
         .collect();
 
     let mut units: Vec<Block> = Vec::new();
-    let mut idx = 0usize;
-    while idx < parts.len() {
-        let first = parts[idx];
-        let kind = record.parts[first].kind();
-        let group_end = if matches!(kind, WorkPartKind::ToolCall) {
-            parts
-                .get(idx + 1)
-                .filter(|&&next| {
-                    matches!(record.parts[next].kind(), WorkPartKind::ToolResult)
-                        && part_call_id(&record.parts[next]) == part_call_id(&record.parts[first])
-                })
-                .map_or(idx, |_| idx + 1)
-        } else {
-            idx
-        };
-        units.push(Block::leaf(parts[idx..=group_end].to_vec(), kind));
-        idx = group_end + 1;
+    // Pair every ToolResult with the ToolCall that opened it by call id. The
+    // stream interleaves parallel calls (call A, call B, result A, result B),
+    // so adjacency is not enough: a result lands in the block its call
+    // opened wherever it appears. A result without a call id falls back to
+    // the nearest preceding id-less call, preserving the old adjacency rule.
+    let mut open_calls: HashMap<&str, usize> = HashMap::new();
+    let mut last_idless_call: Option<usize> = None;
+    for &part_idx in &parts {
+        let part = &record.parts[part_idx];
+        match part.kind() {
+            WorkPartKind::ToolCall => {
+                let block_idx = units.len();
+                units.push(Block::leaf(vec![part_idx], WorkPartKind::ToolCall));
+                if let Some(call_id) = part_call_id(part) {
+                    open_calls.insert(call_id, block_idx);
+                    last_idless_call = None;
+                } else {
+                    last_idless_call = Some(block_idx);
+                }
+            }
+            WorkPartKind::ToolResult => {
+                // Fold the result into its call's block; a result without a
+                // matching open call stands alone.
+                let target = part_call_id(part)
+                    .and_then(|id| open_calls.remove(id))
+                    .or_else(|| last_idless_call.take());
+                match target {
+                    Some(block_idx) => units[block_idx].parts.push(part_idx),
+                    None => units.push(Block::leaf(vec![part_idx], WorkPartKind::ToolResult)),
+                }
+            }
+            kind => units.push(Block::leaf(vec![part_idx], kind)),
+        }
     }
 
     // Consecutive structure units fold into one run, whatever their kinds.
@@ -420,6 +439,68 @@ mod tests {
         assert_eq!(blocks[0].kind, WorkPartKind::ToolCall);
         assert_eq!(blocks[0].parts, vec![0, 1, 2]);
         assert_eq!(blocks[0].children.len(), 2);
+    }
+
+    #[test]
+    fn parallel_calls_pair_results_by_call_id_across_interleaving() {
+        // The ACP stream interleaves parallel calls: call 0, call 1, then
+        // result 0, result 1. Adjacency pairing would leave all four as
+        // separate blocks; call-id pairing folds each call with its result.
+        let rec = record(vec![
+            WorkPart {
+                seq: 1,
+                occurred_at: None,
+                data: WorkPartData::ToolCall {
+                    call_id: Some("c0".to_string()),
+                    tool: Some("read_file".to_string()),
+                    input: serde_json::json!({ "target_file": "a.rs" }),
+                },
+            },
+            WorkPart {
+                seq: 2,
+                occurred_at: None,
+                data: WorkPartData::ToolCall {
+                    call_id: Some("c1".to_string()),
+                    tool: Some("read_file".to_string()),
+                    input: serde_json::json!({ "target_file": "b.rs" }),
+                },
+            },
+            tool_result_part(3, "read_file", Some("c0"), "a body"),
+            tool_result_part(4, "read_file", Some("c1"), "b body"),
+        ]);
+        let blocks = half_blocks(&rec, false);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].children.len(), 2);
+        // Each member owns its call and the matching result, in call order.
+        assert_eq!(blocks[0].children[0].parts, vec![0, 2]);
+        assert_eq!(blocks[0].children[1].parts, vec![1, 3]);
+    }
+
+    #[test]
+    fn orphan_results_stay_separate() {
+        // A result whose call id never opened, and an id-less result with no
+        // preceding id-less call, both stand alone.
+        let rec = record(vec![
+            tool_result_part(1, "Bash", Some("gone"), "no matching call"),
+            tool_result_part(2, "Bash", None, "no call id"),
+        ]);
+        let blocks = half_blocks(&rec, false);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].children.len(), 2);
+        assert_eq!(blocks[0].children[0].parts, vec![0]);
+        assert_eq!(blocks[0].children[1].parts, vec![1]);
+    }
+
+    #[test]
+    fn idless_result_pairs_with_nearest_idless_call() {
+        let rec = record(vec![
+            tool_part(1, "Bash", "ls"),
+            tool_result_part(2, "Bash", None, "ok"),
+        ]);
+        let blocks = half_blocks(&rec, false);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].kind, WorkPartKind::ToolCall);
+        assert_eq!(blocks[0].parts, vec![0, 1]);
     }
 
     #[test]
