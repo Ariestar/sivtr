@@ -1617,6 +1617,22 @@ mod tests {
     }
 
     #[test]
+    fn register_group_rejects_name_collisions_and_resolves_renamed_groups() {
+        let (_temp, store, _share) = group_store();
+        // A different id already owns the name: a clear error, not a raw
+        // UNIQUE constraint failure.
+        let error = store.register_group("grp-other", "team").unwrap_err();
+        assert!(error.to_string().contains("already exists"));
+
+        // Re-registering the same id after an owner rename adopts the current
+        // name instead of failing the by-name lookup.
+        let renamed = store.rename_group("team", "team-b").unwrap();
+        let rejoin = store.register_group(&renamed.id, "team").unwrap();
+        assert_eq!(rejoin.id, renamed.id);
+        assert_eq!(rejoin.name, "team");
+    }
+
+    #[test]
     fn remove_member_cleans_contribution_rows() {
         let (temp, store, _share) = group_store();
         let alice_share = real_share(&store, temp.path(), "alice", "alice-ws");

@@ -72,14 +72,34 @@ impl StateStore {
     }
 
     /// Register a group row with an explicit id. Joiners use this to mirror the
-    /// owner's group identity; idempotent on re-join.
+    /// owner's group identity; idempotent on re-join, and a re-join adopts the
+    /// owner's current name when the group was renamed since the last join.
     pub fn register_group(&self, id: &str, name: &str) -> Result<GroupInfo> {
         validate_alias(name, "group name")?;
-        self.connect()?.execute(
-            "INSERT INTO groups(id, name, created_at) VALUES (?1, ?2, ?3) ON CONFLICT(id) DO NOTHING",
-            params![id, name.to_ascii_lowercase(), now()],
+        let name = name.to_ascii_lowercase();
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction()?;
+        // A different local group already owns this name: say so instead of
+        // surfacing a raw UNIQUE constraint error.
+        let collides = transaction
+            .query_row(
+                "SELECT 1 FROM groups WHERE lower(name) = ?1 AND id != ?2",
+                params![name, id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if collides {
+            bail!("A group named `{name}` already exists");
+        }
+        transaction.execute(
+            "INSERT INTO groups(id, name, created_at) VALUES (?1, ?2, ?3) ON CONFLICT(id) DO UPDATE SET name = excluded.name",
+            params![id, name, now()],
         )?;
-        self.group(name)
+        transaction.commit()?;
+        // The id may already exist locally under a different name; resolve by
+        // id so a renamed group still returns.
+        self.group(id)
     }
 
     /// Rename the group. The name is the ref segment (`team:...`) and is
