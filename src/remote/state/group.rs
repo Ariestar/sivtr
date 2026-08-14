@@ -36,6 +36,41 @@ impl StateStore {
         Ok(info)
     }
 
+    /// Create a group with the owner's first contribution in one transaction.
+    /// A group without its owner's contribution is an invalid state, so the
+    /// three rows (group, owner membership, owner share) commit or roll back
+    /// together.
+    pub fn create_group_with_owner_share(
+        &self,
+        name: &str,
+        self_peer_id: &str,
+        self_peer_name: &str,
+        share_id: &str,
+        share_name: &str,
+    ) -> Result<GroupInfo> {
+        validate_alias(name, "group name")?;
+        validate_alias(share_name, "contributed share name")?;
+        // The local device is a peer of itself; peers(id) is a FK target.
+        self.save_remote_peer(self_peer_id, self_peer_name, "{}")?;
+        let id = random_id("grp");
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO groups(id, name, created_at) VALUES (?1, ?2, ?3)",
+            params![id, name.to_ascii_lowercase(), now()],
+        )?;
+        transaction.execute(
+            "INSERT INTO group_members(group_id, peer_id, role, joined_at) VALUES (?1, ?2, 'owner', ?3)",
+            params![id, self_peer_id, now()],
+        )?;
+        transaction.execute(
+            "INSERT INTO group_shares(group_id, peer_id, share_id, share_name, added_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, self_peer_id, share_id, share_name, now()],
+        )?;
+        transaction.commit()?;
+        self.group(&id)
+    }
+
     /// Register a group row with an explicit id. Joiners use this to mirror the
     /// owner's group identity; idempotent on re-join.
     pub fn register_group(&self, id: &str, name: &str) -> Result<GroupInfo> {

@@ -1004,6 +1004,28 @@ mod tests {
         (temp, store, share)
     }
 
+    #[test]
+    fn create_group_with_owner_share_writes_all_three_rows() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let store = StateStore::open(temp.path().join("state.db")).unwrap();
+        let share = store
+            .add_share("workspace-key", &workspace, "project", true)
+            .unwrap();
+        let group = store
+            .create_group_with_owner_share("team", "self-1", "self", &share.id, &share.name)
+            .unwrap();
+        assert!(store
+            .members(&group.id)
+            .unwrap()
+            .iter()
+            .any(|member| member.peer_id == "self-1"));
+        let contributions = store.group_shares(&group.id, "self-1").unwrap();
+        assert_eq!(contributions.len(), 1);
+        assert_eq!(contributions[0].share_id, share.id);
+    }
+
     fn joiner<'a>(
         peer_id: &'a str,
         peer_name: &'a str,

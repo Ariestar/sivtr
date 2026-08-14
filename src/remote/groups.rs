@@ -848,13 +848,13 @@ pub(crate) async fn local_group_create(
     share_id: String,
     share_name: String,
 ) -> Result<LocalResponse> {
-    let group = context
-        .store
-        .add_group(&name, &context.identity.id(), &context.identity.name)?;
-    // The owner's first contribution is the workspace they created from.
-    context
-        .store
-        .add_group_share(&group.id, &context.identity.id(), &share_id, &share_name)?;
+    let group = context.store.create_group_with_owner_share(
+        &name,
+        &context.identity.id(),
+        &context.identity.name,
+        &share_id,
+        &share_name,
+    )?;
     Ok(LocalResponse::Group(group))
 }
 
