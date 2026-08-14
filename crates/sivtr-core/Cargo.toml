@@ -27,6 +27,7 @@ thiserror = "2"
 tempfile = "3"
 toml = "1"
 shell-words = "1"
+ruzstd = "0.9"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["processenv", "winbase", "wincon", "handleapi", "processthreadsapi", "shellapi", "winuser"] }

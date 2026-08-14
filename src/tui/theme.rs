@@ -55,6 +55,7 @@ pub(crate) fn provider_color(provider: AgentProvider) -> Color {
         AgentProvider::Codex => Color::Rgb(129, 140, 248), // indigo-400
         AgentProvider::Claude => Color::Rgb(251, 146, 60), // orange-400
         AgentProvider::Cursor => Color::Rgb(167, 139, 250), // violet-400
+        AgentProvider::Dsh => Color::Rgb(77, 107, 254),    // DeepSeek blue
         AgentProvider::OpenCode => Color::Rgb(45, 212, 191), // teal-400
         AgentProvider::OpenClaw => Color::Rgb(248, 113, 113), // red-400
         AgentProvider::Hermes => Color::Rgb(250, 204, 21), // yellow-400

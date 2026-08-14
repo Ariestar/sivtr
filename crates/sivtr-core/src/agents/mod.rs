@@ -8,6 +8,7 @@
 pub mod claude;
 pub mod codex;
 pub mod cursor;
+pub mod dsh;
 pub mod gemini;
 pub mod goose;
 pub mod grok;
@@ -22,8 +23,8 @@ pub mod qwen;
 pub mod sqlite;
 
 pub use jsonl::{
-    jsonl_files, list_chat_recording_sessions, list_recent_jsonl_sessions, parse_jsonl_meta,
-    parse_jsonl_session,
+    jsonl_files, list_chat_recording_sessions, list_recent_jsonl_sessions,
+    list_recent_log_sessions, parse_jsonl_meta, parse_jsonl_session,
 };
 pub use model::*;
 pub use sqlite::{open_readonly_db, system_time_from_millis, system_time_from_unix_secs};
@@ -62,6 +63,14 @@ const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
         current_transcript_env: None,
         current_session_id_env: None,
         factory: cursor_provider,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::Dsh,
+        name: "Dsh",
+        command_name: "dsh",
+        current_transcript_env: None,
+        current_session_id_env: None,
+        factory: dsh_provider,
     },
     AgentProviderSpec {
         provider: AgentProvider::OpenCode,
@@ -155,6 +164,10 @@ fn claude_provider() -> Box<dyn AgentSessionProvider> {
 
 fn cursor_provider() -> Box<dyn AgentSessionProvider> {
     Box::new(crate::agents::cursor::CursorProvider)
+}
+
+fn dsh_provider() -> Box<dyn AgentSessionProvider> {
+    Box::new(crate::agents::dsh::DshProvider)
 }
 
 fn opencode_provider() -> Box<dyn AgentSessionProvider> {

@@ -35,6 +35,7 @@ impl WorkspaceSourceKind {
             Self::Agent(AgentProvider::Codex) => "cdx",
             Self::Agent(AgentProvider::Claude) => "cld",
             Self::Agent(AgentProvider::Cursor) => "cur",
+            Self::Agent(AgentProvider::Dsh) => "dsh",
             Self::Agent(AgentProvider::OpenCode) => "opc",
             Self::Agent(AgentProvider::OpenClaw) => "ocw",
             Self::Agent(AgentProvider::Hermes) => "hrm",
