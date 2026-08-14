@@ -1117,6 +1117,56 @@ mod tests {
     }
 
     #[test]
+    fn group_invite_retry_by_an_admitted_peer_is_idempotent() {
+        let (temp, store, _share) = group_store();
+        let alice_share = real_share(&store, temp.path(), "alice", "alice-ws");
+        let bob_share = real_share(&store, temp.path(), "bob", "bob-ws");
+
+        // max_uses = 1: a single admission.
+        let invite = store.create_group_invite("team", 60, Some(1)).unwrap();
+        store
+            .redeem_group_invite(
+                &invite.id,
+                &invite.secret,
+                &joiner(
+                    "peer-1",
+                    "alice",
+                    &[(alice_share.id.clone(), alice_share.name.clone())],
+                ),
+            )
+            .unwrap();
+
+        // A retry by the same peer (lost `GroupJoined` response, or a crash
+        // before the joiner saved its local group) completes instead of being
+        // blocked by the usage cap, and does not consume another use.
+        store
+            .redeem_group_invite(
+                &invite.id,
+                &invite.secret,
+                &joiner(
+                    "peer-1",
+                    "alice",
+                    &[(alice_share.id.clone(), alice_share.name.clone())],
+                ),
+            )
+            .unwrap();
+
+        // The retry did not spend the invite: one different peer still fits.
+        let error = store
+            .redeem_group_invite(
+                &invite.id,
+                &invite.secret,
+                &joiner(
+                    "peer-2",
+                    "bob",
+                    &[(bob_share.id.clone(), bob_share.name.clone())],
+                ),
+            )
+            .expect_err("max_uses=1 is spent by the first admission");
+        assert!(error.to_string().contains("usage limit"));
+    }
+
+    #[test]
     fn join_grants_owner_and_roster_roundtrips() {
         let (temp, store, share) = group_store();
         let alice_share = real_share(&store, temp.path(), "alice", "alice-ws");

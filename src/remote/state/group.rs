@@ -572,11 +572,6 @@ impl StateStore {
         if expires_at < Utc::now().timestamp() || used_at.is_some() {
             bail!("Invitation is invalid or expired");
         }
-        if let Some(max_uses) = max_uses {
-            if used_count >= max_uses {
-                bail!("Invitation has reached its usage limit");
-            }
-        }
         if expected_hash != hash_secret(secret) {
             bail!("Invitation is invalid or expired");
         }
@@ -585,10 +580,20 @@ impl StateStore {
             "INSERT INTO peers(id, name, endpoint_json, created_at, last_seen_at) VALUES (?1, ?2, ?3, ?4, ?4) ON CONFLICT(id) DO UPDATE SET name = excluded.name, endpoint_json = excluded.endpoint_json, last_seen_at = excluded.last_seen_at",
             params![joiner.peer_id, joiner.peer_name, joiner.endpoint_json, timestamp],
         )?;
-        transaction.execute(
+        // 0 rows = the peer was already admitted; a retry (lost `GroupJoined`,
+        // or a crash before the joiner saved its local group) must complete
+        // without consuming another use or being blocked by the cap.
+        let admitted = transaction.execute(
             "INSERT INTO group_members(group_id, peer_id, role, joined_at) VALUES (?1, ?2, 'member', ?3) ON CONFLICT(group_id, peer_id) DO NOTHING",
             params![group_id, joiner.peer_id, timestamp],
-        )?;
+        )? > 0;
+        if admitted {
+            if let Some(max_uses) = max_uses {
+                if used_count >= max_uses {
+                    bail!("Invitation has reached its usage limit");
+                }
+            }
+        }
         for (share_id, share_name) in joiner.shares {
             transaction.execute(
                 "INSERT INTO group_shares(group_id, peer_id, share_id, share_name, added_at) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(group_id, peer_id, share_id) DO NOTHING",
@@ -613,10 +618,12 @@ impl StateStore {
                 params![joiner.peer_id, owner_share, PERMISSION_READ_MEMORY, timestamp],
             )?;
         }
-        transaction.execute(
-            "UPDATE invites SET used_count = used_count + 1 WHERE id = ?1",
-            [invite_id],
-        )?;
+        if admitted {
+            transaction.execute(
+                "UPDATE invites SET used_count = used_count + 1 WHERE id = ?1",
+                [invite_id],
+            )?;
+        }
         transaction.commit()?;
         let roster = self.members(&group_id)?;
         Ok(RedeemedGroup { group_id, roster })
