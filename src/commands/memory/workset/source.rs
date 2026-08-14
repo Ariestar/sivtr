@@ -411,7 +411,8 @@ fn try_group_timed(
     let Some((group, member, share)) = split_group_scope(scope) else {
         return Ok(None);
     };
-    crate::commands::remote::serve::ensure_running()?;
+    crate::commands::remote::serve::ensure_running()
+        .context("failed to start the sivtr daemon for a group query")?;
     match ipc::call_with_read_timeout(
         LocalRequest::GroupQuery {
             group,
@@ -421,7 +422,9 @@ fn try_group_timed(
             filter,
         },
         read_timeout,
-    )? {
+    )
+    .context("group query failed")?
+    {
         // Unknown group: fall through to the rest of the scope cascade.
         LocalResponse::GroupQuery(None) => Ok(None),
         LocalResponse::GroupQuery(Some(response)) => {
