@@ -24,6 +24,7 @@ use super::nav::{
     move_workspace_cursor_down, move_workspace_cursor_up, reset_workspace_after_source_change,
     reset_workspace_dialogue_state, ContentBlockCursor,
 };
+use super::panes::ContentPane;
 use super::selection::{select_sources, WorkspaceSourceSelection};
 use super::vim::open_vim_view;
 use super::visual::{enter_visual_select_mode, VisualSelectMode};
@@ -57,6 +58,7 @@ pub(super) fn apply_workspace_help_action(
     content_input_lines: usize,
     content_output_lines: usize,
     content_cursor: &mut ContentBlockCursor,
+    content_pane: &mut ContentPane,
     content_blocks: (&[BlockText], &[BlockText]),
     show_help: &mut bool,
     show_search: &mut bool,
@@ -154,7 +156,13 @@ pub(super) fn apply_workspace_help_action(
                 }
                 *range_anchor = None;
             }
-            WorkspaceFocus::Content => {}
+            WorkspaceFocus::Content => {
+                // Pane-native selection: Space marks the focused block for
+                // batch copy, like Space toggles a list row.
+                if let Some((half, block)) = content_cursor.focused(*content_io_focus) {
+                    content_pane.toggle_mark(half, block);
+                }
+            }
         },
         WorkspaceHelpAction::SelectAllSources => {
             select_sources(sources, selected_sources, WorkspaceSourceSelection::All);

@@ -129,7 +129,7 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
             description: "toggle selection",
             action: WorkspaceHelpAction::ToggleSelection,
             footer_label: Some("toggle"),
-            footer_panes: &[Source, Sessions, Dialogues],
+            footer_panes: &[Source, Sessions, Dialogues, Content],
         },
         WorkspaceHelpEntry {
             key: "a",
