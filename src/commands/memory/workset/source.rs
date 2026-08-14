@@ -21,6 +21,8 @@ pub const REMOTE_QUERY_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Minimum deadline for one group fan-out inside [`query`]; a group query
 /// fans out to every member, so it needs headroom beyond a single remote hop.
+/// Must stay >= the daemon's group sync pull budget plus the per-share
+/// fan-out budget (`remote::groups` constants).
 const GROUP_QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How one source is scheduled inside [`query_many`].
@@ -409,17 +411,8 @@ fn try_group_timed(
     let Some((group, member, share)) = split_group_scope(scope) else {
         return Ok(None);
     };
-    crate::commands::remote::serve::ensure_running()?;
-    let exists = match ipc::call(LocalRequest::GroupList)? {
-        LocalResponse::Groups(groups) => groups.iter().any(|group_info| group_info.name == group),
-        _ => return Ok(None),
-    };
-    if !exists {
-        return Ok(None);
-    }
-    // Fan-out happens inside the daemon (parallel per-member dials); give the
-    // socket read enough headroom beyond the daemon's per-peer budget.
-    let read_timeout = read_timeout.max(GROUP_QUERY_TIMEOUT);
+    crate::commands::remote::serve::ensure_running()
+        .context("failed to start the sivtr daemon for a group query")?;
     match ipc::call_with_read_timeout(
         LocalRequest::GroupQuery {
             group,
@@ -429,8 +422,12 @@ fn try_group_timed(
             filter,
         },
         read_timeout,
-    )? {
-        LocalResponse::GroupQuery(response) => {
+    )
+    .context("group query failed")?
+    {
+        // Unknown group: fall through to the rest of the scope cascade.
+        LocalResponse::GroupQuery(None) => Ok(None),
+        LocalResponse::GroupQuery(Some(response)) => {
             if !response.skipped.is_empty() {
                 output::info(format!(
                     "group members offline: {}",

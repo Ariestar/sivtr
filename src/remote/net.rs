@@ -4,7 +4,9 @@ use anyhow::{Context, Result};
 use iroh::endpoint::{Connection, Endpoint};
 use iroh::EndpointAddr;
 
-use super::protocol::{RemoteRequest, RemoteResponse, MAX_MESSAGE_SIZE, REMOTE_ALPN};
+use super::protocol::{
+    RemoteEnvelope, RemoteRequest, RemoteResponse, MAX_MESSAGE_SIZE, PROTOCOL_VERSION, REMOTE_ALPN,
+};
 use super::state::StateStore;
 
 /// Dial `peer_id` using its stored endpoint and exchange one request, then
@@ -42,13 +44,23 @@ pub(crate) async fn exchange(
     let connection = connect_default(endpoint, &address).await?;
     let observed = observed_endpoint(endpoint, &connection, &address).await;
     let (mut send, mut receive) = connection.open_bi().await?;
-    send.write_all(&serde_json::to_vec(&request)?).await?;
+    let envelope = RemoteEnvelope {
+        protocol_version: PROTOCOL_VERSION,
+        kind: request,
+    };
+    send.write_all(&serde_json::to_vec(&envelope)?).await?;
     send.finish()?;
     let bytes = receive.read_to_end(MAX_MESSAGE_SIZE).await?;
     connection.close(0u32.into(), b"done");
-    let response: RemoteResponse =
+    let envelope: RemoteEnvelope<RemoteResponse> =
         serde_json::from_slice(&bytes).context("Invalid remote daemon response")?;
-    match response {
+    if envelope.protocol_version != PROTOCOL_VERSION {
+        anyhow::bail!(
+            "Unsupported peer protocol version {} (this build speaks {PROTOCOL_VERSION})",
+            envelope.protocol_version
+        );
+    }
+    match envelope.kind {
         RemoteResponse::Error { message } => Err(anyhow::anyhow!(message)),
         response => Ok((response, observed)),
     }

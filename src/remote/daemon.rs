@@ -15,13 +15,14 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 
 use super::context::DaemonContext;
-use super::group;
+use super::groups;
 use super::identity::Identity;
 use super::ipc;
 use super::net;
 use super::protocol::{
     qualify_query_scope, DaemonInfo, DaemonStatus, InviteTicket, LocalEnvelope, LocalRequest,
-    LocalResponse, QueryResponse, RemoteRequest, RemoteResponse, MAX_MESSAGE_SIZE, REMOTE_ALPN,
+    LocalResponse, QueryResponse, RemoteEnvelope, RemoteRequest, RemoteResponse, MAX_MESSAGE_SIZE,
+    PROTOCOL_VERSION, REMOTE_ALPN,
 };
 use super::state::{MountInfo, StateStore};
 
@@ -146,6 +147,12 @@ async fn handle_local(
         .context("Failed to read local request")?;
     let envelope: LocalEnvelope =
         serde_json::from_str(&line).context("Invalid local control request")?;
+    if envelope.protocol_version != PROTOCOL_VERSION {
+        anyhow::bail!(
+            "Unsupported control protocol version {} (this build speaks {PROTOCOL_VERSION})",
+            envelope.protocol_version
+        );
+    }
     let (response, shutdown) = if envelope.token != context.control_token {
         (
             LocalResponse::Error {
@@ -185,6 +192,7 @@ async fn process_local(
             started_at: context.started_at.clone(),
             shares: context.store.shares()?.len(),
             peers: context.store.peers()?.len(),
+            protocol_version: PROTOCOL_VERSION,
         }),
         LocalRequest::Shutdown => return Ok((LocalResponse::Ok, true)),
         LocalRequest::ShareAdd {
@@ -318,137 +326,33 @@ async fn process_local(
             name,
             share_id,
             share_name,
-        } => {
-            let group =
-                context
-                    .store
-                    .add_group(&name, &context.identity.id(), &context.identity.name)?;
-            // The owner's first contribution is the workspace they created from.
-            context.store.add_group_share(
-                &group.id,
-                &context.identity.id(),
-                &share_id,
-                &share_name,
-            )?;
-            LocalResponse::Group(group)
-        }
-        LocalRequest::GroupList => {
-            for group in context.store.groups()? {
-                group::maybe_sync_group(context, &group.name).await;
-            }
-            LocalResponse::Groups(context.store.groups()?)
-        }
-        LocalRequest::GroupMembers { group } => {
-            group::maybe_sync_group(context, &group).await;
-            LocalResponse::Members(context.store.members(&group)?)
-        }
-        LocalRequest::GroupShares { group } => {
-            // First-time join runs before any local group row exists; an
-            // unknown group simply means nothing is contributed yet.
-            let shares = match context.store.group_opt(&group)? {
-                Some(group) => context
-                    .store
-                    .group_shares(&group.id, &context.identity.id())?,
-                None => Vec::new(),
-            };
-            LocalResponse::GroupShares(shares)
-        }
+        } => groups::local_group_create(context, name, share_id, share_name).await?,
+        LocalRequest::GroupList => groups::local_group_list(context).await?,
+        LocalRequest::GroupMembers { group } => groups::local_group_members(context, group).await?,
+        LocalRequest::GroupShares { group } => groups::local_group_shares(context, group).await?,
         LocalRequest::GroupInvite {
             group,
             valid_for_seconds,
             max_uses,
-        } => {
-            // Only the owner may mint join links: a member-created invite
-            // would let anyone join without the owner's consent.
-            group::require_group_owner(&context.store, &group, &context.identity.id())?;
-            let invite = context
-                .store
-                .create_group_invite(&group, valid_for_seconds, max_uses)?;
-            let ticket = InviteTicket {
-                version: 1,
-                endpoint: context.endpoint.addr(),
-                share_id: String::new(),
-                group_id: Some(invite.share_id.clone()),
-                invite_id: invite.id,
-                secret: invite.secret,
-                expires_at: invite.expires_at,
-            }
-            .encode()?;
-            LocalResponse::Invitation {
-                share_name: invite.share_name,
-                ticket,
-                expires_at: invite.expires_at,
-            }
-        }
+        } => groups::local_group_invite(context, group, valid_for_seconds, max_uses).await?,
         LocalRequest::GroupJoin { invite, shares } => {
-            let ticket = InviteTicket::parse(&invite)?;
-            if ticket.expires_at < Utc::now().timestamp() {
-                bail!("Invitation is expired");
-            }
-            let group_id = ticket
-                .group_id
-                .as_deref()
-                .context("Invitation is not a group invite")?;
-            // A known member re-running join adjusts contributions (multi-select
-            // checkboxes: additions register + grant, withdrawals revoke).
-            let member_group = context.store.group(group_id).ok().filter(|group| {
-                context.store.members(&group.id).is_ok_and(|members| {
-                    members
-                        .iter()
-                        .any(|member| member.peer_id == context.identity.id())
-                })
-            });
-            if let Some(group) = member_group {
-                group::adjust_group_shares(context, &group.id, &shares).await?;
-                LocalResponse::GroupJoined {
-                    group_name: group.name,
-                    member_count: group.member_count as usize,
-                }
-            } else {
-                let (group_name, member_count) =
-                    group::redeem_group_remote(context, &invite, &shares).await?;
-                LocalResponse::GroupJoined {
-                    group_name,
-                    member_count,
-                }
-            }
+            groups::local_group_join(context, invite, shares).await?
         }
-        LocalRequest::GroupLeave { group } => {
-            group::leave_group(context, &group).await?;
-            LocalResponse::Ok
-        }
+        LocalRequest::GroupLeave { group } => groups::local_group_leave(context, group).await?,
         LocalRequest::GroupRemoveMember { group, peer } => {
-            group::remove_group_member(context, &group, &peer).await?;
-            LocalResponse::Ok
+            groups::local_group_remove_member(context, group, peer).await?
         }
         LocalRequest::GroupRename { group, name } => {
-            let info = context.store.group(&group)?;
-            group::require_group_owner(&context.store, &info.id, &context.identity.id())?;
-            LocalResponse::Group(context.store.rename_group(&info.id, &name)?)
+            groups::local_group_rename(context, group, name).await?
         }
-        LocalRequest::GroupSync { group } => {
-            group::sync_group(context, &group).await?;
-            LocalResponse::Group(context.store.group(&group)?)
-        }
+        LocalRequest::GroupSync { group } => groups::local_group_sync(context, group).await?,
         LocalRequest::GroupQuery {
             group,
             member,
             share,
             source,
             filter,
-        } => {
-            let group_info = context.store.group(&group)?;
-            group::maybe_sync_group(context, &group).await;
-            let targets = group::group_targets(
-                &context.store,
-                &group_info,
-                member.as_deref(),
-                share.as_deref(),
-            )?;
-            let response =
-                group::group_fan_out(context, &group_info.name, &targets, &source, filter).await?;
-            LocalResponse::GroupQuery(response)
-        }
+        } => groups::local_group_query(context, group, member, share, source, filter).await?,
     };
     Ok((response, false))
 }
@@ -498,15 +402,25 @@ async fn handle_remote(connection: Connection, context: Arc<DaemonContext>) -> R
     let peer_id = connection.remote_id().to_string();
     let (mut send, mut receive) = connection.accept_bi().await?;
     let bytes = receive.read_to_end(MAX_MESSAGE_SIZE).await?;
-    let request: RemoteRequest =
+    let envelope: RemoteEnvelope<RemoteRequest> =
         serde_json::from_slice(&bytes).context("Invalid remote request")?;
-    let response = match process_remote(&context, &peer_id, request).await {
+    if envelope.protocol_version != PROTOCOL_VERSION {
+        anyhow::bail!(
+            "Unsupported peer protocol version {} (this build speaks {PROTOCOL_VERSION})",
+            envelope.protocol_version
+        );
+    }
+    let response = match process_remote(&context, &peer_id, envelope.kind).await {
         Ok(response) => response,
         Err(error) => RemoteResponse::Error {
             message: format!("{error:#}"),
         },
     };
-    send.write_all(&serde_json::to_vec(&response)?).await?;
+    let envelope = RemoteEnvelope {
+        protocol_version: PROTOCOL_VERSION,
+        kind: response,
+    };
+    send.write_all(&serde_json::to_vec(&envelope)?).await?;
     send.finish()?;
     connection.closed().await;
     Ok(())
@@ -517,6 +431,23 @@ async fn process_remote(
     peer_id: &str,
     request: RemoteRequest,
 ) -> Result<RemoteResponse> {
+    // The access matrix is the single gate: every request is classified once
+    // against its role rule, then the arms do domain work only.
+    match groups::access_rule(&request) {
+        groups::AccessRule::Open => {}
+        groups::AccessRule::Owner => {
+            let group_id =
+                groups::request_group_id(&request).context("Owner rule needs a group")?;
+            groups::require_group_owner(&context.store, group_id, peer_id)?;
+        }
+        groups::AccessRule::Member => {
+            let group_id =
+                groups::request_group_id(&request).context("Member rule needs a group")?;
+            if !context.store.is_member(group_id, peer_id)? {
+                bail!("Only group members may send this request");
+            }
+        }
+    }
     match request {
         RemoteRequest::RedeemInvite {
             invite_id,
@@ -564,15 +495,18 @@ async fn process_remote(
             shares,
             endpoint,
         } => {
-            let response = group::handle_redeem_group_invite(
+            let response = groups::handle_redeem_group_invite(
                 context, peer_id, &invite_id, &secret, peer_name, shares, endpoint,
             )
             .await?;
             Ok(response)
         }
-        RemoteRequest::GroupMemberAdded { group_id, member } => {
-            group::require_group_owner(&context.store, &group_id, peer_id)?;
-            group::merge_member(context, &group_id, &member)?;
+        RemoteRequest::GroupMemberAdded {
+            group_id,
+            members,
+            roster_epoch,
+        } => {
+            groups::merge_member(context, &group_id, &members, roster_epoch)?;
             Ok(RemoteResponse::GroupAck)
         }
         RemoteRequest::GroupShareAdded {
@@ -581,67 +515,61 @@ async fn process_remote(
             peer_name: _,
             share_id,
             share_name,
-        } => {
-            // Only the contributor may register its own contribution; a forged
-            // peer_id would otherwise let a member attach arbitrary shares to
-            // other members' rosters.
-            if contributor != peer_id {
-                bail!("Only the contributor may register its own share");
-            }
-            // The contributor granted everyone access locally; members only
-            // need to register the new contribution so fan-out can reach it.
-            context
-                .store
-                .add_group_share(&group_id, &contributor, &share_id, &share_name)?;
-            Ok(RemoteResponse::GroupAck)
-        }
+        } => groups::handle_share_added(
+            context,
+            &group_id,
+            peer_id,
+            &contributor,
+            &share_id,
+            &share_name,
+        ),
         RemoteRequest::GroupShareRemoved {
             group_id,
             peer_id: contributor,
             share_id,
-        } => {
-            if contributor != peer_id {
-                bail!("Only the contributor may withdraw its own share");
-            }
-            // The share is no longer part of the group; drop the local
-            // registration so fan-out stops dialing it.
-            context
-                .store
-                .remove_group_share(&group_id, &contributor, &share_id)?;
-            Ok(RemoteResponse::GroupAck)
-        }
+        } => groups::handle_share_removed(context, &group_id, peer_id, &contributor, &share_id),
         RemoteRequest::GroupMemberRemoved {
             group_id,
             peer_id: removed_peer,
             peer_name: _,
-        } => {
-            group::require_group_owner(&context.store, &group_id, peer_id)?;
-            group::handle_member_removed(context, &group_id, &removed_peer).await
-        }
+            roster_epoch,
+        } => groups::handle_member_removed(context, &group_id, &removed_peer, roster_epoch).await,
         RemoteRequest::GroupLeave { group_id } => {
-            group::handle_leave(context, &group_id, peer_id).await?;
+            groups::handle_leave(context, &group_id, peer_id).await?;
             Ok(RemoteResponse::GroupAck)
         }
-        RemoteRequest::GroupSync { group_id } => {
-            let Some((group_name, members)) = group::roster_for(context, &group_id, peer_id)?
+        RemoteRequest::GroupSync { group_id, shares } => {
+            let Some((group_name, members)) = groups::roster_for(context, &group_id, peer_id)?
             else {
                 return Ok(RemoteResponse::GroupSynced {
                     group_name: group_id.clone(),
                     member: false,
                     members: Vec::new(),
+                    roster_epoch: 0,
                 });
             };
+            let roster_epoch = context.store.roster_epoch(&group_id)?;
             if members.is_empty() {
                 return Ok(RemoteResponse::GroupSynced {
                     group_name,
                     member: false,
                     members: Vec::new(),
+                    roster_epoch,
                 });
             }
+            // The member is the authority on its own contributions: repair the
+            // roster from the reported list (the add/withdraw broadcast may
+            // have been missed while we were offline), then answer with the
+            // fresh roster so the member converges immediately.
+            groups::sync_member_shares(&context.store, &group_id, peer_id, &shares)?;
+            let roster_epoch = context.store.roster_epoch(&group_id)?;
+            let (group_name, members) = groups::roster_for(context, &group_id, peer_id)?
+                .context("Group disappeared during roster sync")?;
             Ok(RemoteResponse::GroupSynced {
                 group_name,
                 member: true,
                 members,
+                roster_epoch,
             })
         }
     }

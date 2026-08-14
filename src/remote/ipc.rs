@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use sivtr_core::workspace;
 
-use super::protocol::{DaemonInfo, LocalEnvelope, LocalRequest, LocalResponse};
+use super::protocol::{DaemonInfo, LocalEnvelope, LocalRequest, LocalResponse, PROTOCOL_VERSION};
 
 pub fn daemon_info_path() -> PathBuf {
     workspace::data_dir().join("daemon.json")
@@ -78,6 +78,7 @@ fn call_with_info_and_read_timeout(
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     let envelope = LocalEnvelope {
         token: info.token.clone(),
+        protocol_version: PROTOCOL_VERSION,
         request,
     };
     serde_json::to_writer(&mut stream, &envelope)?;

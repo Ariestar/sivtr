@@ -8,6 +8,8 @@ use sha2::{Digest, Sha256};
 
 use sivtr_core::workspace;
 
+mod group;
+
 const PERMISSION_READ_MEMORY: &str = "read-memory";
 
 #[derive(Debug, Clone)]
@@ -62,11 +64,54 @@ pub struct GroupInfo {
     pub created_at: String,
 }
 
+/// A member's role inside a group. Stored as TEXT in SQLite and carried as a
+/// lowercase string on the wire; typed here so role comparisons cannot
+/// silently drift (`"owner"` vs `"Owner"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GroupRole {
+    Owner,
+    Member,
+}
+
+impl GroupRole {
+    pub fn is_owner(self) -> bool {
+        matches!(self, Self::Owner)
+    }
+
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            Self::Owner => "owner",
+            Self::Member => "member",
+        }
+    }
+}
+
+impl std::str::FromStr for GroupRole {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value {
+            "owner" => Ok(Self::Owner),
+            "member" => Ok(Self::Member),
+            _ => bail!("Unknown group role `{value}`"),
+        }
+    }
+}
+
+impl rusqlite::types::FromSql for GroupRole {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let text = value.as_str()?;
+        text.parse()
+            .map_err(|_| rusqlite::types::FromSqlError::InvalidType)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupMemberInfo {
     pub peer_id: String,
     pub peer_name: String,
-    pub role: String,
+    pub role: GroupRole,
     pub joined_at: String,
     pub last_seen_at: Option<String>,
     /// Number of workspaces this member contributes to the group.
@@ -80,6 +125,17 @@ pub struct GroupShareInfo {
     pub share_id: String,
     pub share_name: String,
     pub added_at: String,
+}
+
+/// One roster row as it converges into the store: peer identity, role, and
+/// contributed shares, with the wire endpoint already serialized.
+#[derive(Debug, Clone)]
+pub struct RosterRow {
+    pub peer_id: String,
+    pub peer_name: String,
+    pub role: String,
+    pub shares: Vec<(String, String)>,
+    pub endpoint_json: String,
 }
 
 #[derive(Debug, Clone)]
@@ -141,7 +197,16 @@ impl StateStore {
     }
 
     fn initialize(&self) -> Result<()> {
-        self.connect()?.execute_batch(
+        let mut connection = self.connect()?;
+        // Detect installs that predate the group-domain grant-sources table
+        // (the schema below would create it) so the migration can backfill
+        // existing grants exactly once, on the pass that introduces it.
+        let had_grant_sources: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'grant_sources'",
+            [],
+            |row| row.get(0),
+        )?;
+        connection.execute_batch(
             r#"
             PRAGMA journal_mode = WAL;
 
@@ -180,7 +245,9 @@ impl StateStore {
                 share_id    TEXT NOT NULL,
                 peer_id     TEXT NOT NULL,
                 via         TEXT NOT NULL CHECK (via IN ('group', 'direct')),
-                group_id    TEXT,
+                -- Direct rows use '' as the sentinel so the primary key stays
+                -- unique (SQLite treats NULLs as distinct in UNIQUE indexes).
+                group_id    TEXT NOT NULL DEFAULT '',
                 created_at  TEXT NOT NULL,
                 PRIMARY KEY(share_id, peer_id, via, group_id)
             );
@@ -248,12 +315,12 @@ impl StateStore {
         // Idempotent migration for installs that predate group invites.
         // `CREATE TABLE IF NOT EXISTS` cannot add columns, so ALTER and ignore
         // the "duplicate column name" error on already-migrated databases.
-        let connection = self.connect()?;
         for statement in [
             "ALTER TABLE invites ADD COLUMN kind TEXT NOT NULL DEFAULT 'share'",
             "ALTER TABLE invites ADD COLUMN group_id TEXT",
             "ALTER TABLE invites ADD COLUMN max_uses INTEGER",
             "ALTER TABLE invites ADD COLUMN used_count INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE groups ADD COLUMN roster_epoch INTEGER NOT NULL DEFAULT 0",
         ] {
             // Only the expected "column already exists" failure is benign for
             // an idempotent ALTER; anything else is a real migration error.
@@ -271,7 +338,10 @@ impl StateStore {
             .query_map([], |row| row.get::<_, String>(1))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         if columns.iter().any(|column| column == "share_id") {
-            connection.execute_batch(
+            // The rename+recreate window must be one unit: a stop between the
+            // rename and the copy would leave only `group_members_old`.
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(
                 r#"
                 INSERT INTO group_shares(group_id, peer_id, share_id, share_name, added_at)
                     SELECT group_id, peer_id, share_id, share_name, joined_at
@@ -289,11 +359,12 @@ impl StateStore {
                 DROP TABLE group_members_old;
                 "#,
             )?;
+            transaction.commit()?;
         }
         // Rebuild `group_shares` without the share_id foreign key: mirrored
         // members' shares live on their own devices, so they never exist in
         // the local shares table and a FK would reject them. Only the obsolete
-        // `share_id` FK triggers the rebuild — the `group_id`/`peer_id` FKs are
+        // `share_id` FK triggers the rebuild 鈥?the `group_id`/`peer_id` FKs are
         // intentional, so counting every FK would re-run this migration on
         // every startup.
         let share_fks: i64 = connection.query_row(
@@ -302,7 +373,9 @@ impl StateStore {
             |row| row.get(0),
         )?;
         if share_fks > 0 {
-            connection.execute_batch(
+            // Same single-unit window as the `group_members` split above.
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(
                 r#"
                 ALTER TABLE group_shares RENAME TO group_shares_old;
                 CREATE TABLE group_shares (
@@ -318,7 +391,25 @@ impl StateStore {
                 DROP TABLE group_shares_old;
                 "#,
             )?;
+            transaction.commit()?;
         }
+        // The pass that introduces `grant_sources` backfills the already-active
+        // grants as direct sources: without a source row, withdrawing the same
+        // share from a later group would revoke a still-valid direct grant.
+        if had_grant_sources == 0 {
+            connection.execute_batch(
+                "INSERT INTO grant_sources(share_id, peer_id, via, group_id, created_at)
+                 SELECT share_id, peer_id, 'direct', '', created_at FROM grants
+                 WHERE revoked_at IS NULL",
+            )?;
+        }
+        // Legacy `direct` rows stored NULL for group_id, which the primary key
+        // treats as distinct: normalize them to the sentinel so repeated
+        // direct redemptions deduplicate.
+        connection.execute(
+            "UPDATE grant_sources SET group_id = '' WHERE group_id IS NULL",
+            [],
+        )?;
         Ok(())
     }
 
@@ -388,11 +479,14 @@ impl StateStore {
 
     pub fn remove_share(&self, name_or_id: &str) -> Result<ShareInfo> {
         let share = self.share(name_or_id)?;
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // A share that is still contributed to a group cannot be deleted: the
         // group's roster elsewhere keeps dialing it and a later sync would
         // resurrect the stale contribution. Withdraw it from the group first.
-        let groups: Vec<String> = self
-            .connect()?
+        // The check and the deletes share one transaction so a concurrent
+        // GroupJoin cannot slip a contribution in between them.
+        let groups: Vec<String> = transaction
             .prepare(
                 "SELECT g.name FROM group_shares gs JOIN groups g ON g.id = gs.group_id WHERE gs.share_id = ?1 ORDER BY g.name",
             )?
@@ -405,9 +499,9 @@ impl StateStore {
                 groups.join(", ")
             );
         }
-        let connection = self.connect()?;
-        connection.execute("DELETE FROM group_shares WHERE share_id = ?1", [&share.id])?;
-        connection.execute("DELETE FROM shares WHERE id = ?1", [&share.id])?;
+        transaction.execute("DELETE FROM group_shares WHERE share_id = ?1", [&share.id])?;
+        transaction.execute("DELETE FROM shares WHERE id = ?1", [&share.id])?;
+        transaction.commit()?;
         Ok(share)
     }
 
@@ -480,7 +574,7 @@ impl StateStore {
         // A direct redeem is its own grant source, independent of any group:
         // withdrawing the same share from a group later must keep this grant.
         transaction.execute(
-            "INSERT INTO grant_sources(share_id, peer_id, via, group_id, created_at) VALUES (?1, ?2, 'direct', NULL, ?3) ON CONFLICT DO NOTHING",
+            "INSERT INTO grant_sources(share_id, peer_id, via, group_id, created_at) VALUES (?1, ?2, 'direct', '', ?3) ON CONFLICT DO NOTHING",
             params![share_id, peer_id, timestamp],
         )?;
         transaction.execute(
@@ -590,8 +684,13 @@ impl StateStore {
                 groups.join(", ")
             );
         }
-        self.connect()?
-            .execute("DELETE FROM peers WHERE id = ?1", [&peer.id])?;
+        // `grant_sources` has no foreign key on peers, so the cascade cannot
+        // clean it: drop every source this peer authorized through. Otherwise
+        // a later rejoin + kick would see the stale source and preserve the
+        // grant, leaving the forgotten peer queryable forever.
+        let connection = self.connect()?;
+        connection.execute("DELETE FROM grant_sources WHERE peer_id = ?1", [&peer.id])?;
+        connection.execute("DELETE FROM peers WHERE id = ?1", [&peer.id])?;
         Ok(peer)
     }
 
@@ -715,474 +814,6 @@ impl StateStore {
         Ok(Some(grant))
     }
 
-    // ------------------------------------------------------------------
-    // Groups: a named set of devices that expose their memory to each other.
-    // Membership (`group_members`) and contributed workspaces (`group_shares`,
-    // many per member) are separate. Invariant: for every contribution a
-    // member adds, every other member holds a read-memory grant on that share.
-    // ------------------------------------------------------------------
-
-    pub fn add_group(
-        &self,
-        name: &str,
-        self_peer_id: &str,
-        self_peer_name: &str,
-    ) -> Result<GroupInfo> {
-        validate_alias(name, "group name")?;
-        // The local device is a peer of itself; peers(id) is a FK target.
-        self.save_remote_peer(self_peer_id, self_peer_name, "{}")?;
-        let id = random_id("grp");
-        let info = self.register_group(&id, name)?;
-        self.connect()?.execute(
-            "INSERT INTO group_members(group_id, peer_id, role, joined_at) VALUES (?1, ?2, 'owner', ?3)",
-            params![id, self_peer_id, now()],
-        )?;
-        Ok(info)
-    }
-
-    /// Register a group row with an explicit id. Joiners use this to mirror the
-    /// owner's group identity; idempotent on re-join.
-    pub fn register_group(&self, id: &str, name: &str) -> Result<GroupInfo> {
-        validate_alias(name, "group name")?;
-        self.connect()?.execute(
-            "INSERT INTO groups(id, name, created_at) VALUES (?1, ?2, ?3) ON CONFLICT(id) DO NOTHING",
-            params![id, name.to_ascii_lowercase(), now()],
-        )?;
-        self.group(name)
-    }
-
-    /// Rename the group. The name is the ref segment (`team:...`) and is
-    /// stored once per device in `groups.name`; the owner renames and members
-    /// mirror the new name on their next roster sync. Collisions with another
-    /// local group are rejected (the `UNIQUE` constraint backs the check).
-    pub fn rename_group(&self, group_name_or_id: &str, new_name: &str) -> Result<GroupInfo> {
-        // The same rules as creation: a rename must not smuggle in a name
-        // `add_group` would reject (including reserved scheme names).
-        validate_alias(new_name, "group name")?;
-        let new_name = new_name.to_ascii_lowercase();
-        let group = self.group(group_name_or_id)?;
-        if new_name != group.name && self.group_opt(&new_name)?.is_some() {
-            bail!("A group named `{new_name}` already exists");
-        }
-        self.connect()?.execute(
-            "UPDATE groups SET name = ?1 WHERE id = ?2",
-            params![new_name, group.id],
-        )?;
-        self.group(&group.id)
-    }
-
-    pub fn groups(&self) -> Result<Vec<GroupInfo>> {
-        let connection = self.connect()?;
-        let mut statement = connection.prepare(
-            "SELECT g.id, g.name, (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id), g.created_at FROM groups g ORDER BY g.name",
-        )?;
-        let rows = statement.query_map([], group_from_row)?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(Into::into)
-    }
-
-    pub fn group_opt(&self, name_or_id: &str) -> Result<Option<GroupInfo>> {
-        self.connect()?
-            .query_row(
-                "SELECT g.id, g.name, (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id), g.created_at FROM groups g WHERE g.id = ?1 OR lower(g.name) = lower(?1)",
-                [name_or_id],
-                group_from_row,
-            )
-            .optional()
-            .map_err(Into::into)
-    }
-
-    pub fn group(&self, name_or_id: &str) -> Result<GroupInfo> {
-        self.group_opt(name_or_id)?
-            .with_context(|| format!("Unknown group `{name_or_id}`"))
-    }
-
-    /// Insert or refresh one member row. Endpoint/name live in `peers`.
-    pub fn add_member(
-        &self,
-        group_name_or_id: &str,
-        peer_id: &str,
-        role: &str,
-    ) -> Result<GroupMemberInfo> {
-        let group = self.group(group_name_or_id)?;
-        self.connect()?.execute(
-            "INSERT INTO group_members(group_id, peer_id, role, joined_at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(group_id, peer_id) DO UPDATE SET role = excluded.role",
-            params![group.id, peer_id, role, now()],
-        )?;
-        self.member(&group.id, peer_id)
-    }
-
-    pub fn remove_member(&self, group_name_or_id: &str, peer_id: &str) -> Result<()> {
-        let group = self.group(group_name_or_id)?;
-        let mut connection = self.connect()?;
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        // The member's contribution rows describe access on its own device and
-        // are not covered by the `group_members` cascade; leaving them behind
-        // would resurrect stale shares if the peer ever rejoins with a
-        // different set, so removal is one operation over both tables.
-        transaction.execute(
-            "DELETE FROM group_shares WHERE group_id = ?1 AND peer_id = ?2",
-            params![group.id, peer_id],
-        )?;
-        transaction.execute(
-            "DELETE FROM group_members WHERE group_id = ?1 AND peer_id = ?2",
-            params![group.id, peer_id],
-        )?;
-        transaction.commit()?;
-        Ok(())
-    }
-
-    fn member(&self, group_name_or_id: &str, peer_id: &str) -> Result<GroupMemberInfo> {
-        let group = self.group(group_name_or_id)?;
-        self.connect()?
-            .query_row(
-                "SELECT gm.peer_id, p.name, gm.role, gm.joined_at, p.last_seen_at, p.endpoint_json, (SELECT COUNT(*) FROM group_shares gs WHERE gs.group_id = gm.group_id AND gs.peer_id = gm.peer_id) FROM group_members gm JOIN peers p ON p.id = gm.peer_id WHERE gm.group_id = ?1 AND gm.peer_id = ?2",
-                params![group.id, peer_id],
-                group_member_from_row,
-            )
-            .optional()?
-            .with_context(|| format!("Peer `{peer_id}` is not a member of `{}`", group.name))
-    }
-
-    pub fn members(&self, group_name_or_id: &str) -> Result<Vec<GroupMemberInfo>> {
-        let group = self.group(group_name_or_id)?;
-        let connection = self.connect()?;
-        let mut statement = connection.prepare(
-            "SELECT gm.peer_id, p.name, gm.role, gm.joined_at, p.last_seen_at, p.endpoint_json, (SELECT COUNT(*) FROM group_shares gs WHERE gs.group_id = gm.group_id AND gs.peer_id = gm.peer_id) FROM group_members gm JOIN peers p ON p.id = gm.peer_id WHERE gm.group_id = ?1 ORDER BY p.name",
-        )?;
-        let rows = statement.query_map([group.id], group_member_from_row)?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(Into::into)
-    }
-
-    /// Register one contributed workspace for a member (idempotent).
-    pub fn add_group_share(
-        &self,
-        group_name_or_id: &str,
-        peer_id: &str,
-        share_id: &str,
-        share_name: &str,
-    ) -> Result<()> {
-        let group = self.group(group_name_or_id)?;
-        self.connect()?.execute(
-            "INSERT INTO group_shares(group_id, peer_id, share_id, share_name, added_at) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(group_id, peer_id, share_id) DO NOTHING",
-            params![group.id, peer_id, share_id, share_name, now()],
-        )?;
-        Ok(())
-    }
-
-    pub fn remove_group_share(
-        &self,
-        group_name_or_id: &str,
-        peer_id: &str,
-        share_id: &str,
-    ) -> Result<()> {
-        let group = self.group(group_name_or_id)?;
-        self.connect()?.execute(
-            "DELETE FROM group_shares WHERE group_id = ?1 AND peer_id = ?2 AND share_id = ?3",
-            params![group.id, peer_id, share_id],
-        )?;
-        Ok(())
-    }
-
-    pub fn group_shares(
-        &self,
-        group_name_or_id: &str,
-        peer_id: &str,
-    ) -> Result<Vec<GroupShareInfo>> {
-        let group = self.group(group_name_or_id)?;
-        let connection = self.connect()?;
-        let mut statement = connection.prepare(
-            "SELECT share_id, share_name, added_at FROM group_shares WHERE group_id = ?1 AND peer_id = ?2 ORDER BY share_name",
-        )?;
-        let rows = statement.query_map(params![group.id, peer_id], |row| {
-            Ok(GroupShareInfo {
-                share_id: row.get(0)?,
-                share_name: row.get(1)?,
-                added_at: row.get(2)?,
-            })
-        })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(Into::into)
-    }
-
-    /// Resolve a member's contributed share by name (three-segment scope
-    /// `team/alice/proj-b` lands here).
-    pub fn group_share_by_name(
-        &self,
-        group_name_or_id: &str,
-        peer_id: &str,
-        share_name: &str,
-    ) -> Result<Option<GroupShareInfo>> {
-        let group = self.group(group_name_or_id)?;
-        self.connect()?
-            .query_row(
-                "SELECT share_id, share_name, added_at FROM group_shares WHERE group_id = ?1 AND peer_id = ?2 AND share_name = ?3",
-                params![group.id, peer_id, share_name],
-                |row| {
-                    Ok(GroupShareInfo {
-                        share_id: row.get(0)?,
-                        share_name: row.get(1)?,
-                        added_at: row.get(2)?,
-                    })
-                },
-            )
-            .optional()
-            .map_err(Into::into)
-    }
-
-    /// Grant `peer` read access to `share` on behalf of `group` (idempotent).
-    /// Also clears a previous revocation, so rejoining a group reactivates
-    /// the grant. The group source is recorded in `grant_sources` under the
-    /// group's real id (the argument may be a name), so a later withdrawal
-    /// from this group alone does not revoke access still justified by
-    /// another source.
-    pub fn group_grant(&self, group_name_or_id: &str, share_id: &str, peer_id: &str) -> Result<()> {
-        let group = self.group(group_name_or_id)?;
-        let connection = self.connect()?;
-        connection.execute(
-            "INSERT INTO grant_sources(share_id, peer_id, via, group_id, created_at) VALUES (?1, ?2, 'group', ?3, ?4) ON CONFLICT DO NOTHING",
-            params![share_id, peer_id, group.id, now()],
-        )?;
-        connection.execute(
-            "INSERT INTO grants(peer_id, share_id, permission, created_at, revoked_at) VALUES (?1, ?2, ?3, ?4, NULL) ON CONFLICT(peer_id, share_id) DO UPDATE SET permission = excluded.permission, revoked_at = NULL",
-            params![peer_id, share_id, PERMISSION_READ_MEMORY, now()],
-        )?;
-        Ok(())
-    }
-
-    /// Revoke a member's grant on a group share. The group's source row is
-    /// removed first; the grant itself survives while another source still
-    /// justifies it (see [`Self::has_other_grant_source`]).
-    pub fn revoke_group_grant(
-        &self,
-        group_name_or_id: &str,
-        share_id: &str,
-        peer_id: &str,
-    ) -> Result<()> {
-        let group = self.group(group_name_or_id)?;
-        self.connect()?.execute(
-            "DELETE FROM grant_sources WHERE share_id = ?1 AND peer_id = ?2 AND via = 'group' AND group_id = ?3",
-            params![share_id, peer_id, group.id],
-        )?;
-        if self.has_other_grant_source(&group.id, share_id, peer_id)? {
-            return Ok(());
-        }
-        self.revoke(share_id, peer_id)?;
-        Ok(())
-    }
-
-    /// True when `peer` still holds access to `share` from a source other than
-    /// the group being revoked from. `grants` stores one row per (peer, share)
-    /// even when several sources issued it, so each group grant and direct
-    /// redeem records a row in `grant_sources`; revocation must not tear down
-    /// independently authorized access.
-    fn has_other_grant_source(
-        &self,
-        group_id: &str,
-        share_id: &str,
-        peer_id: &str,
-    ) -> Result<bool> {
-        self.connect()?
-            .query_row(
-                "SELECT EXISTS(
-                    SELECT 1 FROM grant_sources
-                    WHERE share_id = ?1 AND peer_id = ?2
-                      AND NOT (via = 'group' AND group_id = ?3)
-                )",
-                params![share_id, peer_id, group_id],
-                |row| row.get(0),
-            )
-            .map_err(Into::into)
-    }
-
-    /// Revoke every other member's grant on `share` (the contributor withdrew
-    /// that workspace from the group). A grant survives when the peer still
-    /// holds access from another source, because `grants` keeps one row per
-    /// (peer, share) regardless of how many sources issued it.
-    pub fn revoke_group_share(
-        &self,
-        group_name_or_id: &str,
-        share_id: &str,
-        except_peer_id: &str,
-    ) -> Result<()> {
-        let group = self.group(group_name_or_id)?;
-        let peers: Vec<String> = self
-            .connect()?
-            .prepare("SELECT peer_id FROM group_members WHERE group_id = ?1 AND peer_id != ?2")?
-            .query_map(params![group.id, except_peer_id], |row| row.get(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        for peer_id in peers {
-            self.revoke_group_grant(&group.id, share_id, &peer_id)?;
-        }
-        Ok(())
-    }
-
-    pub fn remove_group(&self, name_or_id: &str) -> Result<GroupInfo> {
-        let group = self.group(name_or_id)?;
-        self.connect()?
-            .execute("DELETE FROM groups WHERE id = ?1", [&group.id])?;
-        Ok(group)
-    }
-
-    pub fn create_group_invite(
-        &self,
-        group_name_or_id: &str,
-        valid_for_seconds: i64,
-        max_uses: Option<i64>,
-    ) -> Result<InviteRecord> {
-        if valid_for_seconds <= 0 {
-            bail!("Invite expiration must be positive");
-        }
-        let group = self.group(group_name_or_id)?;
-        // invites.share_id references shares(id); group invites point at the
-        // owner's first contributed share so the FK holds.
-        let owner_share: String = self
-            .connect()?
-            .query_row(
-                "SELECT gs.share_id FROM group_shares gs JOIN group_members gm ON gm.group_id = gs.group_id AND gm.peer_id = gs.peer_id WHERE gs.group_id = ?1 AND gm.role = 'owner' LIMIT 1",
-                [&group.id],
-                |row| row.get(0),
-            )
-            .optional()?
-            .context("Group has no shared workspace to invite with")?;
-        let id = random_id("iv");
-        let secret = random_secret();
-        let expires_at = Utc::now().timestamp() + valid_for_seconds;
-        self.connect()?.execute(
-            "INSERT INTO invites(id, share_id, secret_hash, permission, expires_at, used_at, created_at, kind, group_id, max_uses, used_count) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, 'group', ?7, ?8, 0)",
-            params![id, owner_share, hash_secret(&secret), PERMISSION_READ_MEMORY, expires_at, now(), group.id, max_uses],
-        )?;
-        Ok(InviteRecord {
-            id,
-            share_id: group.id,
-            share_name: group.name,
-            secret,
-            expires_at,
-        })
-    }
-
-    /// Redeem a group invite: validates the multi-use ticket, adds the joiner
-    /// to the roster with every contributed workspace, grants the joiner read
-    /// access to the owner's contributions, and returns the authoritative
-    /// group id with the current roster for the joiner to reconcile.
-    pub fn redeem_group_invite(
-        &self,
-        invite_id: &str,
-        secret: &str,
-        joiner: &JoinerInfo<'_>,
-    ) -> Result<RedeemedGroup> {
-        validate_identifier(joiner.peer_name, "peer name")?;
-        // Group mode promises every member publishes memory to the mesh; a
-        // joiner with no contribution would consume the roster and owner
-        // shares without contributing anything back.
-        if joiner.shares.is_empty() {
-            bail!("A group member must contribute at least one workspace");
-        }
-        let mut connection = self.connect()?;
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let invite = transaction
-            .query_row(
-                "SELECT i.group_id, i.secret_hash, i.expires_at, i.used_count, i.max_uses, i.used_at FROM invites i WHERE i.id = ?1 AND i.kind = 'group'",
-                [invite_id],
-                |row| {
-                    Ok((
-                        row.get::<_, Option<String>>(0)?,
-                        row.get::<_, Vec<u8>>(1)?,
-                        row.get::<_, i64>(2)?,
-                        row.get::<_, i64>(3)?,
-                        row.get::<_, Option<i64>>(4)?,
-                        row.get::<_, Option<String>>(5)?,
-                    ))
-                },
-            )
-            .optional()?
-            .context("Invitation is invalid or expired")?;
-        let (group_id, expected_hash, expires_at, used_count, max_uses, used_at) = invite;
-        let group_id = group_id.context("Invitation is invalid or expired")?;
-        if expires_at < Utc::now().timestamp() || used_at.is_some() {
-            bail!("Invitation is invalid or expired");
-        }
-        if let Some(max_uses) = max_uses {
-            if used_count >= max_uses {
-                bail!("Invitation has reached its usage limit");
-            }
-        }
-        if expected_hash != hash_secret(secret) {
-            bail!("Invitation is invalid or expired");
-        }
-        let timestamp = now();
-        transaction.execute(
-            "INSERT INTO peers(id, name, endpoint_json, created_at, last_seen_at) VALUES (?1, ?2, ?3, ?4, ?4) ON CONFLICT(id) DO UPDATE SET name = excluded.name, endpoint_json = excluded.endpoint_json, last_seen_at = excluded.last_seen_at",
-            params![joiner.peer_id, joiner.peer_name, joiner.endpoint_json, timestamp],
-        )?;
-        transaction.execute(
-            "INSERT INTO group_members(group_id, peer_id, role, joined_at) VALUES (?1, ?2, 'member', ?3) ON CONFLICT(group_id, peer_id) DO NOTHING",
-            params![group_id, joiner.peer_id, timestamp],
-        )?;
-        for (share_id, share_name) in joiner.shares {
-            transaction.execute(
-                "INSERT INTO group_shares(group_id, peer_id, share_id, share_name, added_at) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(group_id, peer_id, share_id) DO NOTHING",
-                params![group_id, joiner.peer_id, share_id, share_name, timestamp],
-            )?;
-        }
-        // Owner grants the newcomer on every owner contribution.
-        let owner_shares: Vec<String> = {
-            let mut statement = transaction.prepare(
-                "SELECT gs.share_id FROM group_shares gs JOIN group_members gm ON gm.group_id = gs.group_id AND gm.peer_id = gs.peer_id WHERE gs.group_id = ?1 AND gm.role = 'owner'",
-            )?;
-            let rows = statement.query_map([&group_id], |row| row.get::<_, String>(0))?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()?
-        };
-        for owner_share in &owner_shares {
-            transaction.execute(
-                "INSERT INTO grant_sources(share_id, peer_id, via, group_id, created_at) VALUES (?1, ?2, 'group', ?3, ?4) ON CONFLICT DO NOTHING",
-                params![owner_share, joiner.peer_id, group_id, timestamp],
-            )?;
-            transaction.execute(
-                "INSERT INTO grants(peer_id, share_id, permission, created_at, revoked_at) VALUES (?1, ?2, ?3, ?4, NULL) ON CONFLICT(peer_id, share_id) DO UPDATE SET permission = excluded.permission, revoked_at = NULL",
-                params![joiner.peer_id, owner_share, PERMISSION_READ_MEMORY, timestamp],
-            )?;
-        }
-        transaction.execute(
-            "UPDATE invites SET used_count = used_count + 1 WHERE id = ?1",
-            [invite_id],
-        )?;
-        transaction.commit()?;
-        let roster = self.members(&group_id)?;
-        Ok(RedeemedGroup { group_id, roster })
-    }
-
-    pub fn touch_group_sync(&self, group_name_or_id: &str) -> Result<()> {
-        let group = self.group(group_name_or_id)?;
-        self.connect()?.execute(
-            "UPDATE groups SET last_synced_at = ?1 WHERE id = ?2",
-            params![now(), group.id],
-        )?;
-        Ok(())
-    }
-
-    pub fn sync_stale(&self, group_name_or_id: &str, ttl_secs: i64) -> Result<bool> {
-        let group = self.group(group_name_or_id)?;
-        let last: Option<String> = self
-            .connect()?
-            .query_row(
-                "SELECT last_synced_at FROM groups WHERE id = ?1",
-                [&group.id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        match last {
-            None => Ok(true),
-            Some(timestamp) => {
-                let last = chrono::DateTime::parse_from_rfc3339(&timestamp)
-                    .map_err(|_| anyhow::anyhow!("Invalid last_synced_at timestamp"))?
-                    .with_timezone(&Utc);
-                Ok(Utc::now() - last > chrono::Duration::seconds(ttl_secs))
-            }
-        }
-    }
-
     fn peer(&self, name_or_id: &str) -> Result<PeerInfo> {
         self.connect()?
             .query_row(
@@ -1237,27 +868,6 @@ fn mount_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MountInfo> {
         peer_name: row.get(3)?,
         share_id: row.get(4)?,
         share_name: row.get(5)?,
-    })
-}
-
-fn group_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GroupInfo> {
-    Ok(GroupInfo {
-        id: row.get(0)?,
-        name: row.get(1)?,
-        member_count: row.get(2)?,
-        created_at: row.get(3)?,
-    })
-}
-
-fn group_member_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GroupMemberInfo> {
-    Ok(GroupMemberInfo {
-        peer_id: row.get(0)?,
-        peer_name: row.get(1)?,
-        role: row.get(2)?,
-        joined_at: row.get(3)?,
-        last_seen_at: row.get(4)?,
-        endpoint: row.get(5)?,
-        share_count: row.get(6)?,
     })
 }
 
@@ -1413,6 +1023,28 @@ mod tests {
         (temp, store, share)
     }
 
+    #[test]
+    fn create_group_with_owner_share_writes_all_three_rows() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let store = StateStore::open(temp.path().join("state.db")).unwrap();
+        let share = store
+            .add_share("workspace-key", &workspace, "project", true)
+            .unwrap();
+        let group = store
+            .create_group_with_owner_share("team", "self-1", "self", &share.id, &share.name)
+            .unwrap();
+        assert!(store
+            .members(&group.id)
+            .unwrap()
+            .iter()
+            .any(|member| member.peer_id == "self-1"));
+        let contributions = store.group_shares(&group.id, "self-1").unwrap();
+        assert_eq!(contributions.len(), 1);
+        assert_eq!(contributions[0].share_id, share.id);
+    }
+
     fn joiner<'a>(
         peer_id: &'a str,
         peer_name: &'a str,
@@ -1424,6 +1056,21 @@ mod tests {
             shares,
             endpoint_json: "{}",
         }
+    }
+
+    #[test]
+    fn is_owner_and_is_member_gate_membership() {
+        let (_temp, store, _share) = group_store();
+        store.save_remote_peer("peer-2", "bob", "{}").unwrap();
+        store.add_member("team", "peer-2", "member").unwrap();
+        assert!(store.is_group_owner("team", "self-1").unwrap());
+        assert!(!store.is_group_owner("team", "peer-2").unwrap());
+        assert!(!store.is_group_owner("team", "stranger").unwrap());
+        assert!(store.is_member("team", "self-1").unwrap());
+        assert!(store.is_member("team", "peer-2").unwrap());
+        assert!(!store.is_member("team", "stranger").unwrap());
+        // A group without an owner row has no owner authority.
+        assert!(store.owner("missing").is_err());
     }
 
     /// Create a real share under `temp` (group_shares.share_id references shares.id).
@@ -1459,7 +1106,7 @@ mod tests {
             "the group is derived from the invite row"
         );
         assert_eq!(redeemed.roster.len(), 2, "owner + alice");
-        // The same ticket admits another peer — group invites are multi-use.
+        // The same ticket admits another peer 鈥?group invites are multi-use.
         let redeemed = store
             .redeem_group_invite(
                 &invite.id,
@@ -1511,6 +1158,56 @@ mod tests {
     }
 
     #[test]
+    fn group_invite_retry_by_an_admitted_peer_is_idempotent() {
+        let (temp, store, _share) = group_store();
+        let alice_share = real_share(&store, temp.path(), "alice", "alice-ws");
+        let bob_share = real_share(&store, temp.path(), "bob", "bob-ws");
+
+        // max_uses = 1: a single admission.
+        let invite = store.create_group_invite("team", 60, Some(1)).unwrap();
+        store
+            .redeem_group_invite(
+                &invite.id,
+                &invite.secret,
+                &joiner(
+                    "peer-1",
+                    "alice",
+                    &[(alice_share.id.clone(), alice_share.name.clone())],
+                ),
+            )
+            .unwrap();
+
+        // A retry by the same peer (lost `GroupJoined` response, or a crash
+        // before the joiner saved its local group) completes instead of being
+        // blocked by the usage cap, and does not consume another use.
+        store
+            .redeem_group_invite(
+                &invite.id,
+                &invite.secret,
+                &joiner(
+                    "peer-1",
+                    "alice",
+                    &[(alice_share.id.clone(), alice_share.name.clone())],
+                ),
+            )
+            .unwrap();
+
+        // The retry did not spend the invite: one different peer still fits.
+        let error = store
+            .redeem_group_invite(
+                &invite.id,
+                &invite.secret,
+                &joiner(
+                    "peer-2",
+                    "bob",
+                    &[(bob_share.id.clone(), bob_share.name.clone())],
+                ),
+            )
+            .expect_err("max_uses=1 is spent by the first admission");
+        assert!(error.to_string().contains("usage limit"));
+    }
+
+    #[test]
     fn join_grants_owner_and_roster_roundtrips() {
         let (temp, store, share) = group_store();
         let alice_share = real_share(&store, temp.path(), "alice", "alice-ws");
@@ -1536,7 +1233,7 @@ mod tests {
             .find(|member| member.peer_id == "peer-1")
             .expect("alice in roster");
         assert_eq!(alice.endpoint.as_deref(), Some(r#"{"id":"alice"}"#));
-        assert_eq!(alice.role, "member");
+        assert_eq!(alice.role, GroupRole::Member);
         assert_eq!(alice.share_count, 1);
     }
 
@@ -1727,7 +1424,7 @@ mod tests {
             .iter()
             .find(|member| member.peer_id == "peer-1")
             .unwrap();
-        assert_eq!(alice.role, "member");
+        assert_eq!(alice.role, GroupRole::Member);
         assert_eq!(alice.endpoint.as_deref(), Some(r#"{"id":"alice"}"#));
         assert_eq!(alice.share_count, 1);
         assert!(
@@ -1784,21 +1481,11 @@ mod tests {
         assert_eq!(store.group_shares("team", "self-1").unwrap().len(), 2);
         let owner = store.members("team").unwrap().remove(0);
         assert_eq!(owner.share_count, 2);
-        // Name-resolved lookup powers `team/self/project-2` three-segment refs.
-        let found = store
-            .group_share_by_name("team", "self-1", "project-2")
-            .unwrap()
-            .expect("share by name");
-        assert_eq!(found.share_id, second.id);
         // Withdrawing one contribution keeps the rest.
         store
             .remove_group_share("team", "self-1", &second.id)
             .unwrap();
         assert_eq!(store.group_shares("team", "self-1").unwrap().len(), 1);
-        assert!(store
-            .group_share_by_name("team", "self-1", "project-2")
-            .unwrap()
-            .is_none());
     }
 
     #[test]
@@ -1904,6 +1591,48 @@ mod tests {
     }
 
     #[test]
+    fn repeated_direct_redemption_does_not_duplicate_grant_sources() {
+        let (_temp, store, _share) = group_store();
+        let first = store.create_invite("project", 60).unwrap();
+        let second = store.create_invite("project", 60).unwrap();
+        store
+            .redeem_invite(&first.id, &first.secret, "peer-1", "alice")
+            .unwrap();
+        store
+            .redeem_invite(&second.id, &second.secret, "peer-1", "alice")
+            .unwrap();
+        let count: i64 = store
+            .connect()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM grant_sources WHERE peer_id = 'peer-1' AND via = 'direct'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "a second direct redeem of the same share must not append a duplicate source row"
+        );
+    }
+
+    #[test]
+    fn register_group_rejects_name_collisions_and_resolves_renamed_groups() {
+        let (_temp, store, _share) = group_store();
+        // A different id already owns the name: a clear error, not a raw
+        // UNIQUE constraint failure.
+        let error = store.register_group("grp-other", "team").unwrap_err();
+        assert!(error.to_string().contains("already exists"));
+
+        // Re-registering the same id after an owner rename adopts the current
+        // name instead of failing the by-name lookup.
+        let renamed = store.rename_group("team", "team-b").unwrap();
+        let rejoin = store.register_group(&renamed.id, "team").unwrap();
+        assert_eq!(rejoin.id, renamed.id);
+        assert_eq!(rejoin.name, "team");
+    }
+
+    #[test]
     fn remove_member_cleans_contribution_rows() {
         let (temp, store, _share) = group_store();
         let alice_share = real_share(&store, temp.path(), "alice", "alice-ws");
@@ -1959,6 +1688,30 @@ mod tests {
     }
 
     #[test]
+    fn forgetting_a_peer_clears_its_grant_sources() {
+        let (_temp, store, share) = group_store();
+        // A direct redeem records a `grant_sources` row that has no foreign
+        // key on peers; forgetting the peer must drop it or the stale source
+        // would keep a later rejoin's grant alive after a kick.
+        store.save_remote_peer("peer-9", "zoe", "{}").unwrap();
+        let invite = store.create_invite(&share.name, 60).unwrap();
+        store
+            .redeem_invite(&invite.id, &invite.secret, "peer-9", "zoe")
+            .unwrap();
+        store.forget_peer("peer-9").unwrap();
+        let remaining: i64 = store
+            .connect()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM grant_sources WHERE peer_id = ?1",
+                ["peer-9"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 0, "forgetting a peer clears its grant sources");
+    }
+
+    #[test]
     fn group_names_reject_reserved_schemes() {
         let temp = tempfile::tempdir().unwrap();
         let store = StateStore::open(temp.path().join("state.db")).unwrap();
@@ -1972,5 +1725,78 @@ mod tests {
         assert!(error.to_string().contains("reserved"));
         // Ordinary names still work.
         store.add_group("team", "self-1", "self").unwrap();
+    }
+
+    #[test]
+    fn rename_to_own_id_is_not_a_collision() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = StateStore::open(temp.path().join("state.db")).unwrap();
+        let group = store.add_group("team", "self-1", "self").unwrap();
+        // The group's own id satisfies the identifier rules and resolves
+        // through the same lookup; renaming to it is not a collision.
+        let renamed = store.rename_group("team", &group.id).unwrap();
+        assert_eq!(renamed.name, group.id);
+        // A real collision is still rejected.
+        store.add_group("other", "self-1", "self").unwrap();
+        let error = store
+            .rename_group(&group.id, "other")
+            .expect_err("collision");
+        assert!(error.to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn contributed_share_names_reject_reserved_schemes() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = StateStore::open(temp.path().join("state.db")).unwrap();
+        store.add_group("team", "self-1", "self").unwrap();
+        let error = store
+            .add_group_share("team", "self-1", "sh-1", "local")
+            .expect_err("reserved");
+        assert!(error.to_string().contains("reserved"));
+        let error = store
+            .add_group_share("team", "self-1", "sh-1", "sivtr")
+            .expect_err("reserved");
+        assert!(error.to_string().contains("reserved"));
+        store
+            .add_group_share("team", "self-1", "sh-1", "bob-ws")
+            .unwrap();
+    }
+
+    #[test]
+    fn migration_backfills_legacy_direct_grants() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = temp.path().join("state.db");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        // Simulate an install from before `grant_sources`: no table, but an
+        // active grant issued by a direct redeem.
+        let store = StateStore::open(db.clone()).unwrap();
+        let share = store.add_share("ws-key", &workspace, "proj", true).unwrap();
+        store.save_remote_peer("peer-1", "bob", "{}").unwrap();
+        {
+            let connection = store.connect().unwrap();
+            connection
+                .execute_batch(&format!(
+                    "DROP TABLE grant_sources;
+                     INSERT INTO grants(peer_id, share_id, permission, created_at)
+                     VALUES ('peer-1', '{}', 'read_memory', '2026-01-01T00:00:00Z');",
+                    share.id
+                ))
+                .unwrap();
+        }
+        // Reopening runs the migration: the table is recreated and the active
+        // grant gets a direct source, so a later group withdrawal cannot
+        // revoke it.
+        let store = StateStore::open(db.clone()).unwrap();
+        let backfilled: i64 = store
+            .connect()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM grant_sources WHERE peer_id = 'peer-1' AND via = 'direct'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(backfilled, 1, "legacy active grants become direct sources");
     }
 }

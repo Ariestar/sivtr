@@ -136,8 +136,10 @@ fn select_contributions(
     // current contributions (re-running join in another workspace adds it).
     let picker = interactive::is_interactive() && path.is_none();
     if !picker {
-        let (share, _) = super::share::ensure_share(path, share_name, redact)?;
+        // Reject a non-group ticket before `ensure_share` creates or enables
+        // a share as a side effect.
         let group_id = ticket_group_id(encoded_invite)?;
+        let (share, _) = super::share::ensure_share(path, share_name, redact)?;
         return append_contribution(&group_id, &share);
     }
 
@@ -244,7 +246,7 @@ fn members(group: &str) -> Result<()> {
                 output::plain("no members");
             }
             for member in members {
-                let marker = if member.role == "owner" {
+                let marker = if member.role.is_owner() {
                     " [owner]"
                 } else {
                     ""

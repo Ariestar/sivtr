@@ -233,10 +233,26 @@ pub(crate) fn ensure_share(
 }
 
 fn add(path: Option<PathBuf>, name: Option<String>, redact: bool) -> Result<ShareInfo> {
-    let (share, root) = ensure_share(path, name, redact)?;
+    // Explicit `share add` always creates; a workspace that is already shared
+    // is a duplicate, reported by the daemon. (Reuse is reserved for group
+    // setup, which must not clobber the requested name/redaction.)
+    let path =
+        path.unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
+    let paths = workspace::ensure_workspace_for_dir(&path)?
+        .with_context(|| format!("{} is not inside a git workspace", path.display()))?;
+    let name = name.unwrap_or_else(|| default_share_name(&paths.root));
+    let share = match ipc::call(LocalRequest::ShareAdd {
+        workspace_key: paths.key,
+        root: paths.root.display().to_string(),
+        name,
+        redact,
+    })? {
+        LocalResponse::Share(share) => share,
+        response => bail!("Unexpected daemon response: {response:?}"),
+    };
     output::success(format!("shared workspace `{}`", share.name));
     output::detail("id", share.id.clone());
-    output::detail("root", root.display().to_string());
+    output::detail("root", paths.root.display().to_string());
     output::detail(
         "redaction",
         if share.redact { "enabled" } else { "disabled" },

@@ -1,6 +1,7 @@
 pub mod context;
 pub mod daemon;
-pub mod group;
+pub mod fanout;
+pub mod groups;
 pub mod identity;
 pub mod ipc;
 pub mod net;
