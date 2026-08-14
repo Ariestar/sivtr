@@ -412,9 +412,6 @@ fn try_group_timed(
         return Ok(None);
     };
     crate::commands::remote::serve::ensure_running()?;
-    // Fan-out happens inside the daemon (parallel per-member dials); give the
-    // socket read enough headroom beyond the daemon's per-peer budget.
-    let read_timeout = read_timeout.max(GROUP_QUERY_TIMEOUT);
     match ipc::call_with_read_timeout(
         LocalRequest::GroupQuery {
             group,
