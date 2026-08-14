@@ -87,6 +87,20 @@ pub(crate) fn group_targets(
     Ok(targets)
 }
 
+/// Per-share query bounds for a group fan-out: relevance needs the merged
+/// corpus to score, so `rank` (and `latest`/`limit`) stay stripped there;
+/// recency and limit bounds compose across shares and are pushed down to
+/// bound each member's response size.
+fn per_share_bounds(full: &Filter) -> Filter {
+    let mut bounds = full.clone();
+    bounds.rank = None;
+    if full.rank.is_some() {
+        bounds.latest = None;
+        bounds.limit = None;
+    }
+    bounds
+}
+
 /// Fan out a group query: the caller's own contributions run in-process (a
 /// failure is a real error), every remote (member, share) is dialed in parallel
 /// under a per-share budget, and results are merged qualified per member and
@@ -98,16 +112,14 @@ pub(crate) async fn group_fan_out(
     source: &str,
     filter: Filter,
 ) -> Result<GroupQueryResponse> {
-    // Shares only bound the set (pattern/status/time/...). Ordering, the
-    // `latest` window, and `limit` are group-wide: pushed down, they would
-    // return a per-share top-k (five per share for `--latest 5`) instead of
-    // the group's global top results, so they are applied once on the merged
-    // corpus below.
+    // Shares only bound the set (pattern/status/time/...). For non-relevance
+    // ordering, `latest`/`limit` compose across shares: each share's top-N is
+    // a superset of the global top-N's per-share part, so pushing them down
+    // bounds the per-member wire cost without changing the merged result.
+    // Relevance (BM25) is ranked only after the group-wide merge, so it stays
+    // unbounded per share and the full bounds are applied once below.
     let full = filter.for_remote_peer();
-    let mut bounds = full.clone();
-    bounds.rank = None;
-    bounds.latest = None;
-    bounds.limit = None;
+    let bounds = per_share_bounds(&full);
 
     let self_id = context.identity.id();
     let mut records = Vec::new();
@@ -289,5 +301,30 @@ mod tests {
         let error =
             group_targets(&store, &group, None, Some("missing")).expect_err("unknown share");
         assert!(error.to_string().contains("No member contributes a share"));
+    }
+
+    #[test]
+    fn per_share_bounds_push_down_recency_but_not_relevance() {
+        let recency = Filter {
+            latest: Some(5),
+            limit: Some(10),
+            rank: None,
+            ..Filter::default()
+        };
+        let bounds = per_share_bounds(&recency);
+        assert_eq!(bounds.rank, None);
+        assert_eq!(bounds.latest, Some(5));
+        assert_eq!(bounds.limit, Some(10));
+
+        let relevance = Filter {
+            latest: Some(5),
+            limit: Some(10),
+            rank: Some("query".to_string()),
+            ..Filter::default()
+        };
+        let bounds = per_share_bounds(&relevance);
+        assert_eq!(bounds.rank, None);
+        assert_eq!(bounds.latest, None);
+        assert_eq!(bounds.limit, None);
     }
 }
