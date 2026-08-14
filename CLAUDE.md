@@ -44,11 +44,11 @@ src/                       ← CLI binary
   main.rs                  ← Command routing
   cli/
     mod.rs                 ← Top-level Clap definitions (copy agents via registry external subcommand)
-    remote.rs              ← serve/share/peer/remote/workspace Clap types
+    remote.rs              ← serve/share/peer/remote/group/workspace Clap types
   commands/
     capture/               ← copy, pipe, run, init, flush, import, diff, clear, browse
     memory/                ← search, filter, var, nav, zoom, show, work, workset
-    remote/                ← serve, share, mounts, peer, workspace
+    remote/                ← serve, share, mounts, peer, group, workspace
     system/                ← config, doctor, history, hotkey, codex, migrate, version
   remote/                  ← Device daemon, identity, state, protocol, ipc
   tui/                     ← Terminal UI framework
