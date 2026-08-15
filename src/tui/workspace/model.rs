@@ -172,7 +172,6 @@ pub(crate) struct TextPair {
 pub(crate) struct WorkspaceCopyParts {
     pub(crate) input: TextPair,
     pub(crate) output: TextPair,
-    pub(crate) block: TextPair,
     pub(crate) command: TextPair,
 }
 
@@ -180,8 +179,7 @@ impl WorkspaceCopyParts {
     pub(crate) fn from_block(block: TextPair) -> Self {
         Self {
             input: block.clone(),
-            output: block.clone(),
-            block,
+            output: block,
             command: TextPair::default(),
         }
     }
