@@ -23,7 +23,7 @@ use super::content::{
 };
 use super::nav::{
     move_workspace_cursor_down, move_workspace_cursor_up, reset_workspace_after_source_change,
-    reset_workspace_dialogue_state, ContentBlockCursor,
+    reset_workspace_dialogue_state, shown_dialogue_idx, ContentBlockCursor,
 };
 use super::panes::ContentPane;
 use super::selection::{select_sources, WorkspaceSourceSelection};
@@ -58,6 +58,8 @@ pub(super) fn apply_workspace_help_action(
     expanded: &mut ExpandedBlocks,
     content_input_lines: usize,
     content_output_lines: usize,
+    // Which selected dialogue the content pane shows (multi-select paging).
+    content_page: &mut usize,
     content_cursor: &mut ContentBlockCursor,
     content_pane: &mut ContentPane,
     content_blocks: (&[BlockText], &[BlockText]),
@@ -160,15 +162,39 @@ pub(super) fn apply_workspace_help_action(
             WorkspaceFocus::Content => {
                 // Pane-native selection: Space marks the focused block for
                 // batch copy, like Space toggles a list row. Multi-select
-                // joins several dialogues into one frame with per-dialogue
-                // block ids, so block marks are single-dialogue only.
-                if selected_dialogues.iter().filter(|s| **s).count() <= 1 {
-                    if let Some((half, block)) = content_cursor.focused(*content_io_focus) {
-                        content_pane.toggle_mark(half, block);
-                    }
+                // pages one dialogue at a time, so the shown dialogue owns
+                // the mark regardless of the selection count.
+                let shown = shown_dialogue_idx(selected_dialogues, *content_page, dialogue_idx);
+                if let Some((half, block)) = content_cursor.focused(*content_io_focus) {
+                    content_pane.toggle_mark(half, shown, block);
                 }
             }
         },
+        // Multi-select paging: J/K flip the content pane to the next /
+        // previous selected dialogue. The redraw resets the fold state and
+        // cursor when the shown dialogue changes; marks follow their
+        // dialogue and stay, so a later copy can join pages.
+        WorkspaceHelpAction::NextDialoguePage if *focus == WorkspaceFocus::Content => {
+            let count = selected_dialogues
+                .iter()
+                .filter(|selected| **selected)
+                .count();
+            if count > 1 {
+                *content_page = (*content_page + 1).min(count.saturating_sub(1));
+                content_scrolls.clear();
+            }
+        }
+        WorkspaceHelpAction::PreviousDialoguePage if *focus == WorkspaceFocus::Content => {
+            if selected_dialogues
+                .iter()
+                .filter(|selected| **selected)
+                .count()
+                > 1
+            {
+                *content_page = content_page.saturating_sub(1);
+                content_scrolls.clear();
+            }
+        }
         WorkspaceHelpAction::SelectAllSources => {
             select_sources(sources, selected_sources, WorkspaceSourceSelection::All);
             reset_workspace_after_source_change(
@@ -220,8 +246,7 @@ pub(super) fn apply_workspace_help_action(
         WorkspaceHelpAction::OpenVim if can_open_dialogue_vim(*focus, dialogue_count) => {
             let view = dialogue_text_vim_view(workspace_content_text(
                 dialogues,
-                selected_dialogues,
-                dialogue_idx,
+                shown_dialogue_idx(selected_dialogues, *content_page, dialogue_idx),
                 *content_mode,
                 content_at,
             ));
@@ -281,8 +306,7 @@ pub(super) fn apply_workspace_help_action(
             );
             let io = workspace_content_io_texts(
                 dialogues,
-                selected_dialogues,
-                dialogue_idx,
+                shown_dialogue_idx(selected_dialogues, *content_page, dialogue_idx),
                 *content_mode,
                 content_at,
                 expanded,
@@ -411,6 +435,8 @@ pub(super) fn apply_workspace_help_action(
         | WorkspaceHelpAction::ToggleContentMode
         | WorkspaceHelpAction::ToggleContentIo
         | WorkspaceHelpAction::ToggleBlockFold
+        | WorkspaceHelpAction::NextDialoguePage
+        | WorkspaceHelpAction::PreviousDialoguePage
         | WorkspaceHelpAction::VisualTextSelect
         | WorkspaceHelpAction::CopyInput
         | WorkspaceHelpAction::CopyOutput

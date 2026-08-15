@@ -24,14 +24,12 @@ pub(crate) fn content_io_from_record(
 
 pub(crate) fn workspace_content_text(
     dialogues: &[WorkspaceDialogue],
-    selected_dialogues: &[bool],
     highlighted_idx: usize,
     mode: ContentViewMode,
     target: Option<WorkAt>,
 ) -> String {
     workspace_content_io_texts(
         dialogues,
-        selected_dialogues,
         highlighted_idx,
         mode,
         target,
@@ -43,43 +41,19 @@ pub(crate) fn workspace_content_text(
 /// Input / Output bodies for the dual content panes with per-block fold
 /// state. Every workpart is a block; the segments stay attached to the pane
 /// text so the content view can map displayed lines back to their block.
+/// Multi-selection is paged: multi-selected dialogues render one at a time,
+/// so the caller passes the index of the dialogue shown on the current page.
 pub(crate) fn workspace_content_io_texts(
     dialogues: &[WorkspaceDialogue],
-    selected_dialogues: &[bool],
     highlighted_idx: usize,
     mode: ContentViewMode,
     target: Option<WorkAt>,
     expanded: &ExpandedBlocks,
 ) -> ContentIoTexts {
-    if dialogues.is_empty() {
-        return ContentIoTexts::new(Vec::new(), Vec::new());
-    }
-
-    let selected = selected_dialogues
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, selected)| selected.then_some(idx))
-        .collect::<Vec<_>>();
-
-    if selected.is_empty() {
-        return dialogues
-            .get(highlighted_idx)
-            .map(|dialogue| dialogue.content_io_texts(mode, target, expanded))
-            .unwrap_or_else(|| ContentIoTexts::new(Vec::new(), Vec::new()));
-    }
-
-    // Multi-select: join each dialogue's IO half separately, block by block.
-    let mut input = Vec::new();
-    let mut output = Vec::new();
-    for dialogue_idx in selected {
-        let Some(dialogue) = dialogues.get(dialogue_idx) else {
-            continue;
-        };
-        let io = dialogue.content_io_texts(mode, None, expanded);
-        input.extend(io.input_blocks);
-        output.extend(io.output_blocks);
-    }
-    ContentIoTexts::new(input, output)
+    dialogues
+        .get(highlighted_idx)
+        .map(|dialogue| dialogue.content_io_texts(mode, target, expanded))
+        .unwrap_or_else(|| ContentIoTexts::new(Vec::new(), Vec::new()))
 }
 
 /// A line that opens or closes a structure block (`<:tool:…:>`,

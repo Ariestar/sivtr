@@ -31,7 +31,8 @@ use super::load::{SessionColumn, SessionCtx, SourceLoadState};
 use super::nav::{
     clamp_list_state, move_workspace_cursor_down, move_workspace_cursor_up, open_link_target,
     reset_workspace_after_source_change, reset_workspace_dialogue_state,
-    resize_workspace_dialogue_selection, row_list_index, source_list_index, ContentBlockCursor,
+    resize_workspace_dialogue_selection, row_list_index, shown_dialogue_idx, source_list_index,
+    ContentBlockCursor,
 };
 use super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane, SourcePane};
 use super::selection::{has_selected_sessions, refresh_next_level};
@@ -124,6 +125,12 @@ pub(crate) fn run(
     // (engine generation, selected mask, focused index) for the projection in
     // `dialogues`; unchanged redraws reuse it instead of re-cloning bodies.
     let mut dialogues_key: Option<(u64, Vec<bool>, usize)> = None;
+    // Multi-select paging: which selected dialogue the content pane shows
+    // (J/K flip the page); single selection always shows the focused row.
+    let mut content_page = 0usize;
+    // Last selection mask; marks drop when the selection set itself changes
+    // (they belong to their dialogue and survive page flips).
+    let mut previous_selection_key = None;
 
     loop {
         // ── Unified pane poll/ensure ───────────────────────────────────────
@@ -325,6 +332,14 @@ pub(crate) fn run(
 
         if redraw {
             redraw = false;
+            // Multi-select pages through one selected dialogue at a time
+            // (J/K flips the page); single selection shows the focused row.
+            let selected_count = selected_dialogues
+                .iter()
+                .filter(|selected| **selected)
+                .count();
+            content_page = content_page.min(selected_count.saturating_sub(1));
+            let shown_idx = shown_dialogue_idx(&selected_dialogues, content_page, dialogue_idx);
             // List: title borrows. Content/copy: materialize (body only for focus∪select).
             let dialogue_titles: Vec<&str> = dialogue_pane.titles().collect();
 
@@ -344,13 +359,13 @@ pub(crate) fn run(
                 content_io_focus = half;
             }
             // Expansion indices are per-dialogue; reset when the shown
-            // dialogue's identity, target, or selection changes.
+            // dialogue's identity, page flip, target, or selection changes.
             let dialogue_identity = dialogues
-                .get(dialogue_idx)
+                .get(shown_idx)
                 .map(|dialogue| (dialogue.source.clone(), dialogue.work_ref.clone()));
             let expand_key = (
                 dialogue_identity,
-                dialogue_idx,
+                shown_idx,
                 active_content_at,
                 selected_dialogues.clone(),
             );
@@ -360,8 +375,13 @@ pub(crate) fn run(
                 pending_block_toggle = None;
                 last_block_click = None;
                 content_cursor.clear();
-                content_pane.clear_marks();
                 expanded_key = Some(expand_key);
+            }
+            // Marks belong to their dialogue (they survive page flips for
+            // cross-page copy); drop them when the selection set changes.
+            if previous_selection_key.as_ref() != Some(&selected_dialogues) {
+                content_pane.clear_marks();
+                previous_selection_key = Some(selected_dialogues.clone());
             }
             // Rebuild the content frame (texts + cached layouts) only when
             // the shown dialogue, mode, focus, target, expansion, or pane
@@ -369,6 +389,7 @@ pub(crate) fn run(
             // input never re-lays-out the text, so it stays responsive.
             let content_key = (
                 materialize_key.clone(),
+                shown_idx,
                 active_content_at,
                 content_mode,
                 content_io_focus,
@@ -378,8 +399,7 @@ pub(crate) fn run(
             if last_content_key.as_ref() != Some(&content_key) {
                 content_frame = content_pane.ensure(ContentCtx {
                     dialogues: &dialogues,
-                    selected_dialogues: &selected_dialogues,
-                    highlighted_idx: dialogue_idx,
+                    highlighted_idx: shown_idx,
                     mode: content_mode,
                     target: active_content_at,
                     area: layout.content,
@@ -475,8 +495,11 @@ pub(crate) fn run(
                         content_selection: visual_select_mode
                             .map(|mode: VisualSelectMode| mode.selection),
                         content_block_cursor: content_cursor.focused(content_io_focus),
-                        content_marked_input: content_pane.marked(ContentIoFocus::Input),
-                        content_marked_output: content_pane.marked(ContentIoFocus::Output),
+                        content_marked_input: content_pane.marked(ContentIoFocus::Input, shown_idx),
+                        content_marked_output: content_pane
+                            .marked(ContentIoFocus::Output, shown_idx),
+                        content_page: (selected_count > 1)
+                            .then_some((content_page, selected_count)),
                         content_frame: &content_frame,
                     },
                 )
@@ -734,6 +757,7 @@ pub(crate) fn run(
                                 &mut expanded_blocks,
                                 content_pane.line_count(ContentIoFocus::Input),
                                 content_pane.line_count(ContentIoFocus::Output),
+                                &mut content_page,
                                 &mut content_cursor,
                                 &mut content_pane,
                                 content_frame.texts.block_slices(),
@@ -863,6 +887,7 @@ pub(crate) fn run(
                         &mut expanded_blocks,
                         content_pane.line_count(ContentIoFocus::Input),
                         content_pane.line_count(ContentIoFocus::Output),
+                        &mut content_page,
                         &mut content_cursor,
                         &mut content_pane,
                         content_frame.texts.block_slices(),
@@ -961,14 +986,15 @@ pub(crate) fn run(
                                 mouse.row,
                             ) {
                                 content_cursor.set(half, block);
-                                // Dot marks are per-block-id, and multi-select
-                                // joins several dialogues' blocks into one
-                                // frame with ids repeating per dialogue — a
-                                // dot cannot be attributed to one dialogue.
-                                // Keep dot marking single-dialogue only.
-                                if selected_dialogues.iter().filter(|s| **s).count() <= 1 {
-                                    content_pane.toggle_mark(half, block);
-                                }
+                                // Dot marks belong to the shown dialogue
+                                // (multi-select pages one dialogue at a
+                                // time, so ids never repeat on screen).
+                                let shown = shown_dialogue_idx(
+                                    &selected_dialogues,
+                                    content_page,
+                                    dialogue_idx,
+                                );
+                                content_pane.toggle_mark(half, shown, block);
                                 continue;
                             }
                         }
@@ -1501,7 +1527,6 @@ mod tests {
         let mut pane = ContentPane::default();
         pane.ensure(ContentCtx {
             dialogues: &dialogues,
-            selected_dialogues: &selected,
             highlighted_idx: 0,
             mode: ContentViewMode::Reading,
             target: None,
@@ -1516,7 +1541,7 @@ mod tests {
         );
 
         // Mark the tool block (output half): copy joins the call + result bodies.
-        pane.toggle_mark(ContentIoFocus::Output, 0);
+        pane.toggle_mark(ContentIoFocus::Output, 0, 0);
         let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
             .expect("marked copy");
         assert_eq!(picked.units.len(), 1);
@@ -1532,7 +1557,7 @@ mod tests {
         );
 
         // Mark the user block (input half): both marked blocks are joined.
-        pane.toggle_mark(ContentIoFocus::Input, 0);
+        pane.toggle_mark(ContentIoFocus::Input, 0, 0);
         let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
             .expect("marked copy");
         let text = &picked.units[0].plain;
@@ -1589,7 +1614,6 @@ mod tests {
         let mut pane = ContentPane::default();
         pane.ensure(ContentCtx {
             dialogues: &dialogues,
-            selected_dialogues: &selected,
             highlighted_idx: 0,
             mode: ContentViewMode::Reading,
             target: None,
@@ -1601,7 +1625,7 @@ mod tests {
         // Mark the output run block: the tool run is id 1 (assistant's
         // reply is id 0 in the output half). Copy joins the run's tool
         // bodies, never the user or assistant blocks.
-        pane.toggle_mark(ContentIoFocus::Output, 1);
+        pane.toggle_mark(ContentIoFocus::Output, 0, 1);
         let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
             .expect("marked copy");
         let text = &picked.units[0].plain;
@@ -1667,7 +1691,6 @@ mod tests {
         let area = ratatui::layout::Rect::new(0, 0, 60, 20);
         let frame = pane.ensure(ContentCtx {
             dialogues: &dialogues,
-            selected_dialogues: &selected,
             highlighted_idx: 0,
             mode: ContentViewMode::Reading,
             target: None,
@@ -1687,7 +1710,7 @@ mod tests {
             }
         }
         let hit_id = hit_id.expect("a block is hit in the output half");
-        pane.toggle_mark(ContentIoFocus::Output, hit_id);
+        pane.toggle_mark(ContentIoFocus::Output, 0, hit_id);
 
         let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
             .expect("marked copy must not be None after a real dot hit");
@@ -1830,7 +1853,6 @@ mod tests {
         expanded.toggle(ContentIoFocus::Output, 0);
         pane.ensure(ContentCtx {
             dialogues: &dialogues,
-            selected_dialogues: &selected,
             highlighted_idx: 0,
             mode: ContentViewMode::Reading,
             target: None,
@@ -1838,7 +1860,7 @@ mod tests {
             io_focus: ContentIoFocus::Output,
             expanded: &expanded,
         });
-        pane.toggle_mark(ContentIoFocus::Output, 1);
+        pane.toggle_mark(ContentIoFocus::Output, 0, 1);
         let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
             .expect("marked member copy");
         let text = &picked.units[0].plain;

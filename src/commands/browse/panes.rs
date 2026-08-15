@@ -414,7 +414,6 @@ fn body_for_key<'a>(
 /// Domain context for dual IO content line-count catalogs.
 pub struct ContentCtx<'a> {
     pub dialogues: &'a [WorkspaceDialogue],
-    pub selected_dialogues: &'a [bool],
     pub highlighted_idx: usize,
     pub mode: ContentViewMode,
     pub target: Option<WorkAt>,
@@ -424,15 +423,17 @@ pub struct ContentCtx<'a> {
 }
 
 /// Tracks layout line counts for Input / Output halves separately and owns
-/// the per-half block multi-select (native pane selection): clicking a
+/// the per-dialogue block multi-select (native pane selection): clicking a
 /// block's dot toggles its id, and content (copy, fold) consumes the mask.
+/// Marks are keyed by dialogue so multi-select paging (J/K) keeps every
+/// page's marks; the picker clears the whole set when the selection changes.
 #[derive(Default)]
 pub struct ContentPane {
     input_lines: usize,
     output_lines: usize,
-    /// Marked block ids per half, indexed by block id (dense DFS ids).
-    marked_input: Selection,
-    marked_output: Selection,
+    /// Marked block ids per dialogue per half, indexed by block id (dense
+    /// DFS ids): `dialogue_idx -> (input, output)`.
+    marked: std::collections::HashMap<usize, [Selection; 2]>,
 }
 
 /// Largest block id in a half's display segments plus one, for mask sizing.
@@ -444,6 +445,18 @@ fn marked_mask_len(blocks: &[BlockText]) -> usize {
         .map_or(0, |max| max + 1)
 }
 
+fn half_selection_mut(
+    marked: &mut std::collections::HashMap<usize, [Selection; 2]>,
+    idx: usize,
+    half: ContentIoFocus,
+) -> &mut Selection {
+    let entry = marked.entry(idx).or_default();
+    match half {
+        ContentIoFocus::Input => &mut entry[0],
+        ContentIoFocus::Output => &mut entry[1],
+    }
+}
+
 impl ContentPane {
     pub fn line_count(&self, half: ContentIoFocus) -> usize {
         match half {
@@ -453,12 +466,11 @@ impl ContentPane {
     }
 
     /// Build the frame for this context, resizing the block selection masks
-    /// to the shown dialogue's block ids. Rebuilds the cached layouts; call
+    /// of the shown dialogue's block ids. Rebuilds the cached layouts; call
     /// it only when the content actually changed.
     pub fn ensure(&mut self, ctx: ContentCtx<'_>) -> ContentIoFrame {
         let texts = workspace_content_io_texts(
             ctx.dialogues,
-            ctx.selected_dialogues,
             ctx.highlighted_idx,
             ctx.mode,
             ctx.target,
@@ -467,35 +479,44 @@ impl ContentPane {
         let frame = ContentIoFrame::build(ctx.area, texts, ctx.mode, ctx.io_focus);
         self.input_lines = frame.line_count(ContentIoFocus::Input);
         self.output_lines = frame.line_count(ContentIoFocus::Output);
-        self.marked_input
+        half_selection_mut(&mut self.marked, ctx.highlighted_idx, ContentIoFocus::Input)
             .resize(marked_mask_len(&frame.texts.input_blocks));
-        self.marked_output
-            .resize(marked_mask_len(&frame.texts.output_blocks));
+        half_selection_mut(
+            &mut self.marked,
+            ctx.highlighted_idx,
+            ContentIoFocus::Output,
+        )
+        .resize(marked_mask_len(&frame.texts.output_blocks));
         frame
     }
 
-    /// Marked block mask of one half (`mask[block_id]` = marked).
-    pub fn marked(&self, half: ContentIoFocus) -> &[bool] {
+    /// Marked block mask of one dialogue's half (`mask[block_id]` = marked);
+    /// an unknown dialogue has no marks.
+    pub fn marked(&self, half: ContentIoFocus, dialogue_idx: usize) -> &[bool] {
+        let [input, output] = match self.marked.get(&dialogue_idx) {
+            Some(entry) => entry,
+            None => return &[],
+        };
         match half {
-            ContentIoFocus::Input => self.marked_input.mask(),
-            ContentIoFocus::Output => self.marked_output.mask(),
+            ContentIoFocus::Input => input.mask(),
+            ContentIoFocus::Output => output.mask(),
         }
     }
 
-    pub fn toggle_mark(&mut self, half: ContentIoFocus, block: usize) {
-        match half {
-            ContentIoFocus::Input => self.marked_input.toggle(block),
-            ContentIoFocus::Output => self.marked_output.toggle(block),
-        }
+    pub fn toggle_mark(&mut self, half: ContentIoFocus, dialogue_idx: usize, block: usize) {
+        half_selection_mut(&mut self.marked, dialogue_idx, half).toggle(block);
     }
 
+    /// Drop every dialogue's marks (selection set changed).
     pub fn clear_marks(&mut self) {
-        self.marked_input.clear();
-        self.marked_output.clear();
+        self.marked.clear();
     }
 
     pub fn marked_count(&self) -> usize {
-        self.marked_input.count() + self.marked_output.count()
+        self.marked
+            .values()
+            .map(|[input, output]| input.count() + output.count())
+            .sum()
     }
 }
 

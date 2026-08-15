@@ -87,13 +87,12 @@ fn content_preview_text_preserves_raw_text_without_line_number_prefixes() {
 
     let io = workspace_content_io_texts(
         std::slice::from_ref(&dialogue),
-        &[false],
         0,
         ContentViewMode::Raw,
         None,
         &ExpandedBlocks::default(),
     );
-    let text = workspace_content_text(&[dialogue], &[false], 0, ContentViewMode::Raw, None);
+    let text = workspace_content_text(&[dialogue], 0, ContentViewMode::Raw, None);
     assert_eq!(io.input.trim(), "alpha");
     assert_eq!(io.output.trim(), "omega");
     assert!(text.contains("alpha"));
@@ -114,13 +113,7 @@ fn content_preview_text_uses_targeted_part_text_in_raw_mode() {
     )]);
     let dialogue = codex_dialogue(record);
 
-    let text = workspace_content_text(
-        &[dialogue],
-        &[false],
-        0,
-        ContentViewMode::Raw,
-        Some(WorkAt::Part(1)),
-    );
+    let text = workspace_content_text(&[dialogue], 0, ContentViewMode::Raw, Some(WorkAt::Part(1)));
     assert!(text.contains("<:tool:tool call:>"));
     assert!(text.contains("hidden tool call"));
     assert!(text.contains("<:/tool:tool call:>"));
@@ -140,7 +133,6 @@ fn content_preview_text_uses_structured_targeted_part_text_in_reading_mode() {
 
     let text = workspace_content_text(
         &[dialogue],
-        &[false],
         0,
         ContentViewMode::Reading,
         Some(WorkAt::Part(1)),
@@ -190,14 +182,12 @@ fn reading_mode_folds_structure_and_raw_expands() {
 
     let reading = workspace_content_text(
         std::slice::from_ref(&dialogue),
-        &[false],
         0,
         ContentViewMode::Reading,
         None,
     );
     let reading_io = workspace_content_io_texts(
         std::slice::from_ref(&dialogue),
-        &[false],
         0,
         ContentViewMode::Reading,
         None,
@@ -218,13 +208,12 @@ fn reading_mode_folds_structure_and_raw_expands() {
 
     let raw_io = workspace_content_io_texts(
         std::slice::from_ref(&dialogue),
-        &[false],
         0,
         ContentViewMode::Raw,
         None,
         &ExpandedBlocks::default(),
     );
-    let raw = workspace_content_text(&[dialogue], &[false], 0, ContentViewMode::Raw, None);
+    let raw = workspace_content_text(&[dialogue], 0, ContentViewMode::Raw, None);
     assert!(raw_io.input.contains("question"));
     assert!(raw_io.output.contains("cargo test"));
     assert!(raw_io.output.contains("$ cargo test"));
@@ -287,7 +276,6 @@ fn reading_mode_collapses_adjacent_structure_runs() {
 
     let reading_io = workspace_content_io_texts(
         std::slice::from_ref(&dialogue),
-        &[false],
         0,
         ContentViewMode::Reading,
         None,
@@ -295,7 +283,6 @@ fn reading_mode_collapses_adjacent_structure_runs() {
     );
     let reading = workspace_content_text(
         std::slice::from_ref(&dialogue),
-        &[false],
         0,
         ContentViewMode::Reading,
         None,
@@ -364,7 +351,6 @@ fn reading_mode_folds_consecutive_same_kind_runs() {
 
     let reading_io = workspace_content_io_texts(
         std::slice::from_ref(&dialogue),
-        &[false],
         0,
         ContentViewMode::Reading,
         None,
@@ -423,7 +409,6 @@ fn reading_mode_keeps_structure_runs_in_call_order() {
 
     let reading_io = workspace_content_io_texts(
         std::slice::from_ref(&dialogue),
-        &[false],
         0,
         ContentViewMode::Reading,
         None,

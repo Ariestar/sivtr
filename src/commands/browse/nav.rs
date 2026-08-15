@@ -69,6 +69,29 @@ impl ContentBlockCursor {
     }
 }
 
+/// Index of the dialogue the content pane shows: the `page`-th selected
+/// dialogue when several are selected, otherwise the focused row. `page`
+/// is clamped to the current selection count.
+pub(super) fn shown_dialogue_idx(
+    selected_dialogues: &[bool],
+    page: usize,
+    dialogue_idx: usize,
+) -> usize {
+    let count = selected_dialogues
+        .iter()
+        .filter(|selected| **selected)
+        .count();
+    if count == 0 {
+        return dialogue_idx;
+    }
+    selected_dialogues
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, selected)| selected.then_some(idx))
+        .nth(page.min(count.saturating_sub(1)))
+        .unwrap_or(dialogue_idx)
+}
+
 pub(super) fn reset_workspace_after_source_change(
     session_state: &mut ListState,
     selected_sessions: &mut Vec<bool>,
@@ -291,7 +314,7 @@ pub(super) fn reset_workspace_dialogue_state(
 
 #[cfg(test)]
 mod tests {
-    use super::row_list_index;
+    use super::{row_list_index, shown_dialogue_idx};
     use ratatui::layout::Rect;
 
     #[test]
@@ -306,5 +329,21 @@ mod tests {
         assert_eq!(row_list_index(area, 4, 100, 98), None);
         // The title row is not a selectable row.
         assert_eq!(row_list_index(area, 0, 100, 0), None);
+    }
+
+    #[test]
+    fn shown_dialogue_idx_falls_back_to_focused_row_without_selection() {
+        assert_eq!(shown_dialogue_idx(&[false, false], 0, 1), 1);
+    }
+
+    #[test]
+    fn shown_dialogue_idx_pages_through_the_selected_dialogues() {
+        let selected = [false, true, false, true, true];
+        // Page 0..3 maps onto the 2nd, 4th, and 5th dialogues.
+        assert_eq!(shown_dialogue_idx(&selected, 0, 0), 1);
+        assert_eq!(shown_dialogue_idx(&selected, 1, 0), 3);
+        assert_eq!(shown_dialogue_idx(&selected, 2, 0), 4);
+        // A page past the end clamps to the last selected dialogue.
+        assert_eq!(shown_dialogue_idx(&selected, 9, 0), 4);
     }
 }

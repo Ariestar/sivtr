@@ -97,6 +97,11 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         .filter(|search| search.scope == WorkspaceSearchScope::Content)
         .and(search_regex.as_ref());
     let title_suffix = content_title_suffix(view.selected_dialogues, current_ref.as_ref());
+    // Multi-select paging: `Input (read) · 2/3 : 3 dialogues selected`.
+    let page_label = view
+        .content_page
+        .map(|(page, total)| format!(" · {}/{}", page + 1, total))
+        .unwrap_or_default();
 
     for half in [ContentIoFocus::Input, ContentIoFocus::Output] {
         let area = frame_io.areas.area(half);
@@ -119,7 +124,10 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
             area,
             Panel::new(
                 WorkspaceFocus::Content.key(),
-                format!("{half_title} ({}){title_suffix}", view.content_mode.label()),
+                format!(
+                    "{half_title} ({}){page_label}{title_suffix}",
+                    view.content_mode.label()
+                ),
                 content_active && view.content_io_focus == half,
             )
             .with_position(
