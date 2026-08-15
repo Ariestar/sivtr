@@ -288,6 +288,10 @@ pub enum WorkPartData {
         #[serde(skip_serializing_if = "Option::is_none")]
         tool: Option<String>,
         output: serde_json::Value,
+        /// First file line of a read-result body when the provider numbered
+        /// it (`775→ …`); display shifts the code gutter to real file lines.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        start_line: Option<u64>,
     },
     Skill {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -1107,6 +1111,7 @@ fn agent_parts(blocks: &[AgentBlock]) -> Vec<WorkPart> {
                         call_id: block.call_id.clone(),
                         tool,
                         output: tool_value(text),
+                        start_line: block.start_line,
                     },
                 );
             }
@@ -1281,6 +1286,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "fix latest terminal error".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::ToolCall,
@@ -1288,6 +1294,7 @@ mod tests {
                     label: Some("bash".to_string()),
                     call_id: None,
                     text: "{\"command\":\"cargo test\"}".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::ToolOutput,
@@ -1295,6 +1302,7 @@ mod tests {
                     label: Some("bash".to_string()),
                     call_id: None,
                     text: "failed".to_string(),
+                    start_line: None,
                 },
             ],
         };
@@ -1342,6 +1350,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "read a.rs".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::ToolCall,
@@ -1349,6 +1358,7 @@ mod tests {
                     label: Some("read".to_string()),
                     call_id: Some("c1".to_string()),
                     text: "{\"file_path\":\"a.rs\"}".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::ToolOutput,
@@ -1356,6 +1366,7 @@ mod tests {
                     label: None,
                     call_id: Some("c1".to_string()),
                     text: "content".to_string(),
+                    start_line: None,
                 },
             ],
         };
@@ -1380,6 +1391,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "<environment_context>".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::User,
@@ -1387,6 +1399,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "implement this".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::Assistant,
@@ -1394,6 +1407,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "done".to_string(),
+                    start_line: None,
                 },
             ],
         };
@@ -1438,6 +1452,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "<skill name=\"sivtr-memory\" location=\"C:\\x\\SKILL.md\">\nlong instructions\n</skill>\n\nreal task".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::Assistant,
@@ -1445,6 +1460,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "done".to_string(),
+                    start_line: None,
                 },
             ],
         };
@@ -1485,6 +1501,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "[Request interrupted by user for tool use]".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::Assistant,
@@ -1492,6 +1509,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "partial".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::User,
@@ -1499,6 +1517,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "continue".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::Assistant,
@@ -1506,6 +1525,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "done".to_string(),
+                    start_line: None,
                 },
             ],
         };
@@ -1534,6 +1554,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "  <system-reminder>\nhidden\n</system-reminder>".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::User,
@@ -1541,6 +1562,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "<command-args>--foo</command-args>".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::User,
@@ -1548,6 +1570,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "<ide_selection>main.rs</ide_selection>".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::User,
@@ -1555,6 +1578,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "real question".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::Assistant,
@@ -1562,6 +1586,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "answer".to_string(),
+                    start_line: None,
                 },
             ],
         };

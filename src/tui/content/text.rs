@@ -129,6 +129,7 @@ mod tests {
                 call_id: None,
                 tool: Some(tool.to_string()),
                 output: serde_json::json!({ "stdout": output }),
+                start_line: None,
             },
         }
     }

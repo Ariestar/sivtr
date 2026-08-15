@@ -335,6 +335,7 @@ fn apply_tool_result(session: &mut AgentSession, value: &Value) {
             .map(str::to_string),
         None,
         text,
+        None,
     );
 }
 
@@ -530,6 +531,7 @@ impl UpdatesParser {
             tool_call_id.map(str::to_string),
             Some(name),
             arguments,
+            None,
         );
     }
 
@@ -544,6 +546,22 @@ impl UpdatesParser {
         if text.trim().is_empty() {
             return;
         }
+        // The provider owns its output shapes: read results number every
+        // line (`775→ …`) and grep output rides in a `<workspace_result …>`
+        // envelope — both are stripped here so blocks carry clean text, with
+        // the read start line kept as explicit metadata.
+        let raw_type = update
+            .get("rawOutput")
+            .and_then(|raw| raw.get("type"))
+            .and_then(Value::as_str);
+        let (text, start_line) = match raw_type {
+            Some("ReadFile") => match strip_read_gutter(&text) {
+                Some((start, clean)) => (clean, Some(start)),
+                None => (text, None),
+            },
+            Some("GrepSearch") => (strip_workspace_envelope(&text), None),
+            _ => (text, None),
+        };
         let tool_call_id = update.get("toolCallId").and_then(Value::as_str);
         let name = tool_call_id.and_then(|id| self.tool_names.get(id)).cloned();
         push_tool_block(
@@ -553,6 +571,7 @@ impl UpdatesParser {
             tool_call_id.map(str::to_string),
             name,
             text,
+            start_line,
         );
     }
 }
@@ -632,6 +651,42 @@ fn tool_raw_output_text(raw: &Value) -> String {
     serde_json::to_string_pretty(raw).unwrap_or_default()
 }
 
+/// grok numbers read results every ten lines (`775→` on lines 1, 10, 20 …),
+/// not per line. When the *first* line carries the `N→` gutter, strip the
+/// gutter and keep its number as the start line; unmarked lines pass through
+/// untouched, so the body is exactly the file content.
+fn strip_read_gutter(text: &str) -> Option<(u64, String)> {
+    let mut lines = text.lines();
+    let first = lines.next()?;
+    let (num, rest) = first.split_once('→')?;
+    let start = num.trim().parse::<u64>().ok()?;
+    let mut out = vec![strip_gutter_space(rest)];
+    for line in lines {
+        match line.split_once('→') {
+            Some((num, rest)) if num.trim().parse::<u64>().is_ok() => {
+                out.push(strip_gutter_space(rest));
+            }
+            _ => out.push(line.to_string()),
+        }
+    }
+    Some((start, out.join("\n")))
+}
+
+/// One optional space after the arrow keeps the code's own indentation.
+fn strip_gutter_space(rest: &str) -> String {
+    rest.strip_prefix(' ').unwrap_or(rest).to_string()
+}
+
+/// grok wraps grep output in `<workspace_result …>` — tool plumbing, not a
+/// match. The provider owns its shape, so it drops out before the generic
+/// grep structure reaches the display layer.
+fn strip_workspace_envelope(text: &str) -> String {
+    text.lines()
+        .filter(|line| !line.trim_start().starts_with("<workspace_result"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Event time from the ACP envelope: precise `agentTimestampMs` when present,
 /// else the top-level unix-seconds `timestamp`.
 fn event_timestamp(value: &Value) -> Option<String> {
@@ -680,6 +735,7 @@ fn push_one_tool_call(session: &mut AgentSession, tool_call: &Value) {
             .map(str::to_string),
         name,
         arguments,
+        None,
     );
 }
 
@@ -853,6 +909,54 @@ mod tests {
         assert!(session.blocks[6].text.contains("count 3"));
         assert_eq!(session.blocks[7].kind, AgentBlockKind::Assistant);
         assert_eq!(session.blocks[7].text, "done\nnow");
+    }
+
+    #[test]
+    fn strips_provider_shapes_read_gutter_and_grep_envelope() {
+        let home = tempfile::tempdir().unwrap();
+        let session_id = "019ff6dd-clean";
+        let dir = home.path().join("sessions").join("bucket").join(session_id);
+        fs::create_dir_all(&dir).unwrap();
+        let _ = fs::write(
+            dir.join(UPDATES_FILE),
+            r#"{"timestamp":1000,"params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"r1","title":"read_file","rawInput":{"target_file":"a.rs"}},"_meta":{"agentTimestampMs":1000000}}}
+{"timestamp":1001,"params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"r1","status":"completed","rawOutput":{"type":"ReadFile","FileContent":{"content":"775→ line one\n776→ line two\n"}}},"_meta":{"agentTimestampMs":1001000}}}
+{"timestamp":1002,"params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"g1","title":"GrepSearch","rawInput":{"pattern":"fn"}},"_meta":{"agentTimestampMs":1002000}}}
+{"timestamp":1003,"params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"g1","status":"completed","rawOutput":{"type":"GrepSearch","stdout":[60,119,111,114,107,115,112,97,99,101,95,114,101,115,117,108,116,62,10,70,111,117,110,100,32,49,32,109,97,116,99,104,105,110,103,32,108,105,110,101,115,10,97,46,114,115,10,55,58,102,110,32,109,97,105,110,40,41,10]}},"_meta":{"agentTimestampMs":1003000}}}
+"#,
+        );
+        let _guard = EnvGuard::set("GROK_HOME", home.path());
+        let path = home.path().join("sessions").join("bucket").join(session_id);
+        let session = GrokProvider.parse_session_file(&path).unwrap();
+
+        // Read result: the `N→` gutter is stripped, the start line kept as
+        // generic metadata for the display layer.
+        assert_eq!(session.blocks[1].kind, AgentBlockKind::ToolOutput);
+        assert_eq!(session.blocks[1].text, "line one\nline two");
+        assert_eq!(session.blocks[1].start_line, Some(775));
+
+        // Grep result: the `<workspace_result …>` envelope drops, matches stay.
+        assert_eq!(session.blocks[3].kind, AgentBlockKind::ToolOutput);
+        assert!(!session.blocks[3].text.contains("<workspace_result"));
+        assert!(session.blocks[3].text.contains("Found 1 matching lines"));
+        assert!(session.blocks[3].text.contains("7:fn main()"));
+    }
+
+    #[test]
+    fn read_gutter_strips_when_only_every_tenth_line_is_marked() {
+        // Real grok shape: the `N→` gutter appears on the first line and
+        // every tenth line, plain lines in between pass through untouched.
+        assert_eq!(
+            strip_read_gutter("775→ line one\nplain line\n776→ line two"),
+            Some((775, "line one\nplain line\nline two".to_string()))
+        );
+        // A leading `1→` on an empty first line keeps the blank line.
+        assert_eq!(
+            strip_read_gutter("1→\n--\nname: help\n10→\n\n# Title"),
+            Some((1, "\n--\nname: help\n\n\n# Title".to_string()))
+        );
+        // No gutter at all: verbatim (None keeps the transcript).
+        assert_eq!(strip_read_gutter("plain text\nmore"), None);
     }
 
     #[test]

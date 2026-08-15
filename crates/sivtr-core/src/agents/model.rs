@@ -97,6 +97,10 @@ pub struct AgentBlock {
     pub timestamp: Option<String>,
     pub label: Option<String>,
     pub call_id: Option<String>,
+    /// First file line of a read-result body, when the provider numbers its
+    /// output (`775→ …`). Generic metadata — providers that number their
+    /// read results set it, others leave `None`.
+    pub start_line: Option<u64>,
     pub text: String,
 }
 
@@ -238,6 +242,7 @@ pub fn push_block(
             timestamp,
             label,
             call_id: None,
+            start_line: None,
             text,
         });
     }
@@ -250,6 +255,7 @@ pub fn push_tool_block(
     call_id: Option<String>,
     label: Option<String>,
     text: impl Into<String>,
+    start_line: Option<u64>,
 ) {
     let text = text.into().trim().to_string();
     if !text.is_empty() {
@@ -258,6 +264,7 @@ pub fn push_tool_block(
             timestamp,
             label,
             call_id,
+            start_line,
             text,
         });
     }
@@ -296,6 +303,7 @@ pub fn push_parts_blocks(
                         part_id(item, call),
                         call.get("name").and_then(Value::as_str).map(str::to_string),
                         pretty_json_value(call.get("args").unwrap_or(&Value::Null)),
+                        None,
                     );
                 } else if let Some(response) = item.get("functionResponse") {
                     let body = response.get("response").unwrap_or(&Value::Null);
@@ -310,6 +318,7 @@ pub fn push_parts_blocks(
                             .and_then(Value::as_str)
                             .map(str::to_string),
                         text,
+                        None,
                     );
                 } else {
                     push_block(

@@ -176,6 +176,7 @@ fn reading_mode_folds_structure_and_raw_expands() {
                 call_id: None,
                 tool: Some("Bash".to_string()),
                 output: tool_test_value("ok".to_string()),
+                start_line: None,
             },
         ),
         part(
@@ -408,6 +409,7 @@ fn reading_mode_keeps_structure_runs_in_call_order() {
                 call_id: None,
                 tool: Some("Bash".to_string()),
                 output: tool_test_value("ok".to_string()),
+                start_line: None,
             },
         ),
         part(

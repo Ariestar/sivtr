@@ -371,6 +371,7 @@ mod tests {
                 call_id: call_id.map(str::to_string),
                 tool: Some(tool.to_string()),
                 output: serde_json::json!({ "stdout": output }),
+                start_line: None,
             },
         }
     }

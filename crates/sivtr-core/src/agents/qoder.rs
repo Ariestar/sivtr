@@ -252,6 +252,7 @@ fn push_content_blocks(
                                 item.get("id").and_then(Value::as_str).map(str::to_string),
                                 item.get("name").and_then(Value::as_str).map(str::to_string),
                                 pretty_json_value(input),
+                                None,
                             );
                         }
                     }
@@ -266,6 +267,7 @@ fn push_content_blocks(
                                     .map(str::to_string),
                                 None,
                                 extract_content_text(result_content),
+                                None,
                             );
                         }
                     }

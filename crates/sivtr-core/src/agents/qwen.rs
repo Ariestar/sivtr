@@ -176,6 +176,7 @@ fn apply_event(session: &mut AgentSession, value: &Value) {
                         .and_then(Value::as_str)
                         .map(str::to_string),
                     pretty_json_value(result),
+                    None,
                 );
             }
         }
@@ -192,6 +193,7 @@ fn apply_event(session: &mut AgentSession, value: &Value) {
                 None,
                 label,
                 extract_record_text(value),
+                None,
             );
         }
         "system" => {}

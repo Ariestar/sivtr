@@ -495,6 +495,7 @@ mod tests {
                 call_id: None,
                 tool: None,
                 output: serde_json::json!(text),
+                start_line: None,
             },
             WorkPartKind::Assistant => WorkPartData::Assistant {
                 content: text.to_string(),

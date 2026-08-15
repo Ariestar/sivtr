@@ -214,6 +214,7 @@ fn apply_response_item(session: &mut AgentSession, payload: &Value, timestamp: O
                 .and_then(Value::as_str)
                 .map(str::to_string),
             extract_tool_call_text(payload),
+            None,
         ),
         Some("function_call_output") => push_tool_block(
             session,
@@ -229,6 +230,7 @@ fn apply_response_item(session: &mut AgentSession, payload: &Value, timestamp: O
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
+            None,
         ),
         // Modern codex records shell/apply_patch/read calls as custom tool
         // events with a script `input` and an `output` content array.
@@ -248,6 +250,7 @@ fn apply_response_item(session: &mut AgentSession, payload: &Value, timestamp: O
                 .get("input")
                 .and_then(Value::as_str)
                 .unwrap_or_default(),
+            None,
         ),
         Some("custom_tool_call_output") => push_tool_block(
             session,
@@ -259,6 +262,7 @@ fn apply_response_item(session: &mut AgentSession, payload: &Value, timestamp: O
                 .map(str::to_string),
             None,
             extract_content_text(payload.get("output").unwrap_or(&Value::Null)),
+            None,
         ),
         _ => {}
     }

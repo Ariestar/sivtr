@@ -401,6 +401,14 @@ mod tests {
     }
 
     fn result(tool: &str, output: serde_json::Value) -> WorkPart {
+        result_with_line(tool, output, None)
+    }
+
+    fn result_with_line(
+        tool: &str,
+        output: serde_json::Value,
+        start_line: Option<u64>,
+    ) -> WorkPart {
         WorkPart {
             seq: 2,
             occurred_at: None,
@@ -408,6 +416,7 @@ mod tests {
                 call_id: None,
                 tool: Some(tool.to_string()),
                 output,
+                start_line,
             },
         }
     }

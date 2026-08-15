@@ -1487,6 +1487,7 @@ mod tests {
                 call_id: Some("c1".to_string()),
                 tool: Some("Bash".to_string()),
                 output: serde_json::json!({ "stdout": "ok" }),
+                start_line: None,
             },
         });
         let dialogue = WorkspaceDialogue {
@@ -1573,6 +1574,7 @@ mod tests {
                     call_id: Some(format!("c{i}")),
                     tool: Some(tool.to_string()),
                     output: serde_json::json!({ "stdout": format!("out {i}") }),
+                    start_line: None,
                 },
             });
         }
@@ -1649,6 +1651,7 @@ mod tests {
                     call_id: Some(format!("c{i}")),
                     tool: Some(tool.to_string()),
                     output: serde_json::json!({ "stdout": format!("out {i}") }),
+                    start_line: None,
                 },
             });
         }
@@ -1734,6 +1737,7 @@ mod tests {
                 call_id: Some("c1".to_string()),
                 tool: Some("Grep".to_string()),
                 output: serde_json::json!({ "matches": [{ "file": "a.rs" }] }),
+                start_line: None,
             },
         });
         let dialogue = WorkspaceDialogue {
@@ -1793,6 +1797,7 @@ mod tests {
                     call_id: Some(format!("c{i}")),
                     tool: Some(tool.to_string()),
                     output: serde_json::json!({ "matches": format!("out {i}") }),
+                    start_line: None,
                 },
             });
         }
@@ -1865,6 +1870,7 @@ mod tests {
                 call_id: Some("c1".to_string()),
                 tool: Some("Bash".to_string()),
                 output: serde_json::json!({ "stdout": "ok" }),
+                start_line: None,
             },
         });
         let dialogue = WorkspaceDialogue {
@@ -2192,6 +2198,7 @@ mod tests {
                 call_id: None,
                 tool: None,
                 output: tool_test_value("first line\nneedle one\nmiddle\nneedle two".to_string()),
+                start_line: None,
             },
         }];
         let sessions = vec![WorkspaceSession {
