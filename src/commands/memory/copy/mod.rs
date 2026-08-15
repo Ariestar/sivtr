@@ -14,6 +14,7 @@ pub use plan::{parse_address_dialogues, CopyFilters, CopyPlan, Projection};
 
 use anyhow::{Context, Result};
 use sivtr_core::ai::AgentProvider;
+use sivtr_core::origin::OriginKind;
 use sivtr_core::record::WorkRecord;
 
 use crate::commands::browse;
@@ -119,12 +120,23 @@ fn session_source_from_records(records: &[WorkRecord]) -> Option<WorkspaceSource
         Some(provider) => WorkspaceSourceKind::Agent(provider),
         None => WorkspaceSourceKind::Terminal,
     };
-    // The records keep their named scope (`desk:`, `team/alice:`), so a
-    // remote pick renders with the remote origin, not a local glyph.
-    match record.work_ref.scope_name() {
-        Some(scope) => Some(WorkspaceSource::remote(scope, kind)),
-        None => Some(WorkspaceSource::local(kind)),
-    }
+    let Some(scope) = record.work_ref.scope_name() else {
+        return Some(WorkspaceSource::local(kind));
+    };
+    // Only a registry-confirmed remote mount renders with the remote glyph;
+    // named local aliases (`docs:`) and groups stay on the local style.
+    let cwd = std::env::current_dir().ok()?;
+    let registry = crate::origins::collect(&cwd).ok()?;
+    let remote = registry
+        .resolve(scope)
+        .ok()
+        .flatten()
+        .is_some_and(|entry| entry.origin.kind == OriginKind::Remote);
+    Some(if remote {
+        WorkspaceSource::remote(scope, kind)
+    } else {
+        WorkspaceSource::local(kind)
+    })
 }
 
 /// Build plan from CLI pieces (projection sugar + free tokens + flags).

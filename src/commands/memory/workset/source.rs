@@ -101,12 +101,11 @@ pub fn query(source: &str, filter: Filter, cwd: Option<&Path>) -> Result<WorkSet
         }
         let scope = scope.to_ascii_lowercase();
 
-        // A scoped query may address a remote mount; the daemon must be up
-        // before the passive registry lookup can see its mounts.
-        serve::ensure_running()?;
         // One lookup: the registry is the single alias table (local
         // workspaces, remote mounts, cloud), each entry carrying its reach
         // payload; resolution applies kind precedence on name collisions.
+        // The registry lists mounts only while the daemon is already running;
+        // remote and group paths start it themselves when they run.
         // Groups (`team`, `team/alice`) are a roster fan-out over many
         // devices, not a single origin, so they are tried only on a miss.
         let registry = crate::origins::collect(&cwd)?;
