@@ -611,7 +611,6 @@ fn style_block_line(
     if !range.contains(&line_idx) {
         return line;
     }
-    // One style entry point for every focus highlight (lists + content).
     let overlay = crate::tui::pane::active_item_style();
     let text_width = line_text_width(Some(&line));
     let mut spans = line
