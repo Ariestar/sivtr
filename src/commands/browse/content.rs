@@ -317,28 +317,6 @@ pub(super) fn handle_line_filter_paste(
     }
 }
 
-pub(super) fn apply_dialogue_range_selection(
-    range_anchor: &mut Option<usize>,
-    selected_dialogues: &mut [bool],
-    dialogue_idx: usize,
-) {
-    if let Some(anchor) = range_anchor.take() {
-        let start = anchor.min(dialogue_idx);
-        let end = anchor.max(dialogue_idx);
-        let select = selected_dialogues
-            .get(start..=end)
-            .map(|range| range.iter().any(|selected| !selected))
-            .unwrap_or(true);
-        for idx in start..=end {
-            if let Some(selected) = selected_dialogues.get_mut(idx) {
-                *selected = select;
-            }
-        }
-    } else {
-        *range_anchor = Some(dialogue_idx);
-    }
-}
-
 pub(super) fn workspace_search_target_ref<'a>(
     sessions: &'a [WorkspaceSession],
     matched: &WorkspaceSearchMatch,

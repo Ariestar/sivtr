@@ -613,7 +613,7 @@ pub(crate) fn run(
                     )? {
                         return Ok(picked);
                     }
-                    if matches!(key.code, KeyCode::Esc | KeyCode::Char('v')) {
+                    if matches!(key.code, KeyCode::Esc) {
                         visual_select_mode = None;
                         terminal.hide_cursor()?;
                     }
@@ -651,7 +651,6 @@ pub(crate) fn run(
                                 &mut session_state,
                                 &mut dialogue_state,
                                 &mut selected_dialogues,
-                                &mut range_anchor,
                                 &mut content_scrolls,
                                 content_io_focus,
                                 &mut content_cursor,
@@ -669,7 +668,6 @@ pub(crate) fn run(
                                 &mut session_state,
                                 &mut dialogue_state,
                                 &mut selected_dialogues,
-                                &mut range_anchor,
                                 &mut content_scrolls,
                                 content_io_focus,
                                 &mut content_cursor,
@@ -769,7 +767,6 @@ pub(crate) fn run(
                                 &mut show_search,
                                 &mut search_query,
                                 &mut search_dirty,
-                                &mut visual_select_mode,
                                 active_content_at,
                                 line_filter_spec(&line_filter),
                                 &sessions,
@@ -899,7 +896,6 @@ pub(crate) fn run(
                         &mut show_search,
                         &mut search_query,
                         &mut search_dirty,
-                        &mut visual_select_mode,
                         active_content_at,
                         line_filter_spec(&line_filter),
                         &sessions,
@@ -946,7 +942,7 @@ pub(crate) fn run(
                         if let Some(next_focus) =
                             WorkspaceFocus::from_number_key(ch, dialogue_count)
                         {
-                            set_focus(&mut focus, &mut fullscreen, next_focus);
+                            set_focus(&mut focus, &mut fullscreen, &mut range_anchor, next_focus);
                         }
                     }
                 }
@@ -1072,7 +1068,12 @@ pub(crate) fn run(
                             if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
                                 || visual_select_mode.is_some()
                             {
-                                set_focus(&mut focus, &mut fullscreen, WorkspaceFocus::Content);
+                                set_focus(
+                                    &mut focus,
+                                    &mut fullscreen,
+                                    &mut range_anchor,
+                                    WorkspaceFocus::Content,
+                                );
                             }
                             // Pure click (no drag): release highlights the
                             // block; a second click on the same block within
@@ -1144,7 +1145,6 @@ pub(crate) fn run(
                                 &mut session_state,
                                 &mut dialogue_state,
                                 &mut selected_dialogues,
-                                &mut range_anchor,
                                 &mut content_scrolls,
                                 scroll_half,
                                 &mut content_cursor,
@@ -1158,7 +1158,12 @@ pub(crate) fn run(
                         {
                             // Clicking another pane clears free selection.
                             visual_select_mode = None;
-                            set_focus(&mut focus, &mut fullscreen, clicked_focus);
+                            set_focus(
+                                &mut focus,
+                                &mut fullscreen,
+                                &mut range_anchor,
+                                clicked_focus,
+                            );
                             match clicked_focus {
                                 WorkspaceFocus::Source => {
                                     let vertical = layout.source.height > 3;
@@ -1186,7 +1191,6 @@ pub(crate) fn run(
                                                 0,
                                                 &mut dialogue_state,
                                                 &mut selected_dialogues,
-                                                &mut range_anchor,
                                             );
                                         }
                                         content_scrolls.clear();
@@ -2329,7 +2333,6 @@ mod tests {
         let mut dialogue_state = ListState::default();
         dialogue_state.select(Some(0));
         let mut selected_dialogues = Vec::new();
-        let mut range_anchor = None;
         let mut content_scrolls = ContentScrolls::default();
 
         move_workspace_cursor_up(
@@ -2342,7 +2345,6 @@ mod tests {
             &mut session_state,
             &mut dialogue_state,
             &mut selected_dialogues,
-            &mut range_anchor,
             &mut content_scrolls,
             ContentIoFocus::Input,
             &mut super::super::nav::ContentBlockCursor::default(),

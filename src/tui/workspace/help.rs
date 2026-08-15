@@ -30,7 +30,6 @@ pub(crate) enum WorkspaceHelpAction {
     NextDialoguePage,
     /// Multi-select paging: flip the content pane to the previous selected dialogue.
     PreviousDialoguePage,
-    VisualTextSelect,
     Copy,
     CopyInput,
     CopyOutput,
@@ -165,10 +164,12 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
         },
         WorkspaceHelpEntry {
             key: "v",
-            description: "range select dialogues",
+            description: "range select rows",
             action: WorkspaceHelpAction::RangeSelect,
             footer_label: Some("range"),
-            footer_panes: DIA,
+            // List panes (Source/Sessions/Dialogues) share the same range
+            // selection semantic; Content is a text view with no list rows.
+            footer_panes: &[Source, Sessions, Dialogues],
         },
         WorkspaceHelpEntry {
             key: "a",
@@ -210,13 +211,6 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
             description: "switch Input/Output half",
             action: WorkspaceHelpAction::ToggleContentIo,
             footer_label: Some("io"),
-            footer_panes: CNT,
-        },
-        WorkspaceHelpEntry {
-            key: "v",
-            description: "visual text select",
-            action: WorkspaceHelpAction::VisualTextSelect,
-            footer_label: Some("select"),
             footer_panes: CNT,
         },
         WorkspaceHelpEntry {

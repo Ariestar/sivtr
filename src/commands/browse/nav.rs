@@ -138,7 +138,6 @@ pub(super) fn move_workspace_cursor_up(
     session_state: &mut ListState,
     dialogue_state: &mut ListState,
     selected_dialogues: &mut Vec<bool>,
-    range_anchor: &mut Option<usize>,
     content_scrolls: &mut ContentScrolls,
     content_io_focus: ContentIoFocus,
     content_cursor: &mut ContentBlockCursor,
@@ -154,12 +153,7 @@ pub(super) fn move_workspace_cursor_up(
             if next != selected_index(session_state) {
                 session_state.select((!sessions.is_empty()).then_some(next));
                 if !has_selected_sessions(selected_sessions) {
-                    reset_workspace_dialogue_state(
-                        0,
-                        dialogue_state,
-                        selected_dialogues,
-                        range_anchor,
-                    );
+                    reset_workspace_dialogue_state(0, dialogue_state, selected_dialogues);
                 }
                 content_scrolls.clear();
             }
@@ -186,7 +180,6 @@ pub(super) fn move_workspace_cursor_down(
     session_state: &mut ListState,
     dialogue_state: &mut ListState,
     selected_dialogues: &mut Vec<bool>,
-    range_anchor: &mut Option<usize>,
     content_scrolls: &mut ContentScrolls,
     content_io_focus: ContentIoFocus,
     content_cursor: &mut ContentBlockCursor,
@@ -204,12 +197,7 @@ pub(super) fn move_workspace_cursor_down(
             if next != current {
                 session_state.select((!sessions.is_empty()).then_some(next));
                 if !has_selected_sessions(selected_sessions) {
-                    reset_workspace_dialogue_state(
-                        0,
-                        dialogue_state,
-                        selected_dialogues,
-                        range_anchor,
-                    );
+                    reset_workspace_dialogue_state(0, dialogue_state, selected_dialogues);
                 }
                 content_scrolls.clear();
             }
@@ -304,12 +292,10 @@ pub(super) fn reset_workspace_dialogue_state(
     dialogue_count: usize,
     dialogue_state: &mut ListState,
     selected_dialogues: &mut Vec<bool>,
-    range_anchor: &mut Option<usize>,
 ) {
     dialogue_state.select((dialogue_count > 0).then_some(0));
     selected_dialogues.clear();
     selected_dialogues.resize(dialogue_count, false);
-    *range_anchor = None;
 }
 
 #[cfg(test)]

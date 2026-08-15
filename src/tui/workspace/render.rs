@@ -29,6 +29,23 @@ use crate::tui::workspace::model::{
 };
 use sivtr_core::record::{WorkAt, WorkRef};
 
+/// Range-selection anchor is per-pane: only the focused list honors it so a
+/// left-over anchor from another pane never styles unrelated rows.
+fn active_range(
+    focus: WorkspaceFocus,
+    pane: WorkspaceFocus,
+    range_anchor: Option<usize>,
+) -> Option<usize> {
+    (focus == pane).then_some(range_anchor).flatten()
+}
+
+/// `true` when `idx` falls inside a pending range span (`anchor…cursor`).
+fn in_range(idx: usize, cursor_idx: usize, range_anchor: Option<usize>) -> bool {
+    range_anchor
+        .map(|anchor| idx >= anchor.min(cursor_idx) && idx <= anchor.max(cursor_idx))
+        .unwrap_or(false)
+}
+
 pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
     let area = frame.area();
     frame.render_widget(Clear, area);
@@ -60,6 +77,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         view.source_markers,
         view.loading_tick,
         view.source_state,
+        active_range(view.focus, WorkspaceFocus::Source, view.range_anchor),
         view.focus == WorkspaceFocus::Source,
     );
     render_session_list(
@@ -72,6 +90,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         &view.body_failures,
         view.search.as_ref(),
         search_regex.as_ref(),
+        active_range(view.focus, WorkspaceFocus::Sessions, view.range_anchor),
         view.focus == WorkspaceFocus::Sessions,
     );
     render_dialogue_list(
@@ -81,7 +100,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         view.dialogue_state,
         view.selected_sessions,
         view.selected_dialogues,
-        view.range_anchor,
+        active_range(view.focus, WorkspaceFocus::Dialogues, view.range_anchor),
         view.search.as_ref(),
         search_regex.as_ref(),
         view.focus == WorkspaceFocus::Dialogues,
@@ -559,6 +578,7 @@ fn render_source_list(
     source_markers: &[SourceLoadMarker],
     loading_tick: u8,
     state: &ListState,
+    range_anchor: Option<usize>,
     active: bool,
 ) {
     let cursor_idx = selected_index(state).min(sources.len().saturating_sub(1));
@@ -585,12 +605,15 @@ fn render_source_list(
         .map(|(idx, source)| {
             let selected = selected_sources.get(idx).copied().unwrap_or(false);
             let focused = idx == cursor_idx;
+            let in_range = in_range(idx, cursor_idx, range_anchor);
             let load = source_markers
                 .get(idx)
                 .copied()
                 .unwrap_or(SourceLoadMarker::Idle);
             let marker = load.status_glyph(selected, loading_tick);
-            let style = if focused {
+            let style = if in_range {
+                theme::range_row()
+            } else if focused {
                 active_item_style()
             } else {
                 Style::default().fg(source.color())
@@ -679,6 +702,7 @@ fn render_session_list(
     body_failures: &HashSet<(WorkspaceSource, String)>,
     search: Option<&WorkspaceSearchView<'_>>,
     search_regex: Option<&Regex>,
+    range_anchor: Option<usize>,
     active: bool,
 ) {
     let cursor_idx = selected_index(state);
@@ -688,7 +712,10 @@ fn render_session_list(
         .map(|(idx, choice)| {
             let selected = selected_sessions.get(idx).copied().unwrap_or(false);
             let focused = idx == cursor_idx;
-            let base_style = if focused {
+            let in_range = in_range(idx, cursor_idx, range_anchor);
+            let base_style = if in_range {
+                theme::range_row()
+            } else if focused {
                 active_item_style()
             } else {
                 Style::default()
@@ -743,11 +770,7 @@ fn render_dialogue_list(
         .iter()
         .enumerate()
         .map(|(idx, title)| {
-            let in_range = range_anchor
-                .map(|anchor| {
-                    idx >= anchor.min(highlighted_idx) && idx <= anchor.max(highlighted_idx)
-                })
-                .unwrap_or(false);
+            let in_range = in_range(idx, highlighted_idx, range_anchor);
             let selected = selected_dialogues.get(idx).copied().unwrap_or(false);
             // Selection is shown by the dot alone (● = selected, ○ = not),
             // always visible so it survives pane switches.

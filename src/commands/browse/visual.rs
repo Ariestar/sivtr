@@ -43,33 +43,6 @@ pub(super) struct MouseSelectionStart {
     pub(super) kind: ContentSelectionKind,
 }
 
-pub(super) fn enter_visual_select_mode(
-    visual_select_mode: &mut Option<VisualSelectMode>,
-    content_scroll: &mut usize,
-    content_area: ratatui::layout::Rect,
-    text: &str,
-    mode: ContentViewMode,
-) {
-    let position = clamp_content_position(
-        content_area,
-        text,
-        mode,
-        ContentPosition {
-            line: *content_scroll,
-            column: 0,
-        },
-    );
-    *content_scroll = position.line;
-    *visual_select_mode = Some(VisualSelectMode {
-        selection: ContentSelection {
-            anchor: position,
-            cursor: position,
-            kind: ContentSelectionKind::Linear,
-        },
-        dragging: false,
-    });
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn handle_visual_select_key(
     key: KeyCode,
@@ -84,7 +57,7 @@ pub(super) fn handle_visual_select_key(
     dialogue_idx: usize,
 ) -> Result<Option<WorkspacePickedContent>> {
     match key {
-        KeyCode::Esc | KeyCode::Char('v') => return Ok(None),
+        KeyCode::Esc => return Ok(None),
         KeyCode::Enter | KeyCode::Char('y') => {
             return Ok(Some(workspace_picked_content_for_visual_selection(
                 dialogues,
@@ -401,7 +374,6 @@ pub(super) fn apply_workspace_mouse_scroll(
     session_state: &mut ListState,
     dialogue_state: &mut ListState,
     selected_dialogues: &mut Vec<bool>,
-    range_anchor: &mut Option<usize>,
     content_scrolls: &mut ContentScrolls,
     content_io_focus: ContentIoFocus,
     content_cursor: &mut super::nav::ContentBlockCursor,
@@ -437,7 +409,6 @@ pub(super) fn apply_workspace_mouse_scroll(
                 session_state,
                 dialogue_state,
                 selected_dialogues,
-                range_anchor,
                 content_scrolls,
                 content_io_focus,
                 content_cursor,
@@ -454,7 +425,6 @@ pub(super) fn apply_workspace_mouse_scroll(
                 session_state,
                 dialogue_state,
                 selected_dialogues,
-                range_anchor,
                 content_scrolls,
                 content_io_focus,
                 content_cursor,
