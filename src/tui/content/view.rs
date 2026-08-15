@@ -1723,7 +1723,8 @@ mod tests {
         for row in 1..=3 {
             let cell = buffer.cell((4, row)).unwrap();
             assert_eq!(
-                cell.style().bg, selected_bg,
+                cell.style().bg,
+                selected_bg,
                 "row {row} should be highlighted"
             );
         }
