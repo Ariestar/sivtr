@@ -92,6 +92,7 @@ impl Report {
         self.check_config(fix);
         self.check_session_dir();
         self.check_shell_hooks(fix);
+        self.check_workspace_keys(fix);
         self.check_agent_hosts();
         self.check_mcp_registration(fix);
         self.check_skill(fix);
@@ -256,6 +257,69 @@ impl Report {
                 hint: Some(
                     "run `sivtr init bash` or `sivtr init zsh|powershell|nushell`".to_string(),
                 ),
+            });
+        }
+    }
+
+    /// Workspaces whose stored roots predate the commondir key scheme become
+    /// unreachable (their captured sessions vanish from queries). `--fix`
+    /// re-keys and merges them; without it the check reports what needs it.
+    fn check_workspace_keys(&mut self, fix: bool) {
+        let result = if fix {
+            workspace::migrate_workspace_keys()
+        } else {
+            workspace::inspect_workspace_keys()
+        };
+        let report = match result {
+            Ok(report) => report,
+            Err(e) => {
+                self.add(Check {
+                    name: "workspace_keys",
+                    label: "workspace keys",
+                    status: Status::Manual,
+                    detail: format!("migration check failed: {e}"),
+                    hint: None,
+                });
+                return;
+            }
+        };
+        let mut pending = Vec::new();
+        if !report.migrated.is_empty() {
+            pending.push(format!("{} to re-key", report.migrated.len()));
+        }
+        if !report.merged.is_empty() {
+            pending.push(format!("{} to merge", report.merged.len()));
+        }
+        if !pending.is_empty() {
+            self.add(Check {
+                name: "workspace_keys",
+                label: "workspace keys",
+                status: if fix { Status::Fixed } else { Status::Fail },
+                detail: pending.join(", "),
+                hint: if fix {
+                    None
+                } else {
+                    Some("run `sivtr doctor --fix`".to_string())
+                },
+            });
+        } else if !report.skipped.is_empty() {
+            self.add(Check {
+                name: "workspace_keys",
+                label: "workspace keys",
+                status: Status::Manual,
+                detail: format!(
+                    "{} workspace(s) could not be migrated",
+                    report.skipped.len()
+                ),
+                hint: None,
+            });
+        } else {
+            self.add(Check {
+                name: "workspace_keys",
+                label: "workspace keys",
+                status: Status::Pass,
+                detail: format!("{} workspace(s) on current scheme", report.current),
+                hint: None,
             });
         }
     }

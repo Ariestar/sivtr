@@ -170,10 +170,22 @@ fn paths_for_root(root: PathBuf) -> Result<WorkspacePaths> {
     // and resolves symlinks we don't need. `absolute` makes the path absolute
     // (so a relative `--cwd` still keys stably) without either side effect.
     let root = std::path::absolute(&root).unwrap_or(root);
-    // Workspace identity = the shared git dir (commondir), so every worktree of
-    // one repository resolves to the same key: main checkout + worktrees are a
-    // single workspace with unified terminal logs and agent sessions.
-    let common = repo_common_dir(&root).unwrap_or_else(|| root.clone());
+    let (key, display_root) = workspace_identity(&root);
+    let dir = data_dir().join(WORKSPACES_DIR).join(&key);
+    Ok(WorkspacePaths {
+        key,
+        root: display_root,
+        terminals_dir: dir.join("terminals"),
+        dir,
+    })
+}
+
+/// The identity a checkout resolves to today: its workspace key and display
+/// root, both derived from the shared git dir (commondir), so every worktree
+/// of one repository resolves to the same key. Migration re-keys stored roots
+/// with the same function so a migrated workspace matches a fresh lookup.
+fn workspace_identity(root: &Path) -> (String, PathBuf) {
+    let common = repo_common_dir(root).unwrap_or_else(|| root.to_path_buf());
     let key = workspace_key(&normalize_repo(&common));
     // Display/query root = the main checkout (commondir's parent when it is the
     // `.git` dir), giving every worktree one stable name; fall back to the
@@ -182,17 +194,11 @@ fn paths_for_root(root: PathBuf) -> Result<WorkspacePaths> {
         common
             .parent()
             .map(Path::to_path_buf)
-            .unwrap_or_else(|| root.clone())
+            .unwrap_or_else(|| root.to_path_buf())
     } else {
-        root.clone()
+        root.to_path_buf()
     };
-    let dir = data_dir().join(WORKSPACES_DIR).join(&key);
-    Ok(WorkspacePaths {
-        key,
-        root: display_root,
-        terminals_dir: dir.join("terminals"),
-        dir,
-    })
+    (key, display_root)
 }
 
 /// The shared git directory for a checkout: the `.git` dir itself for a normal
@@ -340,6 +346,132 @@ fn write_workspace_metadata(path: &Path, meta: &WorkspaceMetadata) -> Result<()>
     Ok(())
 }
 
+/// Outcome of [`inspect_workspace_keys`] / [`migrate_workspace_keys`].
+#[derive(Debug, Default)]
+pub struct WorkspaceMigration {
+    /// `(old_key, new_key)` dirs re-keyed (or needing one).
+    pub migrated: Vec<(String, String)>,
+    /// `(old_key, new_key)` legacy dirs merged into the current key's dir.
+    pub merged: Vec<(String, String)>,
+    /// Dirs that could not be migrated, with the reason.
+    pub skipped: Vec<(PathBuf, String)>,
+    /// Workspaces already on the current (commondir) key scheme.
+    pub current: usize,
+}
+
+/// Dry-run: report which workspace dirs need re-keying without renaming.
+pub fn inspect_workspace_keys() -> Result<WorkspaceMigration> {
+    scan_workspace_keys(false)
+}
+
+/// Re-key workspace dirs to the commondir scheme (run via `sivtr doctor --fix`).
+///
+/// Keys were derived from the checkout root; since the commondir change every
+/// checkout of one repository resolves to the shared git dir instead, so
+/// stored roots must be re-keyed or their captured sessions become
+/// unreachable. Worktrees and the main checkout of one repo converge on one
+/// key, merging terminal logs. Idempotent: a second run is a no-op.
+pub fn migrate_workspace_keys() -> Result<WorkspaceMigration> {
+    scan_workspace_keys(true)
+}
+
+fn scan_workspace_keys(apply: bool) -> Result<WorkspaceMigration> {
+    let base = data_dir().join(WORKSPACES_DIR);
+    let mut report = WorkspaceMigration::default();
+    if !base.exists() {
+        return Ok(report);
+    }
+    for entry in fs::read_dir(&base)? {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let dir = entry.path();
+        let Some(old_key) = dir.file_name().and_then(|n| n.to_str()).map(str::to_string) else {
+            continue;
+        };
+        let meta_path = dir.join("workspace.json");
+        let Some(mut meta) = load_workspace_metadata(&meta_path) else {
+            continue;
+        };
+        let (new_key, display_root) = workspace_identity(Path::new(&meta.root));
+        if new_key == old_key {
+            report.current += 1;
+            continue;
+        }
+        let target = base.join(&new_key);
+        if target.exists() {
+            if apply {
+                match merge_workspace_dir(&dir, &target) {
+                    Ok(()) => report.merged.push((old_key, new_key)),
+                    Err(e) => report
+                        .skipped
+                        .push((dir, format!("failed to merge into {new_key}: {e}"))),
+                }
+            } else {
+                report.merged.push((old_key, new_key));
+            }
+            continue;
+        }
+        if !apply {
+            report.migrated.push((old_key, new_key));
+            continue;
+        }
+        match fs::rename(&dir, &target) {
+            Ok(()) => {
+                meta.key = new_key.clone();
+                meta.root = display_root.to_string_lossy().to_string();
+                let _ = write_workspace_metadata(&target.join("workspace.json"), &meta);
+                report.migrated.push((old_key, new_key));
+            }
+            Err(e) => report.skipped.push((dir, format!("rename failed: {e}"))),
+        }
+    }
+    Ok(report)
+}
+
+/// Merge a legacy workspace dir into the current-key dir: copy terminal logs
+/// the target lacks (and the source alias when the target has none), then
+/// remove the legacy dir.
+fn merge_workspace_dir(legacy: &Path, current: &Path) -> Result<()> {
+    let legacy_terminals = legacy.join("terminals");
+    let current_terminals = current.join("terminals");
+    if legacy_terminals.is_dir() {
+        fs::create_dir_all(&current_terminals)?;
+        for entry in fs::read_dir(&legacy_terminals)? {
+            let entry = entry?;
+            let src = entry.path();
+            if !src.is_file() {
+                continue;
+            }
+            let dest = current_terminals.join(entry.file_name());
+            if !dest.exists() {
+                fs::copy(&src, &dest).with_context(|| {
+                    format!("failed to copy {} -> {}", src.display(), dest.display())
+                })?;
+            }
+        }
+    }
+    let current_meta_path = current.join("workspace.json");
+    if let (Some(current_meta), Some(legacy_meta)) = (
+        load_workspace_metadata(&current_meta_path),
+        load_workspace_metadata(&legacy.join("workspace.json")),
+    ) {
+        if current_meta.alias.is_none() && legacy_meta.alias.is_some() {
+            let mut updated = current_meta;
+            updated.alias = legacy_meta.alias;
+            write_workspace_metadata(&current_meta_path, &updated)?;
+        }
+    }
+    fs::remove_dir_all(legacy)
+        .with_context(|| format!("failed to remove legacy workspace {}", legacy.display()))?;
+    Ok(())
+}
+
+fn load_workspace_metadata(path: &Path) -> Option<WorkspaceMetadata> {
+    let text = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
 fn git_root(cwd: &Path) -> Result<Option<PathBuf>> {
     let mut dir = if cwd.is_dir() {
         cwd.to_path_buf()
@@ -384,8 +516,9 @@ fn modified_time(path: &Path) -> std::time::SystemTime {
 #[cfg(test)]
 mod tests {
     use super::{
-        git_root, paths_for_root, real_path, rename_workspace, repo_identity,
-        terminal_session_id_from_path, workspace_alias, workspace_key, WorkspaceMetadata,
+        git_root, inspect_workspace_keys, migrate_workspace_keys, paths_for_root, real_path,
+        rename_workspace, repo_identity, terminal_session_id_from_path, workspace_alias,
+        workspace_identity, workspace_key, WorkspaceMetadata,
     };
     use crate::test_fixtures::{make_repo, make_worktree};
     use std::path::{Path, PathBuf};
@@ -511,6 +644,76 @@ mod tests {
         let dir = unique_test_dir("repo-identity-none");
         assert_eq!(repo_identity(&dir), None);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn migrate_rekeys_root_based_keys_and_merges_worktree_logs() {
+        let _lock = crate::test_env_lock();
+        let data = unique_test_dir("workspace-migrate");
+        let old_data = std::env::var_os("SIVTR_DATA_DIR");
+        std::env::set_var("SIVTR_DATA_DIR", &data);
+
+        let main = unique_test_dir("repo-main");
+        let worktree = unique_test_dir("repo-worktree");
+        make_repo(&main);
+        make_worktree(&main, &worktree, "wt");
+
+        let new_key = workspace_identity(&main).0;
+        let main_old_key = workspace_key(&main.to_string_lossy());
+        let wt_old_key = workspace_key(&worktree.to_string_lossy());
+        assert_ne!(new_key, main_old_key);
+        assert_ne!(new_key, wt_old_key);
+
+        let workspaces = data.join("workspaces");
+        let main_dir = workspaces.join(&main_old_key);
+        let wt_dir = workspaces.join(&wt_old_key);
+        std::fs::create_dir_all(main_dir.join("terminals")).expect("main terminals");
+        std::fs::create_dir_all(wt_dir.join("terminals")).expect("wt terminals");
+        std::fs::write(main_dir.join("terminals/s1.jsonl"), "x").expect("s1");
+        std::fs::write(wt_dir.join("terminals/s2.jsonl"), "y").expect("s2");
+        for (dir, key, root) in [
+            (&main_dir, &main_old_key, &main),
+            (&wt_dir, &wt_old_key, &worktree),
+        ] {
+            let meta = WorkspaceMetadata {
+                key: key.clone(),
+                root: root.to_string_lossy().to_string(),
+                alias: None,
+                created_at: "t0".into(),
+                last_seen_at: "t0".into(),
+            };
+            std::fs::write(
+                dir.join("workspace.json"),
+                serde_json::to_string_pretty(&meta).expect("serialize"),
+            )
+            .expect("write meta");
+        }
+
+        let inspect = inspect_workspace_keys().expect("inspect");
+        assert_eq!(inspect.migrated.len(), 2);
+        assert!(main_dir.exists(), "inspect must not rename");
+
+        let migrated = migrate_workspace_keys().expect("migrate");
+        assert_eq!(migrated.migrated.len() + migrated.merged.len(), 2);
+
+        // Both checkouts converge on the commondir key with logs merged.
+        let merged = workspaces.join(&new_key);
+        assert!(merged.join("terminals/s1.jsonl").exists());
+        assert!(merged.join("terminals/s2.jsonl").exists());
+        assert!(!main_dir.exists());
+        assert!(!wt_dir.exists());
+
+        // Idempotent: a second run is a no-op.
+        let second = migrate_workspace_keys().expect("idempotent");
+        assert!(second.migrated.is_empty() && second.merged.is_empty());
+        assert_eq!(second.current, 1);
+
+        match old_data {
+            Some(value) => std::env::set_var("SIVTR_DATA_DIR", value),
+            None => std::env::remove_var("SIVTR_DATA_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(main);
+        let _ = std::fs::remove_dir_all(data);
     }
 
     #[test]
