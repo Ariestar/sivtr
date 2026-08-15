@@ -753,7 +753,9 @@ pub fn sessions_from_records(
     }
     let mut sessions = Vec::with_capacity(groups.len());
     for (session_id, mut records) in groups {
-        records.sort_by_key(|record| record.work_ref.path.index());
+        // Newest dialogue first: the record index grows over time, so a
+        // reversed index order puts the latest turn at the top.
+        records.sort_by_key(|record| std::cmp::Reverse(record.work_ref.path.index()));
         let modified = records
             .iter()
             .filter_map(record_modified)
@@ -822,6 +824,15 @@ mod tests {
         ];
         let sessions = sessions_from_records(&source, records);
         assert_eq!(sessions.len(), 2);
+        let s1 = sessions.iter().find(|s| s.session_id == "s1").unwrap();
+        // Newest dialogue first: index 2 precedes index 1.
+        assert_eq!(
+            s1.records
+                .iter()
+                .map(|r| r.work_ref.index())
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
     }
 
     #[test]
