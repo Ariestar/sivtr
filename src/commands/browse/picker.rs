@@ -38,7 +38,7 @@ use super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane, SourcePan
 use super::selection::{has_selected_sessions, refresh_next_level};
 use super::visual::{
     apply_workspace_mouse_scroll, handle_content_mouse_select, handle_visual_select_key,
-    VisualContentContext, VisualSelectMode, MOUSE_SCROLL_LINES,
+    MouseSelectionStart, VisualContentContext, VisualSelectMode, MOUSE_SCROLL_LINES,
 };
 use super::PICK_CANCELLED_MESSAGE;
 use crate::pane::{Pane, PaneInput, Viewport};
@@ -100,6 +100,9 @@ pub(crate) fn run(
     // Block cursor (keyboard j/k + click), highlighted like a list row; one
     // position per half.
     let mut content_cursor = ContentBlockCursor::default();
+    // Mouse-down anchor inside content; promoted to a real selection only by
+    // the first drag, so a pure click never shows a selection flash.
+    let mut mouse_down_select: Option<MouseSelectionStart> = None;
     let mut show_help = false;
     let mut show_search = false;
     let mut search_query = String::new();
@@ -374,6 +377,7 @@ pub(crate) fn run(
                 expanded_blocks.output.clear();
                 pending_block_toggle = None;
                 last_block_click = None;
+                mouse_down_select = None;
                 content_cursor.clear();
                 expanded_key = Some(expand_key);
             }
@@ -1051,6 +1055,7 @@ pub(crate) fn run(
                         }
                         if handle_content_mouse_select(
                             &mut visual_select_mode,
+                            &mut mouse_down_select,
                             mouse.kind,
                             mouse.modifiers,
                             mouse.column,
@@ -1063,7 +1068,10 @@ pub(crate) fn run(
                             },
                             true,
                         ) {
-                            if visual_select_mode.is_some() {
+                            // A click (down) or a live drag focuses content.
+                            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+                                || visual_select_mode.is_some()
+                            {
                                 set_focus(&mut focus, &mut fullscreen, WorkspaceFocus::Content);
                             }
                             // Pure click (no drag): release highlights the
@@ -1094,6 +1102,7 @@ pub(crate) fn run(
                         let active = content_frame.active(content_io_focus, &mut content_scrolls);
                         if handle_content_mouse_select(
                             &mut visual_select_mode,
+                            &mut mouse_down_select,
                             mouse.kind,
                             mouse.modifiers,
                             mouse.column,
@@ -1118,6 +1127,8 @@ pub(crate) fn run(
                             // The wheel scrolls the content half under the
                             // cursor; anywhere else falls back to the focused
                             // half (hit_test is already None off-content).
+                            // A wheel scroll drops any armed mouse selection.
+                            mouse_down_select = None;
                             let scroll_half = content_frame
                                 .areas
                                 .hit_test(mouse.column, mouse.row)

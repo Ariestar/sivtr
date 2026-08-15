@@ -35,6 +35,14 @@ pub(super) struct VisualContentContext<'a> {
     pub(super) scroll: usize,
 }
 
+/// Mouse-down anchor recorded before any dragging. A pure click (down and
+/// up with no drag event) never becomes a text selection: the anchor is
+/// only promoted to `VisualSelectMode` by the first actual drag.
+pub(super) struct MouseSelectionStart {
+    pub(super) anchor: ContentPosition,
+    pub(super) kind: ContentSelectionKind,
+}
+
 pub(super) fn enter_visual_select_mode(
     visual_select_mode: &mut Option<VisualSelectMode>,
     content_scroll: &mut usize,
@@ -211,15 +219,19 @@ pub(super) fn ensure_visual_cursor_visible(
 /// Start or update content mouse selection.
 ///
 /// Free drag works without first pressing `v`. Ctrl+drag forces block selection.
+/// A click (down then up with no drag) only moves focus and highlights the
+/// block under the cursor; the selection starts on the first real drag.
 /// Returns `true` when the event was consumed by selection handling.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn handle_content_mouse_select(
     visual_select_mode: &mut Option<VisualSelectMode>,
+    mouse_down: &mut Option<MouseSelectionStart>,
     kind: MouseEventKind,
     modifiers: KeyModifiers,
     column: u16,
     row: u16,
     content: VisualContentContext<'_>,
-    // When true, left-down on content may start a selection even if mode is None.
+    // When true, left-down on content may arm a selection even if mode is None.
     allow_start: bool,
 ) -> bool {
     let in_content = content_position_in_text_row(
@@ -235,12 +247,14 @@ pub(super) fn handle_content_mouse_select(
     match kind {
         MouseEventKind::Down(MouseButton::Left) if allow_start || visual_select_mode.is_some() => {
             if !in_content {
-                // Outside content: drop free selection so list panes can take the click.
-                // Keep consuming only while a drag is in progress.
+                // Outside content: drop an armed/pending selection so list
+                // panes can take the click. Keep consuming only while a drag
+                // is in progress.
                 if visual_select_mode.as_ref().is_some_and(|m| m.dragging) {
                     return true;
                 }
                 *visual_select_mode = None;
+                *mouse_down = None;
                 return false;
             }
             let Some(position) = content_position_in_text_row(
@@ -253,17 +267,48 @@ pub(super) fn handle_content_mouse_select(
             ) else {
                 return false;
             };
-            *visual_select_mode = Some(VisualSelectMode {
-                selection: ContentSelection {
-                    anchor: position,
-                    cursor: position,
-                    kind: mouse_selection_kind(modifiers),
-                },
-                dragging: true,
-            });
+            match visual_select_mode.as_mut() {
+                // An active selection (keyboard `v` mode) re-anchors on click.
+                Some(mode) => {
+                    mode.selection.anchor = position;
+                    mode.selection.cursor = position;
+                    mode.selection.kind = mouse_selection_kind(modifiers);
+                    mode.dragging = true;
+                }
+                // Otherwise arm the drag: a pure click below never selects.
+                None => {
+                    *mouse_down = Some(MouseSelectionStart {
+                        anchor: position,
+                        kind: mouse_selection_kind(modifiers),
+                    });
+                }
+            }
             true
         }
         MouseEventKind::Drag(MouseButton::Left) => {
+            // First real drag promotes the armed click into a selection.
+            if let Some(start) = mouse_down.take() {
+                let mut selection = ContentSelection {
+                    anchor: start.anchor,
+                    cursor: start.anchor,
+                    kind: start.kind,
+                };
+                if let Some(position) = content_position_in_text_row(
+                    content.area,
+                    content.text,
+                    content.scroll,
+                    content.mode,
+                    column,
+                    row,
+                ) {
+                    selection.cursor = position;
+                }
+                *visual_select_mode = Some(VisualSelectMode {
+                    selection,
+                    dragging: true,
+                });
+                return true;
+            }
             let Some(mode) = visual_select_mode.as_mut() else {
                 return false;
             };
@@ -286,25 +331,30 @@ pub(super) fn handle_content_mouse_select(
             true
         }
         MouseEventKind::Up(MouseButton::Left) => {
-            let Some(mode) = visual_select_mode.as_mut() else {
-                return false;
-            };
-            if let Some(position) = content_position_in_text_row(
-                content.area,
-                content.text,
-                content.scroll,
-                content.mode,
-                column,
-                row,
-            ) {
-                mode.selection.cursor = position;
+            if let Some(mode) = visual_select_mode.as_mut() {
+                if let Some(position) = content_position_in_text_row(
+                    content.area,
+                    content.text,
+                    content.scroll,
+                    content.mode,
+                    column,
+                    row,
+                ) {
+                    mode.selection.cursor = position;
+                }
+                mode.dragging = false;
+                // A drag that lands back on its anchor clears the selection.
+                if mode.selection.anchor == mode.selection.cursor {
+                    *visual_select_mode = None;
+                }
+                return true;
             }
-            mode.dragging = false;
-            // Pure click (no drag range) clears selection so list clicks stay light.
-            if mode.selection.anchor == mode.selection.cursor {
-                *visual_select_mode = None;
+            // Pure click: never selected, just let the caller handle the
+            // block highlight / fold toggle.
+            if mouse_down.take().is_some() {
+                return true;
             }
-            true
+            false
         }
         _ => false,
     }
