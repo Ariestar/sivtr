@@ -574,11 +574,22 @@ fn chunk_text(update: &Value) -> String {
     }
 }
 
-/// Result text of a completed tool update: the model-facing `content` text,
-/// else a summary field buried in `rawOutput` (shapes differ per tool type).
+/// Text of a tool result: the raw output body per the tool's own shape
+/// (`rawOutput.type` dispatches to the field grok build wrote), byte arrays
+/// decoded as UTF-8, unknown shapes kept verbatim so the transcript is
+/// preserved. `content[].content.text` only backs up events without a
+/// `rawOutput` — on real events it carries the human description, not the
+/// result payload.
 fn tool_result_text(update: &Value) -> String {
+    if let Some(text) = update
+        .get("rawOutput")
+        .map(tool_raw_output_text)
+        .filter(|text| !text.trim().is_empty())
+    {
+        return text;
+    }
     if let Some(items) = update.get("content").and_then(Value::as_array) {
-        let text = items
+        return items
             .iter()
             .filter_map(|item| {
                 item.get("content")
@@ -587,35 +598,38 @@ fn tool_result_text(update: &Value) -> String {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        if !text.trim().is_empty() {
-            return text;
-        }
     }
-    update
-        .get("rawOutput")
-        .and_then(find_summary_text)
-        .unwrap_or_default()
+    String::new()
 }
 
-/// First non-empty string under a common summary key, recursing into nested
-/// objects (rawOutput structures differ per tool type).
-fn find_summary_text(value: &Value) -> Option<String> {
-    for key in ["summary_for_prompt", "text", "output", "stdout"] {
-        if let Some(candidate) = value.get(key) {
-            if let Some(text) = candidate.as_str() {
-                if !text.trim().is_empty() {
-                    return Some(text.to_string());
-                }
-            }
-        }
+/// Result body of a raw output event, per its declared `type`: known shapes
+/// are extracted from the field grok build writes them to, unknown shapes
+/// keep the whole event pretty-printed — no recursive guessing.
+fn tool_raw_output_text(raw: &Value) -> String {
+    let body = match raw.get("type").and_then(Value::as_str) {
+        Some("GrepSearch") => raw.get("stdout"),
+        Some("Bash") => raw.get("output"),
+        Some("ReadFile") => raw.get("FileContent").and_then(|v| v.get("content")),
+        Some("ListDir") => raw.get("Content").and_then(|v| v.get("content")),
+        Some("TaskOutput") => raw.get("Result").and_then(|v| v.get("output")),
+        _ => None,
+    };
+    if let Some(body) = body {
+        return match body {
+            Value::String(text) => text.trim().to_string(),
+            Value::Array(bytes) => String::from_utf8_lossy(
+                &bytes
+                    .iter()
+                    .filter_map(Value::as_u64)
+                    .map(|byte| byte as u8)
+                    .collect::<Vec<_>>(),
+            )
+            .trim()
+            .to_string(),
+            other => serde_json::to_string_pretty(other).unwrap_or_default(),
+        };
     }
-    let object = value.as_object()?;
-    for nested in object.values() {
-        if let Some(found) = find_summary_text(nested) {
-            return Some(found);
-        }
-    }
-    None
+    serde_json::to_string_pretty(raw).unwrap_or_default()
 }
 
 /// Event time from the ACP envelope: precise `agentTimestampMs` when present,
@@ -834,9 +848,63 @@ mod tests {
         assert!(session.blocks[5].text.contains("sivtr__sivtr_search"));
         assert_eq!(session.blocks[6].kind, AgentBlockKind::ToolOutput);
         assert_eq!(session.blocks[6].label.as_deref(), Some("use_tool"));
-        assert_eq!(session.blocks[6].text, "count 3");
+        // Unknown rawOutput shapes keep the whole event verbatim.
+        assert!(session.blocks[6].text.contains("summary_for_prompt"));
+        assert!(session.blocks[6].text.contains("count 3"));
         assert_eq!(session.blocks[7].kind, AgentBlockKind::Assistant);
         assert_eq!(session.blocks[7].text, "done\nnow");
+    }
+
+    #[test]
+    fn tool_raw_output_text_extracts_each_shape_verbatim() {
+        // GrepSearch: stdout is a UTF-8 byte array.
+        let grep = serde_json::json!({
+            "status": "completed",
+            "rawOutput": {
+                "type": "GrepSearch",
+                "stdout": [70, 111, 117, 110, 100, 32, 50, 32, 109, 97, 116, 99, 104, 101, 115],
+            },
+        });
+        assert_eq!(tool_result_text(&grep), "Found 2 matches");
+
+        // Bash: output byte array.
+        let bash = serde_json::json!({
+            "status": "completed",
+            "rawOutput": {
+                "type": "Bash",
+                "output": [111, 107, 10, 119, 97, 114, 110],
+            },
+        });
+        assert_eq!(tool_result_text(&bash), "ok\nwarn");
+
+        // ReadFile / ListDir: nested content strings.
+        let read = serde_json::json!({
+            "status": "completed",
+            "rawOutput": {
+                "type": "ReadFile",
+                "FileContent": {"content": "fn main() {}\n"},
+            },
+        });
+        assert_eq!(tool_result_text(&read), "fn main() {}");
+
+        // Unknown shape: the whole rawOutput survives, nothing is guessed.
+        let unknown = serde_json::json!({
+            "status": "completed",
+            "rawOutput": {
+                "type": "Todo",
+                "TodosUpdated": {"summary_for_prompt": "count 3"},
+            },
+        });
+        let text = tool_result_text(&unknown);
+        assert!(text.contains("summary_for_prompt"));
+        assert!(text.contains("count 3"));
+
+        // content text backs up events without rawOutput.
+        let described = serde_json::json!({
+            "status": "completed",
+            "content": [{"type": "content", "content": {"type": "text", "text": "fn main() {}"}}],
+        });
+        assert_eq!(tool_result_text(&described), "fn main() {}");
     }
 
     #[test]
