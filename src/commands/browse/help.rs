@@ -18,7 +18,8 @@ use sivtr_core::record::WorkAt;
 
 use super::content::{
     apply_dialogue_range_selection, dialogue_text_vim_view, workspace_picked_content,
-    workspace_picked_content_for_copy_with_line_filter, WorkspaceCopyShortcut,
+    workspace_picked_content_for_copy_with_line_filter, workspace_picked_content_for_cursor_block,
+    WorkspaceCopyShortcut,
 };
 use super::nav::{
     move_workspace_cursor_down, move_workspace_cursor_up, reset_workspace_after_source_change,
@@ -334,17 +335,18 @@ pub(super) fn apply_workspace_help_action(
             ));
         }
         WorkspaceHelpAction::CopyBlock if dialogue_count > 0 => {
-            return Ok(HelpDispatch::Picked(
-                workspace_picked_content_for_copy_with_line_filter(
-                    dialogues,
-                    selected_dialogues,
-                    dialogue_idx,
-                    WorkspaceCopyShortcut::Block,
-                    line_filter,
-                    None,
-                    *content_mode,
-                )?,
-            ));
+            // y copies the block under the content cursor (call + result
+            // bodies); marked blocks take over in the picker beforehand.
+            let block_id = content_cursor.get(*content_io_focus).unwrap_or(0);
+            if let Some(picked) = workspace_picked_content_for_cursor_block(
+                dialogues,
+                selected_dialogues,
+                dialogue_idx,
+                *content_io_focus,
+                block_id,
+            ) {
+                return Ok(HelpDispatch::Picked(picked));
+            }
         }
         WorkspaceHelpAction::CopyCommand if dialogue_count > 0 => {
             return Ok(HelpDispatch::Picked(

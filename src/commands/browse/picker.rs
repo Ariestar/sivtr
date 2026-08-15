@@ -1253,8 +1253,9 @@ mod tests {
         handle_line_filter_key, handle_line_filter_paste, workspace_dialogue_vim_view,
         workspace_picked_content, workspace_picked_content_for_copy,
         workspace_picked_content_for_copy_with_line_filter,
-        workspace_picked_content_for_marked_blocks, workspace_picked_content_with_line_filter,
-        workspace_search_target_ref, WorkspaceCopyShortcut,
+        workspace_picked_content_for_cursor_block, workspace_picked_content_for_marked_blocks,
+        workspace_picked_content_with_line_filter, workspace_search_target_ref,
+        WorkspaceCopyShortcut,
     };
     use super::super::nav::{clamp_list_state, move_workspace_cursor_up};
     use super::super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane};
@@ -1529,6 +1530,376 @@ mod tests {
         let text = &picked.units[0].plain;
         assert!(text.contains("user text"));
         assert!(text.contains("$ ls"));
+    }
+
+    #[test]
+    fn marked_block_copy_with_real_sized_record_keeps_unmarked_blocks_out() {
+        // A dialogue-sized record: user, assistant, then a run of three tool
+        // pairs (output half). Marking one block must copy only its bodies.
+        let mut record = workspace_test_record(
+            WorkspaceSource::agent(AgentProvider::Codex),
+            "cmd",
+            "the user question",
+            0,
+        );
+        record.parts.push(WorkPart {
+            seq: 2,
+            occurred_at: None,
+            data: WorkPartData::Assistant {
+                content: "the assistant answer".to_string(),
+            },
+        });
+        for (i, tool) in ["Bash", "Read", "Grep"].iter().enumerate() {
+            record.parts.push(WorkPart {
+                seq: 3 + 2 * i,
+                occurred_at: None,
+                data: WorkPartData::ToolCall {
+                    call_id: Some(format!("c{i}")),
+                    tool: Some(tool.to_string()),
+                    input: serde_json::json!({ "command": format!("cmd {i}") }),
+                },
+            });
+            record.parts.push(WorkPart {
+                seq: 4 + 2 * i,
+                occurred_at: None,
+                data: WorkPartData::ToolResult {
+                    call_id: Some(format!("c{i}")),
+                    tool: Some(tool.to_string()),
+                    output: serde_json::json!({ "stdout": format!("out {i}") }),
+                },
+            });
+        }
+        let dialogue = WorkspaceDialogue {
+            source: WorkspaceSource::agent(AgentProvider::Codex),
+            work_ref: Some(record.work_ref.clone()),
+            record: Some(record.clone()),
+            copy: WorkspaceCopyParts::default(),
+        };
+        let dialogues = [dialogue.clone()];
+        let selected = [true];
+        let mut pane = ContentPane::default();
+        pane.ensure(ContentCtx {
+            dialogues: &dialogues,
+            selected_dialogues: &selected,
+            highlighted_idx: 0,
+            mode: ContentViewMode::Reading,
+            target: None,
+            area: ratatui::layout::Rect::new(0, 0, 60, 20),
+            io_focus: ContentIoFocus::Output,
+            expanded: &crate::tui::content::io::ExpandedBlocks::default(),
+        });
+
+        // Mark the output run block: the tool run is id 1 (assistant's
+        // reply is id 0 in the output half). Copy joins the run's tool
+        // bodies, never the user or assistant blocks.
+        pane.toggle_mark(ContentIoFocus::Output, 1);
+        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
+            .expect("marked copy");
+        let text = &picked.units[0].plain;
+        assert!(text.contains("cmd 0") && text.contains("cmd 2"), "{text}");
+        assert!(
+            !text.contains("the user question"),
+            "user block leaked: {text}"
+        );
+        assert!(
+            !text.contains("the assistant answer"),
+            "assistant block leaked: {text}"
+        );
+    }
+
+    #[test]
+    fn dot_marked_block_survives_ensure_and_matches_half_blocks_ids() {
+        // Simulate the real click flow: build the frame, hit a block through
+        // the layout (as the dot gutter does), toggle it, then run the copy
+        // collection — it must find the block, never return None.
+        let mut record = workspace_test_record(
+            WorkspaceSource::agent(AgentProvider::Codex),
+            "cmd",
+            "the user question",
+            0,
+        );
+        record.parts.push(WorkPart {
+            seq: 2,
+            occurred_at: None,
+            data: WorkPartData::Assistant {
+                content: "the assistant answer".to_string(),
+            },
+        });
+        for (i, tool) in ["Bash", "Read", "Grep"].iter().enumerate() {
+            record.parts.push(WorkPart {
+                seq: 3 + 2 * i,
+                occurred_at: None,
+                data: WorkPartData::ToolCall {
+                    call_id: Some(format!("c{i}")),
+                    tool: Some(tool.to_string()),
+                    input: serde_json::json!({ "command": format!("cmd {i}") }),
+                },
+            });
+            record.parts.push(WorkPart {
+                seq: 4 + 2 * i,
+                occurred_at: None,
+                data: WorkPartData::ToolResult {
+                    call_id: Some(format!("c{i}")),
+                    tool: Some(tool.to_string()),
+                    output: serde_json::json!({ "stdout": format!("out {i}") }),
+                },
+            });
+        }
+        let dialogue = WorkspaceDialogue {
+            source: WorkspaceSource::agent(AgentProvider::Codex),
+            work_ref: Some(record.work_ref.clone()),
+            record: Some(record.clone()),
+            copy: WorkspaceCopyParts::default(),
+        };
+        let dialogues = [dialogue.clone()];
+        let selected = [true];
+        let mut pane = ContentPane::default();
+        let area = ratatui::layout::Rect::new(0, 0, 60, 20);
+        let frame = pane.ensure(ContentCtx {
+            dialogues: &dialogues,
+            selected_dialogues: &selected,
+            highlighted_idx: 0,
+            mode: ContentViewMode::Reading,
+            target: None,
+            area,
+            io_focus: ContentIoFocus::Output,
+            expanded: &crate::tui::content::io::ExpandedBlocks::default(),
+        });
+
+        // Hit the run block exactly as a dot-gutter click would: the last
+        // owned block in the output half is the tool run (assistant's reply
+        // owns the first lines).
+        let layout = frame.layout(ContentIoFocus::Output);
+        let mut hit_id = None;
+        for (line, owner) in layout.ownership.iter().enumerate() {
+            if owner.is_some() {
+                hit_id = crate::tui::content::view::content_block_at(layout, line);
+            }
+        }
+        let hit_id = hit_id.expect("a block is hit in the output half");
+        pane.toggle_mark(ContentIoFocus::Output, hit_id);
+
+        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
+            .expect("marked copy must not be None after a real dot hit");
+        let text = &picked.units[0].plain;
+        assert!(text.contains("cmd 0") && text.contains("cmd 2"), "{text}");
+        assert!(
+            !text.contains("the user question"),
+            "user block leaked: {text}"
+        );
+        assert!(
+            !text.contains("the assistant answer"),
+            "assistant block leaked: {text}"
+        );
+    }
+
+    #[test]
+    fn cursor_on_tool_block_after_assistant_copies_the_tool_block() {
+        // The user report: with the cursor on a pure tool block (grep) that
+        // follows an assistant reply in the output half, y must copy the
+        // tool block — it must not stay silent.
+        let mut record = workspace_test_record(
+            WorkspaceSource::agent(AgentProvider::Codex),
+            "cmd",
+            "user question",
+            0,
+        );
+        record.parts.push(WorkPart {
+            seq: 2,
+            occurred_at: None,
+            data: WorkPartData::Assistant {
+                content: "assistant reply".to_string(),
+            },
+        });
+        record.parts.push(WorkPart {
+            seq: 3,
+            occurred_at: None,
+            data: WorkPartData::ToolCall {
+                call_id: Some("c1".to_string()),
+                tool: Some("Grep".to_string()),
+                input: serde_json::json!({ "pattern": "fn main" }),
+            },
+        });
+        record.parts.push(WorkPart {
+            seq: 4,
+            occurred_at: None,
+            data: WorkPartData::ToolResult {
+                call_id: Some("c1".to_string()),
+                tool: Some("Grep".to_string()),
+                output: serde_json::json!({ "matches": [{ "file": "a.rs" }] }),
+            },
+        });
+        let dialogue = WorkspaceDialogue {
+            source: WorkspaceSource::agent(AgentProvider::Codex),
+            work_ref: Some(record.work_ref.clone()),
+            record: Some(record.clone()),
+            copy: WorkspaceCopyParts::default(),
+        };
+        let dialogues = [dialogue.clone()];
+        let selected = [true];
+
+        // Output half: assistant = id 0, grep tool pair = id 1. The cursor
+        // on the tool block copies only it.
+        let picked = workspace_picked_content_for_cursor_block(
+            &dialogues,
+            &selected,
+            0,
+            ContentIoFocus::Output,
+            1,
+        )
+        .expect("tool block copy must not be None");
+        let text = &picked.units[0].plain;
+        assert!(text.contains("fn main"), "tool call missing: {text}");
+        assert!(text.contains("\"matches\""), "tool result missing: {text}");
+        assert!(
+            !text.contains("assistant reply"),
+            "assistant block leaked: {text}"
+        );
+    }
+
+    #[test]
+    fn run_member_block_copies_even_though_nested_under_the_run() {
+        // Two consecutive tool pairs merge into a run (id 0) with members
+        // (id 1, 2). The cursor may sit on a member after expanding the run;
+        // y must copy just that member, not fail because the member is not a
+        // top-level block.
+        let mut record = workspace_test_record(
+            WorkspaceSource::agent(AgentProvider::Codex),
+            "cmd",
+            "user question",
+            0,
+        );
+        for (i, tool) in ["Grep", "Read"].iter().enumerate() {
+            record.parts.push(WorkPart {
+                seq: 1 + 2 * i,
+                occurred_at: None,
+                data: WorkPartData::ToolCall {
+                    call_id: Some(format!("c{i}")),
+                    tool: Some(tool.to_string()),
+                    input: serde_json::json!({ "pattern": format!("pat {i}") }),
+                },
+            });
+            record.parts.push(WorkPart {
+                seq: 2 + 2 * i,
+                occurred_at: None,
+                data: WorkPartData::ToolResult {
+                    call_id: Some(format!("c{i}")),
+                    tool: Some(tool.to_string()),
+                    output: serde_json::json!({ "matches": format!("out {i}") }),
+                },
+            });
+        }
+        let dialogue = WorkspaceDialogue {
+            source: WorkspaceSource::agent(AgentProvider::Codex),
+            work_ref: Some(record.work_ref.clone()),
+            record: Some(record.clone()),
+            copy: WorkspaceCopyParts::default(),
+        };
+        let dialogues = [dialogue.clone()];
+        let selected = [true];
+
+        // Member id 1 = the first tool of the run.
+        let picked = workspace_picked_content_for_cursor_block(
+            &dialogues,
+            &selected,
+            0,
+            ContentIoFocus::Output,
+            1,
+        )
+        .expect("run member copy must not be None");
+        let text = &picked.units[0].plain;
+        assert!(text.contains("pat 0"), "first member missing: {text}");
+        assert!(!text.contains("pat 1"), "second member leaked: {text}");
+
+        // Marking a member also collects only it — after expanding the run,
+        // so the mask covers the member ids.
+        let mut pane = ContentPane::default();
+        let mut expanded = crate::tui::content::io::ExpandedBlocks::default();
+        expanded.toggle(ContentIoFocus::Output, 0);
+        pane.ensure(ContentCtx {
+            dialogues: &dialogues,
+            selected_dialogues: &selected,
+            highlighted_idx: 0,
+            mode: ContentViewMode::Reading,
+            target: None,
+            area: ratatui::layout::Rect::new(0, 0, 60, 20),
+            io_focus: ContentIoFocus::Output,
+            expanded: &expanded,
+        });
+        pane.toggle_mark(ContentIoFocus::Output, 1);
+        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
+            .expect("marked member copy");
+        let text = &picked.units[0].plain;
+        assert!(text.contains("pat 0"), "first member missing: {text}");
+        assert!(!text.contains("pat 1"), "second member leaked: {text}");
+    }
+
+    #[test]
+    fn cursor_block_copy_joins_only_the_focused_block_bodies() {
+        let mut record = workspace_test_record(
+            WorkspaceSource::agent(AgentProvider::Codex),
+            "cmd",
+            "user text",
+            0,
+        );
+        record.parts.push(WorkPart {
+            seq: 2,
+            occurred_at: None,
+            data: WorkPartData::ToolCall {
+                call_id: Some("c1".to_string()),
+                tool: Some("Bash".to_string()),
+                input: serde_json::json!({ "command": "ls" }),
+            },
+        });
+        record.parts.push(WorkPart {
+            seq: 3,
+            occurred_at: None,
+            data: WorkPartData::ToolResult {
+                call_id: Some("c1".to_string()),
+                tool: Some("Bash".to_string()),
+                output: serde_json::json!({ "stdout": "ok" }),
+            },
+        });
+        let dialogue = WorkspaceDialogue {
+            source: WorkspaceSource::agent(AgentProvider::Codex),
+            work_ref: Some(record.work_ref.clone()),
+            record: Some(record.clone()),
+            copy: WorkspaceCopyParts::default(),
+        };
+        let dialogues = [dialogue.clone()];
+        let selected = [true];
+
+        // Cursor on the tool block (output half): call + result bodies only.
+        let picked = workspace_picked_content_for_cursor_block(
+            &dialogues,
+            &selected,
+            0,
+            ContentIoFocus::Output,
+            0,
+        )
+        .expect("cursor block copy");
+        assert_eq!(picked.units.len(), 1);
+        let text = &picked.units[0].plain;
+        assert!(text.contains("$ ls"), "tool call body missing: {text}");
+        assert!(
+            text.contains("\"stdout\""),
+            "tool result body missing: {text}"
+        );
+        assert!(
+            !text.contains("user text"),
+            "other input block leaked: {text}"
+        );
+
+        // Cursor on the user block (input half): just the user text.
+        let picked = workspace_picked_content_for_cursor_block(
+            &dialogues,
+            &selected,
+            0,
+            ContentIoFocus::Input,
+            0,
+        )
+        .expect("cursor block copy");
+        assert_eq!(picked.units[0].plain, "user text");
     }
 
     #[test]
@@ -1984,10 +2355,6 @@ mod tests {
                     plain: "answer".to_string(),
                     ansi: String::new(),
                 },
-                block: TextPair {
-                    plain: "question\n\nanswer".to_string(),
-                    ansi: String::new(),
-                },
                 command: TextPair::default(),
             },
         }];
@@ -2004,16 +2371,9 @@ mod tests {
             0,
             WorkspaceCopyShortcut::Output,
         );
-        let block = workspace_picked_content_for_copy(
-            &dialogues,
-            &[false],
-            0,
-            WorkspaceCopyShortcut::Block,
-        );
 
         assert_eq!(input.units[0].plain, "question");
         assert_eq!(output.units[0].plain, "answer");
-        assert_eq!(block.units[0].plain, "question\n\nanswer");
     }
 
     #[test]
@@ -2031,10 +2391,6 @@ mod tests {
             },
             output: TextPair {
                 plain: "answer 1\nanswer 2\nanswer 3".to_string(),
-                ansi: String::new(),
-            },
-            block: TextPair {
-                plain: "ask 1\nask 2\nask 3\n\nanswer 1\nanswer 2\nanswer 3".to_string(),
                 ansi: String::new(),
             },
             command: TextPair::default(),
@@ -2150,10 +2506,6 @@ mod tests {
                 },
                 output: TextPair {
                     plain: "ok".to_string(),
-                    ansi: String::new(),
-                },
-                block: TextPair {
-                    plain: "PS C:\\repo> cargo test\nok".to_string(),
                     ansi: String::new(),
                 },
                 command: TextPair {

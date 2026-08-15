@@ -4,12 +4,12 @@ use anyhow::Result;
 use crossterm::event::KeyCode;
 
 use crate::commands::select::CommandSelection;
-use crate::tui::content::block::half_blocks;
+use crate::tui::content::block::{half_blocks, Block};
 use crate::tui::content::io::ContentIoFocus;
 use crate::tui::content::view::{line_count, ContentViewMode};
 use crate::tui::search::{WorkspaceSearchMatch, WorkspaceSearchOutput};
 use crate::tui::workspace::{WorkspaceDialogue, WorkspacePickedContent, WorkspaceSession};
-use sivtr_core::record::{WorkAt, WorkRef};
+use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
 
 use super::panes::ContentPane;
 use super::text::filter_lines_by_spec;
@@ -20,7 +20,6 @@ pub(super) enum WorkspaceCopyShortcut {
     Displayed,
     Input,
     Output,
-    Block,
     Command,
 }
 
@@ -55,7 +54,6 @@ pub(super) fn workspace_picked_content_for_copy_with_line_filter(
             WorkspaceCopyShortcut::Displayed => dialogue.display_unit(content_mode, display_target),
             WorkspaceCopyShortcut::Input => dialogue.copy.input.clone(),
             WorkspaceCopyShortcut::Output => dialogue.copy.output.clone(),
-            WorkspaceCopyShortcut::Block => dialogue.copy.block.clone(),
             WorkspaceCopyShortcut::Command => dialogue.copy.command.clone(),
         })
         .collect::<Vec<_>>();
@@ -138,16 +136,77 @@ pub(super) fn workspace_picked_content_for_marked_blocks(
         (false, ContentIoFocus::Output),
     ] {
         for block in half_blocks(record, input) {
-            if content_pane
-                .marked(half)
-                .get(block.id)
-                .copied()
-                .unwrap_or(false)
-            {
-                texts.push(block.body(record));
-            }
+            collect_marked_blocks(&block, half, content_pane, record, &mut texts);
         }
     }
+    picked_for_texts(dialogues, selected_dialogues, dialogue_idx, texts)
+}
+
+/// Push every marked block's body, descending into run members (a marked
+/// member of a folded run carries its own id, separate from the run's).
+fn collect_marked_blocks(
+    block: &Block,
+    half: ContentIoFocus,
+    content_pane: &ContentPane,
+    record: &WorkRecord,
+    texts: &mut Vec<String>,
+) {
+    if content_pane
+        .marked(half)
+        .get(block.id)
+        .copied()
+        .unwrap_or(false)
+    {
+        texts.push(block.body(record));
+    }
+    for child in &block.children {
+        collect_marked_blocks(child, half, content_pane, record, texts);
+    }
+}
+
+/// Copy the block under the content cursor: y without marked blocks joins
+/// just that block's call + result bodies, not the whole dialogue.
+pub(super) fn workspace_picked_content_for_cursor_block(
+    dialogues: &[WorkspaceDialogue],
+    selected_dialogues: &[bool],
+    dialogue_idx: usize,
+    half: ContentIoFocus,
+    block_id: usize,
+) -> Option<WorkspacePickedContent> {
+    let dialogue = dialogues.get(dialogue_idx)?;
+    let record = dialogue.record.as_ref()?;
+    let input = matches!(half, ContentIoFocus::Input);
+    let blocks = half_blocks(record, input);
+    let block = blocks
+        .iter()
+        .find_map(|block| find_block(block, block_id))?;
+    picked_for_texts(
+        dialogues,
+        selected_dialogues,
+        dialogue_idx,
+        vec![block.body(record)],
+    )
+}
+
+/// Depth-first block lookup: run members live nested in `children`, and the
+/// content cursor may sit on either a run or one of its members.
+fn find_block(block: &Block, id: usize) -> Option<&Block> {
+    if block.id == id {
+        return Some(block);
+    }
+    block
+        .children
+        .iter()
+        .find_map(|child| find_block(child, id))
+}
+
+/// One copy unit from already-collected block bodies.
+fn picked_for_texts(
+    dialogues: &[WorkspaceDialogue],
+    selected_dialogues: &[bool],
+    dialogue_idx: usize,
+    texts: Vec<String>,
+) -> Option<WorkspacePickedContent> {
     if texts.is_empty() {
         return None;
     }

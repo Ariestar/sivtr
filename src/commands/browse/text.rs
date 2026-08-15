@@ -97,7 +97,6 @@ impl From<sivtr_core::record::WorkRecordCopyParts> for WorkspaceCopyParts {
         WorkspaceCopyParts {
             input: record_text_to_pair(parts.input),
             output: record_text_to_pair(parts.output),
-            block: record_text_to_pair(parts.block),
             command: record_text_to_pair(parts.command),
         }
     }
