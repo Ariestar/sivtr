@@ -16,7 +16,8 @@ use crate::tui::content::view::{
     ContentView,
 };
 use crate::tui::pane::{
-    active_item_style, panel_block, render_list_panel, render_panel_scrollbar, Panel, PanelScroll,
+    active_item_style, panel_block, render_list_panel, render_panel_scrollbar, selection_dot,
+    Panel, PanelScroll,
 };
 use crate::tui::search::{workspace_search_query, workspace_search_regex, WorkspaceSearchScope};
 use crate::tui::theme;
@@ -106,11 +107,12 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
             ContentIoFocus::Input => "Input",
             ContentIoFocus::Output => "Output",
         };
-        // The block cursor highlights only the focused half, like the cursor
-        // row in the session/dialogue lists.
+        // The block cursor highlights the focused half like the cursor row in
+        // the session/dialogue lists; it never depends on the panel being
+        // focused, so scrolling content always shows where the cursor is.
         let cursor_block = view
             .content_block_cursor
-            .filter(|(focus, _)| content_active && *focus == half)
+            .filter(|(focus, _)| *focus == half)
             .map(|(_, block)| block);
         render_content_panel(
             frame,
@@ -119,6 +121,10 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
                 WorkspaceFocus::Content.key(),
                 format!("{half_title} ({}){title_suffix}", view.content_mode.label()),
                 content_active && view.content_io_focus == half,
+            )
+            .with_position(
+                view.content_scrolls.get(half),
+                frame_io.layout(half).lines.len(),
             ),
             frame_io.layout(half),
             view.content_scrolls.get(half),
@@ -316,7 +322,7 @@ fn session_row_line(
             .records
             .first()
             .is_some_and(|record| !record.work_ref.is_local());
-    let check = if selected { "● " } else { "○ " };
+    let check = format!("{} ", selection_dot(selected));
     let origin = theme::origin_glyph(remote);
     let badge = choice.source.badge();
     let title = compact_session_title(choice);
@@ -551,7 +557,9 @@ fn render_source_list(
     state: &ListState,
     active: bool,
 ) {
-    let panel = Panel::new(WorkspaceFocus::Source.key(), "Source", active);
+    let cursor_idx = selected_index(state).min(sources.len().saturating_sub(1));
+    let panel = Panel::new(WorkspaceFocus::Source.key(), "Source", active)
+        .with_position(cursor_idx, sources.len());
     // Compact strip when not focused; vertical list (scrollable) when focused.
     if !active || area.height <= 3 {
         render_source_strip(
@@ -568,7 +576,6 @@ fn render_source_list(
         return;
     }
 
-    let cursor_idx = selected_index(state).min(sources.len().saturating_sub(1));
     let mut items: Vec<ListItem> = sources
         .iter()
         .enumerate()
@@ -677,7 +684,7 @@ fn render_session_list(
         .enumerate()
         .map(|(idx, choice)| {
             let selected = selected_sessions.get(idx).copied().unwrap_or(false);
-            let focused = active && idx == cursor_idx;
+            let focused = idx == cursor_idx;
             let base_style = if focused {
                 active_item_style()
             } else {
@@ -708,7 +715,8 @@ fn render_session_list(
             WorkspaceFocus::Sessions.key(),
             selected_parent_title("Sessions", selected_sources, "source", "sources"),
             active,
-        ),
+        )
+        .with_position(cursor_idx, choices.len()),
         items,
         state,
     );
@@ -741,14 +749,14 @@ fn render_dialogue_list(
             let selected = selected_dialogues.get(idx).copied().unwrap_or(false);
             // Selection is shown by the dot alone (● = selected, ○ = not),
             // always visible so it survives pane switches.
-            let marker = if selected { "● " } else { "○ " };
+            let marker = format!("{} ", selection_dot(selected));
             let line = format!("{marker}{title}");
             let highlight = search
                 .filter(|search| search.scope == WorkspaceSearchScope::Dialogue)
                 .and(search_regex);
             if in_range {
                 ListItem::new(Line::from(Span::styled(line, theme::range_row())))
-            } else if active && idx == highlighted_idx {
+            } else if idx == highlighted_idx {
                 ListItem::new(Line::from(highlight_spans(
                     &line,
                     highlight,
@@ -778,7 +786,8 @@ fn render_dialogue_list(
             WorkspaceFocus::Dialogues.key(),
             selected_parent_title("Dialogues", selected_sessions, "session", "sessions"),
             active,
-        ),
+        )
+        .with_position(highlighted_idx, titles.len()),
         items,
         state,
     );

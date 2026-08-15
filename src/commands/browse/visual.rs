@@ -5,10 +5,11 @@ use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::widgets::ListState;
 
 use crate::commands::select::CommandSelection;
-use crate::tui::content::block::BlockText;
+use crate::tui::content::io::ContentIoFrame;
 use crate::tui::content::view::{
-    clamp_content_position, content_position_in_text_row, content_text_area, selected_content_text,
-    ContentPosition, ContentSelection, ContentSelectionKind, ContentViewMode,
+    clamp_content_position, content_block_at, content_position_in_text_row, content_text_area,
+    selected_content_text, ContentPosition, ContentSelection, ContentSelectionKind,
+    ContentViewMode,
 };
 use crate::tui::workspace::{
     ContentIoFocus, ContentScrolls, WorkspaceDialogue, WorkspaceFocus, WorkspacePickedContent,
@@ -354,17 +355,24 @@ pub(super) fn apply_workspace_mouse_scroll(
     content_scrolls: &mut ContentScrolls,
     content_io_focus: ContentIoFocus,
     content_cursor: &mut super::nav::ContentBlockCursor,
-    content_blocks: (&[BlockText], &[BlockText]),
+    content_frame: &ContentIoFrame,
 ) {
     if focus == WorkspaceFocus::Content {
-        // The wheel keeps smooth line scrolling; j/k navigates blocks.
+        // The wheel keeps smooth line scrolling; j/k navigates blocks. The
+        // block cursor snaps to the first visible block so the highlight
+        // always shows where the viewport is.
         let scroll = content_scrolls.get(content_io_focus);
         let next = if scroll_up {
             scroll.saturating_sub(MOUSE_SCROLL_LINES)
         } else {
             scroll.saturating_add(MOUSE_SCROLL_LINES)
         };
+        let layout = content_frame.layout(content_io_focus);
+        let next = next.min(layout.lines.len().saturating_sub(1));
         content_scrolls.set(content_io_focus, next);
+        if let Some(block) = content_block_at(layout, next) {
+            content_cursor.set(content_io_focus, block);
+        }
         return;
     }
     for _ in 0..MOUSE_SCROLL_LINES {
@@ -383,7 +391,7 @@ pub(super) fn apply_workspace_mouse_scroll(
                 content_scrolls,
                 content_io_focus,
                 content_cursor,
-                content_blocks,
+                content_frame.texts.block_slices(),
             );
         } else {
             move_workspace_cursor_down(
@@ -400,7 +408,7 @@ pub(super) fn apply_workspace_mouse_scroll(
                 content_scrolls,
                 content_io_focus,
                 content_cursor,
-                content_blocks,
+                content_frame.texts.block_slices(),
             );
         }
     }

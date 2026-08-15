@@ -9,6 +9,9 @@ pub(crate) struct Panel {
     key: &'static str,
     name: String,
     active: bool,
+    /// Cursor position `(offset, total)` rendered as `(cur/total)` in the
+    /// title; `None` hides it (overlays, source strip).
+    position: Option<(usize, usize)>,
 }
 
 impl Panel {
@@ -17,31 +20,44 @@ impl Panel {
             key,
             name: name.into(),
             active,
+            position: None,
         }
     }
 
+    pub(crate) fn with_position(mut self, offset: usize, total: usize) -> Self {
+        self.position = Some((offset, total));
+        self
+    }
+
     fn title_line(&self) -> Line<'static> {
-        if self.key.is_empty() {
-            return Line::from(Span::styled(
+        let mut spans = if self.key.is_empty() {
+            vec![Span::styled(
                 self.name.clone(),
                 theme::title_style(self.active),
-            ));
-        }
-        let mut spans = vec![
-            Span::styled(
-                format!(" {} ", self.key),
-                Style::default()
-                    .fg(if self.active {
-                        theme::accent()
-                    } else {
-                        theme::muted()
-                    })
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(self.name.clone(), theme::title_style(self.active)),
-        ];
-        if self.active {
-            spans.push(Span::styled(" ●", Style::default().fg(theme::accent())));
+            )]
+        } else {
+            vec![
+                Span::styled(
+                    format!(" {} ", self.key),
+                    Style::default()
+                        .fg(if self.active {
+                            theme::accent()
+                        } else {
+                            theme::muted()
+                        })
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(self.name.clone(), theme::title_style(self.active)),
+            ]
+        };
+        if let Some((offset, total)) = self.position {
+            if total > 0 {
+                let current = offset.min(total - 1) + 1;
+                spans.push(Span::styled(
+                    format!(" ({current}/{total})"),
+                    theme::title_style(self.active),
+                ));
+            }
         }
         Line::from(spans)
     }
@@ -81,17 +97,6 @@ impl PanelScroll {
             viewport,
         }
     }
-
-    fn position_label(self) -> Option<String> {
-        if self.total == 0 {
-            return None;
-        }
-        Some(format!(
-            "[ {}/{} ]",
-            self.offset.min(self.total - 1) + 1,
-            self.total
-        ))
-    }
 }
 
 pub(crate) fn render_panel_scrollbar(
@@ -103,7 +108,6 @@ pub(crate) fn render_panel_scrollbar(
     let Some((thumb_top, thumb_height)) =
         panel_scrollbar_thumb(scroll, area.height.saturating_sub(2) as usize)
     else {
-        render_panel_scroll_label(frame, area, scroll, active);
         return;
     };
     let x = area.x.saturating_add(area.width).saturating_sub(1);
@@ -114,34 +118,6 @@ pub(crate) fn render_panel_scrollbar(
             cell.set_symbol("┃").set_style(style);
         }
     }
-    render_panel_scroll_label(frame, area, scroll, active);
-}
-
-fn render_panel_scroll_label(frame: &mut Frame, area: Rect, scroll: PanelScroll, active: bool) {
-    if area.width < 4 || area.height == 0 {
-        return;
-    }
-    let Some(label) = scroll.position_label() else {
-        return;
-    };
-    let max_width = area.width.saturating_sub(2) as usize;
-    let label = if label.len() > max_width {
-        format!("[{}]", scroll.total)
-    } else {
-        label
-    };
-    let label_width = label.len() as u16;
-    if label_width >= area.width {
-        return;
-    }
-    let x = area
-        .x
-        .saturating_add(area.width)
-        .saturating_sub(1)
-        .saturating_sub(label_width);
-    let y = area.y.saturating_add(area.height).saturating_sub(1);
-    let style = scroll_label_style(active);
-    frame.render_widget(Line::styled(label, style), Rect::new(x, y, label_width, 1));
 }
 
 fn panel_scrollbar_thumb(scroll: PanelScroll, track_height: usize) -> Option<(usize, usize)> {
@@ -173,20 +149,22 @@ fn scrollbar_style(active: bool) -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-fn scroll_label_style(active: bool) -> Style {
-    Style::default().fg(if active {
-        theme::accent()
-    } else {
-        theme::muted()
-    })
-}
-
+/// One style entry point for the current row/block in every pane (lists and
+/// content). The highlight never depends on the panel being focused: focus is
+/// expressed by the border alone, so the current row stays visible after
+/// switching panes.
 pub(crate) fn active_item_style() -> Style {
     theme::focus_row()
 }
 
-pub(crate) fn inactive_highlight_style() -> Style {
-    Style::default()
+/// `●` / `○` marker for selected / unselected rows, used by every pane so the
+/// selection dot has one spelling across the whole UI.
+pub(crate) fn selection_dot(selected: bool) -> &'static str {
+    if selected {
+        "●"
+    } else {
+        "○"
+    }
 }
 
 pub(crate) fn render_list_panel(
@@ -198,11 +176,7 @@ pub(crate) fn render_list_panel(
 ) {
     let list = List::new(items)
         .block(panel_block(&panel))
-        .highlight_style(if panel.active() {
-            active_item_style()
-        } else {
-            inactive_highlight_style()
-        })
+        .highlight_style(active_item_style())
         .highlight_symbol("");
     let mut local_state = *state;
     frame.render_stateful_widget(list, area, &mut local_state);

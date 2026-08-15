@@ -1142,7 +1142,7 @@ fn block_dot_lines(
             match owner {
                 Some(block) if starts => {
                     let marked = marked.get(block).copied().unwrap_or(false);
-                    let glyph = if marked { "●" } else { "○" };
+                    let glyph = crate::tui::pane::selection_dot(marked);
                     Line::from(Span::styled(
                         glyph,
                         Style::default().fg(block_dot_color(layout.kinds.get(block))),

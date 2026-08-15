@@ -151,13 +151,7 @@ impl SourceLoadMarker {
                 FRAMES[(tick as usize) % FRAMES.len()]
             }
             Self::Failed => "!",
-            Self::Idle | Self::Ready => {
-                if selected {
-                    "●"
-                } else {
-                    "○"
-                }
-            }
+            Self::Idle | Self::Ready => crate::tui::pane::selection_dot(selected),
         }
     }
 }

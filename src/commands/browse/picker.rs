@@ -1111,7 +1111,7 @@ pub(crate) fn run(
                                 &mut content_scrolls,
                                 scroll_half,
                                 &mut content_cursor,
-                                content_frame.texts.block_slices(),
+                                &content_frame,
                             );
                         }
                     }
