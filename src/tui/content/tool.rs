@@ -8,6 +8,8 @@
 //! provider (claude, grok, codex, opencode, …) flows through one code path —
 //! display only; evidence export keeps its original markers.
 
+use similar::{ChangeTag, TextDiff};
+
 use serde_json::Value;
 use sivtr_core::record::{WorkPart, WorkPartData};
 
@@ -308,8 +310,9 @@ pub(crate) fn tool_call_text(tool: &str, input: &Value) -> String {
     }
 }
 
-/// Diff preview from the tool input: `+` lines for write content, `-`/`+`
-/// for edit old/new strings, the raw unified diff for apply_patch, inside a
+/// Diff preview from the tool input: `+` lines for write content, a real
+/// line diff for edit old/new strings (aligned insertions, deletions, and
+/// context like grok build), the raw unified diff for apply_patch, inside a
 /// ```diff fence the pane colors.
 fn diff_preview(tool: &str, input: &Value) -> Option<String> {
     let spec = tool_spec(tool)?;
@@ -331,35 +334,76 @@ fn diff_preview(tool: &str, input: &Value) -> Option<String> {
             let content = input.as_object()?.get("content")?.as_str()?;
             content
                 .lines()
-                .map(|line| format!("+ {line}"))
+                .map(|line| format!("+{line}"))
                 .collect::<Vec<_>>()
                 .join("\n")
         }
         _ => {
-            // edit / notebook-edit: old_string → `-`, new_string → `+`.
+            // edit / notebook-edit: diff old_string against new_string so the
+            // preview shows what actually changed, not two blind blocks.
             let obj = input.as_object()?;
-            let mut diff = Vec::new();
-            if let Some(old_string) = obj
+            let old_string = obj
                 .get("old_string")
                 .or_else(|| obj.get("oldString"))
-                .and_then(Value::as_str)
-            {
-                diff.extend(old_string.lines().map(|line| format!("- {line}")));
-            }
-            if let Some(new_string) = obj
+                .and_then(Value::as_str);
+            let new_string = obj
                 .get("new_string")
                 .or_else(|| obj.get("newString"))
-                .and_then(Value::as_str)
-            {
-                diff.extend(new_string.lines().map(|line| format!("+ {line}")));
-            }
-            if diff.is_empty() {
-                return None;
-            }
-            diff.join("\n")
+                .and_then(Value::as_str);
+            let (Some(old), Some(new)) = (old_string, new_string) else {
+                // Notebook-style edits may carry only one side: show it as a
+                // plain insertion or deletion.
+                let marked = |text: &str, sign: char| {
+                    text.lines()
+                        .map(|line| format!("{sign}{line}"))
+                        .collect::<Vec<_>>()
+                };
+                let single = new_string
+                    .map(|new| marked(new, '+'))
+                    .or_else(|| old_string.map(|old| marked(old, '-')))
+                    .filter(|lines| !lines.is_empty())
+                    .map(|lines| format!("```diff\n{}\n```", lines.join("\n")));
+                return single;
+            };
+            diff_hunk(old, new)?
         }
     };
+    if diff.trim().is_empty() {
+        return None;
+    }
     Some(format!("```diff\n{diff}\n```"))
+}
+
+/// Unified-style line diff of `old` → `new`, keeping up to three context
+/// lines around the changes — the same shape `similar` produces for grok
+/// build's edit previews.
+fn diff_hunk(old: &str, new: &str) -> Option<String> {
+    const CONTEXT: usize = 3;
+    let lines: Vec<(ChangeTag, String)> = TextDiff::from_lines(old, new)
+        .iter_all_changes()
+        .map(|change| {
+            (
+                change.tag(),
+                change.value().trim_end_matches('\n').to_string(),
+            )
+        })
+        .collect();
+    let first = lines.iter().position(|(tag, _)| *tag != ChangeTag::Equal)?;
+    let last = lines
+        .iter()
+        .rposition(|(tag, _)| *tag != ChangeTag::Equal)?;
+    let start = first.saturating_sub(CONTEXT);
+    let end = (last + CONTEXT + 1).min(lines.len());
+    let text = lines[start..end]
+        .iter()
+        .map(|(tag, text)| match tag {
+            ChangeTag::Delete => format!("-{text}"),
+            ChangeTag::Insert => format!("+{text}"),
+            ChangeTag::Equal => format!(" {text}"),
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.is_empty()).then_some(text)
 }
 
 /// Expanded body of a tool result: `>` output lines, or a fenced block for
@@ -507,7 +551,7 @@ mod tests {
         assert_eq!(tool_tag_for_part(&write).unwrap(), "<:write: notes.md:>");
         assert_eq!(
             part_body_text(&write),
-            "$ write notes.md\n```diff\n+ line one\n+ line two\n```"
+            "$ write notes.md\n```diff\n+line one\n+line two\n```"
         );
 
         let edit = call(
@@ -522,8 +566,27 @@ mod tests {
         assert_eq!(tool_tag_for_part(&edit).unwrap(), "<:edit: a.rs:>");
         assert_eq!(
             part_body_text(&edit),
-            "$ edit a.rs\n```diff\n- old\n+ new\n```"
+            "$ edit a.rs\n```diff\n-old\n+new\n```"
         );
+    }
+
+    #[test]
+    fn edit_diff_aligns_changes_with_context() {
+        // Replacing one line inside a block shows the surrounding context
+        // and the real change — not two blind old/new blocks.
+        let edit = call(
+            "Edit",
+            serde_json::json!({
+                "file_path": "a.rs",
+                "old_string": "fn main() {\n    println!(\"old\");\n}",
+                "new_string": "fn main() {\n    println!(\"new\");\n}",
+            }),
+        );
+        let text = part_body_text(&edit);
+        assert!(text.contains(" fn main() {"), "context missing: {text}");
+        assert!(text.contains("-    println!(\"old\");"), "{text}");
+        assert!(text.contains("+    println!(\"new\");"), "{text}");
+        assert!(text.contains(" }"), "trailing context missing: {text}");
     }
 
     #[test]
@@ -577,7 +640,7 @@ mod tests {
         assert_eq!(tool_tag_for_part(&edit).unwrap(), "<:edit: a.rs:>");
         assert_eq!(
             part_body_text(&edit),
-            "$ edit a.rs\n```diff\n- old\n+ new\n```"
+            "$ edit a.rs\n```diff\n-old\n+new\n```"
         );
 
         let grep = call(
