@@ -960,8 +960,15 @@ pub(crate) fn run(
                                 mouse.column,
                                 mouse.row,
                             ) {
-                                content_pane.toggle_mark(half, block);
                                 content_cursor.set(half, block);
+                                // Dot marks are per-block-id, and multi-select
+                                // joins several dialogues' blocks into one
+                                // frame with ids repeating per dialogue — a
+                                // dot cannot be attributed to one dialogue.
+                                // Keep dot marking single-dialogue only.
+                                if selected_dialogues.iter().filter(|s| **s).count() <= 1 {
+                                    content_pane.toggle_mark(half, block);
+                                }
                                 continue;
                             }
                         }

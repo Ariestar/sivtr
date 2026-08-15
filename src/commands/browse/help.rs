@@ -159,9 +159,13 @@ pub(super) fn apply_workspace_help_action(
             }
             WorkspaceFocus::Content => {
                 // Pane-native selection: Space marks the focused block for
-                // batch copy, like Space toggles a list row.
-                if let Some((half, block)) = content_cursor.focused(*content_io_focus) {
-                    content_pane.toggle_mark(half, block);
+                // batch copy, like Space toggles a list row. Multi-select
+                // joins several dialogues into one frame with per-dialogue
+                // block ids, so block marks are single-dialogue only.
+                if selected_dialogues.iter().filter(|s| **s).count() <= 1 {
+                    if let Some((half, block)) = content_cursor.focused(*content_io_focus) {
+                        content_pane.toggle_mark(half, block);
+                    }
                 }
             }
         },
