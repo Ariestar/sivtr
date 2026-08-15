@@ -9,9 +9,6 @@ pub(crate) struct Panel {
     key: &'static str,
     name: String,
     active: bool,
-    /// Cursor position `(offset, total)` rendered as `(cur/total)` in the
-    /// title; `None` hides it (overlays, source strip).
-    position: Option<(usize, usize)>,
 }
 
 impl Panel {
@@ -20,17 +17,11 @@ impl Panel {
             key,
             name: name.into(),
             active,
-            position: None,
         }
     }
 
-    pub(crate) fn with_position(mut self, offset: usize, total: usize) -> Self {
-        self.position = Some((offset, total));
-        self
-    }
-
     fn title_line(&self) -> Line<'static> {
-        let mut spans = if self.key.is_empty() {
+        let spans = if self.key.is_empty() {
             vec![Span::styled(
                 self.name.clone(),
                 theme::title_style(self.active),
@@ -50,15 +41,6 @@ impl Panel {
                 Span::styled(self.name.clone(), theme::title_style(self.active)),
             ]
         };
-        if let Some((offset, total)) = self.position {
-            if total > 0 {
-                let current = offset.min(total - 1) + 1;
-                spans.push(Span::styled(
-                    format!(" ({current}/{total})"),
-                    theme::title_style(self.active),
-                ));
-            }
-        }
         Line::from(spans)
     }
 
@@ -97,6 +79,18 @@ impl PanelScroll {
             viewport,
         }
     }
+
+    /// `[ cur/total ]` for the bottom-right corner of a pane.
+    fn position_label(self) -> Option<String> {
+        if self.total == 0 {
+            return None;
+        }
+        Some(format!(
+            "[ {}/{} ]",
+            self.offset.min(self.total - 1) + 1,
+            self.total
+        ))
+    }
 }
 
 pub(crate) fn render_panel_scrollbar(
@@ -105,19 +99,48 @@ pub(crate) fn render_panel_scrollbar(
     scroll: PanelScroll,
     active: bool,
 ) {
-    let Some((thumb_top, thumb_height)) =
+    if let Some((thumb_top, thumb_height)) =
         panel_scrollbar_thumb(scroll, area.height.saturating_sub(2) as usize)
-    else {
-        return;
-    };
-    let x = area.x.saturating_add(area.width).saturating_sub(1);
-    let y = area.y.saturating_add(1).saturating_add(thumb_top as u16);
-    let style = scrollbar_style(active);
-    for row in y..y.saturating_add(thumb_height as u16) {
-        if let Some(cell) = frame.buffer_mut().cell_mut((x, row)) {
-            cell.set_symbol("┃").set_style(style);
+    {
+        let x = area.x.saturating_add(area.width).saturating_sub(1);
+        let y = area.y.saturating_add(1).saturating_add(thumb_top as u16);
+        let style = scrollbar_style(active);
+        for row in y..y.saturating_add(thumb_height as u16) {
+            if let Some(cell) = frame.buffer_mut().cell_mut((x, row)) {
+                cell.set_symbol("┃").set_style(style);
+            }
         }
     }
+    render_panel_scroll_label(frame, area, scroll, active);
+}
+
+/// Cursor/scroll position `[ cur/total ]` in a pane's bottom-right corner,
+/// rendered even when the content fits (no scroll thumb).
+fn render_panel_scroll_label(frame: &mut Frame, area: Rect, scroll: PanelScroll, active: bool) {
+    if area.width < 4 || area.height == 0 {
+        return;
+    }
+    let Some(label) = scroll.position_label() else {
+        return;
+    };
+    let max_width = area.width.saturating_sub(2) as usize;
+    let label = if label.len() > max_width {
+        format!("[{}]", scroll.total)
+    } else {
+        label
+    };
+    let label_width = label.len() as u16;
+    if label_width >= area.width {
+        return;
+    }
+    let x = area
+        .x
+        .saturating_add(area.width)
+        .saturating_sub(1)
+        .saturating_sub(label_width);
+    let y = area.y.saturating_add(area.height).saturating_sub(1);
+    let style = scroll_label_style(active);
+    frame.render_widget(Line::styled(label, style), Rect::new(x, y, label_width, 1));
 }
 
 fn panel_scrollbar_thumb(scroll: PanelScroll, track_height: usize) -> Option<(usize, usize)> {
@@ -147,6 +170,14 @@ fn scrollbar_style(active: bool) -> Style {
             theme::muted()
         })
         .add_modifier(Modifier::BOLD)
+}
+
+fn scroll_label_style(active: bool) -> Style {
+    Style::default().fg(if active {
+        theme::accent()
+    } else {
+        theme::muted()
+    })
 }
 
 /// One style entry point for the current row/block in every pane (lists and

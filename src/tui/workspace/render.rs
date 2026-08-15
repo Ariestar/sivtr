@@ -129,10 +129,6 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
                     view.content_mode.label()
                 ),
                 content_active && view.content_io_focus == half,
-            )
-            .with_position(
-                view.content_scrolls.get(half),
-                frame_io.layout(half).lines.len(),
             ),
             frame_io.layout(half),
             view.content_scrolls.get(half),
@@ -566,8 +562,7 @@ fn render_source_list(
     active: bool,
 ) {
     let cursor_idx = selected_index(state).min(sources.len().saturating_sub(1));
-    let panel = Panel::new(WorkspaceFocus::Source.key(), "Source", active)
-        .with_position(cursor_idx, sources.len());
+    let panel = Panel::new(WorkspaceFocus::Source.key(), "Source", active);
     // Compact strip when not focused; vertical list (scrollable) when focused.
     if !active || area.height <= 3 {
         render_source_strip(
@@ -723,8 +718,7 @@ fn render_session_list(
             WorkspaceFocus::Sessions.key(),
             selected_parent_title("Sessions", selected_sources, "source", "sources"),
             active,
-        )
-        .with_position(cursor_idx, choices.len()),
+        ),
         items,
         state,
     );
@@ -794,8 +788,7 @@ fn render_dialogue_list(
             WorkspaceFocus::Dialogues.key(),
             selected_parent_title("Dialogues", selected_sessions, "session", "sessions"),
             active,
-        )
-        .with_position(highlighted_idx, titles.len()),
+        ),
         items,
         state,
     );
