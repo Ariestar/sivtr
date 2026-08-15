@@ -418,9 +418,5 @@ pub(crate) struct WorkspaceFooterView<'a> {
     pub(crate) line_filter: Option<&'a str>,
     pub(crate) line_filter_error: Option<&'a str>,
     pub(crate) fullscreen: Option<WorkspaceFocus>,
-    pub(crate) content_mode: ContentViewMode,
     pub(crate) content_selection: Option<ContentSelection>,
-    /// Blocks marked for batch copy (footer hint), per the current dialogue.
-    pub(crate) marked_count: usize,
-    pub(crate) current_ref: Option<&'a WorkRef>,
 }

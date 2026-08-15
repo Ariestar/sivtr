@@ -144,10 +144,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
             line_filter: view.line_filter,
             line_filter_error: view.line_filter_error,
             fullscreen: view.fullscreen,
-            content_mode: view.content_mode,
             content_selection: view.content_selection,
-            marked_count: marked_count(&view),
-            current_ref: current_ref.as_ref(),
         },
     );
 
@@ -203,19 +200,6 @@ fn position_overlay_cursor(frame: &mut Frame, area: Rect, text: &str) {
     frame.set_cursor_position(Position::new(inner.x.saturating_add(column), row));
 }
 
-/// Blocks marked for batch copy across both content halves.
-fn marked_count(view: &WorkspaceView<'_>) -> usize {
-    view.content_marked_input
-        .iter()
-        .filter(|marked| **marked)
-        .count()
-        + view
-            .content_marked_output
-            .iter()
-            .filter(|marked| **marked)
-            .count()
-}
-
 fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>) {
     let WorkspaceFooterView {
         focus,
@@ -225,10 +209,7 @@ fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>)
         line_filter,
         line_filter_error,
         fullscreen,
-        content_mode,
         content_selection,
-        marked_count,
-        current_ref,
     } = footer;
 
     let mut spans = if search.is_some() {
@@ -255,11 +236,6 @@ fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>)
         } else {
             workspace_footer_hotkeys(focus)
         };
-        let controls = if marked_count == 0 {
-            controls
-        } else {
-            format!("{controls}  ·  {marked_count} marked — y copies them together")
-        };
         footer_control_spans(&controls)
     };
 
@@ -275,14 +251,6 @@ fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>)
         )));
     } else if let Some(spec) = line_filter.filter(|spec| !spec.is_empty()) {
         spans.extend(footer_status_spans(&format!("lines {spec}")));
-    }
-    if focus == WorkspaceFocus::Content {
-        spans.extend(footer_status_spans(content_mode.label()));
-    }
-    if matches!(focus, WorkspaceFocus::Dialogues | WorkspaceFocus::Content) {
-        if let Some(work_ref) = current_ref {
-            spans.extend(footer_status_spans(&format!("ref {work_ref}")));
-        }
     }
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
