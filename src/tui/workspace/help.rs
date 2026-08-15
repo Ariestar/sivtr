@@ -117,7 +117,7 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
             key: "h",
             description: "previous pane",
             action: WorkspaceHelpAction::PreviousPane,
-            footer_label: None,
+            footer_label: Some("pane"),
             footer_panes: ALL,
         },
         WorkspaceHelpEntry {
@@ -167,9 +167,9 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
             description: "range select rows",
             action: WorkspaceHelpAction::RangeSelect,
             footer_label: Some("range"),
-            // List panes (Source/Sessions/Dialogues) share the same range
-            // selection semantic; Content is a text view with no list rows.
-            footer_panes: &[Source, Sessions, Dialogues],
+            // All four panes share the range semantic: the list panes select
+            // spans of rows, Content selects a span of blocks in one half.
+            footer_panes: &[Source, Sessions, Dialogues, Content],
         },
         WorkspaceHelpEntry {
             key: "a",
@@ -287,14 +287,14 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
             key: "J",
             description: "next selected dialogue",
             action: WorkspaceHelpAction::NextDialoguePage,
-            footer_label: None,
+            footer_label: Some("page"),
             footer_panes: CNT,
         },
         WorkspaceHelpEntry {
             key: "K",
             description: "previous selected dialogue",
             action: WorkspaceHelpAction::PreviousDialoguePage,
-            footer_label: None,
+            footer_label: Some("page"),
             footer_panes: CNT,
         },
         WorkspaceHelpEntry {

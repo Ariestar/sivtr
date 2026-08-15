@@ -9,9 +9,9 @@ use crate::tui::content::block::BlockText;
 use crate::tui::content::view::ContentViewMode;
 use crate::tui::terminal::suspend;
 use crate::tui::workspace::{
-    can_open_dialogue_vim, selected_index, workspace_content_text, ContentIoFocus, ContentScrolls,
-    ExpandedBlocks, WorkspaceDialogue, WorkspaceFocus, WorkspaceHelpAction, WorkspacePickedContent,
-    WorkspaceSession, WorkspaceSource,
+    can_open_dialogue_vim, selected_count, selected_index, workspace_content_text, ContentIoFocus,
+    ContentScrolls, ExpandedBlocks, WorkspaceDialogue, WorkspaceFocus, WorkspaceHelpAction,
+    WorkspacePickedContent, WorkspaceSession, WorkspaceSource,
 };
 use sivtr_core::record::WorkAt;
 
@@ -50,6 +50,8 @@ pub(super) fn apply_workspace_help_action(
     dialogue_state: &mut ListState,
     selected_dialogues: &mut Vec<bool>,
     range_anchor: &mut Option<usize>,
+    // Content block-range anchor for `v` (half + block id of the first press).
+    content_range_anchor: &mut Option<(ContentIoFocus, usize)>,
     content_scrolls: &mut ContentScrolls,
     content_io_focus: &mut ContentIoFocus,
     content_mode: &mut ContentViewMode,
@@ -75,18 +77,34 @@ pub(super) fn apply_workspace_help_action(
     terminal: &mut crate::tui::terminal::Tui,
 ) -> Result<HelpDispatch> {
     match action {
-        WorkspaceHelpAction::FocusSource => {
-            set_focus(focus, fullscreen, range_anchor, WorkspaceFocus::Source)
-        }
-        WorkspaceHelpAction::FocusSessions => {
-            set_focus(focus, fullscreen, range_anchor, WorkspaceFocus::Sessions)
-        }
-        WorkspaceHelpAction::FocusDialogues if dialogue_count > 0 => {
-            set_focus(focus, fullscreen, range_anchor, WorkspaceFocus::Dialogues)
-        }
-        WorkspaceHelpAction::FocusContent if dialogue_count > 0 => {
-            set_focus(focus, fullscreen, range_anchor, WorkspaceFocus::Content)
-        }
+        WorkspaceHelpAction::FocusSource => set_focus(
+            focus,
+            fullscreen,
+            range_anchor,
+            content_range_anchor,
+            WorkspaceFocus::Source,
+        ),
+        WorkspaceHelpAction::FocusSessions => set_focus(
+            focus,
+            fullscreen,
+            range_anchor,
+            content_range_anchor,
+            WorkspaceFocus::Sessions,
+        ),
+        WorkspaceHelpAction::FocusDialogues if dialogue_count > 0 => set_focus(
+            focus,
+            fullscreen,
+            range_anchor,
+            content_range_anchor,
+            WorkspaceFocus::Dialogues,
+        ),
+        WorkspaceHelpAction::FocusContent if dialogue_count > 0 => set_focus(
+            focus,
+            fullscreen,
+            range_anchor,
+            content_range_anchor,
+            WorkspaceFocus::Content,
+        ),
         WorkspaceHelpAction::MoveUp => move_workspace_cursor_up(
             *focus,
             sources,
@@ -119,43 +137,67 @@ pub(super) fn apply_workspace_help_action(
         ),
         WorkspaceHelpAction::PreviousPane => {
             if let Some(next_focus) = focus.previous(dialogue_count) {
-                set_focus(focus, fullscreen, range_anchor, next_focus);
+                set_focus(
+                    focus,
+                    fullscreen,
+                    range_anchor,
+                    content_range_anchor,
+                    next_focus,
+                );
             }
         }
         WorkspaceHelpAction::NextPane => {
             if let Some(next_focus) = focus.next(dialogue_count) {
-                set_focus(focus, fullscreen, range_anchor, next_focus);
+                set_focus(
+                    focus,
+                    fullscreen,
+                    range_anchor,
+                    content_range_anchor,
+                    next_focus,
+                );
             }
         }
         WorkspaceHelpAction::ToggleSelection => match *focus {
             WorkspaceFocus::Source => {
-                let source_idx = selected_index(source_state);
-                if let Some(selected) = selected_sources.get_mut(source_idx) {
-                    *selected = !*selected;
-                }
-                reset_workspace_after_source_change(
-                    session_state,
+                if toggle_list_row(
+                    *focus,
+                    selected_index(source_state),
+                    selected_sources,
                     selected_sessions,
-                    dialogue_state,
                     selected_dialogues,
                     range_anchor,
+                    session_state,
+                    dialogue_state,
                     content_scrolls,
-                );
-                return Ok(HelpDispatch::Refresh);
+                ) {
+                    return Ok(HelpDispatch::Refresh);
+                }
             }
             WorkspaceFocus::Sessions => {
-                if let Some(selected) = selected_sessions.get_mut(session_idx) {
-                    *selected = !*selected;
-                }
-                *range_anchor = None;
-                reset_workspace_dialogue_state(0, dialogue_state, selected_dialogues);
-                content_scrolls.clear();
+                toggle_list_row(
+                    *focus,
+                    session_idx,
+                    selected_sources,
+                    selected_sessions,
+                    selected_dialogues,
+                    range_anchor,
+                    session_state,
+                    dialogue_state,
+                    content_scrolls,
+                );
             }
             WorkspaceFocus::Dialogues => {
-                if let Some(selected) = selected_dialogues.get_mut(dialogue_idx) {
-                    *selected = !*selected;
-                }
-                *range_anchor = None;
+                toggle_list_row(
+                    *focus,
+                    dialogue_idx,
+                    selected_sources,
+                    selected_sessions,
+                    selected_dialogues,
+                    range_anchor,
+                    session_state,
+                    dialogue_state,
+                    content_scrolls,
+                );
             }
             WorkspaceFocus::Content => {
                 // Pane-native selection: Space marks the focused block for
@@ -173,22 +215,14 @@ pub(super) fn apply_workspace_help_action(
         // cursor when the shown dialogue changes; marks follow their
         // dialogue and stay, so a later copy can join pages.
         WorkspaceHelpAction::NextDialoguePage if *focus == WorkspaceFocus::Content => {
-            let count = selected_dialogues
-                .iter()
-                .filter(|selected| **selected)
-                .count();
+            let count = selected_count(selected_dialogues);
             if count > 1 {
                 *content_page = (*content_page + 1).min(count.saturating_sub(1));
                 content_scrolls.clear();
             }
         }
         WorkspaceHelpAction::PreviousDialoguePage if *focus == WorkspaceFocus::Content => {
-            if selected_dialogues
-                .iter()
-                .filter(|selected| **selected)
-                .count()
-                > 1
-            {
+            if selected_count(selected_dialogues) > 1 {
                 *content_page = content_page.saturating_sub(1);
                 content_scrolls.clear();
             }
@@ -263,7 +297,33 @@ pub(super) fn apply_workspace_help_action(
             WorkspaceFocus::Dialogues => {
                 apply_range_selection(range_anchor, selected_dialogues, dialogue_idx);
             }
-            WorkspaceFocus::Content => {}
+            WorkspaceFocus::Content => {
+                // Block range: `v` anchors the cursor block in the current
+                // half, moves extend, and a second `v` toggles marks across
+                // the anchor..cursor span. Switching half re-anchors.
+                if let Some((half, cursor_block)) = content_cursor.focused(*content_io_focus) {
+                    match *content_range_anchor {
+                        Some((anchor_half, anchor_block)) if anchor_half == half => {
+                            let shown =
+                                shown_dialogue_idx(selected_dialogues, *content_page, dialogue_idx);
+                            let blocks = match half {
+                                ContentIoFocus::Input => content_blocks.0,
+                                ContentIoFocus::Output => content_blocks.1,
+                            };
+                            let anchor = blocks.iter().position(|b| b.id == anchor_block);
+                            let cursor = blocks.iter().position(|b| b.id == cursor_block);
+                            if let (Some(anchor), Some(cursor)) = (anchor, cursor) {
+                                let (lo, hi) = (anchor.min(cursor), anchor.max(cursor));
+                                for block in &blocks[lo..=hi] {
+                                    content_pane.toggle_mark(half, shown, block.id);
+                                }
+                            }
+                            *content_range_anchor = None;
+                        }
+                        _ => *content_range_anchor = Some((half, cursor_block)),
+                    }
+                }
+            }
         },
         WorkspaceHelpAction::ToggleAllDialogues if *focus == WorkspaceFocus::Dialogues => {
             let select_all = selected_dialogues.iter().any(|selected| !selected);
@@ -315,6 +375,7 @@ pub(super) fn apply_workspace_help_action(
                 ContentIoFocus::Input => ContentIoFocus::Output,
                 ContentIoFocus::Output => ContentIoFocus::Input,
             };
+            *content_range_anchor = None;
         }
         WorkspaceHelpAction::ToggleBlockFold if *focus == WorkspaceFocus::Content => {
             if *content_mode == ContentViewMode::Reading {
@@ -325,12 +386,20 @@ pub(super) fn apply_workspace_help_action(
             }
         }
         WorkspaceHelpAction::Copy => match *focus {
-            WorkspaceFocus::Source => {
-                set_focus(focus, fullscreen, range_anchor, WorkspaceFocus::Sessions)
-            }
-            WorkspaceFocus::Sessions if dialogue_count > 0 => {
-                set_focus(focus, fullscreen, range_anchor, WorkspaceFocus::Dialogues)
-            }
+            WorkspaceFocus::Source => set_focus(
+                focus,
+                fullscreen,
+                range_anchor,
+                content_range_anchor,
+                WorkspaceFocus::Sessions,
+            ),
+            WorkspaceFocus::Sessions if dialogue_count > 0 => set_focus(
+                focus,
+                fullscreen,
+                range_anchor,
+                content_range_anchor,
+                WorkspaceFocus::Dialogues,
+            ),
             WorkspaceFocus::Dialogues | WorkspaceFocus::Content => {
                 return Ok(HelpDispatch::Picked(workspace_picked_content(
                     dialogues,
@@ -419,10 +488,22 @@ pub(super) fn apply_workspace_help_action(
                 anyhow::bail!(PICK_CANCELLED_MESSAGE)
             }
             WorkspaceFocus::Dialogues => {
-                set_focus(focus, fullscreen, range_anchor, WorkspaceFocus::Sessions);
+                set_focus(
+                    focus,
+                    fullscreen,
+                    range_anchor,
+                    content_range_anchor,
+                    WorkspaceFocus::Sessions,
+                );
             }
             WorkspaceFocus::Content => {
-                set_focus(focus, fullscreen, range_anchor, WorkspaceFocus::Dialogues);
+                set_focus(
+                    focus,
+                    fullscreen,
+                    range_anchor,
+                    content_range_anchor,
+                    WorkspaceFocus::Dialogues,
+                );
             }
         },
         WorkspaceHelpAction::Cancel => anyhow::bail!(PICK_CANCELLED_MESSAGE),
@@ -461,15 +542,67 @@ pub(super) fn toggle_fullscreen(
     }
 }
 
+/// Toggle the focused list row's selection mark — the single path shared by
+/// the Space key and a dot-gutter click. `true` when panes below need a
+/// refresh (a Source toggle reshapes the session/dialogue trees).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn toggle_list_row(
+    focus: WorkspaceFocus,
+    idx: usize,
+    selected_sources: &mut [bool],
+    selected_sessions: &mut Vec<bool>,
+    selected_dialogues: &mut Vec<bool>,
+    range_anchor: &mut Option<usize>,
+    session_state: &mut ListState,
+    dialogue_state: &mut ListState,
+    content_scrolls: &mut ContentScrolls,
+) -> bool {
+    match focus {
+        WorkspaceFocus::Source => {
+            if let Some(selected) = selected_sources.get_mut(idx) {
+                *selected = !*selected;
+            }
+            reset_workspace_after_source_change(
+                session_state,
+                selected_sessions,
+                dialogue_state,
+                selected_dialogues,
+                range_anchor,
+                content_scrolls,
+            );
+            true
+        }
+        WorkspaceFocus::Sessions => {
+            if let Some(selected) = selected_sessions.get_mut(idx) {
+                *selected = !*selected;
+            }
+            *range_anchor = None;
+            reset_workspace_dialogue_state(0, dialogue_state, selected_dialogues);
+            content_scrolls.clear();
+            false
+        }
+        WorkspaceFocus::Dialogues => {
+            if let Some(selected) = selected_dialogues.get_mut(idx) {
+                *selected = !*selected;
+            }
+            *range_anchor = None;
+            false
+        }
+        WorkspaceFocus::Content => false,
+    }
+}
+
 pub(super) fn set_focus(
     focus: &mut WorkspaceFocus,
     fullscreen: &mut Option<WorkspaceFocus>,
     range_anchor: &mut Option<usize>,
+    content_range_anchor: &mut Option<(ContentIoFocus, usize)>,
     next: WorkspaceFocus,
 ) {
     *focus = next;
-    // Range selection is per-pane: leaving a list pane discards its anchor.
+    // Range selection is per-pane: leaving a pane discards its anchors.
     *range_anchor = None;
+    *content_range_anchor = None;
     if fullscreen.is_some() {
         *fullscreen = Some(next);
     }

@@ -17,6 +17,19 @@ use crate::tui::content::view::{ContentSelection, ContentViewMode};
 use crate::tui::search::WorkspaceSearchScope;
 use crate::tui::theme;
 
+/// Indices of true entries in a selection mask, in order.
+pub(crate) fn selected_indices(mask: &[bool]) -> Vec<usize> {
+    mask.iter()
+        .enumerate()
+        .filter_map(|(idx, selected)| selected.then_some(idx))
+        .collect()
+}
+
+/// Count of true entries in a selection mask.
+pub(crate) fn selected_count(mask: &[bool]) -> usize {
+    mask.iter().filter(|selected| **selected).count()
+}
+
 /// Kind of memory source (local path body before any `scope:` prefix).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum WorkspaceSourceKind {
@@ -383,6 +396,9 @@ pub(crate) struct WorkspaceView<'a> {
     /// Block under the keyboard/mouse cursor per half; highlighted like a
     /// list row when its half is focused.
     pub(crate) content_block_cursor: Option<(ContentIoFocus, usize)>,
+    /// Pending `v` block-range span `(half, anchor block, cursor block)`;
+    /// its lines render with the same amber range style as the list panes.
+    pub(crate) content_range: Option<(ContentIoFocus, usize, usize)>,
     /// Marked block masks per half (`mask[block_id]` = marked), owned by the
     /// content pane's native selection; consumed by the dot gutter and copy.
     pub(crate) content_marked_input: &'a [bool],

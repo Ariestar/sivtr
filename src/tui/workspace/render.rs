@@ -16,16 +16,16 @@ use crate::tui::content::view::{
     ContentView,
 };
 use crate::tui::pane::{
-    active_item_style, panel_block, render_list_panel, render_panel_scrollbar, selection_dot,
-    Panel, PanelScroll,
+    active_item_style, panel_block, render_list_panel, render_panel_scrollbar, row_highlight,
+    selection_dot, Panel, PanelScroll,
 };
 use crate::tui::search::{workspace_search_query, workspace_search_regex, WorkspaceSearchScope};
 use crate::tui::theme;
 use crate::tui::workspace::help::{workspace_footer_hotkeys, workspace_help_entries};
 use crate::tui::workspace::layout::{selected_index, workspace_layout};
 use crate::tui::workspace::model::{
-    SourceLoadMarker, WorkspaceDialogue, WorkspaceFocus, WorkspaceFooterView, WorkspaceSearchView,
-    WorkspaceSession, WorkspaceSource, WorkspaceView,
+    selected_count, selected_indices, SourceLoadMarker, WorkspaceDialogue, WorkspaceFocus,
+    WorkspaceFooterView, WorkspaceSearchView, WorkspaceSession, WorkspaceSource, WorkspaceView,
 };
 use sivtr_core::record::{WorkAt, WorkRef};
 
@@ -37,13 +37,6 @@ fn active_range(
     range_anchor: Option<usize>,
 ) -> Option<usize> {
     (focus == pane).then_some(range_anchor).flatten()
-}
-
-/// `true` when `idx` falls inside a pending range span (`anchor…cursor`).
-fn in_range(idx: usize, cursor_idx: usize, range_anchor: Option<usize>) -> bool {
-    range_anchor
-        .map(|anchor| idx >= anchor.min(cursor_idx) && idx <= anchor.max(cursor_idx))
-        .unwrap_or(false)
 }
 
 pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
@@ -138,6 +131,10 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
             .content_block_cursor
             .filter(|(focus, _)| *focus == half)
             .map(|(_, block)| block);
+        let range_blocks = view
+            .content_range
+            .filter(|(focus, _, _)| *focus == half)
+            .map(|(_, anchor, cursor)| (anchor, cursor));
         render_content_panel(
             frame,
             area,
@@ -155,6 +152,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
                 .filter(|_| view.content_io_focus == half),
             content_search,
             cursor_block,
+            range_blocks,
             match half {
                 ContentIoFocus::Input => view.content_marked_input,
                 ContentIoFocus::Output => view.content_marked_output,
@@ -426,12 +424,7 @@ pub(crate) fn current_content_dialogue<'a>(
     selected_dialogues: &[bool],
     highlighted_idx: usize,
 ) -> Option<&'a WorkspaceDialogue> {
-    let selected = selected_dialogues
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, selected)| selected.then_some(idx))
-        .collect::<Vec<_>>();
-    match selected.as_slice() {
+    match selected_indices(selected_dialogues).as_slice() {
         [] => dialogues.get(highlighted_idx),
         [idx] => dialogues.get(*idx),
         _ => None,
@@ -604,20 +597,13 @@ fn render_source_list(
         .enumerate()
         .map(|(idx, source)| {
             let selected = selected_sources.get(idx).copied().unwrap_or(false);
-            let focused = idx == cursor_idx;
-            let in_range = in_range(idx, cursor_idx, range_anchor);
             let load = source_markers
                 .get(idx)
                 .copied()
                 .unwrap_or(SourceLoadMarker::Idle);
             let marker = load.status_glyph(selected, loading_tick);
-            let style = if in_range {
-                theme::range_row()
-            } else if focused {
-                active_item_style()
-            } else {
-                Style::default().fg(source.color())
-            };
+            let style = row_highlight(idx, cursor_idx, range_anchor)
+                .unwrap_or_else(|| Style::default().fg(source.color()));
             ListItem::new(Line::from(vec![
                 Span::styled(format!("{marker} "), style),
                 Span::styled(source.label(), style),
@@ -711,15 +697,7 @@ fn render_session_list(
         .enumerate()
         .map(|(idx, choice)| {
             let selected = selected_sessions.get(idx).copied().unwrap_or(false);
-            let focused = idx == cursor_idx;
-            let in_range = in_range(idx, cursor_idx, range_anchor);
-            let base_style = if in_range {
-                theme::range_row()
-            } else if focused {
-                active_item_style()
-            } else {
-                Style::default()
-            };
+            let base_style = row_highlight(idx, cursor_idx, range_anchor).unwrap_or_default();
             let highlight = search
                 .filter(|search| search.scope == WorkspaceSearchScope::Session)
                 .and(search_regex);
@@ -770,7 +748,6 @@ fn render_dialogue_list(
         .iter()
         .enumerate()
         .map(|(idx, title)| {
-            let in_range = in_range(idx, highlighted_idx, range_anchor);
             let selected = selected_dialogues.get(idx).copied().unwrap_or(false);
             // Selection is shown by the dot alone (● = selected, ○ = not),
             // always visible so it survives pane switches.
@@ -779,20 +756,13 @@ fn render_dialogue_list(
             let highlight = search
                 .filter(|search| search.scope == WorkspaceSearchScope::Dialogue)
                 .and(search_regex);
-            if in_range {
-                ListItem::new(Line::from(Span::styled(line, theme::range_row())))
-            } else if idx == highlighted_idx {
-                ListItem::new(Line::from(highlight_spans(
-                    &line,
-                    highlight,
-                    active_item_style(),
-                )))
-            } else {
-                ListItem::new(Line::from(highlight_spans(
+            match row_highlight(idx, highlighted_idx, range_anchor) {
+                Some(style) => ListItem::new(Line::from(highlight_spans(&line, highlight, style))),
+                None => ListItem::new(Line::from(highlight_spans(
                     &line,
                     highlight,
                     Style::default(),
-                )))
+                ))),
             }
         })
         .collect();
@@ -852,6 +822,7 @@ fn render_content_panel(
     selection: Option<ContentSelection>,
     search_regex: Option<&Regex>,
     cursor_block: Option<usize>,
+    range_blocks: Option<(usize, usize)>,
     marked: &[bool],
 ) {
     render_content_view(
@@ -864,6 +835,7 @@ fn render_content_panel(
             search_regex,
             selection,
             cursor_block,
+            range_blocks,
             marked,
         },
     );
@@ -875,10 +847,7 @@ fn selected_parent_title(
     singular: &str,
     plural: &str,
 ) -> String {
-    let count = selected_parent_items
-        .iter()
-        .filter(|selected| **selected)
-        .count();
+    let count = selected_count(selected_parent_items);
     if count == 0 {
         title.to_string()
     } else if count == 1 {
@@ -889,7 +858,7 @@ fn selected_parent_title(
 }
 
 fn content_title_suffix(selected_dialogues: &[bool], current_ref: Option<&WorkRef>) -> String {
-    let count = selected_dialogues.iter().filter(|s| **s).count();
+    let count = selected_count(selected_dialogues);
     let select = match count {
         0 => String::new(),
         1 => ": 1 dialogue selected".to_string(),

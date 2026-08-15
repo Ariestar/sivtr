@@ -45,6 +45,9 @@ pub(crate) struct ContentView<'a> {
     /// Block under the keyboard/mouse cursor; its displayed line range is
     /// highlighted with the list-row focus style.
     pub(crate) cursor_block: Option<usize>,
+    /// Pending `v` block-range span (anchor block, cursor block). Lines owned
+    /// by any block in the span use the list panes' amber range style.
+    pub(crate) range_blocks: Option<(usize, usize)>,
     /// Marked block mask (`mask[block_id]` = marked) for the batch-copy dots.
     pub(crate) marked: &'a [bool],
 }
@@ -103,7 +106,7 @@ pub(crate) fn layout_content(
     blocks: &[BlockText],
     mode: ContentViewMode,
 ) -> ContentLayout {
-    let inner = panel_block(&Panel::new("", "", false)).inner(area);
+    let inner = panel_inner(area);
     let width = inner.width.saturating_sub(GUTTER_WIDTH) as usize;
     let lines = all_content_lines(text, width, mode);
     let mut kinds = vec![WorkPartKind::User; marked_mask_len(blocks)];
@@ -180,6 +183,9 @@ pub(crate) fn render_content_view(
     let block_highlight = view
         .cursor_block
         .and_then(|block| content_block_range(view.layout, block));
+    let range_highlight = view
+        .range_blocks
+        .and_then(|(anchor, cursor)| content_range_line_ranges(view.layout, anchor, cursor));
     frame.render_widget(
         Paragraph::new(block_dot_lines(view.layout, view.marked, scroll, &visible)),
         chunks[0],
@@ -190,6 +196,7 @@ pub(crate) fn render_content_view(
             scroll,
             view.search_regex,
             view.selection,
+            range_highlight.as_deref(),
             block_highlight,
             chunks[1].width as usize,
         )),
@@ -203,6 +210,13 @@ pub(crate) fn render_content_view(
     );
 }
 
+/// Content panel's inner rect (borders already accounted) — the geometry
+/// every layout and hit-test helper asks for, instead of re-deriving a
+/// borderless chrome block each time.
+fn panel_inner(area: Rect) -> Rect {
+    panel_block(&Panel::new("", "", false)).inner(area)
+}
+
 /// Horizontal split of a panel's inner area: fixed dot gutter + content.
 fn content_chunks(inner: Rect) -> Rc<[Rect]> {
     Layout::default()
@@ -214,7 +228,7 @@ fn content_chunks(inner: Rect) -> Rc<[Rect]> {
 /// Content column rect (the panel's inner area minus the fixed dot gutter);
 /// pure geometry, no layout.
 pub(crate) fn content_text_area(area: Rect) -> Rect {
-    let inner = panel_block(&Panel::new("", "", false)).inner(area);
+    let inner = panel_inner(area);
     Rect {
         x: inner.x.saturating_add(GUTTER_WIDTH),
         y: inner.y,
@@ -231,7 +245,7 @@ pub(crate) fn content_link_at(
     column: u16,
     row: u16,
 ) -> Option<String> {
-    let inner = panel_block(&Panel::new("", "", false)).inner(area);
+    let inner = panel_inner(area);
     if inner.width == 0
         || inner.height == 0
         || column < inner.x
@@ -334,6 +348,26 @@ pub(crate) fn content_block_range(
     Some(start..end + 1)
 }
 
+/// Displayed line ranges owned by any block in `anchor..=cursor`, grouped
+/// into contiguous chunks — the pending `v` span highlight.
+pub(crate) fn content_range_line_ranges(
+    layout: &ContentLayout,
+    anchor: usize,
+    cursor: usize,
+) -> Option<Vec<std::ops::Range<usize>>> {
+    let (lo, hi) = (anchor.min(cursor), anchor.max(cursor));
+    let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+    for (line_idx, owner) in layout.ownership.iter().enumerate() {
+        if owner.is_some_and(|id| id >= lo && id <= hi) {
+            match ranges.last_mut() {
+                Some(range) if range.end == line_idx => range.end = line_idx + 1,
+                _ => ranges.push(line_idx..line_idx + 1),
+            }
+        }
+    }
+    (!ranges.is_empty()).then_some(ranges)
+}
+
 pub(crate) fn content_position_in_text_row(
     area: Rect,
     text: &str,
@@ -342,7 +376,7 @@ pub(crate) fn content_position_in_text_row(
     column: u16,
     row: u16,
 ) -> Option<ContentPosition> {
-    let inner = panel_block(&Panel::new("", "", false)).inner(area);
+    let inner = panel_inner(area);
     let content_area = content_text_area(area);
     if inner.width == 0
         || inner.height == 0
@@ -471,12 +505,11 @@ fn clamp_content_selection(
 }
 
 pub(crate) fn content_view_line_count(area: Rect, text: &str, mode: ContentViewMode) -> usize {
-    let inner = panel_block(&Panel::new("", "", false)).inner(area);
+    let inner = panel_inner(area);
     if inner.width == 0 || inner.height == 0 {
         return 1;
     }
     content_layout_lines_metrics(inner.width, text, mode)
-        .0
         .len()
         .max(1)
 }
@@ -485,15 +518,11 @@ pub(crate) fn content_view_line_count(area: Rect, text: &str, mode: ContentViewM
 const GUTTER_WIDTH: u16 = 2;
 
 fn content_layout(area: Rect, text: &str, mode: ContentViewMode) -> (Vec<ContentLine>, Rc<[Rect]>) {
-    let inner = panel_block(&Panel::new("", "", false)).inner(area);
-    let (lines, gutter_width) = content_layout_lines_metrics(inner.width, text, mode);
+    let inner = panel_inner(area);
     // Gutter: dialogue dots per block, right-aligned dot plus one trailing
     // space — no separator bar between the dots and the content.
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(gutter_width), Constraint::Min(1)])
-        .split(inner);
-    (lines, chunks)
+    let lines = content_layout_lines_metrics(inner.width, text, mode);
+    (lines, content_chunks(inner))
 }
 
 #[cfg(test)]
@@ -569,10 +598,9 @@ fn content_layout_lines_metrics(
     inner_width: u16,
     text: &str,
     mode: ContentViewMode,
-) -> (Vec<ContentLine>, u16) {
+) -> Vec<ContentLine> {
     let content_width = inner_width.saturating_sub(GUTTER_WIDTH) as usize;
-    let lines = all_content_lines(text, content_width, mode);
-    (lines, GUTTER_WIDTH)
+    all_content_lines(text, content_width, mode)
 }
 
 fn content_lines(
@@ -580,6 +608,7 @@ fn content_lines(
     scroll: usize,
     search_regex: Option<&Regex>,
     selection: Option<ContentSelection>,
+    range_highlight: Option<&[std::ops::Range<usize>]>,
     block_highlight: Option<std::ops::Range<usize>>,
     width: usize,
 ) -> Text<'static> {
@@ -590,28 +619,35 @@ fn content_lines(
             let line_idx = scroll.saturating_add(idx);
             let line = styled_content_line(line.line, search_regex);
             let line = styled_selection_line(line, selection, line_idx);
-            style_block_line(line, block_highlight.as_ref(), line_idx, width)
+            style_block_line(
+                line,
+                range_highlight,
+                block_highlight.as_ref(),
+                line_idx,
+                width,
+            )
         })
         .collect::<Vec<_>>();
     Text::from(lines)
 }
 
-/// Tint every line of the cursor block with the list-row focus style and pad
-/// the remainder of the row so the whole block lights up, not just the text
-/// columns — the same full-width highlight the session/dialogue lists use.
+/// Tint every line of the pending range span (amber) or the cursor block
+/// (list-row focus) and pad the remainder of the row so the whole block
+/// lights up — the same full-width highlight the session/dialogue lists use.
+/// The style decision itself is the shared pane `span_style`.
 fn style_block_line(
     line: Line<'static>,
-    highlight: Option<&std::ops::Range<usize>>,
+    range_highlight: Option<&[std::ops::Range<usize>]>,
+    block_highlight: Option<&std::ops::Range<usize>>,
     line_idx: usize,
     width: usize,
 ) -> Line<'static> {
-    let Some(range) = highlight else {
+    let in_span =
+        range_highlight.is_some_and(|ranges| ranges.iter().any(|range| range.contains(&line_idx)));
+    let focused = block_highlight.is_some_and(|range| range.contains(&line_idx));
+    let Some(overlay) = crate::tui::pane::span_style(in_span, focused) else {
         return line;
     };
-    if !range.contains(&line_idx) {
-        return line;
-    }
-    let overlay = crate::tui::pane::active_item_style();
     let text_width = line_text_width(Some(&line));
     let mut spans = line
         .spans
@@ -646,7 +682,7 @@ fn styled_selection_line(
         line,
         range.start,
         range.end,
-        crate::tui::theme::selected_row(),
+        crate::tui::theme::text_selection_row(),
     )
 }
 
@@ -1181,7 +1217,7 @@ pub(crate) fn content_dot_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let inner = panel_block(&Panel::new("", "", false)).inner(area);
+    let inner = panel_inner(area);
     let content_area = content_text_area(area);
     if content_area.width == 0
         || content_area.height == 0
@@ -1412,6 +1448,7 @@ mod tests {
             search_regex,
             None,
             None,
+            None,
             80,
         )
     }
@@ -1505,6 +1542,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             4,
         );
 
@@ -1524,7 +1562,7 @@ mod tests {
             16,
             ContentViewMode::Reading,
         );
-        let rendered = content_lines(visible.clone(), 0, None, None, None, 16);
+        let rendered = content_lines(visible.clone(), 0, None, None, None, None, 16);
 
         assert_eq!(rendered.lines.len(), 2);
         assert_eq!(rendered_line_text(&rendered, 0), "docker-compose.f");
@@ -1601,9 +1639,7 @@ mod tests {
         // inner_width == 3 leaves a single content column; the fixed two-column
         // gutter (dot + space) means a ten-character unbroken line wraps to
         // ten rows instead of oscillating against the digit width.
-        let (lines, gutter_width) =
-            super::content_layout_lines_metrics(3, "0123456789", ContentViewMode::Reading);
-        assert_eq!(gutter_width, 2);
+        let lines = super::content_layout_lines_metrics(3, "0123456789", ContentViewMode::Reading);
         assert_eq!(lines.len(), 10, "one character per wrapped row");
         assert!(!lines[0].line.spans.is_empty(), "content must not vanish");
     }
@@ -1619,6 +1655,7 @@ mod tests {
                 ContentViewMode::Reading,
             ),
             0,
+            None,
             None,
             None,
             None,
@@ -1726,6 +1763,7 @@ mod tests {
                 kind: ContentSelectionKind::Block,
             }),
             None,
+            None,
             80,
         );
 
@@ -1733,11 +1771,11 @@ mod tests {
         assert_eq!(rendered.lines[1].spans[1].content.as_ref(), "vwx");
         assert_eq!(
             rendered.lines[0].spans[1].style.bg,
-            crate::tui::theme::selected_row().bg
+            crate::tui::theme::text_selection_row().bg
         );
         assert_eq!(
             rendered.lines[1].spans[1].style.bg,
-            crate::tui::theme::selected_row().bg
+            crate::tui::theme::text_selection_row().bg
         );
     }
 
@@ -1753,6 +1791,7 @@ mod tests {
                 kind: ContentSelectionKind::Linear,
             }),
             None,
+            None,
             80,
         );
 
@@ -1760,7 +1799,7 @@ mod tests {
         assert_eq!(rendered.lines[0].spans[1].content.as_ref(), "lph");
         assert_eq!(
             rendered.lines[0].spans[1].style.bg,
-            crate::tui::theme::selected_row().bg
+            crate::tui::theme::text_selection_row().bg
         );
     }
 
@@ -1787,6 +1826,7 @@ mod tests {
                         search_regex: None,
                         selection: None,
                         cursor_block: None,
+                        range_blocks: None,
                         marked: &marked,
                     },
                 );
@@ -1845,6 +1885,7 @@ mod tests {
                         search_regex: None,
                         selection: None,
                         cursor_block: Some(0),
+                        range_blocks: None,
                         marked: &[],
                     },
                 );
@@ -1872,6 +1913,62 @@ mod tests {
                 "row {row} should be highlighted to the right edge"
             );
         }
+    }
+
+    #[test]
+    fn render_content_view_highlights_the_range_span() {
+        let backend = TestBackend::new(40, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let area = Rect::new(0, 0, 40, 8);
+        let blocks = vec![
+            test_block(0, "alpha\nbeta"),
+            test_block(1, "omega"),
+            test_block(2, "gamma"),
+        ];
+        let layout = layout_content(
+            area,
+            &blocks_text(&blocks),
+            &blocks,
+            ContentViewMode::Reading,
+        );
+        terminal
+            .draw(|frame| {
+                render_content_view(
+                    frame,
+                    area,
+                    Panel::new("3", "Content (read)", true),
+                    ContentView {
+                        layout: &layout,
+                        scroll: 0,
+                        search_regex: None,
+                        selection: None,
+                        // The cursor block is inside the span, so the amber
+                        // range style overrides the focus style — the same
+                        // in-range priority the list panes use.
+                        cursor_block: Some(0),
+                        range_blocks: Some((0, 1)),
+                        marked: &[],
+                    },
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        // The span owns block 0 (rows 1-2) and block 1 (row 4), split by the
+        // block separator.
+        let range_fg = crate::tui::theme::range_row().fg;
+        for row in [1, 2, 4] {
+            let cell = buffer.cell((4, row)).unwrap();
+            assert_eq!(cell.style().fg, range_fg, "row {row} should be in range");
+        }
+        // The span wins over the cursor block: no focus background on block 0.
+        let focus_bg = crate::tui::theme::focus_row().bg;
+        for row in 1..=2 {
+            let cell = buffer.cell((4, row)).unwrap();
+            assert_ne!(cell.style().bg, focus_bg);
+        }
+        // Block 2 (row 6) is outside the span.
+        let cell = buffer.cell((4, 6)).unwrap();
+        assert_ne!(cell.style().fg, range_fg);
     }
 
     #[test]

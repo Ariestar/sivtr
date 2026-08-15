@@ -371,8 +371,9 @@ pub(crate) fn focus_row() -> Style {
     Style::default().bg(ACTIVE.get().focus_bg)
 }
 
-/// Multi-selected row (not necessarily focused).
-pub(crate) fn selected_row() -> Style {
+/// Text-selection overlay (drag / visual-mode columns), distinct from the
+/// list panes' `●`/`○` selection dots.
+pub(crate) fn text_selection_row() -> Style {
     let theme = ACTIVE.get();
     Style::default().bg(theme.selected_bg).fg(theme.selected_fg)
 }

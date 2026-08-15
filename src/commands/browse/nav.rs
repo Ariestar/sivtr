@@ -6,8 +6,8 @@ use std::process::Command;
 
 use crate::tui::content::block::BlockText;
 use crate::tui::workspace::{
-    selected_index, ContentIoFocus, ContentScrolls, WorkspaceFocus, WorkspaceSession,
-    WorkspaceSource,
+    selected_index, selected_indices, ContentIoFocus, ContentScrolls, WorkspaceFocus,
+    WorkspaceSession, WorkspaceSource,
 };
 
 use super::selection::has_selected_sessions;
@@ -77,18 +77,10 @@ pub(super) fn shown_dialogue_idx(
     page: usize,
     dialogue_idx: usize,
 ) -> usize {
-    let count = selected_dialogues
-        .iter()
-        .filter(|selected| **selected)
-        .count();
-    if count == 0 {
-        return dialogue_idx;
-    }
-    selected_dialogues
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, selected)| selected.then_some(idx))
-        .nth(page.min(count.saturating_sub(1)))
+    let selected = selected_indices(selected_dialogues);
+    selected
+        .get(page.min(selected.len().saturating_sub(1)))
+        .copied()
         .unwrap_or(dialogue_idx)
 }
 
@@ -253,6 +245,12 @@ pub(super) fn row_list_index(
     let row = row.checked_sub(area.y.saturating_add(1))? as usize;
     let index = row.saturating_add(offset);
     (index < len).then_some(index)
+}
+
+/// Is `column` inside a list row's selection-dot gutter (rows render
+/// `{dot} ` at `area.x`, two columns wide)?
+pub(super) fn dot_gutter_hit(area: ratatui::layout::Rect, column: u16) -> bool {
+    column <= area.x.saturating_add(1)
 }
 
 pub(super) fn source_list_index(

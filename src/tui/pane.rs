@@ -188,6 +188,20 @@ pub(crate) fn active_item_style() -> Style {
     theme::focus_row()
 }
 
+/// Highlight style for a row/block line in any pane: a pending range span
+/// (`v` anchor..cursor) wins over the focused row, and a plain row stays
+/// unstyled so the caller keeps its own base (agent colors, badges). The one
+/// style decision every pane shares.
+pub(crate) fn span_style(in_span: bool, focused: bool) -> Option<Style> {
+    if in_span {
+        Some(theme::range_row())
+    } else if focused {
+        Some(active_item_style())
+    } else {
+        None
+    }
+}
+
 /// `●` / `○` marker for selected / unselected rows, used by every pane so the
 /// selection dot has one spelling across the whole UI.
 pub(crate) fn selection_dot(selected: bool) -> &'static str {
@@ -196,6 +210,19 @@ pub(crate) fn selection_dot(selected: bool) -> &'static str {
     } else {
         "○"
     }
+}
+
+/// Resolve one list row's highlight from its index, the cursor, and a pending
+/// `v` range anchor — the one question every list pane asks, instead of each
+/// pane re-deriving the span test and focus flag.
+pub(crate) fn row_highlight(
+    idx: usize,
+    cursor: usize,
+    range_anchor: Option<usize>,
+) -> Option<Style> {
+    let in_span =
+        range_anchor.is_some_and(|anchor| idx >= anchor.min(cursor) && idx <= anchor.max(cursor));
+    span_style(in_span, idx == cursor)
 }
 
 pub(crate) fn render_list_panel(
@@ -207,8 +234,7 @@ pub(crate) fn render_list_panel(
 ) {
     let list = List::new(items)
         .block(panel_block(&panel))
-        .highlight_style(active_item_style())
-        .highlight_symbol("");
+        .highlight_style(active_item_style());
     let mut local_state = *state;
     frame.render_stateful_widget(list, area, &mut local_state);
 }

@@ -16,21 +16,22 @@ use crate::tui::search::{
 };
 use crate::tui::terminal::read_interaction;
 use crate::tui::workspace::{
-    help_action_for_key, panel_inner_rows, render_workspace, search_match_half, selected_index,
-    workspace_help_entries, workspace_hit_test, workspace_layout, ContentIoFocus, ContentIoFrame,
-    ContentScrolls, ExpandedBlocks, WorkspaceDialogue, WorkspaceFocus, WorkspaceHelpAction,
-    WorkspacePickedContent, WorkspaceSearchView, WorkspaceSession, WorkspaceSource, WorkspaceView,
+    help_action_for_key, panel_inner_rows, render_workspace, search_match_half, selected_count,
+    selected_index, workspace_help_entries, workspace_hit_test, workspace_layout, ContentIoFocus,
+    ContentIoFrame, ContentScrolls, ExpandedBlocks, WorkspaceDialogue, WorkspaceFocus,
+    WorkspaceHelpAction, WorkspacePickedContent, WorkspaceSearchView, WorkspaceSession,
+    WorkspaceSource, WorkspaceView,
 };
 
 use super::content::{
     active_workspace_content_at, handle_line_filter_key, handle_line_filter_paste,
     line_filter_spec, workspace_picked_content_for_marked_blocks, workspace_search_target_ref,
 };
-use super::help::{apply_workspace_help_action, set_focus, HelpDispatch};
+use super::help::{apply_workspace_help_action, set_focus, toggle_list_row, HelpDispatch};
 use super::load::{SessionColumn, SessionCtx, SourceLoadState};
 use super::nav::{
-    clamp_list_state, move_workspace_cursor_down, move_workspace_cursor_up, open_link_target,
-    reset_workspace_after_source_change, reset_workspace_dialogue_state,
+    clamp_list_state, dot_gutter_hit, move_workspace_cursor_down, move_workspace_cursor_up,
+    open_link_target, reset_workspace_after_source_change, reset_workspace_dialogue_state,
     resize_workspace_dialogue_selection, row_list_index, shown_dialogue_idx, source_list_index,
     ContentBlockCursor,
 };
@@ -100,6 +101,9 @@ pub(crate) fn run(
     // Block cursor (keyboard j/k + click), highlighted like a list row; one
     // position per half.
     let mut content_cursor = ContentBlockCursor::default();
+    // Content block-range anchor for `v` (half + block id); cleared when the
+    // focus, half, or shown dialogue changes.
+    let mut content_range_anchor: Option<(ContentIoFocus, usize)> = None;
     // Mouse-down anchor inside content; promoted to a real selection only by
     // the first drag, so a pure click never shows a selection flash.
     let mut mouse_down_select: Option<MouseSelectionStart> = None;
@@ -337,11 +341,8 @@ pub(crate) fn run(
             redraw = false;
             // Multi-select pages through one selected dialogue at a time
             // (J/K flips the page); single selection shows the focused row.
-            let selected_count = selected_dialogues
-                .iter()
-                .filter(|selected| **selected)
-                .count();
-            content_page = content_page.min(selected_count.saturating_sub(1));
+            let selected = selected_count(&selected_dialogues);
+            content_page = content_page.min(selected.saturating_sub(1));
             let shown_idx = shown_dialogue_idx(&selected_dialogues, content_page, dialogue_idx);
             // List: title borrows. Content/copy: materialize (body only for focus∪select).
             let dialogue_titles: Vec<&str> = dialogue_pane.titles().collect();
@@ -379,6 +380,7 @@ pub(crate) fn run(
                 last_block_click = None;
                 mouse_down_select = None;
                 content_cursor.clear();
+                content_range_anchor = None;
                 expanded_key = Some(expand_key);
             }
             // Marks belong to their dialogue (they survive page flips for
@@ -499,11 +501,15 @@ pub(crate) fn run(
                         content_selection: visual_select_mode
                             .map(|mode: VisualSelectMode| mode.selection),
                         content_block_cursor: content_cursor.focused(content_io_focus),
+                        content_range: content_range_anchor.and_then(|(half, anchor)| {
+                            content_cursor
+                                .focused(half)
+                                .map(|(_, cursor)| (half, anchor, cursor))
+                        }),
                         content_marked_input: content_pane.marked(ContentIoFocus::Input, shown_idx),
                         content_marked_output: content_pane
                             .marked(ContentIoFocus::Output, shown_idx),
-                        content_page: (selected_count > 1)
-                            .then_some((content_page, selected_count)),
+                        content_page: (selected > 1).then_some((content_page, selected)),
                         content_frame: &content_frame,
                     },
                 )
@@ -753,6 +759,7 @@ pub(crate) fn run(
                                 &mut dialogue_state,
                                 &mut selected_dialogues,
                                 &mut range_anchor,
+                                &mut content_range_anchor,
                                 &mut content_scrolls,
                                 &mut content_io_focus,
                                 &mut content_mode,
@@ -882,6 +889,7 @@ pub(crate) fn run(
                         &mut dialogue_state,
                         &mut selected_dialogues,
                         &mut range_anchor,
+                        &mut content_range_anchor,
                         &mut content_scrolls,
                         &mut content_io_focus,
                         &mut content_mode,
@@ -942,7 +950,13 @@ pub(crate) fn run(
                         if let Some(next_focus) =
                             WorkspaceFocus::from_number_key(ch, dialogue_count)
                         {
-                            set_focus(&mut focus, &mut fullscreen, &mut range_anchor, next_focus);
+                            set_focus(
+                                &mut focus,
+                                &mut fullscreen,
+                                &mut range_anchor,
+                                &mut content_range_anchor,
+                                next_focus,
+                            );
                         }
                     }
                 }
@@ -1072,6 +1086,7 @@ pub(crate) fn run(
                                     &mut focus,
                                     &mut fullscreen,
                                     &mut range_anchor,
+                                    &mut content_range_anchor,
                                     WorkspaceFocus::Content,
                                 );
                             }
@@ -1162,6 +1177,7 @@ pub(crate) fn run(
                                 &mut focus,
                                 &mut fullscreen,
                                 &mut range_anchor,
+                                &mut content_range_anchor,
                                 clicked_focus,
                             );
                             match clicked_focus {
@@ -1176,6 +1192,25 @@ pub(crate) fn run(
                                         source_state.offset(),
                                     ) {
                                         source_state.select(Some(idx));
+                                        // Dot-gutter click toggles the row's
+                                        // mark, exactly like Space.
+                                        if vertical
+                                            && dot_gutter_hit(layout.source, mouse.column)
+                                            && toggle_list_row(
+                                                WorkspaceFocus::Source,
+                                                idx,
+                                                &mut selected_sources,
+                                                &mut selected_sessions,
+                                                &mut selected_dialogues,
+                                                &mut range_anchor,
+                                                &mut session_state,
+                                                &mut dialogue_state,
+                                                &mut content_scrolls,
+                                            )
+                                        {
+                                            sessions_dirty = true;
+                                            search_dirty = true;
+                                        }
                                     }
                                 }
                                 WorkspaceFocus::Sessions => {
@@ -1193,6 +1228,19 @@ pub(crate) fn run(
                                                 &mut selected_dialogues,
                                             );
                                         }
+                                        if dot_gutter_hit(layout.sessions, mouse.column) {
+                                            toggle_list_row(
+                                                WorkspaceFocus::Sessions,
+                                                idx,
+                                                &mut selected_sources,
+                                                &mut selected_sessions,
+                                                &mut selected_dialogues,
+                                                &mut range_anchor,
+                                                &mut session_state,
+                                                &mut dialogue_state,
+                                                &mut content_scrolls,
+                                            );
+                                        }
                                         content_scrolls.clear();
                                     }
                                 }
@@ -1204,6 +1252,19 @@ pub(crate) fn run(
                                         dialogue_state.offset(),
                                     ) {
                                         dialogue_state.select(Some(idx));
+                                        if dot_gutter_hit(layout.dialogues, mouse.column) {
+                                            toggle_list_row(
+                                                WorkspaceFocus::Dialogues,
+                                                idx,
+                                                &mut selected_sources,
+                                                &mut selected_sessions,
+                                                &mut selected_dialogues,
+                                                &mut range_anchor,
+                                                &mut session_state,
+                                                &mut dialogue_state,
+                                                &mut content_scrolls,
+                                            );
+                                        }
                                         content_scrolls.clear();
                                     }
                                 }
