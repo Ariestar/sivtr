@@ -183,10 +183,15 @@ pub(crate) fn part_body_text(part: &WorkPart) -> String {
                 sivtr_core::record::format_work_part(part)
             }
         }
-        WorkPartData::ToolResult { tool, output, .. } => {
+        WorkPartData::ToolResult {
+            tool,
+            output,
+            start_line,
+            ..
+        } => {
             let tool = tool.as_deref().unwrap_or_default();
             if is_known_tool(tool) {
-                tool_result_text(tool, output)
+                tool_result_text(tool, output, *start_line)
             } else {
                 sivtr_core::record::format_work_part(part)
             }
@@ -357,21 +362,39 @@ fn diff_preview(tool: &str, input: &Value) -> Option<String> {
     Some(format!("```diff\n{diff}\n```"))
 }
 
-/// Expanded body of a tool result: `>` output lines, or a code block for
-/// read (the file content preview shown right under the `$ read` line).
-pub(crate) fn tool_result_text(tool: &str, output: &Value) -> String {
+/// Expanded body of a tool result: `>` output lines, or a fenced block for
+/// read (the file content preview) and every search tool. Text matches fence
+/// as a structured ` ```grep ` block (summary, paths, line numbers); JSON
+/// results (e.g. opencode's `search_files`) keep their data shape as a
+/// ` ```json ` block. Provider envelopes (grok's `<workspace_result …>`,
+/// `N→` line gutters) are already stripped by the parser, whose `start_line`
+/// metadata shifts the read gutter to real file lines.
+pub(crate) fn tool_result_text(tool: &str, output: &Value, start_line: Option<u64>) -> String {
     let text = match output {
         Value::String(text) => text.clone(),
         _ => serde_json::to_string_pretty(output).unwrap_or_default(),
     };
-    if tool_spec(tool).is_some_and(|spec| spec.category == ToolCategory::Read) {
-        format!("```\n{}\n```", text.trim_end())
-    } else {
-        text.lines()
-            .map(|line| format!("> {line}"))
-            .collect::<Vec<_>>()
-            .join("\n")
+    let Some(spec) = tool_spec(tool) else {
+        return output_lines(&text);
+    };
+    match spec.category {
+        ToolCategory::Read => match start_line {
+            Some(start) => format!("```{start}\n{}\n```", text.trim_end()),
+            None => format!("```\n{}\n```", text.trim_end()),
+        },
+        ToolCategory::Search => match output {
+            Value::String(_) => format!("```grep\n{}\n```", text.trim_end()),
+            _ => format!("```json\n{}\n```", text.trim_end()),
+        },
+        _ => output_lines(&text),
     }
+}
+
+fn output_lines(text: &str) -> String {
+    text.lines()
+        .map(|line| format!("> {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Truncate a long expression to fit a tag line, appending `…`.
@@ -508,13 +531,27 @@ mod tests {
         let read_result = result("Read", serde_json::json!("fn main() {}\n"));
         assert_eq!(part_body_text(&read_result), "```\nfn main() {}\n```");
 
+        // A numbered read result shifts the code gutter to the file's line.
+        let numbered = result_with_line("Read", serde_json::json!("line one\nline two"), Some(775));
+        assert_eq!(part_body_text(&numbered), "```775\nline one\nline two\n```");
+
         let bash_result = result("Bash", serde_json::json!("ok\nwarning"));
         assert_eq!(part_body_text(&bash_result), "> ok\n> warning");
 
+        // Text grep results fence as a structured search block; JSON results
+        // (opencode's search_files) keep their data shape as a JSON block.
+        let text_match = result(
+            "Grep",
+            serde_json::json!("Found 2 matching lines\nD:\\Coding\\AGENTS.md\n31:- rule\n"),
+        );
+        assert_eq!(
+            part_body_text(&text_match),
+            "```grep\nFound 2 matching lines\nD:\\Coding\\AGENTS.md\n31:- rule\n```"
+        );
         let json_result = result("Grep", serde_json::json!([{"file": "a.rs", "line": 1}]));
         assert_eq!(
             part_body_text(&json_result),
-            "> [\n>   {\n>     \"file\": \"a.rs\",\n>     \"line\": 1\n>   }\n> ]"
+            "```json\n[\n  {\n    \"file\": \"a.rs\",\n    \"line\": 1\n  }\n]\n```"
         );
     }
 

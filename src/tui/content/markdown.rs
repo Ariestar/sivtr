@@ -3,8 +3,6 @@ use ratatui::prelude::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
-const CODE_INDENT: &str = "  ";
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MarkdownLineKind {
     Normal,
@@ -94,14 +92,34 @@ pub(crate) fn render_markdown_lines(lines: &[&str], width: usize) -> Vec<Markdow
     rendered
 }
 
-/// One fenced block: ` ```rust ` … ` ``` `. Diff-aware when the fence names
-/// `diff` or the body carries a unified-diff hunk header (`@@ …`).
+/// One fenced block: ` ```rust ` … ` ``` `. GitHub-style: every code line
+/// carries a right-aligned line number sharing the block background, so the
+/// same gutter appears in markdown fences, tool result previews, and diffs.
+/// Diff-aware when the fence names `diff` or the body carries a unified-diff
+/// hunk header (`@@ …`). A numeric fence (```` ```775 ````) numbers the block
+/// from that file line — read-result previews keep their real line numbers.
 fn render_code_block(body: &[&str], language: Option<&str>) -> Vec<MarkdownLine> {
+    if language == Some("grep") {
+        return render_grep_block(body);
+    }
     let is_diff = language == Some("diff") || body.iter().any(|line| is_diff_hunk_header(line));
+    let start_line = language
+        .and_then(|lang| lang.parse::<usize>().ok())
+        .unwrap_or(1);
+    // GitHub-style gutter: right-aligned line numbers, the code follows;
+    // widths grow with the block's last line number. No background — the
+    // current-row highlight owns the background on the content pane.
+    let gutter_width = (start_line.saturating_add(body.len()).saturating_sub(1))
+        .to_string()
+        .len();
     body.iter()
-        .map(|line| MarkdownLine {
+        .enumerate()
+        .map(|(idx, line)| MarkdownLine {
             line: Line::from(vec![
-                Span::styled(CODE_INDENT, code_block_margin_style()),
+                Span::styled(
+                    format!("{:>gutter_width$} ", start_line + idx),
+                    code_line_number_style(),
+                ),
                 Span::styled(line.to_string(), code_line_style(line, is_diff)),
             ]),
             kind: MarkdownLineKind::CodeBlock,
@@ -149,6 +167,59 @@ fn is_diff_file_header(line: &str) -> bool {
         .or_else(|| line.strip_prefix("---"))
         .and_then(|rest| rest.strip_prefix(' '))
         .is_some_and(|path| !path.is_empty())
+}
+
+/// grep search results (` ```grep `): a structured block, not a code gutter.
+/// Matches are scattered single lines, so each part gets its own color — the
+/// `Found N matching lines` summary stands out, file paths read as targets,
+/// and the `line:content` matches highlight their line number. Provider
+/// envelopes (grok's `<workspace_result …>`) are already stripped by the
+/// formatter, so only the generic shape is rendered here.
+fn render_grep_block(body: &[&str]) -> Vec<MarkdownLine> {
+    body.iter()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            let spans = if trimmed.starts_with("Found ") && trimmed.contains("matching lines") {
+                vec![Span::styled(
+                    line.to_string(),
+                    Style::default()
+                        .fg(crate::tui::theme::accent())
+                        .add_modifier(Modifier::BOLD),
+                )]
+            } else if let Some((num, rest)) = line.split_once(':') {
+                if num.trim().chars().all(|ch| ch.is_ascii_digit()) {
+                    vec![
+                        Span::styled(
+                            format!("{num}:"),
+                            Style::default()
+                                .fg(crate::tui::theme::accent())
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(rest.to_string(), grep_match_style()),
+                    ]
+                } else {
+                    vec![Span::styled(line.to_string(), grep_path_style())]
+                }
+            } else {
+                vec![Span::styled(line.to_string(), grep_path_style())]
+            };
+            MarkdownLine {
+                line: Line::from(spans),
+                kind: MarkdownLineKind::CodeBlock,
+                links: Vec::new(),
+            }
+        })
+        .collect()
+}
+
+/// File path in a grep result.
+fn grep_path_style() -> Style {
+    Style::default().fg(crate::tui::theme::accent())
+}
+
+/// Matched content after the `line:` prefix.
+fn grep_match_style() -> Style {
+    code_block_style()
 }
 
 fn code_line_style(line: &str, is_diff: bool) -> Style {
@@ -238,11 +309,10 @@ fn code_fence_language(line: &str) -> Option<Option<String>> {
 }
 
 fn code_fence_line(language: Option<String>) -> Line<'static> {
-    match language {
-        Some(language) => Line::from(Span::styled(
-            format!("{CODE_INDENT}{language}"),
-            code_fence_style(),
-        )),
+    // A numeric fence is a line-number offset, not a language label — the
+    // fence row stays empty so the gutter reads as the file's own numbers.
+    match language.filter(|lang| lang.parse::<usize>().is_err()) {
+        Some(language) => Line::from(Span::styled(language, code_fence_style())),
         None => Line::default(),
     }
 }
@@ -868,7 +938,8 @@ fn code_block_style() -> Style {
     Style::default().fg(crate::tui::theme::code())
 }
 
-fn code_block_margin_style() -> Style {
+/// GitHub-style gutter numbers: dim, same width as the block's line count.
+fn code_line_number_style() -> Style {
     Style::default().fg(crate::tui::theme::dim())
 }
 
@@ -888,7 +959,7 @@ fn blockquote_style() -> Style {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_markdown_window, MarkdownLineKind, CODE_INDENT};
+    use super::{render_markdown_window, MarkdownLineKind};
     use ratatui::prelude::Modifier;
 
     #[test]
@@ -1122,14 +1193,14 @@ mod tests {
     }
 
     #[test]
-    fn renders_fenced_code_blocks_as_indented_code() {
+    fn renders_fenced_code_blocks_with_github_style_line_numbers() {
         let lines = render_markdown_window(&["```text", "-> value", "```"], 0, 3, 80);
 
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[0].kind, MarkdownLineKind::CodeFence);
         assert!(lines[0].line.spans.is_empty());
         assert_eq!(lines[1].kind, MarkdownLineKind::CodeBlock);
-        assert_eq!(lines[1].line.spans[0].content.as_ref(), CODE_INDENT);
+        assert_eq!(lines[1].line.spans[0].content.as_ref(), "1 ");
         assert_eq!(lines[1].line.spans[1].content.as_ref(), "-> value");
         assert_eq!(
             lines[1].line.spans[1].style.fg,
@@ -1144,9 +1215,98 @@ mod tests {
         let lines = render_markdown_window(&["```text", "alpha", "beta", "```"], 2, 1, 80);
 
         assert_eq!(lines[0].kind, MarkdownLineKind::CodeBlock);
+        // Numbers stay true to the block: "beta" is the second line, so its
+        // gutter says 2 even when the window starts at line two.
+        assert_eq!(lines[0].line.spans[0].content.as_ref(), "2 ");
         assert_eq!(lines[0].line.spans[1].content.as_ref(), "beta");
         assert_eq!(
             lines[0].line.spans[1].style.fg,
+            Some(crate::tui::theme::code())
+        );
+    }
+
+    #[test]
+    fn code_block_gutter_width_tracks_the_block_length() {
+        let lines = render_markdown_window(
+            &[
+                "```text", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "```",
+            ],
+            0,
+            12,
+            80,
+        );
+        // Ten lines → two-digit numbers, right-aligned to the same width.
+        assert_eq!(lines[1].line.spans[0].content.as_ref(), " 1 ");
+        assert_eq!(lines[9].line.spans[0].content.as_ref(), " 9 ");
+        assert_eq!(lines[10].line.spans[0].content.as_ref(), "10 ");
+    }
+
+    #[test]
+    fn numeric_fence_numbers_the_block_from_that_file_line() {
+        // read results fence as ```` ```775 ````: the gutter shows the file's
+        // real lines, and the fence row does not print "775" as a language.
+        let lines = render_markdown_window(
+            &["```775", "line one", "line two", "line three", "```"],
+            0,
+            5,
+            80,
+        );
+        assert_eq!(lines[0].kind, MarkdownLineKind::CodeFence);
+        assert!(lines[0].line.spans.is_empty());
+        assert_eq!(lines[1].line.spans[0].content.as_ref(), "775 ");
+        assert_eq!(lines[2].line.spans[0].content.as_ref(), "776 ");
+        assert_eq!(lines[3].line.spans[0].content.as_ref(), "777 ");
+        assert_eq!(lines[4].kind, MarkdownLineKind::CodeFence);
+        assert!(lines[4].line.spans.is_empty());
+    }
+
+    #[test]
+    fn grep_block_styles_summary_paths_and_matches_separately() {
+        let lines = render_markdown_window(
+            &[
+                "```grep",
+                "Found 2 matching lines",
+                "D:\\Coding\\AGENTS.md",
+                "31:- Adding, updating, or removing dependencies",
+                "```",
+            ],
+            0,
+            5,
+            100,
+        );
+        assert_eq!(lines[0].kind, MarkdownLineKind::CodeFence);
+        assert_eq!(lines[0].line.spans[0].content.as_ref(), "grep");
+
+        // The summary reads as a bold accent.
+        assert_eq!(
+            lines[1].line.spans[0].style.fg,
+            Some(crate::tui::theme::accent())
+        );
+        assert!(lines[1].line.spans[0]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD));
+        // The file path gets accent, no line gutter.
+        assert_eq!(
+            lines[2].line.spans[0].content.as_ref(),
+            "D:\\Coding\\AGENTS.md"
+        );
+        assert_eq!(
+            lines[2].line.spans[0].style.fg,
+            Some(crate::tui::theme::accent())
+        );
+        // The match splits into a highlighted line number and code content.
+        assert_eq!(lines[3].line.spans[0].content.as_ref(), "31:");
+        assert_eq!(
+            lines[3].line.spans[0].style.fg,
+            Some(crate::tui::theme::accent())
+        );
+        assert_eq!(
+            lines[3].line.spans[1].content.as_ref(),
+            "- Adding, updating, or removing dependencies"
+        );
+        assert_eq!(
+            lines[3].line.spans[1].style.fg,
             Some(crate::tui::theme::code())
         );
     }
@@ -1156,7 +1316,7 @@ mod tests {
         let lines = render_markdown_window(&["```sql", "select 1", "```"], 0, 1, 80);
 
         assert_eq!(lines[0].kind, MarkdownLineKind::CodeFence);
-        assert_eq!(lines[0].line.spans[0].content.as_ref(), "  sql");
+        assert_eq!(lines[0].line.spans[0].content.as_ref(), "sql");
     }
 
     #[test]
@@ -1176,7 +1336,7 @@ mod tests {
             80,
         );
 
-        assert_eq!(lines[0].line.spans[0].content.as_ref(), "  diff");
+        assert_eq!(lines[0].line.spans[0].content.as_ref(), "diff");
         assert_eq!(
             lines[1].line.spans[1].style.fg,
             Some(crate::tui::theme::accent())
