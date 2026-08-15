@@ -281,11 +281,7 @@ fn active_session_indices(
     session_idx: usize,
     selected_sessions: &[bool],
 ) -> Vec<usize> {
-    let selected: Vec<usize> = selected_sessions
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, selected)| selected.then_some(idx))
-        .collect();
+    let selected = crate::tui::workspace::selected_indices(selected_sessions);
     if !selected.is_empty() {
         return selected;
     }

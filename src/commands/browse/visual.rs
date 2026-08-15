@@ -207,29 +207,8 @@ pub(super) fn handle_content_mouse_select(
     // When true, left-down on content may arm a selection even if mode is None.
     allow_start: bool,
 ) -> bool {
-    let in_content = content_position_in_text_row(
-        content.area,
-        content.text,
-        content.scroll,
-        content.mode,
-        column,
-        row,
-    )
-    .is_some();
-
     match kind {
         MouseEventKind::Down(MouseButton::Left) if allow_start || visual_select_mode.is_some() => {
-            if !in_content {
-                // Outside content: drop an armed/pending selection so list
-                // panes can take the click. Keep consuming only while a drag
-                // is in progress.
-                if visual_select_mode.as_ref().is_some_and(|m| m.dragging) {
-                    return true;
-                }
-                *visual_select_mode = None;
-                *mouse_down = None;
-                return false;
-            }
             let Some(position) = content_position_in_text_row(
                 content.area,
                 content.text,
@@ -238,6 +217,14 @@ pub(super) fn handle_content_mouse_select(
                 column,
                 row,
             ) else {
+                // Outside content: drop an armed/pending selection so list
+                // panes can take the click. Keep consuming only while a drag
+                // is in progress.
+                if visual_select_mode.as_ref().is_some_and(|m| m.dragging) {
+                    return true;
+                }
+                *visual_select_mode = None;
+                *mouse_down = None;
                 return false;
             };
             match visual_select_mode.as_mut() {

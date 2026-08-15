@@ -8,7 +8,9 @@ use crate::tui::content::block::{half_blocks, Block};
 use crate::tui::content::io::ContentIoFocus;
 use crate::tui::content::view::{line_count, ContentViewMode};
 use crate::tui::search::{WorkspaceSearchMatch, WorkspaceSearchOutput};
-use crate::tui::workspace::{WorkspaceDialogue, WorkspacePickedContent, WorkspaceSession};
+use crate::tui::workspace::{
+    selected_indices, WorkspaceDialogue, WorkspacePickedContent, WorkspaceSession,
+};
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
 
 use super::panes::ContentPane;
@@ -26,11 +28,7 @@ pub(super) enum WorkspaceCopyShortcut {
 /// Selected dialogue indices in selection order, falling back to the
 /// focused row when nothing is selected (copy targets one dialogue then).
 fn picked_dialogue_indices(selected_dialogues: &[bool], dialogue_idx: usize) -> Vec<usize> {
-    let selected = selected_dialogues
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, selected)| selected.then_some(idx))
-        .collect::<Vec<_>>();
+    let selected = selected_indices(selected_dialogues);
     if selected.is_empty() {
         vec![dialogue_idx]
     } else {
