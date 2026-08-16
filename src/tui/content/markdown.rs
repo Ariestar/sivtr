@@ -111,11 +111,11 @@ fn render_code_block(body: &[&str], language: Option<&str>) -> Vec<MarkdownLine>
 }
 
 /// Unified-diff hunk header: `@@ -1,3 +1,4 @@` (an optional section heading
-/// may follow the closing `@@`). Validates the full shape so ordinary code
-/// lines that merely start with `@@` (doc attributes, Lua long strings, …)
-/// do not switch the whole block into diff mode.
+/// may follow the closing `@@`). Strict on shape and column: the header
+/// starts at column 0, the old range is minus-led and the new range
+/// plus-led, and each range carries at most one line-count segment — so
+/// context lines and lookalike code never switch the block into diff mode.
 fn is_diff_hunk_header(line: &str) -> bool {
-    let line = line.trim_start();
     let Some(rest) = line.strip_prefix("@@") else {
         return false;
     };
@@ -125,18 +125,20 @@ fn is_diff_hunk_header(line: &str) -> bool {
     let Some((minus, plus)) = ranges.trim().split_once(' ') else {
         return false;
     };
-    is_hunk_range(minus) && is_hunk_range(plus)
+    minus.strip_prefix('-').is_some_and(hunk_count)
+        && plus.strip_prefix('+').is_some_and(hunk_count)
 }
 
-/// One hunk range (`-1,3`, `+1`, …): a sign followed by comma-joined digits.
-fn is_hunk_range(range: &str) -> bool {
-    let Some(digits) = range.strip_prefix('-').or_else(|| range.strip_prefix('+')) else {
-        return false;
-    };
-    !digits.is_empty()
-        && digits
-            .split(',')
-            .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
+/// Digits, optionally followed by one `,digits` line count.
+fn hunk_count(digits: &str) -> bool {
+    match digits.split_once(',') {
+        Some((start, count)) => is_digits(start) && is_digits(count),
+        None => is_digits(digits),
+    }
+}
+
+fn is_digits(text: &str) -> bool {
+    !text.is_empty() && text.chars().all(|c| c.is_ascii_digit())
 }
 
 /// Unified-diff file header (`+++ b/file`, `--- a/file`): the marker is
@@ -1209,6 +1211,20 @@ mod tests {
             lines[2].line.spans[1].style.fg,
             Some(crate::tui::theme::code())
         );
+    }
+
+    #[test]
+    fn non_canonical_hunk_headers_do_not_enable_diff_mode() {
+        // A context line, a swapped sign order, and a multi-count range are
+        // all lookalikes, not hunk headers.
+        for header in [" @@ -1 +1 @@", "@@ +1 -1 @@", "@@ -1,2,3 +1 @@"] {
+            let lines = render_markdown_window(&["```", header, "+ not a change", "```"], 0, 3, 80);
+            assert_eq!(
+                lines[2].line.spans[1].style.fg,
+                Some(crate::tui::theme::code()),
+                "header `{header}` must not enable diff mode"
+            );
+        }
     }
 
     #[test]
