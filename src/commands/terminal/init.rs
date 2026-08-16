@@ -650,27 +650,25 @@ fn tmux_config_path() -> Result<PathBuf> {
 }
 
 fn get_ps_profile(cmd: &str) -> Result<String> {
-    let output = Command::new(cmd)
-        .args(["-NoProfile", "-Command", "Write-Output $PROFILE"])
-        .output()
-        .context("Failed to run shell")?;
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if path.is_empty() {
-        anyhow::bail!("empty profile path");
-    }
-    Ok(path)
+    let path = shell_printed_path(cmd, &["-NoProfile", "-Command", "Write-Output $PROFILE"])?;
+    path.context("empty profile path")
 }
 
 fn get_nu_config_path(cmd: &str) -> Result<String> {
+    let path = shell_printed_path(cmd, &["-c", "print $nu.config-path"])?;
+    path.context("empty config path")
+}
+
+/// Run a shell command that prints a path (`$PROFILE`, `$nu.config-path`)
+/// and return the trimmed stdout; `Ok(None)` when the shell printed nothing.
+/// The single "ask a shell for a path" spelling across init/doctor/MCP.
+pub(crate) fn shell_printed_path(cmd: &str, args: &[&str]) -> Result<Option<String>> {
     let output = Command::new(cmd)
-        .args(["-c", "print $nu.config-path"])
+        .args(args)
         .output()
         .context("Failed to run shell")?;
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if path.is_empty() {
-        anyhow::bail!("empty config path");
-    }
-    Ok(path)
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok((!value.is_empty()).then_some(value))
 }
 
 fn update_existing_hook(content: &str, spec: &HookSpec) -> Option<String> {
