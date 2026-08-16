@@ -18,7 +18,6 @@ description: TOML 配置参考。
 ```toml
 [general]
 open_mode = "tui"
-preserve_colors = true
 
 [editor]
 command = "nvim"
@@ -42,13 +41,11 @@ chord = "alt+y"
 ```toml
 [general]
 open_mode = "tui"
-preserve_colors = true
 ```
 
 | Key | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
 | `open_mode` | `"tui"` 或 `"editor"` | `"tui"` | 捕获输出打开位置 |
-| `preserve_colors` | boolean | `true` | 在 TUI 显示中保留原始 ANSI 颜色 |
 
 ## editor
 

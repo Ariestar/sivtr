@@ -24,7 +24,6 @@ sivtr config edit
 ```toml
 [general]
 open_mode = "tui"
-preserve_colors = true
 
 [editor]
 command = ""
@@ -56,15 +55,6 @@ command = "nvim"
 ```
 
 当 `open_mode` 是 `editor` 时，pipe mode、run mode 和 session import 会把捕获文本交给外部编辑器，而不是内置 TUI。
-
-## 保留颜色
-
-```toml
-[general]
-preserve_colors = true
-```
-
-启用后，TUI 可以在有 ANSI 内容时显示原始颜色。纯文本复制和搜索仍保持稳定。
 
 ## Prompt 检测
 

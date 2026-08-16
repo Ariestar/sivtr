@@ -25,12 +25,9 @@ pub struct SivtrConfig {
 }
 
 /// General behavior settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
-pub struct GeneralConfig {
-    /// Preserve original ANSI colors in content views when available.
-    pub preserve_colors: bool,
-}
+pub struct GeneralConfig {}
 
 /// Editor configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -57,12 +54,6 @@ pub struct HistoryConfig {
 pub struct CopyConfig {
     /// Prompt profiles or literal prefixes used when detecting command lines.
     pub prompts: Vec<String>,
-}
-
-impl CopyConfig {
-    pub fn prompt_values(&self) -> impl Iterator<Item = &String> {
-        self.prompts.iter()
-    }
 }
 
 /// Codex session configuration.
@@ -93,14 +84,6 @@ pub struct McpConfig {
 }
 
 // --- Defaults ---
-
-impl Default for GeneralConfig {
-    fn default() -> Self {
-        Self {
-            preserve_colors: true,
-        }
-    }
-}
 
 impl Default for HistoryConfig {
     fn default() -> Self {

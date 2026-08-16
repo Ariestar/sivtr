@@ -74,12 +74,14 @@ impl Line {
         if col_start >= col_end {
             return String::new();
         }
-        let (char_start, char_end) =
-            crate::parse::unicode::display_col_to_char_range(&self.content, col_start, col_end);
+        let char_start = self.char_index_for_display_col(col_start);
+        // The range includes the char covering the last column, so derive the
+        // end from the char covering `col_end - 1`.
+        let char_end = self.char_index_for_display_col(col_end - 1) + 1;
         self.content
             .chars()
             .skip(char_start)
-            .take(char_end - char_start)
+            .take(char_end.saturating_sub(char_start))
             .collect()
     }
 }

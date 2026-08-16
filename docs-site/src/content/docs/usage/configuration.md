@@ -24,7 +24,6 @@ sivtr config edit
 ```toml
 [general]
 open_mode = "tui"
-preserve_colors = true
 
 [editor]
 command = ""
@@ -56,15 +55,6 @@ command = "nvim"
 ```
 
 When `open_mode` is `editor`, pipe mode, run mode, and session import open captured text in the configured external editor instead of the built-in TUI.
-
-## Preserve colors
-
-```toml
-[general]
-preserve_colors = true
-```
-
-When enabled, the TUI can display ANSI colors where captured ANSI content is available. Plain-text copy and search remain stable.
 
 ## Prompt detection
 
