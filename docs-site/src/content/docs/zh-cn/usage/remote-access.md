@@ -105,7 +105,7 @@ sivtr serve logs
 sivtr serve stop
 ```
 
-状态在 `data_dir()`（`SIVTR_DATA_DIR` 覆盖，否则平台 config 下的 `sivtr`）：
+状态在统一 home 下（`SIVTR_HOME` 覆盖，否则 `~/.sivtr`）：
 
 | 文件 | 用途 |
 | --- | --- |

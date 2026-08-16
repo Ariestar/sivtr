@@ -3,25 +3,38 @@ title: 数据位置
 description: sivtr 存放配置、history、session log 和 provider 数据的位置。
 ---
 
-`sivtr` 是 local-first。它使用的大多数数据已经在你的机器上；它生成的数据默认写在平台配置或状态目录下，除非你显式导出到其他位置。
+`sivtr` 是 local-first。它使用的大多数数据已经在你的机器上；它生成的数据全部存放在一个 home 目录下：
+
+- 设置了 `SIVTR_HOME` 时用它（Grok 风格的整体搬迁），
+- 否则每个平台都用 `~/.sivtr`。
+
+```text
+~/.sivtr/
+  config.toml               ← 配置
+  history.db                ← 捕获的终端输出（SQLite）
+  sets/                     ← WorkSet 检查点（@last、@name）
+  workspaces/<key>/terminals/  ← shell session log（session_<pid>.jsonl）
+  cache/                    ← agent session 解析缓存
+  identity.key              ← 远程记忆的设备身份
+  remote-state.db           ← peers、shares、grants、invites、mounts
+  daemon.json / daemon.lock / daemon.log
+```
+
+请通过 CLI 命令访问，而不是直接编辑这些文件。
+
+## 从旧版本迁移
+
+sivtr ≤ 0.4 把数据分散在平台的 config、state 和 data 目录。`sivtr doctor` 会报告仍然留在旧位置的数据，`sivtr doctor --fix` 会把它们搬进统一 home。迁移按目录合并、绝不覆盖已存在的目标；冲突项会被报告并留在原地。
 
 ## 配置文件
 
-| 平台 | 路径 |
-| --- | --- |
-| Windows | `%APPDATA%\sivtr\config.toml` |
-| macOS | `~/Library/Application Support/sivtr/config.toml` |
-| Linux | `~/.config/sivtr/config.toml` |
+```text
+<SIVTR_HOME 或 ~/.sivtr>/config.toml
+```
 
 ## Shell session log
 
-Shell 集成会写入按进程区分的结构化 session log。
-
-| Shell/平台 | 常见路径 |
-| --- | --- |
-| Windows PowerShell / PowerShell 7 | `%APPDATA%\sivtr\session_<pid>.log` |
-| Bash / Zsh | `$XDG_STATE_HOME/sivtr/session_<pid>.log` 或 `~/.local/state/sivtr/session_<pid>.log` |
-| Nushell | Nushell config/state 区域中的 `sivtr` session 文件 |
+Shell 集成会写入按进程区分的结构化 session log，位于 `<home>/workspaces/<key>/terminals/session_<pid>.jsonl`。
 
 这些 log 支撑：
 
@@ -32,7 +45,11 @@ Shell 集成会写入按进程区分的结构化 session log。
 
 ## History 数据库
 
-当 `[history].auto_save = true` 时，捕获的终端输出会保存到本地 SQLite history 数据库。
+当 `[history].auto_save = true` 时，捕获的终端输出会保存到本地 SQLite history 数据库：
+
+```text
+<home>/history.db
+```
 
 请通过 CLI 命令访问，而不是直接编辑数据库：
 
@@ -97,7 +114,7 @@ macOS shortcut generation 会写入：
 - `~/.local/bin/sivtr-pick-codex`；
 - `~/Library/LaunchAgents/dev.sivtr.pick-codex.plist`。
 
-Windows hotkey 状态存放在 `sivtr` 的平台 config/state 区域下，由以下命令管理：
+Windows hotkey 状态存放在统一 home 下，由以下命令管理：
 
 ```bash
 sivtr hotkey status
@@ -106,7 +123,7 @@ sivtr hotkey stop
 
 ## Remote daemon 状态
 
-跨设备远程记忆使用设备级 daemon。可用 `SIVTR_DATA_DIR` 覆盖根目录；否则是平台 config 目录下的 `sivtr`（与 `data_dir()` 相同）。
+跨设备远程记忆使用设备级 daemon。状态存放在统一 home 下：
 
 | 文件 | 用途 |
 | --- | --- |

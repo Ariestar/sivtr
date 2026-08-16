@@ -125,7 +125,7 @@ impl SivtrConfig {
     /// Load config from the default config file.
     /// If the file doesn't exist, return defaults.
     pub fn load() -> Result<Self> {
-        let path = Self::config_path()?;
+        let path = Self::config_path();
         if !path.exists() {
             return Ok(Self::default());
         }
@@ -138,7 +138,7 @@ impl SivtrConfig {
 
     /// Save config to the default config file.
     pub fn save(&self) -> Result<()> {
-        let path = Self::config_path()?;
+        let path = Self::config_path();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -151,7 +151,7 @@ impl SivtrConfig {
     /// Generate the default config file if it doesn't exist.
     /// Returns the path to the config file.
     pub fn init_default() -> Result<PathBuf> {
-        let path = Self::config_path()?;
+        let path = Self::config_path();
         if !path.exists() {
             let config = Self::default();
             config.save()?;
@@ -159,14 +159,10 @@ impl SivtrConfig {
         Ok(path)
     }
 
-    /// Get the config file path.
-    /// Windows: %APPDATA%/sivtr/config.toml
-    /// macOS:   ~/Library/Application Support/sivtr/config.toml
-    /// Linux:   ~/.config/sivtr/config.toml
-    pub fn config_path() -> Result<PathBuf> {
-        let config_dir = dirs::config_dir()
-            .ok_or_else(|| anyhow::anyhow!("Cannot determine config directory"))?;
-        Ok(config_dir.join("sivtr").join("config.toml"))
+    /// Get the config file path under the single home (`SIVTR_HOME`, else
+    /// `~/.sivtr`).
+    pub fn config_path() -> PathBuf {
+        crate::workspace::home_dir().join("config.toml")
     }
 }
 

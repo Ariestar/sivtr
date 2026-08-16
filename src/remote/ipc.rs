@@ -9,15 +9,15 @@ use sivtr_core::workspace;
 use super::protocol::{DaemonInfo, LocalEnvelope, LocalRequest, LocalResponse, PROTOCOL_VERSION};
 
 pub fn daemon_info_path() -> PathBuf {
-    workspace::data_dir().join("daemon.json")
+    workspace::home_dir().join("daemon.json")
 }
 
 pub fn daemon_lock_path() -> PathBuf {
-    workspace::data_dir().join("daemon.lock")
+    workspace::home_dir().join("daemon.lock")
 }
 
 pub fn daemon_log_path() -> PathBuf {
-    workspace::data_dir().join("daemon.log")
+    workspace::home_dir().join("daemon.log")
 }
 
 pub fn read_daemon_info() -> Result<DaemonInfo> {

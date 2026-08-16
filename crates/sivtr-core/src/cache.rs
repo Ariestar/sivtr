@@ -14,9 +14,9 @@ use std::time::SystemTime;
 
 use crate::agents::AgentProvider;
 
-/// Cache root under the platform data dir (`SIVTR_DATA_DIR` override).
+/// Cache root under the single home (`SIVTR_HOME` override).
 pub fn cache_dir() -> PathBuf {
-    crate::workspace::data_dir().join("cache")
+    crate::workspace::home_dir().join("cache")
 }
 
 /// `(mtime secs, mtime nanos, size)` fingerprint of a file; `None` when the

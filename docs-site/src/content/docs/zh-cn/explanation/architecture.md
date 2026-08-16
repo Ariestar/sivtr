@@ -78,7 +78,7 @@ sivtr/
 | `export` | clipboard、file、editor export helpers |
 | `config` | TOML config 模型、默认值和路径解析 |
 | `session` | 结构化 shell session entries 和渲染 |
-| `workspace` | git-root workspace 解析、registry、`data_dir()` |
+| `workspace` | git-root workspace 解析、registry、`home_dir()` |
 
 这种拆分让计算和数据处理可以独立于终端 UI 测试。
 

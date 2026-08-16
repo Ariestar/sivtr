@@ -105,7 +105,7 @@ sivtr serve logs
 sivtr serve stop
 ```
 
-State lives under `data_dir()` (`SIVTR_DATA_DIR` override, else the platform config dir under `sivtr`):
+State lives under the single home (`SIVTR_HOME` override, else `~/.sivtr`):
 
 | File | Purpose |
 | --- | --- |

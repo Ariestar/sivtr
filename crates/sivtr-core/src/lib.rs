@@ -27,7 +27,7 @@ pub use agents::pi;
 /// Serialize tests that mutate process-global env vars.
 ///
 /// `std::env` is process-global, so any two tests that point e.g.
-/// `SIVTR_DATA_DIR` (or a provider home) at different temp dirs race unless
+/// `SIVTR_HOME` (or a provider home) at different temp dirs race unless
 /// they hold one shared lock. Every env-touching test module must use this.
 #[cfg(test)]
 pub(crate) fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {

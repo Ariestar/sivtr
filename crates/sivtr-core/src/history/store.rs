@@ -42,7 +42,7 @@ pub struct HistoryStore {
 impl HistoryStore {
     /// Open or create the history database at the default location.
     pub fn open_default() -> Result<Self> {
-        let path = Self::default_db_path()?;
+        let path = Self::default_db_path();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -92,10 +92,8 @@ impl HistoryStore {
         Ok(self.conn.last_insert_rowid())
     }
 
-    /// Get default database path.
-    fn default_db_path() -> Result<PathBuf> {
-        let data_dir =
-            dirs::data_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine data directory"))?;
-        Ok(data_dir.join("sivtr").join("history.db"))
+    /// Get default database path under the single home.
+    fn default_db_path() -> PathBuf {
+        crate::workspace::home_dir().join("history.db")
     }
 }

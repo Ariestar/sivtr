@@ -241,12 +241,10 @@ fn invalid_params(error: impl std::fmt::Display) -> McpError {
 fn collect_status(cwd: Option<&str>) -> anyhow::Result<StatusResult> {
     let cwd = cwd.map(PathBuf::from).unwrap_or(std::env::current_dir()?);
 
-    let config_path = dirs::config_dir().map(|dir| dir.join("sivtr").join("config.toml"));
+    let config_path = Some(sivtr_core::workspace::home_dir().join("config.toml"));
     let config_present = config_path.as_ref().is_some_and(|path| path.exists());
 
-    let session_dir = dirs::state_dir()
-        .or_else(|| dirs::home_dir().map(|home| home.join(".local").join("state")))
-        .map(|dir| dir.join("sivtr"));
+    let session_dir = Some(sivtr_core::workspace::home_dir().join("workspaces"));
     let session_dir_present = session_dir.as_ref().is_some_and(|path| path.exists());
 
     let shell_hooks_installed = shell_hooks_installed();

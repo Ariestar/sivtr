@@ -173,7 +173,7 @@ fn status() -> Result<()> {
 }
 
 fn state_path() -> Result<PathBuf> {
-    let config_path = SivtrConfig::config_path()?;
+    let config_path = SivtrConfig::config_path();
     let dir = config_path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("Config path has no parent directory"))?;

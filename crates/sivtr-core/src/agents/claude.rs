@@ -656,9 +656,9 @@ mod tests {
         let _guard = env_lock();
         let dir = tempfile::tempdir().unwrap();
         let original_claude_home = env::var_os("CLAUDE_HOME");
-        let original_data_dir = env::var_os("SIVTR_DATA_DIR");
+        let original_data_dir = env::var_os("SIVTR_HOME");
         env::set_var("CLAUDE_HOME", dir.path());
-        env::set_var("SIVTR_DATA_DIR", dir.path().join("data"));
+        env::set_var("SIVTR_HOME", dir.path().join("data"));
 
         let projects = dir.path().join("projects").join("workspace");
         std::fs::create_dir_all(&projects).unwrap();
@@ -688,8 +688,8 @@ mod tests {
             None => env::remove_var("CLAUDE_HOME"),
         }
         match original_data_dir {
-            Some(value) => env::set_var("SIVTR_DATA_DIR", value),
-            None => env::remove_var("SIVTR_DATA_DIR"),
+            Some(value) => env::set_var("SIVTR_HOME", value),
+            None => env::remove_var("SIVTR_HOME"),
         }
 
         assert_eq!(sessions.len(), 1);

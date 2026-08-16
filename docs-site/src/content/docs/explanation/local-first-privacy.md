@@ -12,7 +12,7 @@ description: How sivtr keeps agent memory, terminal output, and transcripts unde
 - shell session logs from shell integration;
 - local SQLite history for captured terminal output;
 - provider-owned agent transcript files or databases;
-- local config under the platform config directory.
+- local config and state under the single home directory (`~/.sivtr` by default).
 
 It does not provide a hosted transcript service by default.
 

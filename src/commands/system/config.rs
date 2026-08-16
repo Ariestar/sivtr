@@ -7,7 +7,7 @@ use sivtr_core::export::editor;
 pub fn execute(cmd: ConfigCommand) -> Result<()> {
     match cmd.action {
         Some(ConfigAction::Show) | None => {
-            let path = SivtrConfig::config_path()?;
+            let path = SivtrConfig::config_path();
             println!("Config file: {}", path.display());
             println!();
 
