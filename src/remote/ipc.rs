@@ -41,8 +41,14 @@ pub fn write_daemon_info(info: &DaemonInfo) -> Result<()> {
     Ok(())
 }
 
-pub fn remove_daemon_info() {
-    let _ = std::fs::remove_file(daemon_info_path());
+/// Delete the daemon control file, tolerating a missing file. The one
+/// removal path for `daemon.json`, shared by shutdown and clean starts.
+pub fn remove_daemon_info() -> Result<()> {
+    match std::fs::remove_file(daemon_info_path()) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// Default read timeout for daemon control calls.
@@ -61,14 +67,6 @@ pub fn call_with_read_timeout(
     read_timeout: Duration,
 ) -> Result<LocalResponse> {
     let info = read_daemon_info()?;
-    call_with_info_and_read_timeout(&info, request, read_timeout)
-}
-
-fn call_with_info_and_read_timeout(
-    info: &DaemonInfo,
-    request: LocalRequest,
-    read_timeout: Duration,
-) -> Result<LocalResponse> {
     let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), info.port);
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))
         .with_context(|| "sivtr daemon is not responding; run `sivtr serve restart`")?;

@@ -1,5 +1,4 @@
 use std::fs::OpenOptions;
-use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -130,7 +129,8 @@ struct DaemonInfoGuard;
 
 impl Drop for DaemonInfoGuard {
     fn drop(&mut self) {
-        ipc::remove_daemon_info();
+        // Best-effort cleanup: a missing control file is already the goal.
+        let _ = ipc::remove_daemon_info();
     }
 }
 
@@ -579,12 +579,4 @@ fn random_token() -> String {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).expect("OS RNG unavailable");
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
-}
-
-pub fn remove_stale_daemon_info() -> Result<()> {
-    match std::fs::remove_file(ipc::daemon_info_path()) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
-    }
 }
