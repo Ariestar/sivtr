@@ -7,7 +7,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::tui::content::view::{
-    content_link_at, content_position_at, content_structure_block_at, ContentViewMode,
+    content_link_at, content_position_at, content_row_in_text, content_structure_block_at,
+    ContentViewMode,
 };
 use crate::tui::search::{
     workspace_search_fingerprint, workspace_search_has_query, workspace_search_scope,
@@ -334,8 +335,16 @@ pub(crate) fn run(
                 content_io_focus = half;
             }
             // Expansion indices are per-dialogue; reset when the shown
-            // dialogue, target, or selection changes.
-            let expand_key = (dialogue_idx, active_content_at, selected_dialogues.clone());
+            // dialogue's identity, target, or selection changes.
+            let dialogue_identity = dialogues
+                .get(dialogue_idx)
+                .map(|dialogue| (dialogue.source.clone(), dialogue.work_ref.clone()));
+            let expand_key = (
+                dialogue_identity,
+                dialogue_idx,
+                active_content_at,
+                selected_dialogues.clone(),
+            );
             if expanded_key.as_ref() != Some(&expand_key) {
                 expanded_blocks.clear();
                 pending_block_toggle = None;
@@ -890,6 +899,18 @@ pub(crate) fn run(
                                     mouse.column,
                                     mouse.row,
                                 ) {
+                                    // Clicks below the last rendered line clamp
+                                    // to it in `content_position_at`; ignore
+                                    // them instead of toggling the last block.
+                                    if !content_row_in_text(
+                                        active.area,
+                                        active.text,
+                                        content_mode,
+                                        *active.scroll,
+                                        mouse.row,
+                                    ) {
+                                        continue;
+                                    }
                                     // Record the block under the click and toggle
                                     // it on release, so a drag still selects text
                                     // instead of collapsing the block.

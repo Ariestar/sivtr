@@ -203,6 +203,24 @@ pub(crate) fn content_position_at(
     ))
 }
 
+/// Whether a mouse row inside the content area lands on a real rendered
+/// line. [`content_position_at`] clamps rows below the last line to it, so
+/// callers that treat a hit as content (e.g. block toggling) must check the
+/// raw row against the wrapped line count first. Call after
+/// [`content_position_at`] returned `Some`, when the row is already known to
+/// be inside the content area.
+pub(crate) fn content_row_in_text(
+    area: Rect,
+    text: &str,
+    mode: ContentViewMode,
+    scroll: usize,
+    row: u16,
+) -> bool {
+    let content_area = content_text_area(area, text, mode);
+    let raw_line = scroll.saturating_add((row.saturating_sub(content_area.y)) as usize);
+    raw_line < content_view_line_count(area, text, mode)
+}
+
 /// Structure block ordinal covering `line` (a displayed line index), if any.
 /// Walks the wrapped display and maps each line onto the block whose open
 /// marker owns it: the tag line, the expanded body, and the close marker all
@@ -268,7 +286,11 @@ fn content_block_ownership(area: Rect, text: &str, mode: ContentViewMode) -> Vec
             if is_open_marker(&candidate) && !is_result_section(&candidate) {
                 break;
             }
-            if candidate.starts_with("<:/") {
+            // Close markers get the same validation as open ones: plain text
+            // that merely starts with "<:/" must not extend the block.
+            if crate::tui::content::text::is_structure_marker(&candidate)
+                && candidate.starts_with("<:/")
+            {
                 end = scan;
             }
             scan += 1;
@@ -1299,6 +1321,23 @@ mod tests {
     use regex::Regex;
     use unicode_width::UnicodeWidthStr;
 
+    /// Displayed line index of the first layout line containing `needle`.
+    fn displayed_line_of(lines: &[super::ContentLine], needle: &str) -> usize {
+        lines
+            .iter()
+            .enumerate()
+            .find_map(|(idx, line)| {
+                let joined: String = line
+                    .line
+                    .spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect();
+                joined.contains(needle).then_some(idx)
+            })
+            .expect("needle appears in layout")
+    }
+
     fn render_content_lines(
         text: &str,
         scroll: usize,
@@ -1698,7 +1737,7 @@ mod tests {
     #[test]
     fn render_content_view_highlights_the_active_block() {
         let backend = TestBackend::new(40, 8);
-        let mut terminal = Terminal::new(backend).unwrap();
+        let mut terminal = Terminal::new(backend).expect("terminal from test backend");
         terminal
             .draw(|frame| {
                 render_content_view(
@@ -1715,13 +1754,13 @@ mod tests {
                     },
                 );
             })
-            .unwrap();
+            .expect("draw content frame");
         let buffer = terminal.backend().buffer();
         // Block 0 spans the tag, body, and close rows; its lines use the same
         // selected-row background as the session/dialogue lists.
         let selected_bg = super::visual_selection_style().bg;
         for row in 1..=3 {
-            let cell = buffer.cell((4, row)).unwrap();
+            let cell = buffer.cell((4, row)).expect("cell within buffer bounds");
             assert_eq!(
                 cell.style().bg,
                 selected_bg,
@@ -1729,7 +1768,7 @@ mod tests {
             );
         }
         // The next block's tag is not part of the highlight.
-        let cell = buffer.cell((4, 4)).unwrap();
+        let cell = buffer.cell((4, 4)).expect("cell within buffer bounds");
         assert_ne!(cell.style().bg, selected_bg);
     }
 
@@ -1813,26 +1852,11 @@ mod tests {
         let text =
             "<:tool:Bash call:>\noutput line\n<:/tool:Bash call:>\n<:tool:Read call:>\nplain";
         let (lines, _) = super::content_layout(area, text, ContentViewMode::Reading);
-        let displayed_of = |needle: &str| {
-            lines
-                .iter()
-                .enumerate()
-                .find_map(|(idx, line)| {
-                    let joined: String = line
-                        .line
-                        .spans
-                        .iter()
-                        .map(|span| span.content.as_ref())
-                        .collect();
-                    joined.contains(needle).then_some(idx)
-                })
-                .unwrap()
-        };
-        let tag = displayed_of("<:tool:Bash call:>");
-        let body = displayed_of("output line");
-        let close = displayed_of("<:/tool:Bash call:>");
-        let next_tag = displayed_of("<:tool:Read call:>");
-        let plain = displayed_of("plain");
+        let tag = displayed_line_of(&lines, "<:tool:Bash call:>");
+        let body = displayed_line_of(&lines, "output line");
+        let close = displayed_line_of(&lines, "<:/tool:Bash call:>");
+        let next_tag = displayed_line_of(&lines, "<:tool:Read call:>");
+        let plain = displayed_line_of(&lines, "plain");
         // The tag, the expanded body, and the close marker all own block 0.
         assert_eq!(
             content_structure_block_at(area, text, ContentViewMode::Reading, tag),
@@ -1858,33 +1882,44 @@ mod tests {
     }
 
     #[test]
+    fn structure_block_ignores_plain_text_starting_with_close_prefix() {
+        let area = Rect::new(0, 0, 40, 20);
+        // A collapsed block followed by plain text that starts like a close
+        // marker but is not a valid structure marker.
+        let text = "<:tool:Bash call:>\n<:/ not a marker\n<:tool:Read call:>";
+        let (lines, _) = super::content_layout(area, text, ContentViewMode::Reading);
+        let bash = displayed_line_of(&lines, "<:tool:Bash call:>");
+        let fake_close = displayed_line_of(&lines, "<:/ not a marker");
+        let read = displayed_line_of(&lines, "<:tool:Read call:>");
+        // Only the real tag lines are clickable blocks; the fake close line
+        // extends nothing.
+        assert_eq!(
+            content_structure_block_at(area, text, ContentViewMode::Reading, bash),
+            Some(0)
+        );
+        assert_eq!(
+            content_structure_block_at(area, text, ContentViewMode::Reading, fake_close),
+            None
+        );
+        assert_eq!(
+            content_structure_block_at(area, text, ContentViewMode::Reading, read),
+            Some(1)
+        );
+    }
+
+    #[test]
     fn structure_block_at_keeps_tool_result_section_inside_the_group() {
         let area = Rect::new(0, 0, 40, 20);
         // A merged tool group: call section + result section share one block.
         let text = "<:tool:Bash call:>\ninput\n<:/tool:Bash call:>\n<:tool:Bash result:>\noutput\n<:/tool:Bash result:>\n<:tool:Read call:>";
         let (lines, _) = super::content_layout(area, text, ContentViewMode::Reading);
-        let displayed_of = |needle: &str| {
-            lines
-                .iter()
-                .enumerate()
-                .find_map(|(idx, line)| {
-                    let joined: String = line
-                        .line
-                        .spans
-                        .iter()
-                        .map(|span| span.content.as_ref())
-                        .collect();
-                    joined.contains(needle).then_some(idx)
-                })
-                .unwrap()
-        };
-        let call_tag = displayed_of("<:tool:Bash call:>");
-        let call_body = displayed_of("input");
-        let call_close = displayed_of("<:/tool:Bash call:>");
-        let result_tag = displayed_of("<:tool:Bash result:>");
-        let result_body = displayed_of("output");
-        let result_close = displayed_of("<:/tool:Bash result:>");
-        let next_tag = displayed_of("<:tool:Read call:>");
+        let call_tag = displayed_line_of(&lines, "<:tool:Bash call:>");
+        let call_body = displayed_line_of(&lines, "input");
+        let call_close = displayed_line_of(&lines, "<:/tool:Bash call:>");
+        let result_tag = displayed_line_of(&lines, "<:tool:Bash result:>");
+        let result_body = displayed_line_of(&lines, "output");
+        let result_close = displayed_line_of(&lines, "<:/tool:Bash result:>");
+        let next_tag = displayed_line_of(&lines, "<:tool:Read call:>");
         // Everything from the call tag through the result close is block 0.
         for line in [
             call_tag,

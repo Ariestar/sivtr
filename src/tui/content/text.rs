@@ -67,7 +67,7 @@ fn io_body_text(
 }
 
 /// Last part of the structure group starting at `start`: a ToolCall followed
-/// by a ToolResult with the same call id is one group; anything else is a
+/// by a ToolResult of the same tool exchange is one group; anything else is a
 /// single-part group.
 fn structure_group_end(parts: &[&sivtr_core::record::WorkPart], start: usize) -> usize {
     if !matches!(
@@ -79,7 +79,7 @@ fn structure_group_end(parts: &[&sivtr_core::record::WorkPart], start: usize) ->
     match parts.get(start + 1) {
         Some(result)
             if matches!(result.kind(), sivtr_core::record::WorkPartKind::ToolResult)
-                && part_call_id(result) == part_call_id(parts[start]) =>
+                && same_tool_exchange(parts[start], result) =>
         {
             start + 1
         }
@@ -87,11 +87,28 @@ fn structure_group_end(parts: &[&sivtr_core::record::WorkPart], start: usize) ->
     }
 }
 
-fn part_call_id(part: &sivtr_core::record::WorkPart) -> Option<&str> {
-    match &part.data {
-        sivtr_core::record::WorkPartData::ToolCall { call_id, .. }
-        | sivtr_core::record::WorkPartData::ToolResult { call_id, .. } => call_id.as_deref(),
-        _ => None,
+/// Whether a ToolCall and a ToolResult provably belong to one exchange:
+/// equal non-empty call ids, or — for id-less transcripts — the same tool
+/// name. Two missing ids alone never match.
+fn same_tool_exchange(
+    call: &sivtr_core::record::WorkPart,
+    result: &sivtr_core::record::WorkPart,
+) -> bool {
+    use sivtr_core::record::WorkPartData;
+    match (&call.data, &result.data) {
+        (
+            WorkPartData::ToolCall { call_id, tool, .. },
+            WorkPartData::ToolResult {
+                call_id: result_id,
+                tool: result_tool,
+                ..
+            },
+        ) => match (call_id.as_deref(), result_id.as_deref()) {
+            (Some(call), Some(result)) => call == result,
+            (None, None) => tool.is_some() && tool == result_tool,
+            _ => false,
+        },
+        _ => false,
     }
 }
 
@@ -127,7 +144,9 @@ fn tool_description(part: &sivtr_core::record::WorkPart) -> Option<String> {
     let description = input
         .get("description")
         .and_then(serde_json::Value::as_str)?;
-    let description = description.trim();
+    // Normalize internal whitespace so a multi-line description still folds
+    // to a single tag line (marker scanning assumes one line per block).
+    let description: String = description.split_whitespace().collect::<Vec<_>>().join(" ");
     if description.is_empty() {
         return None;
     }
@@ -218,9 +237,24 @@ pub(crate) fn workspace_content_io_texts(
     }
 }
 
-/// A line that opens or closes a structure block (`<:tool:…:>` / `<:/…:>`).
+/// A line that opens or closes a structure block (`<:tool:…:>`,
+/// `<:skill:…:>`, `<:thinking:>`, or the generic `<:structure:>` fallback).
+/// Validates the full marker shape, not just the `<:` prefix, so plain text
+/// that happens to start with `<:` is not treated as a marker.
 pub(crate) fn is_structure_marker(line: &str) -> bool {
-    line.starts_with("<:")
+    let Some(inner) = line
+        .strip_prefix("<:")
+        .and_then(|rest| rest.strip_suffix(":>"))
+    else {
+        return false;
+    };
+    let kind = inner
+        .strip_prefix('/')
+        .unwrap_or(inner)
+        .split(':')
+        .next()
+        .unwrap_or_default();
+    matches!(kind, "tool" | "skill" | "thinking" | "structure")
 }
 
 #[cfg(test)]
@@ -383,5 +417,68 @@ mod tests {
         let rec = record(vec![tool_part(1, "Bash", "ls")]);
         let io = content_io_from_record(&rec, true, &ExpandedBlocks::default());
         assert!(io.output.contains("<:tool:Bash call:>"));
+    }
+
+    #[test]
+    fn fold_label_normalizes_multiline_descriptions_to_one_tag_line() {
+        let rec = record(vec![WorkPart {
+            seq: 1,
+            occurred_at: None,
+            data: WorkPartData::ToolCall {
+                call_id: None,
+                tool: Some("Bash".to_string()),
+                input: serde_json::json!({
+                    "command": "git diff",
+                    "description": "line one\nline two",
+                }),
+            },
+        }]);
+        let io = content_io_from_record(&rec, true, &ExpandedBlocks::default());
+        // The tag stays a single line: internal whitespace collapses.
+        let mut lines = io.output.lines();
+        assert_eq!(lines.next(), Some("<:tool:Bash call: line one line two:>"));
+        assert_eq!(lines.next(), None);
+    }
+
+    #[test]
+    fn id_less_call_and_result_group_only_for_the_same_tool() {
+        let rec = record(vec![
+            tool_part(1, "Bash", "ls"),
+            tool_result_part(2, "Read", "ok"),
+        ]);
+        let io = content_io_from_record(&rec, true, &ExpandedBlocks::default());
+        // Different tools without call ids are separate blocks, so the
+        // result keeps its own tag instead of hiding inside the Bash block.
+        let output = &io.output;
+        assert!(output.contains("<:tool:Bash call:>"));
+        assert!(output.contains("<:tool:Read result:>"));
+    }
+
+    #[test]
+    fn distinct_call_ids_never_group() {
+        let rec = record(vec![
+            WorkPart {
+                seq: 1,
+                occurred_at: None,
+                data: WorkPartData::ToolCall {
+                    call_id: Some("a".to_string()),
+                    tool: Some("Bash".to_string()),
+                    input: serde_json::json!({ "command": "ls" }),
+                },
+            },
+            WorkPart {
+                seq: 2,
+                occurred_at: None,
+                data: WorkPartData::ToolResult {
+                    call_id: Some("b".to_string()),
+                    tool: Some("Bash".to_string()),
+                    output: serde_json::json!({ "stdout": "ok" }),
+                },
+            },
+        ]);
+        let io = content_io_from_record(&rec, true, &ExpandedBlocks::default());
+        let output = &io.output;
+        assert!(output.contains("<:tool:Bash call:>"));
+        assert!(output.contains("<:tool:Bash result:>"));
     }
 }
