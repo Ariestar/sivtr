@@ -824,7 +824,10 @@ mod tests {
         ];
         let sessions = sessions_from_records(&source, records);
         assert_eq!(sessions.len(), 2);
-        let s1 = sessions.iter().find(|s| s.session_id == "s1").unwrap();
+        let s1 = sessions
+            .iter()
+            .find(|s| s.session_id == "s1")
+            .expect("s1 session present");
         // Newest dialogue first: index 2 precedes index 1.
         assert_eq!(
             s1.records

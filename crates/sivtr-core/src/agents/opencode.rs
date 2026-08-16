@@ -479,9 +479,9 @@ mod tests {
 
     #[test]
     fn mcp_tools_are_normalized_to_server_tool_form() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().expect("tempdir for opencode test");
         let path = dir.path().join("opencode.db");
-        let conn = Connection::open(&path).unwrap();
+        let conn = Connection::open(&path).expect("open opencode test db");
         conn.execute_batch(
             r#"
             create table session (
@@ -512,28 +512,33 @@ mod tests {
             );
             "#,
         )
-        .unwrap();
+        .expect("create opencode test schema");
         conn.execute(
             "insert into session (id, directory, title, time_updated) values (?1, ?2, ?3, ?4)",
             params!["mcp-session", "D:\\sivtr", "MCP", 1000_i64],
         )
-        .unwrap();
+        .expect("insert opencode test session");
         conn.execute(
             "insert into message (id, session_id, time_created, data) values (?1, ?2, ?3, ?4)",
             params!["m1", "mcp-session", 1001_i64, r#"{"role":"assistant"}"#],
         )
-        .unwrap();
+        .expect("insert opencode test message");
         conn.execute(
             "insert into part (id, message_id, session_id, time_created, data) values (?1, ?2, ?3, ?4, ?5)",
             params!["p1", "m1", "mcp-session", 1002_i64, r#"{"type":"tool","tool":"sivtr_sivtr_search","state":{"input":{"source":"claude"},"output":"{\"count\": 1}"}}"#],
         )
-        .unwrap();
+        .expect("insert opencode test part");
         drop(conn);
 
         let provider = OpenCodeProvider::with_db_path(path);
         let session = provider
-            .parse_session_file(&provider.find_session_by_id("mcp-session").unwrap().unwrap())
-            .unwrap();
+            .parse_session_file(
+                &provider
+                    .find_session_by_id("mcp-session")
+                    .expect("query opencode mcp session")
+                    .expect("opencode mcp session exists"),
+            )
+            .expect("parse opencode mcp session");
 
         assert_eq!(session.blocks.len(), 2);
         assert_eq!(session.blocks[0].kind, AgentBlockKind::ToolCall);
