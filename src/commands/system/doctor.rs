@@ -504,6 +504,32 @@ impl Report {
     }
 }
 
+/// `"N workspace(s) could not be migrated (dir: reason; …)"` from a migration
+/// report's skipped entries, sampling the first three reasons.
+fn skipped_summary(skipped: &[(PathBuf, String)]) -> String {
+    let reasons: Vec<String> = skipped
+        .iter()
+        .take(3)
+        .map(|(path, reason)| {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("workspace");
+            format!("{name}: {reason}")
+        })
+        .collect();
+    let more = if skipped.len() > 3 {
+        format!(", +{} more", skipped.len() - 3)
+    } else {
+        String::new()
+    };
+    format!(
+        "{} workspace(s) could not be migrated ({}{more})",
+        skipped.len(),
+        reasons.join("; ")
+    )
+}
+
 /// Map a migration report onto the `workspace_keys` check. Partial success
 /// keeps the migrated/merged counts but must never report `Fixed` while any
 /// workspace was skipped — its sessions stay unreachable.
@@ -518,28 +544,8 @@ fn workspace_keys_check(report: workspace::WorkspaceMigration, fix: bool) -> Che
     if !pending.is_empty() {
         let mut detail = pending.join(", ");
         if !report.skipped.is_empty() {
-            let reasons: Vec<String> = report
-                .skipped
-                .iter()
-                .take(3)
-                .map(|(path, reason)| {
-                    let name = path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("workspace");
-                    format!("{name}: {reason}")
-                })
-                .collect();
-            let more = if report.skipped.len() > 3 {
-                format!(", +{} more", report.skipped.len() - 3)
-            } else {
-                String::new()
-            };
-            detail.push_str(&format!(
-                "; {} workspace(s) could not be migrated ({}{more})",
-                report.skipped.len(),
-                reasons.join("; ")
-            ));
+            detail.push_str("; ");
+            detail.push_str(&skipped_summary(&report.skipped));
         }
         return Check {
             name: "workspace_keys",
@@ -562,10 +568,7 @@ fn workspace_keys_check(report: workspace::WorkspaceMigration, fix: bool) -> Che
             name: "workspace_keys",
             label: "workspace keys",
             status: Status::Manual,
-            detail: format!(
-                "{} workspace(s) could not be migrated",
-                report.skipped.len()
-            ),
+            detail: skipped_summary(&report.skipped),
             hint: None,
         };
     }
@@ -755,5 +758,18 @@ mod tests {
         let check = workspace_keys_check(partial_report(), false);
         assert_eq!(check.status, Status::Fail);
         assert_eq!(check.hint.as_deref(), Some("run `sivtr doctor --fix`"));
+    }
+
+    #[test]
+    fn skipped_only_reports_manual_with_reasons() {
+        let report = WorkspaceMigration {
+            migrated: Vec::new(),
+            merged: Vec::new(),
+            skipped: vec![(PathBuf::from("old-b"), "rename failed: boom".into())],
+            current: 2,
+        };
+        let check = workspace_keys_check(report, true);
+        assert_eq!(check.status, Status::Manual);
+        assert!(check.detail.contains("old-b: rename failed: boom"));
     }
 }

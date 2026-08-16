@@ -381,11 +381,12 @@ fn scan_workspace_keys(apply: bool) -> Result<WorkspaceMigration> {
     if !base.exists() {
         return Ok(report);
     }
-    for entry in fs::read_dir(&base)? {
-        let Ok(entry) = entry else {
-            continue;
-        };
-        let dir = entry.path();
+    // Snapshot entries first: the loop renames and deletes directories inside
+    // `base`, whose visibility during iteration is platform-dependent.
+    let entries: Vec<PathBuf> = fs::read_dir(&base)?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .collect();
+    for dir in entries {
         let Some(old_key) = dir.file_name().and_then(|n| n.to_str()).map(str::to_string) else {
             continue;
         };
@@ -730,6 +731,7 @@ mod tests {
             None => std::env::remove_var("SIVTR_DATA_DIR"),
         }
         let _ = std::fs::remove_dir_all(main);
+        let _ = std::fs::remove_dir_all(worktree);
         let _ = std::fs::remove_dir_all(data);
     }
 

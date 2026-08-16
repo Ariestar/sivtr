@@ -4,7 +4,7 @@
 //! [`SlidingPane::ensure_meta`] / [`SlidingPane::ensure_bodies`]; this module
 //! only fulfills those requests over workset.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -687,7 +687,7 @@ pub fn workspace_source_catalog(
     }
     // Mount aliases come from the same origin registry every query path uses;
     // it lists mounts only while the daemon is already running.
-    let registry = crate::origins::collect(cwd)?;
+    let registry = crate::origins::collect(cwd).context("Failed to collect the origin registry")?;
     for origin in registry.all() {
         if origin.kind != OriginKind::Remote {
             continue;
