@@ -117,7 +117,7 @@ fn render_code_block(body: &[&str], language: Option<&str>) -> Vec<MarkdownLine>
         .map(|(idx, line)| MarkdownLine {
             line: Line::from(vec![
                 Span::styled(
-                    format!("{:>gutter_width$} ", start_line + idx),
+                    format!("{:>gutter_width$} ", start_line.saturating_add(idx)),
                     code_line_number_style(),
                 ),
                 Span::styled(line.to_string(), code_line_style(line, is_diff)),

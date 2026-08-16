@@ -282,8 +282,12 @@ fn line_range(obj: &serde_json::Map<String, Value>) -> Option<String> {
             let offset = obj.get("offset").and_then(Value::as_i64);
             let limit = obj.get("limit").and_then(Value::as_i64);
             match (offset, limit) {
-                (Some(offset), Some(limit)) => Some(format!("{}-{}", offset + 1, offset + limit)),
-                (Some(offset), None) => Some(format!("{}", offset + 1)),
+                (Some(offset), Some(limit)) => Some(format!(
+                    "{}-{}",
+                    offset.saturating_add(1),
+                    offset.saturating_add(limit)
+                )),
+                (Some(offset), None) => Some(format!("{}", offset.saturating_add(1))),
                 _ => None,
             }
         }
