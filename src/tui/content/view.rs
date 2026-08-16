@@ -4,7 +4,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 use regex::Regex;
 use std::rc::Rc;
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::tui::content::block::BlockText;
 use crate::tui::content::markdown::{render_markdown_lines, MarkdownLineKind};
@@ -1154,8 +1154,10 @@ fn char_width(ch: char) -> usize {
     UnicodeWidthChar::width(ch).unwrap_or(0)
 }
 
+/// One width source: `unicode-width`'s string algorithm (identical to summing
+/// `char_width` per char) instead of a second hand-rolled sum.
 fn text_width(text: &str) -> usize {
-    text.chars().map(char_width).sum()
+    UnicodeWidthStr::width(text)
 }
 
 /// Gutter lines: one dialogue dot per block, shown on the block's first
