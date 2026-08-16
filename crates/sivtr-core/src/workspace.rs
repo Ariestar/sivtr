@@ -395,6 +395,18 @@ fn scan_workspace_keys(apply: bool) -> Result<WorkspaceMigration> {
         };
         let (new_key, display_root) = workspace_identity(Path::new(&meta.root));
         if new_key == old_key {
+            // Heal metadata left stale by a failed post-rename write: the dir
+            // already carries the current key, so only the fields need repair.
+            if apply && (meta.key != new_key || meta.root != display_root.to_string_lossy()) {
+                meta.key = new_key;
+                meta.root = display_root.to_string_lossy().to_string();
+                if let Err(e) = write_workspace_metadata(&meta_path, &meta) {
+                    report
+                        .skipped
+                        .push((dir, format!("failed to rewrite workspace.json: {e}")));
+                    continue;
+                }
+            }
             report.current += 1;
             continue;
         }
@@ -420,8 +432,13 @@ fn scan_workspace_keys(apply: bool) -> Result<WorkspaceMigration> {
             Ok(()) => {
                 meta.key = new_key.clone();
                 meta.root = display_root.to_string_lossy().to_string();
-                let _ = write_workspace_metadata(&target.join("workspace.json"), &meta);
-                report.migrated.push((old_key, new_key));
+                match write_workspace_metadata(&target.join("workspace.json"), &meta) {
+                    Ok(()) => report.migrated.push((old_key, new_key)),
+                    Err(e) => report.skipped.push((
+                        target,
+                        format!("renamed to {new_key} but workspace.json update failed: {e}"),
+                    )),
+                }
             }
             Err(e) => report.skipped.push((dir, format!("rename failed: {e}"))),
         }
@@ -707,6 +724,55 @@ mod tests {
         let second = migrate_workspace_keys().expect("idempotent");
         assert!(second.migrated.is_empty() && second.merged.is_empty());
         assert_eq!(second.current, 1);
+
+        match old_data {
+            Some(value) => std::env::set_var("SIVTR_DATA_DIR", value),
+            None => std::env::remove_var("SIVTR_DATA_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(main);
+        let _ = std::fs::remove_dir_all(data);
+    }
+
+    #[test]
+    fn migrate_heals_stale_metadata_after_failed_rename_write() {
+        let _lock = crate::test_env_lock();
+        let data = unique_test_dir("workspace-heal");
+        let old_data = std::env::var_os("SIVTR_DATA_DIR");
+        std::env::set_var("SIVTR_DATA_DIR", &data);
+
+        let main = unique_test_dir("repo-main");
+        make_repo(&main);
+
+        // The dir already carries the commondir key, but a previous
+        // post-rename metadata write failed: workspace.json still holds the
+        // stale key. A --fix run must repair the fields in place.
+        let new_key = workspace_identity(&main).0;
+        let dir = data.join("workspaces").join(&new_key);
+        std::fs::create_dir_all(&dir).expect("workspace dir");
+        let meta = WorkspaceMetadata {
+            key: "stale-key".into(),
+            root: real_path(&main).to_string_lossy().to_string(),
+            alias: None,
+            created_at: "t0".into(),
+            last_seen_at: "t0".into(),
+        };
+        let meta_path = dir.join("workspace.json");
+        std::fs::write(
+            &meta_path,
+            serde_json::to_string_pretty(&meta).expect("serialize"),
+        )
+        .expect("write meta");
+
+        let report = migrate_workspace_keys().expect("migrate");
+        assert!(report.migrated.is_empty() && report.merged.is_empty());
+        assert!(report.skipped.is_empty());
+        assert_eq!(report.current, 1);
+
+        let healed: WorkspaceMetadata =
+            serde_json::from_str(&std::fs::read_to_string(&meta_path).expect("read meta"))
+                .expect("parse meta");
+        assert_eq!(healed.key, new_key);
+        assert_eq!(healed.root, real_path(&main).to_string_lossy().to_string());
 
         match old_data {
             Some(value) => std::env::set_var("SIVTR_DATA_DIR", value),

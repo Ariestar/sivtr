@@ -104,11 +104,16 @@ pub fn query(source: &str, filter: Filter, cwd: Option<&Path>) -> Result<WorkSet
         // One lookup: the registry is the single alias table (local
         // workspaces, remote mounts, cloud), each entry carrying its reach
         // payload; resolution applies kind precedence on name collisions.
-        // The registry lists mounts only while the daemon is already running;
-        // remote and group paths start it themselves when they run.
-        // Groups (`team`, `team/alice`) are a roster fan-out over many
-        // devices, not a single origin, so they are tried only on a miss.
-        let registry = crate::origins::collect(&cwd)?;
+        // The registry lists mounts only while the daemon is already running,
+        // so a passive miss is retried once with the daemon up — a cold
+        // `desk:terminal` query must still resolve its mount. Groups
+        // (`team`, `team/alice`) are a roster fan-out over many devices, not
+        // a single origin, so they are tried only on a miss.
+        let mut registry = crate::origins::collect(&cwd)?;
+        if registry.resolve(&scope)?.is_none() {
+            serve::ensure_running()?;
+            registry = crate::origins::collect(&cwd)?;
+        }
         return match registry.resolve(&scope)? {
             Some(entry) => match &entry.reach {
                 Reach::Local { root } => run_local(path, Path::new(root), filter),
