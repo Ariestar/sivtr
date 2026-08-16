@@ -6,7 +6,6 @@ Detailed release notes live in [`changelogs/`](changelogs/).
 
 ## Releases
 
-- [0.5.0 - unreleased](changelogs/0.5.0.md)
 - [0.4.1 - 2026-08-05](changelogs/0.4.1.md)
 - [0.4.0 - 2026-08-04](changelogs/0.4.0.md)
 - [0.3.0 - 2026-07-21](changelogs/0.3.0.md)
