@@ -61,12 +61,6 @@ pub struct CopyConfig {
     pub prompts: Vec<String>,
 }
 
-impl CopyConfig {
-    pub fn prompt_values(&self) -> impl Iterator<Item = &String> {
-        self.prompts.iter()
-    }
-}
-
 /// Codex session configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
