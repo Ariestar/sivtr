@@ -3,25 +3,38 @@ title: Data Locations
 description: Where sivtr stores configuration, history, session logs, and provider data.
 ---
 
-`sivtr` is local-first. Most data it uses is already on your machine, and generated data is written under platform config or state directories unless you explicitly export it elsewhere.
+`sivtr` is local-first. Most data it uses is already on your machine, and everything sivtr generates lives under one home directory:
+
+- `SIVTR_HOME` if set (Grok-style whole-home relocation),
+- else `~/.sivtr` on every platform.
+
+```text
+~/.sivtr/
+  config.toml               ← configuration
+  history.db                ← captured terminal output (SQLite)
+  sets/                     ← WorkSet checkpoints (@last, @name)
+  workspaces/<key>/terminals/  ← shell session logs (session_<pid>.jsonl)
+  cache/                    ← agent session parse cache
+  identity.key              ← device identity for remote memory
+  remote-state.db           ← peers, shares, grants, invites, mounts
+  daemon.json / daemon.lock / daemon.log
+```
+
+Use CLI commands instead of editing these files directly.
+
+## Migrating from earlier versions
+
+Sivtr ≤ 0.4 scattered its data across the platform config, state, and data directories. `sivtr doctor` reports anything still there, and `sivtr doctor --fix` moves it into the single home. Migration merges directories and never overwrites an existing destination; conflicting items are reported and left in place.
 
 ## Config file
 
-| Platform | Path |
-| --- | --- |
-| Windows | `%APPDATA%\sivtr\config.toml` |
-| macOS | `~/Library/Application Support/sivtr/config.toml` |
-| Linux | `~/.config/sivtr/config.toml` |
+```text
+<SIVTR_HOME or ~/.sivtr>/config.toml
+```
 
 ## Shell session logs
 
-Shell integration writes per-process structured session logs.
-
-| Shell/platform | Typical path |
-| --- | --- |
-| Windows PowerShell / PowerShell 7 | `%APPDATA%\sivtr\session_<pid>.log` |
-| Bash / Zsh | `$XDG_STATE_HOME/sivtr/session_<pid>.log` or `~/.local/state/sivtr/session_<pid>.log` |
-| Nushell | Nushell config/state area with a `sivtr` session file |
+Shell integration writes per-process structured session logs under `<home>/workspaces/<key>/terminals/session_<pid>.jsonl`.
 
 These logs power:
 
@@ -32,7 +45,11 @@ These logs power:
 
 ## History database
 
-Captured terminal output is stored in a local SQLite history database when `[history].auto_save = true`.
+Captured terminal output is stored in a local SQLite history database when `[history].auto_save = true`:
+
+```text
+<home>/history.db
+```
 
 Use CLI commands instead of editing the database directly:
 
@@ -97,7 +114,7 @@ macOS shortcut generation writes:
 - `~/.local/bin/sivtr-pick-codex`;
 - `~/Library/LaunchAgents/dev.sivtr.pick-codex.plist`.
 
-Windows hotkey state is stored under `sivtr`'s platform config/state area and is managed by:
+Windows hotkey state is stored under the single home and is managed by:
 
 ```bash
 sivtr hotkey status
@@ -106,7 +123,7 @@ sivtr hotkey stop
 
 ## Remote daemon state
 
-Cross-device remote memory uses a device-scoped daemon. Override the root with `SIVTR_DATA_DIR`; otherwise it is the platform config directory under `sivtr` (same root as `data_dir()`).
+Cross-device remote memory uses a device-scoped daemon. State lives under the single home:
 
 | File | Purpose |
 | --- | --- |

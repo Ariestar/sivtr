@@ -78,7 +78,7 @@ This layer can depend on terminal UI libraries, platform APIs, process spawning,
 | `export` | clipboard, file, and editor export helpers |
 | `config` | TOML config model, defaults, and path resolution |
 | `session` | structured shell session entries and rendering |
-| `workspace` | git-root workspace resolution, registry, `data_dir()` |
+| `workspace` | git-root workspace resolution, registry, `home_dir()` |
 
 This split keeps computation and data handling testable independently from the terminal UI.
 

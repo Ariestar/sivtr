@@ -3,7 +3,7 @@ title: Configuration
 description: Create, inspect, edit, and understand sivtr configuration.
 ---
 
-`sivtr` uses a TOML config file in the platform config directory. Configuration controls open mode, editor handoff, history retention, prompt detection, Codex mirrors, and the Windows hotkey chord.
+`sivtr` uses a TOML config file under its single home (`~/.sivtr` by default, `SIVTR_HOME` override). Configuration controls open mode, editor handoff, history retention, prompt detection, Codex mirrors, and the Windows hotkey chord.
 
 ## Commands
 

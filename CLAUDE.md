@@ -35,7 +35,7 @@ crates/sivtr-core/src/     ← Core library (no CLI deps)
     index.rs               ← Record indexing and lookup
   query/                   ← Workspace record/source loading
   search/                  ← Filter/Searcher pipeline, BM25 ranking (types.rs, filter.rs, bm25.rs, eval.rs)
-  workspace.rs             ← Workspace resolution (git root → sessions), data_dir()
+  workspace.rs             ← Workspace resolution (git root → sessions), home_dir()
   config/                  ← SivtrConfig, serde TOML
   history/                 ← SQLite command history
   session.rs               ← Session log reading
@@ -82,7 +82,7 @@ pwd && git branch
 
 ## Shell Hook System
 
-`sivtr init {shell}` injects precmd hooks using marker blocks (`# >>> sivtr shell integration >>>`). Session logs go to `$XDG_STATE_HOME/sivtr/session_<pid>.log`. Internal `sivtr flush` called by hooks on each prompt.
+`sivtr init {shell}` injects precmd hooks using marker blocks (`# >>> sivtr shell integration >>>`). Session logs go to `<home>/workspaces/<key>/terminals/session_<pid>.jsonl` under the single home. Internal `sivtr flush` called by hooks on each prompt.
 
 ## Search Pipeline
 
@@ -125,7 +125,7 @@ sivtr s team/alice:terminal "q" # one member (group/member scope form)
 ```
 Group membership is a roster overlay on share/grant/mount: join = one multi-use invite with the owner, mirror roster locally, grant every member read on your group share. Owner is the roster source of truth; members pull-sync on a 5-min TTL (`GroupSync`), kicked devices drop the group on the next sync. `team:` refs are qualified per member (`team/alice:...`) so `show`/`zoom`/`nav` round-trip.
 
-State lives under `data_dir()` (`SIVTR_DATA_DIR` override, else platform config dir `/sivtr`): `identity.key`, `remote-state.db`, `daemon.json`, `daemon.lock`, `daemon.log`.
+State lives under the single home (`SIVTR_HOME` override, else `~/.sivtr` on every platform): `config.toml`, `sets/`, `history.db`, `identity.key`, `remote-state.db`, `daemon.json`, `daemon.lock`, `daemon.log`. Legacy locations from ≤ 0.4 are migrated by `sivtr doctor --fix`.
 
 ## Diagnostics
 

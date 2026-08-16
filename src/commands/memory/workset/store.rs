@@ -98,11 +98,7 @@ fn set_path(name: &str) -> Result<PathBuf> {
 }
 
 fn sets_dir() -> Result<PathBuf> {
-    let state_dir = dirs::state_dir()
-        .or_else(dirs::data_local_dir)
-        .or_else(dirs::config_dir)
-        .ok_or_else(|| anyhow::anyhow!("Cannot determine state directory"))?;
-    Ok(state_dir.join("sivtr").join("sets"))
+    Ok(sivtr_core::workspace::home_dir().join("sets"))
 }
 
 pub fn validate_name(name: &str) -> Result<()> {

@@ -480,7 +480,12 @@ fn show_status() -> Result<()> {
     }
 
     if any_installed {
-        eprintln!("  session log dir: {}", session_log_dir().display());
+        eprintln!(
+            "  session log dir: {}",
+            sivtr_core::workspace::home_dir()
+                .join("workspaces")
+                .display()
+        );
     } else {
         eprintln!("  no shell hooks installed");
         eprintln!("  run `sivtr init bash` (or zsh/pwsh/nushell) to install");
@@ -574,17 +579,6 @@ fn shell_specs() -> Vec<ShellSpecRef<'static>> {
         },
     ]
     // PowerShell detected dynamically — handled inline in show_status/uninstall if needed
-}
-
-fn session_log_dir() -> PathBuf {
-    dirs::state_dir()
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_default()
-                .join(".local")
-                .join("state")
-        })
-        .join("sivtr")
 }
 
 fn remove_hook_block(content: &str, spec: &HookSpec) -> Option<String> {

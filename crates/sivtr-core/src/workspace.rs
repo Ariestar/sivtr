@@ -48,13 +48,124 @@ pub fn ensure_workspace_for_dir(cwd: &Path) -> Result<Option<WorkspacePaths>> {
     Ok(Some(paths))
 }
 
-pub fn data_dir() -> PathBuf {
-    if let Some(path) = std::env::var_os("SIVTR_DATA_DIR").filter(|value| !value.is_empty()) {
+/// Root directory for every path sivtr generates: config, workspaces
+/// (terminal logs), sets, cache, history, and the remote daemon state.
+///
+/// Grok-style single home: `SIVTR_HOME` relocates the whole layout, else
+/// `~/.sivtr` on every platform.
+pub fn home_dir() -> PathBuf {
+    if let Some(path) = std::env::var_os("SIVTR_HOME").filter(|value| !value.is_empty()) {
         return PathBuf::from(path);
     }
-    dirs::config_dir()
+    dirs::home_dir()
+        .map(|home| home.join(".sivtr"))
+        .or_else(|| dirs::config_dir().map(|dir| dir.join("sivtr")))
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("sivtr")
+}
+
+/// One legacy location from before the single-home layout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyPath {
+    pub source: PathBuf,
+    pub target: PathBuf,
+    pub label: &'static str,
+}
+
+/// Locations sivtr wrote to before the single-home layout, for `doctor --fix`
+/// migration. Entries whose source and target are the same place are omitted.
+pub fn legacy_home_paths() -> Vec<LegacyPath> {
+    let home = home_dir();
+    let mut paths = Vec::new();
+
+    if let Some(config) = dirs::config_dir() {
+        let root = config.join("sivtr");
+        if !same_location(&root, &home) {
+            paths.push(LegacyPath {
+                source: root,
+                target: home.clone(),
+                label: "data root",
+            });
+        }
+    }
+
+    if let Some(sets) = dirs::state_dir()
+        .or_else(dirs::data_local_dir)
+        .or_else(dirs::config_dir)
+        .map(|dir| dir.join("sivtr").join("sets"))
+    {
+        let target = home.join("sets");
+        if !same_location(&sets, &target) {
+            paths.push(LegacyPath {
+                source: sets,
+                target,
+                label: "workset store",
+            });
+        }
+    }
+
+    if let Some(data) = dirs::data_dir() {
+        let db = data.join("sivtr").join("history.db");
+        let target = home.join("history.db");
+        if !same_location(&db, &target) {
+            paths.push(LegacyPath {
+                source: db,
+                target,
+                label: "history database",
+            });
+        }
+    }
+
+    paths
+}
+
+fn same_location(a: &Path, b: &Path) -> bool {
+    a == b
+        || match (a.canonicalize(), b.canonicalize()) {
+            (Ok(x), Ok(y)) => x == y,
+            _ => false,
+        }
+}
+
+/// Move `source` into `target`, merging directory contents entry by entry so a
+/// rename never clobbers an existing destination. Falls back to copy+delete
+/// across volumes. Returns paths skipped because the destination already
+/// exists.
+pub fn move_path(source: &Path, target: &Path) -> Result<Vec<PathBuf>> {
+    let mut conflicts = Vec::new();
+    move_path_inner(source, target, &mut conflicts)?;
+    Ok(conflicts)
+}
+
+fn move_path_inner(source: &Path, target: &Path, conflicts: &mut Vec<PathBuf>) -> Result<()> {
+    if source.is_dir() {
+        for entry in
+            fs::read_dir(source).with_context(|| format!("Failed to read {}", source.display()))?
+        {
+            let entry = entry?;
+            move_path_inner(&entry.path(), &target.join(entry.file_name()), conflicts)?;
+        }
+        let _ = fs::remove_dir(source);
+        return Ok(());
+    }
+    if target.exists() {
+        conflicts.push(target.to_path_buf());
+        return Ok(());
+    }
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create {}", parent.display()))?;
+    }
+    if fs::rename(source, target).is_err() {
+        fs::copy(source, target).with_context(|| {
+            format!(
+                "Failed to copy {} to {}",
+                source.display(),
+                target.display()
+            )
+        })?;
+        fs::remove_file(source)?;
+    }
+    Ok(())
 }
 
 pub fn terminal_id() -> String {
@@ -115,11 +226,11 @@ pub fn terminal_log_paths_for_workspace(cwd: &Path) -> Result<Vec<PathBuf>> {
     Ok(logs)
 }
 
-/// All known workspaces, parsed from `<data_dir>/workspaces/<key>/workspace.json`,
+/// All known workspaces, parsed from `<home>/workspaces/<key>/workspace.json`,
 /// most-recently-seen first. An empty result means sivtr has not recorded any
 /// workspace yet (e.g. `sivtr init` was never run in a git repo).
 pub fn list_workspaces() -> Result<Vec<WorkspaceMetadata>> {
-    let dir = data_dir().join(WORKSPACES_DIR);
+    let dir = home_dir().join(WORKSPACES_DIR);
     if !dir.exists() {
         return Ok(Vec::new());
     }
@@ -190,7 +301,7 @@ pub fn migrate_workspace_keys() -> Result<WorkspaceMigration> {
 }
 
 fn scan_workspace_keys(apply: bool) -> Result<WorkspaceMigration> {
-    let base = data_dir().join(WORKSPACES_DIR);
+    let base = home_dir().join(WORKSPACES_DIR);
     let mut report = WorkspaceMigration::default();
     if !base.exists() {
         return Ok(report);
@@ -328,7 +439,7 @@ fn paths_for_root(root: PathBuf) -> Result<WorkspacePaths> {
     // (so a relative `--cwd` still keys stably) without either side effect.
     let root = std::path::absolute(&root).unwrap_or(root);
     let key = workspace_key(&root.to_string_lossy());
-    let dir = data_dir().join(WORKSPACES_DIR).join(&key);
+    let dir = home_dir().join(WORKSPACES_DIR).join(&key);
     Ok(WorkspacePaths {
         key,
         root,
@@ -399,8 +510,8 @@ fn modified_time(path: &Path) -> std::time::SystemTime {
 #[cfg(test)]
 mod tests {
     use super::{
-        git_root, inspect_workspace_keys, migrate_workspace_keys, terminal_session_id_from_path,
-        workspace_key, WorkspaceMetadata,
+        git_root, home_dir, inspect_workspace_keys, legacy_home_paths, migrate_workspace_keys,
+        move_path, terminal_session_id_from_path, workspace_key, WorkspaceMetadata,
     };
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -460,7 +571,7 @@ mod tests {
     #[test]
     fn inspect_workspace_keys_is_dry_run_and_migrate_renames() {
         let data = unique_test_dir("workspace-keys");
-        let _guard = EnvGuard::set("SIVTR_DATA_DIR", &data);
+        let _guard = EnvGuard::set("SIVTR_HOME", &data);
 
         let root = unique_test_dir("legacy-root");
         let legacy_root = format!(r"\\?\{}", root.display());
@@ -502,7 +613,7 @@ mod tests {
     #[test]
     fn migrate_removes_legacy_duplicate_when_current_key_exists() {
         let data = unique_test_dir("workspace-dup");
-        let _guard = EnvGuard::set("SIVTR_DATA_DIR", &data);
+        let _guard = EnvGuard::set("SIVTR_HOME", &data);
 
         let root = unique_test_dir("dup-root");
         let legacy_root = format!(r"\\?\{}", root.display());
@@ -605,5 +716,93 @@ mod tests {
                 None => unsafe { std::env::remove_var(self.key) },
             }
         }
+    }
+
+    #[test]
+    fn home_dir_prefers_sivtr_home() {
+        let _lock = crate::test_env_lock();
+        let home = unique_test_dir("home-env");
+        let old_home = std::env::var_os("SIVTR_HOME");
+        unsafe { std::env::set_var("SIVTR_HOME", &home) };
+        assert_eq!(home_dir(), home);
+        match old_home {
+            Some(value) => unsafe { std::env::set_var("SIVTR_HOME", value) },
+            None => unsafe { std::env::remove_var("SIVTR_HOME") },
+        }
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn legacy_home_paths_never_target_their_source() {
+        let _lock = crate::test_env_lock();
+        let home = unique_test_dir("legacy-home");
+        let old = std::env::var_os("SIVTR_HOME");
+        unsafe { std::env::set_var("SIVTR_HOME", &home) };
+        for path in legacy_home_paths() {
+            assert_ne!(path.source, path.target, "{}", path.label);
+        }
+        match old {
+            Some(value) => unsafe { std::env::set_var("SIVTR_HOME", value) },
+            None => unsafe { std::env::remove_var("SIVTR_HOME") },
+        }
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn move_path_merges_directories_and_reports_conflicts() {
+        let source = unique_test_dir("move-src");
+        let target = unique_test_dir("move-dst");
+        std::fs::create_dir_all(source.join("workspaces")).expect("workspaces");
+        std::fs::write(source.join("workspaces/a.jsonl"), "a").expect("a");
+        std::fs::write(source.join("config.toml"), "c").expect("config");
+        std::fs::create_dir_all(target.join("workspaces")).expect("target workspaces");
+        std::fs::write(target.join("workspaces/a.jsonl"), "existing").expect("existing");
+
+        let conflicts = move_path(&source, &target).expect("move");
+
+        assert_eq!(conflicts, vec![target.join("workspaces").join("a.jsonl")]);
+        assert_eq!(
+            std::fs::read_to_string(target.join("workspaces/a.jsonl")).expect("read"),
+            "existing"
+        );
+        assert!(
+            target.join("config.toml").exists(),
+            "moved entries land in target"
+        );
+        assert!(
+            source.join("workspaces/a.jsonl").exists(),
+            "conflicting entry stays in source"
+        );
+        assert!(
+            !source.join("config.toml").exists(),
+            "moved entries leave source"
+        );
+
+        let _ = std::fs::remove_dir_all(source);
+        let _ = std::fs::remove_dir_all(target);
+    }
+
+    #[test]
+    fn move_path_skips_existing_files() {
+        let source = unique_test_dir("move-file-src");
+        let target = unique_test_dir("move-file-dst");
+        std::fs::write(source.join("history.db"), "new").expect("new");
+        std::fs::write(target.join("history.db"), "old").expect("old");
+
+        let conflicts =
+            move_path(&source.join("history.db"), &target.join("history.db")).expect("move");
+
+        assert_eq!(conflicts, vec![target.join("history.db")]);
+        assert_eq!(
+            std::fs::read_to_string(target.join("history.db")).expect("read"),
+            "old"
+        );
+        assert!(
+            source.join("history.db").exists(),
+            "conflicting source stays"
+        );
+
+        let _ = std::fs::remove_dir_all(source);
+        let _ = std::fs::remove_dir_all(target);
     }
 }

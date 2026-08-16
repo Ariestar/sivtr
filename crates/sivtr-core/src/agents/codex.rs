@@ -516,10 +516,10 @@ mod tests {
 
         let previous_codex_home = env::var_os("CODEX_HOME");
         let previous_thread_id = env::var_os("CODEX_THREAD_ID");
-        let previous_data_dir = env::var_os("SIVTR_DATA_DIR");
+        let previous_data_dir = env::var_os("SIVTR_HOME");
         env::set_var("CODEX_HOME", &codex_home);
         env::set_var("CODEX_THREAD_ID", "thread-session");
-        env::set_var("SIVTR_DATA_DIR", temp.path().join("data"));
+        env::set_var("SIVTR_HOME", temp.path().join("data"));
 
         let resolved = CodexProvider.find_current_session(&cwd_match).unwrap();
 
@@ -532,8 +532,8 @@ mod tests {
             None => env::remove_var("CODEX_THREAD_ID"),
         }
         match previous_data_dir {
-            Some(value) => env::set_var("SIVTR_DATA_DIR", value),
-            None => env::remove_var("SIVTR_DATA_DIR"),
+            Some(value) => env::set_var("SIVTR_HOME", value),
+            None => env::remove_var("SIVTR_HOME"),
         }
 
         assert_eq!(resolved, Some(thread_session));
@@ -567,19 +567,13 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let config_home = temp.path().join("config-home");
 
-        let previous_xdg_config_home = env::var_os("XDG_CONFIG_HOME");
-        let previous_appdata = env::var_os("APPDATA");
+        let previous_home = env::var_os("SIVTR_HOME");
         let previous_extra_dirs = env::var_os("SIVTR_CODEX_SESSION_DIRS");
         let separator = if cfg!(windows) { ";" } else { ":" };
-        env::set_var("XDG_CONFIG_HOME", &config_home);
-        if cfg!(windows) {
-            env::set_var("APPDATA", &config_home);
-        }
-        let config_path = SivtrConfig::config_path().unwrap();
+        env::set_var("SIVTR_HOME", &config_home);
+        let config_path = SivtrConfig::config_path();
         let previous_config_bytes = fs::read(&config_path).ok();
-        if let Some(parent) = config_path.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
+        fs::create_dir_all(&config_home).unwrap();
         fs::write(
             &config_path,
             "[codex]\nsession_dirs = [\"/tmp/from-config\", \"/tmp/shared\"]\n",
@@ -598,13 +592,9 @@ mod tests {
             let _ = fs::remove_file(&config_path);
         }
 
-        match previous_xdg_config_home {
-            Some(value) => env::set_var("XDG_CONFIG_HOME", value),
-            None => env::remove_var("XDG_CONFIG_HOME"),
-        }
-        match previous_appdata {
-            Some(value) => env::set_var("APPDATA", value),
-            None => env::remove_var("APPDATA"),
+        match previous_home {
+            Some(value) => env::set_var("SIVTR_HOME", value),
+            None => env::remove_var("SIVTR_HOME"),
         }
         match previous_extra_dirs {
             Some(value) => env::set_var("SIVTR_CODEX_SESSION_DIRS", value),
@@ -665,13 +655,13 @@ mod tests {
         let previous_dirs = env::var_os("SIVTR_CODEX_SESSION_DIRS");
         let previous_xdg_config_home = env::var_os("XDG_CONFIG_HOME");
         let previous_appdata = env::var_os("APPDATA");
-        let previous_data_dir = env::var_os("SIVTR_DATA_DIR");
+        let previous_data_dir = env::var_os("SIVTR_HOME");
         let config_home = temp.path().join("config-home");
         std::fs::create_dir_all(&config_home).unwrap();
         env::set_var("CODEX_HOME", &codex_home);
         env::set_var("SIVTR_CODEX_SESSION_DIRS", exported_root.join("sessions"));
         env::set_var("XDG_CONFIG_HOME", &config_home);
-        env::set_var("SIVTR_DATA_DIR", temp.path().join("data"));
+        env::set_var("SIVTR_HOME", temp.path().join("data"));
         if cfg!(windows) {
             env::set_var("APPDATA", &config_home);
         }
@@ -695,8 +685,8 @@ mod tests {
             None => env::remove_var("APPDATA"),
         }
         match previous_data_dir {
-            Some(value) => env::set_var("SIVTR_DATA_DIR", value),
-            None => env::remove_var("SIVTR_DATA_DIR"),
+            Some(value) => env::set_var("SIVTR_HOME", value),
+            None => env::remove_var("SIVTR_HOME"),
         }
 
         assert_eq!(sessions.len(), 2);
