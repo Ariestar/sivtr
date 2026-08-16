@@ -110,29 +110,64 @@ fn render_code_block(body: &[&str], language: Option<&str>) -> Vec<MarkdownLine>
         .collect()
 }
 
-/// Unified-diff hunk header: `@@ -1,3 +1,4 @@`.
+/// Unified-diff hunk header: `@@ -1,3 +1,4 @@` (an optional section heading
+/// may follow the closing `@@`). Validates the full shape so ordinary code
+/// lines that merely start with `@@` (doc attributes, Lua long strings, …)
+/// do not switch the whole block into diff mode.
 fn is_diff_hunk_header(line: &str) -> bool {
-    line.trim_start().starts_with("@@")
+    let line = line.trim_start();
+    let Some(rest) = line.strip_prefix("@@") else {
+        return false;
+    };
+    let Some((ranges, _heading)) = rest.trim_start().split_once("@@") else {
+        return false;
+    };
+    let Some((minus, plus)) = ranges.trim().split_once(' ') else {
+        return false;
+    };
+    is_hunk_range(minus) && is_hunk_range(plus)
+}
+
+/// One hunk range (`-1,3`, `+1`, …): a sign followed by comma-joined digits.
+fn is_hunk_range(range: &str) -> bool {
+    let Some(digits) = range.strip_prefix('-').or_else(|| range.strip_prefix('+')) else {
+        return false;
+    };
+    !digits.is_empty()
+        && digits
+            .split(',')
+            .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// Unified-diff file header (`+++ b/file`, `--- a/file`): the marker is
+/// followed by a space and a path, so a change line whose content itself
+/// starts with `++`/`--` stays a change line.
+fn is_diff_file_header(line: &str) -> bool {
+    line.strip_prefix("+++")
+        .or_else(|| line.strip_prefix("---"))
+        .and_then(|rest| rest.strip_prefix(' '))
+        .is_some_and(|path| !path.is_empty())
 }
 
 fn code_line_style(line: &str, is_diff: bool) -> Style {
     if !is_diff {
         return code_block_style();
     }
-    let trimmed = line.trim_start();
-    if trimmed.starts_with("@@") {
+    if is_diff_hunk_header(line) {
         Style::default()
             .fg(crate::tui::theme::accent())
             .add_modifier(Modifier::BOLD)
-    } else if trimmed.starts_with("+++") || trimmed.starts_with("---") {
+    } else if is_diff_file_header(line) {
         Style::default()
             .fg(crate::tui::theme::muted())
             .add_modifier(Modifier::BOLD)
-    } else if trimmed.starts_with('+') {
+    } else if line.starts_with('+') {
         Style::default().fg(crate::tui::theme::success())
-    } else if trimmed.starts_with('-') {
+    } else if line.starts_with('-') {
         Style::default().fg(crate::tui::theme::failure())
     } else {
+        // Context lines (leading marker space) and anything else keep the
+        // plain code style; the context space stays in the rendered text.
         code_block_style()
     }
 }
@@ -1155,5 +1190,74 @@ mod tests {
             lines[2].line.spans[1].style.fg,
             Some(crate::tui::theme::code())
         );
+    }
+
+    #[test]
+    fn plain_code_lines_starting_with_at_at_do_not_enable_diff_mode() {
+        // `@@derive` is not a hunk header, so the block stays plain.
+        let lines = render_markdown_window(
+            &["```rust", "@@derive(Clone)", "+ not a change", "```"],
+            0,
+            3,
+            80,
+        );
+        assert_eq!(
+            lines[1].line.spans[1].style.fg,
+            Some(crate::tui::theme::code())
+        );
+        assert_eq!(
+            lines[2].line.spans[1].style.fg,
+            Some(crate::tui::theme::code())
+        );
+    }
+
+    #[test]
+    fn hunk_headers_with_section_headings_still_detect() {
+        let lines = render_markdown_window(&["```", "@@ -1,3 +1,4 @@ fn main()", "```"], 0, 2, 80);
+        assert_eq!(
+            lines[1].line.spans[1].style.fg,
+            Some(crate::tui::theme::accent())
+        );
+    }
+
+    #[test]
+    fn diff_context_lines_with_plus_content_stay_plain() {
+        // The leading context space is preserved: " + x" is context, not an
+        // addition.
+        let lines =
+            render_markdown_window(&["```diff", "@@ -1 +1 @@", " + not added", "```"], 0, 3, 80);
+        assert_eq!(
+            lines[2].line.spans[1].style.fg,
+            Some(crate::tui::theme::code())
+        );
+        assert_eq!(lines[2].line.spans[1].content.as_ref(), " + not added");
+    }
+
+    #[test]
+    fn change_lines_starting_with_triple_pluses_stay_additions() {
+        let lines = render_markdown_window(
+            &["```diff", "@@ -1 +1 @@", "+++added", "--- b/file", "```"],
+            0,
+            4,
+            80,
+        );
+        // "+++added" is added content, not a file header.
+        assert_eq!(
+            lines[2].line.spans[1].style.fg,
+            Some(crate::tui::theme::success())
+        );
+        assert!(!lines[2].line.spans[1]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD));
+        // "--- b/file" is a file header: muted + bold.
+        assert_eq!(
+            lines[3].line.spans[1].style.fg,
+            Some(crate::tui::theme::muted())
+        );
+        assert!(lines[3].line.spans[1]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD));
     }
 }
