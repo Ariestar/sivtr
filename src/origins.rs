@@ -1,11 +1,11 @@
 //! Unified origin composition.
 //!
 //! The single place that assembles every addressable memory source (local
-//! workspaces, remote device mounts, cloud accounts) into one
-//! [`OriginRegistry`]. Each entry pairs the display [`Origin`] with its
-//! [`Reach`] payload, so resolution never re-looks-up what composition
-//! already knew. Upper layers consume the registry — new sources add a
-//! constructor block here, and [`Origin`] itself never changes.
+//! workspaces, remote device mounts) into one [`OriginRegistry`]. Each entry
+//! pairs the display [`Origin`] with its [`Reach`] payload, so resolution
+//! never re-looks-up what composition already knew. Upper layers consume the
+//! registry — new sources add a constructor block here, and [`Origin`] itself
+//! never changes.
 
 use anyhow::{bail, Context, Result};
 use std::path::Path;
@@ -18,8 +18,7 @@ use crate::remote::ipc;
 use crate::remote::protocol::{LocalRequest, LocalResponse};
 
 /// All origins addressable from `cwd`: every local workspace (the current one
-/// flagged), the current workspace's remote mounts, and cloud sources
-/// (reserved — none yet).
+/// flagged) plus the current workspace's remote mounts.
 pub fn collect(cwd: &Path) -> Result<OriginRegistry> {
     let mut entries = Vec::new();
 
@@ -71,8 +70,6 @@ pub fn collect(cwd: &Path) -> Result<OriginRegistry> {
         }
     }
 
-    // Cloud origins: reserved — cloud sources will construct here.
-
     Ok(OriginRegistry::new(entries))
 }
 
@@ -118,6 +115,5 @@ pub fn rename(cwd: &Path, name: &str, new_name: &str) -> Result<String> {
             LocalResponse::Mount(mount) => Ok(mount.alias),
             response => bail!("Unexpected daemon response: {response:?}"),
         },
-        Reach::Cloud => bail!("cloud origins are reserved"),
     }
 }

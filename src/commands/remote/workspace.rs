@@ -8,8 +8,8 @@ pub fn execute(command: WorkspaceCommand) -> Result<()> {
     }
 }
 
-/// List every addressable origin (local workspaces + remote mounts + cloud)
-/// through the unified [`OriginRegistry`] — rendering never branches on kind.
+/// List every addressable origin (local workspaces + remote mounts) through
+/// the unified [`OriginRegistry`] — rendering never branches on kind.
 fn list() -> Result<()> {
     let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
     let registry = crate::origins::collect(&cwd)?;

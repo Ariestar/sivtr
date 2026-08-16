@@ -169,7 +169,7 @@ fn paths_for_root(root: PathBuf) -> Result<WorkspacePaths> {
     // verbatim prefix on Windows (root cause of ugly displayed paths and keys),
     // and resolves symlinks we don't need. `absolute` makes the path absolute
     // (so a relative `--cwd` still keys stably) without either side effect.
-    let root = std::path::absolute(&root).unwrap_or(root);
+    let root = absolutize(&root);
     let (key, display_root) = workspace_identity(&root);
     let dir = data_dir().join(WORKSPACES_DIR).join(&key);
     Ok(WorkspacePaths {

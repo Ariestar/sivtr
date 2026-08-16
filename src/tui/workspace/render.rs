@@ -326,8 +326,8 @@ fn session_row_line(
     } else {
         ""
     };
-    let origin_kind = choice.source.origin_kind();
-    let origin = theme::origin_glyph(origin_kind);
+    let remote = choice.source.is_remote();
+    let origin = theme::origin_glyph(remote);
     let badge = choice.source.badge();
     let title = compact_session_title(choice);
     // Keep search highlighting over the full visible text, but paint origin/badge
@@ -349,7 +349,7 @@ fn session_row_line(
     }
     spans.push(Span::styled(
         format!("{origin} "),
-        theme::origin_style(origin_kind),
+        theme::origin_style(remote),
     ));
     spans.push(Span::styled(
         format!("{badge}  "),

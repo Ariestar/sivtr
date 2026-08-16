@@ -217,10 +217,6 @@ pub struct VarStatus {
     pub created_at: String,
 }
 
-fn cwd_path(cwd: Option<&str>) -> Option<PathBuf> {
-    cwd.map(PathBuf::from)
-}
-
 pub fn to_search_args(params: &SearchParams) -> Result<SearchArgs, String> {
     Ok(SearchArgs {
         source: params.source.clone(),
@@ -234,7 +230,7 @@ pub fn to_search_args(params: &SearchParams) -> Result<SearchArgs, String> {
         min_duration: None,
         max_duration: None,
         sort: None,
-        cwd: cwd_path(params.cwd.as_deref()),
+        cwd: params.cwd.as_deref().map(PathBuf::from),
         since: params.since.clone(),
         until: params.until.clone(),
         last: params.last.clone(),
@@ -261,7 +257,7 @@ pub fn to_filter_args(params: &FilterParams) -> Result<FilterArgs, String> {
         min_duration: None,
         max_duration: None,
         sort: None,
-        cwd: cwd_path(params.cwd.as_deref()),
+        cwd: params.cwd.as_deref().map(PathBuf::from),
         since: params.since.clone(),
         until: params.until.clone(),
         last: params.last.clone(),
@@ -292,7 +288,7 @@ pub fn to_show_args(params: &ShowParams) -> Result<ShowArgs, String> {
     };
     Ok(ShowArgs {
         source: params.source.clone(),
-        cwd: cwd_path(params.cwd.as_deref()),
+        cwd: params.cwd.as_deref().map(PathBuf::from),
         format,
         full: false,
         refs: false,
@@ -306,7 +302,7 @@ pub fn to_zoom_args(params: &ZoomParams) -> ZoomArgs {
         context: params.context,
         before: params.before,
         after: params.after,
-        cwd: cwd_path(params.cwd.as_deref()),
+        cwd: params.cwd.as_deref().map(PathBuf::from),
         format: None,
         json: false,
         refs: false,

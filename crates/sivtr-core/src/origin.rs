@@ -1,13 +1,12 @@
 //! Unified source origins.
 //!
-//! Every memory source — a local workspace, a remote device mount, a cloud
-//! account — is described by one [`Origin`] with the same four fields, so
-//! upper layers (listing, rendering) never branch on which kind of source
-//! they are looking at. Kind-specific details (root paths, peer/share ids,
-//! cloud account) never enter [`Origin`]: the display [`Origin::detail`] is
-//! composed by the source at construction time, and whether a remote or
-//! cloud source happens to be ingested into local files is a
-//! resolution-layer concern, not an origin concern.
+//! Every memory source — a local workspace or a remote device mount — is
+//! described by one [`Origin`] with the same four fields, so upper layers
+//! (listing, rendering) never branch on which kind of source they are
+//! looking at. Kind-specific details (root paths, peer/share ids) never
+//! enter [`Origin`]: the display [`Origin::detail`] is composed by the source
+//! at construction time, and whether a remote source happens to be ingested
+//! into local files is a resolution-layer concern, not an origin concern.
 //!
 //! [`OriginRegistry`] is the single lookup surface: enumerate every
 //! addressable origin, or resolve one by its logical name. Each entry pairs
@@ -21,9 +20,9 @@ use serde::{Deserialize, Serialize};
 
 /// Major source category.
 ///
-/// `#[non_exhaustive]`: adding a category (WSL, container, archive, …) only
-/// requires a new variant plus a `label()` arm here; code outside this crate
-/// is forced to handle the wildcard, so nothing downstream breaks.
+/// `#[non_exhaustive]`: adding a category (cloud account, WSL, container, …)
+/// only requires a new variant plus a `label()` arm here; code outside this
+/// crate is forced to handle the wildcard, so nothing downstream breaks.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -32,8 +31,6 @@ pub enum OriginKind {
     Local,
     /// Another device, forwarded through the daemon.
     Remote,
-    /// A cloud account (synced and/or fetched).
-    Cloud,
 }
 
 impl OriginKind {
@@ -42,7 +39,6 @@ impl OriginKind {
         match self {
             Self::Local => "local",
             Self::Remote => "remote",
-            Self::Cloud => "cloud",
         }
     }
 }
@@ -75,8 +71,6 @@ pub enum Reach {
         workspace_key: String,
         alias: String,
     },
-    /// A cloud account (reserved — none yet).
-    Cloud,
 }
 
 /// One registry entry: the display [`Origin`] plus its [`Reach`].
@@ -123,8 +117,8 @@ impl OriginRegistry {
         if matched.is_empty() {
             return Ok(None);
         }
-        // Remote before local before cloud: the higher-priority kind wins a
-        // cross-kind collision; within one kind the name is still ambiguous.
+        // Remote before local: the higher-priority kind wins a cross-kind
+        // collision; within one kind the name is still ambiguous.
         matched.sort_by_key(|entry| kind_priority(entry.origin.kind));
         if matched.len() > 1
             && kind_priority(matched[0].origin.kind) == kind_priority(matched[1].origin.kind)
@@ -141,13 +135,11 @@ impl OriginRegistry {
 
 /// Resolution priority when a name collides across kinds. A remote mount
 /// wins over a local workspace of the same name — remote lookup ran before
-/// local workspace resolution before the registry existed — and cloud is
-/// reserved, resolving last.
+/// local workspace resolution before the registry existed.
 fn kind_priority(kind: OriginKind) -> u8 {
     match kind {
         OriginKind::Remote => 0,
         OriginKind::Local => 1,
-        OriginKind::Cloud => 2,
     }
 }
 
@@ -187,7 +179,6 @@ mod tests {
     fn labels_are_stable() {
         assert_eq!(OriginKind::Local.label(), "local");
         assert_eq!(OriginKind::Remote.label(), "remote");
-        assert_eq!(OriginKind::Cloud.label(), "cloud");
     }
 
     #[test]
@@ -312,7 +303,7 @@ mod tests {
         for origin in sample().all() {
             assert!(!origin.name.is_empty());
             assert!(!origin.detail.is_empty());
-            assert!(matches!(origin.kind.label(), "local" | "remote" | "cloud"));
+            assert!(matches!(origin.kind.label(), "local" | "remote"));
         }
     }
 

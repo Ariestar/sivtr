@@ -102,8 +102,8 @@ pub fn query(source: &str, filter: Filter, cwd: Option<&Path>) -> Result<WorkSet
         let scope = scope.to_ascii_lowercase();
 
         // One lookup: the registry is the single alias table (local
-        // workspaces, remote mounts, cloud), each entry carrying its reach
-        // payload; resolution applies kind precedence on name collisions.
+        // workspaces, remote mounts), each entry carrying its reach payload;
+        // resolution applies kind precedence on name collisions.
         // The registry lists mounts only while the daemon is already running,
         // so a passive miss is retried once with the daemon up — a cold
         // `desk:terminal` query must still resolve its mount. Groups
@@ -126,9 +126,6 @@ pub fn query(source: &str, filter: Filter, cwd: Option<&Path>) -> Result<WorkSet
                     Duration::from_secs(30),
                 )
                 .with_context(|| format!("remote mount `{alias}` unavailable")),
-                Reach::Cloud => {
-                    anyhow::bail!("cloud source `{}` is not available yet", entry.origin.name)
-                }
             },
             None => match try_group(&scope, path, filter, &cwd)? {
                 Some(set) => Ok(set),
