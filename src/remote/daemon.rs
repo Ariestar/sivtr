@@ -129,8 +129,11 @@ struct DaemonInfoGuard;
 
 impl Drop for DaemonInfoGuard {
     fn drop(&mut self) {
-        // Best-effort cleanup: a missing control file is already the goal.
-        let _ = ipc::remove_daemon_info();
+        // Best-effort cleanup: a missing control file is already the goal,
+        // but surface real failures instead of hiding them.
+        if let Err(error) = ipc::remove_daemon_info() {
+            crate::output::error(format!("failed to remove daemon info: {error:#}"));
+        }
     }
 }
 

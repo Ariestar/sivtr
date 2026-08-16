@@ -667,6 +667,9 @@ pub(crate) fn shell_printed_path(cmd: &str, args: &[&str]) -> Result<Option<Stri
         .args(args)
         .output()
         .context("Failed to run shell")?;
+    if !output.status.success() {
+        anyhow::bail!("shell {cmd} exited with {}", output.status);
+    }
     let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
     Ok((!value.is_empty()).then_some(value))
 }
@@ -872,10 +875,21 @@ mod tests {
     };
     use super::{
         desktop_exec_quote, render_macos_shortcut_plist, render_macos_shortcut_script,
-        update_existing_hook, xml_escape, BASH_HOOK, BASH_SPEC, MACOS_SHORTCUT_LABEL, NUSHELL_HOOK,
-        NUSHELL_SPEC, POWERSHELL_HOOK, POWERSHELL_SPEC, ZSH_HOOK, ZSH_SPEC,
+        shell_printed_path, update_existing_hook, xml_escape, BASH_HOOK, BASH_SPEC,
+        MACOS_SHORTCUT_LABEL, NUSHELL_HOOK, NUSHELL_SPEC, POWERSHELL_HOOK, POWERSHELL_SPEC,
+        ZSH_HOOK, ZSH_SPEC,
     };
     use std::path::Path;
+
+    #[test]
+    fn shell_printed_path_rejects_nonzero_exit_code() {
+        // A failed shell that still writes stdout must not yield a path.
+        #[cfg(unix)]
+        let result = shell_printed_path("sh", &["-c", "echo junk; exit 1"]);
+        #[cfg(windows)]
+        let result = shell_printed_path("cmd", &["/C", "echo junk & exit /b 1"]);
+        assert!(result.is_err(), "nonzero exit must not parse as a path");
+    }
 
     #[test]
     fn keeps_current_powershell_hook_unchanged() {

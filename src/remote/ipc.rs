@@ -44,10 +44,11 @@ pub fn write_daemon_info(info: &DaemonInfo) -> Result<()> {
 /// Delete the daemon control file, tolerating a missing file. The one
 /// removal path for `daemon.json`, shared by shutdown and clean starts.
 pub fn remove_daemon_info() -> Result<()> {
-    match std::fs::remove_file(daemon_info_path()) {
+    let path = daemon_info_path();
+    match std::fs::remove_file(&path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
+        Err(error) => Err(error).with_context(|| format!("Failed to remove {}", path.display())),
     }
 }
 
