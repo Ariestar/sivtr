@@ -258,7 +258,7 @@ fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>)
         spans
     } else {
         let controls = if content_selection.is_some() {
-            "select  drag / Ctrl-drag block  y/Enter/Ctrl-c copy  Esc/v clear".to_string()
+            "select  drag / Ctrl-drag block  y/Enter/Ctrl-c copy  Esc clear".to_string()
         } else if show_help {
             "j/k move  Enter execute  Esc/? close help  q cancel".to_string()
         } else {

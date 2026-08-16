@@ -164,7 +164,7 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
         },
         WorkspaceHelpEntry {
             key: "v",
-            description: "range select rows",
+            description: "range select items",
             action: WorkspaceHelpAction::RangeSelect,
             footer_label: Some("range"),
             // All four panes share the range semantic: the list panes select

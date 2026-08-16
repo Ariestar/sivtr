@@ -226,7 +226,7 @@ impl Theme {
             dim: Color::DarkGray,
             local_origin: Color::Green,
             remote_origin: Color::Magenta,
-            focus_bg: Color::Gray,
+            focus_bg: Color::DarkGray,
             selected_bg: Color::DarkGray,
             selected_fg: Color::White,
             range_fg: Color::Yellow,
