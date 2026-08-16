@@ -67,12 +67,12 @@ impl Selection {
     }
 
     /// Toggle one row; out-of-range rows are ignored (the mask is resized
-    /// when the pane's rows change).
+    /// when the pane's rows change) and never update the anchor.
     pub fn toggle(&mut self, idx: usize) {
         if let Some(flag) = self.mask.get_mut(idx) {
             *flag = !*flag;
+            self.anchor = Some(idx);
         }
-        self.anchor = Some(idx);
     }
 
     /// Toggle every row between the anchor and `idx` to the same state:

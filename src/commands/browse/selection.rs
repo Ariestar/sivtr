@@ -139,16 +139,14 @@ pub(super) fn apply_range_selection(
     idx: usize,
 ) {
     if let Some(anchor) = range_anchor.take() {
-        let start = anchor.min(idx);
-        let end = anchor.max(idx);
-        let select = selected
-            .get(start..=end)
-            .map(|range| range.iter().any(|selected| !selected))
-            .unwrap_or(true);
-        for i in start..=end {
-            if let Some(flag) = selected.get_mut(i) {
-                *flag = select;
-            }
+        // Reject out-of-bounds endpoints before iterating: a stray large
+        // index must not walk a near-empty mask for the whole span.
+        let Some(span) = selected.get_mut(anchor.min(idx)..=anchor.max(idx)) else {
+            return;
+        };
+        let select = span.iter().any(|flag| !*flag);
+        for flag in span {
+            *flag = select;
         }
     } else {
         *range_anchor = Some(idx);
