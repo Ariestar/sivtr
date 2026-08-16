@@ -195,13 +195,19 @@ fn render_grep_block(body: &[&str]) -> Vec<MarkdownLine> {
                                 .fg(crate::tui::theme::accent())
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::styled(rest.to_string(), grep_match_style()),
+                        Span::styled(rest.to_string(), code_block_style()),
                     ]
                 } else {
-                    vec![Span::styled(line.to_string(), grep_path_style())]
+                    vec![Span::styled(
+                        line.to_string(),
+                        Style::default().fg(crate::tui::theme::accent()),
+                    )]
                 }
             } else {
-                vec![Span::styled(line.to_string(), grep_path_style())]
+                vec![Span::styled(
+                    line.to_string(),
+                    Style::default().fg(crate::tui::theme::accent()),
+                )]
             };
             MarkdownLine {
                 line: Line::from(spans),
@@ -210,16 +216,6 @@ fn render_grep_block(body: &[&str]) -> Vec<MarkdownLine> {
             }
         })
         .collect()
-}
-
-/// File path in a grep result.
-fn grep_path_style() -> Style {
-    Style::default().fg(crate::tui::theme::accent())
-}
-
-/// Matched content after the `line:` prefix.
-fn grep_match_style() -> Style {
-    code_block_style()
 }
 
 fn code_line_style(line: &str, is_diff: bool) -> Style {

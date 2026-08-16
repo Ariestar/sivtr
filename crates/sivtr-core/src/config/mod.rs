@@ -8,14 +8,10 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SivtrConfig {
-    /// General settings.
-    pub general: GeneralConfig,
     /// Editor settings.
     pub editor: EditorConfig,
     /// History settings.
     pub history: HistoryConfig,
-    /// Copy command settings.
-    pub copy: CopyConfig,
     /// Codex session settings.
     pub codex: CodexConfig,
     /// Global hotkey settings.
@@ -24,14 +20,6 @@ pub struct SivtrConfig {
     pub theme: ThemeConfig,
     /// MCP stdio server settings.
     pub mcp: McpConfig,
-}
-
-/// General behavior settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct GeneralConfig {
-    /// Preserve original ANSI colors in content views when available.
-    pub preserve_colors: bool,
 }
 
 /// Editor configuration.
@@ -51,14 +39,6 @@ pub struct HistoryConfig {
     pub auto_save: bool,
     /// Maximum number of history entries to keep (0 = unlimited).
     pub max_entries: usize,
-}
-
-/// Copy command configuration.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct CopyConfig {
-    /// Prompt profiles or literal prefixes used when detecting command lines.
-    pub prompts: Vec<String>,
 }
 
 /// Codex session configuration.
@@ -110,14 +90,6 @@ pub struct McpConfig {
 }
 
 // --- Defaults ---
-
-impl Default for GeneralConfig {
-    fn default() -> Self {
-        Self {
-            preserve_colors: true,
-        }
-    }
-}
 
 impl Default for HistoryConfig {
     fn default() -> Self {
@@ -195,24 +167,6 @@ pub fn to_toml_string(config: &SivtrConfig) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn serializes_copy_prompt_config() {
-        let config = SivtrConfig {
-            copy: CopyConfig {
-                prompts: vec!["arrow".to_string(), "mysh>".to_string(), "dev>".to_string()],
-            },
-            ..SivtrConfig::default()
-        };
-
-        let toml = to_toml_string(&config).unwrap();
-
-        assert!(toml.contains("[copy]"));
-        assert!(toml.contains("prompts = ["));
-        assert!(toml.contains("\"arrow\""));
-        assert!(toml.contains("\"mysh>\""));
-        assert!(toml.contains("\"dev>\""));
-    }
 
     #[test]
     fn serializes_hotkey_config() {

@@ -100,21 +100,6 @@ impl AgentSessionProvider for GrokProvider {
         }
         Ok(session)
     }
-
-    fn find_session_by_id(&self, id: &str) -> Result<Option<PathBuf>> {
-        for session in self.list_recent_sessions(None)? {
-            if session.id.as_deref() == Some(id)
-                || session
-                    .path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.contains(id))
-            {
-                return Ok(Some(session.path));
-            }
-        }
-        Ok(None)
-    }
 }
 
 pub fn grok_home() -> PathBuf {

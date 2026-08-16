@@ -472,32 +472,13 @@ impl WorkspaceMatchTarget {
 }
 
 fn git_remote_keys(path: &Path) -> HashSet<String> {
-    let Some(root) = git_root(path) else {
+    let Some(root) = crate::workspace::git_root(path).ok().flatten() else {
         return HashSet::new();
     };
     let Some(config_path) = git_config_path(&root) else {
         return HashSet::new();
     };
     parse_git_remote_keys(&config_path)
-}
-
-fn git_root(path: &Path) -> Option<PathBuf> {
-    let mut dir = if path.is_dir() {
-        path.to_path_buf()
-    } else {
-        path.parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| path.to_path_buf())
-    };
-
-    loop {
-        if dir.join(".git").exists() {
-            return Some(dir);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
 }
 
 fn git_config_path(root: &Path) -> Option<PathBuf> {
@@ -635,14 +616,6 @@ fn select_last_turn(blocks: &[AgentBlock]) -> Vec<AgentBlock> {
 /// `<:tool:bash call:>` … `<:tool:bash result:>`, `<:skill:name:>`, `<:thinking:>`.
 pub fn format_structured_block(kind: AgentBlockKind, label: Option<&str>, text: &str) -> String {
     kind.format_block(label, text)
-}
-
-pub fn is_dialogue_block(kind: AgentBlockKind) -> bool {
-    kind.is_dialogue()
-}
-
-pub fn is_structure_block(kind: AgentBlockKind) -> bool {
-    kind.is_structure()
 }
 
 #[cfg(test)]

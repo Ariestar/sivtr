@@ -141,7 +141,11 @@ pub(crate) fn tool_tag(tool: &str, value: &Value) -> Option<String> {
         return Some("<:patch:>".to_string());
     }
     let expr = tool_input_expr(tool, value)?;
-    Some(format!("<:{}: {}:>", spec.name, truncate(expr)))
+    Some(format!(
+        "<:{}: {}:>",
+        spec.name,
+        crate::tui::content::truncate_chars(&expr, MAX_EXPR)
+    ))
 }
 
 /// New-style folded tag for a tool part, when the tool is known: calls get
@@ -443,11 +447,6 @@ fn output_lines(text: &str) -> String {
         .map(|line| format!("> {line}"))
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// Truncate a long expression to fit a tag line, appending `…`.
-fn truncate(text: String) -> String {
-    crate::tui::content::truncate_chars(&text, MAX_EXPR)
 }
 
 #[cfg(test)]
