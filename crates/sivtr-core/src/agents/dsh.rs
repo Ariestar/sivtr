@@ -240,10 +240,7 @@ fn parse_session_meta(path: &Path) -> Result<AgentSessionMeta> {
                 )
             })?;
             if value.get("type").and_then(Value::as_str) != Some("session") {
-                bail!(
-                    "not a {PROVIDER_NAME} session log (missing session header): {}",
-                    path.display()
-                );
+                return Err(missing_session_header(path));
             }
             apply_header_to_meta(&mut meta, &value).with_context(|| {
                 format!(
@@ -269,6 +266,9 @@ fn parse_session_meta(path: &Path) -> Result<AgentSessionMeta> {
             }
             _ => {}
         }
+    }
+    if !header_seen {
+        return Err(missing_session_header(path));
     }
     meta.fallback_title(first_user.as_deref());
     Ok(meta)
@@ -334,10 +334,7 @@ fn parse_log_text(path: &Path, text: &str) -> Result<AgentSession> {
         };
         if !header_seen {
             if value.get("type").and_then(Value::as_str) != Some("session") {
-                bail!(
-                    "not a {PROVIDER_NAME} session log (missing session header): {}",
-                    path.display()
-                );
+                return Err(missing_session_header(path));
             }
             check_format_version(&value)?;
             session.id = value.get("id").and_then(Value::as_str).map(str::to_string);
@@ -348,6 +345,9 @@ fn parse_log_text(path: &Path, text: &str) -> Result<AgentSession> {
         apply_event(&mut session, &mut tool_names, &mut first_user, &value);
     }
 
+    if !header_seen {
+        return Err(missing_session_header(path));
+    }
     if session.title.is_none() {
         session.title = first_user
             .as_deref()
@@ -355,6 +355,16 @@ fn parse_log_text(path: &Path, text: &str) -> Result<AgentSession> {
             .filter(|title| !title.is_empty());
     }
     Ok(session)
+}
+
+/// Error for a log with no readable `session` header: empty, whitespace-only,
+/// or a first line of a different type. Shared by the metadata and full
+/// parsers so the contract stays in one place.
+fn missing_session_header(path: &Path) -> anyhow::Error {
+    anyhow::anyhow!(
+        "not a {PROVIDER_NAME} session log (missing session header): {}",
+        path.display()
+    )
 }
 
 fn apply_event(
@@ -694,6 +704,28 @@ mod tests {
     }
 
     #[test]
+    fn refuses_empty_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(&path, "").unwrap();
+
+        let error = DshProvider.parse_session_file(&path).unwrap_err();
+        assert!(format!("{error:#}").contains("missing session header"));
+    }
+
+    #[test]
+    fn refuses_empty_zstd_log() {
+        // A .zstd artifact with no complete frame decodes to nothing, which
+        // must be rejected like an empty plain log.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl.zstd");
+        std::fs::write(&path, []).unwrap();
+
+        let error = DshProvider.parse_session_file(&path).unwrap_err();
+        assert!(format!("{error:#}").contains("missing session header"));
+    }
+
+    #[test]
     fn lists_dsh_sessions_under_dsh_home() {
         let _guard = env_lock();
         let dir = tempfile::tempdir().unwrap();
@@ -712,6 +744,10 @@ mod tests {
         let bad = dir.path().join("sessions").join("--repo--").join("bad");
         std::fs::create_dir_all(&bad).unwrap();
         std::fs::write(bad.join("session.jsonl"), "{not json}\n").unwrap();
+        // Empty sibling must be skipped during listing, not listed as unbound.
+        let empty = dir.path().join("sessions").join("--repo--").join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        std::fs::write(empty.join("session.jsonl"), "").unwrap();
 
         let listed = DshProvider.list_recent_sessions(None).unwrap();
 
