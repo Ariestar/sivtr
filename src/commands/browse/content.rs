@@ -126,8 +126,9 @@ pub(super) fn workspace_picked_content(
 /// Picked content from the content pane's marked blocks: every selected
 /// block's full body (regardless of fold state), joined in display order.
 /// Marks follow their dialogue (multi-select paging keeps them), so all
-/// marked dialogues contribute, in selection order. `None` when nothing is
-/// marked or a marked dialogue has no record.
+/// marked dialogues contribute, in selection order. Dialogues without a
+/// record are skipped, keeping the blocks already collected. `None` when
+/// nothing is marked.
 pub(super) fn workspace_picked_content_for_marked_blocks(
     dialogues: &[WorkspaceDialogue],
     selected_dialogues: &[bool],
@@ -137,8 +138,12 @@ pub(super) fn workspace_picked_content_for_marked_blocks(
     let picked_indices = picked_dialogue_indices(selected_dialogues, dialogue_idx);
     let mut texts = Vec::new();
     for dialogue_idx in picked_indices {
-        let dialogue = dialogues.get(dialogue_idx)?;
-        let record = dialogue.record.as_ref()?;
+        let Some(record) = dialogues
+            .get(dialogue_idx)
+            .and_then(|dialogue| dialogue.record.as_ref())
+        else {
+            continue;
+        };
         for (input, half) in [
             (true, ContentIoFocus::Input),
             (false, ContentIoFocus::Output),

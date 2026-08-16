@@ -999,6 +999,16 @@ pub(crate) fn run(
                                 mouse.column,
                                 mouse.row,
                             ) {
+                                // Move focus to the content pane like the
+                                // text-click path, so j/k/y act on content
+                                // after a dot click, not the previous list.
+                                set_focus(
+                                    &mut focus,
+                                    &mut fullscreen,
+                                    &mut range_anchor,
+                                    &mut content_range_anchor,
+                                    WorkspaceFocus::Content,
+                                );
                                 content_cursor.set(half, block);
                                 // Dot marks belong to the shown dialogue
                                 // (multi-select pages one dialogue at a

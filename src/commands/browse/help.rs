@@ -439,11 +439,14 @@ pub(super) fn apply_workspace_help_action(
         WorkspaceHelpAction::CopyBlock if dialogue_count > 0 => {
             // y copies the block under the content cursor (call + result
             // bodies); marked blocks take over in the picker beforehand.
+            // The block id belongs to the *displayed* dialogue, so resolve
+            // the shown index like the marked paths do, not the focused row.
+            let shown = shown_dialogue_idx(selected_dialogues, *content_page, dialogue_idx);
             let block_id = content_cursor.get(*content_io_focus).unwrap_or(0);
             if let Some(picked) = workspace_picked_content_for_cursor_block(
                 dialogues,
                 selected_dialogues,
-                dialogue_idx,
+                shown,
                 *content_io_focus,
                 block_id,
             ) {
