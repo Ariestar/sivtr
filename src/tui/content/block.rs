@@ -241,11 +241,7 @@ fn tool_description(part: &WorkPart) -> Option<String> {
         return None;
     }
     const MAX: usize = 40;
-    let mut truncated: String = description.chars().take(MAX).collect();
-    if description.chars().count() > MAX {
-        truncated.push('…');
-    }
-    Some(truncated)
+    Some(crate::tui::content::truncate_chars(description, MAX))
 }
 
 fn part_call_id(part: &WorkPart) -> Option<&str> {

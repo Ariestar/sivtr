@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use unicode_width::UnicodeWidthStr;
 
 use crate::tui::content::io::ContentIoFocus;
+use crate::tui::content::truncate_chars;
 #[cfg(test)]
 use crate::tui::content::view::ContentViewMode;
 use crate::tui::content::view::{
@@ -401,17 +402,6 @@ fn compact_session_title(choice: &WorkspaceSession) -> String {
         .unwrap_or(without_bracket)
         .trim();
     truncate_chars(without_bracket, 64)
-}
-
-fn truncate_chars(text: &str, max_chars: usize) -> String {
-    let count = text.chars().count();
-    if count <= max_chars {
-        return text.to_string();
-    }
-    let keep = max_chars.saturating_sub(1);
-    let mut out: String = text.chars().take(keep).collect();
-    out.push('…');
-    out
 }
 
 fn search_position_label(search: &WorkspaceSearchView<'_>) -> Option<String> {

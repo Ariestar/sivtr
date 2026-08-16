@@ -443,12 +443,7 @@ fn output_lines(text: &str) -> String {
 
 /// Truncate a long expression to fit a tag line, appending `…`.
 fn truncate(text: String) -> String {
-    if text.chars().count() <= MAX_EXPR {
-        return text;
-    }
-    let mut out: String = text.chars().take(MAX_EXPR).collect();
-    out.push('…');
-    out
+    crate::tui::content::truncate_chars(&text, MAX_EXPR)
 }
 
 #[cfg(test)]
