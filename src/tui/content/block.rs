@@ -144,7 +144,9 @@ pub(crate) fn half_blocks(record: &WorkRecord, input: bool) -> Vec<Block> {
     // opened wherever it appears. A result without a call id falls back to
     // the nearest preceding id-less call, preserving the old adjacency rule.
     let mut open_calls: HashMap<&str, usize> = HashMap::new();
-    let mut last_idless_call: Option<usize> = None;
+    // An id-less call pairs only with an id-less result of the same tool —
+    // two missing ids alone never match.
+    let mut last_idless_call: Option<(usize, Option<&str>)> = None;
     for &part_idx in &parts {
         let part = &record.parts[part_idx];
         match part.kind() {
@@ -155,7 +157,7 @@ pub(crate) fn half_blocks(record: &WorkRecord, input: bool) -> Vec<Block> {
                     open_calls.insert(call_id, block_idx);
                     last_idless_call = None;
                 } else {
-                    last_idless_call = Some(block_idx);
+                    last_idless_call = Some((block_idx, part_tool(part)));
                 }
             }
             WorkPartKind::ToolResult => {
@@ -163,7 +165,15 @@ pub(crate) fn half_blocks(record: &WorkRecord, input: bool) -> Vec<Block> {
                 // matching open call stands alone.
                 let target = part_call_id(part)
                     .and_then(|id| open_calls.remove(id))
-                    .or_else(|| last_idless_call.take());
+                    .or_else(|| match last_idless_call {
+                        Some((block_idx, call_tool))
+                            if same_idless_tool(call_tool, part_tool(part)) =>
+                        {
+                            last_idless_call = None;
+                            Some(block_idx)
+                        }
+                        _ => None,
+                    });
                 match target {
                     Some(block_idx) => units[block_idx].parts.push(part_idx),
                     None => units.push(Block::leaf(vec![part_idx], WorkPartKind::ToolResult)),
@@ -242,12 +252,14 @@ fn tool_description(part: &WorkPart) -> Option<String> {
     let description = input
         .get("description")
         .and_then(serde_json::Value::as_str)?;
-    let description = description.trim();
+    // Normalize internal whitespace so a multi-line description still folds
+    // to a single tag line (block layout assumes one line per tag).
+    let description: String = description.split_whitespace().collect::<Vec<_>>().join(" ");
     if description.is_empty() {
         return None;
     }
     const MAX: usize = 40;
-    Some(crate::tui::content::truncate_chars(description, MAX))
+    Some(crate::tui::content::truncate_chars(&description, MAX))
 }
 
 fn part_call_id(part: &WorkPart) -> Option<&str> {
@@ -257,6 +269,21 @@ fn part_call_id(part: &WorkPart) -> Option<&str> {
         }
         _ => None,
     }
+}
+
+/// Tool name for a ToolCall/ToolResult, used by the id-less pairing fallback.
+fn part_tool(part: &WorkPart) -> Option<&str> {
+    match &part.data {
+        WorkPartData::ToolCall { tool, .. } | WorkPartData::ToolResult { tool, .. } => {
+            tool.as_deref()
+        }
+        _ => None,
+    }
+}
+
+/// Two id-less parts pair only when both name the same tool.
+fn same_idless_tool(call_tool: Option<&str>, result_tool: Option<&str>) -> bool {
+    call_tool.is_some() && call_tool == result_tool
 }
 
 /// Render one IO half's blocks to their display segments, in display order:

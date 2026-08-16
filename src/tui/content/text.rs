@@ -231,23 +231,24 @@ mod tests {
 
     #[test]
     fn fold_label_normalizes_multiline_descriptions_to_one_tag_line() {
-        let rec = record(vec![WorkPart {
+        // An unknown tool takes the generic marker path, where the
+        // description lands in the tag.
+        let part = WorkPart {
             seq: 1,
             occurred_at: None,
             data: WorkPartData::ToolCall {
                 call_id: None,
-                tool: Some("Bash".to_string()),
+                tool: Some("UnknownTool".to_string()),
                 input: serde_json::json!({
                     "command": "git diff",
                     "description": "line one\nline two",
                 }),
             },
-        }]);
-        let io = content_io_from_record(&rec, true, &ExpandedBlocks::default());
+        };
+        let tag = crate::tui::content::block::fold_label_for_part(&part);
         // The tag stays a single line: internal whitespace collapses.
-        let mut lines = io.output.lines();
-        assert_eq!(lines.next(), Some("<:tool:Bash call: line one line two:>"));
-        assert_eq!(lines.next(), None);
+        assert_eq!(tag.lines().count(), 1);
+        assert!(tag.contains("line one line two"));
     }
 
     #[test]
@@ -256,12 +257,21 @@ mod tests {
             tool_part(1, "Bash", "ls"),
             tool_result_part(2, "Read", "ok"),
         ]);
-        let io = content_io_from_record(&rec, true, &ExpandedBlocks::default());
-        // Different tools without call ids are separate blocks, so the
-        // result keeps its own tag instead of hiding inside the Bash block.
-        let output = &io.output;
-        assert!(output.contains("<:tool:Bash call:>"));
-        assert!(output.contains("<:tool:Read result:>"));
+        // Different tools without call ids stay separate blocks: the run
+        // keeps the result out of the call's leaf.
+        let blocks = crate::tui::content::block::half_blocks(&rec, false);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].children.len(), 2);
+
+        let rec = record(vec![
+            tool_part(1, "Bash", "ls"),
+            tool_result_part(2, "Bash", "ok"),
+        ]);
+        // The same tool without call ids pairs into one leaf.
+        let blocks = crate::tui::content::block::half_blocks(&rec, false);
+        assert_eq!(blocks.len(), 1);
+        assert!(blocks[0].children.is_empty());
+        assert_eq!(blocks[0].parts, vec![0, 1]);
     }
 
     #[test]
@@ -283,12 +293,12 @@ mod tests {
                     call_id: Some("b".to_string()),
                     tool: Some("Bash".to_string()),
                     output: serde_json::json!({ "stdout": "ok" }),
+                    start_line: None,
                 },
             },
         ]);
-        let io = content_io_from_record(&rec, true, &ExpandedBlocks::default());
-        let output = &io.output;
-        assert!(output.contains("<:tool:Bash call:>"));
-        assert!(output.contains("<:tool:Bash result:>"));
+        // Distinct call ids never merge the result into the call's leaf.
+        let blocks = crate::tui::content::block::half_blocks(&rec, false);
+        assert_eq!(blocks[0].children.len(), 2);
     }
 }

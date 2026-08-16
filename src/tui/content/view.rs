@@ -309,7 +309,7 @@ pub(crate) fn content_row_in_text(
     scroll: usize,
     row: u16,
 ) -> bool {
-    let content_area = content_text_area(area, text, mode);
+    let content_area = content_text_area(area);
     let raw_line = scroll.saturating_add((row.saturating_sub(content_area.y)) as usize);
     raw_line < content_view_line_count(area, text, mode)
 }
@@ -2094,10 +2094,7 @@ mod tests {
             );
         }
         assert_eq!(
-            content_block_at(
-                &layout,
-                displayed_line_of(lines, "<:tool:Read call:>")
-            ),
+            content_block_at(&layout, displayed_line_of(lines, "<:tool:Read call:>")),
             Some(1)
         );
     }
