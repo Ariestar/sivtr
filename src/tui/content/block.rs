@@ -43,6 +43,12 @@ pub(crate) struct BlockText {
     pub(crate) kind: WorkPartKind,
 }
 
+/// Largest block id plus one for the given ids, for mask sizing. Shared by
+/// the content layout and the block-selection masks.
+pub(crate) fn marked_mask_len(ids: impl IntoIterator<Item = usize>) -> usize {
+    ids.into_iter().max().map_or(0, |max| max + 1)
+}
+
 impl Block {
     /// A leaf (non-run) block; ids are assigned by `assign_ids` afterwards.
     fn leaf(parts: Vec<usize>, kind: WorkPartKind) -> Self {
@@ -392,6 +398,16 @@ mod tests {
         }
     }
 
+    fn assistant_part(seq: usize, content: &str) -> WorkPart {
+        WorkPart {
+            seq,
+            occurred_at: None,
+            data: WorkPartData::Assistant {
+                content: content.to_string(),
+            },
+        }
+    }
+
     fn record(parts: Vec<WorkPart>) -> WorkRecord {
         WorkRecord {
             schema_version: RECORD_SCHEMA_VERSION,
@@ -523,14 +539,15 @@ mod tests {
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].children.len(), 3);
         assert_eq!(blocks[0].fold_label(&rec), "<:bash, thinking, read:>");
-        // A body part after the series starts a new block.
+        // A body part after the series starts a new block in the same
+        // (output) half: the run keeps its members, the body joins after.
         let rec = record(vec![
             tool_part(1, "Bash", "ls"),
             thinking_part(2, "reasoning"),
-            user_part(3, "question"),
+            assistant_part(3, "answer"),
         ]);
-        assert_eq!(half_blocks(&rec, false).len(), 1);
-        assert_eq!(half_blocks(&rec, true).len(), 1);
+        assert_eq!(half_blocks(&rec, false).len(), 2);
+        assert!(half_blocks(&rec, true).is_empty());
     }
 
     #[test]

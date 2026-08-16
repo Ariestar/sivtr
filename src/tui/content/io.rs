@@ -81,6 +81,18 @@ impl ContentIoTexts {
         }
     }
 
+    /// Block segments backing the *displayed* text of a half: empty when
+    /// the half renders `<empty>`, so the layout's lines and ownership
+    /// always derive from the same state and the dot gutter stays aligned.
+    pub(crate) fn display_blocks(&self, half: ContentIoFocus) -> &[BlockText] {
+        let blocks = self.half_blocks(half);
+        match half {
+            ContentIoFocus::Input if self.input_blank() => &[],
+            ContentIoFocus::Output if self.output_blank() => &[],
+            _ => blocks,
+        }
+    }
+
     /// The two halves' block segments, for fold-aware cursor movement.
     pub(crate) fn block_slices(&self) -> (&[BlockText], &[BlockText]) {
         (
@@ -243,13 +255,13 @@ impl ContentIoFrame {
         let input_layout = layout_content(
             areas.input,
             texts.display(ContentIoFocus::Input),
-            &texts.input_blocks,
+            texts.display_blocks(ContentIoFocus::Input),
             mode,
         );
         let output_layout = layout_content(
             areas.output,
             texts.display(ContentIoFocus::Output),
-            &texts.output_blocks,
+            texts.display_blocks(ContentIoFocus::Output),
             mode,
         );
         Self {

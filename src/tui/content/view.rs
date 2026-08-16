@@ -6,7 +6,7 @@ use regex::Regex;
 use std::rc::Rc;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::tui::content::block::BlockText;
+use crate::tui::content::block::{marked_mask_len, BlockText};
 use crate::tui::content::markdown::{render_markdown_lines, MarkdownLineKind};
 use crate::tui::pane::{panel_block, render_panel_scrollbar, Panel, PanelScroll};
 use sivtr_core::record::WorkPartKind;
@@ -109,7 +109,7 @@ pub(crate) fn layout_content(
     let inner = panel_inner(area);
     let width = inner.width.saturating_sub(GUTTER_WIDTH) as usize;
     let lines = all_content_lines(text, width, mode);
-    let mut kinds = vec![WorkPartKind::User; marked_mask_len(blocks)];
+    let mut kinds = vec![WorkPartKind::User; marked_mask_len(blocks.iter().map(|b| b.id))];
     for block in blocks {
         kinds[block.id] = block.kind;
     }
@@ -118,14 +118,6 @@ pub(crate) fn layout_content(
         ownership: block_ownership(width, blocks, mode),
         kinds,
     }
-}
-
-fn marked_mask_len(blocks: &[BlockText]) -> usize {
-    blocks
-        .iter()
-        .map(|block| block.id)
-        .max()
-        .map_or(0, |max| max + 1)
 }
 
 /// Map every displayed line of a half to the block that owns it. Each block

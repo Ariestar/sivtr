@@ -8,7 +8,7 @@
 //! Do **not** reimplement viewport growth, keep/evict, or blanking rules.
 
 use crate::pane::{Pane, PaneInput, Selection, SlidingPane, WindowRow};
-use crate::tui::content::block::BlockText;
+use crate::tui::content::block::{marked_mask_len, BlockText};
 use crate::tui::content::view::ContentViewMode;
 use crate::tui::workspace::{
     workspace_content_io_texts, ContentIoFocus, ContentIoFrame, ExpandedBlocks, WorkspaceDialogue,
@@ -432,13 +432,28 @@ pub struct ContentPane {
     marked: std::collections::HashMap<usize, [Selection; 2]>,
 }
 
-/// Largest block id in a half's display segments plus one, for mask sizing.
-fn marked_mask_len(blocks: &[BlockText]) -> usize {
-    blocks
-        .iter()
-        .map(|block| block.id)
-        .max()
-        .map_or(0, |max| max + 1)
+/// Block-selection mask length of one half: the shown dialogue's *complete*
+/// block-id collection when its record is loaded (so marks for folded
+/// blocks survive resizing and are restored on expand), else the displayed
+/// segments of the current frame.
+fn block_mask_len(
+    dialogues: &[WorkspaceDialogue],
+    idx: usize,
+    input: bool,
+    displayed: &[BlockText],
+) -> usize {
+    let full = dialogues
+        .get(idx)
+        .and_then(|dialogue| dialogue.record.as_ref())
+        .map(|record| {
+            marked_mask_len(
+                crate::tui::content::block::half_blocks(record, input)
+                    .iter()
+                    .map(|block| block.id),
+            )
+        })
+        .unwrap_or(0);
+    full.max(marked_mask_len(displayed.iter().map(|block| block.id)))
 }
 
 fn half_selection_mut(
@@ -475,14 +490,25 @@ impl ContentPane {
         let frame = ContentIoFrame::build(ctx.area, texts, ctx.mode, ctx.io_focus);
         self.input_lines = frame.line_count(ContentIoFocus::Input);
         self.output_lines = frame.line_count(ContentIoFocus::Output);
-        half_selection_mut(&mut self.marked, ctx.highlighted_idx, ContentIoFocus::Input)
-            .resize(marked_mask_len(&frame.texts.input_blocks));
+        half_selection_mut(&mut self.marked, ctx.highlighted_idx, ContentIoFocus::Input).resize(
+            block_mask_len(
+                ctx.dialogues,
+                ctx.highlighted_idx,
+                true,
+                &frame.texts.input_blocks,
+            ),
+        );
         half_selection_mut(
             &mut self.marked,
             ctx.highlighted_idx,
             ContentIoFocus::Output,
         )
-        .resize(marked_mask_len(&frame.texts.output_blocks));
+        .resize(block_mask_len(
+            ctx.dialogues,
+            ctx.highlighted_idx,
+            false,
+            &frame.texts.output_blocks,
+        ));
         frame
     }
 
