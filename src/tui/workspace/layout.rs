@@ -3,6 +3,7 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::widgets::ListState;
 
+use crate::tui::content::io::rect_contains;
 use crate::tui::workspace::model::WorkspaceFocus;
 
 #[derive(Clone, Copy, Debug)]
@@ -120,11 +121,4 @@ pub(crate) fn workspace_hit_test(
     } else {
         None
     }
-}
-
-fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
-    column >= area.x
-        && column < area.x.saturating_add(area.width)
-        && row >= area.y
-        && row < area.y.saturating_add(area.height)
 }

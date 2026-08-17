@@ -357,6 +357,14 @@ pub enum Commands {
     /// Manage remotes for the current workspace (like `git remote`)
     Remote(RemoteCommand),
 
+    /// Manage groups: a named set of devices that share memory with each other
+    #[command(visible_alias = "g")]
+    Group(GroupCommand),
+
+    /// Manage source origins: one name for every addressable memory source
+    /// (local workspace alias or remote mount), renamed through one command
+    Origin(OriginCommand),
+
     /// Manage configuration
     Config(ConfigCommand),
 

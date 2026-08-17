@@ -6,6 +6,7 @@
 pub mod cli;
 pub mod commands;
 pub mod mcp;
+pub mod origins;
 pub mod output;
 pub mod pane;
 pub mod remote;
@@ -97,6 +98,12 @@ fn run() -> Result<()> {
         }
         Some(Commands::Remote(cmd)) => {
             commands::remote::execute(cmd)?;
+        }
+        Some(Commands::Group(cmd)) => {
+            commands::remote::group::execute(cmd)?;
+        }
+        Some(Commands::Origin(cmd)) => {
+            commands::remote::origin::execute(cmd)?;
         }
         Some(Commands::Hotkey(cmd)) => {
             commands::system::hotkey::execute(cmd)?;

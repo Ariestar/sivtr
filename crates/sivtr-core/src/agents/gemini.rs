@@ -275,6 +275,7 @@ fn apply_tool_call(session: &mut AgentSession, timestamp: Option<String>, call: 
         id.clone(),
         name,
         pretty_json_value(args),
+        None,
     );
 
     if let Some(result) = call.get("result") {
@@ -285,6 +286,7 @@ fn apply_tool_call(session: &mut AgentSession, timestamp: Option<String>, call: 
             id,
             None,
             extract_content_text(result),
+            None,
         );
     }
 }

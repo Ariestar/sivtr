@@ -12,17 +12,14 @@ use rmcp::{
 };
 use serde::Serialize;
 use sivtr_core::ai::AgentProvider;
-use sivtr_core::workspace;
 
 use crate::commands::memory::{filter, search, show, workset, zoom};
-use crate::commands::remote::workspace::workspace_display_name;
 use crate::remote::ipc;
-use crate::remote::protocol::{LocalRequest, LocalResponse};
 
 use super::types::{
     memory_result, show_result, to_filter_args, to_search_args, to_show_args, to_zoom_args,
-    FilterParams, MountStatus, ProviderStatus, SearchParams, ShowParams, StatusParams,
-    StatusResult, VarStatus, WorkspaceOrigin, ZoomParams,
+    FilterParams, ProviderStatus, SearchParams, ShowParams, StatusParams, StatusResult, VarStatus,
+    ZoomParams,
 };
 
 #[derive(Clone)]
@@ -100,7 +97,7 @@ impl SivtrMcp {
     }
 
     #[tool(
-        description = "Environment and origin status: version, hooks, providers, daemon, local workspace origin labels (ws), remote mounts, and saved WorkSet vars."
+        description = "Environment and origin status: version, hooks, providers, daemon, unified origins (local workspaces + remote mounts), and saved WorkSet vars."
     )]
     fn sivtr_status(
         &self,
@@ -148,17 +145,17 @@ pub async fn serve_stdio(idle_exit: Option<Duration>) -> anyhow::Result<()> {
         return Ok(());
     };
 
-    // Idle-exit watchdog: exit 0 once no tool call has completed for `idle`
-    // seconds (and none is in flight). The clock only starts after the first
-    // tool call — "exit after use" — so a freshly spawned server that the host
-    // is still initializing is never killed. MCP stdio hosts respawn the
-    // server on the next tool use, so an idle server never lingers.
+    // Standard idle-exit: the clock starts at spawn, so any server that stays
+    // idle for `idle` is killed — whether or not a tool was ever called —
+    // and unused servers never linger. Every tool call resets the clock.
+    // MCP stdio hosts respawn the server on the next tool use.
     //
     // This uses a hard `process::exit`: returning instead would drop the tokio
     // runtime, whose shutdown joins the blocking pool — and the stdio reader
     // thread is parked on the still-open stdin pipe, so the drop hangs until
     // the host closes stdin. Exiting directly is safe here: no tool call is in
     // flight (BUSY gate) and the last response was flushed seconds ago.
+    LAST_ACTIVITY_MS.store(now_ms(), Ordering::Relaxed);
     let wait = service.waiting();
     tokio::pin!(wait);
     let mut ticker = tokio::time::interval(Duration::from_millis(500));
@@ -170,8 +167,7 @@ pub async fn serve_stdio(idle_exit: Option<Duration>) -> anyhow::Result<()> {
                 return Ok(());
             }
             _ = ticker.tick() => {
-                if HAS_ACTIVITY.load(Ordering::Relaxed)
-                    && !BUSY.load(Ordering::Relaxed)
+                if !BUSY.load(Ordering::Relaxed)
                     && idle_elapsed() >= idle.as_millis() as u64
                 {
                     std::process::exit(0);
@@ -181,13 +177,9 @@ pub async fn serve_stdio(idle_exit: Option<Duration>) -> anyhow::Result<()> {
     }
 }
 
-/// Milliseconds since the last completed tool call (0 before any call).
+/// Milliseconds since the last completed tool call or server start.
 fn idle_elapsed() -> u64 {
-    let last = LAST_ACTIVITY_MS.load(Ordering::Relaxed);
-    if last == 0 {
-        return u64::MAX;
-    }
-    now_ms().saturating_sub(last)
+    now_ms().saturating_sub(LAST_ACTIVITY_MS.load(Ordering::Relaxed))
 }
 
 fn now_ms() -> u64 {
@@ -197,12 +189,11 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Last completed tool call, in epoch milliseconds.
+/// Last completed tool call or server start (the idle clock base), in epoch
+/// milliseconds.
 static LAST_ACTIVITY_MS: AtomicU64 = AtomicU64::new(0);
 /// A tool call is currently executing; the watchdog must not exit mid-call.
 static BUSY: AtomicBool = AtomicBool::new(false);
-/// Whether any tool call has ever completed (the idle clock starts then).
-static HAS_ACTIVITY: AtomicBool = AtomicBool::new(false);
 
 /// Marks activity at the start of a tool call and again when it completes.
 /// Dropped on every exit path, including errors.
@@ -210,7 +201,6 @@ struct ActivityGuard;
 
 impl ActivityGuard {
     fn begin() -> Self {
-        HAS_ACTIVITY.store(true, Ordering::Relaxed);
         BUSY.store(true, Ordering::Relaxed);
         LAST_ACTIVITY_MS.store(now_ms(), Ordering::Relaxed);
         Self
@@ -252,8 +242,7 @@ fn collect_status(cwd: Option<&str>) -> anyhow::Result<StatusResult> {
     let shell_hooks_installed = shell_hooks_installed();
     let providers = provider_status();
     let (daemon_running, daemon_node_id) = daemon_status();
-    let local_workspaces = local_workspace_origins(&cwd)?;
-    let mounts = mount_status(&cwd);
+    let origins = crate::origins::collect(&cwd)?.all().cloned().collect();
     let vars = workset::list_saved().ok().map(|list| {
         list.into_iter()
             .map(|var| VarStatus {
@@ -274,8 +263,7 @@ fn collect_status(cwd: Option<&str>) -> anyhow::Result<StatusResult> {
         providers,
         daemon_running,
         daemon_node_id,
-        local_workspaces,
-        mounts,
+        origins,
         vars,
     })
 }
@@ -308,21 +296,18 @@ fn shell_hooks_installed() -> bool {
         }
     }
     for cmd in ["pwsh", "powershell"] {
-        if let Ok(output) = std::process::Command::new(cmd)
-            .args(["-NoProfile", "-Command", "Write-Output $PROFILE"])
-            .output()
-        {
-            let profile = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !profile.is_empty() {
-                let path = Path::new(&profile);
-                if path
-                    .exists()
-                    .then(|| std::fs::read_to_string(path).ok())
-                    .flatten()
-                    .is_some_and(|content| content.contains(marker))
-                {
-                    return true;
-                }
+        if let Ok(Some(profile)) = crate::commands::terminal::init::shell_printed_path(
+            cmd,
+            &["-NoProfile", "-Command", "Write-Output $PROFILE"],
+        ) {
+            let path = Path::new(&profile);
+            if path
+                .exists()
+                .then(|| std::fs::read_to_string(path).ok())
+                .flatten()
+                .is_some_and(|content| content.contains(marker))
+            {
+                return true;
             }
         }
     }
@@ -354,66 +339,5 @@ fn daemon_status() -> (bool, Option<String>) {
     match ipc::read_daemon_info() {
         Ok(info) => (true, Some(info.node_id)),
         Err(_) => (false, None),
-    }
-}
-
-fn local_workspace_origins(cwd: &Path) -> anyhow::Result<Vec<WorkspaceOrigin>> {
-    let current = workspace::resolve_current_workspace()?.map(|paths| paths.key);
-    // Ensure cwd is registered when possible.
-    let _ = workspace::ensure_workspace_for_dir(cwd);
-    let mut metas = workspace::list_workspaces()?;
-    if let Some(current_key) = current.as_deref() {
-        metas.sort_by(|a, b| {
-            let a_cur = a.key == current_key;
-            let b_cur = b.key == current_key;
-            b_cur
-                .cmp(&a_cur)
-                .then_with(|| b.last_seen_at.cmp(&a.last_seen_at))
-        });
-    }
-    Ok(metas
-        .into_iter()
-        .map(|meta| {
-            let current = current.as_deref() == Some(meta.key.as_str());
-            WorkspaceOrigin {
-                name: workspace_display_name(&meta),
-                root: meta.root,
-                key: meta.key,
-                current,
-            }
-        })
-        .collect())
-}
-
-fn mount_status(cwd: &Path) -> Vec<MountStatus> {
-    let key = workspace::resolve_workspace_for_dir(cwd)
-        .ok()
-        .flatten()
-        .map(|paths| paths.key)
-        .or_else(|| {
-            workspace::resolve_current_workspace()
-                .ok()
-                .flatten()
-                .map(|paths| paths.key)
-        });
-    mount_status_for_key(key.as_deref())
-}
-
-fn mount_status_for_key(workspace_key: Option<&str>) -> Vec<MountStatus> {
-    let Some(workspace_key) = workspace_key else {
-        return Vec::new();
-    };
-    match ipc::call(LocalRequest::RemoteList {
-        workspace_key: workspace_key.to_string(),
-    }) {
-        Ok(LocalResponse::Mounts(mounts)) => mounts
-            .into_iter()
-            .map(|mount| MountStatus {
-                alias: mount.alias,
-                peer_name: mount.peer_name,
-                share_name: mount.share_name,
-            })
-            .collect(),
-        _ => Vec::new(),
     }
 }

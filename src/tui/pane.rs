@@ -21,28 +21,26 @@ impl Panel {
     }
 
     fn title_line(&self) -> Line<'static> {
-        if self.key.is_empty() {
-            return Line::from(Span::styled(
+        let spans = if self.key.is_empty() {
+            vec![Span::styled(
                 self.name.clone(),
                 theme::title_style(self.active),
-            ));
-        }
-        let mut spans = vec![
-            Span::styled(
-                format!(" {} ", self.key),
-                Style::default()
-                    .fg(if self.active {
-                        theme::accent()
-                    } else {
-                        theme::muted()
-                    })
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(self.name.clone(), theme::title_style(self.active)),
-        ];
-        if self.active {
-            spans.push(Span::styled(" ●", Style::default().fg(theme::accent())));
-        }
+            )]
+        } else {
+            vec![
+                Span::styled(
+                    format!(" {} ", self.key),
+                    Style::default()
+                        .fg(if self.active {
+                            theme::accent()
+                        } else {
+                            theme::muted()
+                        })
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(self.name.clone(), theme::title_style(self.active)),
+            ]
+        };
         Line::from(spans)
     }
 
@@ -82,6 +80,7 @@ impl PanelScroll {
         }
     }
 
+    /// `[ cur/total ]` for the bottom-right corner of a pane.
     fn position_label(self) -> Option<String> {
         if self.total == 0 {
             return None;
@@ -100,23 +99,23 @@ pub(crate) fn render_panel_scrollbar(
     scroll: PanelScroll,
     active: bool,
 ) {
-    let Some((thumb_top, thumb_height)) =
+    if let Some((thumb_top, thumb_height)) =
         panel_scrollbar_thumb(scroll, area.height.saturating_sub(2) as usize)
-    else {
-        render_panel_scroll_label(frame, area, scroll, active);
-        return;
-    };
-    let x = area.x.saturating_add(area.width).saturating_sub(1);
-    let y = area.y.saturating_add(1).saturating_add(thumb_top as u16);
-    let style = scrollbar_style(active);
-    for row in y..y.saturating_add(thumb_height as u16) {
-        if let Some(cell) = frame.buffer_mut().cell_mut((x, row)) {
-            cell.set_symbol("┃").set_style(style);
+    {
+        let x = area.x.saturating_add(area.width).saturating_sub(1);
+        let y = area.y.saturating_add(1).saturating_add(thumb_top as u16);
+        let style = scrollbar_style(active);
+        for row in y..y.saturating_add(thumb_height as u16) {
+            if let Some(cell) = frame.buffer_mut().cell_mut((x, row)) {
+                cell.set_symbol("┃").set_style(style);
+            }
         }
     }
     render_panel_scroll_label(frame, area, scroll, active);
 }
 
+/// Cursor/scroll position `[ cur/total ]` in a pane's bottom-right corner,
+/// rendered even when the content fits (no scroll thumb).
 fn render_panel_scroll_label(frame: &mut Frame, area: Rect, scroll: PanelScroll, active: bool) {
     if area.width < 4 || area.height == 0 {
         return;
@@ -181,16 +180,49 @@ fn scroll_label_style(active: bool) -> Style {
     })
 }
 
+/// One style entry point for the current row/block in every pane (lists and
+/// content). The highlight never depends on the panel being focused: focus is
+/// expressed by the border alone, so the current row stays visible after
+/// switching panes.
 pub(crate) fn active_item_style() -> Style {
     theme::focus_row()
 }
 
-pub(crate) fn selected_item_style() -> Style {
-    theme::selected_row()
+/// Highlight style for a row/block line in any pane: a pending range span
+/// (`v` anchor..cursor) wins over the focused row, and a plain row stays
+/// unstyled so the caller keeps its own base (agent colors, badges). The one
+/// style decision every pane shares.
+pub(crate) fn span_style(in_span: bool, focused: bool) -> Option<Style> {
+    if in_span {
+        Some(theme::range_row())
+    } else if focused {
+        Some(active_item_style())
+    } else {
+        None
+    }
 }
 
-pub(crate) fn inactive_highlight_style() -> Style {
-    Style::default()
+/// `●` / `○` marker for selected / unselected rows, used by every pane so the
+/// selection dot has one spelling across the whole UI.
+pub(crate) fn selection_dot(selected: bool) -> &'static str {
+    if selected {
+        "●"
+    } else {
+        "○"
+    }
+}
+
+/// Resolve one list row's highlight from its index, the cursor, and a pending
+/// `v` range anchor — the one question every list pane asks, instead of each
+/// pane re-deriving the span test and focus flag.
+pub(crate) fn row_highlight(
+    idx: usize,
+    cursor: usize,
+    range_anchor: Option<usize>,
+) -> Option<Style> {
+    let in_span =
+        range_anchor.is_some_and(|anchor| idx >= anchor.min(cursor) && idx <= anchor.max(cursor));
+    span_style(in_span, idx == cursor)
 }
 
 pub(crate) fn render_list_panel(
@@ -202,12 +234,7 @@ pub(crate) fn render_list_panel(
 ) {
     let list = List::new(items)
         .block(panel_block(&panel))
-        .highlight_style(if panel.active() {
-            active_item_style()
-        } else {
-            inactive_highlight_style()
-        })
-        .highlight_symbol("");
+        .highlight_style(active_item_style());
     let mut local_state = *state;
     frame.render_stateful_widget(list, area, &mut local_state);
 }

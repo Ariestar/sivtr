@@ -6,7 +6,6 @@ use sivtr_core::workspace::{self, WorkspaceMetadata};
 
 use crate::cli::{ShareAction, ShareCommand};
 use crate::commands::interactive;
-use crate::commands::remote::workspace::workspace_display_name;
 use crate::output;
 use crate::remote::ipc;
 use crate::remote::protocol::{LocalRequest, LocalResponse, ShareInfo};
@@ -107,16 +106,23 @@ fn finish_share(
 }
 
 #[derive(Clone)]
-struct WorkspaceChoice {
-    key: String,
-    root: String,
-    name: String,
-    current: bool,
+pub(crate) struct WorkspaceChoice {
+    pub(crate) key: String,
+    pub(crate) root: String,
+    pub(crate) name: String,
+    pub(crate) current: bool,
 }
 
-fn pick_workspace() -> Result<WorkspaceChoice> {
-    interactive::require_interactive("share")?;
+impl WorkspaceChoice {
+    pub(crate) fn label(&self) -> String {
+        let marker = if self.current { " [current]" } else { "" };
+        format!("{}  {}{marker}", self.name, self.root)
+    }
+}
 
+/// Enumerate registered workspaces, current first then by recency. Shared by
+/// `sivtr share` (single select) and `sivtr group join` (multi select).
+pub(crate) fn list_workspace_choices() -> Result<Vec<WorkspaceChoice>> {
     let current = workspace::resolve_current_workspace()?;
     // Ensure the current repo is registered so it appears in the list.
     if let Some(ref paths) = current {
@@ -131,6 +137,7 @@ fn pick_workspace() -> Result<WorkspaceChoice> {
                 WorkspaceMetadata {
                     key: paths.key.clone(),
                     root: paths.root.display().to_string(),
+                    alias: None,
                     created_at: String::new(),
                     last_seen_at: String::new(),
                 },
@@ -151,31 +158,28 @@ fn pick_workspace() -> Result<WorkspaceChoice> {
             .then_with(|| b.last_seen_at.cmp(&a.last_seen_at))
     });
 
-    let choices: Vec<WorkspaceChoice> = metas
+    Ok(metas
         .into_iter()
         .map(|meta| {
             let current = Some(meta.key.as_str()) == current_key;
             WorkspaceChoice {
-                name: workspace_display_name(&meta),
+                name: workspace::workspace_alias(&meta),
                 key: meta.key,
                 root: meta.root,
                 current,
             }
         })
-        .collect();
+        .collect())
+}
 
+fn pick_workspace() -> Result<WorkspaceChoice> {
+    interactive::require_interactive("share")?;
+    let choices = list_workspace_choices()?;
     let default_index = choices
         .iter()
         .position(|choice| choice.current)
         .unwrap_or(0);
-    let labels: Vec<String> = choices
-        .iter()
-        .map(|choice| {
-            let marker = if choice.current { " [current]" } else { "" };
-            format!("{}  {}{marker}", choice.name, choice.root)
-        })
-        .collect();
-
+    let labels: Vec<String> = choices.iter().map(WorkspaceChoice::label).collect();
     let index = interactive::select("Share which workspace?", &labels, default_index)?;
     Ok(choices[index].clone())
 }
@@ -189,37 +193,79 @@ fn confirm_single(root: &Path, share_name: &str) -> Result<()> {
     bail!("share cancelled");
 }
 
+/// Resolve or create the share for a workspace: reuse an existing enabled
+/// share, re-enable a disabled one, or add a new one. Silent (no output);
+/// shared by `share add` and group join.
+pub(crate) fn ensure_share(
+    path: Option<PathBuf>,
+    share_name: Option<String>,
+    redact: bool,
+) -> Result<(ShareInfo, PathBuf)> {
+    let path =
+        path.unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
+    let paths = workspace::ensure_workspace_for_dir(&path)?
+        .with_context(|| format!("{} is not inside a git workspace", path.display()))?;
+    let name = share_name.unwrap_or_else(|| default_share_name(&paths.root));
+    let share = match find_share_for_workspace(&paths.key) {
+        Ok(existing) if existing.enabled => existing,
+        Ok(existing) => {
+            // Re-enable a disabled share: a contributed workspace must be
+            // queryable, or members' `authorize` would deny every read.
+            match ipc::call(LocalRequest::ShareSetEnabled {
+                share: existing.id,
+                enabled: true,
+            })? {
+                LocalResponse::Share(share) => share,
+                response => bail!("Unexpected daemon response: {response:?}"),
+            }
+        }
+        Err(_) => match ipc::call(LocalRequest::ShareAdd {
+            workspace_key: paths.key,
+            root: paths.root.display().to_string(),
+            name,
+            redact,
+        })? {
+            LocalResponse::Share(share) => share,
+            response => bail!("Unexpected daemon response: {response:?}"),
+        },
+    };
+    Ok((share, paths.root))
+}
+
 fn add(path: Option<PathBuf>, name: Option<String>, redact: bool) -> Result<ShareInfo> {
+    // Explicit `share add` always creates; a workspace that is already shared
+    // is a duplicate, reported by the daemon. (Reuse is reserved for group
+    // setup, which must not clobber the requested name/redaction.)
     let path =
         path.unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
     let paths = workspace::ensure_workspace_for_dir(&path)?
         .with_context(|| format!("{} is not inside a git workspace", path.display()))?;
     let name = name.unwrap_or_else(|| default_share_name(&paths.root));
-    match ipc::call(LocalRequest::ShareAdd {
+    let share = match ipc::call(LocalRequest::ShareAdd {
         workspace_key: paths.key,
         root: paths.root.display().to_string(),
         name,
         redact,
     })? {
-        LocalResponse::Share(share) => {
-            output::success(format!("shared workspace `{}`", share.name));
-            output::detail("id", share.id.clone());
-            output::detail("root", share.root.clone());
-            output::detail(
-                "redaction",
-                if share.redact { "enabled" } else { "disabled" },
-            );
-            output::hint(format!(
-                "create an invite with: sivtr share invite {}",
-                share.name
-            ));
-            Ok(share)
-        }
+        LocalResponse::Share(share) => share,
         response => bail!("Unexpected daemon response: {response:?}"),
-    }
+    };
+    output::success(format!("shared workspace `{}`", share.name));
+    output::detail("id", share.id.clone());
+    output::detail("root", paths.root.display().to_string());
+    output::detail(
+        "redaction",
+        if share.redact { "enabled" } else { "disabled" },
+    );
+    output::hint(format!(
+        "create an invite with: sivtr share invite {}",
+        share.name
+    ));
+    Ok(share)
 }
 
-fn find_share_for_workspace(workspace_key: &str) -> Result<ShareInfo> {
+/// Find the share for a workspace, if any. Shared with group join.
+pub(crate) fn find_share_for_workspace(workspace_key: &str) -> Result<ShareInfo> {
     match ipc::call(LocalRequest::ShareList)? {
         LocalResponse::Shares(shares) => shares
             .into_iter()
@@ -229,7 +275,7 @@ fn find_share_for_workspace(workspace_key: &str) -> Result<ShareInfo> {
     }
 }
 
-fn default_share_name(root: &Path) -> String {
+pub(crate) fn default_share_name(root: &Path) -> String {
     root.file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("workspace")
@@ -347,7 +393,7 @@ fn revoke(share: &str, peer: &str) -> Result<()> {
     }
 }
 
-fn parse_duration(value: &str) -> Result<i64> {
+pub(crate) fn parse_duration(value: &str) -> Result<i64> {
     let split = value
         .find(|character: char| !character.is_ascii_digit())
         .context("Duration must include a unit, such as 10m, 2h, or 1d")?;

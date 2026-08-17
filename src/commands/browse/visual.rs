@@ -5,19 +5,23 @@ use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::widgets::ListState;
 
 use crate::commands::select::CommandSelection;
+use crate::tui::content::io::ContentIoFrame;
 use crate::tui::content::view::{
-    clamp_content_position, content_position_in_text_row, content_text_area, selected_content_text,
-    ContentPosition, ContentSelection, ContentSelectionKind, ContentViewMode,
+    clamp_content_position, content_block_at, content_position_in_text_row, content_text_area,
+    selected_content_text, ContentPosition, ContentSelection, ContentSelectionKind,
+    ContentViewMode,
 };
 use crate::tui::workspace::{
-    selected_index, ContentIoFocus, ContentScrolls, WorkspaceDialogue, WorkspaceFocus,
-    WorkspacePickedContent, WorkspaceSession, WorkspaceSource,
+    ContentIoFocus, ContentScrolls, WorkspaceDialogue, WorkspaceFocus, WorkspacePickedContent,
+    WorkspaceSession, WorkspaceSource,
 };
 
 use super::content::workspace_picked_content;
 use super::nav::{move_workspace_cursor_down, move_workspace_cursor_up};
 
-const MOUSE_SCROLL_LINES: usize = 3;
+/// Lines per wheel notch: web-like scroll steps (lists move selection by the
+/// same amount, content by the same line count).
+pub(super) const MOUSE_SCROLL_LINES: usize = 3;
 #[derive(Clone, Copy)]
 pub(super) struct VisualSelectMode {
     pub(super) selection: ContentSelection,
@@ -31,31 +35,12 @@ pub(super) struct VisualContentContext<'a> {
     pub(super) scroll: usize,
 }
 
-pub(super) fn enter_visual_select_mode(
-    visual_select_mode: &mut Option<VisualSelectMode>,
-    content_scroll: &mut usize,
-    content_area: ratatui::layout::Rect,
-    text: &str,
-    mode: ContentViewMode,
-) {
-    let position = clamp_content_position(
-        content_area,
-        text,
-        mode,
-        ContentPosition {
-            line: *content_scroll,
-            column: 0,
-        },
-    );
-    *content_scroll = position.line;
-    *visual_select_mode = Some(VisualSelectMode {
-        selection: ContentSelection {
-            anchor: position,
-            cursor: position,
-            kind: ContentSelectionKind::Linear,
-        },
-        dragging: false,
-    });
+/// Mouse-down anchor recorded before any dragging. A pure click (down and
+/// up with no drag event) never becomes a text selection: the anchor is
+/// only promoted to `VisualSelectMode` by the first actual drag.
+pub(super) struct MouseSelectionStart {
+    pub(super) anchor: ContentPosition,
+    pub(super) kind: ContentSelectionKind,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -72,7 +57,7 @@ pub(super) fn handle_visual_select_key(
     dialogue_idx: usize,
 ) -> Result<Option<WorkspacePickedContent>> {
     match key {
-        KeyCode::Esc | KeyCode::Char('v') => return Ok(None),
+        KeyCode::Esc => return Ok(None),
         KeyCode::Enter | KeyCode::Char('y') => {
             return Ok(Some(workspace_picked_content_for_visual_selection(
                 dialogues,
@@ -161,7 +146,7 @@ pub(super) fn handle_visual_select_key(
         }
         _ => {}
     }
-    ensure_visual_cursor_visible(mode, content_area, text, content_mode, content_scroll);
+    ensure_visual_cursor_visible(mode, content_area, content_scroll);
     Ok(None)
 }
 
@@ -183,17 +168,15 @@ pub(super) fn move_visual_cursor(
         content_mode,
         ContentPosition { line, column },
     );
-    ensure_visual_cursor_visible(mode, content_area, text, content_mode, content_scroll);
+    ensure_visual_cursor_visible(mode, content_area, content_scroll);
 }
 
 pub(super) fn ensure_visual_cursor_visible(
     mode: &VisualSelectMode,
     content_area: ratatui::layout::Rect,
-    text: &str,
-    content_mode: ContentViewMode,
     content_scroll: &mut usize,
 ) {
-    let text_area = content_text_area(content_area, text, content_mode);
+    let text_area = content_text_area(content_area);
     let height = text_area.height as usize;
     if height == 0 {
         return;
@@ -209,38 +192,23 @@ pub(super) fn ensure_visual_cursor_visible(
 /// Start or update content mouse selection.
 ///
 /// Free drag works without first pressing `v`. Ctrl+drag forces block selection.
+/// A click (down then up with no drag) only moves focus and highlights the
+/// block under the cursor; the selection starts on the first real drag.
 /// Returns `true` when the event was consumed by selection handling.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn handle_content_mouse_select(
     visual_select_mode: &mut Option<VisualSelectMode>,
+    mouse_down: &mut Option<MouseSelectionStart>,
     kind: MouseEventKind,
     modifiers: KeyModifiers,
     column: u16,
     row: u16,
     content: VisualContentContext<'_>,
-    // When true, left-down on content may start a selection even if mode is None.
+    // When true, left-down on content may arm a selection even if mode is None.
     allow_start: bool,
 ) -> bool {
-    let in_content = content_position_in_text_row(
-        content.area,
-        content.text,
-        content.scroll,
-        content.mode,
-        column,
-        row,
-    )
-    .is_some();
-
     match kind {
         MouseEventKind::Down(MouseButton::Left) if allow_start || visual_select_mode.is_some() => {
-            if !in_content {
-                // Outside content: drop free selection so list panes can take the click.
-                // Keep consuming only while a drag is in progress.
-                if visual_select_mode.as_ref().is_some_and(|m| m.dragging) {
-                    return true;
-                }
-                *visual_select_mode = None;
-                return false;
-            }
             let Some(position) = content_position_in_text_row(
                 content.area,
                 content.text,
@@ -249,19 +217,58 @@ pub(super) fn handle_content_mouse_select(
                 column,
                 row,
             ) else {
+                // Outside content: drop an armed/pending selection so list
+                // panes can take the click. Keep consuming only while a drag
+                // is in progress.
+                if visual_select_mode.as_ref().is_some_and(|m| m.dragging) {
+                    return true;
+                }
+                *visual_select_mode = None;
+                *mouse_down = None;
                 return false;
             };
-            *visual_select_mode = Some(VisualSelectMode {
-                selection: ContentSelection {
-                    anchor: position,
-                    cursor: position,
-                    kind: mouse_selection_kind(modifiers),
-                },
-                dragging: true,
-            });
+            match visual_select_mode.as_mut() {
+                // An active selection (keyboard `v` mode) re-anchors on click.
+                Some(mode) => {
+                    mode.selection.anchor = position;
+                    mode.selection.cursor = position;
+                    mode.selection.kind = mouse_selection_kind(modifiers);
+                    mode.dragging = true;
+                }
+                // Otherwise arm the drag: a pure click below never selects.
+                None => {
+                    *mouse_down = Some(MouseSelectionStart {
+                        anchor: position,
+                        kind: mouse_selection_kind(modifiers),
+                    });
+                }
+            }
             true
         }
         MouseEventKind::Drag(MouseButton::Left) => {
+            // First real drag promotes the armed click into a selection.
+            if let Some(start) = mouse_down.take() {
+                let mut selection = ContentSelection {
+                    anchor: start.anchor,
+                    cursor: start.anchor,
+                    kind: start.kind,
+                };
+                if let Some(position) = content_position_in_text_row(
+                    content.area,
+                    content.text,
+                    content.scroll,
+                    content.mode,
+                    column,
+                    row,
+                ) {
+                    selection.cursor = position;
+                }
+                *visual_select_mode = Some(VisualSelectMode {
+                    selection,
+                    dragging: true,
+                });
+                return true;
+            }
             let Some(mode) = visual_select_mode.as_mut() else {
                 return false;
             };
@@ -284,25 +291,30 @@ pub(super) fn handle_content_mouse_select(
             true
         }
         MouseEventKind::Up(MouseButton::Left) => {
-            let Some(mode) = visual_select_mode.as_mut() else {
-                return false;
-            };
-            if let Some(position) = content_position_in_text_row(
-                content.area,
-                content.text,
-                content.scroll,
-                content.mode,
-                column,
-                row,
-            ) {
-                mode.selection.cursor = position;
+            if let Some(mode) = visual_select_mode.as_mut() {
+                if let Some(position) = content_position_in_text_row(
+                    content.area,
+                    content.text,
+                    content.scroll,
+                    content.mode,
+                    column,
+                    row,
+                ) {
+                    mode.selection.cursor = position;
+                }
+                mode.dragging = false;
+                // A drag that lands back on its anchor clears the selection.
+                if mode.selection.anchor == mode.selection.cursor {
+                    *visual_select_mode = None;
+                }
+                return true;
             }
-            mode.dragging = false;
-            // Pure click (no drag range) clears selection so list clicks stay light.
-            if mode.selection.anchor == mode.selection.cursor {
-                *visual_select_mode = None;
+            // Pure click: never selected, just let the caller handle the
+            // block highlight / fold toggle.
+            if mouse_down.take().is_some() {
+                return true;
             }
-            true
+            false
         }
         _ => false,
     }
@@ -337,19 +349,6 @@ pub(super) fn workspace_picked_content_for_visual_selection(
     }
 }
 
-pub(super) fn scroll_list_state_up(state: &mut ListState) {
-    for _ in 0..MOUSE_SCROLL_LINES {
-        state.select(Some(selected_index(state).saturating_sub(1)));
-    }
-}
-
-pub(super) fn scroll_list_state_down(state: &mut ListState, len: usize) {
-    for _ in 0..MOUSE_SCROLL_LINES {
-        let next = (selected_index(state) + 1).min(len.saturating_sub(1));
-        state.select((len > 0).then_some(next));
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn apply_workspace_mouse_scroll(
     focus: WorkspaceFocus,
@@ -362,10 +361,29 @@ pub(super) fn apply_workspace_mouse_scroll(
     session_state: &mut ListState,
     dialogue_state: &mut ListState,
     selected_dialogues: &mut Vec<bool>,
-    range_anchor: &mut Option<usize>,
     content_scrolls: &mut ContentScrolls,
     content_io_focus: ContentIoFocus,
+    content_cursor: &mut super::nav::ContentBlockCursor,
+    content_frame: &ContentIoFrame,
 ) {
+    if focus == WorkspaceFocus::Content {
+        // The wheel keeps smooth line scrolling; j/k navigates blocks. The
+        // block cursor snaps to the first visible block so the highlight
+        // always shows where the viewport is.
+        let scroll = content_scrolls.get(content_io_focus);
+        let next = if scroll_up {
+            scroll.saturating_sub(MOUSE_SCROLL_LINES)
+        } else {
+            scroll.saturating_add(MOUSE_SCROLL_LINES)
+        };
+        let layout = content_frame.layout(content_io_focus);
+        let next = next.min(layout.lines.len().saturating_sub(1));
+        content_scrolls.set(content_io_focus, next);
+        if let Some(block) = content_block_at(layout, next) {
+            content_cursor.set(content_io_focus, block);
+        }
+        return;
+    }
     for _ in 0..MOUSE_SCROLL_LINES {
         if scroll_up {
             move_workspace_cursor_up(
@@ -378,9 +396,10 @@ pub(super) fn apply_workspace_mouse_scroll(
                 session_state,
                 dialogue_state,
                 selected_dialogues,
-                range_anchor,
                 content_scrolls,
                 content_io_focus,
+                content_cursor,
+                content_frame.texts.block_slices(),
             );
         } else {
             move_workspace_cursor_down(
@@ -393,9 +412,10 @@ pub(super) fn apply_workspace_mouse_scroll(
                 session_state,
                 dialogue_state,
                 selected_dialogues,
-                range_anchor,
                 content_scrolls,
                 content_io_focus,
+                content_cursor,
+                content_frame.texts.block_slices(),
             );
         }
     }

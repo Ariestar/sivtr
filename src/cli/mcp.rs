@@ -11,7 +11,7 @@ pub enum McpAction {
     /// Run the read-only MCP server on stdio
     Serve(McpServeArgs),
 
-    /// Install sivtr MCP into agent hosts
+    /// Install sivtr MCP into agent hosts (interactively picks hosts when -p is omitted)
     Install(McpInstallArgs),
 
     /// Remove sivtr MCP from agent hosts
@@ -29,7 +29,8 @@ pub struct McpServeArgs {
     /// Exit the server process after this many seconds with no tool calls.
     /// The host respawns the server on the next tool use, so an idle server
     /// never lingers (each agent session otherwise keeps one alive until it
-    /// exits). 0 / absent = stay alive until the host closes stdin.
+    /// exits). 0 = stay alive until the host closes stdin. Absent = the
+    /// `[mcp] idle_exit_secs` config value (default 60; 0 disables).
     #[arg(long, value_name = "SECS")]
     pub idle_exit: Option<u64>,
 }
@@ -38,7 +39,7 @@ pub struct McpServeArgs {
 pub struct McpInstallArgs {
     /// Provider host(s) to inject (comma-separated or repeated).
     /// Use registered command names, or `all`.
-    /// Default: detect installed hosts.
+    /// Omit to pick hosts interactively; with -y, installs to detected hosts.
     #[arg(
         short = 'p',
         long = "provider",
@@ -51,7 +52,7 @@ pub struct McpInstallArgs {
     #[arg(short = 'l', long = "location", value_enum, default_value_t = McpLocation::Global)]
     pub location: McpLocation,
 
-    /// Non-interactive defaults
+    /// Non-interactive: skip the host picker and install to detected hosts
     #[arg(short = 'y', long = "yes")]
     pub yes: bool,
 }

@@ -4,7 +4,7 @@
 //! [`SlidingPane::ensure_meta`] / [`SlidingPane::ensure_bodies`]; this module
 //! only fulfills those requests over workset.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -20,14 +20,12 @@ use crate::pane::{
     keep_keys, MetaNeed, Pane, PaneInput, SlidingPane, StorePhase, Viewport, WindowRow,
     FETCH_CEILING, FETCH_FLOOR,
 };
-use crate::remote::ipc;
-use crate::remote::protocol::{LocalRequest, LocalResponse};
 use crate::tui::workspace::{
     SourceLoadMarker, WorkspaceSession, WorkspaceSource, WorkspaceSourceKind,
 };
 use sivtr_core::ai::AgentProvider;
+use sivtr_core::origin::OriginKind;
 use sivtr_core::record::WorkRecord;
-use sivtr_core::workspace;
 
 /// Session meta without dialogue bodies.
 #[derive(Clone, Debug)]
@@ -687,35 +685,25 @@ pub fn workspace_source_catalog(
     for provider in providers {
         sources.push(WorkspaceSource::agent(*provider));
     }
-    for alias in list_remote_aliases(cwd)? {
-        sources.push(WorkspaceSource::scoped(
-            &alias,
+    // Mount aliases come from the same origin registry every query path uses;
+    // it lists mounts only while the daemon is already running.
+    let registry = crate::origins::collect(cwd).context("Failed to collect the origin registry")?;
+    for origin in registry.all() {
+        if origin.kind != OriginKind::Remote {
+            continue;
+        }
+        sources.push(WorkspaceSource::remote(
+            &origin.name,
             WorkspaceSourceKind::Terminal,
         ));
         for provider in providers {
-            sources.push(WorkspaceSource::scoped(
-                &alias,
+            sources.push(WorkspaceSource::remote(
+                &origin.name,
                 WorkspaceSourceKind::Agent(*provider),
             ));
         }
     }
     Ok(sources)
-}
-
-fn list_remote_aliases(cwd: &Path) -> Result<Vec<String>> {
-    let Some(ws) = workspace::resolve_workspace_for_dir(cwd)? else {
-        return Ok(Vec::new());
-    };
-    if !ipc::running() {
-        return Ok(Vec::new());
-    }
-    match ipc::call(LocalRequest::RemoteList {
-        workspace_key: ws.key,
-    }) {
-        Ok(LocalResponse::Mounts(mounts)) => Ok(mounts.into_iter().map(|m| m.alias).collect()),
-        Ok(_) => Ok(Vec::new()),
-        Err(_) => Ok(Vec::new()),
-    }
 }
 
 /// Meta-only merge of ready sources (bodies remain in each source pane).
@@ -753,14 +741,21 @@ pub fn sessions_from_records(
     }
     let mut sessions = Vec::with_capacity(groups.len());
     for (session_id, mut records) in groups {
-        records.sort_by_key(|record| record.work_ref.path.index());
+        // Newest dialogue first: the record index grows over time, so a
+        // reversed index order puts the latest turn at the top.
+        records.sort_by_key(|record| std::cmp::Reverse(record.work_ref.path.index()));
         let modified = records
             .iter()
             .filter_map(record_modified)
             .max()
             .unwrap_or(UNIX_EPOCH);
         let search_title = session_search_title(&session_id, &records);
-        let title = session_title_with_id(search_title.clone(), Some(session_id.as_str()));
+        let short_id = session_id.chars().take(8).collect::<String>();
+        let title = if short_id.is_empty() {
+            search_title.clone()
+        } else {
+            format!("{search_title}  [{short_id}]")
+        };
         let body_loaded = !records.is_empty();
         sessions.push(WorkspaceSession {
             source: source.clone(),
@@ -787,14 +782,6 @@ fn session_search_title(session_id: &str, records: &[WorkRecord]) -> String {
             }
         })
         .unwrap_or_else(|| session_id.to_string())
-}
-
-fn session_title_with_id(title: String, id: Option<&str>) -> String {
-    let id = id.map(|value| value.chars().take(8).collect::<String>());
-    match id {
-        Some(id) if !id.is_empty() => format!("{title}  [{id}]"),
-        _ => title,
-    }
 }
 
 fn record_modified(record: &WorkRecord) -> Option<SystemTime> {
@@ -825,6 +812,18 @@ mod tests {
         ];
         let sessions = sessions_from_records(&source, records);
         assert_eq!(sessions.len(), 2);
+        let s1 = sessions
+            .iter()
+            .find(|s| s.session_id == "s1")
+            .expect("s1 session present");
+        // Newest dialogue first: index 2 precedes index 1.
+        assert_eq!(
+            s1.records
+                .iter()
+                .map(|r| r.work_ref.index())
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
     }
 
     #[test]

@@ -4,21 +4,45 @@
 //! so picker / render / help don't re-copy the same match arms.
 
 use ratatui::layout::Rect;
+use std::collections::HashSet;
 
-use crate::tui::content::view::{content_view_line_count, ContentViewMode};
+use crate::tui::content::block::BlockText;
+use crate::tui::content::view::{
+    content_view_line_count, layout_content, ContentLayout, ContentViewMode,
+};
 
 const EMPTY: &str = "<empty>";
 /// Min pane height: top border + 1 content row + bottom border.
 const MIN_PANE_H: u16 = 3;
 
 /// Body text for one IO half (no section headers — panes own titles).
+/// `input` / `output` are the per-block segments joined with a blank line
+/// (single line between members of the same run); the segments stay
+/// available so the content pane can map displayed lines back to their
+/// owning block (highlight / hit-test / navigation).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ContentIoTexts {
     pub(crate) input: String,
     pub(crate) output: String,
+    /// Display segments of the input half (tag or body), in order.
+    pub(crate) input_blocks: Vec<BlockText>,
+    /// Display segments of the output half (tag or body), in order.
+    pub(crate) output_blocks: Vec<BlockText>,
 }
 
 impl ContentIoTexts {
+    /// Build from per-block segments; the pane text is the segments joined
+    /// with a blank line between blocks (the block separator also drives the
+    /// content layout's line ownership), single newline within a run.
+    pub(crate) fn new(input_blocks: Vec<BlockText>, output_blocks: Vec<BlockText>) -> Self {
+        ContentIoTexts {
+            input: join_blocks(&input_blocks),
+            input_blocks,
+            output: join_blocks(&output_blocks),
+            output_blocks,
+        }
+    }
+
     pub(crate) fn join_displayed(&self) -> String {
         match (self.input_blank(), self.output_blank()) {
             (true, true) => EMPTY.to_string(),
@@ -48,6 +72,47 @@ impl ContentIoTexts {
             raw
         }
     }
+
+    /// One half's block segments, for fold-aware cursor movement.
+    pub(crate) fn half_blocks(&self, half: ContentIoFocus) -> &[BlockText] {
+        match half {
+            ContentIoFocus::Input => &self.input_blocks,
+            ContentIoFocus::Output => &self.output_blocks,
+        }
+    }
+
+    /// Block segments backing the *displayed* text of a half: empty when
+    /// the half renders `<empty>`, so the layout's lines and ownership
+    /// always derive from the same state and the dot gutter stays aligned.
+    pub(crate) fn display_blocks(&self, half: ContentIoFocus) -> &[BlockText] {
+        let blocks = self.half_blocks(half);
+        match half {
+            ContentIoFocus::Input if self.input_blank() => &[],
+            ContentIoFocus::Output if self.output_blank() => &[],
+            _ => blocks,
+        }
+    }
+
+    /// The two halves' block segments, for fold-aware cursor movement.
+    pub(crate) fn block_slices(&self) -> (&[BlockText], &[BlockText]) {
+        (
+            self.half_blocks(ContentIoFocus::Input),
+            self.half_blocks(ContentIoFocus::Output),
+        )
+    }
+}
+
+/// Join block segments: a blank line between blocks, a single newline
+/// between members of the same run (`tight`).
+fn join_blocks(blocks: &[BlockText]) -> String {
+    let mut text = String::new();
+    for (idx, segment) in blocks.iter().enumerate() {
+        text.push_str(&segment.text);
+        if idx + 1 < blocks.len() {
+            text.push_str(if segment.tight { "\n" } else { "\n\n" });
+        }
+    }
+    text
 }
 
 /// Which content half keyboard / selection targets.
@@ -56,22 +121,6 @@ pub(crate) enum ContentIoFocus {
     #[default]
     Input,
     Output,
-}
-
-impl ContentIoFocus {
-    pub(crate) fn toggle(self) -> Self {
-        match self {
-            Self::Input => Self::Output,
-            Self::Output => Self::Input,
-        }
-    }
-
-    pub(crate) fn title(self) -> &'static str {
-        match self {
-            Self::Input => "Input",
-            Self::Output => "Output",
-        }
-    }
 }
 
 /// Independent scroll offsets for the dual content panes.
@@ -107,13 +156,47 @@ impl ContentScrolls {
         *self = Self::default();
     }
 
-    pub(crate) fn clear_half(&mut self, focus: ContentIoFocus) {
-        self.set(focus, 0);
-    }
-
     pub(crate) fn clamp_to(&mut self, input_lines: usize, output_lines: usize) {
         self.input = self.input.min(input_lines.saturating_sub(1));
         self.output = self.output.min(output_lines.saturating_sub(1));
+    }
+}
+
+/// Which blocks show their full body instead of their `<:…:>` tag, per
+/// content half. Structure blocks (tool/skill/thinking, including runs)
+/// default to collapsed, body blocks default to expanded; a block in the
+/// set flips the kind default (structure expanded, body collapsed). Raw
+/// mode always shows full blocks and ignores this state. A block id is the
+/// block's stable DFS id within its half — stable because ids come from the
+/// block tree, not the rendered segment count.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ExpandedBlocks {
+    pub(crate) input: HashSet<usize>,
+    pub(crate) output: HashSet<usize>,
+}
+
+impl ExpandedBlocks {
+    /// Whether `block` in `focus` shows its full body.
+    pub(crate) fn expanded(&self, focus: ContentIoFocus, block: usize, structure: bool) -> bool {
+        let set = match focus {
+            ContentIoFocus::Input => &self.input,
+            ContentIoFocus::Output => &self.output,
+        };
+        if structure {
+            set.contains(&block)
+        } else {
+            !set.contains(&block)
+        }
+    }
+
+    pub(crate) fn toggle(&mut self, focus: ContentIoFocus, block: usize) {
+        let set = match focus {
+            ContentIoFocus::Input => &mut self.input,
+            ContentIoFocus::Output => &mut self.output,
+        };
+        if !set.insert(block) {
+            set.remove(&block);
+        }
     }
 }
 
@@ -150,13 +233,15 @@ pub(crate) struct ActiveHalf<'a> {
     pub(crate) scroll: &'a mut usize,
 }
 
-/// Owned view of both halves for one frame (texts computed once).
-#[derive(Clone, Debug, Default)]
+/// Owned view of both halves for one frame: texts, areas, and the cached
+/// per-half layouts (rebuilt only when the content changes; scroll reuses
+/// them, so wheel events never re-lay-out the text).
+#[derive(Clone, Default)]
 pub(crate) struct ContentIoFrame {
     pub(crate) texts: ContentIoTexts,
     pub(crate) areas: ContentIoAreas,
-    pub(crate) input_lines: usize,
-    pub(crate) output_lines: usize,
+    pub(crate) input_layout: ContentLayout,
+    pub(crate) output_layout: ContentLayout,
 }
 
 impl ContentIoFrame {
@@ -167,24 +252,35 @@ impl ContentIoFrame {
         focus: ContentIoFocus,
     ) -> Self {
         let areas = content_io_layout(area, &texts, mode, focus);
-        let input_lines =
-            content_view_line_count(areas.input, texts.display(ContentIoFocus::Input), mode).max(1);
-        let output_lines =
-            content_view_line_count(areas.output, texts.display(ContentIoFocus::Output), mode)
-                .max(1);
+        let input_layout = layout_content(
+            areas.input,
+            texts.display(ContentIoFocus::Input),
+            texts.display_blocks(ContentIoFocus::Input),
+            mode,
+        );
+        let output_layout = layout_content(
+            areas.output,
+            texts.display(ContentIoFocus::Output),
+            texts.display_blocks(ContentIoFocus::Output),
+            mode,
+        );
         Self {
             texts,
             areas,
-            input_lines,
-            output_lines,
+            input_layout,
+            output_layout,
+        }
+    }
+
+    pub(crate) fn layout(&self, half: ContentIoFocus) -> &ContentLayout {
+        match half {
+            ContentIoFocus::Input => &self.input_layout,
+            ContentIoFocus::Output => &self.output_layout,
         }
     }
 
     pub(crate) fn line_count(&self, half: ContentIoFocus) -> usize {
-        match half {
-            ContentIoFocus::Input => self.input_lines,
-            ContentIoFocus::Output => self.output_lines,
-        }
+        self.layout(half).lines.len().max(1)
     }
 
     pub(crate) fn active<'a>(
@@ -335,16 +431,47 @@ pub(crate) fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sivtr_core::record::WorkPartKind;
+
+    fn seg(text: &str) -> BlockText {
+        BlockText {
+            id: 0,
+            text: text.to_string(),
+            tight: false,
+            kind: WorkPartKind::ToolCall,
+        }
+    }
 
     #[test]
     fn display_uses_trim_for_empty() {
-        let texts = ContentIoTexts {
-            input: "  \n".to_string(),
-            output: "ok".to_string(),
-        };
+        let texts = ContentIoTexts::new(vec![seg("  \n")], vec![seg("ok")]);
         assert!(texts.input_blank());
         assert_eq!(texts.display(ContentIoFocus::Input), EMPTY);
         assert_eq!(texts.display(ContentIoFocus::Output), "ok");
+    }
+
+    #[test]
+    fn join_uses_blank_lines_between_blocks_and_single_within_a_run() {
+        let texts = ContentIoTexts::new(
+            vec![
+                seg("a"),
+                BlockText {
+                    id: 1,
+                    text: "b".to_string(),
+                    tight: true,
+                    kind: WorkPartKind::ToolCall,
+                },
+                BlockText {
+                    id: 2,
+                    text: "c".to_string(),
+                    tight: false,
+                    kind: WorkPartKind::ToolCall,
+                },
+                seg("d"),
+            ],
+            Vec::new(),
+        );
+        assert_eq!(texts.input, "a\n\nb\nc\n\nd");
     }
 
     #[test]

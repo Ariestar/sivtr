@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use sivtr_core::workspace;
 
-use super::protocol::{DaemonInfo, LocalEnvelope, LocalRequest, LocalResponse};
+use super::protocol::{DaemonInfo, LocalEnvelope, LocalRequest, LocalResponse, PROTOCOL_VERSION};
 
 pub fn daemon_info_path() -> PathBuf {
     workspace::data_dir().join("daemon.json")
@@ -41,13 +41,22 @@ pub fn write_daemon_info(info: &DaemonInfo) -> Result<()> {
     Ok(())
 }
 
-pub fn remove_daemon_info() {
-    let _ = std::fs::remove_file(daemon_info_path());
+/// Delete the daemon control file, tolerating a missing file. The one
+/// removal path for `daemon.json`, shared by shutdown and clean starts.
+pub fn remove_daemon_info() -> Result<()> {
+    let path = daemon_info_path();
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("Failed to remove {}", path.display())),
+    }
 }
 
+/// Default read timeout for daemon control calls.
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub fn call(request: LocalRequest) -> Result<LocalResponse> {
-    let info = read_daemon_info()?;
-    call_with_info(&info, request)
+    call_with_read_timeout(request, DEFAULT_READ_TIMEOUT)
 }
 
 /// Like [`call`], but caps how long we wait for the daemon response.
@@ -59,18 +68,6 @@ pub fn call_with_read_timeout(
     read_timeout: Duration,
 ) -> Result<LocalResponse> {
     let info = read_daemon_info()?;
-    call_with_info_and_read_timeout(&info, request, read_timeout)
-}
-
-pub fn call_with_info(info: &DaemonInfo, request: LocalRequest) -> Result<LocalResponse> {
-    call_with_info_and_read_timeout(info, request, Duration::from_secs(30))
-}
-
-fn call_with_info_and_read_timeout(
-    info: &DaemonInfo,
-    request: LocalRequest,
-    read_timeout: Duration,
-) -> Result<LocalResponse> {
     let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), info.port);
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))
         .with_context(|| "sivtr daemon is not responding; run `sivtr serve restart`")?;
@@ -78,6 +75,7 @@ fn call_with_info_and_read_timeout(
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     let envelope = LocalEnvelope {
         token: info.token.clone(),
+        protocol_version: PROTOCOL_VERSION,
         request,
     };
     serde_json::to_writer(&mut stream, &envelope)?;
@@ -97,11 +95,8 @@ fn call_with_info_and_read_timeout(
 }
 
 pub fn running() -> bool {
-    let Ok(info) = read_daemon_info() else {
-        return false;
-    };
     matches!(
-        call_with_info(&info, LocalRequest::Status),
+        call_with_read_timeout(LocalRequest::Status, DEFAULT_READ_TIMEOUT),
         Ok(LocalResponse::Status(_))
     )
 }

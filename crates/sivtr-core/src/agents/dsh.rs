@@ -496,6 +496,7 @@ fn apply_assistant_message(
                     call_id,
                     name,
                     arguments,
+                    None,
                 );
             }
             Some("tool-result") => {
@@ -549,13 +550,14 @@ fn apply_tool_result_part(
         call_id,
         label,
         text,
+        None,
     );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::{format_blocks, select_blocks, AgentSelection};
+    use crate::agents::{select_blocks, AgentSelection};
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         crate::test_env_lock()
@@ -666,10 +668,9 @@ mod tests {
         let session = DshProvider.parse_session_file(&path).unwrap();
 
         assert_eq!(session.title.as_deref(), Some("Fix the flaky test"));
-        assert_eq!(
-            format_blocks(&session.blocks),
-            "Fix the flaky test\n\nOn it."
-        );
+        assert_eq!(session.blocks.len(), 2);
+        assert_eq!(session.blocks[0].text, "Fix the flaky test");
+        assert_eq!(session.blocks[1].text, "On it.");
     }
 
     #[test]

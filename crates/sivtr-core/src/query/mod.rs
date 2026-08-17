@@ -18,6 +18,12 @@ use crate::ai::AgentSessionProvider;
 use crate::record::{WorkPath, WorkRecord, WorkRecordIndex, WorkRef, WorkRefSelector};
 use crate::{session, workspace};
 
+/// Prefix of the error [`load_workspace_source`] raises when a selector
+/// matches no records. An empty source is a normal browse outcome (a
+/// workspace with no sessions yet), so callers treat this exact error as an
+/// empty result; keep it a named constant so that contract cannot drift.
+pub const NO_RECORD_FOR_SELECTOR: &str = "No record found for ref selector";
+
 /// A session file that could not be parsed, retained so callers can warn.
 #[derive(Debug, Clone)]
 pub struct SkippedSession {
@@ -117,7 +123,7 @@ pub fn load_workspace_source(cwd: &Path, source: &str) -> Result<SourceQueryResu
     }
 
     if records.is_empty() {
-        anyhow::bail!("No record found for ref selector `{source}`");
+        anyhow::bail!("{NO_RECORD_FOR_SELECTOR} `{source}`");
     }
 
     Ok(SourceQueryResult {
@@ -211,7 +217,7 @@ fn agent_records(
 }
 
 /// Bump when the cached record layout or agent parsing changes.
-const AGENT_CACHE_VERSION: u32 = 6;
+const AGENT_CACHE_VERSION: u32 = 9;
 
 /// On-disk cache entry for one parsed agent session file, keyed by the
 /// session file's (mtime, size). Reading back a stamp-matched blob is an
@@ -593,6 +599,7 @@ mod tests {
                         label: None,
                         call_id: None,
                         text: "question".to_string(),
+                        start_line: None,
                     },
                     AgentBlock {
                         kind: AgentBlockKind::Assistant,
@@ -600,6 +607,7 @@ mod tests {
                         label: None,
                         call_id: None,
                         text: "assistant".to_string(),
+                        start_line: None,
                     },
                 ],
             })
@@ -687,6 +695,7 @@ mod tests {
                     call_id: Some("call-1".to_string()),
                     tool: Some("Bash".to_string()),
                     output: serde_json::json!({"exit": 0, "stdout": "hi"}),
+                    start_line: None,
                 },
             },
             WorkPart {

@@ -9,6 +9,7 @@ use super::render::{
     content_title, current_content_dialogue, current_content_ref, line_filter_prompt_text,
     search_box_body, search_box_title,
 };
+use crate::tui::content::io::ExpandedBlocks;
 use crate::tui::content::text::{workspace_content_io_texts, workspace_content_text};
 use crate::tui::content::view::ContentViewMode;
 use crate::tui::search::WorkspaceSearchScope;
@@ -86,12 +87,12 @@ fn content_preview_text_preserves_raw_text_without_line_number_prefixes() {
 
     let io = workspace_content_io_texts(
         std::slice::from_ref(&dialogue),
-        &[false],
         0,
         ContentViewMode::Raw,
         None,
+        &ExpandedBlocks::default(),
     );
-    let text = workspace_content_text(&[dialogue], &[false], 0, ContentViewMode::Raw, None);
+    let text = workspace_content_text(&[dialogue], 0, ContentViewMode::Raw, None);
     assert_eq!(io.input.trim(), "alpha");
     assert_eq!(io.output.trim(), "omega");
     assert!(text.contains("alpha"));
@@ -112,13 +113,7 @@ fn content_preview_text_uses_targeted_part_text_in_raw_mode() {
     )]);
     let dialogue = codex_dialogue(record);
 
-    let text = workspace_content_text(
-        &[dialogue],
-        &[false],
-        0,
-        ContentViewMode::Raw,
-        Some(WorkAt::Part(1)),
-    );
+    let text = workspace_content_text(&[dialogue], 0, ContentViewMode::Raw, Some(WorkAt::Part(1)));
     assert!(text.contains("<:tool:tool call:>"));
     assert!(text.contains("hidden tool call"));
     assert!(text.contains("<:/tool:tool call:>"));
@@ -138,7 +133,6 @@ fn content_preview_text_uses_structured_targeted_part_text_in_reading_mode() {
 
     let text = workspace_content_text(
         &[dialogue],
-        &[false],
         0,
         ContentViewMode::Reading,
         Some(WorkAt::Part(1)),
@@ -174,6 +168,7 @@ fn reading_mode_folds_structure_and_raw_expands() {
                 call_id: None,
                 tool: Some("Bash".to_string()),
                 output: tool_test_value("ok".to_string()),
+                start_line: None,
             },
         ),
         part(
@@ -187,24 +182,25 @@ fn reading_mode_folds_structure_and_raw_expands() {
 
     let reading = workspace_content_text(
         std::slice::from_ref(&dialogue),
-        &[false],
         0,
         ContentViewMode::Reading,
         None,
     );
     let reading_io = workspace_content_io_texts(
         std::slice::from_ref(&dialogue),
-        &[false],
         0,
         ContentViewMode::Reading,
         None,
+        &ExpandedBlocks::default(),
     );
     assert!(reading_io.input.contains("question"));
-    // Fold summarizes tool activity by channel; results are dropped.
-    assert!(reading_io.output.contains("tools: Bash"));
-    assert!(!reading_io.output.contains("result"));
+    // Reading folds each structure group to its tag line; the call+result
+    // pair collapses to one tag, so the result tag and payload are dropped.
+    assert!(reading_io.output.contains("<:bash: cargo test:>"));
+    assert!(!reading_io.output.contains("<:tool:Bash result:>"));
     assert!(reading_io.output.contains("answer"));
-    assert!(!reading.contains("cargo test"));
+    assert!(!reading.contains("$ cargo test"));
+    assert!(!reading.contains("ok"));
     assert!(!reading.contains("codex/session"));
     assert!(!reading.contains("## User"));
     assert!(!reading.contains("## Input"));
@@ -212,17 +208,17 @@ fn reading_mode_folds_structure_and_raw_expands() {
 
     let raw_io = workspace_content_io_texts(
         std::slice::from_ref(&dialogue),
-        &[false],
         0,
         ContentViewMode::Raw,
         None,
+        &ExpandedBlocks::default(),
     );
-    let raw = workspace_content_text(&[dialogue], &[false], 0, ContentViewMode::Raw, None);
+    let raw = workspace_content_text(&[dialogue], 0, ContentViewMode::Raw, None);
     assert!(raw_io.input.contains("question"));
     assert!(raw_io.output.contains("cargo test"));
-    assert!(raw_io.output.contains("<:tool:Bash call:>"));
-    assert!(raw_io.output.contains("<:/tool:Bash call:>"));
-    assert!(raw_io.output.contains("<:tool:Bash result:>"));
+    assert!(raw_io.output.contains("$ cargo test"));
+    // Known results use the `>` output format.
+    assert!(raw_io.output.contains("> ok"));
     assert!(raw_io.output.contains("ok"));
     assert!(raw_io.output.contains("answer"));
     assert!(!raw.contains("codex/session"));
@@ -280,34 +276,27 @@ fn reading_mode_collapses_adjacent_structure_runs() {
 
     let reading_io = workspace_content_io_texts(
         std::slice::from_ref(&dialogue),
-        &[false],
         0,
         ContentViewMode::Reading,
         None,
+        &ExpandedBlocks::default(),
     );
     let reading = workspace_content_text(
         std::slice::from_ref(&dialogue),
-        &[false],
         0,
         ContentViewMode::Reading,
         None,
     );
     assert!(reading_io.input.contains("do it"));
-    // Tool calls fold to one channel line in the output half; skills to one in the input half.
-    let tool_fold = reading_io
-        .output
-        .lines()
-        .find(|line| line.starts_with("tools:"))
-        .expect("tools channel line");
-    assert!(tool_fold.contains("Bash"));
-    assert!(tool_fold.contains("Read"));
-    let skill_fold = reading_io
-        .input
-        .lines()
-        .find(|line| line.starts_with("skills:"))
-        .expect("skills channel line");
-    assert!(skill_fold.contains("review"));
-    assert!(skill_fold.contains("deploy"));
+    // Adjacent same-kind structure parts fold into one run tag each.
+    let output = &reading_io.output;
+    assert!(output.contains("<:bash, read:>"));
+    assert!(!output.contains("<:tool:Bash call:>"));
+    assert!(!output.contains("<:tool:Read call:>"));
+    let input = &reading_io.input;
+    assert!(input.contains("<:skill x2:>"));
+    assert!(!input.contains("<:skill:review:>"));
+    assert!(!input.contains("<:skill:deploy:>"));
     assert!(reading_io.output.contains("done"));
     assert!(!reading.contains("file"));
     assert!(!reading.contains("skill body"));
@@ -315,9 +304,10 @@ fn reading_mode_collapses_adjacent_structure_runs() {
 }
 
 #[test]
-fn reading_mode_counts_identical_structure_markers_regardless_of_order() {
+fn reading_mode_folds_consecutive_same_kind_runs() {
     let record = chat_record(vec![
-        // Interleaved with dialogue — still one IO-section fold, same markers count.
+        // Interleaved with dialogue — the output half still sees the tool
+        // calls as one consecutive run.
         part(
             1,
             sivtr_core::record::WorkPartData::ToolCall {
@@ -359,24 +349,21 @@ fn reading_mode_counts_identical_structure_markers_regardless_of_order() {
     ]);
     let dialogue = codex_dialogue(record);
 
-    let reading = workspace_content_text(
+    let reading_io = workspace_content_io_texts(
         std::slice::from_ref(&dialogue),
-        &[false],
         0,
         ContentViewMode::Reading,
         None,
+        &ExpandedBlocks::default(),
     );
-    // Repeated tool names count as xN within the single tools channel line.
-    assert!(reading.contains("tools: Bash x3, Read"));
-    assert!(reading.contains("middle note"));
-    assert!(!reading.contains("file"));
-    assert!(!reading.contains("pwd"));
-    // Single tools line for the section (not split by the dialogue part).
-    let fold_hits = reading
-        .lines()
-        .filter(|line| line.starts_with("tools:"))
-        .count();
-    assert_eq!(fold_hits, 1);
+    // The four output-half tool calls fold into one run tag.
+    assert!(reading_io.input.contains("middle note"));
+    let output = &reading_io.output;
+    assert!(output.contains("<:bash x3, read:>"));
+    assert!(!output.contains("<:tool:Bash call:>"));
+    assert!(!output.contains("file"));
+    assert!(!output.contains("pwd"));
+    assert!(!output.contains("date"));
 }
 
 #[test]
@@ -408,6 +395,7 @@ fn reading_mode_keeps_structure_runs_in_call_order() {
                 call_id: None,
                 tool: Some("Bash".to_string()),
                 output: tool_test_value("ok".to_string()),
+                start_line: None,
             },
         ),
         part(
@@ -421,30 +409,31 @@ fn reading_mode_keeps_structure_runs_in_call_order() {
 
     let reading_io = workspace_content_io_texts(
         std::slice::from_ref(&dialogue),
-        &[false],
         0,
         ContentViewMode::Reading,
         None,
+        &ExpandedBlocks::default(),
     );
-    // Fold sits between the assistant chunks, matching the call order.
+    // Tags sit between the assistant chunks, matching the call order.
     let output = &reading_io.output;
     let first_text = output.find("checking first").expect("first assistant text");
-    let fold = output.find("tools: Bash").expect("tool fold line");
+    let tag = output.find("<:bash: ls:>").expect("tool tag");
     let last_text = output.find("all done").expect("last assistant text");
-    assert!(first_text < fold);
-    assert!(fold < last_text);
-    assert!(!output.contains("result"));
+    assert!(first_text < tag);
+    assert!(tag < last_text);
+    // Payloads are dropped: the tag line mentions result, the body never shows.
+    assert!(!output.contains("ok"));
 }
 
 #[test]
 fn content_title_includes_view_mode() {
     assert_eq!(
         content_title(ContentViewMode::Reading, &[false, false], None),
-        "Content (read/fold)"
+        "Content (read)"
     );
     assert_eq!(
         content_title(ContentViewMode::Raw, &[true, false], None),
-        "Content (raw/full): 1 dialogue selected"
+        "Content (raw): 1 dialogue selected"
     );
 }
 
@@ -454,7 +443,7 @@ fn content_title_includes_current_dialogue_ref() {
 
     assert_eq!(
         content_title(ContentViewMode::Reading, &[false], Some(&work_ref)),
-        "Content (read/fold) [codex/session/2]"
+        "Content (read) [codex/session/2]"
     );
 }
 

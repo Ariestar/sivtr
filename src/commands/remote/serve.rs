@@ -7,7 +7,7 @@ use anyhow::{bail, Context, Result};
 use crate::cli::{ServeAction, ServeCommand};
 use crate::output;
 use crate::remote::ipc;
-use crate::remote::protocol::{LocalRequest, LocalResponse};
+use crate::remote::protocol::{LocalRequest, LocalResponse, PROTOCOL_VERSION};
 
 pub fn execute(command: &ServeCommand) -> Result<()> {
     match command.action {
@@ -35,13 +35,25 @@ pub fn ensure_running() -> Result<()> {
 
 fn start(verbose: bool) -> Result<()> {
     if ipc::running() {
-        if verbose {
-            output::success("sivtr daemon is already running");
-            return status();
+        match ipc::call(LocalRequest::Status) {
+            // A daemon from an older build answers Status but speaks an older
+            // protocol; restart it so new requests do not fail deserialization
+            // and close the control connection.
+            Ok(LocalResponse::Status(daemon)) if daemon.protocol_version == PROTOCOL_VERSION => {
+                if verbose {
+                    output::success("sivtr daemon is already running");
+                    return status();
+                }
+                return Ok(());
+            }
+            // Old daemon: stop it cleanly and start the new build.
+            Ok(LocalResponse::Status(_)) => stop()?,
+            // Stale daemon.json pointing at a dead process: fall through and
+            // start fresh (remove_daemon_info clears the file).
+            _ => {}
         }
-        return Ok(());
     }
-    crate::remote::daemon::remove_stale_daemon_info()?;
+    crate::remote::ipc::remove_daemon_info()?;
     let log_path = ipc::daemon_log_path();
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -80,7 +92,7 @@ fn start(verbose: bool) -> Result<()> {
 
 fn stop() -> Result<()> {
     if !ipc::running() {
-        crate::remote::daemon::remove_stale_daemon_info()?;
+        crate::remote::ipc::remove_daemon_info()?;
         output::warning("sivtr daemon is not running");
         return Ok(());
     }

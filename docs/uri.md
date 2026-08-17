@@ -34,7 +34,7 @@ SIVTR 用一套引用字符串定位「某次工作里的一条记录 / 一行 /
 codex/4                        # 当前 workspace，整条
 docs:codex/4                   # 本机另一 workspace
 desk:terminal/session_42/3/p1 # mount + part
-alice/sivtr:claude/s9f2/2      # device/workspace
+team/alice:terminal/session_42/3/p1 # group/member + part
 &ahs:codex/4                    # 用户短别名 → 完整 scope
 ```
 
@@ -159,12 +159,13 @@ Scope 是逻辑资源空间，不是文件系统路径。它回答「从哪套�
 
 ```text
 name
-device/workspace
+group/member
+group/member/share
 ```
 
 规则：
 
-- 一段或两段，用 `/` 连接；**最多两段**。
+- 一至三段，用 `/` 连接；**最多三段**。
 - 每段 `[A-Za-z0-9_-]+`，大小写不敏感，**规范化为小写**。
 - **`local` 保留**：表示当前 workspace；写成 `local:…` 与 bare 相同。
 - 未注册 / 无法解析的 scope → **报错**，不探测网络、不猜 host。
@@ -174,7 +175,10 @@ device/workspace
 | 省略（bare） | `Local` | `terminal/session_42/3` |
 | `local` | `Local` | `local:codex/4` → 显示为 `codex/4` |
 | 单段名 | `Named("docs")` / `Named("desk")` | `docs:codex/4`、`desk:terminal/...` |
-| `device/workspace` | `Named("alice/sivtr")` | `alice/sivtr:codex/4` |
+| `group/member` | `Named("team/alice")` | `team/alice:terminal/...` |
+| `group/member/share` | `Named("team/alice/proj-b")` | `team/alice/proj-b:codex/4` |
+
+解析顺序：mount 别名（workspace 内，单段）→ group（device 全局，1-3 段）→ 本地 workspace origin（单段，目录 basename 小写）。两段以上不会被当作本地 workspace；`device/workspace` 形态已由 `group/member` 取代（远程 mount 只用单段别名）。
 
 本机可用名见 `sivtr ws list`。远程 mount 由 `sivtr remote add <alias> <invite>` 注册；alias 出现在 scope 槽。
 
@@ -399,7 +403,7 @@ at    = Part(1)
 
 1. **`[scope:]path[/at]`**，冒号切一次；不用 `://`。
 2. **`WorkRef = WorkScope + WorkPath + WorkAt`**，三层正交；字段名 `scope` / `path` / `at`。
-3. **WorkScope** = `Local` \| `Named`（`name` 或 `device/workspace`，≤2 段）。
+3. **WorkScope** = `Local` \| `Named`（`name`、`group/member` 或 `group/member/share`，≤3 段）。
 4. **WorkPath** = `source/session/index` 的包装类型；是 scope 内逻辑路径，**不是**文件路径，**不是**实体 `WorkRecord`。扩展 source / 寻址只动这一层。
 5. **WorkAt** = `Whole` \| `Part(seq)`（`/p<n>`）。
 6. **完整 scope 保唯一，`&alias` 保输入效率**。

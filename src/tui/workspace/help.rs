@@ -24,7 +24,12 @@ pub(crate) enum WorkspaceHelpAction {
     ToggleContentMode,
     /// Switch focused content half (Input ↔ Output).
     ToggleContentIo,
-    VisualTextSelect,
+    /// Content half: expand/collapse the cursor block.
+    ToggleBlockFold,
+    /// Multi-select paging: flip the content pane to the next selected dialogue.
+    NextDialoguePage,
+    /// Multi-select paging: flip the content pane to the previous selected dialogue.
+    PreviousDialoguePage,
     Copy,
     CopyInput,
     CopyOutput,
@@ -112,7 +117,7 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
             key: "h",
             description: "previous pane",
             action: WorkspaceHelpAction::PreviousPane,
-            footer_label: None,
+            footer_label: Some("pane"),
             footer_panes: ALL,
         },
         WorkspaceHelpEntry {
@@ -127,7 +132,7 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
             description: "toggle selection",
             action: WorkspaceHelpAction::ToggleSelection,
             footer_label: Some("toggle"),
-            footer_panes: &[Source, Sessions, Dialogues],
+            footer_panes: &[Source, Sessions, Dialogues, Content],
         },
         WorkspaceHelpEntry {
             key: "a",
@@ -159,10 +164,12 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
         },
         WorkspaceHelpEntry {
             key: "v",
-            description: "range select dialogues",
+            description: "range select items",
             action: WorkspaceHelpAction::RangeSelect,
             footer_label: Some("range"),
-            footer_panes: DIA,
+            // All four panes share the range semantic: the list panes select
+            // spans of rows, Content selects a span of blocks in one half.
+            footer_panes: &[Source, Sessions, Dialogues, Content],
         },
         WorkspaceHelpEntry {
             key: "a",
@@ -194,9 +201,9 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
         },
         WorkspaceHelpEntry {
             key: "r",
-            description: "toggle fold/full content",
+            description: "toggle read/raw content",
             action: WorkspaceHelpAction::ToggleContentMode,
-            footer_label: Some("fold/full"),
+            footer_label: Some("read/raw"),
             footer_panes: CNT,
         },
         WorkspaceHelpEntry {
@@ -204,13 +211,6 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
             description: "switch Input/Output half",
             action: WorkspaceHelpAction::ToggleContentIo,
             footer_label: Some("io"),
-            footer_panes: CNT,
-        },
-        WorkspaceHelpEntry {
-            key: "v",
-            description: "visual text select",
-            action: WorkspaceHelpAction::VisualTextSelect,
-            footer_label: Some("select"),
             footer_panes: CNT,
         },
         WorkspaceHelpEntry {
@@ -278,10 +278,32 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
         },
         WorkspaceHelpEntry {
             key: "Enter",
+            description: "expand/collapse block",
+            action: WorkspaceHelpAction::ToggleBlockFold,
+            footer_label: Some("fold"),
+            footer_panes: CNT,
+        },
+        WorkspaceHelpEntry {
+            key: "J",
+            description: "next selected dialogue",
+            action: WorkspaceHelpAction::NextDialoguePage,
+            footer_label: Some("page"),
+            footer_panes: CNT,
+        },
+        WorkspaceHelpEntry {
+            key: "K",
+            description: "previous selected dialogue",
+            action: WorkspaceHelpAction::PreviousDialoguePage,
+            footer_label: Some("page"),
+            footer_panes: CNT,
+        },
+        WorkspaceHelpEntry {
+            key: "Enter",
             description: "confirm / open next / copy",
             action: WorkspaceHelpAction::Copy,
             footer_label: Some("enter"),
-            footer_panes: NAV,
+            // Content's Enter folds blocks (see ToggleBlockFold above).
+            footer_panes: &[Source, Sessions, Dialogues],
         },
         WorkspaceHelpEntry {
             key: "z",
