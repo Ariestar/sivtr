@@ -83,7 +83,7 @@ chrono = { version = "0.4", features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
 ratatui = "0.30"
 crossterm = "0.29"
-dark-light = "2.0.0"
+dark-light = "3.0.0"
 tokio = { version = "1", features = ["full"] }
 getrandom = "0.4"
 fs2 = "0.4"
