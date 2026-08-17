@@ -188,16 +188,11 @@ fn mcp_host(provider: AgentProvider) -> &'static McpHostSpec {
 pub fn execute(command: McpCommand) -> Result<()> {
     match command.action {
         McpAction::Serve(args) => {
-            // Idle-exit precedence: CLI `--idle-exit` overrides the unified
-            // `[mcp] idle_exit_secs` config, which all host registrations
-            // share (hosts run plain `sivtr mcp serve`). Both accept 0 to
-            // mean "never exit on idle"; the config default is 60.
-            let idle_secs = args.idle_exit.filter(|&secs| secs > 0).or_else(|| {
-                SivtrConfig::load()
-                    .ok()
-                    .map(|config| config.mcp.idle_exit_secs)
-                    .filter(|&secs| secs > 0)
-            });
+            // CLI `--idle-exit` wins over `[mcp] idle_exit_secs`. 0 = never.
+            let idle_secs = resolve_idle_exit_secs(
+                args.idle_exit,
+                SivtrConfig::load().ok().map(|c| c.mcp.idle_exit_secs),
+            );
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()?;
@@ -211,6 +206,10 @@ pub fn execute(command: McpCommand) -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn resolve_idle_exit_secs(cli: Option<u64>, config: Option<u64>) -> Option<u64> {
+    cli.or(config).filter(|&secs| secs > 0)
 }
 
 pub fn install(args: &McpInstallArgs) -> Result<()> {
@@ -1144,5 +1143,13 @@ mod tests {
 
         let hermes = yaml_config_snippet("mcp_servers", hermes_entry());
         assert!(hermes.contains("command: sivtr"));
+    }
+
+    #[test]
+    fn resolve_idle_exit_secs_cli_zero_wins_over_config() {
+        assert_eq!(resolve_idle_exit_secs(Some(0), Some(60)), None);
+        assert_eq!(resolve_idle_exit_secs(Some(30), Some(60)), Some(30));
+        assert_eq!(resolve_idle_exit_secs(None, Some(60)), Some(60));
+        assert_eq!(resolve_idle_exit_secs(None, Some(0)), None);
     }
 }
