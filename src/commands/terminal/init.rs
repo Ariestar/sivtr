@@ -650,27 +650,28 @@ fn tmux_config_path() -> Result<PathBuf> {
 }
 
 fn get_ps_profile(cmd: &str) -> Result<String> {
-    let output = Command::new(cmd)
-        .args(["-NoProfile", "-Command", "Write-Output $PROFILE"])
-        .output()
-        .context("Failed to run shell")?;
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if path.is_empty() {
-        anyhow::bail!("empty profile path");
-    }
-    Ok(path)
+    let path = shell_printed_path(cmd, &["-NoProfile", "-Command", "Write-Output $PROFILE"])?;
+    path.context("empty profile path")
 }
 
 fn get_nu_config_path(cmd: &str) -> Result<String> {
+    let path = shell_printed_path(cmd, &["-c", "print $nu.config-path"])?;
+    path.context("empty config path")
+}
+
+/// Run a shell command that prints a path (`$PROFILE`, `$nu.config-path`)
+/// and return the trimmed stdout; `Ok(None)` when the shell printed nothing.
+/// The single "ask a shell for a path" spelling across init/doctor/MCP.
+pub(crate) fn shell_printed_path(cmd: &str, args: &[&str]) -> Result<Option<String>> {
     let output = Command::new(cmd)
-        .args(["-c", "print $nu.config-path"])
+        .args(args)
         .output()
         .context("Failed to run shell")?;
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if path.is_empty() {
-        anyhow::bail!("empty config path");
+    if !output.status.success() {
+        anyhow::bail!("shell {cmd} exited with {}", output.status);
     }
-    Ok(path)
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok((!value.is_empty()).then_some(value))
 }
 
 fn update_existing_hook(content: &str, spec: &HookSpec) -> Option<String> {
@@ -874,10 +875,21 @@ mod tests {
     };
     use super::{
         desktop_exec_quote, render_macos_shortcut_plist, render_macos_shortcut_script,
-        update_existing_hook, xml_escape, BASH_HOOK, BASH_SPEC, MACOS_SHORTCUT_LABEL, NUSHELL_HOOK,
-        NUSHELL_SPEC, POWERSHELL_HOOK, POWERSHELL_SPEC, ZSH_HOOK, ZSH_SPEC,
+        shell_printed_path, update_existing_hook, xml_escape, BASH_HOOK, BASH_SPEC,
+        MACOS_SHORTCUT_LABEL, NUSHELL_HOOK, NUSHELL_SPEC, POWERSHELL_HOOK, POWERSHELL_SPEC,
+        ZSH_HOOK, ZSH_SPEC,
     };
     use std::path::Path;
+
+    #[test]
+    fn shell_printed_path_rejects_nonzero_exit_code() {
+        // A failed shell that still writes stdout must not yield a path.
+        #[cfg(unix)]
+        let result = shell_printed_path("sh", &["-c", "echo junk; exit 1"]);
+        #[cfg(windows)]
+        let result = shell_printed_path("cmd", &["/C", "echo junk & exit /b 1"]);
+        assert!(result.is_err(), "nonzero exit must not parse as a path");
+    }
 
     #[test]
     fn keeps_current_powershell_hook_unchanged() {

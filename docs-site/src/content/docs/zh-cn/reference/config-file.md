@@ -16,9 +16,6 @@ description: TOML 配置参考。
 ## 完整示例
 
 ```toml
-[general]
-open_mode = "tui"
-
 [editor]
 command = "nvim"
 
@@ -26,26 +23,12 @@ command = "nvim"
 auto_save = true
 max_entries = 0
 
-[copy]
-prompts = ["PS C:\\repo> ", "dev>"]
-
 [codex]
 session_dirs = ["/srv/sivtr/root-codex/sessions"]
 
 [hotkey]
 chord = "alt+y"
 ```
-
-## general
-
-```toml
-[general]
-open_mode = "tui"
-```
-
-| Key | 类型 | 默认值 | 含义 |
-| --- | --- | --- | --- |
-| `open_mode` | `"tui"` 或 `"editor"` | `"tui"` | 捕获输出打开位置 |
 
 ## editor
 
@@ -79,19 +62,6 @@ max_entries = 0
 | --- | --- | --- | --- |
 | `auto_save` | boolean | `true` | 保存捕获输出到 history |
 | `max_entries` | integer | `0` | 最大保留条目数。`0` 表示无限制。 |
-
-## copy
-
-```toml
-[copy]
-prompts = []
-```
-
-| Key | 类型 | 默认值 | 含义 |
-| --- | --- | --- | --- |
-| `prompts` | string array | `[]` | 用于检测命令行的 prompt profile 或字面前缀 |
-
-`prompt_presets` 是 legacy 字段，当前配置写入器不会序列化它。
 
 ## codex
 

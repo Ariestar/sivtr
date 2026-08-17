@@ -49,11 +49,11 @@ fn start(verbose: bool) -> Result<()> {
             // Old daemon: stop it cleanly and start the new build.
             Ok(LocalResponse::Status(_)) => stop()?,
             // Stale daemon.json pointing at a dead process: fall through and
-            // start fresh (remove_stale_daemon_info clears the file).
+            // start fresh (remove_daemon_info clears the file).
             _ => {}
         }
     }
-    crate::remote::daemon::remove_stale_daemon_info()?;
+    crate::remote::ipc::remove_daemon_info()?;
     let log_path = ipc::daemon_log_path();
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -92,7 +92,7 @@ fn start(verbose: bool) -> Result<()> {
 
 fn stop() -> Result<()> {
     if !ipc::running() {
-        crate::remote::daemon::remove_stale_daemon_info()?;
+        crate::remote::ipc::remove_daemon_info()?;
         output::warning("sivtr daemon is not running");
         return Ok(());
     }

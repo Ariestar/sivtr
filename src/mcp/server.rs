@@ -303,21 +303,18 @@ fn shell_hooks_installed() -> bool {
         }
     }
     for cmd in ["pwsh", "powershell"] {
-        if let Ok(output) = std::process::Command::new(cmd)
-            .args(["-NoProfile", "-Command", "Write-Output $PROFILE"])
-            .output()
-        {
-            let profile = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !profile.is_empty() {
-                let path = Path::new(&profile);
-                if path
-                    .exists()
-                    .then(|| std::fs::read_to_string(path).ok())
-                    .flatten()
-                    .is_some_and(|content| content.contains(marker))
-                {
-                    return true;
-                }
+        if let Ok(Some(profile)) = crate::commands::terminal::init::shell_printed_path(
+            cmd,
+            &["-NoProfile", "-Command", "Write-Output $PROFILE"],
+        ) {
+            let path = Path::new(&profile);
+            if path
+                .exists()
+                .then(|| std::fs::read_to_string(path).ok())
+                .flatten()
+                .is_some_and(|content| content.contains(marker))
+            {
+                return true;
             }
         }
     }

@@ -15,22 +15,26 @@ pub(super) fn project_record(
 ) -> Result<TextPair> {
     match projection {
         Projection::Exact(at) => exact_text(record, at),
-        Projection::Both => Ok(record_text_to_pair(record.copy_text_with_prompt(
+        Projection::Both => Ok(record_text_to_pair(record.copy_text(
             RecordTextMode::Combined,
             true,
             prompt_override,
         ))),
-        Projection::Input => Ok(record_text_to_pair(record.copy_text_with_prompt(
+        Projection::Input => Ok(record_text_to_pair(record.copy_text(
             RecordTextMode::Input,
             true,
             prompt_override,
         ))),
-        Projection::Output => Ok(record_text_to_pair(
-            record.copy_text(RecordTextMode::Output, false),
-        )),
-        Projection::Command => Ok(record_text_to_pair(
-            record.copy_text(RecordTextMode::Command, false),
-        )),
+        Projection::Output => Ok(record_text_to_pair(record.copy_text(
+            RecordTextMode::Output,
+            false,
+            None,
+        ))),
+        Projection::Command => Ok(record_text_to_pair(record.copy_text(
+            RecordTextMode::Command,
+            false,
+            None,
+        ))),
     }
 }
 

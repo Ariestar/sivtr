@@ -3,7 +3,7 @@ title: 配置
 description: 创建、查看、编辑并理解 sivtr 配置。
 ---
 
-`sivtr` 使用平台配置目录中的 TOML 配置文件。配置控制打开模式、编辑器交接、history 保留、prompt 检测、Codex mirror 和 Windows 热键按键。
+`sivtr` 使用平台配置目录中的 TOML 配置文件。配置控制编辑器交接、history 保留、Codex mirror、TUI 主题、MCP idle 退出和 Windows 热键按键。
 
 ## 命令
 
@@ -22,18 +22,12 @@ sivtr config edit
 ## 默认配置
 
 ```toml
-[general]
-open_mode = "tui"
-
 [editor]
 command = ""
 
 [history]
 auto_save = true
 max_entries = 0
-
-[copy]
-prompts = []
 
 [codex]
 session_dirs = []
@@ -43,29 +37,6 @@ chord = "alt+y"
 ```
 
 字段级说明见[配置文件](/zh-cn/reference/config-file/)。
-
-## 在编辑器中打开捕获输出
-
-```toml
-[general]
-open_mode = "editor"
-
-[editor]
-command = "nvim"
-```
-
-当 `open_mode` 是 `editor` 时，pipe mode、run mode 和 session import 会把捕获文本交给外部编辑器，而不是内置 TUI。
-
-## Prompt 检测
-
-如果你的 prompt 比较特殊，添加字面 prompt 前缀：
-
-```toml
-[copy]
-prompts = ["dev>", "repo $", "PS C:\\repo>"]
-```
-
-这能帮助命令块解析识别 session log 中的命令输入行。
 
 ## History 保留
 

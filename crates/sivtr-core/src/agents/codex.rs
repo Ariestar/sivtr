@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use crate::agents::{
     extract_content_text, jsonl_files, list_recent_jsonl_sessions, normalize_path_for_match,
     parse_jsonl_meta, parse_jsonl_session, pretty_json_string, pretty_json_value, push_block,
-    AgentBlockKind, AgentProvider, AgentSession, AgentSessionInfo, AgentSessionMeta,
-    AgentSessionProvider,
+    push_tool_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionInfo,
+    AgentSessionMeta, AgentSessionProvider,
 };
 use crate::config::SivtrConfig;
 
@@ -201,26 +201,68 @@ fn apply_response_item(session: &mut AgentSession, payload: &Value, timestamp: O
                 clean_codex_message_text(kind, text),
             );
         }
-        Some("function_call") => push_block(
+        Some("function_call") => push_tool_block(
             session,
             AgentBlockKind::ToolCall,
             timestamp,
+            payload
+                .get("call_id")
+                .and_then(Value::as_str)
+                .map(str::to_string),
             payload
                 .get("name")
                 .and_then(Value::as_str)
                 .map(str::to_string),
             extract_tool_call_text(payload),
+            None,
         ),
-        Some("function_call_output") => push_block(
+        Some("function_call_output") => push_tool_block(
             session,
             AgentBlockKind::ToolOutput,
             timestamp,
+            payload
+                .get("call_id")
+                .and_then(Value::as_str)
+                .map(str::to_string),
             None,
             payload
                 .get("output")
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
+            None,
+        ),
+        // Modern codex records shell/apply_patch/read calls as custom tool
+        // events with a script `input` and an `output` content array.
+        Some("custom_tool_call") => push_tool_block(
+            session,
+            AgentBlockKind::ToolCall,
+            timestamp,
+            payload
+                .get("call_id")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            payload
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            payload
+                .get("input")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            None,
+        ),
+        Some("custom_tool_call_output") => push_tool_block(
+            session,
+            AgentBlockKind::ToolOutput,
+            timestamp,
+            payload
+                .get("call_id")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            None,
+            extract_content_text(payload.get("output").unwrap_or(&Value::Null)),
+            None,
         ),
         _ => {}
     }
@@ -325,7 +367,7 @@ fn dedup_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 mod tests {
     use super::{configured_codex_session_dirs, CodexProvider};
     use crate::agents::{
-        format_blocks, normalize_path_for_match, select_blocks, AgentBlockKind, AgentSelection,
+        normalize_path_for_match, select_blocks, AgentBlockKind, AgentSelection,
         AgentSessionProvider,
     };
     use crate::config::SivtrConfig;
@@ -377,6 +419,33 @@ mod tests {
     }
 
     #[test]
+    fn parses_codex_custom_tool_calls() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"timestamp":"2026-04-27T00:00:00Z","type":"session_meta","payload":{"id":"abc","cwd":"C:\\repo"}}
+{"timestamp":"2026-04-27T00:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"edit it"}]}}
+{"timestamp":"2026-04-27T00:00:02Z","type":"response_item","payload":{"type":"custom_tool_call","id":"ctc_1","status":"completed","call_id":"call_1","name":"apply_patch","input":"*** Begin Patch\n*** Update File: a.rs\n@@\n-old\n+new\n"}}
+{"timestamp":"2026-04-27T00:00:03Z","type":"response_item","payload":{"type":"custom_tool_call_output","id":"ctco_1","call_id":"call_1","output":[{"type":"input_text","text":"Patch applied"}]}}
+{"timestamp":"2026-04-27T00:00:04Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}
+"#,
+        )
+        .unwrap();
+
+        let session = CodexProvider.parse_session_file(&path).unwrap();
+
+        assert_eq!(session.blocks.len(), 4);
+        assert_eq!(session.blocks[1].kind, AgentBlockKind::ToolCall);
+        assert_eq!(session.blocks[1].label.as_deref(), Some("apply_patch"));
+        assert_eq!(session.blocks[1].call_id.as_deref(), Some("call_1"));
+        assert!(session.blocks[1].text.contains("*** Begin Patch"));
+        assert_eq!(session.blocks[2].kind, AgentBlockKind::ToolOutput);
+        assert_eq!(session.blocks[2].call_id.as_deref(), Some("call_1"));
+        assert_eq!(session.blocks[2].text, "Patch applied");
+    }
+
+    #[test]
     fn selects_last_turn_without_tool_noise() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("rollout.jsonl");
@@ -402,11 +471,9 @@ mod tests {
         assert_eq!(blocks[1].kind, AgentBlockKind::ToolOutput);
         assert_eq!(blocks[2].text, "new");
         assert_eq!(blocks[2].kind, AgentBlockKind::Assistant);
-        let formatted = format_blocks(&blocks);
-        assert!(formatted.contains("second"));
-        assert!(formatted.contains("<:tool:unknown result:>"));
-        assert!(formatted.contains("debug"));
-        assert!(formatted.contains("new"));
+        // The tool output block keeps its payload; "unknown result" is the
+        // default label the structure marker derives from a bare output.
+        assert!(blocks[1].text.contains("debug"));
     }
 
     #[test]

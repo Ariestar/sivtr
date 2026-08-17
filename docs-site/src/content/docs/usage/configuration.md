@@ -3,7 +3,7 @@ title: Configuration
 description: Create, inspect, edit, and understand sivtr configuration.
 ---
 
-`sivtr` uses a TOML config file in the platform config directory. Configuration controls open mode, editor handoff, history retention, prompt detection, Codex mirrors, and the Windows hotkey chord.
+`sivtr` uses a TOML config file in the platform config directory. Configuration controls editor handoff, history retention, Codex mirrors, TUI theme, MCP idle exit, and the Windows hotkey chord.
 
 ## Commands
 
@@ -22,18 +22,12 @@ sivtr config edit
 ## Default config
 
 ```toml
-[general]
-open_mode = "tui"
-
 [editor]
 command = ""
 
 [history]
 auto_save = true
 max_entries = 0
-
-[copy]
-prompts = []
 
 [codex]
 session_dirs = []
@@ -43,29 +37,6 @@ chord = "alt+y"
 ```
 
 For a field-by-field reference, see [Config File](/reference/config-file/).
-
-## Open captured output in an editor
-
-```toml
-[general]
-open_mode = "editor"
-
-[editor]
-command = "nvim"
-```
-
-When `open_mode` is `editor`, pipe mode, run mode, and session import open captured text in the configured external editor instead of the built-in TUI.
-
-## Prompt detection
-
-If your prompt is unusual, add literal prompt prefixes:
-
-```toml
-[copy]
-prompts = ["dev>", "repo $", "PS C:\\repo>"]
-```
-
-This helps command-block parsing identify command input lines in session logs.
 
 ## History retention
 

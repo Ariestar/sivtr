@@ -1,7 +1,7 @@
 //! Workspace browser painting (lists, dual content panes, overlays, footer).
 
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
-use ratatui::prelude::{Color, Frame, Modifier, Position, Style};
+use ratatui::prelude::{Frame, Modifier, Position, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, ListItem, ListState, Paragraph};
 use regex::Regex;
@@ -9,23 +9,36 @@ use std::collections::HashSet;
 use unicode_width::UnicodeWidthStr;
 
 use crate::tui::content::io::ContentIoFocus;
+use crate::tui::content::truncate_chars;
+#[cfg(test)]
+use crate::tui::content::view::ContentViewMode;
 use crate::tui::content::view::{
-    content_cursor_position, highlight_spans, render_content_view, ContentSelection, ContentView,
-    ContentViewMode,
+    content_cursor_position, highlight_spans, render_content_view, ContentLayout, ContentSelection,
+    ContentView,
 };
 use crate::tui::pane::{
-    active_item_style, panel_block, render_list_panel, render_panel_scrollbar, selected_item_style,
-    Panel, PanelScroll,
+    active_item_style, panel_block, render_list_panel, render_panel_scrollbar, row_highlight,
+    selection_dot, Panel, PanelScroll,
 };
-use crate::tui::search::{workspace_search_regex_for_query, WorkspaceSearchScope};
+use crate::tui::search::{workspace_search_query, workspace_search_regex, WorkspaceSearchScope};
 use crate::tui::theme;
 use crate::tui::workspace::help::{workspace_footer_hotkeys, workspace_help_entries};
 use crate::tui::workspace::layout::{selected_index, workspace_layout};
 use crate::tui::workspace::model::{
-    SourceLoadMarker, WorkspaceDialogue, WorkspaceFocus, WorkspaceFooterView, WorkspaceSearchView,
-    WorkspaceSession, WorkspaceSource, WorkspaceView,
+    selected_count, selected_indices, SourceLoadMarker, WorkspaceDialogue, WorkspaceFocus,
+    WorkspaceFooterView, WorkspaceSearchView, WorkspaceSession, WorkspaceSource, WorkspaceView,
 };
 use sivtr_core::record::{WorkAt, WorkRef};
+
+/// Range-selection anchor is per-pane: only the focused list honors it so a
+/// left-over anchor from another pane never styles unrelated rows.
+fn active_range(
+    focus: WorkspaceFocus,
+    pane: WorkspaceFocus,
+    range_anchor: Option<usize>,
+) -> Option<usize> {
+    (focus == pane).then_some(range_anchor).flatten()
+}
 
 pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
     let area = frame.area();
@@ -48,7 +61,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
     let search_regex = view
         .search
         .as_ref()
-        .and_then(|search| workspace_search_regex_for_query(search.query));
+        .and_then(|search| workspace_search_regex(workspace_search_query(search.query).1));
 
     render_source_list(
         frame,
@@ -58,6 +71,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         view.source_markers,
         view.loading_tick,
         view.source_state,
+        active_range(view.focus, WorkspaceFocus::Source, view.range_anchor),
         view.focus == WorkspaceFocus::Source,
     );
     render_session_list(
@@ -70,6 +84,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         &view.body_failures,
         view.search.as_ref(),
         search_regex.as_ref(),
+        active_range(view.focus, WorkspaceFocus::Sessions, view.range_anchor),
         view.focus == WorkspaceFocus::Sessions,
     );
     render_dialogue_list(
@@ -79,7 +94,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         view.dialogue_state,
         view.selected_sessions,
         view.selected_dialogues,
-        view.range_anchor,
+        active_range(view.focus, WorkspaceFocus::Dialogues, view.range_anchor),
         view.search.as_ref(),
         search_regex.as_ref(),
         view.focus == WorkspaceFocus::Dialogues,
@@ -95,29 +110,54 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         .filter(|search| search.scope == WorkspaceSearchScope::Content)
         .and(search_regex.as_ref());
     let title_suffix = content_title_suffix(view.selected_dialogues, current_ref.as_ref());
+    // Multi-select paging: `Input (read) · 2/3 : 3 dialogues selected`.
+    let page_label = view
+        .content_page
+        .map(|(page, total)| format!(" · {}/{}", page + 1, total))
+        .unwrap_or_default();
 
     for half in [ContentIoFocus::Input, ContentIoFocus::Output] {
         let area = frame_io.areas.area(half);
         if area.height == 0 {
             continue;
         }
+        let half_title = match half {
+            ContentIoFocus::Input => "Input",
+            ContentIoFocus::Output => "Output",
+        };
+        // The block cursor highlights the focused half like the cursor row in
+        // the session/dialogue lists; it never depends on the panel being
+        // focused, so scrolling content always shows where the cursor is.
+        let cursor_block = view
+            .content_block_cursor
+            .filter(|(focus, _)| *focus == half)
+            .map(|(_, block)| block);
+        let range_blocks = view
+            .content_range
+            .filter(|(focus, _, _)| *focus == half)
+            .map(|(_, anchor, cursor)| (anchor, cursor));
         render_content_panel(
             frame,
             area,
             Panel::new(
                 WorkspaceFocus::Content.key(),
                 format!(
-                    "{} ({}){title_suffix}",
-                    half.title(),
+                    "{half_title} ({}){page_label}{title_suffix}",
                     view.content_mode.label()
                 ),
                 content_active && view.content_io_focus == half,
             ),
-            frame_io.texts.display(half),
+            frame_io.layout(half),
             view.content_scrolls.get(half),
-            view.content_mode,
-            content_selection_for_half(view.content_selection, view.content_io_focus, half),
+            view.content_selection
+                .filter(|_| view.content_io_focus == half),
             content_search,
+            cursor_block,
+            range_blocks,
+            match half {
+                ContentIoFocus::Input => view.content_marked_input,
+                ContentIoFocus::Output => view.content_marked_output,
+            },
         );
     }
 
@@ -132,22 +172,14 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
             line_filter: view.line_filter,
             line_filter_error: view.line_filter_error,
             fullscreen: view.fullscreen,
-            content_mode: view.content_mode,
             content_selection: view.content_selection,
-            current_ref: current_ref.as_ref(),
         },
     );
 
     if let Some(selection) = view.content_selection {
         let mut scrolls = view.content_scrolls;
         let active = frame_io.active(view.content_io_focus, &mut scrolls);
-        if let Some(pos) = content_cursor_position(
-            active.area,
-            active.text,
-            *active.scroll,
-            view.content_mode,
-            selection.cursor,
-        ) {
+        if let Some(pos) = content_cursor_position(active.area, *active.scroll, selection.cursor) {
             frame.set_cursor_position(pos);
         }
     }
@@ -205,9 +237,7 @@ fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>)
         line_filter,
         line_filter_error,
         fullscreen,
-        content_mode,
         content_selection,
-        current_ref,
     } = footer;
 
     let mut spans = if search.is_some() {
@@ -228,7 +258,7 @@ fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>)
         spans
     } else {
         let controls = if content_selection.is_some() {
-            "select  drag / Ctrl-drag block  y/Enter/Ctrl-c copy  Esc/v clear".to_string()
+            "select  drag / Ctrl-drag block  y/Enter/Ctrl-c copy  Esc clear".to_string()
         } else if show_help {
             "j/k move  Enter execute  Esc/? close help  q cancel".to_string()
         } else {
@@ -249,14 +279,6 @@ fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>)
         )));
     } else if let Some(spec) = line_filter.filter(|spec| !spec.is_empty()) {
         spans.extend(footer_status_spans(&format!("lines {spec}")));
-    }
-    if focus == WorkspaceFocus::Content {
-        spans.extend(footer_status_spans(content_mode.label()));
-    }
-    if matches!(focus, WorkspaceFocus::Dialogues | WorkspaceFocus::Content) {
-        if let Some(work_ref) = current_ref {
-            spans.extend(footer_status_spans(&format!("ref {work_ref}")));
-        }
     }
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
@@ -308,25 +330,21 @@ fn footer_status_spans(label: &str) -> Vec<Span<'static>> {
 /// Compact session row: `· cdx  title…` (origin glyph + short badge + title).
 ///
 /// `·` = local, `↗` = remote (named scope on the source or work_ref). A ` [!]`
-/// suffix marks a session whose body failed to hydrate.
+/// suffix marks a session whose body failed to hydrate. The selection dot
+/// (`●` / `○`) is always visible so it survives pane switches.
 fn session_row_line(
     choice: &WorkspaceSession,
     selected: bool,
-    active_panel: bool,
     base_style: Style,
     highlight: Option<&Regex>,
     body_failed: bool,
 ) -> Line<'static> {
-    let check = if active_panel {
-        if selected {
-            "● "
-        } else {
-            "○ "
-        }
-    } else {
-        ""
-    };
-    let remote = choice.source.is_remote();
+    let remote = choice.source.is_remote()
+        || choice
+            .records
+            .first()
+            .is_some_and(|record| !record.work_ref.is_local());
+    let check = format!("{} ", selection_dot(selected));
     let origin = theme::origin_glyph(remote);
     let badge = choice.source.badge();
     let title = compact_session_title(choice);
@@ -357,16 +375,9 @@ fn session_row_line(
             .fg(choice.source.color())
             .add_modifier(Modifier::BOLD),
     ));
-    spans.extend(highlight_spans(
-        &title,
-        highlight,
-        Style::default().fg(Color::Rgb(226, 232, 240)),
-    ));
+    spans.extend(highlight_spans(&title, highlight, Style::default()));
     if body_failed {
-        spans.push(Span::styled(
-            " [!]",
-            Style::default().fg(Color::Rgb(248, 113, 113)), // red-400
-        ));
+        spans.push(Span::styled(" [!]", Style::default().fg(theme::failure())));
     }
     Line::from(spans)
 }
@@ -393,17 +404,6 @@ fn compact_session_title(choice: &WorkspaceSession) -> String {
     truncate_chars(without_bracket, 64)
 }
 
-fn truncate_chars(text: &str, max_chars: usize) -> String {
-    let count = text.chars().count();
-    if count <= max_chars {
-        return text.to_string();
-    }
-    let keep = max_chars.saturating_sub(1);
-    let mut out: String = text.chars().take(keep).collect();
-    out.push('…');
-    out
-}
-
 fn search_position_label(search: &WorkspaceSearchView<'_>) -> Option<String> {
     let current = search.current_match?;
     Some(format!("{}/{}", current + 1, search.match_count))
@@ -414,12 +414,7 @@ pub(crate) fn current_content_dialogue<'a>(
     selected_dialogues: &[bool],
     highlighted_idx: usize,
 ) -> Option<&'a WorkspaceDialogue> {
-    let selected = selected_dialogues
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, selected)| selected.then_some(idx))
-        .collect::<Vec<_>>();
-    match selected.as_slice() {
+    match selected_indices(selected_dialogues).as_slice() {
         [] => dialogues.get(highlighted_idx),
         [idx] => dialogues.get(*idx),
         _ => None,
@@ -542,7 +537,7 @@ fn render_help_panel(frame: &mut Frame, area: Rect, state: &ListState) {
                 Span::styled(format!("{:<12}", entry.key), theme::key_hint_style()),
                 Span::styled(
                     entry.description.to_string(),
-                    Style::default().fg(Color::Rgb(203, 213, 225)),
+                    Style::default().fg(theme::help_text()),
                 ),
             ]))
         })
@@ -566,8 +561,10 @@ fn render_source_list(
     source_markers: &[SourceLoadMarker],
     loading_tick: u8,
     state: &ListState,
+    range_anchor: Option<usize>,
     active: bool,
 ) {
+    let cursor_idx = selected_index(state).min(sources.len().saturating_sub(1));
     let panel = Panel::new(WorkspaceFocus::Source.key(), "Source", active);
     // Compact strip when not focused; vertical list (scrollable) when focused.
     if !active || area.height <= 3 {
@@ -585,25 +582,18 @@ fn render_source_list(
         return;
     }
 
-    let cursor_idx = selected_index(state).min(sources.len().saturating_sub(1));
     let mut items: Vec<ListItem> = sources
         .iter()
         .enumerate()
         .map(|(idx, source)| {
             let selected = selected_sources.get(idx).copied().unwrap_or(false);
-            let focused = idx == cursor_idx;
             let load = source_markers
                 .get(idx)
                 .copied()
                 .unwrap_or(SourceLoadMarker::Idle);
             let marker = load.status_glyph(selected, loading_tick);
-            let style = if focused {
-                active_item_style()
-            } else if selected {
-                selected_item_style()
-            } else {
-                Style::default().fg(source.color())
-            };
+            let style = row_highlight(idx, cursor_idx, range_anchor)
+                .unwrap_or_else(|| Style::default().fg(source.color()));
             ListItem::new(Line::from(vec![
                 Span::styled(format!("{marker} "), style),
                 Span::styled(source.label(), style),
@@ -649,7 +639,7 @@ fn render_source_strip(
             active_item_style()
         } else {
             match load {
-                SourceLoadMarker::Failed => Style::default().fg(Color::Rgb(248, 113, 113)),
+                SourceLoadMarker::Failed => Style::default().fg(theme::failure()),
                 SourceLoadMarker::Loading => Style::default().fg(theme::accent()),
                 SourceLoadMarker::Ready if selected => Style::default().fg(source.color()),
                 SourceLoadMarker::Idle if selected => Style::default().fg(theme::muted()),
@@ -688,30 +678,22 @@ fn render_session_list(
     body_failures: &HashSet<(WorkspaceSource, String)>,
     search: Option<&WorkspaceSearchView<'_>>,
     search_regex: Option<&Regex>,
+    range_anchor: Option<usize>,
     active: bool,
 ) {
     let cursor_idx = selected_index(state);
-    let has_selection = selected_sessions.iter().any(|selected| *selected);
     let mut items: Vec<ListItem> = choices
         .iter()
         .enumerate()
         .map(|(idx, choice)| {
             let selected = selected_sessions.get(idx).copied().unwrap_or(false);
-            let focused = active && !has_selection && idx == cursor_idx;
-            let base_style = if selected {
-                selected_item_style()
-            } else if focused {
-                active_item_style()
-            } else {
-                Style::default()
-            };
+            let base_style = row_highlight(idx, cursor_idx, range_anchor).unwrap_or_default();
             let highlight = search
                 .filter(|search| search.scope == WorkspaceSearchScope::Session)
                 .and(search_regex);
             ListItem::new(session_row_line(
                 choice,
                 selected,
-                active,
                 base_style,
                 highlight,
                 body_failures.contains(&(choice.source.clone(), choice.session_id.clone())),
@@ -752,50 +734,25 @@ fn render_dialogue_list(
     active: bool,
 ) {
     let highlighted_idx = selected_index(state);
-    let has_selection = selected_dialogues.iter().any(|selected| *selected);
     let mut items: Vec<ListItem> = titles
         .iter()
         .enumerate()
         .map(|(idx, title)| {
-            let in_range = range_anchor
-                .map(|anchor| {
-                    idx >= anchor.min(highlighted_idx) && idx <= anchor.max(highlighted_idx)
-                })
-                .unwrap_or(false);
             let selected = selected_dialogues.get(idx).copied().unwrap_or(false);
-            let marker = if active {
-                if selected {
-                    "● "
-                } else {
-                    "○ "
-                }
-            } else {
-                ""
-            };
+            // Selection is shown by the dot alone (● = selected, ○ = not),
+            // always visible so it survives pane switches.
+            let marker = format!("{} ", selection_dot(selected));
             let line = format!("{marker}{title}");
             let highlight = search
                 .filter(|search| search.scope == WorkspaceSearchScope::Dialogue)
                 .and(search_regex);
-            if in_range {
-                ListItem::new(Line::from(Span::styled(line, theme::range_row())))
-            } else if selected {
-                ListItem::new(Line::from(highlight_spans(
+            match row_highlight(idx, highlighted_idx, range_anchor) {
+                Some(style) => ListItem::new(Line::from(highlight_spans(&line, highlight, style))),
+                None => ListItem::new(Line::from(highlight_spans(
                     &line,
                     highlight,
-                    selected_item_style(),
-                )))
-            } else if !has_selection && idx == highlighted_idx {
-                ListItem::new(Line::from(highlight_spans(
-                    &line,
-                    highlight,
-                    active_item_style(),
-                )))
-            } else {
-                ListItem::new(Line::from(highlight_spans(
-                    &line,
-                    highlight,
-                    Style::default().fg(Color::Rgb(203, 213, 225)),
-                )))
+                    Style::default(),
+                ))),
             }
         })
         .collect();
@@ -850,32 +807,28 @@ fn render_content_panel(
     frame: &mut Frame,
     area: Rect,
     panel: Panel,
-    text: &str,
+    layout: &ContentLayout,
     scroll: usize,
-    mode: ContentViewMode,
     selection: Option<ContentSelection>,
     search_regex: Option<&Regex>,
+    cursor_block: Option<usize>,
+    range_blocks: Option<(usize, usize)>,
+    marked: &[bool],
 ) {
     render_content_view(
         frame,
         area,
         panel,
         ContentView {
-            text,
+            layout,
             scroll,
             search_regex,
-            mode,
             selection,
+            cursor_block,
+            range_blocks,
+            marked,
         },
     );
-}
-
-fn content_selection_for_half(
-    selection: Option<ContentSelection>,
-    active: ContentIoFocus,
-    half: ContentIoFocus,
-) -> Option<ContentSelection> {
-    selection.filter(|_| active == half)
 }
 
 fn selected_parent_title(
@@ -884,10 +837,7 @@ fn selected_parent_title(
     singular: &str,
     plural: &str,
 ) -> String {
-    let count = selected_parent_items
-        .iter()
-        .filter(|selected| **selected)
-        .count();
+    let count = selected_count(selected_parent_items);
     if count == 0 {
         title.to_string()
     } else if count == 1 {
@@ -898,7 +848,7 @@ fn selected_parent_title(
 }
 
 fn content_title_suffix(selected_dialogues: &[bool], current_ref: Option<&WorkRef>) -> String {
-    let count = selected_dialogues.iter().filter(|s| **s).count();
+    let count = selected_count(selected_dialogues);
     let select = match count {
         0 => String::new(),
         1 => ": 1 dialogue selected".to_string(),
@@ -969,5 +919,33 @@ mod tests {
         assert_eq!(cursor_for("1\n2\n3\n4"), (4, 3));
         // A line wider than the box clamps the column to the right edge.
         assert_eq!(cursor_for("1\n0123456789abcdefghij"), (15, 3));
+    }
+
+    #[test]
+    fn session_row_body_uses_default_foreground() {
+        use super::session_row_line;
+        use crate::tui::workspace::model::{WorkspaceSession, WorkspaceSource};
+        use ratatui::prelude::Style;
+        use sivtr_core::ai::AgentProvider;
+        use std::time::SystemTime;
+
+        let session = WorkspaceSession {
+            source: WorkspaceSource::agent(AgentProvider::Codex),
+            session_id: "abc123".to_string(),
+            modified: SystemTime::UNIX_EPOCH,
+            title: "title".to_string(),
+            search_title: "title".to_string(),
+            records: Vec::new(),
+            body_loaded: false,
+        };
+        let line = session_row_line(&session, false, Style::default(), None, false);
+        // Non-selected session rows paint body text with the terminal default
+        // foreground, matching dialogue rows and the content pane.
+        let title_span = line
+            .spans
+            .iter()
+            .find(|span| span.content == "title")
+            .expect("title span");
+        assert_eq!(title_span.style.fg, None);
     }
 }
