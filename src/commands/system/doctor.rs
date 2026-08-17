@@ -261,137 +261,29 @@ impl Report {
         }
     }
 
+    /// Workspaces whose stored roots predate the commondir key scheme become
+    /// unreachable (their captured sessions vanish from queries). `--fix`
+    /// re-keys and merges them; without it the check reports what needs it.
     fn check_workspace_keys(&mut self, fix: bool) {
         let result = if fix {
             workspace::migrate_workspace_keys()
         } else {
             workspace::inspect_workspace_keys()
         };
-        match result {
-            Ok(report) => {
-                if !report.needs_attention() && report.removed_duplicates.is_empty() {
-                    self.add(Check {
-                        name: "workspace_keys",
-                        label: "workspace keys",
-                        status: Status::Pass,
-                        detail: format!("{} workspace(s) on current scheme", report.current),
-                        hint: None,
-                    });
-                    return;
-                }
-
-                if fix
-                    && (!report.migrated.is_empty() || !report.removed_duplicates.is_empty())
-                    && report.skipped.is_empty()
-                {
-                    let mut parts = Vec::new();
-                    if !report.migrated.is_empty() {
-                        parts.push(format!("migrated {}", report.migrated.len()));
-                    }
-                    if !report.removed_duplicates.is_empty() {
-                        parts.push(format!(
-                            "removed {} duplicate(s)",
-                            report.removed_duplicates.len()
-                        ));
-                    }
-                    self.add(Check {
-                        name: "workspace_keys",
-                        label: "workspace keys",
-                        status: Status::Fixed,
-                        detail: parts.join(", "),
-                        hint: None,
-                    });
-                    return;
-                }
-
-                if !report.migrated.is_empty() {
-                    self.add(Check {
-                        name: "workspace_keys",
-                        label: "workspace keys",
-                        status: Status::Fail,
-                        detail: format!("{} workspace(s) need migration", report.migrated.len()),
-                        hint: Some("run `sivtr doctor --fix`".to_string()),
-                    });
-                    return;
-                }
-
-                if !report.duplicates.is_empty() {
-                    let samples: Vec<String> = report
-                        .duplicates
-                        .iter()
-                        .take(3)
-                        .map(|(old, new)| format!("{old} -> {new}"))
-                        .collect();
-                    let more = if report.duplicates.len() > 3 {
-                        format!(", +{} more", report.duplicates.len() - 3)
-                    } else {
-                        String::new()
-                    };
-                    self.add(Check {
-                        name: "workspace_keys",
-                        label: "workspace keys",
-                        status: Status::Fail,
-                        detail: format!(
-                            "{} legacy duplicate(s) ({}{more})",
-                            report.duplicates.len(),
-                            samples.join("; ")
-                        ),
-                        hint: Some(
-                            "run `sivtr doctor --fix` to merge unique logs and remove legacy dirs"
-                                .to_string(),
-                        ),
-                    });
-                    return;
-                }
-
-                if !report.skipped.is_empty() {
-                    let reasons: Vec<String> = report
-                        .skipped
-                        .iter()
-                        .take(3)
-                        .map(|(path, reason)| {
-                            let name = path
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("workspace");
-                            format!("{name}: {reason}")
-                        })
-                        .collect();
-                    let more = if report.skipped.len() > 3 {
-                        format!(", +{} more", report.skipped.len() - 3)
-                    } else {
-                        String::new()
-                    };
-                    self.add(Check {
-                        name: "workspace_keys",
-                        label: "workspace keys",
-                        status: Status::Manual,
-                        detail: format!(
-                            "{} workspace(s) could not be migrated ({reasons}{more})",
-                            report.skipped.len(),
-                            reasons = reasons.join("; ")
-                        ),
-                        hint: None,
-                    });
-                    return;
-                }
-
+        let report = match result {
+            Ok(report) => report,
+            Err(e) => {
                 self.add(Check {
                     name: "workspace_keys",
                     label: "workspace keys",
-                    status: Status::Pass,
-                    detail: format!("{} workspace(s) on current scheme", report.current),
+                    status: Status::Manual,
+                    detail: format!("migration check failed: {e}"),
                     hint: None,
                 });
+                return;
             }
-            Err(e) => self.add(Check {
-                name: "workspace_keys",
-                label: "workspace keys",
-                status: Status::Manual,
-                detail: format!("migration check failed: {e}"),
-                hint: None,
-            }),
-        }
+        };
+        self.add(workspace_keys_check(report, fix));
     }
 
     fn check_skill(&mut self, fix: bool) {
@@ -612,6 +504,83 @@ impl Report {
     }
 }
 
+/// `"N workspace(s) could not be migrated (dir: reason; …)"` from a migration
+/// report's skipped entries, sampling the first three reasons.
+fn skipped_summary(skipped: &[(PathBuf, String)]) -> String {
+    let reasons: Vec<String> = skipped
+        .iter()
+        .take(3)
+        .map(|(path, reason)| {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("workspace");
+            format!("{name}: {reason}")
+        })
+        .collect();
+    let more = if skipped.len() > 3 {
+        format!(", +{} more", skipped.len() - 3)
+    } else {
+        String::new()
+    };
+    format!(
+        "{} workspace(s) could not be migrated ({}{more})",
+        skipped.len(),
+        reasons.join("; ")
+    )
+}
+
+/// Map a migration report onto the `workspace_keys` check. Partial success
+/// keeps the migrated/merged counts but must never report `Fixed` while any
+/// workspace was skipped — its sessions stay unreachable.
+fn workspace_keys_check(report: workspace::WorkspaceMigration, fix: bool) -> Check {
+    let mut pending = Vec::new();
+    if !report.migrated.is_empty() {
+        pending.push(format!("{} to re-key", report.migrated.len()));
+    }
+    if !report.merged.is_empty() {
+        pending.push(format!("{} to merge", report.merged.len()));
+    }
+    if !pending.is_empty() {
+        let mut detail = pending.join(", ");
+        if !report.skipped.is_empty() {
+            detail.push_str("; ");
+            detail.push_str(&skipped_summary(&report.skipped));
+        }
+        return Check {
+            name: "workspace_keys",
+            label: "workspace keys",
+            status: if fix && report.skipped.is_empty() {
+                Status::Fixed
+            } else {
+                Status::Fail
+            },
+            detail,
+            hint: if fix {
+                None
+            } else {
+                Some("run `sivtr doctor --fix`".to_string())
+            },
+        };
+    }
+    if !report.skipped.is_empty() {
+        return Check {
+            name: "workspace_keys",
+            label: "workspace keys",
+            status: Status::Manual,
+            detail: skipped_summary(&report.skipped),
+            hint: None,
+        };
+    }
+    Check {
+        name: "workspace_keys",
+        label: "workspace keys",
+        status: Status::Pass,
+        detail: format!("{} workspace(s) on current scheme", report.current),
+        hint: None,
+    }
+}
+
 fn print_human(report: &Report) {
     let total = report.checks.len();
     let mut passed = 0;
@@ -740,5 +709,64 @@ pub fn detect_current_shell() -> String {
         "powershell".to_string()
     } else {
         "bash".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sivtr_core::workspace::WorkspaceMigration;
+
+    fn partial_report() -> WorkspaceMigration {
+        WorkspaceMigration {
+            migrated: vec![("old-a".into(), "new-a".into())],
+            merged: Vec::new(),
+            skipped: vec![(PathBuf::from("old-b"), "rename failed: boom".into())],
+            current: 1,
+        }
+    }
+
+    #[test]
+    fn partial_fix_never_reports_fixed_and_lists_skipped() {
+        let check = workspace_keys_check(partial_report(), true);
+        assert_eq!(check.status, Status::Fail);
+        assert!(check.detail.contains("1 to re-key"));
+        assert!(check
+            .detail
+            .contains("1 workspace(s) could not be migrated"));
+        assert!(check.detail.contains("old-b: rename failed: boom"));
+    }
+
+    #[test]
+    fn clean_fix_reports_fixed_without_skipped_noise() {
+        let report = WorkspaceMigration {
+            migrated: vec![("old-a".into(), "new-a".into())],
+            merged: Vec::new(),
+            skipped: Vec::new(),
+            current: 1,
+        };
+        let check = workspace_keys_check(report, true);
+        assert_eq!(check.status, Status::Fixed);
+        assert_eq!(check.detail, "1 to re-key");
+    }
+
+    #[test]
+    fn inspect_mode_keeps_fail_with_fix_hint() {
+        let check = workspace_keys_check(partial_report(), false);
+        assert_eq!(check.status, Status::Fail);
+        assert_eq!(check.hint.as_deref(), Some("run `sivtr doctor --fix`"));
+    }
+
+    #[test]
+    fn skipped_only_reports_manual_with_reasons() {
+        let report = WorkspaceMigration {
+            migrated: Vec::new(),
+            merged: Vec::new(),
+            skipped: vec![(PathBuf::from("old-b"), "rename failed: boom".into())],
+            current: 2,
+        };
+        let check = workspace_keys_check(report, true);
+        assert_eq!(check.status, Status::Manual);
+        assert!(check.detail.contains("old-b: rename failed: boom"));
     }
 }

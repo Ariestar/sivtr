@@ -406,7 +406,7 @@ pub(crate) fn terminal_color() -> Color {
     ACTIVE.get().footer
 }
 
-/// Local `·` / remote `↗` glyph.
+/// Origin glyph: local `·`, remote `↗`.
 pub(crate) fn origin_glyph(remote: bool) -> &'static str {
     if remote {
         "↗"

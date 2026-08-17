@@ -18,6 +18,12 @@ use crate::ai::AgentSessionProvider;
 use crate::record::{WorkPath, WorkRecord, WorkRecordIndex, WorkRef, WorkRefSelector};
 use crate::{session, workspace};
 
+/// Prefix of the error [`load_workspace_source`] raises when a selector
+/// matches no records. An empty source is a normal browse outcome (a
+/// workspace with no sessions yet), so callers treat this exact error as an
+/// empty result; keep it a named constant so that contract cannot drift.
+pub const NO_RECORD_FOR_SELECTOR: &str = "No record found for ref selector";
+
 /// A session file that could not be parsed, retained so callers can warn.
 #[derive(Debug, Clone)]
 pub struct SkippedSession {
@@ -117,7 +123,7 @@ pub fn load_workspace_source(cwd: &Path, source: &str) -> Result<SourceQueryResu
     }
 
     if records.is_empty() {
-        anyhow::bail!("No record found for ref selector `{source}`");
+        anyhow::bail!("{NO_RECORD_FOR_SELECTOR} `{source}`");
     }
 
     Ok(SourceQueryResult {

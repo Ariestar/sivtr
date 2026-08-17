@@ -14,11 +14,14 @@ pub use plan::{parse_address_dialogues, CopyFilters, CopyPlan, Projection};
 
 use anyhow::{Context, Result};
 use sivtr_core::ai::AgentProvider;
+use sivtr_core::origin::OriginKind;
 use sivtr_core::record::WorkRecord;
 
 use crate::commands::browse;
 use crate::output;
-use crate::tui::workspace::{WorkspaceFocus, WorkspaceSession, WorkspaceSource};
+use crate::tui::workspace::{
+    WorkspaceFocus, WorkspaceSession, WorkspaceSource, WorkspaceSourceKind,
+};
 
 use export::finish_text_pairs;
 use load::load_for_plan;
@@ -113,11 +116,27 @@ fn execute_pick(plan: &CopyPlan) -> Result<()> {
 
 fn session_source_from_records(records: &[WorkRecord]) -> Option<WorkspaceSource> {
     let record = records.first()?;
-    if let Some(provider) = record.work_ref.provider() {
-        Some(WorkspaceSource::agent(provider))
+    let kind = match record.work_ref.provider() {
+        Some(provider) => WorkspaceSourceKind::Agent(provider),
+        None => WorkspaceSourceKind::Terminal,
+    };
+    let Some(scope) = record.work_ref.scope_name() else {
+        return Some(WorkspaceSource::local(kind));
+    };
+    // Only a registry-confirmed remote mount renders with the remote glyph;
+    // named local aliases (`docs:`) and groups stay on the local style.
+    let cwd = std::env::current_dir().ok()?;
+    let registry = crate::origins::collect(&cwd).ok()?;
+    let remote = registry
+        .resolve(scope)
+        .ok()
+        .flatten()
+        .is_some_and(|entry| entry.origin.kind == OriginKind::Remote);
+    Some(if remote {
+        WorkspaceSource::remote(scope, kind)
     } else {
-        Some(WorkspaceSource::terminal())
-    }
+        WorkspaceSource::local(kind)
+    })
 }
 
 /// Build plan from CLI pieces (projection sugar + free tokens + flags).

@@ -12,17 +12,14 @@ use rmcp::{
 };
 use serde::Serialize;
 use sivtr_core::ai::AgentProvider;
-use sivtr_core::workspace;
 
 use crate::commands::memory::{filter, search, show, workset, zoom};
-use crate::commands::remote::workspace::workspace_display_name;
 use crate::remote::ipc;
-use crate::remote::protocol::{LocalRequest, LocalResponse};
 
 use super::types::{
     memory_result, show_result, to_filter_args, to_search_args, to_show_args, to_zoom_args,
-    FilterParams, MountStatus, ProviderStatus, SearchParams, ShowParams, StatusParams,
-    StatusResult, VarStatus, WorkspaceOrigin, ZoomParams,
+    FilterParams, ProviderStatus, SearchParams, ShowParams, StatusParams, StatusResult, VarStatus,
+    ZoomParams,
 };
 
 #[derive(Clone)]
@@ -100,7 +97,7 @@ impl SivtrMcp {
     }
 
     #[tool(
-        description = "Environment and origin status: version, hooks, providers, daemon, local workspace origin labels (ws), remote mounts, and saved WorkSet vars."
+        description = "Environment and origin status: version, hooks, providers, daemon, unified origins (local workspaces + remote mounts), and saved WorkSet vars."
     )]
     fn sivtr_status(
         &self,
@@ -245,8 +242,7 @@ fn collect_status(cwd: Option<&str>) -> anyhow::Result<StatusResult> {
     let shell_hooks_installed = shell_hooks_installed();
     let providers = provider_status();
     let (daemon_running, daemon_node_id) = daemon_status();
-    let local_workspaces = local_workspace_origins(&cwd)?;
-    let mounts = mount_status(&cwd);
+    let origins = crate::origins::collect(&cwd)?.all().cloned().collect();
     let vars = workset::list_saved().ok().map(|list| {
         list.into_iter()
             .map(|var| VarStatus {
@@ -267,8 +263,7 @@ fn collect_status(cwd: Option<&str>) -> anyhow::Result<StatusResult> {
         providers,
         daemon_running,
         daemon_node_id,
-        local_workspaces,
-        mounts,
+        origins,
         vars,
     })
 }
@@ -344,62 +339,5 @@ fn daemon_status() -> (bool, Option<String>) {
     match ipc::read_daemon_info() {
         Ok(info) => (true, Some(info.node_id)),
         Err(_) => (false, None),
-    }
-}
-
-fn local_workspace_origins(cwd: &Path) -> anyhow::Result<Vec<WorkspaceOrigin>> {
-    let current = workspace::resolve_current_workspace()?.map(|paths| paths.key);
-    // Ensure cwd is registered when possible.
-    let _ = workspace::ensure_workspace_for_dir(cwd);
-    let mut metas = workspace::list_workspaces()?;
-    if let Some(current_key) = current.as_deref() {
-        metas.sort_by(|a, b| {
-            let a_cur = a.key == current_key;
-            let b_cur = b.key == current_key;
-            b_cur
-                .cmp(&a_cur)
-                .then_with(|| b.last_seen_at.cmp(&a.last_seen_at))
-        });
-    }
-    Ok(metas
-        .into_iter()
-        .map(|meta| {
-            let current = current.as_deref() == Some(meta.key.as_str());
-            WorkspaceOrigin {
-                name: workspace_display_name(&meta),
-                root: meta.root,
-                key: meta.key,
-                current,
-            }
-        })
-        .collect())
-}
-
-fn mount_status(cwd: &Path) -> Vec<MountStatus> {
-    let key = workspace::resolve_workspace_for_dir(cwd)
-        .ok()
-        .flatten()
-        .map(|paths| paths.key)
-        .or_else(|| {
-            workspace::resolve_current_workspace()
-                .ok()
-                .flatten()
-                .map(|paths| paths.key)
-        });
-    let Some(workspace_key) = key.as_deref() else {
-        return Vec::new();
-    };
-    match ipc::call(LocalRequest::RemoteList {
-        workspace_key: workspace_key.to_string(),
-    }) {
-        Ok(LocalResponse::Mounts(mounts)) => mounts
-            .into_iter()
-            .map(|mount| MountStatus {
-                alias: mount.alias,
-                peer_name: mount.peer_name,
-                share_name: mount.share_name,
-            })
-            .collect(),
-        _ => Vec::new(),
     }
 }

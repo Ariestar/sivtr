@@ -5,6 +5,7 @@ pub mod capture;
 pub mod config;
 pub mod export;
 pub mod history;
+pub mod origin;
 pub mod query;
 pub mod record;
 pub mod search;
@@ -20,6 +21,9 @@ pub use agents::hermes;
 pub use agents::openclaw;
 pub use agents::opencode;
 pub use agents::pi;
+
+#[cfg(test)]
+pub(crate) mod test_fixtures;
 
 /// Serialize tests that mutate process-global env vars.
 ///

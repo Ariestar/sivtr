@@ -4,7 +4,7 @@
 //! [`SlidingPane::ensure_meta`] / [`SlidingPane::ensure_bodies`]; this module
 //! only fulfills those requests over workset.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -20,14 +20,12 @@ use crate::pane::{
     keep_keys, MetaNeed, Pane, PaneInput, SlidingPane, StorePhase, Viewport, WindowRow,
     FETCH_CEILING, FETCH_FLOOR,
 };
-use crate::remote::ipc;
-use crate::remote::protocol::{LocalRequest, LocalResponse};
 use crate::tui::workspace::{
     SourceLoadMarker, WorkspaceSession, WorkspaceSource, WorkspaceSourceKind,
 };
 use sivtr_core::ai::AgentProvider;
+use sivtr_core::origin::OriginKind;
 use sivtr_core::record::WorkRecord;
-use sivtr_core::workspace;
 
 /// Session meta without dialogue bodies.
 #[derive(Clone, Debug)]
@@ -687,35 +685,25 @@ pub fn workspace_source_catalog(
     for provider in providers {
         sources.push(WorkspaceSource::agent(*provider));
     }
-    for alias in list_remote_aliases(cwd)? {
-        sources.push(WorkspaceSource::scoped(
-            &alias,
+    // Mount aliases come from the same origin registry every query path uses;
+    // it lists mounts only while the daemon is already running.
+    let registry = crate::origins::collect(cwd).context("Failed to collect the origin registry")?;
+    for origin in registry.all() {
+        if origin.kind != OriginKind::Remote {
+            continue;
+        }
+        sources.push(WorkspaceSource::remote(
+            &origin.name,
             WorkspaceSourceKind::Terminal,
         ));
         for provider in providers {
-            sources.push(WorkspaceSource::scoped(
-                &alias,
+            sources.push(WorkspaceSource::remote(
+                &origin.name,
                 WorkspaceSourceKind::Agent(*provider),
             ));
         }
     }
     Ok(sources)
-}
-
-fn list_remote_aliases(cwd: &Path) -> Result<Vec<String>> {
-    let Some(ws) = workspace::resolve_workspace_for_dir(cwd)? else {
-        return Ok(Vec::new());
-    };
-    if !ipc::running() {
-        return Ok(Vec::new());
-    }
-    match ipc::call(LocalRequest::RemoteList {
-        workspace_key: ws.key,
-    }) {
-        Ok(LocalResponse::Mounts(mounts)) => Ok(mounts.into_iter().map(|m| m.alias).collect()),
-        Ok(_) => Ok(Vec::new()),
-        Err(_) => Ok(Vec::new()),
-    }
 }
 
 /// Meta-only merge of ready sources (bodies remain in each source pane).

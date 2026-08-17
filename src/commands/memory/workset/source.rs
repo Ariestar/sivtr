@@ -6,12 +6,13 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use sivtr_core::query::load_workspace_source;
+use sivtr_core::origin::Reach;
+use sivtr_core::query::{load_workspace_source, NO_RECORD_FOR_SELECTOR};
 use sivtr_core::record::{expand_source, WorkPath, WorkRecord, WorkRef};
-use sivtr_core::workspace;
 
 use crate::commands::memory::filter::{self, Filter};
 use crate::commands::memory::records::warn_skipped;
+use crate::commands::remote::serve;
 use crate::output;
 
 use super::WorkSet;
@@ -19,10 +20,9 @@ use super::WorkSet;
 /// Default deadline for one remote source inside [`query_many`].
 pub const REMOTE_QUERY_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Minimum deadline for one group fan-out inside [`query`]; a group query
-/// fans out to every member, so it needs headroom beyond a single remote hop.
-/// Must stay >= the daemon's group sync pull budget plus the per-share
-/// fan-out budget (`remote::groups` constants).
+/// Socket-read headroom for one group fan-out inside [`query`]: the daemon
+/// dials every member in parallel under its own per-share budget, so this
+/// must stay above that budget plus local query time.
 const GROUP_QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How one source is scheduled inside [`query_many`].
@@ -101,30 +101,39 @@ pub fn query(source: &str, filter: Filter, cwd: Option<&Path>) -> Result<WorkSet
         }
         let scope = scope.to_ascii_lowercase();
 
-        if let Some(ws) = workspace::resolve_workspace_for_dir(&cwd)? {
-            if let Some(set) = try_remote(&ws.key, &scope, path, filter.clone(), &cwd)? {
-                return Ok(set);
-            }
+        // One lookup: the registry is the single alias table (local
+        // workspaces, remote mounts), each entry carrying its reach payload;
+        // resolution applies kind precedence on name collisions.
+        // The registry lists mounts only while the daemon is already running,
+        // so a passive miss is retried once with the daemon up — a cold
+        // `desk:terminal` query must still resolve its mount. Groups
+        // (`team`, `team/alice`) are a roster fan-out over many devices, not
+        // a single origin, so they are tried only on a miss.
+        let mut registry = crate::origins::collect(&cwd)?;
+        if registry.resolve(&scope)?.is_none() {
+            serve::ensure_running()?;
+            registry = crate::origins::collect(&cwd)?;
         }
-
-        // Group fan-out: `team:terminal` (all members) or `team/alice:terminal`
-        // (one member). Groups are device-global, resolved after mounts so a
-        // mount alias always wins over a same-named group.
-        if let Some(set) = try_group(&scope, path, filter.clone(), &cwd)? {
-            return Ok(set);
-        }
-
-        if !scope.contains('/') {
-            if let Some(root) =
-                crate::commands::remote::workspace::resolve_local_workspace_by_name(&scope)?
-            {
-                return run_local(path, &root, filter);
-            }
-        }
-
-        anyhow::bail!(
-            "unknown scope `{scope}`; use `sivtr remote list` for remotes or `sivtr ws list` for local workspaces"
-        );
+        return match registry.resolve(&scope)? {
+            Some(entry) => match &entry.reach {
+                Reach::Local { root } => run_local(path, Path::new(root), filter),
+                Reach::Remote { workspace_key, alias } => try_remote_timed(
+                    workspace_key,
+                    alias,
+                    path,
+                    filter,
+                    &cwd,
+                    Duration::from_secs(30),
+                )
+                .with_context(|| format!("remote mount `{alias}` unavailable")),
+            },
+            None => match try_group(&scope, path, filter, &cwd)? {
+                Some(set) => Ok(set),
+                None => anyhow::bail!(
+                    "unknown scope `{scope}`; use `sivtr ws list` for local workspaces, `sivtr remote list` for remotes, or `sivtr group list` for groups"
+                ),
+            },
+        };
     }
 
     run_local(&source, &cwd, filter)
@@ -163,7 +172,7 @@ pub fn query_many(
             Err(error) => {
                 let message = error.to_string();
                 // Empty selector is normal for browse; keep parity with single-source callers.
-                if message.starts_with("No record found for ref selector") {
+                if message.starts_with(NO_RECORD_FOR_SELECTOR) {
                     results[idx] = Some(QuerySourceResult::Ok(WorkSet::with_anchors(
                         cwd.display().to_string(),
                         Vec::new(),
@@ -195,7 +204,7 @@ pub fn query_many(
                 Ok(set) => Ok(set),
                 Err(error) => {
                     let message = error.to_string();
-                    if message.starts_with("No record found for ref selector") {
+                    if message.starts_with(NO_RECORD_FOR_SELECTOR) {
                         Ok(WorkSet::with_anchors(
                             cwd.display().to_string(),
                             Vec::new(),
@@ -256,28 +265,30 @@ fn query_remote_bounded(
     cwd: &Path,
     read_timeout: Duration,
 ) -> Result<WorkSet> {
-    // Prefer the timed IPC path for `scope:path` remotes so the daemon socket
-    // itself respects the interactive deadline.
-    if let Some((scope, path)) = selector.split_once(':') {
-        if !path.is_empty() && !path.starts_with('/') && !scope.eq_ignore_ascii_case("local") {
-            if !scope.contains('/') {
-                if let Some(ws) = workspace::resolve_workspace_for_dir(cwd)? {
-                    if let Some(set) =
-                        try_remote_timed(&ws.key, scope, path, filter.clone(), cwd, read_timeout)?
-                    {
-                        return Ok(set);
-                    }
-                }
-            }
-            // Groups (`team` or `team/alice`) are device-global; mount aliases
-            // are workspace-scoped and were checked above.
-            if let Some(set) = try_group_timed(scope, path, filter.clone(), cwd, read_timeout)? {
-                return Ok(set);
-            }
-        }
+    // Only confirmed mounts need the timed IPC path, so the daemon socket
+    // itself respects the interactive deadline. Everything else — groups,
+    // named local workspaces, plain selectors — goes through the unified
+    // [`query`], which resolves it in one registry lookup.
+    let Some((scope, path)) = selector.split_once(':') else {
+        return query(selector, filter, Some(cwd));
+    };
+    if path.is_empty() || path.starts_with('/') || scope.eq_ignore_ascii_case("local") {
+        return query(selector, filter, Some(cwd));
     }
-    // Fall back to the normal query (named local workspace, etc.).
-    query(selector, filter, Some(cwd))
+    // Remote mounts need the daemon; start it before the passive lookup.
+    serve::ensure_running()?;
+    let registry = crate::origins::collect(cwd)?;
+    let Some(entry) = registry.resolve(scope)? else {
+        return query(selector, filter, Some(cwd));
+    };
+    match &entry.reach {
+        Reach::Remote {
+            workspace_key,
+            alias,
+        } => try_remote_timed(workspace_key, alias, path, filter, cwd, read_timeout)
+            .with_context(|| format!("remote mount `{alias}` unavailable")),
+        _ => query(selector, filter, Some(cwd)),
+    }
 }
 
 fn is_timeout_error(message: &str) -> bool {
@@ -308,11 +319,7 @@ pub fn run_on_share(
             }
             Ok((set.records, set.anchors))
         }
-        Err(error)
-            if error
-                .to_string()
-                .starts_with("No record found for ref selector") =>
-        {
+        Err(error) if error.to_string().starts_with(NO_RECORD_FOR_SELECTOR) => {
             Ok((Vec::new(), Vec::new()))
         }
         Err(error) => Err(error),
@@ -332,79 +339,43 @@ fn apply_loaded(set: WorkSet, filter: Filter) -> Result<WorkSet> {
     filter::apply(PathBuf::from(&set.cwd), set.records, set.anchors, filter)
 }
 
-fn try_remote(
-    workspace_key: &str,
-    remote_name: &str,
-    path: &str,
-    filter: Filter,
-    cwd: &Path,
-) -> Result<Option<WorkSet>> {
-    try_remote_timed(
-        workspace_key,
-        remote_name,
-        path,
-        filter,
-        cwd,
-        Duration::from_secs(30),
-    )
-}
-
 fn try_remote_timed(
     workspace_key: &str,
-    remote_name: &str,
+    alias: &str,
     path: &str,
     filter: Filter,
     cwd: &Path,
     read_timeout: Duration,
-) -> Result<Option<WorkSet>> {
+) -> Result<WorkSet> {
     use crate::remote::ipc;
     use crate::remote::protocol::{LocalRequest, LocalResponse};
 
+    // The registry already confirmed the mount; ensure the daemon is up so a
+    // stale socket yields a clear error instead of a confusing one.
     crate::commands::remote::serve::ensure_running()?;
-    let mounts = match ipc::call(LocalRequest::RemoteList {
-        workspace_key: workspace_key.to_string(),
-    })? {
-        LocalResponse::Mounts(mounts) => mounts,
-        _ => return Ok(None),
-    };
-    if !mounts
-        .iter()
-        .any(|mount| mount.alias.eq_ignore_ascii_case(remote_name))
-    {
-        return Ok(None);
-    }
-
     match ipc::call_with_read_timeout(
         LocalRequest::RemoteQuery {
             workspace_key: workspace_key.to_string(),
-            alias: remote_name.to_ascii_lowercase(),
+            alias: alias.to_ascii_lowercase(),
             source: path.to_string(),
             filter,
         },
         read_timeout,
     )? {
-        LocalResponse::Query(response) => Ok(Some(WorkSet::with_anchors(
+        LocalResponse::Query(response) => Ok(WorkSet::with_anchors(
             cwd.display().to_string(),
             response.records,
             response.anchors,
-        ))),
+        )),
         response => anyhow::bail!("Unexpected daemon response: {response:?}"),
     }
 }
 
+/// Group fan-out: `team:...` (all members), `team/alice:...` (one member), or
+/// `team/alice/proj-b:...` (one member, one contributed share). Returns
+/// `Ok(None)` when `scope` is not a group on this device so the caller can
+/// continue the scope cascade.
 fn try_group(scope: &str, path: &str, filter: Filter, cwd: &Path) -> Result<Option<WorkSet>> {
-    try_group_timed(scope, path, filter, cwd, GROUP_QUERY_TIMEOUT)
-}
-
-/// Group fan-out with a deadline. Returns `Ok(None)` when `scope` is not a
-/// group on this device so the caller can continue the scope cascade.
-fn try_group_timed(
-    scope: &str,
-    path: &str,
-    filter: Filter,
-    cwd: &Path,
-    read_timeout: Duration,
-) -> Result<Option<WorkSet>> {
     use crate::remote::ipc;
     use crate::remote::protocol::{LocalRequest, LocalResponse};
 
@@ -413,6 +384,9 @@ fn try_group_timed(
     };
     crate::commands::remote::serve::ensure_running()
         .context("failed to start the sivtr daemon for a group query")?;
+    // The daemon answers `None` for an unknown group; the fan-out happens
+    // inside it (parallel per-member dials), so the socket read gets enough
+    // headroom beyond the daemon's per-peer budget.
     match ipc::call_with_read_timeout(
         LocalRequest::GroupQuery {
             group,
@@ -421,11 +395,10 @@ fn try_group_timed(
             source: path.to_string(),
             filter,
         },
-        read_timeout,
+        GROUP_QUERY_TIMEOUT,
     )
     .context("group query failed")?
     {
-        // Unknown group: fall through to the rest of the scope cascade.
         LocalResponse::GroupQuery(None) => Ok(None),
         LocalResponse::GroupQuery(Some(response)) => {
             if !response.skipped.is_empty() {

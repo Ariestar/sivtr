@@ -6,7 +6,6 @@ use sivtr_core::workspace::{self, WorkspaceMetadata};
 
 use crate::cli::{ShareAction, ShareCommand};
 use crate::commands::interactive;
-use crate::commands::remote::workspace::workspace_display_name;
 use crate::output;
 use crate::remote::ipc;
 use crate::remote::protocol::{LocalRequest, LocalResponse, ShareInfo};
@@ -138,6 +137,7 @@ pub(crate) fn list_workspace_choices() -> Result<Vec<WorkspaceChoice>> {
                 WorkspaceMetadata {
                     key: paths.key.clone(),
                     root: paths.root.display().to_string(),
+                    alias: None,
                     created_at: String::new(),
                     last_seen_at: String::new(),
                 },
@@ -163,7 +163,7 @@ pub(crate) fn list_workspace_choices() -> Result<Vec<WorkspaceChoice>> {
         .map(|meta| {
             let current = Some(meta.key.as_str()) == current_key;
             WorkspaceChoice {
-                name: workspace_display_name(&meta),
+                name: workspace::workspace_alias(&meta),
                 key: meta.key,
                 root: meta.root,
                 current,

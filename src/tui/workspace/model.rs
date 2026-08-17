@@ -102,7 +102,8 @@ impl WorkspaceSource {
         Self::local(WorkspaceSourceKind::Agent(provider))
     }
 
-    pub(crate) fn scoped(scope: impl Into<String>, kind: WorkspaceSourceKind) -> Self {
+    /// A source on another device, addressed by its mount alias.
+    pub(crate) fn remote(scope: impl Into<String>, kind: WorkspaceSourceKind) -> Self {
         Self {
             scope: Some(scope.into()),
             kind,
@@ -133,6 +134,7 @@ impl WorkspaceSource {
         self.kind.color()
     }
 
+    /// Whether this source needs remote transport (mount on another device).
     pub(crate) fn is_remote(&self) -> bool {
         self.scope.is_some()
     }
