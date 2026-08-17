@@ -56,10 +56,6 @@ impl QuerySource {
             transport: QueryTransport::Remote,
         }
     }
-
-    pub fn is_remote(&self) -> bool {
-        self.transport == QueryTransport::Remote
-    }
 }
 
 /// Per-source outcome from [`query_many`]. Failures never drop other sources.
@@ -117,15 +113,17 @@ pub fn query(source: &str, filter: Filter, cwd: Option<&Path>) -> Result<WorkSet
         return match registry.resolve(&scope)? {
             Some(entry) => match &entry.reach {
                 Reach::Local { root } => run_local(path, Path::new(root), filter),
-                Reach::Remote { workspace_key, alias } => try_remote_timed(
+                Reach::Remote { workspace_key } => try_remote_timed(
                     workspace_key,
-                    alias,
+                    &entry.origin.name,
                     path,
                     filter,
                     &cwd,
                     Duration::from_secs(30),
                 )
-                .with_context(|| format!("remote mount `{alias}` unavailable")),
+                .with_context(|| {
+                    format!("remote mount `{}` unavailable", entry.origin.name)
+                }),
             },
             None => match try_group(&scope, path, filter, &cwd)? {
                 Some(set) => Ok(set),
@@ -163,7 +161,7 @@ pub fn query_many(
 
     let mut remote_idxs = Vec::new();
     for (idx, source) in sources.iter().enumerate() {
-        if source.is_remote() {
+        if source.transport == QueryTransport::Remote {
             remote_idxs.push(idx);
             continue;
         }
@@ -282,11 +280,15 @@ fn query_remote_bounded(
         return query(selector, filter, Some(cwd));
     };
     match &entry.reach {
-        Reach::Remote {
+        Reach::Remote { workspace_key } => try_remote_timed(
             workspace_key,
-            alias,
-        } => try_remote_timed(workspace_key, alias, path, filter, cwd, read_timeout)
-            .with_context(|| format!("remote mount `{alias}` unavailable")),
+            &entry.origin.name,
+            path,
+            filter,
+            cwd,
+            read_timeout,
+        )
+        .with_context(|| format!("remote mount `{}` unavailable", entry.origin.name)),
         _ => query(selector, filter, Some(cwd)),
     }
 }

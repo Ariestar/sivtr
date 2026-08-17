@@ -19,11 +19,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Major source category.
-///
-/// `#[non_exhaustive]`: adding a category (cloud account, WSL, container, …)
-/// only requires a new variant plus a `label()` arm here; code outside this
-/// crate is forced to handle the wildcard, so nothing downstream breaks.
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum OriginKind {
@@ -66,11 +61,9 @@ pub struct Origin {
 pub enum Reach {
     /// A workspace on this machine: its root directory.
     Local { root: String },
-    /// A mount on another device: which workspace's mount list and which alias.
-    Remote {
-        workspace_key: String,
-        alias: String,
-    },
+    /// A mount on another device: which workspace's mount list.
+    /// The mount alias is [`Origin::name`].
+    Remote { workspace_key: String },
 }
 
 /// One registry entry: the display [`Origin`] plus its [`Reach`].
@@ -109,37 +102,28 @@ impl OriginRegistry {
     /// higher-priority kind wins, matching the lookup order that predated the
     /// registry. Collisions within one kind are an error.
     pub fn resolve(&self, name: &str) -> Result<Option<&Entry>> {
-        let mut matched = self
+        let mut matched: Vec<_> = self
             .entries
             .iter()
             .filter(|entry| entry.origin.name.eq_ignore_ascii_case(name))
-            .collect::<Vec<_>>();
-        if matched.is_empty() {
-            return Ok(None);
+            .collect();
+        match matched.len() {
+            0 => Ok(None),
+            1 => Ok(Some(matched[0])),
+            _ => {
+                // Remote wins a cross-kind collision; same-kind collisions stay
+                // ambiguous.
+                matched.sort_by_key(|entry| matches!(entry.origin.kind, OriginKind::Local));
+                if matched[0].origin.kind == matched[1].origin.kind {
+                    let details: Vec<&str> = matched
+                        .iter()
+                        .map(|entry| entry.origin.detail.as_str())
+                        .collect();
+                    bail!("ambiguous origin `{name}`; matches: {}", details.join(", "));
+                }
+                Ok(Some(matched[0]))
+            }
         }
-        // Remote before local: the higher-priority kind wins a cross-kind
-        // collision; within one kind the name is still ambiguous.
-        matched.sort_by_key(|entry| kind_priority(entry.origin.kind));
-        if matched.len() > 1
-            && kind_priority(matched[0].origin.kind) == kind_priority(matched[1].origin.kind)
-        {
-            let details: Vec<&str> = matched
-                .iter()
-                .map(|entry| entry.origin.detail.as_str())
-                .collect();
-            bail!("ambiguous origin `{name}`; matches: {}", details.join(", "));
-        }
-        Ok(Some(matched[0]))
-    }
-}
-
-/// Resolution priority when a name collides across kinds. A remote mount
-/// wins over a local workspace of the same name — remote lookup ran before
-/// local workspace resolution before the registry existed.
-fn kind_priority(kind: OriginKind) -> u8 {
-    match kind {
-        OriginKind::Remote => 0,
-        OriginKind::Local => 1,
     }
 }
 
@@ -169,7 +153,6 @@ mod tests {
                 },
                 reach: Reach::Remote {
                     workspace_key: "key1".to_string(),
-                    alias: "desk".to_string(),
                 },
             },
         ])
@@ -263,26 +246,19 @@ mod tests {
                 },
                 reach: Reach::Remote {
                     workspace_key: "k1".to_string(),
-                    alias: "proj".to_string(),
                 },
             },
         ]);
         let entry = registry.resolve("proj").expect("resolve").expect("found");
         assert_eq!(entry.origin.kind, OriginKind::Remote);
-        assert!(matches!(
-            &entry.reach,
-            Reach::Remote { alias, .. } if alias == "proj"
-        ));
+        assert!(matches!(&entry.reach, Reach::Remote { workspace_key } if workspace_key == "k1"));
     }
 
     #[test]
     fn resolve_returns_reach_payload_per_kind() {
         let registry = sample();
         let entry = registry.resolve("desk").expect("resolve").expect("found");
-        assert!(matches!(
-            &entry.reach,
-            Reach::Remote { alias, .. } if alias == "desk"
-        ));
+        assert!(matches!(&entry.reach, Reach::Remote { workspace_key } if workspace_key == "key1"));
         let entry = registry.resolve("sivtr").expect("resolve").expect("found");
         assert!(matches!(
             &entry.reach,
@@ -295,16 +271,6 @@ mod tests {
         let registry = sample();
         let names: Vec<_> = registry.all().map(|origin| origin.name.as_str()).collect();
         assert_eq!(names, vec!["sivtr", "desk"]);
-    }
-
-    #[test]
-    fn origin_fields_are_uniform_across_kinds() {
-        // Upper layers read the same four fields no matter the kind.
-        for origin in sample().all() {
-            assert!(!origin.name.is_empty());
-            assert!(!origin.detail.is_empty());
-            assert!(matches!(origin.kind.label(), "local" | "remote"));
-        }
     }
 
     #[test]

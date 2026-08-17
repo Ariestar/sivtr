@@ -329,7 +329,7 @@ fn footer_status_spans(label: &str) -> Vec<Span<'static>> {
 
 /// Compact session row: `· cdx  title…` (origin glyph + short badge + title).
 ///
-/// `·` = local, `↗` = remote (named scope on the source or work_ref). A ` [!]`
+/// `·` = local, `↗` = remote mount. A ` [!]`
 /// suffix marks a session whose body failed to hydrate. The selection dot
 /// (`●` / `○`) is always visible so it survives pane switches.
 fn session_row_line(
@@ -339,11 +339,7 @@ fn session_row_line(
     highlight: Option<&Regex>,
     body_failed: bool,
 ) -> Line<'static> {
-    let remote = choice.source.is_remote()
-        || choice
-            .records
-            .first()
-            .is_some_and(|record| !record.work_ref.is_local());
+    let remote = choice.source.is_remote();
     let check = format!("{} ", selection_dot(selected));
     let origin = theme::origin_glyph(remote);
     let badge = choice.source.badge();

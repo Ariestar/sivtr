@@ -24,7 +24,7 @@ pub fn collect(cwd: &Path) -> Result<OriginRegistry> {
 
     // Register `cwd` when it is a git repo, so the current workspace is part
     // of the registry even before its first capture.
-    let _ = workspace::ensure_workspace_for_dir(cwd);
+    workspace::ensure_workspace_for_dir(cwd)?;
 
     let current_key = workspace::resolve_workspace_for_dir(cwd)?.map(|paths| paths.key);
     for meta in workspace::list_workspaces()? {
@@ -60,7 +60,6 @@ pub fn collect(cwd: &Path) -> Result<OriginRegistry> {
                             },
                             reach: Reach::Remote {
                                 workspace_key: workspace_key.to_string(),
-                                alias: mount.alias,
                             },
                         });
                     }
@@ -104,12 +103,9 @@ pub fn rename(cwd: &Path, name: &str, new_name: &str) -> Result<String> {
             let updated = workspace::rename_workspace(root, &new_name)?;
             Ok(workspace::workspace_alias(&updated))
         }
-        Reach::Remote {
-            workspace_key,
-            alias,
-        } => match ipc::call(LocalRequest::RemoteRename {
+        Reach::Remote { workspace_key } => match ipc::call(LocalRequest::RemoteRename {
             workspace_key: workspace_key.clone(),
-            alias: alias.clone(),
+            alias: entry.origin.name.clone(),
             new_alias: new_name.clone(),
         })? {
             LocalResponse::Mount(mount) => Ok(mount.alias),
