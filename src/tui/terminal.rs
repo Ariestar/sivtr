@@ -607,9 +607,7 @@ fn ensure_tui_stdout_value(is_terminal: bool) -> Result<()> {
         return Ok(());
     }
 
-    bail!(
-        "sivtr: TUI mode requires an interactive terminal\n  hint: run inside a terminal"
-    )
+    bail!("sivtr: TUI mode requires an interactive terminal\n  hint: run inside a terminal")
 }
 
 /// Read the next event that can affect the rendered interface.
