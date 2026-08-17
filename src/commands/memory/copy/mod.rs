@@ -127,12 +127,8 @@ fn session_source_from_records(records: &[WorkRecord]) -> Option<WorkspaceSource
     // named local aliases (`docs:`) and groups stay on the local style.
     let cwd = std::env::current_dir().ok()?;
     let registry = crate::origins::collect(&cwd).ok()?;
-    let remote = registry
-        .resolve(scope)
-        .ok()
-        .flatten()
-        .is_some_and(|entry| entry.origin.kind == OriginKind::Remote);
-    Some(if remote {
+    let entry = registry.resolve(scope).ok()??;
+    Some(if entry.origin.kind == OriginKind::Remote {
         WorkspaceSource::remote(scope, kind)
     } else {
         WorkspaceSource::local(kind)
