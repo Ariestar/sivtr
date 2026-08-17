@@ -54,6 +54,10 @@ where
         self.store.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.store.len() == 0
+    }
+
     pub fn is_fetching(&self) -> bool {
         self.store.is_fetching()
     }
