@@ -205,8 +205,10 @@ jobs:
             capture { print }
           ' CHANGELOG.md > "$notes"
 
-          if [ ! -s "$notes" ]; then
-            echo "::error::No CHANGELOG.md section for ${version}"
+          # The section heading alone is not release-note content; require at
+          # least one non-empty line after it before allowing the release.
+          if ! awk 'NR > 1 && /[^[:space:]]/ { found = 1 } END { exit !found }' "$notes"; then
+            echo "::error::No CHANGELOG.md content for ${version}"
             exit 1
           fi
 
