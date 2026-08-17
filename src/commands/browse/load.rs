@@ -41,6 +41,9 @@ pub type SessionKey = String;
 pub type SessionBody = Vec<WorkRecord>;
 pub type SessionPane = SlidingPane<SessionKey, SessionMeta, SessionBody>;
 
+/// Cap concurrent session-body parse threads.
+const BODY_FETCH_CAP: usize = 2;
+
 /// UI-facing per-source session pane.
 #[derive(Clone, Debug, Default)]
 pub struct SourceLoadState {
@@ -291,6 +294,9 @@ impl SourceLoadPump {
                 continue;
             };
             for session_id in missing {
+                if self.body_inflight.len() >= BODY_FETCH_CAP {
+                    return;
+                }
                 let ik = format!("{source_idx}\0{session_id}");
                 if self.body_inflight.contains(&ik) || self.body_failed.contains_key(&ik) {
                     continue;
@@ -1105,6 +1111,44 @@ mod tests {
         assert!(column.pump.body_inflight.is_empty());
         assert!(column.pump.body_failed.is_empty());
         assert!(column.states[0].body("s1").is_none());
+    }
+
+    #[test]
+    fn body_spawn_stops_at_fetch_cap() {
+        let source = WorkspaceSource::agent(AgentProvider::Codex);
+        let sources = vec![source.clone()];
+        let rows: Vec<_> = ["s1", "s2", "s3"]
+            .into_iter()
+            .map(|id| {
+                WindowRow::meta_only(
+                    id.to_string(),
+                    SessionMeta {
+                        source: source.clone(),
+                        session_id: id.into(),
+                        modified: UNIX_EPOCH,
+                        title: id.into(),
+                        search_title: id.into(),
+                    },
+                )
+            })
+            .collect();
+        let state = SourceLoadState {
+            pane: SessionPane::ready(rows, 10, true),
+        };
+        let mut column = SessionColumn::new(sources.clone(), vec![state], PathBuf::from("."));
+
+        // Saturate the cap with unrelated keys so the missing keep set cannot
+        // spawn more parse threads.
+        column.pump.body_inflight.insert("0\0busy1".into());
+        column.pump.body_inflight.insert("0\0busy2".into());
+        let keep: HashSet<(usize, String)> = [(0, "s1".into()), (0, "s2".into()), (0, "s3".into())]
+            .into();
+        column.pump.sync_bodies(&sources, &mut column.states, &keep);
+
+        assert_eq!(column.pump.body_inflight.len(), BODY_FETCH_CAP);
+        assert!(!column.pump.body_inflight.contains("0\0s1"));
+        assert!(!column.pump.body_inflight.contains("0\0s2"));
+        assert!(!column.pump.body_inflight.contains("0\0s3"));
     }
 
     fn test_record(session: &str, index: usize, title: &str, ended: &str) -> WorkRecord {
