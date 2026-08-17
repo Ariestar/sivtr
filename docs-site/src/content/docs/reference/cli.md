@@ -568,7 +568,7 @@ sivtr mcp serve
 sivtr mcp serve --idle-exit 60
 ```
 
-`--idle-exit <SECS>` makes the server exit after that many seconds with no tool calls; the host respawns it on the next tool use, so an idle server never lingers (each agent session otherwise keeps one alive until it exits). `0` / absent = stay alive until the host closes stdin. The same value can be set globally with the `[mcp] idle_exit_secs` config key; the CLI flag wins over the config.
+`--idle-exit <SECS>` makes the server exit after that many seconds with no tool calls; the host respawns it on the next tool use, so an idle server never lingers (each agent session otherwise keeps one alive until it exits). `0` = stay alive until the host closes stdin. The same value can be set globally with the `[mcp] idle_exit_secs` config key, which defaults to `60` (idle exit on; set `0` to disable); the CLI flag wins over the config.
 
 Tools:
 

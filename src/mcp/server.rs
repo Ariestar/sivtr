@@ -145,17 +145,17 @@ pub async fn serve_stdio(idle_exit: Option<Duration>) -> anyhow::Result<()> {
         return Ok(());
     };
 
-    // Idle-exit watchdog: exit 0 once no tool call has completed for `idle`
-    // seconds (and none is in flight). The clock only starts after the first
-    // tool call — "exit after use" — so a freshly spawned server that the host
-    // is still initializing is never killed. MCP stdio hosts respawn the
-    // server on the next tool use, so an idle server never lingers.
+    // Standard idle-exit: the clock starts at spawn, so any server that stays
+    // idle for `idle` is killed — whether or not a tool was ever called —
+    // and unused servers never linger. Every tool call resets the clock.
+    // MCP stdio hosts respawn the server on the next tool use.
     //
     // This uses a hard `process::exit`: returning instead would drop the tokio
     // runtime, whose shutdown joins the blocking pool — and the stdio reader
     // thread is parked on the still-open stdin pipe, so the drop hangs until
     // the host closes stdin. Exiting directly is safe here: no tool call is in
     // flight (BUSY gate) and the last response was flushed seconds ago.
+    LAST_ACTIVITY_MS.store(now_ms(), Ordering::Relaxed);
     let wait = service.waiting();
     tokio::pin!(wait);
     let mut ticker = tokio::time::interval(Duration::from_millis(500));
@@ -167,8 +167,7 @@ pub async fn serve_stdio(idle_exit: Option<Duration>) -> anyhow::Result<()> {
                 return Ok(());
             }
             _ = ticker.tick() => {
-                if HAS_ACTIVITY.load(Ordering::Relaxed)
-                    && !BUSY.load(Ordering::Relaxed)
+                if !BUSY.load(Ordering::Relaxed)
                     && idle_elapsed() >= idle.as_millis() as u64
                 {
                     std::process::exit(0);
@@ -178,13 +177,9 @@ pub async fn serve_stdio(idle_exit: Option<Duration>) -> anyhow::Result<()> {
     }
 }
 
-/// Milliseconds since the last completed tool call (0 before any call).
+/// Milliseconds since the last completed tool call or server start.
 fn idle_elapsed() -> u64 {
-    let last = LAST_ACTIVITY_MS.load(Ordering::Relaxed);
-    if last == 0 {
-        return u64::MAX;
-    }
-    now_ms().saturating_sub(last)
+    now_ms().saturating_sub(LAST_ACTIVITY_MS.load(Ordering::Relaxed))
 }
 
 fn now_ms() -> u64 {
@@ -194,12 +189,11 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Last completed tool call, in epoch milliseconds.
+/// Last completed tool call or server start (the idle clock base), in epoch
+/// milliseconds.
 static LAST_ACTIVITY_MS: AtomicU64 = AtomicU64::new(0);
 /// A tool call is currently executing; the watchdog must not exit mid-call.
 static BUSY: AtomicBool = AtomicBool::new(false);
-/// Whether any tool call has ever completed (the idle clock starts then).
-static HAS_ACTIVITY: AtomicBool = AtomicBool::new(false);
 
 /// Marks activity at the start of a tool call and again when it completes.
 /// Dropped on every exit path, including errors.
@@ -207,7 +201,6 @@ struct ActivityGuard;
 
 impl ActivityGuard {
     fn begin() -> Self {
-        HAS_ACTIVITY.store(true, Ordering::Relaxed);
         BUSY.store(true, Ordering::Relaxed);
         LAST_ACTIVITY_MS.store(now_ms(), Ordering::Relaxed);
         Self

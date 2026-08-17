@@ -80,12 +80,13 @@ pub struct ThemeConfig {
 
 /// MCP stdio server settings (shared by every agent host registration —
 /// hosts all run plain `sivtr mcp serve`, behavior is configured here once).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct McpConfig {
-    /// Seconds of no tool calls after which the stdio MCP server exits (0 =
-    /// stay alive until the host closes stdin). Hosts respawn the server on
-    /// the next tool use, so an idle server never lingers.
+    /// Seconds of no tool calls after which the stdio MCP server exits.
+    /// Default 60 (idle exit on); set 0 to keep the server alive until the
+    /// host closes stdin. Hosts respawn the server on the next tool use, so
+    /// an idle server never lingers.
     pub idle_exit_secs: u64,
 }
 
@@ -105,6 +106,12 @@ impl Default for HotkeyConfig {
         Self {
             chord: "alt+y".to_string(),
         }
+    }
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self { idle_exit_secs: 60 }
     }
 }
 
@@ -210,7 +217,7 @@ mod tests {
 
         assert!(toml.contains("[mcp]"));
         assert!(toml.contains("idle_exit_secs = 60"));
-        assert_eq!(SivtrConfig::default().mcp.idle_exit_secs, 0);
+        assert_eq!(SivtrConfig::default().mcp.idle_exit_secs, 60);
     }
 
     #[test]
