@@ -13,7 +13,7 @@ use super::model::{
 };
 
 /// Bump when the listing cache layout or meta parsing changes.
-const LISTING_CACHE_VERSION: u32 = 1;
+const LISTING_CACHE_VERSION: u32 = 2;
 
 /// One cached session file in a listing: fingerprint + parsed metadata.
 #[derive(Clone, Serialize, Deserialize)]
@@ -43,6 +43,19 @@ pub fn list_recent_jsonl_sessions(
     parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
 ) -> Result<Vec<AgentSessionInfo>> {
     collect_recent_sessions(provider, root, cwd, jsonl_files(root)?, parse_meta)
+}
+
+/// Like [`list_recent_jsonl_sessions`], but with caller-supplied session
+/// files (for providers whose logs do not carry a plain `.jsonl` extension,
+/// e.g. dsh's compressed `.jsonl.zstd` artifacts).
+pub fn list_recent_log_sessions(
+    provider: &str,
+    root: &Path,
+    cwd: Option<&Path>,
+    files: Vec<PathBuf>,
+    parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
+) -> Result<Vec<AgentSessionInfo>> {
+    collect_recent_sessions(provider, root, cwd, files, parse_meta)
 }
 
 /// Walk a chat-recording tmp root: `<tmp>/<project>*/chats/*.json[l]`.

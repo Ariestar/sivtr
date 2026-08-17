@@ -183,13 +183,18 @@ const MCP_HOSTS: &[McpHostSpec] = &[
     },
 ];
 
-fn mcp_host(provider: AgentProvider) -> &'static McpHostSpec {
+/// Look up the managed MCP host entry for a provider, or explain why there is
+/// none. Hosts without an entry (e.g. dsh, whose MCP clients are configured as
+/// plugin rows in the harness profile's `cordis.patch.yml`) fail loudly
+/// instead of panicking on the user-facing paths.
+fn mcp_host(provider: AgentProvider) -> Result<&'static McpHostSpec> {
     MCP_HOSTS
         .iter()
         .find(|host| host.provider == provider)
-        .unwrap_or_else(|| {
-            panic!(
-                "MCP host registry missing provider {}",
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "sivtr does not manage MCP server configuration for `{}`; \
+                 configure the host's MCP clients in its own config instead",
                 provider.command_name()
             )
         })
@@ -212,8 +217,7 @@ pub fn execute(command: McpCommand) -> Result<()> {
         McpAction::Uninstall(args) => uninstall(&args),
         McpAction::PrintConfig { target } => {
             let provider = parse_target(&target)?;
-            print_config(provider);
-            Ok(())
+            print_config(provider)
         }
     }
 }
@@ -279,7 +283,7 @@ fn uninstall(args: &McpInstallArgs) -> Result<()> {
 }
 
 fn install_target(target: AgentProvider, location: McpLocation) -> Result<()> {
-    let host = mcp_host(target);
+    let host = mcp_host(target)?;
     ensure_location_allowed(host, location, "install")?;
     let path = (host.config_path)(location);
     match host.kind {
@@ -295,7 +299,7 @@ fn install_target(target: AgentProvider, location: McpLocation) -> Result<()> {
 }
 
 fn uninstall_target(target: AgentProvider, location: McpLocation) -> Result<()> {
-    let host = mcp_host(target);
+    let host = mcp_host(target)?;
     ensure_location_allowed(host, location, "uninstall")?;
     let path = (host.config_path)(location);
     match host.kind {
@@ -339,9 +343,12 @@ fn resolve_targets(providers: &[String]) -> Result<Vec<AgentProvider>> {
                 );
             }
             if part == "all" {
+                // Only hosts with a managed MCP config file; `-p all` must not
+                // try to install into hosts whose config sivtr cannot manage.
                 return Ok(AgentProvider::all()
                     .iter()
                     .map(|spec| spec.provider)
+                    .filter(|provider| MCP_HOSTS.iter().any(|host| host.provider == *provider))
                     .collect());
             }
             out.push(parse_target(&part)?);
@@ -416,8 +423,8 @@ fn config_has_server(host: &McpHostSpec, location: McpLocation) -> bool {
     }
 }
 
-fn print_config(target: AgentProvider) {
-    let host = mcp_host(target);
+fn print_config(target: AgentProvider) -> Result<()> {
+    let host = mcp_host(target)?;
     let path = (host.config_path)(McpLocation::Global);
     output::info(format!("Add to {}", path.display()));
     println!();
@@ -457,6 +464,7 @@ fn print_config(target: AgentProvider) {
             );
         }
     }
+    Ok(())
 }
 
 fn yaml_config_snippet(key: &str, entry: serde_yaml::Value) -> String {
@@ -1101,22 +1109,35 @@ mod tests {
             .contains("removed"));
 
         let all = resolve_targets(&["all".into()]).expect("parse all");
-        assert_eq!(all.len(), AgentProvider::all().len());
+        assert_eq!(all.len(), MCP_HOSTS.len());
     }
 
     #[test]
     fn resolves_all_targets() {
         let all = resolve_targets(&["all".into()]).expect("parse");
-        assert_eq!(all.len(), AgentProvider::all().len());
+        assert_eq!(all.len(), MCP_HOSTS.len());
+        assert!(!all.contains(&AgentProvider::Dsh));
     }
 
     #[test]
-    fn mcp_host_registry_covers_every_provider() {
-        for spec in AgentProvider::all() {
-            let host = mcp_host(spec.provider);
-            assert_eq!(host.provider, spec.provider);
+    fn mcp_host_registry_covers_every_managed_provider() {
+        // dsh configures MCP clients as plugin rows in the harness profile's
+        // `cordis.patch.yml`, not a standalone file, so it has no managed
+        // host entry here; it must fail loudly, never panic.
+        let unmanaged: &[AgentProvider] = &[AgentProvider::Dsh];
+        let managed: Vec<AgentProvider> = AgentProvider::all()
+            .iter()
+            .map(|spec| spec.provider)
+            .filter(|provider| !unmanaged.contains(provider))
+            .collect();
+        assert_eq!(MCP_HOSTS.len(), managed.len());
+        for provider in managed {
+            let host = mcp_host(provider).expect("managed host resolves");
+            assert_eq!(host.provider, provider);
         }
-        assert_eq!(MCP_HOSTS.len(), AgentProvider::all().len());
+        for provider in unmanaged {
+            assert!(mcp_host(*provider).is_err());
+        }
     }
 
     #[test]

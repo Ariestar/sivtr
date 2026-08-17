@@ -93,6 +93,12 @@ pub(crate) const fn provider_colors(provider: AgentProvider) -> ProviderColors {
             ansi: Color::Magenta,
             ansi_light: Color::Magenta,
         },
+        AgentProvider::Dsh => ProviderColors {
+            dark: Color::Rgb(77, 107, 254), // DeepSeek blue
+            light: Color::Rgb(37, 62, 217), // deeper DeepSeek blue
+            ansi: Color::Blue,
+            ansi_light: Color::Blue,
+        },
         AgentProvider::OpenCode => ProviderColors {
             dark: Color::Rgb(45, 212, 191),  // teal-400
             light: Color::Rgb(13, 148, 136), // teal-600
