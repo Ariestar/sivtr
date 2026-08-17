@@ -1,0 +1,34 @@
+# release-plz drives version bumps, the changelog, and tagging.
+#
+# Both crates are processed so the `sivtr-core` dependency pin and Cargo.lock
+# stay in sync, but only `sivtr` creates the `vX.Y.Z` tag and the changelog
+# (core's `git_tag_enable` and `changelog_update` are off). The tag then runs
+# .github/workflows/release.yml, which publishes both crates to crates.io and
+# creates the GitHub Release.
+#
+# release-plz does NOT publish to crates.io (`publish = false`) and does NOT
+# create a GitHub Release (`git_release_enable = false`) — both stay in
+# .github/workflows/release.yml.
+#
+# Note: a change touching only crates/sivtr-core/ bumps the core version and
+# pin but creates no tag; it rides along with the next `sivtr` release.
+
+[workspace]
+git_release_enable = false
+publish = false
+release_always = false
+pr_labels = ["release"]
+features_always_increment_minor = true
+
+[[package]]
+name = "sivtr-core"
+changelog_update = false
+git_tag_enable = false
+
+[[package]]
+name = "sivtr"
+changelog_include = ["sivtr-core"]
+git_tag_name = "v{{ version }}"
+
+[changelog]
+protect_breaking_commits = true

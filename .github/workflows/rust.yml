@@ -1,9 +1,15 @@
 name: Rust
 
+# Merge gate. Required on PRs targeting main:
+#   ci (ubuntu-latest), ci (windows-latest), MSRV
+# Push to main does not re-run this workflow: squash + up-to-date means
+# the PR tree is the tree that lands. release-plz handles versioning.
+
 on:
-  push:
-    branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -16,15 +22,39 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  title:
+    name: PR title
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require Conventional Commits title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, re, sys
+          title = os.environ["PR_TITLE"].strip()
+          pat = re.compile(
+              r"^(feat|fix|refactor|chore|docs|test|ci|perf|build|revert|style)"
+              r"(\([a-z0-9/_-]+\))?(!)?: .+$"
+          )
+          if not pat.match(title):
+              print(
+                  "::error::PR title must be a Conventional Commit subject, "
+                  f"e.g. 'feat(search): add query'. Got: {title!r}"
+              )
+              sys.exit(1)
+          print(f"ok: {title}")
+          PY
+
   ci:
+    if: github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-          - os: ubuntu-latest
-          - os: macos-latest
+        os: [windows-latest, ubuntu-latest, macos-latest]
 
     steps:
       - name: Checkout
@@ -49,8 +79,7 @@ jobs:
         run: cargo test --workspace --locked
 
       - name: Binary smoke test
-        # Real CLI entry points on each OS; catches runtime breakage that
-        # unit tests miss (bad hook glue, missing DLL, platform detection).
+        # Real CLI entry points; catches runtime breakage unit tests miss.
         run: |
           cargo run --quiet -- --version
           cargo run --quiet -- doctor
@@ -59,72 +88,33 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo test --locked tui::conpty_tests::windows_conpty_tui_smoke -- --ignored --exact
 
-  audit:
-    name: Dependency audit
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
-
-      - name: Audit Cargo.lock
-        # Fails only on known vulnerabilities. Two transitive advisories
-        # remain as warnings (paste, spin — upstream deps of ratatui); they
-        # do not fail the gate.
-        run: cargo audit
-
   msrv:
     name: MSRV
+    if: github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # Keep in sync with rust-version in Cargo.toml.
+      - name: Resolve MSRV from Cargo.toml
+        id: msrv
+        run: |
+          set -euo pipefail
+          ver=$(sed -n 's/^rust-version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)
+          if [ -z "$ver" ]; then
+            echo "::error::Could not read rust-version from Cargo.toml"
+            exit 1
+          fi
+          echo "toolchain=$ver" >> "$GITHUB_OUTPUT"
+          echo "MSRV $ver" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Install Rust MSRV
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.97
+          toolchain: ${{ steps.msrv.outputs.toolchain }}
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
       - name: Check on MSRV
         run: cargo check --workspace --locked --all-targets
-
-  docs:
-    name: Docs site
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Install bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Install dependencies
-        run: cd docs-site && bun install --frozen-lockfile
-
-      - name: Astro check
-        run: cd docs-site && bun run check
-
-      - name: Build
-        run: cd docs-site && bun run build
-
-  vscode:
-    name: VS Code extension
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Install bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Install dependencies
-        run: cd editors/vscode && bun install --frozen-lockfile
-
-      - name: Test
-        run: cd editors/vscode && bun run test

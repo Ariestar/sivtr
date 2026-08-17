@@ -195,10 +195,18 @@ jobs:
         run: |
           set -euo pipefail
           version="${RELEASE_REF_NAME#v}"
-          notes="changelogs/${version}.md"
+          notes="${RUNNER_TEMP}/release-notes.md"
 
-          if [ ! -f "$notes" ]; then
-            echo "::error::Missing release notes: ${notes}"
+          awk -v target="## [$version]" '
+            /^## / {
+              if (capture) exit
+              if (index($0, target) == 1) capture = 1
+            }
+            capture { print }
+          ' CHANGELOG.md > "$notes"
+
+          if [ ! -s "$notes" ]; then
+            echo "::error::No CHANGELOG.md section for ${version}"
             exit 1
           fi
 

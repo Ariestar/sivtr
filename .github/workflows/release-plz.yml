@@ -1,0 +1,44 @@
+name: Release-plz
+
+# Keep a Release PR up to date on every push to main. The PR bumps the
+# workspace version, syncs Cargo.lock, and drafts the CHANGELOG.md section
+# from Conventional Commit squash titles. Merging it triggers the tag-only
+# release in release-plz-release.yml.
+#
+# release-plz pushes the PR branch with GITHUB_TOKEN, so GitHub does not run
+# CI on it; merge the Release PR with the maintainer bypass.
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-plz
+  cancel-in-progress: false
+
+jobs:
+  release-plz:
+    name: Release PR
+    if: github.event.repository.fork == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Create or update Release PR
+        uses: release-plz/action@v0.5.131
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

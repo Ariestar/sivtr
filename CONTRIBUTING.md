@@ -37,7 +37,7 @@ bun run build
 
 ## Local checks (same as CI)
 
-CI runs on Windows, Ubuntu, and macOS (`.github/workflows/rust.yml`). Before opening a PR:
+PR CI runs on Windows, Ubuntu, and macOS (`.github/workflows/rust.yml`). `cargo audit` runs weekly / on demand. Before opening a PR:
 
 ```bash
 cargo fmt --all
@@ -59,7 +59,8 @@ src/                 CLI commands, TUI, shell hooks, remote daemon, hotkey
 docs-site/           Astro/Starlight documentation
 editors/vscode/      VS Code bridge for the AI session picker
 skills/              bundled agent skills (e.g. sivtr-memory)
-changelogs/          per-release notes
+changelogs/          archived per-release notes (pre-release-plz)
+CHANGELOG.md         current changelog, updated by release-plz
 ```
 
 Dependency direction: **CLI (`src/`) → `sivtr-core`**. Core must not import CLI/Clap types.
@@ -77,14 +78,19 @@ Dependency direction: **CLI (`src/`) → `sivtr-core`**. Core must not import CL
 1. Prefer a focused branch and a clear PR title (conventional style is welcome: `fix:`, `feat:`, `docs:`, …).
 2. Describe **what** changed and **why**; link issues when relevant.
 3. Include tests for behavioral fixes when practical.
-4. Update docs or `changelogs/` only when the change is user-facing and you are preparing a release — day-to-day PRs need not bump the crate version.
-5. Do not bump `version` in `Cargo.toml` unless the maintainer asked for a release PR.
-
-Maintainer will handle versioning, tags, and crates.io / GitHub Releases.
+4. Use a Conventional Commits PR title (`feat:`, `fix:`, `docs:`, …). Squash titles drive auto-release.
+5. Do not bump `version` in `Cargo.toml` or add `changelogs/` in a feature PR — the release-plz Release PR does that after merge.
 
 ## Releases (maintainers)
 
-Release assets and crates publish are driven by `.github/workflows/release.yml` from a version tag (e.g. `v0.2.6`). Install metadata for `cargo binstall` lives in `[package.metadata.binstall]` in the root `Cargo.toml`.
+[release-plz](https://release-plz.dev) drives versioning, changelog, and tagging (`release-plz.toml` + `.github/workflows/release-plz*.yml`). On every push to `main` it keeps a **Release PR** up to date: it bumps the workspace version, syncs the `sivtr-core` pin and `Cargo.lock`, and drafts a section in `CHANGELOG.md` from Conventional Commit squash titles. Merging that PR is the release.
+
+- `feat:` → MINOR; `fix:` → PATCH; `feat!` → still MINOR in `0.x` (flagged as breaking); `chore` / `docs` / `ci` / … → no bump.
+- Merge the Release PR immediately for a fresh release, or leave it open to batch several commits.
+- Merging tags `vX.Y.Z`. That tag runs `.github/workflows/release.yml` (assets, crates.io publish for both crates, GitHub Release from the `CHANGELOG.md` section, installer smoke).
+- release-plz pushes the Release PR with `GITHUB_TOKEN`, so CI does not run on it and required checks never turn green — merge it with the maintainer bypass (or add a workflow-capable PAT).
+
+Install metadata for `cargo binstall` lives in `[package.metadata.binstall]` in the root `Cargo.toml`.
 
 ## Community
 
@@ -116,6 +122,6 @@ cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && carg
 - `src/`（CLI）依赖 `crates/sivtr-core/`，core 不得反向依赖 CLI
 - 生产代码用 `anyhow` + `context`，避免 `unwrap`
 - 安全问题请用私密渠道（Security Advisory / 维护者联系方式），不要公开 issue
-- **不要**在普通 PR 里自行 bump `Cargo.toml` 版本；发版由维护者处理
+- **不要**在普通 PR 里自行 bump `Cargo.toml` 版本；发版由 release-plz 的 Release PR 完成（`feat:` → MINOR、`fix:` → PATCH，合并即发版，tag 触发 `release.yml` 构建发布）
 
 更细的模块与 Rust 约定见仓库内 `CLAUDE.md`、`.claude/rules/`。
