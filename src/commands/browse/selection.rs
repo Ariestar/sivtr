@@ -129,3 +129,66 @@ pub(super) fn select_sources(
 pub(super) fn has_selected_sessions(selected_sessions: &[bool]) -> bool {
     selected_sessions.iter().any(|selected| *selected)
 }
+
+/// Range-select rows: first `v` anchors at `idx`, the next completes the
+/// span between anchor and `idx` (inverting the span if any row is unselected).
+/// Shared by every list pane (Source/Sessions/Dialogues).
+pub(super) fn apply_range_selection(
+    range_anchor: &mut Option<usize>,
+    selected: &mut [bool],
+    idx: usize,
+) {
+    if let Some(anchor) = range_anchor.take() {
+        // Reject out-of-bounds endpoints before iterating: a stray large
+        // index must not walk a near-empty mask for the whole span.
+        let Some(span) = selected.get_mut(anchor.min(idx)..=anchor.max(idx)) else {
+            return;
+        };
+        let select = span.iter().any(|flag| !*flag);
+        for flag in span {
+            *flag = select;
+        }
+    } else {
+        *range_anchor = Some(idx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_range_selection;
+
+    #[test]
+    fn first_v_anchors_second_v_selects_span() {
+        let mut anchor = None;
+        let mut selected = [false; 5];
+
+        // First `v` only anchors; nothing is selected yet.
+        apply_range_selection(&mut anchor, &mut selected, 4);
+        assert_eq!(anchor, Some(4));
+        assert!(!selected.iter().any(|flag| *flag));
+
+        // Moving the cursor does not disturb the anchor.
+        apply_range_selection(&mut anchor, &mut selected, 1);
+        assert_eq!(anchor, None);
+        // Span 1..=4 toggled on; row 0 untouched.
+        assert!(!selected[0]);
+        assert!(selected[1..].iter().all(|flag| *flag));
+    }
+
+    #[test]
+    fn second_v_inverts_an_already_selected_span() {
+        let mut anchor = None;
+        let mut selected = [true, true, false, false, true];
+
+        apply_range_selection(&mut anchor, &mut selected, 4);
+        apply_range_selection(&mut anchor, &mut selected, 2);
+        // Span 2..=4 is currently false/false/true (mixed) → select all.
+        assert!(selected[2..].iter().all(|flag| *flag));
+
+        apply_range_selection(&mut anchor, &mut selected, 4);
+        apply_range_selection(&mut anchor, &mut selected, 2);
+        // Span is now all true → deselect all.
+        assert!(selected[0]);
+        assert!(selected[2..=4].iter().all(|flag| !*flag));
+    }
+}

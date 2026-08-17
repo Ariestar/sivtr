@@ -753,14 +753,21 @@ pub fn sessions_from_records(
     }
     let mut sessions = Vec::with_capacity(groups.len());
     for (session_id, mut records) in groups {
-        records.sort_by_key(|record| record.work_ref.path.index());
+        // Newest dialogue first: the record index grows over time, so a
+        // reversed index order puts the latest turn at the top.
+        records.sort_by_key(|record| std::cmp::Reverse(record.work_ref.path.index()));
         let modified = records
             .iter()
             .filter_map(record_modified)
             .max()
             .unwrap_or(UNIX_EPOCH);
         let search_title = session_search_title(&session_id, &records);
-        let title = session_title_with_id(search_title.clone(), Some(session_id.as_str()));
+        let short_id = session_id.chars().take(8).collect::<String>();
+        let title = if short_id.is_empty() {
+            search_title.clone()
+        } else {
+            format!("{search_title}  [{short_id}]")
+        };
         let body_loaded = !records.is_empty();
         sessions.push(WorkspaceSession {
             source: source.clone(),
@@ -787,14 +794,6 @@ fn session_search_title(session_id: &str, records: &[WorkRecord]) -> String {
             }
         })
         .unwrap_or_else(|| session_id.to_string())
-}
-
-fn session_title_with_id(title: String, id: Option<&str>) -> String {
-    let id = id.map(|value| value.chars().take(8).collect::<String>());
-    match id {
-        Some(id) if !id.is_empty() => format!("{title}  [{id}]"),
-        _ => title,
-    }
 }
 
 fn record_modified(record: &WorkRecord) -> Option<SystemTime> {
@@ -825,6 +824,18 @@ mod tests {
         ];
         let sessions = sessions_from_records(&source, records);
         assert_eq!(sessions.len(), 2);
+        let s1 = sessions
+            .iter()
+            .find(|s| s.session_id == "s1")
+            .expect("s1 session present");
+        // Newest dialogue first: index 2 precedes index 1.
+        assert_eq!(
+            s1.records
+                .iter()
+                .map(|r| r.work_ref.index())
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
     }
 
     #[test]

@@ -288,6 +288,10 @@ pub enum WorkPartData {
         #[serde(skip_serializing_if = "Option::is_none")]
         tool: Option<String>,
         output: serde_json::Value,
+        /// First file line of a read-result body when the provider numbered
+        /// it (`775→ …`); display shifts the code gutter to real file lines.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        start_line: Option<u64>,
     },
     Skill {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -523,11 +527,7 @@ impl WorkRecord {
         }
     }
 
-    pub fn copy_text(&self, mode: RecordTextMode, include_prompt: bool) -> RecordText {
-        self.copy_text_with_prompt(mode, include_prompt, None)
-    }
-
-    pub fn copy_text_with_prompt(
+    pub fn copy_text(
         &self,
         mode: RecordTextMode,
         include_prompt: bool,
@@ -547,31 +547,11 @@ impl WorkRecord {
     }
 
     pub fn copy_parts(&self, include_prompt: bool) -> WorkRecordCopyParts {
-        self.copy_parts_with_prompt(include_prompt, None)
-    }
-
-    pub fn copy_parts_with_prompt(
-        &self,
-        include_prompt: bool,
-        prompt_override: Option<&str>,
-    ) -> WorkRecordCopyParts {
         WorkRecordCopyParts {
-            input: self.copy_text_with_prompt(
-                RecordTextMode::Input,
-                include_prompt,
-                prompt_override,
-            ),
-            output: self.copy_text_with_prompt(
-                RecordTextMode::Output,
-                include_prompt,
-                prompt_override,
-            ),
-            block: self.copy_text_with_prompt(
-                RecordTextMode::Combined,
-                include_prompt,
-                prompt_override,
-            ),
-            command: self.copy_text_with_prompt(RecordTextMode::Command, false, None),
+            input: self.copy_text(RecordTextMode::Input, include_prompt, None),
+            output: self.copy_text(RecordTextMode::Output, include_prompt, None),
+            block: self.copy_text(RecordTextMode::Combined, include_prompt, None),
+            command: self.copy_text(RecordTextMode::Command, false, None),
         }
     }
 
@@ -714,19 +694,20 @@ fn terminal_input_text(
 
     let plain_prompt = render_input(prompt, command);
     let ansi_prompt = render_input(prompt_ansi.unwrap_or(prompt), command);
+    // The override only rewrites the prompt when there is a command to attach
+    // it to; otherwise both branches fall back to the recorded prompt, keeping
+    // the ANSI rendering intact.
     let plain = match prompt_override {
         Some(prompt_override) if !command.is_empty() => {
             render_prompt_override(prompt_override, command)
         }
-        Some(_) => plain_prompt.clone(),
-        None => plain_prompt.clone(),
+        _ => plain_prompt,
     };
     let ansi = match prompt_override {
         Some(prompt_override) if !command.is_empty() => {
             render_prompt_override(prompt_override, command)
         }
-        Some(_) => plain_prompt,
-        None => ansi_prompt,
+        _ => ansi_prompt,
     };
     RecordText::with_ansi(plain, ansi)
 }
@@ -1068,6 +1049,11 @@ fn terminal_parts(entry: &SessionEntry, command: &str, output: &str) -> Vec<Work
 
 fn agent_parts(blocks: &[AgentBlock]) -> Vec<WorkPart> {
     let mut parts = Vec::new();
+    // Tool name for results that omit it: borrowed from the matching call —
+    // same call id when both carry one, else the nearest preceding call
+    // (the block model's adjacency pairing rule).
+    let mut last_call_name: Option<String> = None;
+    let mut last_call_id: Option<Option<String>> = None;
     for block in blocks {
         let text = block.text.trim();
         if text.is_empty() {
@@ -1097,24 +1083,38 @@ fn agent_parts(blocks: &[AgentBlock]) -> Vec<WorkPart> {
                     push_agent_part(&mut parts, block.timestamp.clone(), data);
                 }
             }
-            AgentBlockKind::ToolCall => push_agent_part(
-                &mut parts,
-                block.timestamp.clone(),
-                WorkPartData::ToolCall {
-                    call_id: block.call_id.clone(),
-                    tool: block.label.clone(),
-                    input: tool_value(text),
-                },
-            ),
-            AgentBlockKind::ToolOutput => push_agent_part(
-                &mut parts,
-                block.timestamp.clone(),
-                WorkPartData::ToolResult {
-                    call_id: block.call_id.clone(),
-                    tool: block.label.clone(),
-                    output: tool_value(text),
-                },
-            ),
+            AgentBlockKind::ToolCall => {
+                last_call_name = block.label.clone();
+                last_call_id = Some(block.call_id.clone());
+                push_agent_part(
+                    &mut parts,
+                    block.timestamp.clone(),
+                    WorkPartData::ToolCall {
+                        call_id: block.call_id.clone(),
+                        tool: block.label.clone(),
+                        input: tool_value(text),
+                    },
+                );
+            }
+            AgentBlockKind::ToolOutput => {
+                let tool = block.label.clone().or_else(|| {
+                    if last_call_id.as_ref() == Some(&block.call_id) {
+                        last_call_name.clone()
+                    } else {
+                        None
+                    }
+                });
+                push_agent_part(
+                    &mut parts,
+                    block.timestamp.clone(),
+                    WorkPartData::ToolResult {
+                        call_id: block.call_id.clone(),
+                        tool,
+                        output: tool_value(text),
+                        start_line: block.start_line,
+                    },
+                );
+            }
             AgentBlockKind::Skill => push_agent_part(
                 &mut parts,
                 block.timestamp.clone(),
@@ -1286,6 +1286,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "fix latest terminal error".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::ToolCall,
@@ -1293,6 +1294,7 @@ mod tests {
                     label: Some("bash".to_string()),
                     call_id: None,
                     text: "{\"command\":\"cargo test\"}".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::ToolOutput,
@@ -1300,6 +1302,7 @@ mod tests {
                     label: Some("bash".to_string()),
                     call_id: None,
                     text: "failed".to_string(),
+                    start_line: None,
                 },
             ],
         };
@@ -1334,6 +1337,47 @@ mod tests {
     }
 
     #[test]
+    fn tool_results_without_a_label_borrow_the_call_tool_name() {
+        let session = AgentSession {
+            path: PathBuf::from("pi-session.jsonl"),
+            id: Some("abcdef123456".to_string()),
+            cwd: Some("D:\\sivtr".to_string()),
+            title: None,
+            blocks: vec![
+                AgentBlock {
+                    kind: AgentBlockKind::User,
+                    timestamp: None,
+                    label: None,
+                    call_id: None,
+                    text: "read a.rs".to_string(),
+                    start_line: None,
+                },
+                AgentBlock {
+                    kind: AgentBlockKind::ToolCall,
+                    timestamp: None,
+                    label: Some("read".to_string()),
+                    call_id: Some("c1".to_string()),
+                    text: "{\"file_path\":\"a.rs\"}".to_string(),
+                    start_line: None,
+                },
+                AgentBlock {
+                    kind: AgentBlockKind::ToolOutput,
+                    timestamp: None,
+                    label: None,
+                    call_id: Some("c1".to_string()),
+                    text: "content".to_string(),
+                    start_line: None,
+                },
+            ],
+        };
+
+        let records = WorkRecord::chat_turns(AgentProvider::Pi, &session);
+        let output = records[0].output_text().unwrap_or_default();
+        // The result carries the call's tool name instead of "unknown".
+        assert!(output.contains("<:tool:read result:>"));
+    }
+
+    #[test]
     fn chat_turn_records_ignore_startup_user_blocks() {
         let session = AgentSession {
             path: PathBuf::from("pi-session.jsonl"),
@@ -1347,6 +1391,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "<environment_context>".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::User,
@@ -1354,6 +1399,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "implement this".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::Assistant,
@@ -1361,6 +1407,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "done".to_string(),
+                    start_line: None,
                 },
             ],
         };
@@ -1405,6 +1452,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "<skill name=\"sivtr-memory\" location=\"C:\\x\\SKILL.md\">\nlong instructions\n</skill>\n\nreal task".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::Assistant,
@@ -1412,6 +1460,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "done".to_string(),
+                    start_line: None,
                 },
             ],
         };
@@ -1452,6 +1501,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "[Request interrupted by user for tool use]".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::Assistant,
@@ -1459,6 +1509,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "partial".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::User,
@@ -1466,6 +1517,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "continue".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::Assistant,
@@ -1473,6 +1525,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "done".to_string(),
+                    start_line: None,
                 },
             ],
         };
@@ -1501,6 +1554,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "  <system-reminder>\nhidden\n</system-reminder>".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::User,
@@ -1508,6 +1562,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "<command-args>--foo</command-args>".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::User,
@@ -1515,6 +1570,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "<ide_selection>main.rs</ide_selection>".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::User,
@@ -1522,6 +1578,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "real question".to_string(),
+                    start_line: None,
                 },
                 AgentBlock {
                     kind: AgentBlockKind::Assistant,
@@ -1529,6 +1586,7 @@ mod tests {
                     label: None,
                     call_id: None,
                     text: "answer".to_string(),
+                    start_line: None,
                 },
             ],
         };

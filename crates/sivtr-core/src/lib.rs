@@ -1,16 +1,13 @@
 pub mod agents;
 pub mod ai;
-pub mod buffer;
 pub mod cache;
 pub mod capture;
 pub mod config;
 pub mod export;
 pub mod history;
-pub mod parse;
 pub mod query;
 pub mod record;
 pub mod search;
-pub mod selection;
 pub mod session;
 pub mod time;
 pub mod workspace;

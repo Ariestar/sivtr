@@ -705,19 +705,16 @@ pub fn detect_installed_shells() -> Vec<String> {
     }
 
     for cmd in &["pwsh", "powershell"] {
-        if let Ok(out) = std::process::Command::new(cmd)
-            .args(["-NoProfile", "-Command", "Write-Output $PROFILE"])
-            .output()
-        {
-            let profile = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !profile.is_empty() {
-                let path = Path::new(&profile);
-                if path.exists() {
-                    if let Ok(content) = std::fs::read_to_string(path) {
-                        if content.contains("# >>> sivtr shell integration >>>") {
-                            installed.push("powershell".to_string());
-                            break;
-                        }
+        if let Ok(Some(profile)) = crate::commands::terminal::init::shell_printed_path(
+            cmd,
+            &["-NoProfile", "-Command", "Write-Output $PROFILE"],
+        ) {
+            let path = Path::new(&profile);
+            if path.exists() {
+                if let Ok(content) = std::fs::read_to_string(path) {
+                    if content.contains("# >>> sivtr shell integration >>>") {
+                        installed.push("powershell".to_string());
+                        break;
                     }
                 }
             }

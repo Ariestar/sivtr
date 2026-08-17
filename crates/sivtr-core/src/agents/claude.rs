@@ -366,9 +366,7 @@ fn tool_child_body(inner: &str, tool_kind: EmbeddedToolKind) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::ClaudeProvider;
-    use crate::agents::{
-        format_blocks, select_blocks, AgentBlockKind, AgentSelection, AgentSessionProvider,
-    };
+    use crate::agents::{select_blocks, AgentBlockKind, AgentSelection, AgentSessionProvider};
     use std::env;
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -440,7 +438,8 @@ mod tests {
         let session = ClaudeProvider.parse_session_file(&path).unwrap();
 
         assert_eq!(session.blocks.len(), 2);
-        assert_eq!(format_blocks(&session.blocks), "hello\n\ndone");
+        assert_eq!(session.blocks[0].text.trim(), "hello");
+        assert_eq!(session.blocks[1].text.trim(), "done");
     }
 
     #[test]
@@ -464,7 +463,8 @@ mod tests {
         assert_eq!(session.cwd.as_deref(), Some("C:\\repo"));
         assert_eq!(session.title.as_deref(), Some("Named session"));
         assert_eq!(session.blocks.len(), 2);
-        assert_eq!(format_blocks(&session.blocks), "hello\n\ndone");
+        assert_eq!(session.blocks[0].text.trim(), "hello");
+        assert_eq!(session.blocks[1].text.trim(), "done");
     }
 
     #[test]
@@ -648,7 +648,8 @@ mod tests {
         let blocks = select_blocks(&session, AgentSelection::LastTurn);
 
         assert_eq!(blocks.len(), 2);
-        assert_eq!(format_blocks(&blocks), "second\n\nnew");
+        assert_eq!(blocks[0].text.trim(), "second");
+        assert_eq!(blocks[1].text.trim(), "new");
     }
 
     #[test]

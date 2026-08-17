@@ -288,6 +288,7 @@ fn apply_content(
                     id,
                     name,
                     pretty_json_value(args),
+                    None,
                 );
             }
             Some("toolResponse") => {
@@ -308,6 +309,7 @@ fn apply_content(
                     id,
                     None,
                     text,
+                    None,
                 );
             }
             _ => {}

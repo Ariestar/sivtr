@@ -211,7 +211,7 @@ fn agent_records(
 }
 
 /// Bump when the cached record layout or agent parsing changes.
-const AGENT_CACHE_VERSION: u32 = 5;
+const AGENT_CACHE_VERSION: u32 = 8;
 
 /// On-disk cache entry for one parsed agent session file, keyed by the
 /// session file's (mtime, size). Reading back a stamp-matched blob is an
@@ -593,6 +593,7 @@ mod tests {
                         label: None,
                         call_id: None,
                         text: "question".to_string(),
+                        start_line: None,
                     },
                     AgentBlock {
                         kind: AgentBlockKind::Assistant,
@@ -600,6 +601,7 @@ mod tests {
                         label: None,
                         call_id: None,
                         text: "assistant".to_string(),
+                        start_line: None,
                     },
                 ],
             })
@@ -687,6 +689,7 @@ mod tests {
                     call_id: Some("call-1".to_string()),
                     tool: Some("Bash".to_string()),
                     output: serde_json::json!({"exit": 0, "stdout": "hi"}),
+                    start_line: None,
                 },
             },
             WorkPart {

@@ -261,6 +261,11 @@ pub fn parse_jsonl_session(
         let value: Value = match serde_json::from_str(&line) {
             Ok(value) => value,
             Err(error) if idx > 0 && is_trailing_partial_json_line(&error) => break,
+            Err(_) if line.contains('\0') => {
+                // NUL-padded garbage from a crashed write is never valid
+                // JSON; skip the line and keep the rest of the session.
+                continue;
+            }
             Err(error) => {
                 return Err(error).with_context(|| {
                     format!(

@@ -23,7 +23,6 @@ uuid = { version = "1", features = ["v4"] }
 hostname = "0.4"
 anyhow = "1"
 rmp-serde = "1"
-thiserror = "2"
 tempfile = "3"
 toml = "1"
 shell-words = "1"

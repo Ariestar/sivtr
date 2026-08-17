@@ -7,10 +7,11 @@
 //!
 //! Do **not** reimplement viewport growth, keep/evict, or blanking rules.
 
-use crate::pane::{Pane, PaneInput, SlidingPane, WindowRow};
+use crate::pane::{Pane, PaneInput, Selection, SlidingPane, WindowRow};
+use crate::tui::content::block::{marked_mask_len, BlockText};
 use crate::tui::content::view::ContentViewMode;
 use crate::tui::workspace::{
-    workspace_content_io_texts, ContentIoFocus, ContentIoFrame, ContentIoTexts, WorkspaceDialogue,
+    workspace_content_io_texts, ContentIoFocus, ContentIoFrame, ExpandedBlocks, WorkspaceDialogue,
     WorkspaceSession, WorkspaceSource,
 };
 use sivtr_core::ai::AgentSelection;
@@ -280,11 +281,7 @@ fn active_session_indices(
     session_idx: usize,
     selected_sessions: &[bool],
 ) -> Vec<usize> {
-    let selected: Vec<usize> = selected_sessions
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, selected)| selected.then_some(idx))
-        .collect();
+    let selected = crate::tui::workspace::selected_indices(selected_sessions);
     if !selected.is_empty() {
         return selected;
     }
@@ -413,19 +410,62 @@ fn body_for_key<'a>(
 /// Domain context for dual IO content line-count catalogs.
 pub struct ContentCtx<'a> {
     pub dialogues: &'a [WorkspaceDialogue],
-    pub selected_dialogues: &'a [bool],
     pub highlighted_idx: usize,
     pub mode: ContentViewMode,
     pub target: Option<WorkAt>,
     pub area: ratatui::layout::Rect,
     pub io_focus: ContentIoFocus,
+    pub expanded: &'a ExpandedBlocks,
 }
 
-/// Tracks layout line counts for Input / Output halves separately.
+/// Tracks layout line counts for Input / Output halves separately and owns
+/// the per-dialogue block multi-select (native pane selection): clicking a
+/// block's dot toggles its id, and content (copy, fold) consumes the mask.
+/// Marks are keyed by dialogue so multi-select paging (J/K) keeps every
+/// page's marks; the picker clears the whole set when the selection changes.
 #[derive(Default)]
 pub struct ContentPane {
     input_lines: usize,
     output_lines: usize,
+    /// Marked block ids per dialogue per half, indexed by block id (dense
+    /// DFS ids): `dialogue_idx -> (input, output)`.
+    marked: std::collections::HashMap<usize, [Selection; 2]>,
+}
+
+/// Block-selection mask length of one half: the shown dialogue's *complete*
+/// block-id collection when its record is loaded (so marks for folded
+/// blocks survive resizing and are restored on expand), else the displayed
+/// segments of the current frame.
+fn block_mask_len(
+    dialogues: &[WorkspaceDialogue],
+    idx: usize,
+    input: bool,
+    displayed: &[BlockText],
+) -> usize {
+    let full = dialogues
+        .get(idx)
+        .and_then(|dialogue| dialogue.record.as_ref())
+        .map(|record| {
+            marked_mask_len(
+                crate::tui::content::block::half_blocks(record, input)
+                    .iter()
+                    .map(|block| block.id),
+            )
+        })
+        .unwrap_or(0);
+    full.max(marked_mask_len(displayed.iter().map(|block| block.id)))
+}
+
+fn half_selection_mut(
+    marked: &mut std::collections::HashMap<usize, [Selection; 2]>,
+    idx: usize,
+    half: ContentIoFocus,
+) -> &mut Selection {
+    let entry = marked.entry(idx).or_default();
+    match half {
+        ContentIoFocus::Input => &mut entry[0],
+        ContentIoFocus::Output => &mut entry[1],
+    }
 }
 
 impl ContentPane {
@@ -436,19 +476,69 @@ impl ContentPane {
         }
     }
 
-    /// Build texts + dynamic layout metrics for this frame.
-    pub fn ensure(&mut self, ctx: ContentCtx<'_>) -> ContentIoTexts {
+    /// Build the frame for this context, resizing the block selection masks
+    /// of the shown dialogue's block ids. Rebuilds the cached layouts; call
+    /// it only when the content actually changed.
+    pub fn ensure(&mut self, ctx: ContentCtx<'_>) -> ContentIoFrame {
         let texts = workspace_content_io_texts(
             ctx.dialogues,
-            ctx.selected_dialogues,
             ctx.highlighted_idx,
             ctx.mode,
             ctx.target,
+            ctx.expanded,
         );
         let frame = ContentIoFrame::build(ctx.area, texts, ctx.mode, ctx.io_focus);
-        self.input_lines = frame.input_lines;
-        self.output_lines = frame.output_lines;
-        frame.texts
+        self.input_lines = frame.line_count(ContentIoFocus::Input);
+        self.output_lines = frame.line_count(ContentIoFocus::Output);
+        half_selection_mut(&mut self.marked, ctx.highlighted_idx, ContentIoFocus::Input).resize(
+            block_mask_len(
+                ctx.dialogues,
+                ctx.highlighted_idx,
+                true,
+                &frame.texts.input_blocks,
+            ),
+        );
+        half_selection_mut(
+            &mut self.marked,
+            ctx.highlighted_idx,
+            ContentIoFocus::Output,
+        )
+        .resize(block_mask_len(
+            ctx.dialogues,
+            ctx.highlighted_idx,
+            false,
+            &frame.texts.output_blocks,
+        ));
+        frame
+    }
+
+    /// Marked block mask of one dialogue's half (`mask[block_id]` = marked);
+    /// an unknown dialogue has no marks.
+    pub fn marked(&self, half: ContentIoFocus, dialogue_idx: usize) -> &[bool] {
+        let [input, output] = match self.marked.get(&dialogue_idx) {
+            Some(entry) => entry,
+            None => return &[],
+        };
+        match half {
+            ContentIoFocus::Input => input.mask(),
+            ContentIoFocus::Output => output.mask(),
+        }
+    }
+
+    pub fn toggle_mark(&mut self, half: ContentIoFocus, dialogue_idx: usize, block: usize) {
+        half_selection_mut(&mut self.marked, dialogue_idx, half).toggle(block);
+    }
+
+    /// Drop every dialogue's marks (selection set changed).
+    pub fn clear_marks(&mut self) {
+        self.marked.clear();
+    }
+
+    pub fn marked_count(&self) -> usize {
+        self.marked
+            .values()
+            .map(|[input, output]| input.count() + output.count())
+            .sum()
     }
 }
 

@@ -97,6 +97,10 @@ pub struct AgentBlock {
     pub timestamp: Option<String>,
     pub label: Option<String>,
     pub call_id: Option<String>,
+    /// First file line of a read-result body, when the provider numbers its
+    /// output (`775→ …`). Generic metadata — providers that number their
+    /// read results set it, others leave `None`.
+    pub start_line: Option<u64>,
     pub text: String,
 }
 
@@ -238,6 +242,7 @@ pub fn push_block(
             timestamp,
             label,
             call_id: None,
+            start_line: None,
             text,
         });
     }
@@ -250,6 +255,7 @@ pub fn push_tool_block(
     call_id: Option<String>,
     label: Option<String>,
     text: impl Into<String>,
+    start_line: Option<u64>,
 ) {
     let text = text.into().trim().to_string();
     if !text.is_empty() {
@@ -258,6 +264,7 @@ pub fn push_tool_block(
             timestamp,
             label,
             call_id,
+            start_line,
             text,
         });
     }
@@ -296,6 +303,7 @@ pub fn push_parts_blocks(
                         part_id(item, call),
                         call.get("name").and_then(Value::as_str).map(str::to_string),
                         pretty_json_value(call.get("args").unwrap_or(&Value::Null)),
+                        None,
                     );
                 } else if let Some(response) = item.get("functionResponse") {
                     let body = response.get("response").unwrap_or(&Value::Null);
@@ -310,6 +318,7 @@ pub fn push_parts_blocks(
                             .and_then(Value::as_str)
                             .map(str::to_string),
                         text,
+                        None,
                     );
                 } else {
                     push_block(
@@ -463,32 +472,13 @@ impl WorkspaceMatchTarget {
 }
 
 fn git_remote_keys(path: &Path) -> HashSet<String> {
-    let Some(root) = git_root(path) else {
+    let Some(root) = crate::workspace::git_root(path).ok().flatten() else {
         return HashSet::new();
     };
     let Some(config_path) = git_config_path(&root) else {
         return HashSet::new();
     };
     parse_git_remote_keys(&config_path)
-}
-
-fn git_root(path: &Path) -> Option<PathBuf> {
-    let mut dir = if path.is_dir() {
-        path.to_path_buf()
-    } else {
-        path.parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| path.to_path_buf())
-    };
-
-    loop {
-        if dir.join(".git").exists() {
-            return Some(dir);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
 }
 
 fn git_config_path(root: &Path) -> Option<PathBuf> {
@@ -587,27 +577,6 @@ pub fn select_blocks(session: &AgentSession, selection: AgentSelection) -> Vec<A
     }
 }
 
-pub fn format_blocks(blocks: &[AgentBlock]) -> String {
-    format_blocks_with_text(blocks, |block| block.text.trim().to_string())
-}
-
-pub fn format_blocks_with_text(
-    blocks: &[AgentBlock],
-    text_for_block: impl Fn(&AgentBlock) -> String,
-) -> String {
-    if blocks.len() == 1 {
-        return text_for_block(&blocks[0]).trim().to_string();
-    }
-
-    blocks
-        .iter()
-        .filter_map(|block| format_block_with_heading(block, &text_for_block(block)))
-        .collect::<Vec<_>>()
-        .join("\n\n")
-        .trim()
-        .to_string()
-}
-
 fn select_last_kind(blocks: &[AgentBlock], kind: AgentBlockKind) -> Vec<AgentBlock> {
     blocks
         .iter()
@@ -641,32 +610,12 @@ fn select_last_turn(blocks: &[AgentBlock]) -> Vec<AgentBlock> {
     blocks[user_idx..=assistant_idx].to_vec()
 }
 
-fn format_block_with_heading(block: &AgentBlock, text: &str) -> Option<String> {
-    let text = text.trim();
-    if text.is_empty() && block.kind.is_dialogue() {
-        return None;
-    }
-    Some(format_structured_block(
-        block.kind,
-        block.label.as_deref(),
-        text,
-    ))
-}
-
 /// Serialize a block for human/machine-readable evidence (not Markdown dialogue headings).
 ///
 /// Dialogue stays plain. Structural channels use content-block markers:
 /// `<:tool:bash call:>` … `<:tool:bash result:>`, `<:skill:name:>`, `<:thinking:>`.
 pub fn format_structured_block(kind: AgentBlockKind, label: Option<&str>, text: &str) -> String {
     kind.format_block(label, text)
-}
-
-pub fn is_dialogue_block(kind: AgentBlockKind) -> bool {
-    kind.is_dialogue()
-}
-
-pub fn is_structure_block(kind: AgentBlockKind) -> bool {
-    kind.is_structure()
 }
 
 #[cfg(test)]

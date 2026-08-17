@@ -355,7 +355,9 @@ fn ensure_workspace_metadata(paths: &WorkspacePaths) -> Result<()> {
     Ok(())
 }
 
-fn git_root(cwd: &Path) -> Result<Option<PathBuf>> {
+/// Walk parents to the repository root (the dir containing `.git`, file or
+/// dir). Shared by workspace resolution and agent session cwd filtering.
+pub(crate) fn git_root(cwd: &Path) -> Result<Option<PathBuf>> {
     let mut dir = if cwd.is_dir() {
         cwd.to_path_buf()
     } else {

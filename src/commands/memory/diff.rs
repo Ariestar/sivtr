@@ -85,7 +85,7 @@ pub fn execute(request: DiffRequest<'_>) -> Result<()> {
 
 fn record_text(record: &WorkRecord, mode: DiffTextMode) -> String {
     record
-        .copy_text(mode.record_text_mode(), mode.include_prompt())
+        .copy_text(mode.record_text_mode(), mode.include_prompt(), None)
         .plain
 }
 

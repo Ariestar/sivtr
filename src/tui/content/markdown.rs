@@ -1,9 +1,7 @@
 use pulldown_cmark::{Event, Options as MarkdownOptions, Parser, Tag, TagEnd};
-use ratatui::prelude::{Color, Modifier, Style};
+use ratatui::prelude::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
-
-const CODE_INDENT: &str = "  ";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MarkdownLineKind {
@@ -51,19 +49,196 @@ struct MarkdownLineParts<'a> {
 }
 
 pub(crate) fn render_markdown_lines(lines: &[&str], width: usize) -> Vec<MarkdownLine> {
-    let mut in_code_block = false;
     let table_rows = aligned_table_rows(lines);
     let mut rendered = Vec::with_capacity(lines.len());
+    let mut idx = 0;
 
-    lines.iter().enumerate().for_each(|(idx, line)| {
+    while idx < lines.len() {
         if let Some(table_rows) = &table_rows[idx] {
             rendered.extend(table_rows.iter().map(render_table_row));
-        } else {
-            rendered.push(render_markdown_line(line, &mut in_code_block, width));
+            idx += 1;
+            continue;
         }
-    });
+        let line = lines[idx];
+        // Fenced code blocks are gathered as one unit so diff-aware coloring
+        // can see the whole block before deciding how to paint its lines.
+        if let Some(language) = code_fence_language(line) {
+            rendered.push(MarkdownLine {
+                line: code_fence_line(language.clone()),
+                kind: MarkdownLineKind::CodeFence,
+                links: Vec::new(),
+            });
+            let mut body = Vec::new();
+            idx += 1;
+            while idx < lines.len() && code_fence_language(lines[idx]).is_none() {
+                body.push(lines[idx]);
+                idx += 1;
+            }
+            rendered.extend(render_code_block(&body, language.as_deref()));
+            if idx < lines.len() {
+                rendered.push(MarkdownLine {
+                    line: code_fence_line(None),
+                    kind: MarkdownLineKind::CodeFence,
+                    links: Vec::new(),
+                });
+                idx += 1;
+            }
+            continue;
+        }
+        rendered.push(render_markdown_line(line, width));
+        idx += 1;
+    }
 
     rendered
+}
+
+/// One fenced block: ` ```rust ` … ` ``` `. GitHub-style: every code line
+/// carries a right-aligned line number sharing the block background, so the
+/// same gutter appears in markdown fences, tool result previews, and diffs.
+/// Diff-aware when the fence names `diff` or the body carries a unified-diff
+/// hunk header (`@@ …`). A numeric fence (```` ```775 ````) numbers the block
+/// from that file line — read-result previews keep their real line numbers.
+fn render_code_block(body: &[&str], language: Option<&str>) -> Vec<MarkdownLine> {
+    if language == Some("grep") {
+        return render_grep_block(body);
+    }
+    let is_diff = language == Some("diff") || body.iter().any(|line| is_diff_hunk_header(line));
+    let start_line = language
+        .and_then(|lang| lang.parse::<usize>().ok())
+        .unwrap_or(1);
+    // GitHub-style gutter: right-aligned line numbers, the code follows;
+    // widths grow with the block's last line number. No background — the
+    // current-row highlight owns the background on the content pane.
+    let gutter_width = (start_line.saturating_add(body.len()).saturating_sub(1))
+        .to_string()
+        .len();
+    body.iter()
+        .enumerate()
+        .map(|(idx, line)| MarkdownLine {
+            line: Line::from(vec![
+                Span::styled(
+                    format!("{:>gutter_width$} ", start_line.saturating_add(idx)),
+                    code_line_number_style(),
+                ),
+                Span::styled(line.to_string(), code_line_style(line, is_diff)),
+            ]),
+            kind: MarkdownLineKind::CodeBlock,
+            links: Vec::new(),
+        })
+        .collect()
+}
+
+/// Unified-diff hunk header: `@@ -1,3 +1,4 @@` (an optional section heading
+/// may follow the closing `@@`). Strict on shape and column: the header
+/// starts at column 0, the old range is minus-led and the new range
+/// plus-led, and each range carries at most one line-count segment — so
+/// context lines and lookalike code never switch the block into diff mode.
+fn is_diff_hunk_header(line: &str) -> bool {
+    let Some(rest) = line.strip_prefix("@@") else {
+        return false;
+    };
+    let Some((ranges, _heading)) = rest.trim_start().split_once("@@") else {
+        return false;
+    };
+    let Some((minus, plus)) = ranges.trim().split_once(' ') else {
+        return false;
+    };
+    minus.strip_prefix('-').is_some_and(hunk_count)
+        && plus.strip_prefix('+').is_some_and(hunk_count)
+}
+
+/// Digits, optionally followed by one `,digits` line count.
+fn hunk_count(digits: &str) -> bool {
+    match digits.split_once(',') {
+        Some((start, count)) => is_digits(start) && is_digits(count),
+        None => is_digits(digits),
+    }
+}
+
+fn is_digits(text: &str) -> bool {
+    !text.is_empty() && text.chars().all(|c| c.is_ascii_digit())
+}
+
+/// Unified-diff file header (`+++ b/file`, `--- a/file`): the marker is
+/// followed by a space and a path, so a change line whose content itself
+/// starts with `++`/`--` stays a change line.
+fn is_diff_file_header(line: &str) -> bool {
+    line.strip_prefix("+++")
+        .or_else(|| line.strip_prefix("---"))
+        .and_then(|rest| rest.strip_prefix(' '))
+        .is_some_and(|path| !path.is_empty())
+}
+
+/// grep search results (` ```grep `): a structured block, not a code gutter.
+/// Matches are scattered single lines, so each part gets its own color — the
+/// `Found N matching lines` summary stands out, file paths read as targets,
+/// and the `line:content` matches highlight their line number. Provider
+/// envelopes (grok's `<workspace_result …>`) are already stripped by the
+/// formatter, so only the generic shape is rendered here.
+fn render_grep_block(body: &[&str]) -> Vec<MarkdownLine> {
+    body.iter()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            let spans = if trimmed.starts_with("Found ") && trimmed.contains("matching lines") {
+                vec![Span::styled(
+                    line.to_string(),
+                    Style::default()
+                        .fg(crate::tui::theme::accent())
+                        .add_modifier(Modifier::BOLD),
+                )]
+            } else if let Some((num, rest)) = line.split_once(':') {
+                if num.trim().chars().all(|ch| ch.is_ascii_digit()) {
+                    vec![
+                        Span::styled(
+                            format!("{num}:"),
+                            Style::default()
+                                .fg(crate::tui::theme::accent())
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(rest.to_string(), code_block_style()),
+                    ]
+                } else {
+                    vec![Span::styled(
+                        line.to_string(),
+                        Style::default().fg(crate::tui::theme::accent()),
+                    )]
+                }
+            } else {
+                vec![Span::styled(
+                    line.to_string(),
+                    Style::default().fg(crate::tui::theme::accent()),
+                )]
+            };
+            MarkdownLine {
+                line: Line::from(spans),
+                kind: MarkdownLineKind::CodeBlock,
+                links: Vec::new(),
+            }
+        })
+        .collect()
+}
+
+fn code_line_style(line: &str, is_diff: bool) -> Style {
+    if !is_diff {
+        return code_block_style();
+    }
+    if is_diff_hunk_header(line) {
+        Style::default()
+            .fg(crate::tui::theme::accent())
+            .add_modifier(Modifier::BOLD)
+    } else if is_diff_file_header(line) {
+        Style::default()
+            .fg(crate::tui::theme::muted())
+            .add_modifier(Modifier::BOLD)
+    } else if line.starts_with('+') {
+        Style::default().fg(crate::tui::theme::success())
+    } else if line.starts_with('-') {
+        Style::default().fg(crate::tui::theme::failure())
+    } else {
+        // Context lines (leading marker space) and anything else keep the
+        // plain code style; the context space stays in the rendered text.
+        code_block_style()
+    }
 }
 
 #[cfg(test)]
@@ -80,33 +255,12 @@ fn render_markdown_window(
         .collect()
 }
 
-fn render_markdown_line(line: &str, in_code_block: &mut bool, width: usize) -> MarkdownLine {
-    if let Some(language) = code_fence_language(line) {
-        let opening = !*in_code_block;
-        *in_code_block = !*in_code_block;
-        return MarkdownLine {
-            line: code_fence_line(opening.then_some(language).flatten()),
-            kind: MarkdownLineKind::CodeFence,
-            links: Vec::new(),
-        };
-    }
-
-    if *in_code_block {
-        return MarkdownLine {
-            line: Line::from(vec![
-                Span::styled(CODE_INDENT, code_block_margin_style()),
-                Span::styled(line.to_string(), code_block_style()),
-            ]),
-            kind: MarkdownLineKind::CodeBlock,
-            links: Vec::new(),
-        };
-    }
-
+fn render_markdown_line(line: &str, width: usize) -> MarkdownLine {
     if is_horizontal_rule(line) {
         return MarkdownLine {
             line: Line::from(Span::styled(
                 "─".repeat(width.max(3)),
-                structural_marker_style(),
+                structure_prefix_style(),
             )),
             kind: MarkdownLineKind::Normal,
             links: Vec::new(),
@@ -151,11 +305,10 @@ fn code_fence_language(line: &str) -> Option<Option<String>> {
 }
 
 fn code_fence_line(language: Option<String>) -> Line<'static> {
-    match language {
-        Some(language) => Line::from(Span::styled(
-            format!("{CODE_INDENT}{language}"),
-            code_fence_style(),
-        )),
+    // A numeric fence is a line-number offset, not a language label — the
+    // fence row stays empty so the gutter reads as the file's own numbers.
+    match language.filter(|lang| lang.parse::<usize>().is_err()) {
+        Some(language) => Line::from(Span::styled(language, code_fence_style())),
         None => Line::default(),
     }
 }
@@ -169,7 +322,7 @@ fn markdown_line_parts(line: &str) -> MarkdownLineParts<'_> {
         let style = agent_heading_style(rest).unwrap_or_else(|| heading_style(level));
         return MarkdownLineParts {
             prefix: format!("{leading}{} ", "#".repeat(level)),
-            prefix_style: structural_marker_style(),
+            prefix_style: structure_prefix_style(),
             content: rest,
             content_style: style,
         };
@@ -185,10 +338,21 @@ fn markdown_line_parts(line: &str) -> MarkdownLineParts<'_> {
         };
     }
 
+    // Tool input line (`$ read src/main.rs:12-30`): the `$` marker is the
+    // highlighted prompt; the command itself reads in the default color.
+    if let Some(rest) = trimmed.strip_prefix("$ ") {
+        return MarkdownLineParts {
+            prefix: format!("{leading}$ "),
+            prefix_style: tool_input_marker_style(),
+            content: rest,
+            content_style: Style::default(),
+        };
+    }
+
     if let Some(rest) = trimmed.strip_prefix("> ") {
         return MarkdownLineParts {
             prefix: format!("{leading}> "),
-            prefix_style: structural_marker_style(),
+            prefix_style: structure_prefix_style(),
             content: rest,
             content_style: blockquote_style(),
         };
@@ -206,7 +370,7 @@ fn markdown_line_parts(line: &str) -> MarkdownLineParts<'_> {
     if let Some((marker, rest)) = markdown_list_item(trimmed) {
         return MarkdownLineParts {
             prefix: format!("{leading}{marker}"),
-            prefix_style: structural_marker_style(),
+            prefix_style: structure_prefix_style(),
             content: rest,
             content_style: Style::default(),
         };
@@ -232,7 +396,7 @@ fn markdown_heading(line: &str) -> Option<(usize, &str)> {
 fn markdown_task_item(line: &str) -> Option<(String, &str, Style)> {
     let (_marker, rest) = markdown_list_item(line)?;
     let (symbol, rest, style) = if let Some(rest) = rest.strip_prefix("[ ] ") {
-        ("□ ", rest, structural_marker_style())
+        ("□ ", rest, structure_prefix_style())
     } else {
         let rest = rest
             .strip_prefix("[x] ")
@@ -411,11 +575,11 @@ fn render_table_row(row: &TableRenderRow) -> MarkdownLine {
     }
 
     let mut spans = Vec::new();
-    spans.push(Span::styled("│ ", structural_marker_style()));
+    spans.push(Span::styled("│ ", structure_prefix_style()));
 
     for (idx, width) in row.widths.iter().enumerate() {
         if idx > 0 {
-            spans.push(Span::styled(" │ ", structural_marker_style()));
+            spans.push(Span::styled(" │ ", structure_prefix_style()));
         }
 
         let cell = row.cells.get(idx).map(String::as_str).unwrap_or_default();
@@ -426,7 +590,7 @@ fn render_table_row(row: &TableRenderRow) -> MarkdownLine {
         }
     }
 
-    spans.push(Span::styled(" │", structural_marker_style()));
+    spans.push(Span::styled(" │", structure_prefix_style()));
     MarkdownLine {
         line: Line::from(spans),
         kind: MarkdownLineKind::Table,
@@ -453,7 +617,7 @@ fn render_table_border(row: &TableRenderRow) -> Option<MarkdownLine> {
     line.push_str(right);
 
     Some(MarkdownLine {
-        line: Line::from(Span::styled(line, structural_marker_style())),
+        line: Line::from(Span::styled(line, structure_prefix_style())),
         kind: MarkdownLineKind::Table,
         links: Vec::new(),
     })
@@ -707,53 +871,42 @@ fn current_style(styles: &[Style]) -> Style {
 }
 
 fn agent_heading_style(text: &str) -> Option<Style> {
-    if text.starts_with("Assistant") {
-        Some(
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        )
+    let color = if text.starts_with("Assistant") {
+        crate::tui::theme::success()
     } else if text.starts_with("User") {
-        Some(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )
+        crate::tui::theme::user()
     } else if text.starts_with("Command") {
-        Some(
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )
+        crate::tui::theme::structure_color(false)
     } else if text.starts_with("Error") {
-        Some(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+        crate::tui::theme::failure()
     } else if text.starts_with("Output") {
-        Some(
-            Style::default()
-                .fg(Color::Blue)
-                .add_modifier(Modifier::BOLD),
-        )
+        crate::tui::theme::output()
     } else {
-        None
-    }
+        return None;
+    };
+    Some(Style::default().fg(color).add_modifier(Modifier::BOLD))
 }
 
-/// Style for `<:channel:…:>` structure markers (tools/skills/thinking/mcp).
+/// Style for `<:channel:…:>` structure markers (tools/skills/thinking/mcp):
+/// structural content renders in a subdued gray, distinct from the
+/// default-foreground body.
 fn structure_marker_style(text: &str) -> Option<Style> {
-    if !(text.starts_with("<:") || text.starts_with("<:/")) {
+    if !crate::tui::content::text::is_structure_marker(text) {
         return None;
     }
-    // Result channels lean blue; everything else structural yellow.
-    let is_result = text.contains(" result:>") || text.contains(" result:");
-    Some(
-        Style::default()
-            .fg(if is_result {
-                Color::Blue
-            } else {
-                Color::Yellow
-            })
-            .add_modifier(Modifier::BOLD),
-    )
+    Some(structural_gray_style())
+}
+
+fn structural_gray_style() -> Style {
+    Style::default().fg(crate::tui::theme::muted())
+}
+
+/// The `$` prompt marker of a tool input line: muted but bold so the
+/// instruction stands out from surrounding output.
+fn tool_input_marker_style() -> Style {
+    Style::default()
+        .fg(crate::tui::theme::muted())
+        .add_modifier(Modifier::BOLD)
 }
 
 fn heading_style(level: usize) -> Style {
@@ -763,48 +916,47 @@ fn heading_style(level: usize) -> Style {
     }
 }
 
-fn structural_marker_style() -> Style {
-    Style::default().fg(Color::DarkGray)
+fn structure_prefix_style() -> Style {
+    Style::default().fg(crate::tui::theme::dim())
 }
 
 fn task_done_marker_style() -> Style {
     Style::default()
-        .fg(Color::Green)
+        .fg(crate::tui::theme::success())
         .add_modifier(Modifier::BOLD)
 }
 
 fn code_style() -> Style {
-    Style::default().fg(Color::Gray)
+    Style::default().fg(crate::tui::theme::code())
 }
 
 fn code_block_style() -> Style {
-    Style::default().fg(Color::Gray)
+    Style::default().fg(crate::tui::theme::code())
 }
 
-fn code_block_margin_style() -> Style {
-    Style::default().fg(Color::DarkGray)
+/// GitHub-style gutter numbers: dim, same width as the block's line count.
+fn code_line_number_style() -> Style {
+    Style::default().fg(crate::tui::theme::dim())
 }
 
 fn code_fence_style() -> Style {
     Style::default()
-        .fg(Color::DarkGray)
+        .fg(crate::tui::theme::dim())
         .add_modifier(Modifier::ITALIC)
 }
 
 fn link_style() -> Style {
-    Style::default()
-        .fg(Color::Blue)
-        .add_modifier(Modifier::UNDERLINED)
+    crate::tui::theme::link_style()
 }
 
 fn blockquote_style() -> Style {
-    Style::default().fg(Color::Green)
+    Style::default().fg(crate::tui::theme::quote())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{render_markdown_window, MarkdownLineKind, CODE_INDENT};
-    use ratatui::prelude::{Color, Modifier};
+    use super::{render_markdown_window, MarkdownLineKind};
+    use ratatui::prelude::Modifier;
 
     #[test]
     fn renders_agent_headings_with_provider_roles() {
@@ -814,8 +966,11 @@ mod tests {
 
         assert_eq!(user.spans[0].content.as_ref(), "## ");
         assert_eq!(user.spans[1].content.as_ref(), "User");
-        assert_eq!(user.spans[1].style.fg, Some(Color::Cyan));
-        assert_eq!(assistant.spans[1].style.fg, Some(Color::Green));
+        assert_eq!(user.spans[1].style.fg, Some(crate::tui::theme::user()));
+        assert_eq!(
+            assistant.spans[1].style.fg,
+            Some(crate::tui::theme::success())
+        );
     }
 
     #[test]
@@ -834,12 +989,21 @@ mod tests {
             80,
         );
 
-        assert_eq!(lines[0].line.spans[1].style.fg, Some(Color::Yellow)); // Command
-        assert_eq!(lines[1].line.spans[0].style.fg, Some(Color::Yellow)); // tool call
-        assert_eq!(lines[2].line.spans[0].style.fg, Some(Color::Blue)); // tool result
-        assert_eq!(lines[3].line.spans[0].style.fg, Some(Color::Yellow)); // skill
-        assert_eq!(lines[4].line.spans[0].style.fg, Some(Color::Yellow)); // thinking
-        assert_eq!(lines[5].line.spans[1].style.fg, Some(Color::Red)); // Error
+        assert_eq!(
+            lines[0].line.spans[1].style.fg,
+            Some(crate::tui::theme::structure_color(false))
+        ); // Command heading stays amber
+        for marker in [1, 2, 3, 4] {
+            assert_eq!(
+                lines[marker].line.spans[0].style.fg,
+                Some(crate::tui::theme::muted()),
+                "structure marker line {marker} must render gray"
+            );
+        }
+        assert_eq!(
+            lines[5].line.spans[1].style.fg,
+            Some(crate::tui::theme::failure())
+        ); // Error
     }
 
     #[test]
@@ -868,11 +1032,11 @@ mod tests {
         let line = &lines[0].line;
 
         assert_eq!(line.spans[0].content.as_ref(), "- ");
-        assert_eq!(line.spans[0].style.fg, Some(Color::DarkGray));
+        assert_eq!(line.spans[0].style.fg, Some(crate::tui::theme::dim()));
         assert_eq!(line.spans[1].content.as_ref(), "bold");
         assert!(line.spans[1].style.add_modifier.contains(Modifier::BOLD));
         assert_eq!(line.spans[3].content.as_ref(), "code");
-        assert_eq!(line.spans[3].style.fg, Some(Color::Gray));
+        assert_eq!(line.spans[3].style.fg, Some(crate::tui::theme::code()));
         assert_eq!(line.spans[3].style.bg, None);
     }
 
@@ -884,7 +1048,10 @@ mod tests {
         assert_eq!(line.spans[0].content.as_ref(), "em");
         assert!(line.spans[0].style.add_modifier.contains(Modifier::ITALIC));
         assert_eq!(line.spans[2].content.as_ref(), "site");
-        assert_eq!(line.spans[2].style.fg, Some(Color::Blue));
+        assert_eq!(
+            line.spans[2].style.fg,
+            Some(crate::tui::theme::link_style().fg.unwrap())
+        );
         assert!(line.spans[2]
             .style
             .add_modifier
@@ -902,7 +1069,10 @@ mod tests {
 
         assert_eq!(line.spans[0].content.as_ref(), "See ");
         assert_eq!(line.spans[1].content.as_ref(), "https://example.com/docs");
-        assert_eq!(line.spans[1].style.fg, Some(Color::Blue));
+        assert_eq!(
+            line.spans[1].style.fg,
+            Some(crate::tui::theme::link_style().fg.unwrap())
+        );
         assert_eq!(line.spans[2].content.as_ref(), ".");
         assert_eq!(lines[0].links[0].start, 4);
         assert_eq!(lines[0].links[0].end, 28);
@@ -914,12 +1084,21 @@ mod tests {
         let lines = render_markdown_window(&["> quote", "1. item"], 0, 2, 80);
 
         assert_eq!(lines[0].line.spans[0].content.as_ref(), "> ");
-        assert_eq!(lines[0].line.spans[0].style.fg, Some(Color::DarkGray));
+        assert_eq!(
+            lines[0].line.spans[0].style.fg,
+            Some(crate::tui::theme::dim())
+        );
         assert_eq!(lines[0].line.spans[1].content.as_ref(), "quote");
-        assert_eq!(lines[0].line.spans[1].style.fg, Some(Color::Green));
+        assert_eq!(
+            lines[0].line.spans[1].style.fg,
+            Some(crate::tui::theme::quote())
+        );
 
         assert_eq!(lines[1].line.spans[0].content.as_ref(), "1. ");
-        assert_eq!(lines[1].line.spans[0].style.fg, Some(Color::DarkGray));
+        assert_eq!(
+            lines[1].line.spans[0].style.fg,
+            Some(crate::tui::theme::dim())
+        );
         assert_eq!(lines[1].line.spans[1].content.as_ref(), "item");
     }
 
@@ -928,11 +1107,17 @@ mod tests {
         let lines = render_markdown_window(&["- [ ] open", "- [x] done"], 0, 2, 80);
 
         assert_eq!(lines[0].line.spans[0].content.as_ref(), "□ ");
-        assert_eq!(lines[0].line.spans[0].style.fg, Some(Color::DarkGray));
+        assert_eq!(
+            lines[0].line.spans[0].style.fg,
+            Some(crate::tui::theme::dim())
+        );
         assert_eq!(lines[0].line.spans[1].content.as_ref(), "open");
 
         assert_eq!(lines[1].line.spans[0].content.as_ref(), "■ ");
-        assert_eq!(lines[1].line.spans[0].style.fg, Some(Color::Green));
+        assert_eq!(
+            lines[1].line.spans[0].style.fg,
+            Some(crate::tui::theme::success())
+        );
         assert_eq!(lines[1].line.spans[1].content.as_ref(), "done");
     }
 
@@ -941,7 +1126,10 @@ mod tests {
         let lines = render_markdown_window(&["---"], 0, 1, 12);
 
         assert_eq!(lines[0].line.spans[0].content.as_ref(), "────────────");
-        assert_eq!(lines[0].line.spans[0].style.fg, Some(Color::DarkGray));
+        assert_eq!(
+            lines[0].line.spans[0].style.fg,
+            Some(crate::tui::theme::dim())
+        );
     }
 
     #[test]
@@ -982,16 +1170,38 @@ mod tests {
     }
 
     #[test]
-    fn renders_fenced_code_blocks_as_indented_code() {
+    fn styles_tool_input_lines_with_a_marker_prefix() {
+        let lines = render_markdown_window(&["$ read src/main.rs:12-30"], 0, 1, 80);
+
+        assert_eq!(lines[0].line.spans[0].content.as_ref(), "$ ");
+        assert_eq!(
+            lines[0].line.spans[0].style.fg,
+            Some(crate::tui::theme::muted())
+        );
+        assert!(lines[0].line.spans[0]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD));
+        assert_eq!(
+            lines[0].line.spans[1].content.as_ref(),
+            "read src/main.rs:12-30"
+        );
+    }
+
+    #[test]
+    fn renders_fenced_code_blocks_with_github_style_line_numbers() {
         let lines = render_markdown_window(&["```text", "-> value", "```"], 0, 3, 80);
 
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[0].kind, MarkdownLineKind::CodeFence);
         assert!(lines[0].line.spans.is_empty());
         assert_eq!(lines[1].kind, MarkdownLineKind::CodeBlock);
-        assert_eq!(lines[1].line.spans[0].content.as_ref(), CODE_INDENT);
+        assert_eq!(lines[1].line.spans[0].content.as_ref(), "1 ");
         assert_eq!(lines[1].line.spans[1].content.as_ref(), "-> value");
-        assert_eq!(lines[1].line.spans[1].style.fg, Some(Color::Gray));
+        assert_eq!(
+            lines[1].line.spans[1].style.fg,
+            Some(crate::tui::theme::code())
+        );
         assert_eq!(lines[2].kind, MarkdownLineKind::CodeFence);
         assert!(lines[2].line.spans.is_empty());
     }
@@ -1001,8 +1211,100 @@ mod tests {
         let lines = render_markdown_window(&["```text", "alpha", "beta", "```"], 2, 1, 80);
 
         assert_eq!(lines[0].kind, MarkdownLineKind::CodeBlock);
+        // Numbers stay true to the block: "beta" is the second line, so its
+        // gutter says 2 even when the window starts at line two.
+        assert_eq!(lines[0].line.spans[0].content.as_ref(), "2 ");
         assert_eq!(lines[0].line.spans[1].content.as_ref(), "beta");
-        assert_eq!(lines[0].line.spans[1].style.fg, Some(Color::Gray));
+        assert_eq!(
+            lines[0].line.spans[1].style.fg,
+            Some(crate::tui::theme::code())
+        );
+    }
+
+    #[test]
+    fn code_block_gutter_width_tracks_the_block_length() {
+        let lines = render_markdown_window(
+            &[
+                "```text", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "```",
+            ],
+            0,
+            12,
+            80,
+        );
+        // Ten lines → two-digit numbers, right-aligned to the same width.
+        assert_eq!(lines[1].line.spans[0].content.as_ref(), " 1 ");
+        assert_eq!(lines[9].line.spans[0].content.as_ref(), " 9 ");
+        assert_eq!(lines[10].line.spans[0].content.as_ref(), "10 ");
+    }
+
+    #[test]
+    fn numeric_fence_numbers_the_block_from_that_file_line() {
+        // read results fence as ```` ```775 ````: the gutter shows the file's
+        // real lines, and the fence row does not print "775" as a language.
+        let lines = render_markdown_window(
+            &["```775", "line one", "line two", "line three", "```"],
+            0,
+            5,
+            80,
+        );
+        assert_eq!(lines[0].kind, MarkdownLineKind::CodeFence);
+        assert!(lines[0].line.spans.is_empty());
+        assert_eq!(lines[1].line.spans[0].content.as_ref(), "775 ");
+        assert_eq!(lines[2].line.spans[0].content.as_ref(), "776 ");
+        assert_eq!(lines[3].line.spans[0].content.as_ref(), "777 ");
+        assert_eq!(lines[4].kind, MarkdownLineKind::CodeFence);
+        assert!(lines[4].line.spans.is_empty());
+    }
+
+    #[test]
+    fn grep_block_styles_summary_paths_and_matches_separately() {
+        let lines = render_markdown_window(
+            &[
+                "```grep",
+                "Found 2 matching lines",
+                "D:\\Coding\\AGENTS.md",
+                "31:- Adding, updating, or removing dependencies",
+                "```",
+            ],
+            0,
+            5,
+            100,
+        );
+        assert_eq!(lines[0].kind, MarkdownLineKind::CodeFence);
+        assert_eq!(lines[0].line.spans[0].content.as_ref(), "grep");
+
+        // The summary reads as a bold accent.
+        assert_eq!(
+            lines[1].line.spans[0].style.fg,
+            Some(crate::tui::theme::accent())
+        );
+        assert!(lines[1].line.spans[0]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD));
+        // The file path gets accent, no line gutter.
+        assert_eq!(
+            lines[2].line.spans[0].content.as_ref(),
+            "D:\\Coding\\AGENTS.md"
+        );
+        assert_eq!(
+            lines[2].line.spans[0].style.fg,
+            Some(crate::tui::theme::accent())
+        );
+        // The match splits into a highlighted line number and code content.
+        assert_eq!(lines[3].line.spans[0].content.as_ref(), "31:");
+        assert_eq!(
+            lines[3].line.spans[0].style.fg,
+            Some(crate::tui::theme::accent())
+        );
+        assert_eq!(
+            lines[3].line.spans[1].content.as_ref(),
+            "- Adding, updating, or removing dependencies"
+        );
+        assert_eq!(
+            lines[3].line.spans[1].style.fg,
+            Some(crate::tui::theme::code())
+        );
     }
 
     #[test]
@@ -1010,6 +1312,162 @@ mod tests {
         let lines = render_markdown_window(&["```sql", "select 1", "```"], 0, 1, 80);
 
         assert_eq!(lines[0].kind, MarkdownLineKind::CodeFence);
-        assert_eq!(lines[0].line.spans[0].content.as_ref(), "  sql");
+        assert_eq!(lines[0].line.spans[0].content.as_ref(), "sql");
+    }
+
+    #[test]
+    fn renders_diff_fenced_blocks_with_change_colors() {
+        let lines = render_markdown_window(
+            &[
+                "```diff",
+                "@@ -1,3 +1,4 @@",
+                " base",
+                "-removed",
+                "+added",
+                "+++ b/file",
+                "```",
+            ],
+            0,
+            6,
+            80,
+        );
+
+        assert_eq!(lines[0].line.spans[0].content.as_ref(), "diff");
+        assert_eq!(
+            lines[1].line.spans[1].style.fg,
+            Some(crate::tui::theme::accent())
+        ); // @@ hunk
+        assert_eq!(
+            lines[2].line.spans[1].style.fg,
+            Some(crate::tui::theme::code())
+        ); // context
+        assert_eq!(
+            lines[3].line.spans[1].style.fg,
+            Some(crate::tui::theme::failure())
+        ); // - removed
+        assert_eq!(
+            lines[4].line.spans[1].style.fg,
+            Some(crate::tui::theme::success())
+        ); // + added
+        assert!(lines[5].line.spans[1]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn auto_detects_unified_diffs_in_plain_fenced_blocks() {
+        let lines = render_markdown_window(&["```", "@@ -1 +1 @@", "-a", "+b", "```"], 0, 5, 80);
+
+        assert_eq!(
+            lines[1].line.spans[1].style.fg,
+            Some(crate::tui::theme::accent())
+        );
+        assert_eq!(
+            lines[2].line.spans[1].style.fg,
+            Some(crate::tui::theme::failure())
+        );
+        assert_eq!(
+            lines[3].line.spans[1].style.fg,
+            Some(crate::tui::theme::success())
+        );
+    }
+
+    #[test]
+    fn non_diff_code_blocks_keep_plain_code_style() {
+        let lines = render_markdown_window(&["```text", "- not a diff", "+ nope", "```"], 0, 3, 80);
+
+        // No hunk header: the block is not a diff, so +/- lines stay code-colored.
+        assert_eq!(
+            lines[1].line.spans[1].style.fg,
+            Some(crate::tui::theme::code())
+        );
+        assert_eq!(
+            lines[2].line.spans[1].style.fg,
+            Some(crate::tui::theme::code())
+        );
+    }
+
+    #[test]
+    fn plain_code_lines_starting_with_at_at_do_not_enable_diff_mode() {
+        // `@@derive` is not a hunk header, so the block stays plain.
+        let lines = render_markdown_window(
+            &["```rust", "@@derive(Clone)", "+ not a change", "```"],
+            0,
+            3,
+            80,
+        );
+        assert_eq!(
+            lines[1].line.spans[1].style.fg,
+            Some(crate::tui::theme::code())
+        );
+        assert_eq!(
+            lines[2].line.spans[1].style.fg,
+            Some(crate::tui::theme::code())
+        );
+    }
+
+    #[test]
+    fn non_canonical_hunk_headers_do_not_enable_diff_mode() {
+        // A context line, a swapped sign order, and a multi-count range are
+        // all lookalikes, not hunk headers.
+        for header in [" @@ -1 +1 @@", "@@ +1 -1 @@", "@@ -1,2,3 +1 @@"] {
+            let lines = render_markdown_window(&["```", header, "+ not a change", "```"], 0, 3, 80);
+            assert_eq!(
+                lines[2].line.spans[1].style.fg,
+                Some(crate::tui::theme::code()),
+                "header `{header}` must not enable diff mode"
+            );
+        }
+    }
+
+    #[test]
+    fn hunk_headers_with_section_headings_still_detect() {
+        let lines = render_markdown_window(&["```", "@@ -1,3 +1,4 @@ fn main()", "```"], 0, 2, 80);
+        assert_eq!(
+            lines[1].line.spans[1].style.fg,
+            Some(crate::tui::theme::accent())
+        );
+    }
+
+    #[test]
+    fn diff_context_lines_with_plus_content_stay_plain() {
+        // The leading context space is preserved: " + x" is context, not an
+        // addition.
+        let lines =
+            render_markdown_window(&["```diff", "@@ -1 +1 @@", " + not added", "```"], 0, 3, 80);
+        assert_eq!(
+            lines[2].line.spans[1].style.fg,
+            Some(crate::tui::theme::code())
+        );
+        assert_eq!(lines[2].line.spans[1].content.as_ref(), " + not added");
+    }
+
+    #[test]
+    fn change_lines_starting_with_triple_pluses_stay_additions() {
+        let lines = render_markdown_window(
+            &["```diff", "@@ -1 +1 @@", "+++added", "--- b/file", "```"],
+            0,
+            4,
+            80,
+        );
+        // "+++added" is added content, not a file header.
+        assert_eq!(
+            lines[2].line.spans[1].style.fg,
+            Some(crate::tui::theme::success())
+        );
+        assert!(!lines[2].line.spans[1]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD));
+        // "--- b/file" is a file header: muted + bold.
+        assert_eq!(
+            lines[3].line.spans[1].style.fg,
+            Some(crate::tui::theme::muted())
+        );
+        assert!(lines[3].line.spans[1]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD));
     }
 }
