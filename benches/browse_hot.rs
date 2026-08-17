@@ -6,7 +6,7 @@
 //! ```
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use sivtr::commands::browse::perf::{run_ensure_growth, HotPane, HydratedStore};
+use sivtr::commands::browse::perf::{run_ensure_growth, FatLayout, HotPane, HydratedStore};
 
 fn bench_materialize(c: &mut Criterion) {
     let mut group = c.benchmark_group("dialogue_materialize");
@@ -56,11 +56,28 @@ fn bench_session_list_project(c: &mut Criterion) {
     group.finish();
 }
 
+/// Content layout: one large session (80 blocks × 20 md paragraphs).
+fn bench_content_layout(c: &mut Criterion) {
+    let fat = FatLayout::new(80, 20);
+    c.bench_function("content_layout_80x20", |b| {
+        b.iter(|| black_box(fat.layout_lines()))
+    });
+}
+
+fn bench_apply_bodies(c: &mut Criterion) {
+    let store = HydratedStore::new(40, 50);
+    c.bench_function("apply_fat_bodies_40x50", |b| {
+        b.iter(|| black_box(store.apply_all_bodies()))
+    });
+}
+
 criterion_group!(
     benches,
     bench_materialize,
     bench_ensure_growth,
     bench_titles_iter,
-    bench_session_list_project
+    bench_session_list_project,
+    bench_content_layout,
+    bench_apply_bodies
 );
 criterion_main!(benches);

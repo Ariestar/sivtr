@@ -6,8 +6,8 @@ use crate::pane::{Pane, PaneInput, Viewport};
 use crate::tui::workspace::{WorkspaceSession, WorkspaceSource};
 use sivtr_core::ai::AgentProvider;
 use sivtr_core::record::{
-    WorkChannel, WorkPart, WorkPartKind, WorkRecord, WorkRecordKind, WorkRef, WorkSessionRef,
-    WorkSource, WorkTime, RECORD_SCHEMA_VERSION,
+    WorkChannel, WorkPart, WorkRecord, WorkRecordKind, WorkRef, WorkSessionRef, WorkSource,
+    WorkTime, RECORD_SCHEMA_VERSION,
 };
 use std::time::UNIX_EPOCH;
 
@@ -121,7 +121,8 @@ impl HotPane {
         let titles: Vec<&str> = self.inner.titles().collect();
         let selected = vec![false; self.inner.len()];
         let focus = self.n / 2;
-        let rows = self.inner.materialize(&selected, focus);
+        let mut rows = Vec::new();
+        self.inner.materialize_into(&selected, focus, &mut rows);
         let bodies = rows.iter().filter(|d| d.record.is_some()).count();
         std::hint::black_box(titles.len());
         (titles.len(), bodies)
@@ -234,4 +235,87 @@ impl HydratedStore {
         let bodies: usize = out.iter().map(|s| s.records.len()).sum();
         std::hint::black_box((out.len(), bodies)).0
     }
+
+    /// Land every session body in a sliding pane (stale-apply cost).
+    pub fn apply_all_bodies(&self) -> usize {
+        use crate::pane::{SlidingPane, WindowRow};
+
+        let rows: Vec<_> = self
+            .sessions
+            .iter()
+            .map(|s| WindowRow::meta_only(s.session_id.clone(), ()))
+            .collect();
+        let mut pane: SlidingPane<String, (), Vec<sivtr_core::record::WorkRecord>> =
+            SlidingPane::ready(rows, self.sessions.len(), true);
+        let mut applied = 0usize;
+        for s in &self.sessions {
+            if pane.apply_body(&s.session_id, s.records.clone()) {
+                applied += 1;
+            }
+        }
+        std::hint::black_box((pane.len(), applied)).1
+    }
+}
+
+/// Fat content half: `n_blocks` markdown segments, `lines_per` each.
+///
+/// Mirrors one large agent session in the content pane (the path that
+/// double-laid-out the joined document and every block).
+pub struct FatLayout {
+    area: ratatui::layout::Rect,
+    text: String,
+    blocks: Vec<crate::tui::content::block::BlockText>,
+}
+
+impl FatLayout {
+    pub fn new(n_blocks: usize, lines_per: usize) -> Self {
+        use crate::tui::content::block::BlockText;
+        use sivtr_core::record::WorkPartKind;
+
+        let blocks: Vec<BlockText> = (0..n_blocks)
+            .map(|i| {
+                let mut text = String::new();
+                for j in 0..lines_per {
+                    text.push_str(&format!(
+                        "## h{i}.{j}\n\nparagraph {j} with `code` and **bold** text that wraps at eighty columns easily.\n\n"
+                    ));
+                }
+                BlockText {
+                    id: i,
+                    text,
+                    tight: false,
+                    kind: WorkPartKind::Assistant,
+                }
+            })
+            .collect();
+        let mut joined = String::new();
+        for (idx, block) in blocks.iter().enumerate() {
+            joined.push_str(&block.text);
+            if idx + 1 < blocks.len() {
+                joined.push_str("\n\n");
+            }
+        }
+        Self {
+            area: ratatui::layout::Rect::new(0, 0, 84, 40),
+            text: joined,
+            blocks,
+        }
+    }
+
+    pub fn layout_lines(&self) -> usize {
+        crate::tui::content::view::layout_content(
+            self.area,
+            &self.text,
+            &self.blocks,
+            crate::tui::content::view::ContentViewMode::Reading,
+        )
+        .lines
+        .len()
+    }
+}
+
+/// Apply `n` fat session bodies into a store (the cost of not dropping stale
+/// parses). `records_each` × 4KiB assistant blobs.
+pub fn apply_fat_bodies(n_sessions: usize, records_each: usize) -> usize {
+    HydratedStore::new(n_sessions, records_each).apply_all_bodies()
 }

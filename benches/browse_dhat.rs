@@ -8,7 +8,7 @@
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
-use sivtr::commands::browse::perf::{HotPane, HydratedStore};
+use sivtr::commands::browse::perf::{apply_fat_bodies, FatLayout, HotPane, HydratedStore};
 
 fn main() {
     let _profiler = dhat::Profiler::new_heap();
@@ -123,5 +123,67 @@ fn main() {
     }
     eprintln!();
     eprintln!("peak_bytes={} peak_blocks={}", t5.max_bytes, t5.max_blocks);
+
+    // ── Content layout (the double-wrap path on a fat session) ────────────
+    let n_blocks = std::env::var("SIVTR_DHAT_BLOCKS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(80usize);
+    let n_lines = std::env::var("SIVTR_DHAT_BLOCK_LINES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20usize);
+    let layout_iters = std::env::var("SIVTR_DHAT_LAYOUT_ITERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20usize);
+    let fat = FatLayout::new(n_blocks, n_lines);
+    let t6 = dhat::HeapStats::get();
+    let mut layout_lines = 0usize;
+    for _ in 0..layout_iters {
+        layout_lines = fat.layout_lines();
+    }
+    let t7 = dhat::HeapStats::get();
+    let layout_bytes = t7.total_bytes.saturating_sub(t6.total_bytes);
+    let layout_blocks = t7.total_blocks.saturating_sub(t6.total_blocks);
+    eprintln!();
+    eprintln!(
+        "=== content layout ({n_blocks} blocks × {n_lines} md paras × {layout_iters} iters) ==="
+    );
+    eprintln!("  lines={layout_lines}");
+    eprintln!("  heap_bytes={layout_bytes}");
+    eprintln!("  heap_blocks={layout_blocks}");
+    if layout_iters > 0 {
+        eprintln!(
+            "  heap_bytes/iter={:.0}",
+            layout_bytes as f64 / layout_iters as f64
+        );
+    }
+
+    // ── Stale-body apply: 40 fat sessions landed in the store ─────────────
+    let apply_iters = std::env::var("SIVTR_DHAT_APPLY_ITERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10usize);
+    let t8 = dhat::HeapStats::get();
+    let mut applied = 0usize;
+    for _ in 0..apply_iters {
+        applied = apply_fat_bodies(40, 50);
+    }
+    let t9 = dhat::HeapStats::get();
+    let apply_bytes = t9.total_bytes.saturating_sub(t8.total_bytes);
+    eprintln!();
+    eprintln!("=== apply fat bodies (40 sessions × 50 turns × {apply_iters} iters) ===");
+    eprintln!("  applied={applied}");
+    eprintln!("  heap_bytes={apply_bytes}");
+    if apply_iters > 0 {
+        eprintln!(
+            "  heap_bytes/iter={:.0}",
+            apply_bytes as f64 / apply_iters as f64
+        );
+    }
+
+    eprintln!();
+    eprintln!("peak_bytes={} peak_blocks={}", t9.max_bytes, t9.max_blocks);
     eprintln!("Open dhat-heap.json in dh_view for the full allocation tree.");
 }

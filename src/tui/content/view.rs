@@ -97,9 +97,7 @@ pub(crate) struct ContentLayout {
     pub(crate) kinds: Vec<WorkPartKind>,
 }
 
-/// Lay one half out once: lines, per-line block ownership, and per-block
-/// kinds, all derived from the same content width so scroll, dots, and
-/// hit-testing agree.
+/// Lay one half out once from its blocks. Empty halves use `text` (`<empty>`).
 pub(crate) fn layout_content(
     area: Rect,
     text: &str,
@@ -108,41 +106,33 @@ pub(crate) fn layout_content(
 ) -> ContentLayout {
     let inner = panel_inner(area);
     let width = inner.width.saturating_sub(GUTTER_WIDTH) as usize;
-    let lines = all_content_lines(text, width, mode);
+    if blocks.is_empty() {
+        let lines = all_content_lines(text, width, mode);
+        let n = lines.len().max(1);
+        return ContentLayout {
+            lines,
+            ownership: vec![None; n],
+            kinds: Vec::new(),
+        };
+    }
     let mut kinds = vec![WorkPartKind::User; marked_mask_len(blocks.iter().map(|b| b.id))];
-    for block in blocks {
-        kinds[block.id] = block.kind;
+    let mut lines = Vec::new();
+    let mut ownership = Vec::new();
+    for (idx, segment) in blocks.iter().enumerate() {
+        kinds[segment.id] = segment.kind;
+        let block_lines = all_content_lines(&segment.text, width, mode);
+        ownership.extend(std::iter::repeat_n(Some(segment.id), block_lines.len()));
+        lines.extend(block_lines);
+        if idx + 1 < blocks.len() && !segment.tight {
+            ownership.push(None);
+            lines.push(raw_content_line(""));
+        }
     }
     ContentLayout {
         lines,
-        ownership: block_ownership(width, blocks, mode),
+        ownership,
         kinds,
     }
-}
-
-/// Map every displayed line of a half to the block that owns it. Each block
-/// is laid out independently and followed by one unowned separator line,
-/// which matches the `"\n\n"` join the pane text uses between segments; run
-/// members join on adjacent lines with no separator.
-fn block_ownership(
-    width: usize,
-    blocks: &[BlockText],
-    mode: ContentViewMode,
-) -> Vec<Option<usize>> {
-    let mut ownership = Vec::new();
-    for (idx, segment) in blocks.iter().enumerate() {
-        for _ in all_content_lines(&segment.text, width, mode) {
-            ownership.push(Some(segment.id));
-        }
-        if idx + 1 < blocks.len() && !segment.tight {
-            ownership.push(None);
-        }
-    }
-    if ownership.is_empty() {
-        // An empty half renders `<empty>`: one unowned line.
-        ownership.push(None);
-    }
-    ownership
 }
 
 pub(crate) fn render_content_view(
