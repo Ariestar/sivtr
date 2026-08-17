@@ -5,7 +5,7 @@ description: sivtr 面向用户的发布说明。
 
 `sivtr` 仍处在早期 `0.4.x` 开发阶段。本系列中 CLI 和配置格式仍可能变化。
 
-完整发布说明在仓库 [`changelogs/`](https://github.com/Ariestar/sivtr/tree/main/changelogs) 中；索引见 [`CHANGELOG.md`](https://github.com/Ariestar/sivtr/blob/main/CHANGELOG.md)。
+发布说明见 [`CHANGELOG.md`](https://github.com/Ariestar/sivtr/blob/main/CHANGELOG.md)。旧版本详细说明归档在 [`changelogs/`](https://github.com/Ariestar/sivtr/tree/main/changelogs) 目录。
 
 ## Releases
 

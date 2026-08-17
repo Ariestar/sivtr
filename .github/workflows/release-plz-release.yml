@@ -1,0 +1,36 @@
+name: Release-plz release
+
+# Creates the `vX.Y.Z` tag when a Release PR is merged. With
+# `release_always = false` release-plz only releases when the merged PR came
+# from a `release-plz-` branch. The tag then runs release.yml (assets,
+# crates.io, GitHub Release, installer smoke).
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+
+jobs:
+  release-plz:
+    name: Tag release
+    if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Tag release
+        uses: release-plz/action@v0.5.131
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

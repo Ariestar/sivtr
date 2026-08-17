@@ -72,6 +72,7 @@ Keep this file limited to durable, cross-session guidance. Current progress, tem
 - Do not push unless the user explicitly requests it.
 - Never delete remote branches, including merged feature branches.
 - Never force-push or rewrite shared branch history.
+- `main` accepts squash merges only. PR titles are Conventional Commits and become the squash subject.
 
 ## Conventional Commits
 
@@ -123,20 +124,17 @@ How this project versions and releases changes. AI agents must follow this when 
 - Versions are `MAJOR.MINOR.PATCH` per SemVer. In the `0.x` phase: MINOR carries new user-visible features (it may include breaking changes); PATCH is reserved for backwards-compatible bug fixes and hotfixes; MAJOR stays unused until the API/config surface is stable enough to commit to `1.0.0`.
 - Pre-release suffixes (`-alpha.N`, `-beta.N`, `-rc.N`) mark unstable builds. Keep them few and converge quickly; do not let a release candidate drag on.
 
-### When to release
+### Release flow
 
-Feature-driven first, calendar check second, hotfix as the exception:
+[release-plz](https://release-plz.dev) drives versioning, changelog, and tagging (`release-plz.toml` + `.github/workflows/release-plz*.yml`). On every push to `main` it keeps a **Release PR** up to date: it bumps `[workspace.package]` version, syncs the `sivtr-core` pin and `Cargo.lock`, and drafts a Keep a Changelog section in `CHANGELOG.md` from Conventional Commit squash titles. Merging that PR is the release.
 
-1. A user-visible feature (new provider, command, or interaction) is merged to main → release `X.Y.0` promptly. Do not wait, hoard, or bundle unrelated work.
-2. Weekly check: review main once a week. A feature landed this week → MINOR. Fixes only → hold for the next feature batch, or release a PATCH if urgent.
-3. Hotfix: blocking bug or security issue on a released version → cut a PATCH from the last tag immediately, then merge the fix back into main.
+1. `feat:` → MINOR (`0.4.1` → `0.5.0`); `fix:` → PATCH (`0.4.1` → `0.4.2`); `feat!` / `BREAKING CHANGE` → still MINOR in `0.x`, flagged as breaking in the changelog; `chore` / `docs` / `ci` / `refactor` / `test` / `perf` / `build` → no version bump.
+2. **Immediately** = merge the Release PR right after the feature lands. **Batch** = leave it open and let later squashes accumulate in it.
+3. Edit the changelog section inside the Release PR before merging if a hand-written note is wanted; release-plz never overwrites existing release sections.
+4. Only `sivtr` is tagged (`vX.Y.Z`) and gets a changelog entry; `sivtr-core` shares `version.workspace`, its version and the `sivtr-core` pin are synced by the same Release PR, and both crates are published by the tag pipeline. A change touching only `crates/sivtr-core/` bumps core but creates no tag — it ships with the next `sivtr` release.
+5. Merging the Release PR creates tag `vX.Y.Z`. The tag runs `.github/workflows/release.yml` (assets, crates.io publish for both crates, GitHub Release from the `CHANGELOG.md` section, installer smoke). Do not produce or attach artifacts manually.
 
-Release gate — all four must hold before tagging:
-
-- The feature is merged to main and CI is green (fmt, lint, tests, smoke, audit as applicable).
-- The changelog entry for this version exists. If the repo's release workflow requires a changelog file, a missing entry failing the build is a feature, not a bug — write it first.
-- The version is bumped in every manifest that declares it (workspace crates, packages, etc.) — never only one.
-- The tag `vX.Y.Z` is created and pushed. A tag-triggered pipeline (build, publish, release notes, installer smoke tests) handles the rest; do not produce or attach artifacts manually.
+Merge gate for the Release PR: release-plz pushes its branch with `GITHUB_TOKEN`, so GitHub does not run CI on it and the required status checks never go green — only the maintainer bypass can merge it. (Optional: swap in a workflow-capable PAT secret to restore CI on the Release PR.)
 
 ### Branch discipline
 
@@ -146,16 +144,17 @@ Release gate — all four must hold before tagging:
 
 ### Commits and changelog
 
-- Conventional Commits (see [Conventional Commits](#conventional-commits) for the full syntax) drive version bumps: `feat:` → MINOR; `fix:` → PATCH; `feat!:` (breaking change) → still MINOR in 0.x, but flag it in the changelog; `chore`/`docs`/`ci`/`refactor`/`test`/`perf`/`build` → no release.
-- Record every user-visible change in the changelog. Derive entries from `git log --oneline <last-tag>..HEAD` rather than from memory.
+- Conventional Commits (see [Conventional Commits](#conventional-commits) for the full syntax) drive version bumps. Squash titles become the changelog entries; keep them imperative and lowercase.
+- Do not bump `version` in `Cargo.toml` or add `changelogs/` in a feature PR — the Release PR does that.
+- New release notes go into `CHANGELOG.md`; old per-release files under `changelogs/` are archive only.
 
 ### Common traps
 
-- Hoarding changes into one big release → release per feature batch instead.
+- Hoarding changes into one big release → merge the Release PR per feature batch instead.
 - PATCH creep (many patches within one MINOR) → it is time for a new MINOR; PATCH is for hotfixes.
 - Branch pile-up (unmerged branches, abandoned worktrees) → merge and clean up.
 - Hotfix not merged back into main → the bug returns in the next release.
-- Version mismatch between tag and manifests → the release pipeline fails; bump all manifests together.
+- Version mismatch between tag and manifests → the release pipeline fails; release-plz bumps all manifests together (`Cargo.toml`, `sivtr-core` pin, `Cargo.lock`).
 
 ## Project Invariants
 
