@@ -15,7 +15,7 @@ sivtr --all              # with bare TTY: also select remote mounts on open
 With no command:
 
 - **TTY** → multi-source workspace browser (Source / Sessions / Dialogues / Content).
-- **Piped stdin** → single-buffer browser (same as `sivtr pipe`).
+- **Piped stdin** → same as `sivtr pipe`: write to history and open the external editor.
 
 ## run
 
@@ -23,7 +23,7 @@ With no command:
 sivtr run <COMMAND> [ARGS...]
 ```
 
-Runs a command, captures combined stdout/stderr, reports the exit status, saves history when enabled, and opens the captured output.
+Runs a command, captures combined stdout/stderr, reports the exit status, saves history when enabled, and opens the captured output in the external editor.
 
 ```bash
 sivtr run cargo test
@@ -429,6 +429,55 @@ sivtr show @last --full
 sivtr show @ctx -f timeline
 ```
 
+## zoom
+
+```bash
+sivtr zoom [SOURCE=@last] [OPTIONS]
+```
+
+Expands each target WorkRecord with neighboring records from the same session. Defaults to `@last` when no source is given.
+
+Options:
+
+| Option | Meaning |
+| --- | --- |
+| `-C, --context <N>` | Records before + after each anchor (default `1`) |
+| `--before <N>` | Records before each anchor |
+| `--after <N>` | Records after each anchor |
+| `--cwd <PATH>` | Workspace directory used to resolve sessions |
+| `--json` | Alias for `--format workset` |
+| `--refs` | Alias for `--format refs` |
+| `-f, --format <FORMAT>` | `full`, `timeline`, `compact`, `md`, `refs`, or `workset` |
+| `--save <NAME>` | Save the expanded set as a named WorkSet var |
+
+```bash
+sivtr zoom                        # expand @last
+sivtr zoom claude/<session>/3 -C 2
+sivtr zoom @failures --before 2 --after 0 --refs
+```
+
+## work
+
+```bash
+sivtr work <COMMAND>
+```
+
+Traverses workspace sessions, records, and parts without printing full content — marker-level output you can pipe into other commands.
+
+| Command | Meaning |
+| --- | --- |
+| `sessions [SOURCE]` | List terminal and agent sessions in the current workspace |
+| `records <SOURCE>` | Turn sessions or saved variables into event-level refs |
+| `parts <SOURCE>` | Extract only useful inputs/outputs from matching events |
+
+Common flags: `--provider <NAME>` filter, `--cwd <PATH>`, `--json`, `--refs`, `--save <NAME>`.
+
+```bash
+sivtr work sessions
+sivtr work records codex/ --refs
+sivtr work parts @last --kind output --save out_parts
+```
+
 ## serve
 
 ```bash
@@ -533,6 +582,54 @@ sivtr peer list
 sivtr peer forget <peer>
 ```
 
+## group
+
+```bash
+sivtr group <COMMAND>
+```
+
+Groups are a named set of devices that share memory with each other: every member contributes workspaces, and roster changes sync automatically.
+
+| Command | Meaning |
+| --- | --- |
+| `create <NAME> [--workspace PATH] [--share-name NAME]` | Create the group and contribute the current workspace in one transaction |
+| `invite <GROUP> [--expires DURATION] [--max-uses N]` | Owner-only; mint a multi-use join link (stdout = bare key) |
+| `join <INVITE> [--workspace PATH] [--share-name NAME] [--no-redact]` | Redeem an invite and contribute workspaces; re-run to adjust contributions |
+| `list` | List groups you belong to |
+| `members <GROUP>` | List members and their contributions |
+| `remove <GROUP> <PEER>` | Owner-only; remove a member |
+| `rename <GROUP> <NAME>` | Owner-only; rename the group |
+| `leave <GROUP>` | Leave the group (owner leaving disbands it) |
+| `sync <GROUP>` | Force a roster pull from the owner |
+
+```bash
+sivtr group create team
+sivtr group invite team --expires 1d --max-uses 10
+sivtr group join <invite-key>
+sivtr group list
+sivtr group members team
+sivtr group sync team
+```
+
+Membership changes broadcast to every member automatically (and re-pull on a 5-minute TTL). Group access to a member's contributions is read-only and redacts secrets like shares do.
+
+## origin
+
+```bash
+sivtr origin <COMMAND>
+```
+
+One rename path for every addressable source — a name is either a local workspace alias or a remote mount, unified through an origin registry.
+
+| Command | Meaning |
+| --- | --- |
+| `rename <NAME> <NEW_NAME>` | Rename a local workspace alias or a remote mount; both kinds resolve through the same command |
+
+```bash
+sivtr origin rename docs knowledge
+sivtr origin rename desk alice-desk
+```
+
 ## workspace
 
 ```bash
@@ -593,7 +690,7 @@ sivtr mcp uninstall -p all -y
 
 | Flag | Meaning |
 | --- | --- |
-| `-p, --provider` | Provider host(s): `claude`, `cursor`, `codex`, `opencode`, `openclaw`, `grok`, `pi`, `hermes`, or `all`. Omit to detect installed hosts. |
+| `-p, --provider` | Provider host(s): `claude`, `cursor`, `codex`, `opencode`, `openclaw`, `grok`, `hermes`, `pi`, `qoder`, `qodercn`, `gemini`, `qwen`, `goose`, or `all`. Omit to detect installed hosts. |
 | `-l, --location` | `global` (default) or `local` |
 | `-y, --yes` | Non-interactive |
 
@@ -609,6 +706,10 @@ Install locations (registry-driven; paths are host defaults):
 | Grok | Grok config TOML → MCP entry |
 | Hermes | Hermes YAML → `mcp_servers.sivtr` |
 | Pi | Pi config → `mcpServers.sivtr` |
+| Qoder / Qoder-CN | Qoder settings.json → MCP entry |
+| Gemini | Gemini settings.json → `mcpServers.sivtr` |
+| Qwen | Qwen settings.json → MCP entry |
+| Goose | Goose config.yaml extensions → MCP entry |
 
 Registered command is always:
 
@@ -625,6 +726,7 @@ sivtr mcp print-config claude
 sivtr mcp print-config cursor
 sivtr mcp print-config codex
 sivtr mcp print-config grok
+sivtr mcp print-config goose
 ```
 
 MCP is not a full CLI mirror. Interactive, write, and capture commands stay on the CLI. Strategy still lives in the `sivtr-memory` skill.
@@ -652,6 +754,49 @@ Verbose output includes:
 - detected repo root;
 - local `target/debug/sivtr` binary status;
 - a warning when a different global binary is being used inside the repo.
+
+## doctor
+
+```bash
+sivtr doctor [--fix] [--json]
+```
+
+Diagnoses the installation and environment: binary, config, session logs, shell hooks, provider session counts, clipboard, and available updates.
+
+| Option | Meaning |
+| --- | --- |
+| `--fix` | Attempt to repair detected problems automatically |
+| `--json` | Machine-readable JSON output |
+
+```bash
+sivtr doctor
+sivtr doctor --fix
+sivtr doctor --json
+```
+
+## update
+
+```bash
+sivtr update
+```
+
+Self-updates to the latest GitHub release: downloads the matching platform asset, verifies its SHA256, and replaces the binary in place.
+
+```bash
+sivtr update
+```
+
+## setup
+
+```bash
+sivtr setup
+```
+
+One-command setup for a fresh install: detects the environment, installs shell hooks, registers the MCP server with detected agent hosts, installs the `sivtr-memory` skill when missing, and runs a smoke test. Equivalent to running `sivtr init`, `sivtr mcp install`, the skill install, and `sivtr doctor` step by step.
+
+```bash
+sivtr setup
+```
 
 ## history
 
