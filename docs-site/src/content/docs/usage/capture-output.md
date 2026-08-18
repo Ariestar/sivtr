@@ -11,13 +11,13 @@ Capture is the first step in turning terminal output into reusable text. Use the
 | --- | --- | --- |
 | Inspect one existing command pipeline | `command 2>&1 \| sivtr` | No |
 | Let `sivtr` run one command | `sivtr run command` | Partially, for the captured run |
-| Browse the current shell's recorded work | `sivtr import` | Yes, after shell integration |
+| Open the current shell's recorded work | `sivtr import` | Yes, after shell integration |
 | Copy one recent command block | `sivtr copy out` | Yes, after shell integration |
 | Search saved output history | `sivtr history search "query"` | Yes, for saved captures |
 
 ## Pipe mode
 
-Pipe mode reads stdin and opens the result.
+Pipe mode reads stdin, writes it to history (when enabled), and opens the result in the external editor.
 
 ```bash
 ls -la | sivtr
@@ -49,10 +49,10 @@ sivtr run git status --short
 Use run mode when:
 
 - you want `sivtr` to execute and capture a single command;
-- you want the exit status printed before browsing;
+- you want the exit status reported and the output saved before the editor opens;
 - you prefer not to manage shell redirection manually.
 
-Run mode captures stdout and stderr together. If the command produces no output, `sivtr` exits after reporting that nothing was captured.
+Run mode captures stdout and stderr together and saves the result to history. If the command produces no output, `sivtr` exits after reporting that nothing was captured.
 
 ## Shell session import
 
@@ -62,7 +62,7 @@ Shell integration records structured command entries over time. After installing
 sivtr import
 ```
 
-This is useful when you have been working normally and later want to browse the accumulated session as one workspace.
+This is useful when you have been working normally and later want to open the accumulated session in the editor.
 
 Install shell integration with:
 

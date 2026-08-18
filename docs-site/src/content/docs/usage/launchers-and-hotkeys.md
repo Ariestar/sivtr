@@ -77,7 +77,7 @@ sivtr hotkey start --provider all
 sivtr hotkey start --provider claude
 ```
 
-Supported provider values are `all`, `codex`, `claude`, `hermes`, `opencode`, and `pi`.
+Supported provider values are `all`, `codex`, `claude`, `hermes`, `opencode`, `pi`, `cursor`, `openclaw`, `grok`, `dsh`, `gemini`, `goose`, `qoder`, `qodercn`, and `qwen`.
 
 When the chord is pressed, the daemon opens a terminal running an internal picker command for the daemon working directory. The picker tries the newest non-empty current session first and falls back to the session list.
 

@@ -34,6 +34,12 @@ session_dirs = []
 
 [hotkey]
 chord = "alt+y"
+
+[theme]
+mode = "auto"
+
+[mcp]
+idle_exit_secs = 60
 ```
 
 For a field-by-field reference, see [Config File](/reference/config-file/).
@@ -81,3 +87,26 @@ Provider selection is a runtime CLI option, not a config key:
 sivtr hotkey start --provider all
 sivtr hotkey start --provider claude
 ```
+
+## TUI theme
+
+```toml
+[theme]
+mode = "auto"
+```
+
+`auto` follows the system appearance and picks the truecolor vs ANSI palette from the terminal. Force a scheme with `dark` or `light`:
+
+```toml
+[theme]
+mode = "dark"
+```
+
+## MCP idle exit
+
+```toml
+[mcp]
+idle_exit_secs = 60
+```
+
+Seconds without tool calls before the stdio MCP server exits (`0` = stay alive until the host closes stdin). The `sivtr mcp serve --idle-exit` flag overrides this per invocation.

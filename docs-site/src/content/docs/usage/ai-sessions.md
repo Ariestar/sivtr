@@ -1,6 +1,6 @@
 ---
 title: Agent Sessions
-description: Turn registered agent providers (Codex, Claude, Cursor, Hermes, OpenCode, OpenClaw, Grok, Pi, …) into reusable agent memory.
+description: Turn registered agent providers (Codex, Claude, Cursor, Hermes, OpenCode, OpenClaw, Grok, Pi, Dsh, Gemini, Goose, Qoder, Qwen, …) into reusable agent memory.
 ---
 
 `sivtr` treats agent transcripts as local workspace memory sources. You can copy the latest useful turn, browse older sessions in a picker, search across providers, and show exact refs without opening raw transcript files. Prior agent work becomes memory for both humans and later agents.
@@ -20,7 +20,12 @@ Providers come from the `AgentProvider` registry. Copy uses the same names:
 | OpenClaw | `sivtr copy openclaw ...` | OpenClaw agent SQLite (+ legacy JSONL) |
 | Hermes | `sivtr copy hermes ...` | Hermes `state.db` (JSONL under `sessions/` residual) |
 | Grok | `sivtr copy grok ...` | Grok sessions under `~/.grok` (`GROK_HOME`) |
+| Dsh | `sivtr copy dsh ...` | Dsh agent sessions |
+| Gemini | `sivtr copy gemini ...` | Gemini CLI sessions |
+| Goose | `sivtr copy goose ...` | Goose agent sessions |
 | Pi | `sivtr copy pi ...` | Pi session JSONL under the Pi agent directory |
+| Qoder / Qoder-CN | `sivtr copy qoder ...` | Qoder and Qoder-CN sessions |
+| Qwen | `sivtr copy qwen ...` | Qwen Code sessions |
 
 Use `agent` in search commands when you want all registered providers:
 
@@ -63,7 +68,7 @@ sivtr copy claude all
 | `tool` | Last tool output |
 | `all` | Whole parsed session |
 
-Replace `claude` with any registered provider name (`codex`, `cursor`, `hermes`, `opencode`, `openclaw`, `grok`, `pi`, …).
+Replace `claude` with any registered provider name (`codex`, `cursor`, `hermes`, `opencode`, `openclaw`, `grok`, `pi`, `dsh`, `gemini`, `goose`, `qoder`, `qodercn`, `qwen`, …).
 
 ## Select older items
 

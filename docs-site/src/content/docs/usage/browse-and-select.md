@@ -1,12 +1,9 @@
 ---
 title: Browse and Select
-description: Navigate the workspace browser and single-buffer browser, select text, and copy.
+description: Navigate the workspace browser, fold structure blocks, select, and copy.
 ---
 
-`sivtr` has two interactive surfaces:
-
-- the **workspace browser** (bare `sivtr` on a TTY, or `sivtr copy --pick` / hotkey): multi-source Source → Sessions → Dialogues → Content;
-- the **single-buffer browser** (piped stdin or `sivtr run` / `sivtr pipe`): one captured output buffer.
+The **workspace browser** (bare `sivtr` on a TTY, or `sivtr copy --pick` / hotkey) is the interactive surface: multi-source Source → Sessions → Dialogues → Content. `sivtr pipe` and `sivtr run` no longer open a TUI — they write to history and open the external editor.
 
 ## Open the workspace browser
 
@@ -26,48 +23,41 @@ Layout: Source · Sessions · Dialogues · Content. Content splits into **Input*
 | `0` / `1` / `2` / `3` | Focus Source, Sessions, Dialogues, or Content |
 | `h` / `l` | Previous / next pane |
 | `j` / `k` | Move down / up |
-| `Space` | Toggle selection (source, session, or dialogue) |
+| `Space` | Toggle selection (source, session, or dialogue) · mark a content block |
 | `a` | Select all sources (Source) · toggle all dialogues (Dialogues) |
 | `g` / `t` | Select agent sources / terminal source (Source) |
 | `R` | Refresh next level under active rows |
-| `v` | Range-select dialogues · visual text select on Content |
+| `v` | Range-select rows · block-range mark a span (Content) |
 | `Tab` | Switch Content Input ↔ Output half |
-| `r` | Toggle fold/full content (structure markers vs expanded payloads) |
+| `r` | Toggle read/raw content (structure markers + fold tags vs expanded payloads) |
 | `Ctrl-d` / `Ctrl-u` · `PgDn` / `PgUp` | Scroll content |
 | `g` / `G` | Content top / bottom |
+| `J` / `K` | Page next/previous selected dialogue (Content, multi-select) |
 | `i` / `o` / `y` / `c` | Copy input / output / block / command |
-| `Enter` | Confirm / open next / copy |
+| `Enter` | Confirm / open next / copy; fold/unfold the cursor block (Content) |
 | `/` | Search |
 | `z` | Toggle focused pane fullscreen |
-| `t` | Open Vim-style full view (Sessions/Dialogues) |
+| `t` | Open Vim-style full view (Sessions/Dialogues/Content) |
 | `?` | Help |
 | `q` / `Esc` | Quit / back |
 
-Mouse: drag on Content selects text; `Ctrl`-drag is block select. Source list expands when focused; unfocused stays a compact strip. Content half heights bias toward the focused half.
+Mouse: click focuses + selects; drag selects linearly and `Ctrl`-drag is block select; clicking the dot gutter toggles a block mark; a single/double click folds a structure block. Content half heights bias toward the focused half.
 
-Structure parts (tool / skill / thinking) show as `<:channel:…:>` markers in fold mode; `r` expands full payloads.
+### Structure blocks
+
+Every workpart is a foldable block, and tool call + result group into one block. Consecutive structure units (tool / skill / thinking) fold into a **run** shown as `<:kind xN:>`:
+
+- `Enter` on the cursor block folds/unfolds it.
+- Clicking a run tag expands it to its members; clicking a member expands its body (two levels).
+- `r` toggles read mode (markdown + fold tags) and raw mode (full payloads).
+
+Run members and tool calls are grouped by call id, so interleaved parallel tool calls pair correctly.
 
 See [Keybindings](/reference/keybindings/) for the full table.
 
-## Single-buffer browser
+## Copy to clipboard
 
-Pipe capture or `sivtr run` opens a Vim-shaped read-only browser for one buffer.
-
-| Key | Action |
-| --- | --- |
-| `j` / `k` · arrows | Move |
-| `Ctrl-D` / `Ctrl-U` | Half page |
-| `Ctrl-F` / `Ctrl-B` · Page keys | Page |
-| `gg` / `G` | Top / bottom |
-| `/` · `n` / `N` | Search · next / previous match |
-| `v` / `V` / `Ctrl-V` | Character / line / block select |
-| `y` | Copy selection |
-| mouse drag · `Ctrl`-drag | Select · block select |
-| `e` | Open selection (or whole buffer) in the configured editor |
-| `[[` / `]]` | Previous / next command block (session logs) |
-| `myy` / `myi` / `myo` / `myc` | Copy block / input / output / bare command |
-
-Configure the editor:
+Configure the editor used by `pipe`/`run`/`import` (not a TUI):
 
 ```toml
 [editor]
