@@ -266,6 +266,7 @@ mod tests {
             },
             false,
             |budget| {
+                assert_eq!(budget, FETCH_CEILING);
                 let end = budget.min(source.len());
                 (source[..end].to_vec(), end >= source.len())
             },
@@ -288,6 +289,7 @@ mod tests {
             },
             true,
             |budget| {
+                assert_eq!(budget, FETCH_CEILING);
                 let end = budget.min(source.len());
                 (source[..end].to_vec(), end >= source.len())
             },

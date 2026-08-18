@@ -33,7 +33,6 @@ impl Viewport {
             .saturating_add(prefetch)
             .max(page.saturating_add(prefetch))
     }
-
 }
 
 /// Load phase for a pane store.
