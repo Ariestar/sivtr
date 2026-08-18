@@ -73,6 +73,31 @@ sivtr peer list
 sivtr peer forget <peer>
 ```
 
+## Groups
+
+When more than two devices want long-lived shared memory, instead of each pair doing `share` + `remote add`, form a **group**: a named set of devices that share memory with each other. Every member contributes workspaces, and membership syncs automatically.
+
+```bash
+# Owner on device A:
+sivtr group create <name>        # create the group and contribute the current workspace
+sivtr group invite <name> --expires 1d --max-uses 10   # multi-device join link (stdout = bare key)
+
+# Member on device B:
+sivtr group join <invite>        # join and contribute your own workspace
+sivtr group list
+sivtr group members <name>
+sivtr group sync <name>          # force a roster pull from the owner
+```
+
+The owner manages the group: `rename` renames it, `remove <group> <peer>` kicks a member, and an owner `leave` disbands the group. Membership changes broadcast to every member automatically, so teammates' memory appears under their peer name without any further setup:
+
+```bash
+sivtr s <peer>:terminal --status failure --latest 5 --refs
+sivtr s <peer>:agent -m "decision" --latest 20 --refs
+```
+
+Group access is read-only and redacts secrets just like shares. Groups and one-off shares are independent: you can use both, or only one.
+
 ## Use remote memory
 
 Remotes work with the same WorkSet surface as local sources:
@@ -122,6 +147,8 @@ See [Data Locations](/reference/data-locations/) and [Local-first and Privacy](/
 | `sivtr share` | Interactive share (no invite) |
 | `sivtr share add\|list\|invite\|grants\|revoke...` | Manage shares |
 | `sivtr remote add\|list\|remove\|rename\|test` | Manage remotes in the current workspace |
+| `sivtr group create\|invite\|join\|list\|members\|remove\|rename\|leave\|sync` | Manage shared-memory groups |
+| `sivtr origin rename` | Rename a local workspace alias or remote mount |
 | `sivtr peer list\|forget` | Manage known peer identities |
 | `sivtr serve ...` | Manage the device daemon |
 | `sivtr ws list` | List local workspace origin labels |
