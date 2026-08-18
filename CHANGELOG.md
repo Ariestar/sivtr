@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1](https://github.com/Ariestar/sivtr/compare/v0.5.0...v0.5.1) - 2026-08-18
+
+### Other
+
+- *(deps)* update actions/checkout action to v7 ([#155](https://github.com/Ariestar/sivtr/pull/155))
+- *(release)* push release tag with a PAT so release.yml triggers ([#158](https://github.com/Ariestar/sivtr/pull/158))
+
 ## [0.5.0](https://github.com/Ariestar/sivtr/compare/v0.4.1...v0.5.0) - 2026-08-18
 
 ### Added
