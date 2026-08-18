@@ -1,6 +1,6 @@
 ---
 title: Agent 会话
-description: 把已注册 Agent provider（Codex、Claude、Cursor、Hermes、OpenCode、OpenClaw、Grok、Pi…）变成可复用的 Agent 记忆。
+description: 把已注册 Agent provider（Codex、Claude、Cursor、Hermes、OpenCode、OpenClaw、Grok、Pi、Dsh、Gemini、Goose、Qoder、Qwen…）变成可复用的 Agent 记忆。
 ---
 
 `sivtr` 把 Agent transcript 当成本地 workspace memory source。你可以复制最新的有用 turn，在 picker 中浏览旧 session，跨 provider 搜索，并通过精确 ref 展示内容，而不必手动打开原始 transcript 文件。过去的 Agent 工作会成为人和后续 Agent 都能复用的记忆。
@@ -20,7 +20,12 @@ Provider 来自 `AgentProvider` registry。copy 使用同一组名字：
 | OpenClaw | `sivtr copy openclaw ...` | OpenClaw agent SQLite（+ legacy JSONL） |
 | Hermes | `sivtr copy hermes ...` | Hermes `state.db`（`sessions/` 下 JSONL 为 residual） |
 | Grok | `sivtr copy grok ...` | Grok sessions（`~/.grok`，可用 `GROK_HOME`） |
+| Dsh | `sivtr copy dsh ...` | Dsh agent sessions |
+| Gemini | `sivtr copy gemini ...` | Gemini CLI sessions |
+| Goose | `sivtr copy goose ...` | Goose agent sessions |
 | Pi | `sivtr copy pi ...` | Pi agent 目录下的 session JSONL |
+| Qoder / Qoder-CN | `sivtr copy qoder ...` | Qoder 与 Qoder-CN sessions |
+| Qwen | `sivtr copy qwen ...` | Qwen Code sessions |
 
 在 search 命令中，用 `agent` target 表示所有已注册 provider：
 
@@ -63,7 +68,7 @@ sivtr copy claude all
 | `tool` | 最近工具输出 |
 | `all` | 完整解析会话 |
 
-把 `claude` 换成任意已注册 provider 名（`codex`、`cursor`、`hermes`、`opencode`、`openclaw`、`grok`、`pi`…）即可。
+把 `claude` 换成任意已注册 provider 名（`codex`、`cursor`、`hermes`、`opencode`、`openclaw`、`grok`、`pi`、`dsh`、`gemini`、`goose`、`qoder`、`qodercn`、`qwen`…）即可。
 
 ## 选择更早内容
 

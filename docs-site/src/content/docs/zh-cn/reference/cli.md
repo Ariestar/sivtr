@@ -15,7 +15,7 @@ sivtr --all              # 裸 TTY 打开时也选中 remote mount
 不提供命令时：
 
 - **TTY** → 多源 workspace 浏览器（Source / Sessions / Dialogues / Content）。
-- **管道 stdin** → 单缓冲浏览器（等价 `sivtr pipe`）。
+- **管道 stdin** → 等价 `sivtr pipe`：写入历史后用外部编辑器打开。
 
 ## run
 
@@ -427,6 +427,53 @@ sivtr show @last --full
 sivtr show @ctx -f timeline
 ```
 
+## zoom
+
+```bash
+sivtr zoom [SOURCE=@last] [OPTIONS]
+```
+
+把每个目标 WorkRecord 用同一 session 的相邻 records 展开。未给 source 时默认 `@last`。
+
+| 选项 | 含义 |
+| --- | --- |
+| `-C, --context <N>` | 每个 anchor 前后各取 N 条（默认 `1`） |
+| `--before <N>` | 每个 anchor 前取 N 条 |
+| `--after <N>` | 每个 anchor 后取 N 条 |
+| `--cwd <PATH>` | 用于解析 sessions 的 workspace 目录 |
+| `--json` | `--format workset` 别名 |
+| `--refs` | `--format refs` 别名 |
+| `-f, --format <FORMAT>` | `full`、`timeline`、`compact`、`md`、`refs`、`workset` |
+| `--save <NAME>` | 把展开结果保存为命名 WorkSet 变量 |
+
+```bash
+sivtr zoom                        # 展开 @last
+sivtr zoom claude/<session>/3 -C 2
+sivtr zoom @failures --before 2 --after 0 --refs
+```
+
+## work
+
+```bash
+sivtr work <COMMAND>
+```
+
+遍历 workspace 的 sessions、records、parts，只输出 marker 级信息（不打印全文），可管道给其他命令。
+
+| 命令 | 含义 |
+| --- | --- |
+| `sessions [SOURCE]` | 列出当前 workspace 的 terminal 与 agent sessions |
+| `records <SOURCE>` | 把 sessions 或已保存变量转成事件级 refs |
+| `parts <SOURCE>` | 从匹配事件里抽出真正有用的输入/输出片段 |
+
+常用 flag：`--provider <NAME>` 过滤、`--cwd <PATH>`、`--json`、`--refs`、`--save <NAME>`。
+
+```bash
+sivtr work sessions
+sivtr work records codex/ --refs
+sivtr work parts @last --kind output --save out_parts
+```
+
 ## serve
 
 ```bash
@@ -531,6 +578,54 @@ sivtr peer list
 sivtr peer forget <peer>
 ```
 
+## group
+
+```bash
+sivtr group <COMMAND>
+```
+
+群组是互相共享记忆的一组设备：每个成员贡献 workspace，成员变更自动同步。
+
+| 命令 | 含义 |
+| --- | --- |
+| `create <NAME> [--workspace PATH] [--share-name NAME]` | 建组并在同一事务里贡献当前 workspace |
+| `invite <GROUP> [--expires DURATION] [--max-uses N]` | 仅 owner；签发多设备 join 链接（stdout = bare key） |
+| `join <INVITE> [--workspace PATH] [--share-name NAME] [--no-redact]` | 兑换邀请并贡献 workspace；重跑可调整贡献 |
+| `list` | 列出你所属的组 |
+| `members <GROUP>` | 列出成员及其贡献 |
+| `remove <GROUP> <PEER>` | 仅 owner；移除成员 |
+| `rename <GROUP> <NAME>` | 仅 owner；给组改名 |
+| `leave <GROUP>` | 退出组（owner 退出会解散整组） |
+| `sync <GROUP>` | 强制从 owner 拉一次成员清单 |
+
+```bash
+sivtr group create team
+sivtr group invite team --expires 1d --max-uses 10
+sivtr group join <invite-key>
+sivtr group list
+sivtr group members team
+sivtr group sync team
+```
+
+成员变更会自动广播给每个成员（并每 5 分钟 TTL 重新拉取）。成员对他人贡献的访问是只读的，默认脱敏密钥，与 share 一致。
+
+## origin
+
+```bash
+sivtr origin <COMMAND>
+```
+
+所有可寻址来源的统一改名入口——一个名字既代表本地 workspace 别名，也代表远端 mount，通过 origin registry 解析。
+
+| 命令 | 含义 |
+| --- | --- |
+| `rename <NAME> <NEW_NAME>` | 改本地 workspace 别名或远端 mount 的名字；两种都走同一条命令 |
+
+```bash
+sivtr origin rename docs knowledge
+sivtr origin rename desk alice-desk
+```
+
 ## workspace
 
 ```bash
@@ -591,7 +686,7 @@ sivtr mcp uninstall -p all -y
 
 | 选项 | 含义 |
 | --- | --- |
-| `-p, --provider` | Provider 宿主：`claude`、`cursor`、`codex`、`opencode`、`openclaw`、`grok`、`pi`、`hermes` 或 `all`。省略则自动检测已安装宿主。 |
+| `-p, --provider` | Provider 宿主：`claude`、`cursor`、`codex`、`opencode`、`openclaw`、`grok`、`hermes`、`pi`、`qoder`、`qodercn`、`gemini`、`qwen`、`goose` 或 `all`。省略则自动检测已安装宿主。 |
 | `-l, --location` | `global`（默认）或 `local` |
 | `-y, --yes` | 非交互 |
 
@@ -607,6 +702,10 @@ sivtr mcp uninstall -p all -y
 | Grok | Grok config TOML → MCP entry |
 | Hermes | Hermes YAML → `mcp_servers.sivtr` |
 | Pi | Pi config → `mcpServers.sivtr` |
+| Qoder / Qoder-CN | Qoder settings.json → MCP entry |
+| Gemini | Gemini settings.json → `mcpServers.sivtr` |
+| Qwen | Qwen settings.json → MCP entry |
+| Goose | Goose config.yaml extensions → MCP entry |
 
 注册命令始终为：
 
@@ -623,6 +722,7 @@ sivtr mcp print-config claude
 sivtr mcp print-config cursor
 sivtr mcp print-config codex
 sivtr mcp print-config grok
+sivtr mcp print-config goose
 ```
 
 MCP 不是完整 CLI 镜像。交互、写入和捕获命令仍走 CLI。策略仍在 `sivtr-memory` skill。
@@ -650,6 +750,49 @@ Verbose 输出包含：
 - 检测到的 repo root；
 - 本地 `target/debug/sivtr` binary 状态；
 - 在 repo 内运行不同的全局 binary 时给出 warning。
+
+## doctor
+
+```bash
+sivtr doctor [--fix] [--json]
+```
+
+诊断安装与环境：binary、config、session logs、shell hooks、provider session 数量、clipboard 与可用更新。
+
+| 选项 | 含义 |
+| --- | --- |
+| `--fix` | 尝试自动修复检测到的问题 |
+| `--json` | 机器可读 JSON 输出 |
+
+```bash
+sivtr doctor
+sivtr doctor --fix
+sivtr doctor --json
+```
+
+## update
+
+```bash
+sivtr update
+```
+
+自更新到最新 GitHub release：下载匹配平台的资产，校验 SHA256 后原地替换 binary。
+
+```bash
+sivtr update
+```
+
+## setup
+
+```bash
+sivtr setup
+```
+
+新装一键配置：检测环境、安装 shell hooks、给检测到的 agent 宿主注册 MCP server、缺失时安装 `sivtr-memory` skill，并跑一次 smoke test。等价于分步执行 `sivtr init`、`sivtr mcp install`、skill 安装与 `sivtr doctor`。
+
+```bash
+sivtr setup
+```
 
 ## history
 

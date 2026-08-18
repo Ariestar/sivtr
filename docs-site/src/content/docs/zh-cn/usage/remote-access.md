@@ -73,6 +73,31 @@ sivtr peer list
 sivtr peer forget <peer>
 ```
 
+## 群组（group）
+
+当两台以上设备需要长期共享记忆时，与其每对都做 `share` + `remote add`，不如组成一个**群组**：一组互相共享记忆的设备。每个成员贡献 workspace，成员自动同步。
+
+```bash
+# 组主（owner）在 A 机上：
+sivtr group create <name>        # 建组并贡献当前 workspace
+sivtr group invite <name> --expires 1d --max-uses 10   # 多设备 join 链接（stdout = bare key）
+
+# 成员在 B 机上：
+sivtr group join <invite>        # 加入并贡献自己的 workspace
+sivtr group list
+sivtr group members <name>
+sivtr group sync <name>          # 强制从 owner 拉一次成员清单
+```
+
+组由 owner 管理：`rename` 改名、`remove <group> <peer>` 踢人，owner 退出（`leave`）会解散整组。成员变更自动广播给每个成员，队友的记忆会直接出现在他们的 peer 名下，无需额外设置：
+
+```bash
+sivtr s <peer>:terminal --status failure --latest 5 --refs
+sivtr s <peer>:agent -m "decision" --latest 20 --refs
+```
+
+群组访问是只读的，默认脱敏密钥，与 share 一致。群组与一次性 share 相互独立：可以只用其中一种，也可以都用。
+
 ## 使用远端记忆
 
 remote 与本地 source 使用同一套 WorkSet 表面：
@@ -122,6 +147,8 @@ sivtr serve stop
 | `sivtr share` | 交互式 share（不出 invite） |
 | `sivtr share add\|list\|invite\|grants\|revoke...` | 管理 share |
 | `sivtr remote add\|list\|remove\|rename\|test` | 管理当前 workspace 的 remote |
+| `sivtr group create\|invite\|join\|list\|members\|remove\|rename\|leave\|sync` | 管理共享记忆群组 |
+| `sivtr origin rename` | 改本地 workspace 别名或远端 mount |
 | `sivtr peer list\|forget` | 管理已知 peer |
 | `sivtr serve ...` | 管理设备 daemon |
 | `sivtr ws list` | 列出本机 workspace 标签 |
