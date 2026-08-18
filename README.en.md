@@ -64,10 +64,11 @@ With `sivtr`, you can:
 
 - **MCP-first agent memory**: install once with `sivtr mcp install`, then agents call `sivtr_search` / `sivtr_show` / `sivtr_zoom` / `sivtr_filter` / `sivtr_status` instead of asking you to paste logs.
 - **Shell history that keeps the output**: capture commands from Bash, Zsh, PowerShell, and Nushell, including stdout, stderr, exit code, cwd, and timing.
-- **One search surface for local work**: terminal output plus all registered agent providers (Codex, Claude Code, Cursor, Hermes, OpenCode, OpenClaw, Grok, Pi, …) from the current repo — via MCP or CLI.
+- **One search surface for local work**: terminal output plus all registered agent providers (Codex, Claude Code, Cursor, Dsh, Gemini, Goose, Hermes, OpenCode, OpenClaw, Grok, Pi, Qoder, Qoder-CN, Qwen, …) — via MCP or CLI.
 - **Exact evidence, not summaries**: every hit resolves to a stable ref you can show, zoom, filter, or hand to the next agent.
 - **Named memory variables**: save result sets as `@failures`, reuse `@last`, pipe with `@`, and slice with `@failures[1,3..5]`.
-- **Cross-device access**: share a workspace read-only and browse another device with a `desk:...` ref.
+- **Cross-device access**: share a workspace read-only and browse another device with a `desk:...` ref; multiple devices can form a `group` that syncs membership and lets members read each other's memory.
+- **Configurable theme**: `[theme] mode = auto|dark|light`, follows the system appearance and detects truecolor.
 - **One-command setup**: `sivtr setup` for hooks + MCP host install; `sivtr doctor --fix` to repair.
 - **CLI still there when you want it**: search, show, filter, nav, and a TUI browser for humans — useful, not the main product story.
 
@@ -106,7 +107,7 @@ First-time setup (hooks + MCP hosts):
 sivtr setup             # hooks + MCP hosts + sivtr-memory skill (if missing)
 # or step by step:
 sivtr init powershell   # or bash, zsh, nushell
-sivtr mcp install       # detect installed hosts; or -p claude,cursor,codex,opencode,openclaw,grok,hermes,pi
+sivtr mcp install       # detect installed hosts; or -p claude,cursor,codex,opencode,openclaw,grok,hermes,pi,qoder,qodercn,gemini,qwen,goose
 npx skills add Ariestar/sivtr --skill sivtr-memory -g -y
 sivtr doctor
 ```
@@ -177,36 +178,48 @@ Memory variables:
 | `@name[1,3..5]` | Pick only a few items from a saved variable. |
 | `@` | Use the result coming from the previous command in a pipeline. |
 
-## Command overview
+## Command cheat sheet
 
-| Command | Purpose |
-| --- | --- |
-| `sivtr` | TTY: workspace browser; piped stdin: single-buffer browser. |
-| `sivtr pipe` | Read stdin and open the output browser. |
-| `sivtr run <command>` | Execute a command, capture output, then browse it. |
-| `sivtr copy` | Copy recent terminal command blocks. |
-| `sivtr copy <provider>` | Copy content from any registered agent provider (registry-driven: Codex, Claude, Cursor, OpenCode, OpenClaw, Hermes, Grok, Pi, …). |
-| `sivtr search` / `sivtr s` | Search terminal and agent memory; saves matches as `@last`. |
-| `sivtr filter <source>` | Apply the shared WorkSet filters to a source or piped WorkSet. |
-| `sivtr var` | List, save, remove, merge, drop, or clean up named WorkSet variables. |
-| `sivtr nav <source> <motion>` | Move anchors deterministically with `<`, `>N`, `+N`, `-N`, `[A..B]`, and `~`. |
-| `sivtr work sessions` | List terminal and agent sessions in the current workspace. |
-| `sivtr work records <source>` | Turn sessions or saved variables into event-level refs. |
-| `sivtr work parts <source>` | Extract only useful inputs/outputs from matching events. |
-| `sivtr show <ref-or-workset>` | Print the content behind refs, `@last`, `@name`, or piped results. Also accepts remote refs like `desk:terminal/...`. |
-| `sivtr zoom <source>` | Add surrounding record context around search hits. |
-| `sivtr diff <left> <right>` | Compare recent command blocks. |
-| `sivtr serve` | Start/stop the local remote-memory daemon. |
-| `sivtr share` | Explicitly share a local workspace for remote peers. |
-| `sivtr remote` | Name peer shares in the current workspace (`add`/`list`/`remove`/`test`, like `git remote`). |
-| `sivtr workspace` / `sivtr ws` | List known local workspaces (origin labels for `name:body` refs). |
-| `sivtr mcp` | MCP server + host install (`serve` / `install` / `uninstall` / `print-config`). |
-| `sivtr doctor` | Diagnose binary, config, session logs, hooks, providers, and clipboard; reports new releases. |
-| `sivtr update` | Self-update to the latest GitHub release. |
-| `sivtr init <shell>` | Install shell integration; also supports `show` and `uninstall`. |
-| `sivtr config` | Manage the TOML config file. |
-| `sivtr history` | List, search, and show captured output history. |
-| `sivtr hotkey` | Manage the Windows AI session picker hotkey daemon. |
+The full command, subcommand, and flag reference lives in the [CLI Reference](https://sivtr.pages.dev/reference/cli/). Core commands at a glance:
+
+**Setup & maintenance**
+
+```bash
+sivtr setup                              # one-command setup: env detect + hooks + MCP + skill + smoke
+sivtr doctor --fix                       # diagnose and auto-repair binary/config/hooks/providers
+sivtr mcp install -p claude,cursor,codex # register MCP for specific hosts (or detect installed)
+sivtr update                             # self-update to the latest release
+sivtr config show                        # view config (init writes defaults / edit opens $EDITOR)
+```
+
+**Everyday use**
+
+```bash
+sivtr                                    # TUI workspace browser
+sivtr run cargo test                     # run a command and capture its output (run <COMMAND> [ARGS...])
+sivtr s terminal --status failure --latest 5 --refs   # 5 most recent failed terminal events
+sivtr s agent -m "panic|TODO" --since today -f timeline # today's agent decisions as a timeline
+sivtr show @last                         # open the content behind the last search
+sivtr show desk:terminal/session_42/3    # open an exact remote ref
+sivtr copy                               # copy the most recent command block
+sivtr copy out 2..4                      # output of blocks 2..4
+sivtr copy in --pick --regex panic       # interactively pick the input block matching "panic"
+sivtr copy cmd --pick                    # interactively pick a command itself
+sivtr copy 3 --print                     # print block 3 to stdout
+```
+
+**Remote & collaboration**
+
+```bash
+sivtr share                              # interactively create a read-only share of a workspace
+sivtr share invite <share> --expires 10m # mint a single-use invite (stdout = bare key)
+sivtr remote add desk <invite-key>       # mount a teammate's share as local remote `desk`
+sivtr group create <name>                  # create a group and contribute the current workspace
+sivtr group invite <name> --expires 1d --max-uses 10   # mint a multi-device join link
+sivtr group join <invite-key>            # join and contribute your own workspace
+sivtr group members team                 # members and their contributions
+sivtr s <peer>:terminal --status failure --latest 5 --refs  # read a teammate like local
+```
 
 ## Remote access
 
@@ -242,6 +255,27 @@ sivtr copy desk:terminal/session_42/3 --print
 
 Sharing is opt-in and read-only. Secrets are redacted by default before data leaves the machine. Remote access uses encrypted iroh transport; the daemon auto-starts when needed. Unregistered origins error — register remotes with `sivtr remote add`, or list local workspaces with `sivtr ws`.
 
+## Groups
+
+When more than two devices want long-lived shared memory, instead of each `share` + `remote add`, form a group: every device contributes its own workspace and members sync automatically and read each other's memory.
+
+```bash
+# Owner on device A:
+sivtr group create <name>        # create the group and contribute the current workspace
+sivtr group invite <name>        # mint a multi-device join link (stdout = bare key)
+
+# Member on device B:
+sivtr group join <invite>      # join and contribute your own workspace
+sivtr group list               # all groups
+sivtr group members <name>     # members and their contributions
+sivtr group sync <name>        # force a roster pull
+
+# Day to day: read a teammate's memory like local
+sivtr s <peer>:terminal --status failure --latest 5 --refs
+```
+
+The owner manages the group: `rename` to rename, `remove <group> <peer>` to kick; when the owner `leave`s, the group disbands. Membership changes sync to every member automatically.
+
 ## Supported sources
 
 | Source | Support |
@@ -254,7 +288,12 @@ Sharing is opt-in and read-only. Secrets are redacted by default before data lea
 | OpenClaw | Local OpenClaw agent SQLite (+ legacy JSONL). |
 | Hermes | Local Hermes `state.db` (JSONL under `sessions/` as residual). |
 | Grok | Local Grok agent sessions under `~/.grok` (`GROK_HOME`). |
+| Dsh | Local Dsh agent sessions. |
+| Gemini | Local Gemini CLI sessions. |
+| Goose | Local Goose agent sessions. |
 | Pi | Local Pi agent session logs. |
+| Qoder / Qoder-CN | Local Qoder and Qoder-CN agent sessions. |
+| Qwen | Local Qwen Code sessions. |
 
 ## Documentation
 

@@ -55,10 +55,11 @@
 
 - **MCP 优先的 Agent 记忆**：一次 `sivtr mcp install`，Agent 直接调用 `sivtr_search` / `sivtr_show` / `sivtr_zoom` / `sivtr_filter` / `sivtr_status`，不用你粘贴日志。
 - **带输出的 shell history**：记录 Bash、Zsh、PowerShell、Nushell 里的命令、stdout/stderr、退出码、目录和耗时。
-- **一个搜索面覆盖本地工作**：终端输出 + 所有已注册 Agent provider（Codex / Claude Code / Cursor / Hermes / OpenCode / OpenClaw / Grok / Pi …）——MCP 或 CLI 都能用。
+- **一个搜索面覆盖本地工作**：终端输出 + 所有已注册 Agent provider（Codex / Claude Code / Cursor / Dsh / Gemini / Goose / Hermes / OpenCode / OpenClaw / Grok / Pi / Qoder / Qoder-CN / Qwen …）——MCP 或 CLI 都能用。
 - **精确证据，而不是摘要**：每个命中都落到稳定 ref，可 show / zoom / filter，或交给下一个 Agent。
 - **命名记忆变量**：把结果保存成 `@failures`，复用 `@last`，管道用 `@`，也可 `@failures[1,3..5]` 取子集。
-- **跨设备访问**：只读分享 workspace，用 `desk:...` ref 像读本地一样浏览另一台设备。
+- **跨设备访问**：只读分享 workspace，用 `desk:...` ref 像读本地一样浏览另一台设备；多设备还能组成 `group`，成员间自动同步、一次 `sync` 拉齐。
+- **主题可配**：`[theme] mode = auto|dark|light`，自动跟随系统外观并检测 truecolor。
 - **一键安装与诊断**：`sivtr setup` 装 hooks + MCP；`sivtr doctor --fix` 自动修复。
 - **人用 CLI 仍然在**：search / show / filter / nav，以及 TUI 浏览器——有用，但不是主叙事。
 
@@ -97,7 +98,7 @@ sivtr update    # 下载最新 release，SHA256 校验后原地替换
 sivtr setup             # hooks + MCP 宿主 + sivtr-memory skill（缺失时安装）
 # 或分步：
 sivtr init powershell   # 或 bash、zsh、nushell
-sivtr mcp install       # 检测已装宿主；或 -p claude,cursor,codex,opencode,openclaw,grok,hermes,pi
+sivtr mcp install       # 检测已装宿主；或 -p claude,cursor,codex,opencode,openclaw,grok,hermes,pi,qoder,qodercn,gemini,qwen,goose
 npx skills add Ariestar/sivtr --skill sivtr-memory -g -y
 sivtr doctor
 ```
@@ -168,36 +169,48 @@ sivtr s agent -m "TODO|decision|failed" --since today -f timeline
 | `@name[1,3..5]` | 从已保存变量中只取几项。 |
 | `@` | 使用管道里上一条命令传来的结果。 |
 
-## 命令概览
+## 命令速查
 
-| 命令 | 用途 |
-| --- | --- |
-| `sivtr` | TTY 打开 workspace 浏览器；管道 stdin 打开单缓冲浏览器。 |
-| `sivtr pipe` | 读取 stdin 并打开输出浏览器。 |
-| `sivtr run <command>` | 执行命令、捕获输出并浏览。 |
-| `sivtr copy` | 复制最近终端命令块。 |
-| `sivtr copy <provider>` | 从任意已注册 Agent provider 复制内容（registry 驱动：Codex、Claude、Cursor、OpenCode、OpenClaw、Hermes、Grok、Pi…）。 |
-| `sivtr search` / `sivtr s` | 搜索终端和 Agent memory；命中结果保存为 `@last`。 |
-| `sivtr filter <source>` | 对 source 或管道传入的 WorkSet 应用统一过滤。 |
-| `sivtr var` | 列出、保存、删除、合并、移除或清空命名 WorkSet 变量。 |
-| `sivtr nav <source> <motion>` | 用 `<`、`>N`、`+N`、`-N`、`[A..B]`、`~` 确定性移动 anchors。 |
-| `sivtr work sessions` | 列出当前 workspace 的 terminal 和 Agent sessions。 |
-| `sivtr work records <source>` | 把 sessions 或已保存变量转成事件级 refs。 |
-| `sivtr work parts <source>` | 从匹配事件里抽出真正有用的输入/输出片段。 |
-| `sivtr show <ref-or-workset>` | 打印 refs、`@last`、`@name` 或管道结果背后的内容。也支持远程 ref，如 `desk:terminal/...`。 |
-| `sivtr zoom <source>` | 给搜索命中补上前后 record 上下文。 |
-| `sivtr diff <left> <right>` | 对比最近命令块。 |
-| `sivtr serve` | 启动/停止本机 remote-memory daemon。 |
-| `sivtr share` | 显式分享本机 workspace 给远端。 |
-| `sivtr remote` | 把远端 share 挂到当前 workspace（`add`/`list`/`remove`/`test`）。 |
-| `sivtr workspace` / `sivtr ws` | 列出本机已知 workspace（`name:body` 的 origin 标签）。 |
-| `sivtr mcp` | MCP server 与宿主安装（`serve` / `install` / `uninstall` / `print-config`）。 |
-| `sivtr doctor` | 诊断 binary、config、session logs、hooks、providers、clipboard；有新版本时提示。 |
-| `sivtr update` | 从 GitHub Releases 自更新到最新版本。 |
-| `sivtr init <shell>` | 安装 shell integration；也支持 `show` 和 `uninstall`。 |
-| `sivtr config` | 管理 TOML 配置文件。 |
-| `sivtr history` | 列出、搜索、查看捕获输出历史。 |
-| `sivtr hotkey` | 管理 Windows AI session picker 全局热键守护进程。 |
+完整命令、子命令与参数见 [CLI Reference](https://sivtr.pages.dev/zh-cn/reference/cli/)。核心命令速查：
+
+**安装与维护**
+
+```bash
+sivtr setup                              # 一键配置：环境检测 + hooks + MCP + skill + smoke
+sivtr doctor --fix                       # 诊断并自动修复 binary/config/hooks/providers
+sivtr mcp install -p claude,cursor,codex # 指定宿主注册 MCP（不指定则检测已装的）
+sivtr update                             # 自更新到最新 release
+sivtr config show                        # 查看配置（init 生成默认文件 / edit 用 $EDITOR 打开）
+```
+
+**日常使用**
+
+```bash
+sivtr                                    # TUI workspace 浏览器
+sivtr run cargo test                     # 执行命令并捕获输出（run <COMMAND> [ARGS...]）
+sivtr s terminal --status failure --latest 5 --refs   # 最近 5 个失败终端事件
+sivtr s agent -m "panic|TODO" --since today -f timeline # 今天的 agent 决策时间线
+sivtr show @last                         # 打开上次搜索结果内容
+sivtr show desk:terminal/session_42/3    # 打开远端精确 ref
+sivtr copy                               # 复制最近命令块
+sivtr copy out 2..4                      # 第 2~4 块的输出
+sivtr copy in --pick --regex panic       # 交互挑选含 panic 的输入块
+sivtr copy cmd --pick                    # 交互挑选命令本身
+sivtr copy 3 --print                     # 第 3 块直接打印到 stdout
+```
+
+**远程与协同**
+
+```bash
+sivtr share                              # 交互选择 workspace 创建只读分享
+sivtr share invite <share> --expires 10m # 签发单次 invite（stdout = bare key）
+sivtr remote add desk <invite-key>       # 把队友的 share 挂成本机 remote `desk`
+sivtr group create <name>                  # 建组并贡献当前 workspace（如 create team）
+sivtr group invite <name> --expires 1d --max-uses 10   # 签发多设备 join 链接
+sivtr group join <invite-key>            # 加入并贡献自己的 workspace
+sivtr group members team                 # 组内成员与其贡献
+sivtr s <peer>:terminal --status failure --latest 5 --refs  # 读队友记忆像读本地
+```
 
 ## 远程访问
 
@@ -233,6 +246,27 @@ sivtr copy desk:terminal/session_42/3 --print
 
 分享是 opt-in、只读，默认在数据离开本机前脱敏常见密钥。远程传输走加密 iroh；需要时会自动启动 daemon。未登记的 origin 会报错——用 `sivtr remote add` 登记 remote，或用 `sivtr ws` 查看本机 workspace。
 
+## 群组（group）
+
+两台以上设备要长期共享记忆时，与其各自 `share` 再挂载，不如组成一个群组：组内每台设备贡献自己的 workspace，成员之间自动同步、随时互相读取。
+
+```bash
+# 组主（owner）在 A 机上：
+sivtr group create <name>      # 建组并贡献当前 workspace
+sivtr group invite <name>      # 签发多设备 join 链接（stdout = bare key）
+
+# 成员在 B 机上：
+sivtr group join <invite>      # 加入并贡献自己的 workspace
+sivtr group list               # 所有组
+sivtr group members <name>     # 组内成员与其贡献
+sivtr group sync <name>        # 手动拉一次成员清单
+
+# 日常使用：像本地一样读队友的记忆
+sivtr s <peer>:terminal --status failure --latest 5 --refs
+```
+
+组由 owner 管理：`rename` 改名、`remove <group> <peer>` 踢人；owner 退出（`leave`）会解散整组。成员每次变更都自动同步给全组，无需手动刷新。
+
 ## 支持来源
 
 | Source | 支持内容 |
@@ -245,7 +279,12 @@ sivtr copy desk:terminal/session_42/3 --print
 | OpenClaw | 本地 OpenClaw agent SQLite（+ legacy JSONL）。 |
 | Hermes | 本地 Hermes `state.db`（`sessions/` 下 JSONL 为 residual）。 |
 | Grok | 本地 Grok agent sessions（`~/.grok`，可用 `GROK_HOME`）。 |
+| Dsh | 本地 Dsh agent sessions。 |
+| Gemini | 本地 Gemini CLI sessions。 |
+| Goose | 本地 Goose agent sessions。 |
 | Pi | 本地 Pi agent session logs。 |
+| Qoder / Qoder-CN | 本地 Qoder 与 Qoder-CN agent sessions。 |
+| Qwen | 本地 Qwen Code sessions。 |
 
 ## 文档
 
