@@ -3,12 +3,13 @@
 //! Benches must not name `pub(crate)` TUI types at the crate boundary.
 
 use crate::pane::{Pane, PaneInput, Viewport};
-use crate::tui::workspace::{WorkspaceSession, WorkspaceSource};
+use crate::tui::workspace::{WorkspaceDialogue, WorkspaceSession, WorkspaceSource};
 use sivtr_core::ai::AgentProvider;
 use sivtr_core::record::{
     WorkChannel, WorkPart, WorkRecord, WorkRecordKind, WorkRef, WorkSessionRef, WorkSource,
     WorkTime, RECORD_SCHEMA_VERSION,
 };
+use std::cell::RefCell;
 use std::time::UNIX_EPOCH;
 
 use super::panes::{DialogueCtx, DialoguePane};
@@ -90,6 +91,7 @@ fn primed_dialogue_pane(n: usize) -> DialoguePane {
 pub struct HotPane {
     inner: DialoguePane,
     n: usize,
+    materialized: RefCell<Vec<WorkspaceDialogue>>,
 }
 
 impl HotPane {
@@ -97,6 +99,7 @@ impl HotPane {
         Self {
             inner: primed_dialogue_pane(n),
             n,
+            materialized: RefCell::new(Vec::new()),
         }
     }
 
@@ -121,9 +124,9 @@ impl HotPane {
         let titles: Vec<&str> = self.inner.titles().collect();
         let selected = vec![false; self.inner.len()];
         let focus = self.n / 2;
-        let mut rows = Vec::new();
-        self.inner.materialize_into(&selected, focus, &mut rows);
-        let bodies = rows.iter().filter(|d| d.record.is_some()).count();
+        let mut buf = self.materialized.borrow_mut();
+        self.inner.materialize_into(&selected, focus, &mut buf);
+        let bodies = buf.iter().filter(|d| d.record.is_some()).count();
         std::hint::black_box(titles.len());
         (titles.len(), bodies)
     }
