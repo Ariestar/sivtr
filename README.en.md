@@ -185,30 +185,40 @@ The full command, subcommand, and flag reference lives in the [CLI Reference](ht
 **Setup & maintenance**
 
 ```bash
-sivtr setup                    # one-command setup: detect env, hooks + MCP + skill, smoke test
-sivtr doctor --fix             # diagnose and auto-repair binary/config/hooks/providers
-sivtr mcp install              # register MCP for detected agent hosts; or -p claude,cursor,codex,...
-sivtr update                   # self-update to the latest release
-sivtr config                   # view/init/edit the TOML config (e.g. [theme] mode)
+sivtr setup                              # one-command setup: env detect + hooks + MCP + skill + smoke
+sivtr doctor --fix                       # diagnose and auto-repair binary/config/hooks/providers
+sivtr mcp install -p claude,cursor,codex # register MCP for specific hosts (or detect installed)
+sivtr update                             # self-update to the latest release
+sivtr config show                        # view config (init writes defaults / edit opens $EDITOR)
 ```
 
 **Everyday use**
 
 ```bash
-sivtr                          # TUI workspace browser
-sivtr run cargo test           # run a command and capture its output to history
-sivtr s terminal --status failure --latest 5   # find recent failures
-sivtr show @last               # open the exact content behind a hit
-sivtr copy 3                   # copy the 3rd recent command block
+sivtr                                    # TUI workspace browser
+sivtr run cargo test                     # run a command and capture its output (run <COMMAND> [ARGS...])
+sivtr s terminal --status failure --latest 5 --refs   # 5 most recent failed terminal events
+sivtr s agent -m "panic|TODO" --since today -f timeline # today's agent decisions as a timeline
+sivtr show @last                         # open the content behind the last search
+sivtr show desk:terminal/session_42/3    # open an exact remote ref
+sivtr copy                               # copy the most recent command block
+sivtr copy out 2..4                      # output of blocks 2..4
+sivtr copy in --pick --regex panic       # interactively pick the input block matching "panic"
+sivtr copy cmd --pick                    # interactively pick a command itself
+sivtr copy 3 --print                     # print block 3 to stdout
 ```
 
 **Remote & collaboration**
 
 ```bash
-sivtr share                    # share a local workspace read-only (opt-in)
-sivtr remote add desk <invite> # mount a teammate's share
-sivtr group create team        # group devices for automatic shared memory
-sivtr s <peer>:terminal --latest 5 --refs       # read a teammate like local
+sivtr share                              # interactively create a read-only share of a workspace
+sivtr share invite <share> --expires 10m # mint a single-use invite (stdout = bare key)
+sivtr remote add desk <invite-key>       # mount a teammate's share as local remote `desk`
+sivtr group create team                  # create a group and contribute the current workspace
+sivtr group invite team --expires 1d --max-uses 10   # mint a multi-device join link
+sivtr group join <invite-key>            # join and contribute your own workspace
+sivtr group members team                 # members and their contributions
+sivtr s <peer>:terminal --status failure --latest 5 --refs  # read a teammate like local
 ```
 
 ## Remote access

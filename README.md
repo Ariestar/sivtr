@@ -176,30 +176,40 @@ sivtr s agent -m "TODO|decision|failed" --since today -f timeline
 **安装与维护**
 
 ```bash
-sivtr setup                    # 一键配置：检测环境、装 hooks + MCP + skill、smoke test
-sivtr doctor --fix             # 诊断并自动修复 binary/config/hooks/providers
-sivtr mcp install              # 给已检测的 Agent 宿主注册 MCP；或 -p claude,cursor,codex,...
-sivtr update                   # 自更新到最新 release
-sivtr config                   # 查看/初始化/编辑 TOML 配置（如 [theme] mode）
+sivtr setup                              # 一键配置：环境检测 + hooks + MCP + skill + smoke
+sivtr doctor --fix                       # 诊断并自动修复 binary/config/hooks/providers
+sivtr mcp install -p claude,cursor,codex # 指定宿主注册 MCP（不指定则检测已装的）
+sivtr update                             # 自更新到最新 release
+sivtr config show                        # 查看配置（init 生成默认文件 / edit 用 $EDITOR 打开）
 ```
 
 **日常使用**
 
 ```bash
-sivtr                          # TUI workspace 浏览器
-sivtr run cargo test           # 执行命令并捕获输出到历史
-sivtr s terminal --status failure --latest 5   # 搜索最近失败
-sivtr show @last               # 打开命中背后的精确内容
-sivtr copy 3                   # 复制最近第 3 个命令块
+sivtr                                    # TUI workspace 浏览器
+sivtr run cargo test                     # 执行命令并捕获输出（run <COMMAND> [ARGS...]）
+sivtr s terminal --status failure --latest 5 --refs   # 最近 5 个失败终端事件
+sivtr s agent -m "panic|TODO" --since today -f timeline # 今天的 agent 决策时间线
+sivtr show @last                         # 打开上次搜索结果内容
+sivtr show desk:terminal/session_42/3    # 打开远端精确 ref
+sivtr copy                               # 复制最近命令块
+sivtr copy out 2..4                      # 第 2~4 块的输出
+sivtr copy in --pick --regex panic       # 交互挑选含 panic 的输入块
+sivtr copy cmd --pick                    # 交互挑选命令本身
+sivtr copy 3 --print                     # 第 3 块直接打印到 stdout
 ```
 
 **远程与协同**
 
 ```bash
-sivtr share                    # 本机 workspace 只读分享（opt-in）
-sivtr remote add desk <invite> # 把队友的 share 挂到本机
-sivtr group create team        # 多设备组队，组内自动共享记忆
-sivtr s <peer>:terminal --latest 5 --refs       # 像读本地一样读队友
+sivtr share                              # 交互选择 workspace 创建只读分享
+sivtr share invite <share> --expires 10m # 签发单次 invite（stdout = bare key）
+sivtr remote add desk <invite-key>       # 把队友的 share 挂成本机 remote `desk`
+sivtr group create team                  # 建组并贡献当前 workspace
+sivtr group invite team --expires 1d --max-uses 10   # 签发多设备 join 链接
+sivtr group join <invite-key>            # 加入并贡献自己的 workspace
+sivtr group members team                 # 组内成员与其贡献
+sivtr s <peer>:terminal --status failure --latest 5 --refs  # 读队友记忆像读本地
 ```
 
 ## 远程访问
