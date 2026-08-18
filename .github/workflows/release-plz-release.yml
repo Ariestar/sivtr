@@ -33,6 +33,8 @@ jobs:
         with:
           command: release
         env:
-          # GITHUB_TOKEN pushes do not trigger other workflows (e.g. release.yml),
-          # so the tag must be pushed with a PAT to kick off assets/crates.io.
+          # The action itself needs GITHUB_TOKEN to resolve the git author.
+          # The tag must be pushed with a PAT instead, because GITHUB_TOKEN
+          # pushes do not trigger other workflows (e.g. release.yml).
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_PLZ_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
