@@ -214,8 +214,8 @@ sivtr copy 3 --print                     # print block 3 to stdout
 sivtr share                              # interactively create a read-only share of a workspace
 sivtr share invite <share> --expires 10m # mint a single-use invite (stdout = bare key)
 sivtr remote add desk <invite-key>       # mount a teammate's share as local remote `desk`
-sivtr group create team                  # create a group and contribute the current workspace
-sivtr group invite team --expires 1d --max-uses 10   # mint a multi-device join link
+sivtr group create <name>                  # create a group and contribute the current workspace
+sivtr group invite <name> --expires 1d --max-uses 10   # mint a multi-device join link
 sivtr group join <invite-key>            # join and contribute your own workspace
 sivtr group members team                 # members and their contributions
 sivtr s <peer>:terminal --status failure --latest 5 --refs  # read a teammate like local
@@ -261,14 +261,14 @@ When more than two devices want long-lived shared memory, instead of each `share
 
 ```bash
 # Owner on device A:
-sivtr group create team        # create the group and contribute the current workspace
-sivtr group invite team        # mint a multi-device join link (stdout = bare key)
+sivtr group create <name>        # create the group and contribute the current workspace
+sivtr group invite <name>        # mint a multi-device join link (stdout = bare key)
 
 # Member on device B:
 sivtr group join <invite>      # join and contribute your own workspace
 sivtr group list               # all groups
-sivtr group members team       # members and their contributions
-sivtr group sync team          # force a roster pull
+sivtr group members <name>     # members and their contributions
+sivtr group sync <name>        # force a roster pull
 
 # Day to day: read a teammate's memory like local
 sivtr s <peer>:terminal --status failure --latest 5 --refs

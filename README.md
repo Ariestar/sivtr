@@ -205,8 +205,8 @@ sivtr copy 3 --print                     # 第 3 块直接打印到 stdout
 sivtr share                              # 交互选择 workspace 创建只读分享
 sivtr share invite <share> --expires 10m # 签发单次 invite（stdout = bare key）
 sivtr remote add desk <invite-key>       # 把队友的 share 挂成本机 remote `desk`
-sivtr group create team                  # 建组并贡献当前 workspace
-sivtr group invite team --expires 1d --max-uses 10   # 签发多设备 join 链接
+sivtr group create <name>                  # 建组并贡献当前 workspace（如 create team）
+sivtr group invite <name> --expires 1d --max-uses 10   # 签发多设备 join 链接
 sivtr group join <invite-key>            # 加入并贡献自己的 workspace
 sivtr group members team                 # 组内成员与其贡献
 sivtr s <peer>:terminal --status failure --latest 5 --refs  # 读队友记忆像读本地
@@ -252,14 +252,14 @@ sivtr copy desk:terminal/session_42/3 --print
 
 ```bash
 # 组主（owner）在 A 机上：
-sivtr group create team        # 建组并贡献当前 workspace
-sivtr group invite team        # 签发多设备 join 链接（stdout = bare key）
+sivtr group create <name>      # 建组并贡献当前 workspace
+sivtr group invite <name>      # 签发多设备 join 链接（stdout = bare key）
 
 # 成员在 B 机上：
 sivtr group join <invite>      # 加入并贡献自己的 workspace
 sivtr group list               # 所有组
-sivtr group members team       # 组内成员与其贡献
-sivtr group sync team          # 手动拉一次成员清单
+sivtr group members <name>     # 组内成员与其贡献
+sivtr group sync <name>        # 手动拉一次成员清单
 
 # 日常使用：像本地一样读队友的记忆
 sivtr s <peer>:terminal --status failure --latest 5 --refs
