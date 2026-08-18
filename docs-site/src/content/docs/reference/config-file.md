@@ -28,6 +28,12 @@ session_dirs = ["/srv/sivtr/root-codex/sessions"]
 
 [hotkey]
 chord = "alt+y"
+
+[theme]
+mode = "auto"
+
+[mcp]
+idle_exit_secs = 60
 ```
 
 ## editor
@@ -76,7 +82,7 @@ session_dirs = []
 
 On macOS, a typical shared path is `/Users/Shared/sivtr/root-codex/sessions`.
 
-Only Codex mirrors are currently configured here. Other registered providers (Claude, Cursor, OpenCode, OpenClaw, Hermes, Grok, Pi, …) use their own local locations and environment signals.
+Only Codex mirrors are currently configured here. Other registered providers (Claude, Cursor, OpenCode, OpenClaw, Hermes, Grok, Pi, Dsh, Gemini, Goose, Qoder/Qoder-CN, Qwen, …) use their own local locations and environment signals.
 
 ## hotkey
 
@@ -88,3 +94,27 @@ chord = "alt+y"
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `chord` | string | `"alt+y"` | Chord used by `sivtr hotkey start` |
+
+## theme
+
+```toml
+[theme]
+mode = "auto"
+```
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `mode` | string | `"auto"` | TUI color scheme: `auto`, `dark`, or `light` |
+
+`auto` follows the system appearance (macOS/Linux XDG/Windows registry) and picks the truecolor vs ANSI palette from terminal capability. `dark` and `light` force a palette. The key rejects unknown values and typos (e.g. `mode = "ligth"` is a hard error).
+
+## mcp
+
+```toml
+[mcp]
+idle_exit_secs = 60
+```
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `idle_exit_secs` | integer | `60` | Seconds without tool calls before the stdio MCP server exits; `0` keeps it alive until the host closes stdin. The `sivtr mcp serve --idle-exit` flag overrides this. |
