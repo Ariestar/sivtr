@@ -178,22 +178,38 @@ Memory variables:
 | `@name[1,3..5]` | Pick only a few items from a saved variable. |
 | `@` | Use the result coming from the previous command in a pipeline. |
 
-## Command overview
+## Command cheat sheet
 
-A quick cheat sheet; the full command, subcommand, and flag reference lives in the [CLI Reference](https://sivtr.pages.dev/reference/cli/).
+The full command, subcommand, and flag reference lives in the [CLI Reference](https://sivtr.pages.dev/reference/cli/). Core commands at a glance:
 
-```text
-sivtr                    # TUI workspace browser
-sivtr run <cmd>          # run a command and capture its output
-sivtr s <source> <query> # search terminal / agent memory
-sivtr copy               # copy recent command blocks
-sivtr show <ref>         # show the content behind a ref
-sivtr group              # multi-device shared-memory groups
-sivtr remote / share     # read-only sharing between devices
-sivtr mcp install        # register the MCP server for agent hosts
+**Setup & maintenance**
+
+```bash
+sivtr setup                    # one-command setup: detect env, hooks + MCP + skill, smoke test
+sivtr doctor --fix             # diagnose and auto-repair binary/config/hooks/providers
+sivtr mcp install              # register MCP for detected agent hosts; or -p claude,cursor,codex,...
+sivtr update                   # self-update to the latest release
+sivtr config                   # view/init/edit the TOML config (e.g. [theme] mode)
 ```
 
-Full command list: `search / filter / var / nav / zoom / work / diff / serve / peer / origin / workspace / config / doctor / update / setup / init / history / hotkey / codex / clear / version`.
+**Everyday use**
+
+```bash
+sivtr                          # TUI workspace browser
+sivtr run cargo test           # run a command and capture its output to history
+sivtr s terminal --status failure --latest 5   # find recent failures
+sivtr show @last               # open the exact content behind a hit
+sivtr copy 3                   # copy the 3rd recent command block
+```
+
+**Remote & collaboration**
+
+```bash
+sivtr share                    # share a local workspace read-only (opt-in)
+sivtr remote add desk <invite> # mount a teammate's share
+sivtr group create team        # group devices for automatic shared memory
+sivtr s <peer>:terminal --latest 5 --refs       # read a teammate like local
+```
 
 ## Remote access
 

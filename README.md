@@ -169,22 +169,38 @@ sivtr s agent -m "TODO|decision|failed" --since today -f timeline
 | `@name[1,3..5]` | 从已保存变量中只取几项。 |
 | `@` | 使用管道里上一条命令传来的结果。 |
 
-## 命令概览
+## 命令速查
 
-核心命令速查；完整命令、子命令与参数见 [CLI Reference](https://sivtr.pages.dev/zh-cn/reference/cli/)。
+完整命令、子命令与参数见 [CLI Reference](https://sivtr.pages.dev/zh-cn/reference/cli/)。核心命令速查：
 
-```text
-sivtr                    # TUI workspace 浏览器
-sivtr run <cmd>          # 执行命令并捕获输出
-sivtr s <source> <query> # 搜索 terminal / agent 记忆
-sivtr copy               # 复制最近命令块
-sivtr show <ref>         # 查看精确 ref 内容
-sivtr group              # 多设备共享记忆群组
-sivtr remote / share     # 单设备间只读分享
-sivtr mcp install        # 给 Agent 宿主注册 MCP
+**安装与维护**
+
+```bash
+sivtr setup                    # 一键配置：检测环境、装 hooks + MCP + skill、smoke test
+sivtr doctor --fix             # 诊断并自动修复 binary/config/hooks/providers
+sivtr mcp install              # 给已检测的 Agent 宿主注册 MCP；或 -p claude,cursor,codex,...
+sivtr update                   # 自更新到最新 release
+sivtr config                   # 查看/初始化/编辑 TOML 配置（如 [theme] mode）
 ```
 
-完整命令表：`search / filter / var / nav / zoom / work / diff / serve / peer / origin / workspace / config / doctor / update / setup / init / history / hotkey / codex / clear / version`。
+**日常使用**
+
+```bash
+sivtr                          # TUI workspace 浏览器
+sivtr run cargo test           # 执行命令并捕获输出到历史
+sivtr s terminal --status failure --latest 5   # 搜索最近失败
+sivtr show @last               # 打开命中背后的精确内容
+sivtr copy 3                   # 复制最近第 3 个命令块
+```
+
+**远程与协同**
+
+```bash
+sivtr share                    # 本机 workspace 只读分享（opt-in）
+sivtr remote add desk <invite> # 把队友的 share 挂到本机
+sivtr group create team        # 多设备组队，组内自动共享记忆
+sivtr s <peer>:terminal --latest 5 --refs       # 像读本地一样读队友
+```
 
 ## 远程访问
 
