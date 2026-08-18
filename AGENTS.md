@@ -136,6 +136,8 @@ How this project versions and releases changes. AI agents must follow this when 
 
 Merge gate for the Release PR: release-plz pushes its branch with `GITHUB_TOKEN`, so GitHub does not run CI on it and the required status checks never go green — only the maintainer bypass can merge it. (Optional: swap in a workflow-capable PAT secret to restore CI on the Release PR.)
 
+The tag step (`release-plz-release.yml`) pushes the `vX.Y.Z` tag with `RELEASE_PLZ_TOKEN` (a PAT). `GITHUB_TOKEN` pushes do not trigger other workflows, so the PAT is required for the tag push to fire `release.yml`. Both secrets must be set: `GITHUB_TOKEN` (auto) for the action's git-author step and `RELEASE_PLZ_TOKEN` for the tag push.
+
 ### Branch discipline
 
 - One branch per task; merge back to main within 2–3 days. No long-lived parallel branches.

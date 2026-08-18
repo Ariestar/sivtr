@@ -10,7 +10,7 @@ Source forms:
 
 - `terminal`: terminal command records
 - `agent`: AI/agent conversation records from all providers
-- `codex`, `claude`, `cursor`, `opencode`, `openclaw`, `grok`, `hermes`, `pi`, `qoder`: one provider's conversation records
+- `codex`, `claude`, `cursor`, `opencode`, `openclaw`, `grok`, `hermes`, `pi`, `qoder`, `qodercn`, `dsh`, `gemini`, `goose`, `qwen`: one provider's conversation records
 - `terminal/<session>/<record>`, `<provider>/<session>/<turn>`, or `<provider>/<session>/<turn>/p<part>` for input/output part refs
 - `origin:body` for another local workspace name or a named remote, for example `desk:terminal`, `docs:codex/4`
 - `@last`, `@name`, `@name[1]`, `@name[1,3]`, `@name[1..5]`, `@name[1..3,8]`

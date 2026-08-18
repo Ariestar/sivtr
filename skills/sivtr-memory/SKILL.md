@@ -56,7 +56,7 @@ Mental model to keep in mind:
 - In shell pipelines, `@` means "read the WorkSet JSON from stdin". Do not pipe `--refs` text into `@`; either omit `--refs` in intermediate commands or use `@last` / `@name`.
 
 1. Convert the user's vague reference into a small query.
-2. Choose a source: `terminal`, `agent`, or a provider (`codex`, `claude`, `cursor`, `opencode`, `openclaw`, `grok`, `hermes`, `pi`, `qoder`), a WorkRef selector, an origin-prefixed source such as `desk:terminal` / `docs:agent`, or a WorkSet variable such as `@last` / `@name[1,3]`.
+2. Choose a source: `terminal`, `agent`, or a provider (`codex`, `claude`, `cursor`, `opencode`, `openclaw`, `grok`, `hermes`, `pi`, `qoder`, `qodercn`, `dsh`, `gemini`, `goose`, `qwen`), a WorkRef selector, an origin-prefixed source such as `desk:terminal` / `docs:agent`, or a WorkSet variable such as `@last` / `@name[1,3]`.
 3. Search is BM25-primary: a plain-text positional `QUERY` (no regex) ranks the whole source by relevance; `-m` / `--match` is an optional case-insensitive regex that bounds the set first, and the QUERY (or `--match` text alone) then ranks it. Use `--last` / `--since` for time windows, `-i` / `--in` for field filters, and `--kind` for part kinds (`prompt`, `command`, `user`, `assistant`, `tool`, `tool_call`, `tool_result`, `skill`, `thinking`, `output`, `error`).
    - Latest terminal error: `sivtr s terminal --status fail --latest 1 --save latest_failure --refs`
    - Broader terminal error scan: `sivtr s terminal "error" --latest 20 --save error_hits --refs` or `sivtr s terminal -m "Error|error|failed|fatal|not found|External command failed" --latest 20 --save error_hits --refs`
