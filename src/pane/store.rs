@@ -33,12 +33,6 @@ impl Viewport {
             .saturating_add(prefetch)
             .max(page.saturating_add(prefetch))
     }
-
-    /// Batch size for a fetch aiming to cover `target_items` items.
-    pub fn fetch_budget(target_items: usize) -> usize {
-        let raw = target_items.saturating_mul(3).max(FETCH_FLOOR);
-        raw.min(FETCH_CEILING)
-    }
 }
 
 /// Load phase for a pane store.
@@ -146,16 +140,6 @@ where
             return true;
         }
         self.rows.len() < viewport.need_end()
-    }
-
-    /// Budget for the next meta fetch given current coverage + viewport.
-    pub fn next_meta_budget(&self, viewport: Viewport) -> usize {
-        let need = viewport.need_end();
-        let target = need.max(self.rows.len().saturating_add(viewport.visible.max(1)));
-        let budget = Viewport::fetch_budget(target);
-        budget
-            .max(self.fetch_budget.saturating_add(FETCH_FLOOR))
-            .min(FETCH_CEILING)
     }
 
     /// Begin a meta job: Booting if empty, else Ready+inflight (never blank).

@@ -226,56 +226,6 @@ impl SourceLoadPump {
         }
     }
 
-    /// Grow per-source panes until the merged session list covers `viewport`.
-    pub fn ensure_meta_window(
-        &mut self,
-        sources: &[WorkspaceSource],
-        selected: &[bool],
-        states: &mut [SourceLoadState],
-        viewport: Viewport,
-        merged_len: usize,
-    ) {
-        let need_end = viewport.need_end();
-        for (idx, source) in sources.iter().enumerate() {
-            if !selected.get(idx).copied().unwrap_or(false) {
-                continue;
-            }
-            // Per-pane native ensure first.
-            if let Some(need) = states[idx].pane.ensure_meta(viewport) {
-                self.spawn_meta(idx, source, need.gen, need.budget);
-                continue;
-            }
-            // Multi-source: this pane alone may be "covered" while the merged
-            // list is still short — ask for a larger budget explicitly.
-            if merged_len >= need_end {
-                continue;
-            }
-            let store = states[idx].pane.store();
-            if store.list_inflight || states[idx].pane.exhausted() || store.rows.is_empty() {
-                continue;
-            }
-            let deficit = need_end - merged_len;
-            let target = store.rows.len().saturating_add(deficit);
-            let next = Viewport::fetch_budget(target)
-                .max(store.fetch_budget + FETCH_FLOOR)
-                .min(FETCH_CEILING);
-            if next <= store.fetch_budget {
-                let forced = (store.fetch_budget * 2)
-                    .max(store.fetch_budget + FETCH_FLOOR)
-                    .min(FETCH_CEILING);
-                if forced > store.fetch_budget {
-                    if let Some(need) = states[idx].pane.begin_meta_budget(forced) {
-                        self.spawn_meta(idx, source, need.gen, need.budget);
-                    }
-                }
-                continue;
-            }
-            if let Some(need) = states[idx].pane.begin_meta_budget(next) {
-                self.spawn_meta(idx, source, need.gen, need.budget);
-            }
-        }
-    }
-
     pub fn sync_bodies(
         &mut self,
         sources: &[WorkspaceSource],
@@ -638,12 +588,12 @@ impl Pane for SessionColumn {
                     input.viewport,
                 );
             } else {
-                self.pump.ensure_meta_window(
+                self.pump.kick(
                     &self.sources,
                     ctx.selected_sources,
                     &mut self.states,
                     input.viewport,
-                    self.merged_len,
+                    false,
                 );
             }
         }
@@ -656,7 +606,6 @@ impl Pane for SessionColumn {
         );
         self.pump
             .sync_bodies(&self.sources, &mut self.states, &keep);
-        // Update merged length for next multi-source budget decision.
         self.merged_len = ctx.sessions.len();
         true
     }

@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 use std::hash::Hash;
 
-use super::store::{SlidingStore, Viewport, WindowRow, FETCH_CEILING, FETCH_FLOOR};
+use super::store::{SlidingStore, Viewport, WindowRow, FETCH_CEILING};
 
 /// Request returned by [`SlidingPane::ensure_meta`] / [`SlidingPane::force_meta`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,30 +76,15 @@ where
         if !self.store.needs_meta(viewport) {
             return None;
         }
-        let budget = self.store.next_meta_budget(viewport);
-        Some(self.begin_meta_fetch(budget))
+        Some(self.begin_meta_fetch(FETCH_CEILING))
     }
 
     /// Force a meta refresh (e.g. `R`), even when the viewport is covered.
-    pub fn force_meta(&mut self, viewport: Viewport) -> Option<MetaNeed> {
+    pub fn force_meta(&mut self, _viewport: Viewport) -> Option<MetaNeed> {
         if self.store.list_inflight {
             return None;
         }
-        let budget = self
-            .store
-            .fetch_budget
-            .max(Viewport::fetch_budget(viewport.need_end()))
-            .clamp(FETCH_FLOOR, FETCH_CEILING);
-        Some(self.begin_meta_fetch(budget))
-    }
-
-    /// Explicit budget meta fetch (multi-source pumps that coordinate budgets).
-    pub fn begin_meta_budget(&mut self, budget: usize) -> Option<MetaNeed> {
-        if self.store.list_inflight {
-            return None;
-        }
-        let budget = budget.clamp(FETCH_FLOOR, FETCH_CEILING);
-        Some(self.begin_meta_fetch(budget))
+        Some(self.begin_meta_fetch(FETCH_CEILING))
     }
 
     fn begin_meta_fetch(&mut self, budget: usize) -> MetaNeed {
@@ -271,7 +256,7 @@ mod tests {
     }
 
     #[test]
-    fn ensure_meta_sync_grows_only_to_budget() {
+    fn ensure_meta_sync_asks_ceiling_once() {
         let source: Vec<_> = (0..100u32).map(|i| WindowRow::meta_only(i, "m")).collect();
         let mut pane: SlidingPane<u32, &str, String> = SlidingPane::default();
         let grown = pane.ensure_meta_sync(
@@ -281,16 +266,14 @@ mod tests {
             },
             false,
             |budget| {
+                assert_eq!(budget, FETCH_CEILING);
                 let end = budget.min(source.len());
                 (source[..end].to_vec(), end >= source.len())
             },
         );
         assert!(grown);
-        // need_end=20 → budget ≥ 12 and typically covers ~60; not the full 100.
-        assert!(pane.len() < 100);
-        assert!(pane.len() >= 20);
-        assert!(!pane.exhausted());
-        // covered → no further growth
+        assert_eq!(pane.len(), 100);
+        assert!(pane.exhausted());
         assert!(!pane.ensure_meta_sync(
             Viewport {
                 first: 0,
@@ -299,7 +282,6 @@ mod tests {
             false,
             |_| panic!("must not fetch when covered"),
         ));
-        // force still refetches
         assert!(pane.ensure_meta_sync(
             Viewport {
                 first: 0,
@@ -307,6 +289,7 @@ mod tests {
             },
             true,
             |budget| {
+                assert_eq!(budget, FETCH_CEILING);
                 let end = budget.min(source.len());
                 (source[..end].to_vec(), end >= source.len())
             },
