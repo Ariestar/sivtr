@@ -34,6 +34,12 @@ session_dirs = []
 
 [hotkey]
 chord = "alt+y"
+
+[theme]
+mode = "auto"
+
+[mcp]
+idle_exit_secs = 60
 ```
 
 字段级说明见[配置文件](/zh-cn/reference/config-file/)。
@@ -81,3 +87,26 @@ Provider 选择是运行时 CLI 选项，不是配置项：
 sivtr hotkey start --provider all
 sivtr hotkey start --provider claude
 ```
+
+## TUI 主题
+
+```toml
+[theme]
+mode = "auto"
+```
+
+`auto` 跟随系统外观，并根据终端能力选择 truecolor 或 ANSI 调色板。用 `dark` 或 `light` 强制配色：
+
+```toml
+[theme]
+mode = "dark"
+```
+
+## MCP 空闲退出
+
+```toml
+[mcp]
+idle_exit_secs = 60
+```
+
+无工具调用多少秒后 stdio MCP server 退出（`0` = 保持到宿主关闭 stdin）。`sivtr mcp serve --idle-exit` flag 可在单次调用时覆盖此值。

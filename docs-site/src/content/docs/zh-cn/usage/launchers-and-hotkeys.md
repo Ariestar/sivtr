@@ -77,7 +77,7 @@ sivtr hotkey start --provider all
 sivtr hotkey start --provider claude
 ```
 
-支持的 provider 值是 `all`、`codex`、`claude`、`opencode` 和 `pi`。
+支持的 provider 值是 `all`、`codex`、`claude`、`opencode`、`pi`、`cursor`、`openclaw`、`grok`、`hermes`、`dsh`、`gemini`、`goose`、`qoder`、`qodercn` 和 `qwen`。
 
 按下热键后，daemon 会打开一个终端，在 daemon 工作目录中运行内部 picker 命令。Picker 会先尝试最新的非空当前 session，再回退到 session 列表。
 

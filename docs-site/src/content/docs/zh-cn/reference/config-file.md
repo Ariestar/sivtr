@@ -28,6 +28,12 @@ session_dirs = ["/srv/sivtr/root-codex/sessions"]
 
 [hotkey]
 chord = "alt+y"
+
+[theme]
+mode = "auto"
+
+[mcp]
+idle_exit_secs = 60
 ```
 
 ## editor
@@ -76,7 +82,7 @@ session_dirs = []
 
 在 macOS 上，典型共享路径是 `/Users/Shared/sivtr/root-codex/sessions`。
 
-目前只有 Codex mirror 在这里配置。其他已注册 provider（Claude、Cursor、OpenCode、OpenClaw、Hermes、Grok、Pi…）使用各自本地位置和环境信号。
+目前只有 Codex mirror 在这里配置。其他已注册 provider（Claude、Cursor、OpenCode、OpenClaw、Hermes、Grok、Pi、Dsh、Gemini、Goose、Qoder/Qoder-CN、Qwen…）使用各自本地位置和环境信号。
 
 ## hotkey
 
@@ -88,3 +94,27 @@ chord = "alt+y"
 | Key | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
 | `chord` | string | `"alt+y"` | `sivtr hotkey start` 使用的按键 |
+
+## theme
+
+```toml
+[theme]
+mode = "auto"
+```
+
+| Key | 类型 | 默认值 | 含义 |
+| --- | --- | --- | --- |
+| `mode` | string | `"auto"` | TUI 配色方案：`auto`、`dark` 或 `light` |
+
+`auto` 跟随系统外观（macOS/Linux XDG/Windows registry），并根据终端能力选择 truecolor 或 ANSI 调色板。`dark` 和 `light` 强制调色板。未知值和拼写错误（如 `mode = "ligth"`）是硬错误。
+
+## mcp
+
+```toml
+[mcp]
+idle_exit_secs = 60
+```
+
+| Key | 类型 | 默认值 | 含义 |
+| --- | --- | --- | --- |
+| `idle_exit_secs` | integer | `60` | 无工具调用多少秒后 stdio MCP server 退出；`0` 表示保持到宿主关闭 stdin。`sivtr mcp serve --idle-exit` flag 覆盖此值。 |

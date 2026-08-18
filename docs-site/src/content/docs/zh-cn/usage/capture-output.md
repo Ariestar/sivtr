@@ -11,13 +11,13 @@ description: 使用 pipe mode、run mode 和 shell session import。
 | --- | --- | --- |
 | 查看已有命令管道的输出 | `command 2>&1 \| sivtr` | 否 |
 | 让 `sivtr` 执行一次命令 | `sivtr run command` | 部分保留本次运行信息 |
-| 浏览当前 shell 记录的工作 | `sivtr import` | 是，需要 shell 集成 |
+| 打开当前 shell 记录的工作 | `sivtr import` | 是，需要 shell 集成 |
 | 复制最近命令块 | `sivtr copy out` | 是，需要 shell 集成 |
 | 搜索保存过的输出历史 | `sivtr history search "query"` | 是，针对保存的捕获 |
 
 ## Pipe mode
 
-Pipe mode 读取 stdin 并打开结果。
+Pipe mode 读取 stdin，启用时写入历史，并用外部编辑器打开结果。
 
 ```bash
 ls -la | sivtr
@@ -49,10 +49,10 @@ sivtr run git status --short
 适合在这些情况下使用：
 
 - 你希望 `sivtr` 执行并捕获单个命令；
-- 你希望浏览前看到退出状态；
+- 你希望编辑器打开前先报告退出状态并把输出存入历史；
 - 你不想手动处理 shell 重定向。
 
-Run mode 会合并捕获 stdout 和 stderr。如果命令没有输出，`sivtr` 会提示没有捕获内容后退出。
+Run mode 会合并捕获 stdout 和 stderr，并把结果存入历史。如果命令没有输出，`sivtr` 会提示没有捕获内容后退出。
 
 ## Shell session import
 
@@ -62,7 +62,7 @@ Shell 集成会持续记录结构化命令条目。安装后打开当前 session
 sivtr import
 ```
 
-当你已经正常工作了一段时间，之后想把累积的 session 当成一个工作区浏览时，这很有用。
+当你已经正常工作了一段时间，之后想在编辑器里打开累积的 session 时，这很有用。
 
 安装 shell 集成：
 
