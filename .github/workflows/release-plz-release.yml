@@ -33,4 +33,6 @@ jobs:
         with:
           command: release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITHUB_TOKEN pushes do not trigger other workflows (e.g. release.yml),
+          # so the tag must be pushed with a PAT to kick off assets/crates.io.
+          RELEASE_PLZ_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
