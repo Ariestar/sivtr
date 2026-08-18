@@ -8,7 +8,7 @@
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
-use sivtr::commands::browse::perf::{apply_fat_bodies, FatLayout, HotPane, HydratedStore};
+use sivtr::commands::browse::perf::{FatLayout, HotPane, HydratedStore};
 
 fn main() {
     let _profiler = dhat::Profiler::new_heap();
@@ -168,7 +168,7 @@ fn main() {
     let t8 = dhat::HeapStats::get();
     let mut applied = 0usize;
     for _ in 0..apply_iters {
-        applied = apply_fat_bodies(40, 50);
+        applied = HydratedStore::new(40, 50).apply_all_bodies();
     }
     let t9 = dhat::HeapStats::get();
     let apply_bytes = t9.total_bytes.saturating_sub(t8.total_bytes);

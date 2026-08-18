@@ -266,7 +266,6 @@ impl HydratedStore {
 /// double-laid-out the joined document and every block).
 pub struct FatLayout {
     area: ratatui::layout::Rect,
-    text: String,
     blocks: Vec<crate::tui::content::block::BlockText>,
 }
 
@@ -291,16 +290,8 @@ impl FatLayout {
                 }
             })
             .collect();
-        let mut joined = String::new();
-        for (idx, block) in blocks.iter().enumerate() {
-            joined.push_str(&block.text);
-            if idx + 1 < blocks.len() {
-                joined.push_str("\n\n");
-            }
-        }
         Self {
             area: ratatui::layout::Rect::new(0, 0, 84, 40),
-            text: joined,
             blocks,
         }
     }
@@ -308,17 +299,11 @@ impl FatLayout {
     pub fn layout_lines(&self) -> usize {
         crate::tui::content::view::layout_content(
             self.area,
-            &self.text,
+            "",
             &self.blocks,
             crate::tui::content::view::ContentViewMode::Reading,
         )
         .lines
         .len()
     }
-}
-
-/// Apply `n` fat session bodies into a store (the cost of not dropping stale
-/// parses). `records_each` × 4KiB assistant blobs.
-pub fn apply_fat_bodies(n_sessions: usize, records_each: usize) -> usize {
-    HydratedStore::new(n_sessions, records_each).apply_all_bodies()
 }
