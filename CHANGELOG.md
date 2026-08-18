@@ -7,6 +7,154 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/Ariestar/sivtr/compare/v0.4.1...v0.5.0) - 2026-08-18
+
+### Added
+
+- *(tui)* unify selection highlight across panes
+- *(tui)* page selected dialogues in content with J/K
+- *(tui)* align edit previews with a real line diff
+- *(tui)* GitHub-style code gutters and structured read/search results
+- *(core)* carry read start line as generic block metadata
+- *(tui)* replace content line numbers with selectable dialogue dots
+- *(tui)* render tool calls with per-tool names and \$/ > formats
+- *(tui)* fold mixed-kind structure runs with two-level expansion
+- *(tui)* fold same-kind structure runs into kind xN blocks
+- *(tui)* mark list selection with dots only, always visible
+- *(tui)* gray full-width block highlight and double-click fold
+- *(tui)* make every workpart a foldable block with list-style cursor
+- *(tui)* highlight the clicked structure block in content
+- *(tui)* group tool calls with results and show descriptions
+- *(tui)* click a structure tag to expand its block in read mode
+- *(tui)* color unified-diff lines inside code blocks
+- *(tui)* configurable theme with light/dark and truecolor detection
+- *(remote)* rename groups (owner-only, propagated via roster sync) ([#98](https://github.com/Ariestar/sivtr/pull/98))
+- *(remote)* add group mode for multi-device memory sharing ([#70](https://github.com/Ariestar/sivtr/pull/70))
+- *(tui)* enable bracketed paste for text inputs ([#77](https://github.com/Ariestar/sivtr/pull/77))
+- *(tui)* restore terminal state before panics are reported ([#73](https://github.com/Ariestar/sivtr/pull/73))
+- *(agents)* add Qoder-CN provider, align Qoder MCP config
+- *(agents)* add Gemini CLI, Goose, and Qwen Code providers ([#104](https://github.com/Ariestar/sivtr/pull/104))
+- *(core)* parse codex custom tool call events
+
+### Fixed
+
+- restore SlidingPane is_empty for clippy
+- *(tui)* carry collapse review fixes into segment-based folding
+- *(remote)* surface daemon cleanup failures and shell exit
+- *(tui)* ansi focus contrast and copy hints
+- *(tui)* saturate gutter line numbers and range math
+- *(tui)* bound range spans and toggle anchors
+- *(tui)* keep block marks across folds and blank halves
+- *(browse)* copy and mark the displayed dialogue
+- *(browse)* sort dialogues newest first
+- *(tui)* only select content on a real drag, not on a click
+- *(tui)* show the current position in a pane's bottom-right corner
+- *(tui)* keep block marks single-dialogue under multi-select
+- *(tui)* footer shows hotkeys only, no mode or ref status
+- *(tui)* copy the block under the cursor, run members included
+- *(tui)* mark content blocks with space like list rows
+- *(tui)* pair interleaved parallel tool calls by call id
+- *(tui)* cache content layout so wheel scroll stays responsive
+- *(tui)* smooth wheel scroll under the cursor and hide cursor on click
+- *(tui)* deepen the focus veil to slate-900
+- *(tui)* lighten the focus gray to slate-300
+- *(tui)* lighten the focus highlight to a faint gray
+- *(tui)* soften the focus highlight to a light gray tint
+- *(tui)* tighten structure markers and block folding edges
+- *(tui)* click any part of a structure block to collapse it
+- *(tui)* wheel scroll and click hit-test offsets
+- *(tui)* unify body foreground across lists and content
+- *(tui)* accept only canonical hunk headers at column 0
+- *(tui)* validate unified-diff markers before diff coloring
+- *(tui)* render structure markers and fold summaries in gray
+- *(tui)* drop appearance detection failure latch
+- *(tui)* address theme review feedback
+- *(tui)* finish light theme support
+- *(tui)* keep the ANSI fallback for forced light/dark themes
+- *(tui)* route the body-failure marker through the theme palette
+- *(tui)* light/dark ANSI palettes and reject misspelled theme keys
+- *(tui)* route provider colors through the palette; tighten light detection
+- *(deps)* update dependency astro to v7.2.2 ([#138](https://github.com/Ariestar/sivtr/pull/138))
+- *(tui)* hide the cursor outside typing and selection modes ([#79](https://github.com/Ariestar/sivtr/pull/79))
+- *(tui)* catch panics, restore the terminal, and report ([#78](https://github.com/Ariestar/sivtr/pull/78))
+- *(deps)* update dependency astro to v7.2.1 ([#132](https://github.com/Ariestar/sivtr/pull/132))
+- *(deps)* update dependency astro to v7.2.0 ([#112](https://github.com/Ariestar/sivtr/pull/112))
+- *(codex)* make watch exports incremental ([#84](https://github.com/Ariestar/sivtr/pull/84))
+- *(deps)* update dependency astro to v7 ([#65](https://github.com/Ariestar/sivtr/pull/65))
+- *(core)* extract tool results faithfully from raw output
+- *(core)* normalize opencode MCP tool names as server:tool
+- *(core)* recover complete grok sessions from the ACP stream
+- *(core)* tolerate corrupt grok session files and seed record times
+- *(core)* backfill tool names onto results and pair by call id
+
+### Other
+
+- *(deps)* update rust crate rmcp to v3.1.3 ([#156](https://github.com/Ariestar/sivtr/pull/156))
+- adopt release-plz and PR-gated CI ([#154](https://github.com/Ariestar/sivtr/pull/154))
+- *(deps)* update rust crate similar to v3.2.0 ([#148](https://github.com/Ariestar/sivtr/pull/148))
+- Merge pull request #146 from Ariestar/renovate/dark-light-3.x
+- Merge remote-tracking branch 'origin/main' into feat/dsh-provider
+- drop origin aliases and silent fallbacks
+- rustfmt TUI terminal hint
+- Merge remote-tracking branch 'origin/main' into feat/provider-t1
+- Merge remote-tracking branch 'origin/main' into feat/provider-t1
+- cut dead config sections and duplicate provider helpers
+- expect with context in session tests
+- *(tui)* single width source for content text
+- *(init)* share shell path lookup helper
+- *(remote)* dedupe daemon info removal
+- *(tui)* share one truncate_chars across panes
+- *(browse)* dedupe mask reads and content hit-test
+- *(browse)* unify range select across list panes
+- *(tui)* drop duplicated focus-style comment
+- *(tui)* unify current-row and position rendering across panes
+- *(tui)* drop unused WorkspaceCopyParts::block field
+- *(core)* drop unreachable text primitives and unused thiserror dep
+- *(tui)* categorize tool display by command/read/search/edit/web
+- *(tui)* drop redundant helpers from the audit
+- unify _with pairs and prompt fork
+- remove dead _with/extension wrappers
+- defer the changelog entry to release time
+- apply rustfmt
+- *(tui)* merge _expanded wrappers into single io-texts functions
+- *(tui)* fold structure blocks to tags in read mode
+- *(tui)* fold agent colors into one exhaustive table
+- *(tui)* drop the reset_workspace_search_state pass-through wrapper
+- *(deps)* update rust crate uuid to v1.24.1 ([#140](https://github.com/Ariestar/sivtr/pull/140))
+- *(remote)* harden group roster convergence ([#101](https://github.com/Ariestar/sivtr/pull/101))
+- *(remote)* split the group domain out of the daemon monolith ([#100](https://github.com/Ariestar/sivtr/pull/100))
+- *(tui)* name background loader threads and surface spawn failures ([#81](https://github.com/Ariestar/sivtr/pull/81))
+- *(tui)* drop assert!/expect from production paths ([#80](https://github.com/Ariestar/sivtr/pull/80))
+- *(tui)* cache dialogue projection and honor held-key repeat ([#76](https://github.com/Ariestar/sivtr/pull/76))
+- *(tui)* dedupe per-frame content layout work ([#75](https://github.com/Ariestar/sivtr/pull/75))
+- *(tui)* skip redraw when idle and block on input ([#74](https://github.com/Ariestar/sivtr/pull/74))
+- *(deps)* update actions/github-script action to v9 ([#123](https://github.com/Ariestar/sivtr/pull/123))
+- *(deps)* update rust crate ureq to v3.4.0 ([#122](https://github.com/Ariestar/sivtr/pull/122))
+- *(deps)* update dependency rust to 1.97 ([#121](https://github.com/Ariestar/sivtr/pull/121))
+- *(deps)* update rust crate thiserror to v2.0.20 ([#120](https://github.com/Ariestar/sivtr/pull/120))
+- *(deps)* update rust crate rusqlite to v0.40.2 ([#119](https://github.com/Ariestar/sivtr/pull/119))
+- add AGENT.md
+- *(deps)* update rust crate clap to v4.6.6 ([#115](https://github.com/Ariestar/sivtr/pull/115))
+- *(deps)* update rust crate rmcp to v3.1.2 ([#116](https://github.com/Ariestar/sivtr/pull/116))
+- *(deps)* update dependency @types/vscode to v1.125.0 ([#111](https://github.com/Ariestar/sivtr/pull/111))
+- *(deps)* update dependency @types/node to v26 ([#113](https://github.com/Ariestar/sivtr/pull/113))
+- *(renovate)* enable vulnerability alerts
+- *(renovate)* opt out of dependency dashboard approval
+- *(deps)* update rust crate similar to v3.1.2 ([#108](https://github.com/Ariestar/sivtr/pull/108))
+- *(deps)* update dependency @types/node to v20.19.43 ([#110](https://github.com/Ariestar/sivtr/pull/110))
+- *(deps)* update rust crate toml to v1.1.4 ([#109](https://github.com/Ariestar/sivtr/pull/109))
+- *(deps)* update rust crate base64 to v0.23.1 ([#106](https://github.com/Ariestar/sivtr/pull/106))
+- *(deps)* update dependency @vscode/vsce to v3.9.2 ([#105](https://github.com/Ariestar/sivtr/pull/105))
+- add PayPal as a sponsor option
+- *(ai-review)* drop unsupported -r flag on gh api --jq
+- *(ai-review)* set GH_TOKEN for gh api steps
+- optimize release profile for TUI startup and size ([#71](https://github.com/Ariestar/sivtr/pull/71))
+- *(renovate)* auto-merge patch and minor dependency updates ([#88](https://github.com/Ariestar/sivtr/pull/88))
+- AI-powered pull request review (provider-agnostic LLM) ([#97](https://github.com/Ariestar/sivtr/pull/97))
+- Fix typo in README.md description ([#69](https://github.com/Ariestar/sivtr/pull/69))
+- *(core)* drop unused CopyConfig prompt_values
+- *(config)* cover theme TOML round-trip and typo rejection
+
 ## [0.4.1] - 2026-08-05
 
 Full notes: [changelogs/0.4.1.md](changelogs/0.4.1.md)
