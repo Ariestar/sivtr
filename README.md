@@ -171,37 +171,20 @@ sivtr s agent -m "TODO|decision|failed" --since today -f timeline
 
 ## 命令概览
 
-| 命令 | 用途 |
-| --- | --- |
-| `sivtr` | TTY 打开 workspace 浏览器（TUI）。 |
-| `sivtr pipe` | 读取 stdin 写入历史，用外部编辑器打开。 |
-| `sivtr run <command>` | 执行命令、捕获输出，用外部编辑器打开。 |
-| `sivtr copy` | 复制最近终端命令块。 |
-| `sivtr copy <provider>` | 从任意已注册 Agent provider 复制内容（registry 驱动：Codex、Claude、Cursor、Dsh、Gemini、Goose、OpenCode、OpenClaw、Hermes、Grok、Pi、Qoder、Qoder-CN、Qwen…）。 |
-| `sivtr search` / `sivtr s` | 搜索终端和 Agent memory；命中结果保存为 `@last`。 |
-| `sivtr filter <source>` | 对 source 或管道传入的 WorkSet 应用统一过滤。 |
-| `sivtr var` | 列出、保存、删除、合并、移除或清空命名 WorkSet 变量。 |
-| `sivtr nav <source> <motion>` | 用 `<`、`>N`、`+N`、`-N`、`[A..B]`、`~` 确定性移动 anchors。 |
-| `sivtr work sessions` | 列出当前 workspace 的 terminal 和 Agent sessions。 |
-| `sivtr work records <source>` | 把 sessions 或已保存变量转成事件级 refs。 |
-| `sivtr work parts <source>` | 从匹配事件里抽出真正有用的输入/输出片段。 |
-| `sivtr show <ref-or-workset>` | 打印 refs、`@last`、`@name` 或管道结果背后的内容。也支持远程 ref，如 `desk:terminal/...`。 |
-| `sivtr zoom <source>` | 给搜索命中补上前后 record 上下文。 |
-| `sivtr diff <left> <right>` | 对比最近命令块。 |
-| `sivtr serve` | 启动/停止本机 remote-memory daemon。 |
-| `sivtr share` | 显式分享本机 workspace 给远端。 |
-| `sivtr peer` | 列出/遗忘本机 daemon 认识的设备身份。 |
-| `sivtr remote` | 把远端 share 挂到当前 workspace（`add`/`list`/`remove`/`rename`/`test`）。 |
-| `sivtr group` / `sivtr g` | 把多台设备组成一组，组内自动共享彼此的记忆（create/invite/join/list/members/remove/rename/leave/sync）。 |
-| `sivtr origin` | 统一的来源改名入口——一个名字代表本地 workspace 别名或远端 mount，改名一处生效。 |
-| `sivtr workspace` / `sivtr ws` | 列出本机已知 workspace（`name:body` 的 origin 标签）。 |
-| `sivtr mcp` | MCP server 与宿主安装（`serve` / `install` / `uninstall` / `print-config`）。 |
-| `sivtr doctor` | 诊断 binary、config、session logs、hooks、providers、clipboard；有新版本时提示。 |
-| `sivtr update` | 从 GitHub Releases 自更新到最新版本。 |
-| `sivtr init <shell>` | 安装 shell integration；也支持 `show` 和 `uninstall`。 |
-| `sivtr config` | 管理 TOML 配置文件。 |
-| `sivtr history` | 列出、搜索、查看捕获输出历史。 |
-| `sivtr hotkey` | 管理 Windows AI session picker 全局热键守护进程。 |
+核心命令速查；完整命令、子命令与参数见 [CLI Reference](https://sivtr.pages.dev/zh-cn/reference/cli/)。
+
+```text
+sivtr                    # TUI workspace 浏览器
+sivtr run <cmd>          # 执行命令并捕获输出
+sivtr s <source> <query> # 搜索 terminal / agent 记忆
+sivtr copy               # 复制最近命令块
+sivtr show <ref>         # 查看精确 ref 内容
+sivtr group              # 多设备共享记忆群组
+sivtr remote / share     # 单设备间只读分享
+sivtr mcp install        # 给 Agent 宿主注册 MCP
+```
+
+完整命令表：`search / filter / var / nav / zoom / work / diff / serve / peer / origin / workspace / config / doctor / update / setup / init / history / hotkey / codex / clear / version`。
 
 ## 远程访问
 

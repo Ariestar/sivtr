@@ -180,37 +180,20 @@ Memory variables:
 
 ## Command overview
 
-| Command | Purpose |
-| --- | --- |
-| `sivtr` | TTY: workspace browser (TUI). |
-| `sivtr pipe` | Read stdin, write to history, open the external editor. |
-| `sivtr run <command>` | Execute a command, capture output, open the external editor. |
-| `sivtr copy` | Copy recent terminal command blocks. |
-| `sivtr copy <provider>` | Copy content from any registered agent provider (registry-driven: Codex, Claude, Cursor, Dsh, Gemini, Goose, OpenCode, OpenClaw, Hermes, Grok, Pi, Qoder, Qoder-CN, Qwen, …). |
-| `sivtr search` / `sivtr s` | Search terminal and agent memory; saves matches as `@last`. |
-| `sivtr filter <source>` | Apply the shared WorkSet filters to a source or piped WorkSet. |
-| `sivtr var` | List, save, remove, merge, drop, or clean up named WorkSet variables. |
-| `sivtr nav <source> <motion>` | Move anchors deterministically with `<`, `>N`, `+N`, `-N`, `[A..B]`, and `~`. |
-| `sivtr work sessions` | List terminal and agent sessions in the current workspace. |
-| `sivtr work records <source>` | Turn sessions or saved variables into event-level refs. |
-| `sivtr work parts <source>` | Extract only useful inputs/outputs from matching events. |
-| `sivtr show <ref-or-workset>` | Print the content behind refs, `@last`, `@name`, or piped results. Also accepts remote refs like `desk:terminal/...`. |
-| `sivtr zoom <source>` | Add surrounding record context around search hits. |
-| `sivtr diff <left> <right>` | Compare recent command blocks. |
-| `sivtr serve` | Start/stop the local remote-memory daemon. |
-| `sivtr share` | Explicitly share a local workspace for remote peers. |
-| `sivtr peer` | List/forget device identities known to the daemon. |
-| `sivtr remote` | Name peer shares in the current workspace (`add`/`list`/`remove`/`rename`/`test`, like `git remote`). |
-| `sivtr group` / `sivtr g` | Group devices so they share memory automatically (create/invite/join/list/members/remove/rename/leave/sync). |
-| `sivtr origin` | One rename path for every addressable source — a single name for a local workspace alias or a remote mount. |
-| `sivtr workspace` / `sivtr ws` | List known local workspaces (origin labels for `name:body` refs). |
-| `sivtr mcp` | MCP server + host install (`serve` / `install` / `uninstall` / `print-config`). |
-| `sivtr doctor` | Diagnose binary, config, session logs, hooks, providers, and clipboard; reports new releases. |
-| `sivtr update` | Self-update to the latest GitHub release. |
-| `sivtr init <shell>` | Install shell integration; also supports `show` and `uninstall`. |
-| `sivtr config` | Manage the TOML config file. |
-| `sivtr history` | List, search, and show captured output history. |
-| `sivtr hotkey` | Manage the Windows AI session picker hotkey daemon. |
+A quick cheat sheet; the full command, subcommand, and flag reference lives in the [CLI Reference](https://sivtr.pages.dev/reference/cli/).
+
+```text
+sivtr                    # TUI workspace browser
+sivtr run <cmd>          # run a command and capture its output
+sivtr s <source> <query> # search terminal / agent memory
+sivtr copy               # copy recent command blocks
+sivtr show <ref>         # show the content behind a ref
+sivtr group              # multi-device shared-memory groups
+sivtr remote / share     # read-only sharing between devices
+sivtr mcp install        # register the MCP server for agent hosts
+```
+
+Full command list: `search / filter / var / nav / zoom / work / diff / serve / peer / origin / workspace / config / doctor / update / setup / init / history / hotkey / codex / clear / version`.
 
 ## Remote access
 
