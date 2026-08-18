@@ -150,6 +150,9 @@ pub struct SourceLoadPump {
     rx: Receiver<JobEvent>,
     cwd: PathBuf,
     body_inflight: HashSet<String>,
+    /// Sessions the current viewport still wants hydrated. A body job that
+    /// finishes after the user has scrolled away is dropped, not applied.
+    body_wanted: HashSet<(usize, String)>,
     /// `{source_idx}\0{session_id}` → error message for body loads that failed
     /// (thread spawn refused or the body query errored). Failed keys are not
     /// retried by [`SourceLoadPump::sync_bodies`] until an explicit refresh or
@@ -169,6 +172,7 @@ impl SourceLoadPump {
             rx,
             cwd,
             body_inflight: HashSet::new(),
+            body_wanted: HashSet::new(),
             body_failed: HashMap::new(),
             body_generation: vec![0; source_count],
         }
@@ -275,6 +279,7 @@ impl SourceLoadPump {
         states: &mut [SourceLoadState],
         keep: &HashSet<(usize, String)>,
     ) {
+        self.body_wanted.clone_from(keep);
         for (source_idx, state) in states.iter_mut().enumerate() {
             let keep_local: HashSet<String> = keep
                 .iter()
@@ -473,6 +478,11 @@ impl SourceLoadPump {
                 }
                 let ik = format!("{}\0{session_id}", ev.index);
                 self.body_inflight.remove(&ik);
+                if !self.body_wanted.contains(&(ev.index, session_id.clone())) {
+                    // Scrolled away while the parse was in flight: drop the
+                    // payload so a large session does not land in the store.
+                    return false;
+                }
                 match ev.result {
                     Ok(sessions) => {
                         if sessions.is_empty() {
@@ -917,6 +927,7 @@ mod tests {
         // A successful body query that returns no records must still settle
         // the key instead of respawning it on every sync_bodies pass.
         column.pump.body_inflight.insert("0\0s1".into());
+        column.pump.body_wanted.insert((0, "s1".into()));
         let empty = JobEvent {
             index: 0,
             gen: 0,
@@ -967,6 +978,7 @@ mod tests {
         let mut column = SessionColumn::new(sources.clone(), vec![state], PathBuf::from("."));
 
         column.pump.body_inflight.insert("0\0s1".into());
+        column.pump.body_wanted.insert((0, "s1".into()));
         let unmatched = JobEvent {
             index: 0,
             gen: 0,
@@ -1046,6 +1058,53 @@ mod tests {
         assert!(!column.pump.body_failed.contains_key("0\0s1"));
         // The fresh in-flight marker for the new job is untouched.
         assert!(column.pump.body_inflight.contains("0\0s1"));
+    }
+
+    #[test]
+    fn stale_body_result_is_dropped_not_applied() {
+        let source = WorkspaceSource::agent(AgentProvider::Codex);
+        let sources = vec![source.clone()];
+        let meta = SessionMeta {
+            source: source.clone(),
+            session_id: "s1".into(),
+            modified: UNIX_EPOCH,
+            title: "s1".into(),
+            search_title: "s1".into(),
+        };
+        let state = SourceLoadState {
+            pane: SessionPane::ready(vec![WindowRow::meta_only("s1".into(), meta)], 10, true),
+        };
+        let mut column = SessionColumn::new(sources.clone(), vec![state], PathBuf::from("."));
+
+        // s1 is wanted, then the viewport moves on so sync_bodies clears it.
+        column.pump.body_wanted.insert((0, "s1".into()));
+        let keep = HashSet::new();
+        column.pump.sync_bodies(&sources, &mut column.states, &keep);
+        assert!(!column.pump.body_wanted.contains(&(0, "s1".into())));
+
+        column.pump.body_inflight.insert("0\0s1".into());
+        let arrived = JobEvent {
+            index: 0,
+            gen: 0,
+            kind: JobKind::Body {
+                session_id: "s1".into(),
+            },
+            result: Ok(vec![WorkspaceSession {
+                source,
+                session_id: "s1".into(),
+                modified: UNIX_EPOCH,
+                title: "s1".into(),
+                search_title: "s1".into(),
+                records: vec![test_record("s1", 1, "payload", "2026-07-17T10:00:00Z")],
+                body_loaded: true,
+            }]),
+            exhausted: true,
+        };
+
+        assert!(!column.pump.apply(arrived, &mut column.states));
+        assert!(column.pump.body_inflight.is_empty());
+        assert!(column.pump.body_failed.is_empty());
+        assert!(column.states[0].body("s1").is_none());
     }
 
     fn test_record(session: &str, index: usize, title: &str, ended: &str) -> WorkRecord {
