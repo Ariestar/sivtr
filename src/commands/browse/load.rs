@@ -1074,10 +1074,15 @@ mod tests {
         let state = SourceLoadState {
             pane: SessionPane::ready(vec![WindowRow::meta_only("s1".into(), meta)], 10, true),
         };
-        let mut column = SessionColumn::new(sources, vec![state], PathBuf::from("."));
+        let mut column = SessionColumn::new(sources.clone(), vec![state], PathBuf::from("."));
+
+        // s1 is wanted, then the viewport moves on so sync_bodies clears it.
+        column.pump.body_wanted.insert((0, "s1".into()));
+        let keep = HashSet::new();
+        column.pump.sync_bodies(&sources, &mut column.states, &keep);
+        assert!(!column.pump.body_wanted.contains(&(0, "s1".into())));
 
         column.pump.body_inflight.insert("0\0s1".into());
-        // Viewport moved on: s1 is no longer wanted.
         let arrived = JobEvent {
             index: 0,
             gen: 0,
