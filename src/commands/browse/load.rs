@@ -1141,8 +1141,8 @@ mod tests {
         // spawn more parse threads.
         column.pump.body_inflight.insert("0\0busy1".into());
         column.pump.body_inflight.insert("0\0busy2".into());
-        let keep: HashSet<(usize, String)> = [(0, "s1".into()), (0, "s2".into()), (0, "s3".into())]
-            .into();
+        let keep: HashSet<(usize, String)> =
+            [(0, "s1".into()), (0, "s2".into()), (0, "s3".into())].into();
         column.pump.sync_bodies(&sources, &mut column.states, &keep);
 
         assert_eq!(column.pump.body_inflight.len(), BODY_FETCH_CAP);
