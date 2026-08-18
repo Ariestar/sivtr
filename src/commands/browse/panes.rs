@@ -673,7 +673,7 @@ mod tests {
     }
 
     #[test]
-    fn dialogue_meta_grows_with_viewport_not_full_catalog() {
+    fn dialogue_meta_fetches_full_catalog_at_ceiling() {
         let sessions = vec![session_with_n(100, true)];
         let mut pane = DialoguePane::default();
         tick(
@@ -686,8 +686,8 @@ mod tests {
             0,
             &[],
         );
-        assert!(pane.len() < 100);
-        assert!(pane.len() >= 20);
+        assert_eq!(pane.len(), 100);
+        assert!(pane.exhausted());
         tick(
             &mut pane,
             &sessions,
@@ -698,8 +698,7 @@ mod tests {
             45,
             &[],
         );
-        assert!(pane.len() > 40);
-        assert!(pane.len() < 100);
+        assert_eq!(pane.len(), 100);
     }
 
     #[test]
