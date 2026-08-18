@@ -3,12 +3,13 @@
 //! Benches must not name `pub(crate)` TUI types at the crate boundary.
 
 use crate::pane::{Pane, PaneInput, Viewport};
-use crate::tui::workspace::{WorkspaceSession, WorkspaceSource};
+use crate::tui::workspace::{WorkspaceDialogue, WorkspaceSession, WorkspaceSource};
 use sivtr_core::ai::AgentProvider;
 use sivtr_core::record::{
-    WorkChannel, WorkPart, WorkPartKind, WorkRecord, WorkRecordKind, WorkRef, WorkSessionRef,
-    WorkSource, WorkTime, RECORD_SCHEMA_VERSION,
+    WorkChannel, WorkPart, WorkRecord, WorkRecordKind, WorkRef, WorkSessionRef, WorkSource,
+    WorkTime, RECORD_SCHEMA_VERSION,
 };
+use std::cell::RefCell;
 use std::time::UNIX_EPOCH;
 
 use super::panes::{DialogueCtx, DialoguePane};
@@ -90,6 +91,7 @@ fn primed_dialogue_pane(n: usize) -> DialoguePane {
 pub struct HotPane {
     inner: DialoguePane,
     n: usize,
+    materialized: RefCell<Vec<WorkspaceDialogue>>,
 }
 
 impl HotPane {
@@ -97,6 +99,7 @@ impl HotPane {
         Self {
             inner: primed_dialogue_pane(n),
             n,
+            materialized: RefCell::new(Vec::new()),
         }
     }
 
@@ -121,8 +124,9 @@ impl HotPane {
         let titles: Vec<&str> = self.inner.titles().collect();
         let selected = vec![false; self.inner.len()];
         let focus = self.n / 2;
-        let rows = self.inner.materialize(&selected, focus);
-        let bodies = rows.iter().filter(|d| d.record.is_some()).count();
+        let mut buf = self.materialized.borrow_mut();
+        self.inner.materialize_into(&selected, focus, &mut buf);
+        let bodies = buf.iter().filter(|d| d.record.is_some()).count();
         std::hint::black_box(titles.len());
         (titles.len(), bodies)
     }
@@ -233,5 +237,73 @@ impl HydratedStore {
         let out = self.sessions.clone();
         let bodies: usize = out.iter().map(|s| s.records.len()).sum();
         std::hint::black_box((out.len(), bodies)).0
+    }
+
+    /// Land every session body in a sliding pane (stale-apply cost).
+    pub fn apply_all_bodies(&self) -> usize {
+        use crate::pane::{SlidingPane, WindowRow};
+
+        let rows: Vec<_> = self
+            .sessions
+            .iter()
+            .map(|s| WindowRow::meta_only(s.session_id.clone(), ()))
+            .collect();
+        let mut pane: SlidingPane<String, (), Vec<sivtr_core::record::WorkRecord>> =
+            SlidingPane::ready(rows, self.sessions.len(), true);
+        let mut applied = 0usize;
+        for s in &self.sessions {
+            if pane.apply_body(&s.session_id, s.records.clone()) {
+                applied += 1;
+            }
+        }
+        std::hint::black_box((pane.len(), applied)).1
+    }
+}
+
+/// Fat content half: `n_blocks` markdown segments, `lines_per` each.
+///
+/// Mirrors one large agent session in the content pane (the path that
+/// double-laid-out the joined document and every block).
+pub struct FatLayout {
+    area: ratatui::layout::Rect,
+    blocks: Vec<crate::tui::content::block::BlockText>,
+}
+
+impl FatLayout {
+    pub fn new(n_blocks: usize, lines_per: usize) -> Self {
+        use crate::tui::content::block::BlockText;
+        use sivtr_core::record::WorkPartKind;
+
+        let blocks: Vec<BlockText> = (0..n_blocks)
+            .map(|i| {
+                let mut text = String::new();
+                for j in 0..lines_per {
+                    text.push_str(&format!(
+                        "## h{i}.{j}\n\nparagraph {j} with `code` and **bold** text that wraps at eighty columns easily.\n\n"
+                    ));
+                }
+                BlockText {
+                    id: i,
+                    text,
+                    tight: false,
+                    kind: WorkPartKind::Assistant,
+                }
+            })
+            .collect();
+        Self {
+            area: ratatui::layout::Rect::new(0, 0, 84, 40),
+            blocks,
+        }
+    }
+
+    pub fn layout_lines(&self) -> usize {
+        crate::tui::content::view::layout_content(
+            self.area,
+            "",
+            &self.blocks,
+            crate::tui::content::view::ContentViewMode::Reading,
+        )
+        .lines
+        .len()
     }
 }
