@@ -29,6 +29,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use serde::{Deserialize, Serialize};
+
 use crate::record::{WorkPartKind, WorkRecord, WorkRef};
 
 /// Standard BM25 term-saturation and length-normalization constants. k1 sits
@@ -195,7 +197,10 @@ fn window_tokens(tokens: Vec<String>) -> Vec<String> {
 }
 
 /// An in-memory passage-based BM25 index over a record corpus. Build once,
-/// query many times.
+/// query many times. Serialized (MessagePack) into the cache keyed by the
+/// corpus fingerprint, so a fresh process reuses the index instead of
+/// re-tokenizing every passage.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Bm25Index {
     n: usize,
     /// Average passage length per passage kind.
@@ -211,6 +216,10 @@ pub struct Bm25Index {
     passage_len: HashMap<(usize, usize), f64>,
     refs: Vec<WorkRef>,
 }
+
+/// Bump when the BM25 index layout or scoring changes, to invalidate cached
+/// indexes built by older code.
+pub const INDEX_CACHE_VERSION: u32 = 1;
 
 impl Bm25Index {
     pub fn build(records: &[WorkRecord]) -> Self {
