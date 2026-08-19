@@ -129,6 +129,8 @@ How this project versions and releases changes. AI agents must follow this when 
 [release-plz](https://release-plz.dev) drives versioning, changelog, and tagging (`release-plz.toml` + `.github/workflows/release-plz*.yml`). On every push to `main` it keeps a **Release PR** up to date: it bumps `[workspace.package]` version, syncs the `sivtr-core` pin and `Cargo.lock`, and drafts a Keep a Changelog section in `CHANGELOG.md` from Conventional Commit squash titles. Merging that PR is the release.
 
 1. `feat:` → MINOR (`0.4.1` → `0.5.0`); `fix:` → PATCH (`0.4.1` → `0.4.2`); `feat!` / `BREAKING CHANGE` → still MINOR in `0.x`, flagged as breaking in the changelog; `chore` / `docs` / `ci` / `refactor` / `test` / `perf` / `build` → no version bump.
+   - Only `feat`/`fix` commits open a Release PR (`release_commits` in `release-plz.toml`); non-versioned work rides along with the next release instead of shipping its own.
+   - semver-check runs only on `sivtr-core` (the published library). `sivtr` is a binary; its internal API changes never inflate the version — breaking changes there are signaled by `feat!` / `BREAKING CHANGE` commits.
 2. **Immediately** = merge the Release PR right after the feature lands. **Batch** = leave it open and let later squashes accumulate in it.
 3. Edit the changelog section inside the Release PR before merging if a hand-written note is wanted; release-plz never overwrites existing release sections.
 4. Only `sivtr` is tagged (`vX.Y.Z`) and gets a changelog entry; `sivtr-core` shares `version.workspace`, its version and the `sivtr-core` pin are synced by the same Release PR, and both crates are published by the tag pipeline. A change touching only `crates/sivtr-core/` bumps core but creates no tag — it ships with the next `sivtr` release.
@@ -136,7 +138,7 @@ How this project versions and releases changes. AI agents must follow this when 
 
 Merge gate for the Release PR: release-plz pushes its branch with `GITHUB_TOKEN`, so GitHub does not run CI on it and the required status checks never go green — only the maintainer bypass can merge it. (Optional: swap in a workflow-capable PAT secret to restore CI on the Release PR.)
 
-The tag step (`release-plz-release.yml`) pushes the `vX.Y.Z` tag with `RELEASE_PLZ_TOKEN` (a PAT). `GITHUB_TOKEN` pushes do not trigger other workflows, so the PAT is required for the tag push to fire `release.yml`. Both secrets must be set: `GITHUB_TOKEN` (auto) for the action's git-author step and `RELEASE_PLZ_TOKEN` for the tag push.
+The tag step (`release-plz-release.yml`) pushes the `vX.Y.Z` tag with a PAT: the `RELEASE_PLZ_TOKEN` secret is assigned to the action's `GITHUB_TOKEN` env. `GITHUB_TOKEN` pushes do not trigger other workflows, so the PAT is required for the tag push to fire `release.yml`. Only `RELEASE_PLZ_TOKEN` must be set — the action reads the git token from `GITHUB_TOKEN`, not from a separate env.
 
 ### Branch discipline
 

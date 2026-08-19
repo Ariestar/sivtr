@@ -33,8 +33,8 @@ jobs:
         with:
           command: release
         env:
-          # The action itself needs GITHUB_TOKEN to resolve the git author.
-          # The tag must be pushed with a PAT instead, because GITHUB_TOKEN
-          # pushes do not trigger other workflows (e.g. release.yml).
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_PLZ_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+          # The tag must be pushed with a PAT (RELEASE_PLZ_TOKEN) assigned to
+          # GITHUB_TOKEN, because the default GITHUB_TOKEN push does not trigger
+          # other workflows (e.g. release.yml). release-plz reads the git token
+          # from GITHUB_TOKEN; a separate RELEASE_PLZ_TOKEN env is not used.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
