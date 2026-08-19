@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/Ariestar/sivtr/compare/v0.5.1...v0.6.0) - 2026-08-18
+
+### Other
+
+- sync skills provider list and release token note ([#167](https://github.com/Ariestar/sivtr/pull/167))
+- *(zh-cn)* mirror reference and usage alignment ([#166](https://github.com/Ariestar/sivtr/pull/166))
+- *(usage)* align usage guides with v0.5 features ([#165](https://github.com/Ariestar/sivtr/pull/165))
+- *(reference)* align CLI, config, and keybindings with v0.5 ([#164](https://github.com/Ariestar/sivtr/pull/164))
+- *(readme)* align README with v0.5 features ([#163](https://github.com/Ariestar/sivtr/pull/163))
+- *(browse)* lay out content from blocks once ([#152](https://github.com/Ariestar/sivtr/pull/152))
+- *(browse)* fetch session meta at ceiling once ([#151](https://github.com/Ariestar/sivtr/pull/151))
+- *(browse)* cap concurrent session-body parses ([#150](https://github.com/Ariestar/sivtr/pull/150))
+- *(browse)* drop session bodies that arrive after scroll-away ([#149](https://github.com/Ariestar/sivtr/pull/149))
+- *(deps)* bump h2 to 0.4.16 ([#161](https://github.com/Ariestar/sivtr/pull/161))
+- *(release)* keep GITHUB_TOKEN for git author alongside release PAT ([#160](https://github.com/Ariestar/sivtr/pull/160))
+
 ## [0.5.1](https://github.com/Ariestar/sivtr/compare/v0.5.0...v0.5.1) - 2026-08-18
 
 ### Other
