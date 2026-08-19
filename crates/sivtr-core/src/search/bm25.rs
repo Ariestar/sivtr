@@ -59,6 +59,12 @@ pub const TITLE_WEIGHT: f64 = 3.0;
 /// structural signal. Every content kind (output, error, tool result,
 /// dialogue, thinking) is weighted 1.0: they are all legitimate evidence, and
 /// per-kind length normalization already accounts for their different scales.
+///
+/// Weights are measured per kind (agent eval, 2026-08-19): agent turns are
+/// ~77% tool output by volume vs ~2.4% dialogue, so dialogue (user question
+/// is the intent — it is also the fallback title) is up-weighted and tool
+/// output down-weighted; thinking sits between. Error/output stay 1.0: they
+/// only occur in terminal records and error queries are known-sensitive there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum PassageKind {
     Title = 0,
@@ -78,10 +84,10 @@ impl PassageKind {
             Self::Command => 3.0,
             Self::Output => 1.0,
             Self::Error => 1.0,
-            Self::ToolResult => 1.0,
-            Self::Assistant => 1.0,
-            Self::User => 1.0,
-            Self::Thinking => 1.0,
+            Self::ToolResult => 0.3,
+            Self::Assistant => 2.0,
+            Self::User => 2.5,
+            Self::Thinking => 0.5,
         }
     }
 
