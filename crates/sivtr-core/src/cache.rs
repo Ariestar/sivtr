@@ -31,12 +31,31 @@ pub fn file_stamp(path: &Path) -> Option<(u64, u32, u64)> {
     Some((duration.as_secs(), duration.subsec_nanos(), meta.len()))
 }
 
-/// Cache file for one parsed agent session, keyed by provider + session path.
+/// Cache file for a parsed agent session, keyed by provider + session path.
 pub fn session_cache_path(provider: AgentProvider, path: &Path) -> PathBuf {
     let mut hasher = DefaultHasher::new();
     provider.hash(&mut hasher);
     path.hash(&mut hasher);
     cache_dir().join(format!("agent-{:016x}.bin", hasher.finish()))
+}
+
+/// Cache file for a BM25 index, keyed by the fingerprint of the record corpus
+/// it was built from. A changed corpus (new/changed session files) yields a
+/// different fingerprint, so reads are safe without re-parsing the index.
+pub fn index_cache_path(records_fingerprint: u64) -> PathBuf {
+    cache_dir().join(format!("bm25-{:016x}.bin", records_fingerprint))
+}
+
+/// Deterministic fingerprint of a record corpus: the ordered sequence of
+/// whole work refs. A record's presence, order, or identity change alters the
+/// fingerprint; same-ref records with edited body content are represented as
+/// new records by the query layer, so refs alone are a sound index key.
+pub fn records_fingerprint(records: &[crate::record::WorkRef]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    for reference in records {
+        reference.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 /// Cache file for a session listing, keyed by provider name + root directory.
