@@ -68,10 +68,19 @@ pub fn listing_cache_path(provider: &str, root: &Path) -> PathBuf {
 
 /// Best-effort atomic write (tmp + rename, same volume); callers ignore
 /// failures because a stale cache only costs a re-parse on the next run.
-pub fn write_cache_atomic(target: &Path, bytes: &[u8]) {
-    let _ = std::fs::create_dir_all(cache_dir());
+/// Returns `true` on success, `false` on any failure so expensive-cache
+/// callers can diagnose persistent I/O problems.
+pub fn write_cache_atomic(target: &Path, bytes: &[u8]) -> bool {
+    if std::fs::create_dir_all(cache_dir()).is_err() {
+        return false;
+    }
     let tmp = target.with_extension("tmp");
     if std::fs::write(&tmp, bytes).is_ok() {
-        let _ = std::fs::rename(&tmp, target);
+        if std::fs::rename(&tmp, target).is_ok() {
+            return true;
+        }
+        // rename failed; clean up the temp file.
+        let _ = std::fs::remove_file(&tmp);
     }
+    false
 }
