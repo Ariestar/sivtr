@@ -12,8 +12,10 @@ use crate::commands::memory::workset::{self, WorkSet};
 
 pub use sivtr_core::search::Filter;
 
-/// Default search bound when neither `--latest` nor `--limit` is set.
-const SEARCH_DEFAULT_LATEST: usize = 5;
+/// Default result bound for any search when neither `--latest` nor `--limit`
+/// is set. Applied as a hard `limit` (post-sort), so both recency (Newest) and
+/// relevance (Relevance) searches return the top 5. Single source of truth.
+const SEARCH_DEFAULT_LIMIT: usize = 5;
 
 /// Build the search filter: recency default, BM25 primary.
 ///
@@ -46,10 +48,12 @@ pub fn from_search_args(args: &SearchArgs) -> Result<Filter> {
         Some(sort),
         args.limit,
     )?;
-    // Search always bounds: default latest=5 when neither latest nor limit set.
-    // Relevance ranks the whole result set, so it skips the recency window.
-    if filter.latest.is_none() && filter.limit.is_none() && sort != Sort::Relevance {
-        filter.latest = Some(SEARCH_DEFAULT_LATEST);
+    // Search always bounds to SEARCH_DEFAULT_LIMIT (post-sort hard ceiling) when
+    // neither `latest` nor `limit` is set, regardless of sort. Relevance keeps
+    // the whole set ranked and truncates to the top N; Newest truncates the
+    // latest N. One default for every search path (CLI and MCP).
+    if filter.latest.is_none() && filter.limit.is_none() {
+        filter.limit = Some(SEARCH_DEFAULT_LIMIT);
     }
     if sort == Sort::Relevance {
         // The plain QUERY is the BM25 query; --match falls back to it when no
@@ -248,7 +252,7 @@ mod tests {
     }
 
     #[test]
-    fn search_defaults_to_latest_five_when_unbounded() {
+    fn search_defaults_to_five_when_unbounded() {
         let args = SearchArgs {
             source: "terminal".into(),
             query: None,
@@ -274,8 +278,8 @@ mod tests {
             save: None,
         };
         let spec = from_search_args(&args).expect("spec");
-        assert_eq!(spec.latest, Some(SEARCH_DEFAULT_LATEST));
-        assert_eq!(spec.limit, None);
+        assert_eq!(spec.latest, None);
+        assert_eq!(spec.limit, Some(SEARCH_DEFAULT_LIMIT));
     }
 
     #[test]
@@ -370,7 +374,8 @@ mod tests {
         assert_eq!(spec.sort, Sort::Relevance);
         assert_eq!(spec.pattern, None); // no regex filter: pure BM25
         assert_eq!(spec.rank.as_deref(), Some("docker pull failed"));
-        assert_eq!(spec.latest, None); // relevance skips the recency window
+        assert_eq!(spec.latest, None); // relevance does not use the recency window
+        assert_eq!(spec.limit, Some(SEARCH_DEFAULT_LIMIT)); // ...but still caps at 5
     }
 
     #[test]
