@@ -13,7 +13,7 @@ use super::model::{
 };
 
 /// Bump when the listing cache layout or meta parsing changes.
-const LISTING_CACHE_VERSION: u32 = 2;
+const LISTING_CACHE_VERSION: u32 = 3;
 
 /// One cached session file in a listing: fingerprint + parsed metadata.
 #[derive(Clone, Serialize, Deserialize)]
@@ -24,16 +24,37 @@ struct ListingEntry {
     meta: AgentSessionMeta,
 }
 
+/// One cached directory: fingerprint + partition of its direct children.
+#[derive(Clone, Serialize, Deserialize)]
+struct DirEntry {
+    mtime_secs: u64,
+    mtime_nanos: u32,
+    size: u64,
+    subdirs: Vec<PathBuf>,
+    session_files: Vec<PathBuf>,
+}
+
 /// Stamp-validated cache of a provider root's session listing.
 ///
-/// Discovery walks the tree and stats every file on each call; only files
-/// whose `(mtime, size)` fingerprint changed since the last run are opened
-/// and meta-parsed, so steady-state discovery is a stat sweep instead of a
-/// read + parse of every session file.
-#[derive(Serialize, Deserialize, Default)]
+/// Discovery re-validates every directory stamp on each call but only
+/// re-walks directories whose stamp moved and only re-parses session files
+/// whose own stamp moved, so steady-state discovery is a stat sweep instead
+/// of a walk + read of the session tree.
+#[derive(Serialize, Deserialize)]
 struct ListingCache {
     version: u32,
+    dirs: HashMap<PathBuf, DirEntry>,
     entries: HashMap<PathBuf, ListingEntry>,
+}
+
+impl Default for ListingCache {
+    fn default() -> Self {
+        ListingCache {
+            version: LISTING_CACHE_VERSION,
+            dirs: HashMap::new(),
+            entries: HashMap::new(),
+        }
+    }
 }
 
 pub fn list_recent_jsonl_sessions(
@@ -42,20 +63,20 @@ pub fn list_recent_jsonl_sessions(
     cwd: Option<&Path>,
     parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
 ) -> Result<Vec<AgentSessionInfo>> {
-    collect_recent_sessions(provider, root, cwd, jsonl_files(root)?, parse_meta)
+    collect_recent_sessions(provider, root, cwd, is_jsonl_leaf, parse_meta)
 }
 
-/// Like [`list_recent_jsonl_sessions`], but with caller-supplied session
-/// files (for providers whose logs do not carry a plain `.jsonl` extension,
-/// e.g. dsh's compressed `.jsonl.zstd` artifacts).
-pub fn list_recent_log_sessions(
+/// Like [`list_recent_jsonl_sessions`], with a provider-supplied leaf
+/// predicate: true for a direct child that is one session. Used by dsh
+/// (`.jsonl.zstd` logs) and Grok (session directories).
+pub fn list_sessions_matching(
     provider: &str,
     root: &Path,
     cwd: Option<&Path>,
-    files: Vec<PathBuf>,
+    is_session_leaf: impl Fn(&Path, bool) -> bool,
     parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
 ) -> Result<Vec<AgentSessionInfo>> {
-    collect_recent_sessions(provider, root, cwd, files, parse_meta)
+    collect_recent_sessions(provider, root, cwd, is_session_leaf, parse_meta)
 }
 
 /// Walk a chat-recording tmp root: `<tmp>/<project>*/chats/*.json[l]`.
@@ -70,28 +91,92 @@ pub fn list_chat_recording_sessions(
     cwd: Option<&Path>,
     parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
 ) -> Result<Vec<AgentSessionInfo>> {
-    collect_recent_sessions(
-        provider,
-        tmp_root,
-        cwd,
-        chat_recording_files(tmp_root)?,
-        parse_meta,
-    )
+    collect_recent_sessions(provider, tmp_root, cwd, is_chat_recording_leaf, parse_meta)
+}
+
+fn is_jsonl_leaf(path: &Path, is_dir: bool) -> bool {
+    !is_dir && path.extension().and_then(|ext| ext.to_str()) == Some("jsonl")
+}
+
+fn is_chat_recording_leaf(path: &Path, is_dir: bool) -> bool {
+    !is_dir
+        && path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext == "json" || ext == "jsonl")
+        && path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str())
+            == Some("chats")
 }
 
 fn collect_recent_sessions(
     provider: &str,
     root: &Path,
     cwd: Option<&Path>,
-    files: Vec<PathBuf>,
+    is_session_leaf: impl Fn(&Path, bool) -> bool,
     parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
 ) -> Result<Vec<AgentSessionInfo>> {
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+
     let wanted = cwd.map(WorkspaceMatchTarget::new);
     let mut cache = load_listing_cache(provider, root);
     let mut dirty = false;
     let mut sessions = Vec::new();
 
-    for path in files {
+    // Incremental walk: a directory whose stamp is unchanged contributes its
+    // cached child list without a read_dir; only changed directories are
+    // re-walked and re-filtered through the leaf predicate.
+    let mut leaves = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let stamp = crate::cache::file_stamp(&dir);
+        let hit = stamp.is_some_and(|stamp| {
+            cache.dirs.get(&dir).is_some_and(|entry| {
+                entry.mtime_secs == stamp.0 && entry.mtime_nanos == stamp.1 && entry.size == stamp.2
+            })
+        });
+        if hit {
+            let entry = &cache.dirs[&dir];
+            stack.extend(entry.subdirs.iter().cloned());
+            leaves.extend(entry.session_files.iter().cloned());
+            continue;
+        }
+
+        dirty = true;
+        let mut subdirs = Vec::new();
+        let mut session_files = Vec::new();
+        for entry in
+            fs::read_dir(&dir).with_context(|| format!("Failed to read {}", dir.display()))?
+        {
+            let path = entry?.path();
+            let is_dir = path.is_dir();
+            if is_session_leaf(&path, is_dir) {
+                session_files.push(path);
+            } else if is_dir {
+                subdirs.push(path);
+            }
+        }
+        if let Some(stamp) = stamp {
+            cache.dirs.insert(
+                dir,
+                DirEntry {
+                    mtime_secs: stamp.0,
+                    mtime_nanos: stamp.1,
+                    size: stamp.2,
+                    subdirs: subdirs.clone(),
+                    session_files: session_files.clone(),
+                },
+            );
+        }
+        stack.extend(subdirs);
+        leaves.extend(session_files);
+    }
+
+    for path in leaves {
         let Some(stamp) = crate::cache::file_stamp(&path) else {
             // Unstampable file (e.g. racing delete): parse without caching.
             match parse_meta(&path) {
@@ -162,36 +247,6 @@ fn collect_recent_sessions(
     Ok(sessions)
 }
 
-fn chat_recording_files(tmp_root: &Path) -> Result<Vec<PathBuf>> {
-    if !tmp_root.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut files = Vec::new();
-    for project in
-        fs::read_dir(tmp_root).with_context(|| format!("Failed to read {}", tmp_root.display()))?
-    {
-        let chats = project?.path().join("chats");
-        if !chats.is_dir() {
-            continue;
-        }
-        for entry in
-            fs::read_dir(&chats).with_context(|| format!("Failed to read {}", chats.display()))?
-        {
-            let path = entry?.path();
-            let is_chat_file = path.is_file()
-                && path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| ext == "json" || ext == "jsonl");
-            if is_chat_file {
-                files.push(path);
-            }
-        }
-    }
-    Ok(files)
-}
-
 fn push_session(
     sessions: &mut Vec<AgentSessionInfo>,
     path: PathBuf,
@@ -229,12 +284,8 @@ fn load_listing_cache(provider: &str, root: &Path) -> ListingCache {
 }
 
 fn store_listing_cache(provider: &str, root: &Path, cache: &ListingCache) {
-    let cache_entry = ListingCache {
-        version: LISTING_CACHE_VERSION,
-        entries: cache.entries.clone(),
-    };
     let mut serializer = rmp_serde::encode::Serializer::new(Vec::new()).with_struct_map();
-    if cache_entry.serialize(&mut serializer).is_err() {
+    if cache.serialize(&mut serializer).is_err() {
         return;
     }
     crate::cache::write_cache_atomic(
@@ -600,6 +651,64 @@ mod tests {
             .collect();
         assert!(ids.iter().any(|id| id == "two"));
         assert!(ids.iter().any(|id| id == "stable"));
+
+        match previous {
+            Some(value) => std::env::set_var("SIVTR_DATA_DIR", value),
+            None => std::env::remove_var("SIVTR_DATA_DIR"),
+        }
+    }
+
+    #[test]
+    fn listing_cache_discovers_new_files_via_dir_stamp() {
+        let _guard = env_lock();
+        let temp = tempfile::tempdir().unwrap();
+        let previous = std::env::var_os("SIVTR_DATA_DIR");
+        std::env::set_var("SIVTR_DATA_DIR", temp.path());
+
+        let sessions = temp.path().join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        for index in 0..3 {
+            fs::write(
+                sessions.join(format!("s{index}.jsonl")),
+                session_line(&format!("s{index}"), temp.path()),
+            )
+            .unwrap();
+        }
+
+        let parses = std::cell::Cell::new(0usize);
+        let count_meta = |path: &Path| {
+            parses.set(parses.get() + 1);
+            parse_jsonl_meta(path, "Test", 50, |meta, value| {
+                if meta.id.is_none() {
+                    meta.id = value
+                        .get("sessionId")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                }
+                if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
+                    meta.add_cwd(cwd);
+                }
+            })
+        };
+
+        let first = list_recent_jsonl_sessions("Test", &sessions, None, count_meta).unwrap();
+        assert_eq!(first.len(), 3);
+        assert_eq!(parses.get(), 3);
+
+        // A new session file changes the parent directory stamp, so the next
+        // listing re-walks that directory and discovers it; only the new
+        // file is meta-parsed.
+        std::thread::sleep(Duration::from_millis(10));
+        fs::write(sessions.join("s3.jsonl"), session_line("s3", temp.path())).unwrap();
+
+        let second = list_recent_jsonl_sessions("Test", &sessions, None, count_meta).unwrap();
+        assert_eq!(second.len(), 4);
+        assert_eq!(parses.get(), 4, "only the new file is meta-parsed");
+        let ids: Vec<_> = second
+            .iter()
+            .filter_map(|session| session.id.clone())
+            .collect();
+        assert!(ids.iter().any(|id| id == "s3"));
 
         match previous {
             Some(value) => std::env::set_var("SIVTR_DATA_DIR", value),
