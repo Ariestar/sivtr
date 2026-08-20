@@ -1,5 +1,17 @@
 # release-plz drives version bumps, the changelog, and tagging.
 #
+# Version strategy (0.x):
+# - Only `feat`/`fix` commits open a Release PR (`release_commits`); docs,
+#   perf, chore, refactor, ci, test do NOT bump a version on their own — they
+#   ride along with the next feature/fix release, so the version moves only
+#   when real functionality ships.
+# - `feat` bumps MINOR and `fix` bumps PATCH in 0.x
+#   (`features_always_increment_minor` keeps feature work visible as a MINOR
+#   even before 1.0). `feat!` / `BREAKING CHANGE` also bump MINOR in 0.x.
+# - semver-check runs only on `sivtr-core` (the published library). `sivtr` is
+#   a binary whose internal API must not inflate the version, so its
+#   semver-check is off; breaking changes there are signaled by `feat!` commits.
+#
 # Both crates are processed so the `sivtr-core` dependency pin and Cargo.lock
 # stay in sync, but only `sivtr` creates the `vX.Y.Z` tag and the changelog
 # (core's `git_tag_enable` and `changelog_update` are off). The tag then runs
@@ -19,16 +31,19 @@ publish = false
 release_always = false
 pr_labels = ["release"]
 features_always_increment_minor = true
+release_commits = "^(feat|fix)[(:]"
 
 [[package]]
 name = "sivtr-core"
 changelog_update = false
 git_tag_enable = false
+semver_check = true
 
 [[package]]
 name = "sivtr"
 changelog_include = ["sivtr-core"]
 git_tag_name = "v{{ version }}"
+semver_check = false
 
 [changelog]
 protect_breaking_commits = true
