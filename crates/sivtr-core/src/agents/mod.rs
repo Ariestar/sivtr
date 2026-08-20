@@ -5,6 +5,11 @@
 //! - [`sqlite`]: readonly SQLite helpers (OpenCode/OpenClaw)
 //! - per-provider modules keep only storage paths + schema mapping
 
+use std::path::Path;
+
+use crate::session_source::SessionSource;
+use anyhow::Result;
+
 pub mod claude;
 pub mod codex;
 pub mod cursor;
@@ -266,5 +271,22 @@ impl AgentProvider {
     /// Comma-separated registered provider CLI names for help and errors.
     pub fn command_names_csv() -> String {
         Self::command_names().collect::<Vec<_>>().join(", ")
+    }
+}
+
+use crate::record::WorkRecord;
+
+impl SessionSource for AgentProvider {
+    fn namespace(&self) -> &'static str {
+        self.command_name()
+    }
+
+    fn list_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
+        self.session_provider().list_recent_sessions(cwd)
+    }
+
+    fn parse_file(&self, path: &Path) -> Result<Vec<WorkRecord>> {
+        let session = self.session_provider().parse_session_file(path)?;
+        Ok(WorkRecord::chat_turns(*self, &session))
     }
 }

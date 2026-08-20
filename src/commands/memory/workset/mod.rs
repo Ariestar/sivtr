@@ -10,7 +10,7 @@ pub(crate) use store::{cleanup_saved, delete_saved, list_saved, load_saved, save
 use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
-use sivtr_core::query::{load_session_records, LoadMode, TERMINAL_NAMESPACE};
+use sivtr_core::query::{load_session_records, LoadMode};
 use sivtr_core::record::{WorkPath, WorkRecord, WorkRef};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -55,8 +55,8 @@ pub enum WorkSetSelection {
 /// to pick the right cache view when re-loading full records.
 fn session_namespace(path: &WorkPath) -> Option<&'static str> {
     match path {
-        WorkPath::Agent { provider, .. } => Some(provider.name()),
-        WorkPath::Terminal { .. } => Some(TERMINAL_NAMESPACE),
+        WorkPath::Agent { provider, .. } => Some(provider.command_name()),
+        WorkPath::Terminal { .. } => Some("terminal"),
     }
 }
 

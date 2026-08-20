@@ -8,8 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use super::model::{
-    workspace_matches_candidates, AgentSession, AgentSessionInfo, AgentSessionMeta,
-    WorkspaceMatchTarget,
+    workspace_matches_candidates, AgentSession, AgentSessionMeta, SessionInfo, WorkspaceMatchTarget,
 };
 
 /// Bump when the listing cache layout or meta parsing changes.
@@ -62,7 +61,7 @@ pub fn list_recent_jsonl_sessions(
     root: &Path,
     cwd: Option<&Path>,
     parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
-) -> Result<Vec<AgentSessionInfo>> {
+) -> Result<Vec<SessionInfo>> {
     collect_recent_sessions(provider, root, cwd, is_jsonl_leaf, parse_meta)
 }
 
@@ -75,7 +74,7 @@ pub fn list_sessions_matching(
     cwd: Option<&Path>,
     is_session_leaf: impl Fn(&Path, bool) -> bool,
     parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
-) -> Result<Vec<AgentSessionInfo>> {
+) -> Result<Vec<SessionInfo>> {
     collect_recent_sessions(provider, root, cwd, is_session_leaf, parse_meta)
 }
 
@@ -90,7 +89,7 @@ pub fn list_chat_recording_sessions(
     tmp_root: &Path,
     cwd: Option<&Path>,
     parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
-) -> Result<Vec<AgentSessionInfo>> {
+) -> Result<Vec<SessionInfo>> {
     collect_recent_sessions(provider, tmp_root, cwd, is_chat_recording_leaf, parse_meta)
 }
 
@@ -117,7 +116,7 @@ fn collect_recent_sessions(
     cwd: Option<&Path>,
     is_session_leaf: impl Fn(&Path, bool) -> bool,
     parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
-) -> Result<Vec<AgentSessionInfo>> {
+) -> Result<Vec<SessionInfo>> {
     if !root.exists() {
         return Ok(Vec::new());
     }
@@ -248,7 +247,7 @@ fn collect_recent_sessions(
 }
 
 fn push_session(
-    sessions: &mut Vec<AgentSessionInfo>,
+    sessions: &mut Vec<SessionInfo>,
     path: PathBuf,
     modified: SystemTime,
     meta: AgentSessionMeta,
@@ -261,7 +260,7 @@ fn push_session(
         }
     }
 
-    sessions.push(AgentSessionInfo {
+    sessions.push(SessionInfo {
         modified,
         path,
         id: meta.id,

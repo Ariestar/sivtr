@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use crate::agents::{
     extract_content_text, filter_sessions_by_workspace, open_readonly_db, pretty_json_value,
     push_block, push_tool_block, system_time_from_unix_secs, AgentBlockKind, AgentProvider,
-    AgentSession, AgentSessionInfo, AgentSessionProvider,
+    AgentSession, AgentSessionProvider, SessionInfo,
 };
 
 const SESSION_PATH_PREFIX: &str = "goose-session-";
@@ -37,7 +37,7 @@ impl AgentSessionProvider for GooseProvider {
         AgentProvider::Goose
     }
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
+    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
         let db_path = goose_db_path();
         if !db_path.exists() {
             return Ok(Vec::new());
@@ -60,7 +60,7 @@ impl AgentSessionProvider for GooseProvider {
         let mut sessions = Vec::new();
         for row in rows {
             let (id, working_dir, name, updated_secs) = row?;
-            sessions.push(AgentSessionInfo {
+            sessions.push(SessionInfo {
                 modified: system_time_from_unix_secs(updated_secs as f64),
                 path: goose_session_path(&id),
                 id: Some(id),
