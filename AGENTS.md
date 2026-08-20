@@ -76,9 +76,9 @@ Keep this file limited to durable, cross-session guidance. Current progress, tem
 
 ### Per-change workflow
 
-- Before any set of edits goes into commits, cut a working branch from `main` (`git checkout -b <topic>`). Commit directly on `main` only when the change is a one-off fix that will not become a PR.
+- Before any set of edits goes into commits, cut a working branch from `main` (`git checkout -b <type>/<short-topic>`). Commit directly on `main` only when the change is a one-off fix that will not become a PR.
 - Split the work into one commit per coherent unit (feature / refactor / docs / chore), never one big mixed commit, and never commit unrelated changes together.
-- Group related units that belong to the same module or feature area into one branch, and open one draft PR per branch. A PR's title is a Conventional Commit and becomes the squash subject on merge.
+- Group related units that belong to the same module or feature area into one branch. When the user explicitly asks, open one draft PR per branch. A PR's title is a Conventional Commit and becomes the squash subject on merge.
 
 ## Conventional Commits
 
@@ -112,7 +112,7 @@ Version-bump mapping per type lives in [Version Management](#version-management)
 
 - Open or update a pull request only when the user explicitly asks.
 - Use a dedicated branch (`<type>/<short-topic>`, see [Branch discipline](#branch-discipline)) and follow any repository-specific branch naming convention. Do not perform feature work directly on the default branch.
-- When one branch depends on another unmerged branch, stack the PRs with `gh stack init <bottom> ... <top>` then `gh stack submit` (or `--open` to mark ready); each PR's base points at its dependency so diffs stay minimal until the base merges. `gh stack sync` keeps the stack in sync after upstream merges.
+- When one branch depends on another unmerged branch, stack the PRs with `gh stack init <bottom> ... <top>` then `gh stack submit --auto` (draft PRs; `--open` only when the user asks for ready-for-review); each PR's base points at its dependency so diffs stay minimal until the base merges. `gh stack sync` keeps the stack in sync after upstream merges.
 - Before opening a pull request, inspect the working tree, commits, and complete diff against the intended base branch. Remove unrelated changes from the pull request scope.
 - Run the relevant checks before opening the pull request. Open every pull request as a draft and keep it a draft until the user explicitly asks to mark it ready for review — pushing commits or opening a non-draft pull request triggers GitHub's automated AI review, so do not trigger it before the user asks for review.
 - Follow the repository's existing pull request template. Do not replace or bypass project-specific requirements.
