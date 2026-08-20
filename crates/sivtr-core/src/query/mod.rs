@@ -27,7 +27,8 @@ pub const NO_RECORD_FOR_SELECTOR: &str = "No record found for ref selector";
 /// A session file that could not be parsed, retained so callers can warn.
 #[derive(Debug, Clone)]
 pub struct SkippedSession {
-    pub provider: AgentProvider,
+    /// Cache namespace of the source (`"terminal"` or a provider name).
+    pub namespace: String,
     pub path: PathBuf,
     /// Rendered error message; `anyhow::Error` is not `Clone`, so the reason is
     /// stored as a string for cheap retention and reporting.
@@ -57,6 +58,21 @@ impl QueryResult {
     }
 }
 
+/// How much of each agent record a load must materialize.
+///
+/// `Light` loads records with empty `parts`: enough for session lists,
+/// metadata filtering, and recency ordering. `Full` also loads part text for
+/// rendering, pattern matching, and BM25 ranking (the index is built from
+/// part text). Both views share one per-file stamp validation.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LoadMode {
+    Light,
+    Full,
+}
+
+/// Cache namespace for terminal session logs (no `AgentProvider` exists).
+pub const TERMINAL_NAMESPACE: &str = "terminal";
+
 /// Build the record index for a workspace: terminal records plus agent records
 /// for the given providers, deduplicated and sorted newest-first.
 ///
@@ -66,15 +82,29 @@ pub fn load_workspace_records(
     providers: &[AgentProvider],
     cwd: &Path,
     recent_sessions: Option<usize>,
+    mode: LoadMode,
 ) -> Result<QueryResult> {
+    let mut tasks: Vec<(&'static str, PathBuf)> = Vec::new();
+    tasks.extend(
+        workspace::terminal_log_paths_for_workspace(cwd)?
+            .into_iter()
+            .map(|path| (TERMINAL_NAMESPACE, path)),
+    );
+    for provider in providers {
+        let source = provider.session_provider();
+        let mut sessions = source.list_recent_sessions(Some(cwd))?;
+        if let Some(limit) = recent_sessions {
+            sessions.truncate(limit);
+        }
+        tasks.extend(
+            sessions
+                .into_iter()
+                .map(|info| (provider.name(), info.path)),
+        );
+    }
+
     let mut result = QueryResult::default();
-    result.records.extend(terminal_records(cwd)?);
-    result.records.extend(agent_records(
-        providers,
-        cwd,
-        recent_sessions,
-        &mut result.skipped,
-    )?);
+    result.records = load_session_files(tasks, mode, &mut result.skipped)?;
     dedup_records(&mut result.records);
     normalize_session_display_ids(&mut result.records);
     result
@@ -87,7 +117,11 @@ pub fn load_workspace_records(
 ///
 /// `source` is the local-shaped body (`terminal/...`, `agent`, `pi/...`).
 /// Remote aliases are attached by the client after the response arrives.
-pub fn load_workspace_source(cwd: &Path, source: &str) -> Result<SourceQueryResult> {
+pub fn load_workspace_source(
+    cwd: &Path,
+    source: &str,
+    mode: LoadMode,
+) -> Result<SourceQueryResult> {
     if let Ok(reference) = source.parse::<WorkRef>() {
         if !reference.is_local() {
             anyhow::bail!("remote aliases are not valid inside a served source");
@@ -96,7 +130,7 @@ pub fn load_workspace_source(cwd: &Path, source: &str) -> Result<SourceQueryResu
             .provider()
             .map(|provider| vec![provider])
             .unwrap_or_else(all_agent_providers);
-        let result = load_workspace_records(&providers, cwd, None)?;
+        let result = load_workspace_records(&providers, cwd, None, mode)?;
         let index = WorkRecordIndex::new(result.records);
         let record = index
             .resolve(&reference)
@@ -110,7 +144,7 @@ pub fn load_workspace_source(cwd: &Path, source: &str) -> Result<SourceQueryResu
     }
 
     let selector: WorkRefSelector = source.parse()?;
-    let result = load_workspace_records(&selector.providers(), cwd, None)?;
+    let result = load_workspace_records(&selector.providers(), cwd, None, mode)?;
     let mut records = Vec::new();
     let mut anchors = Vec::new();
 
@@ -140,57 +174,64 @@ fn all_agent_providers() -> Vec<AgentProvider> {
         .collect()
 }
 
-fn terminal_records(cwd: &Path) -> Result<Vec<WorkRecord>> {
-    let mut records = Vec::new();
-    for path in workspace::terminal_log_paths_for_workspace(cwd)? {
-        let entries = session::load_entries(&path).context("Failed to read session log")?;
-        records.extend(
-            entries
-                .iter()
-                .enumerate()
-                .filter_map(|(idx, entry)| WorkRecord::terminal(entry, &path, idx)),
-        );
+/// Load one session file's records from cache (any view) or by parsing the
+/// source file.  A miss writes both views so subsequent light loads skip the
+/// part text.  Public so that CLI consumers (e.g. `WorkSet::materialize_parts`)
+/// can fetch a single session's full records on demand.
+pub fn load_session_records(
+    namespace: &str,
+    path: &Path,
+    mode: LoadMode,
+) -> Result<Vec<WorkRecord>> {
+    let cache_path = match mode {
+        LoadMode::Light => crate::cache::session_meta_cache_path(namespace, path),
+        LoadMode::Full => crate::cache::session_cache_path(namespace, path),
+    };
+    if let Some(records) = load_cached_view(&cache_path, path) {
+        return Ok(records);
     }
+    let records = parse_session_file(namespace, path)?;
+    store_cached_session(namespace, path, &records);
     Ok(records)
 }
 
-fn agent_records(
-    providers: &[AgentProvider],
-    cwd: &Path,
-    recent_sessions: Option<usize>,
+/// Parse one session file into records, dispatching by source namespace:
+/// terminal logs vs provider transcripts.
+fn parse_session_file(namespace: &str, path: &Path) -> Result<Vec<WorkRecord>> {
+    if namespace == TERMINAL_NAMESPACE {
+        let entries = session::load_entries(path).context("Failed to read session log")?;
+        Ok(entries
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, entry)| WorkRecord::terminal(entry, path, idx))
+            .collect())
+    } else {
+        let provider = AgentProvider::from_name(namespace)
+            .with_context(|| format!("unknown session namespace `{namespace}`"))?;
+        parse_agent_session_file(provider, path).map_err(anyhow::Error::msg)
+    }
+}
+
+/// Load many session files in parallel, through the per-file cache, and
+/// report per-file outcomes in list order.
+fn load_session_files(
+    tasks: Vec<(&'static str, PathBuf)>,
+    mode: LoadMode,
     skipped: &mut Vec<SkippedSession>,
 ) -> Result<Vec<WorkRecord>> {
     // Session files are independent, so list every parse task up front and
     // parse them in parallel; outcomes are reassembled in list order so the
     // record sequence (and downstream dedup) is unchanged. Each task first
-    // checks the per-file bincode cache (mtime+size stamped) and only parses
-    // when the file actually changed.
-    let mut tasks: Vec<(AgentProvider, PathBuf)> = Vec::new();
-    for provider in providers {
-        let source = provider.session_provider();
-        let mut sessions = source.list_recent_sessions(Some(cwd))?;
-        if let Some(limit) = recent_sessions {
-            sessions.truncate(limit);
-        }
-        tasks.extend(sessions.into_iter().map(|info| (*provider, info.path)));
-    }
-
+    // checks the per-file stamp cache and only parses when the file changed.
     let outcomes: Vec<(usize, Result<Vec<WorkRecord>, String>)> = std::thread::scope(|scope| {
         let handles: Vec<_> = tasks
             .iter()
             .enumerate()
-            .map(|(index, (provider, path))| {
+            .map(|(index, (namespace, path))| {
+                let path = path.clone();
                 scope.spawn(move || {
-                    let outcome = match load_cached_agent_session(*provider, path) {
-                        Some(records) => Ok(records),
-                        None => {
-                            let parsed = parse_agent_session_file(*provider, path);
-                            if let Ok(ref records) = parsed {
-                                store_cached_agent_session(*provider, path, records);
-                            }
-                            parsed
-                        }
-                    };
+                    let outcome =
+                        load_session_records(namespace, &path, mode).map_err(|e| format!("{e:#}"));
                     (index, outcome)
                 })
             })
@@ -203,11 +244,11 @@ fn agent_records(
 
     let mut records = Vec::new();
     for (index, outcome) in outcomes {
-        let (provider, path) = &tasks[index];
+        let (namespace, path) = &tasks[index];
         match outcome {
             Ok(session_records) => records.extend(session_records),
             Err(error) => skipped.push(SkippedSession {
-                provider: *provider,
+                namespace: (*namespace).to_string(),
                 path: path.clone(),
                 error,
             }),
@@ -248,9 +289,9 @@ fn parse_agent_session_file(
         .map_err(|error| format!("{error:#}"))
 }
 
-fn load_cached_agent_session(provider: AgentProvider, path: &Path) -> Option<Vec<WorkRecord>> {
-    let (secs, nanos, size) = crate::cache::file_stamp(path)?;
-    let bytes = std::fs::read(crate::cache::session_cache_path(provider, path)).ok()?;
+fn load_cached_view(cache_path: &Path, source: &Path) -> Option<Vec<WorkRecord>> {
+    let (secs, nanos, size) = crate::cache::file_stamp(source)?;
+    let bytes = std::fs::read(cache_path).ok()?;
     let cached: CachedAgentSession = rmp_serde::from_slice(&bytes).ok()?;
     if cached.version != AGENT_CACHE_VERSION
         || cached.mtime_secs != secs
@@ -262,11 +303,31 @@ fn load_cached_agent_session(provider: AgentProvider, path: &Path) -> Option<Vec
     Some(cached.records)
 }
 
-/// Best-effort cache write; failures never block the search.
-fn store_cached_agent_session(provider: AgentProvider, path: &Path, records: &[WorkRecord]) {
+/// Best-effort cache write; failures never block the search. Writes both
+/// views so later light loads skip the part text: the metadata view is the
+/// same `CachedAgentSession` shape with `parts` emptied (omitted on disk by
+/// `skip_serializing_if`), sharing the version guard and stamp validation.
+fn store_cached_session(namespace: &str, path: &Path, records: &[WorkRecord]) {
     let Some((secs, nanos, size)) = crate::cache::file_stamp(path) else {
         return;
     };
+    store_cached_view(
+        &crate::cache::session_cache_path(namespace, path),
+        records,
+        secs,
+        nanos,
+        size,
+    );
+    store_cached_view(
+        &crate::cache::session_meta_cache_path(namespace, path),
+        &without_parts(records),
+        secs,
+        nanos,
+        size,
+    );
+}
+
+fn store_cached_view(cache_path: &Path, records: &[WorkRecord], secs: u64, nanos: u32, size: u64) {
     let cache_entry = CachedAgentSession {
         version: AGENT_CACHE_VERSION,
         mtime_secs: secs,
@@ -281,10 +342,19 @@ fn store_cached_agent_session(provider: AgentProvider, path: &Path, records: &[W
     if cache_entry.serialize(&mut serializer).is_err() {
         return;
     }
-    crate::cache::write_cache_atomic(
-        &crate::cache::session_cache_path(provider, path),
-        &serializer.into_inner(),
-    );
+    crate::cache::write_cache_atomic(cache_path, &serializer.into_inner());
+}
+
+/// Metadata view of the same records: light fields only, `parts` emptied.
+fn without_parts(records: &[WorkRecord]) -> Vec<WorkRecord> {
+    records
+        .iter()
+        .map(|record| {
+            let mut meta = record.clone();
+            meta.parts.clear();
+            meta
+        })
+        .collect()
 }
 
 /// Serial single-source parse path, kept for tests that drive a mocked
@@ -307,7 +377,7 @@ fn agent_records_from_source(
             Ok(session) => session,
             Err(error) => {
                 skipped.push(SkippedSession {
-                    provider: source.provider(),
+                    namespace: source.provider().name().to_string(),
                     path: info.path,
                     error: format!("{error:#}"),
                 });
@@ -566,7 +636,7 @@ mod tests {
         assert_eq!(records[0].session.id, "good");
         assert_eq!(skipped.len(), 1);
         assert_eq!(skipped[0].path, PathBuf::from("broken.jsonl"));
-        assert_eq!(skipped[0].provider, AgentProvider::Claude);
+        assert_eq!(skipped[0].namespace, AgentProvider::Claude.name());
     }
 
     struct BrokenAgentSource {

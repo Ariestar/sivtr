@@ -90,6 +90,13 @@ impl Filter {
         Self::default()
     }
 
+    /// Whether applying this filter reads part text: per-line pattern and
+    /// exclude matching both scan `parts`, and BM25 ranking is built from
+    /// part text. Metadata-only bounds (time, status, kind, latest) do not.
+    pub fn needs_parts(&self) -> bool {
+        self.pattern.is_some() || self.exclude_regex.is_some() || self.rank.is_some()
+    }
+
     /// Browse session list: newest-first, bounded by `latest` records.
     pub fn browse_session_page(latest: usize) -> Self {
         Self {

@@ -5,9 +5,9 @@ use crate::commands::memory::workset::WorkSet;
 use crate::commands::memory::{filter, show, workset};
 
 pub fn execute(args: &SearchArgs) -> Result<()> {
-    let workset = run(args)?;
+    let mut workset = run(args)?;
     show::print_workset(
-        &workset,
+        &mut workset,
         show::resolve_output_format(args.format, false, args.refs, args.json),
     )
 }

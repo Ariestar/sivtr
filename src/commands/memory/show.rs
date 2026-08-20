@@ -84,9 +84,9 @@ pub fn resolve_output_format(
 }
 
 pub fn execute(args: &ShowArgs) -> Result<()> {
-    let set = run(args)?;
+    let mut set = run(args)?;
     print_workset(
-        &set,
+        &mut set,
         resolve_output_format(args.format, args.full, args.refs, args.json),
     )
 }
@@ -100,15 +100,30 @@ pub fn run(args: &ShowArgs) -> Result<workset::WorkSet> {
     )
 }
 
-pub fn print_workset(set: &workset::WorkSet, format: WorkSetOutputFormat) -> Result<()> {
+/// Render a WorkSet. Content formats (everything but bare refs) materialize
+/// part text first, so a light-loaded set renders fully.
+pub fn print_workset(set: &mut workset::WorkSet, format: WorkSetOutputFormat) -> Result<()> {
     match format {
-        WorkSetOutputFormat::Full => print_full(set)?,
+        WorkSetOutputFormat::Full => {
+            set.materialize_parts()?;
+            print_full(set)?;
+        }
         WorkSetOutputFormat::WorkSet => {
+            set.materialize_parts()?;
             println!("{}", serde_json::to_string_pretty(set)?);
         }
-        WorkSetOutputFormat::Compact => print_compact(set)?,
-        WorkSetOutputFormat::Timeline => print_timeline(set)?,
-        WorkSetOutputFormat::Md => print_markdown(set)?,
+        WorkSetOutputFormat::Compact => {
+            set.materialize_parts()?;
+            print_compact(set)?;
+        }
+        WorkSetOutputFormat::Timeline => {
+            set.materialize_parts()?;
+            print_timeline(set)?;
+        }
+        WorkSetOutputFormat::Md => {
+            set.materialize_parts()?;
+            print_markdown(set)?;
+        }
         WorkSetOutputFormat::Refs => print_refs(set),
     }
     Ok(())

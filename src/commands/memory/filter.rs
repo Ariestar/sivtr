@@ -153,9 +153,9 @@ fn common_bounds(
 }
 
 pub fn execute(args: &FilterArgs) -> Result<()> {
-    let set = run(args)?;
+    let mut set = run(args)?;
     show::print_workset(
-        &set,
+        &mut set,
         show::resolve_output_format(args.format, false, args.refs, args.json),
     )
 }

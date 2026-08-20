@@ -26,10 +26,10 @@ pub fn execute(args: &NavArgs) -> Result<()> {
     let all_records = workset::load_context_records(&source.records, &source.anchors, &cwd)?;
     let anchors = navigate(&source.records, &source.anchors, &all_records, &args.motion)?;
     let records = workset::records_for_anchors(&all_records, &anchors);
-    let set = WorkSet::with_anchors(source.cwd, records, anchors);
+    let mut set = WorkSet::with_anchors(source.cwd, records, anchors);
     set.save_last()?;
     show::print_workset(
-        &set,
+        &mut set,
         show::resolve_output_format(args.format, false, args.refs, args.json),
     )
 }

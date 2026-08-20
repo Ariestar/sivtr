@@ -23,8 +23,8 @@ pub mod qwen;
 pub mod sqlite;
 
 pub use jsonl::{
-    jsonl_files, list_chat_recording_sessions, list_recent_jsonl_sessions,
-    list_recent_log_sessions, parse_jsonl_meta, parse_jsonl_session,
+    jsonl_files, list_chat_recording_sessions, list_recent_jsonl_sessions, list_sessions_matching,
+    parse_jsonl_meta, parse_jsonl_session,
 };
 pub use model::*;
 pub use sqlite::{open_readonly_db, system_time_from_millis, system_time_from_unix_secs};
@@ -219,6 +219,15 @@ impl AgentProvider {
         Self::all()
             .iter()
             .find(|spec| spec.command_name.eq_ignore_ascii_case(value))
+            .map(|spec| spec.provider)
+    }
+
+    /// Resolve a provider from its registry name (see [`Self::name`]),
+    /// used to map cache namespaces back to a provider.
+    pub fn from_name(value: &str) -> Option<Self> {
+        Self::all()
+            .iter()
+            .find(|spec| spec.name.eq_ignore_ascii_case(value))
             .map(|spec| spec.provider)
     }
 
