@@ -8,9 +8,9 @@ use crate::commands::memory::show;
 use crate::commands::memory::workset::{self, WorkSet};
 
 pub fn execute(args: &ZoomArgs) -> Result<()> {
-    let workset = run(args)?;
+    let mut workset = run(args)?;
     show::print_workset(
-        &workset,
+        &mut workset,
         show::resolve_output_format(args.format, false, args.refs, args.json),
     )?;
     Ok(())

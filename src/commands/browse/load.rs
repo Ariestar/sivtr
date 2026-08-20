@@ -369,13 +369,16 @@ impl SourceLoadPump {
                     REMOTE_QUERY_TIMEOUT,
                 ) {
                     Ok(mut results) => match results.pop() {
-                        Some(QuerySourceResult::Ok(set)) => {
-                            let mut sessions = sessions_from_records(&source, set.records);
-                            for s in &mut sessions {
-                                s.body_loaded = !s.records.is_empty();
+                        Some(QuerySourceResult::Ok(mut set)) => match set.materialize_parts() {
+                            Ok(()) => {
+                                let mut sessions = sessions_from_records(&source, set.records);
+                                for s in &mut sessions {
+                                    s.body_loaded = !s.records.is_empty();
+                                }
+                                Ok(sessions)
                             }
-                            Ok(sessions)
-                        }
+                            Err(e) => Err(format!("{e:#}")),
+                        },
                         Some(QuerySourceResult::Err(m)) => Err(m),
                         None => Err("empty body".into()),
                     },

@@ -12,8 +12,6 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::agents::AgentProvider;
-
 /// Cache root under the platform data dir (`SIVTR_DATA_DIR` override).
 pub fn cache_dir() -> PathBuf {
     crate::workspace::data_dir().join("cache")
@@ -31,12 +29,20 @@ pub fn file_stamp(path: &Path) -> Option<(u64, u32, u64)> {
     Some((duration.as_secs(), duration.subsec_nanos(), meta.len()))
 }
 
-/// Cache file for a parsed agent session, keyed by provider + session path.
-pub fn session_cache_path(provider: AgentProvider, path: &Path) -> PathBuf {
+/// Cache file for one parsed session file, keyed by a namespace
+/// (`"terminal"`, `"pi"`, `"grok"`, …) and the source file path.
+pub fn session_cache_path(namespace: &str, path: &Path) -> PathBuf {
     let mut hasher = DefaultHasher::new();
-    provider.hash(&mut hasher);
+    namespace.hash(&mut hasher);
     path.hash(&mut hasher);
-    cache_dir().join(format!("agent-{:016x}.bin", hasher.finish()))
+    cache_dir().join(format!("sess-{:016x}.bin", hasher.finish()))
+}
+
+/// Cache file for one parsed session file's metadata view (part text
+/// omitted). Same key space as [`session_cache_path`] with a distinct suffix,
+/// so both views share one stamp-validated entry per session file.
+pub fn session_meta_cache_path(namespace: &str, path: &Path) -> PathBuf {
+    session_cache_path(namespace, path).with_extension("meta.bin")
 }
 
 /// Cache file for a BM25 index, keyed by the fingerprint of the record corpus
