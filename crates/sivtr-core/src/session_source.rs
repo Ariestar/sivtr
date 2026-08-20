@@ -53,7 +53,10 @@ impl SessionSource for TerminalSource {
             return Ok(Vec::new());
         };
         let mut infos = Vec::new();
-        for path in workspace::terminal_log_paths_for_workspace(cwd)? {
+        let paths = workspace::terminal_log_paths_for_workspace(cwd).with_context(|| {
+            format!("Failed to list terminal sessions for workspace {}", cwd.display())
+        })?;
+        for path in paths {
             let modified = std::fs::metadata(&path)
                 .and_then(|meta| meta.modified())
                 .with_context(|| format!("Failed to stamp terminal log {}", path.display()))?;
