@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use crate::agents::{
     extract_content_text, jsonl_files, list_recent_jsonl_sessions, normalize_path_for_match,
     parse_jsonl_meta, parse_jsonl_session, pretty_json_string, pretty_json_value, push_block,
-    push_tool_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionInfo,
-    AgentSessionMeta, AgentSessionProvider,
+    push_tool_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionMeta,
+    AgentSessionProvider, SessionInfo,
 };
 use crate::config::SivtrConfig;
 
@@ -21,7 +21,7 @@ impl AgentSessionProvider for CodexProvider {
         AgentProvider::Codex
     }
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
+    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
         let mut sessions = Vec::new();
 
         for root in configured_codex_session_dirs() {
@@ -329,7 +329,7 @@ fn local_session_files() -> Result<Vec<PathBuf>> {
     jsonl_files(&local_codex_sessions_dir())
 }
 
-fn list_recent_local_sessions(cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
+fn list_recent_local_sessions(cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
     list_recent_jsonl_sessions(
         PROVIDER_NAME,
         &local_codex_sessions_dir(),

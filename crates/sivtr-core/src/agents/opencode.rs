@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::agents::{
     extract_content_text, filter_sessions_by_workspace, open_readonly_db, pretty_json_value,
     push_block, system_time_from_millis, AgentBlockKind, AgentProvider, AgentSession,
-    AgentSessionInfo, AgentSessionProvider,
+    AgentSessionProvider, SessionInfo,
 };
 
 const PROVIDER_NAME: &str = "OpenCode";
@@ -36,7 +36,7 @@ impl AgentSessionProvider for OpenCodeProvider {
         AgentProvider::OpenCode
     }
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
+    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
         let db_path = self.db_path();
         if !db_path.exists() {
             return Ok(Vec::new());
@@ -57,7 +57,7 @@ impl AgentSessionProvider for OpenCodeProvider {
         let mut sessions = Vec::new();
         for row in rows {
             let (id, session_cwd, updated, title) = row?;
-            sessions.push(AgentSessionInfo {
+            sessions.push(SessionInfo {
                 modified: system_time_from_millis(updated),
                 path: opencode_session_path(&id),
                 id: Some(id),

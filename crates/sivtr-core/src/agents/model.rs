@@ -4,7 +4,6 @@ use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AgentProvider {
@@ -113,14 +112,7 @@ pub struct AgentSession {
     pub blocks: Vec<AgentBlock>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentSessionInfo {
-    pub path: PathBuf,
-    pub id: Option<String>,
-    pub cwd: Option<String>,
-    pub title: Option<String>,
-    pub modified: SystemTime,
-}
+pub use crate::session_source::SessionInfo;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSessionMeta {
@@ -195,7 +187,7 @@ impl AgentSelection {
 pub trait AgentSessionProvider {
     fn provider(&self) -> AgentProvider;
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>>;
+    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>>;
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession>;
 
@@ -396,9 +388,9 @@ pub fn normalize_path_for_match(path: &Path) -> String {
 ///   (commondir identity) as the target, or exactly matches the target path
 ///   when neither side is inside a git checkout
 pub fn filter_sessions_by_workspace(
-    sessions: Vec<AgentSessionInfo>,
+    sessions: Vec<SessionInfo>,
     cwd: Option<&Path>,
-) -> Vec<AgentSessionInfo> {
+) -> Vec<SessionInfo> {
     let Some(cwd) = cwd else {
         return sessions;
     };
@@ -529,6 +521,7 @@ mod tests {
     use super::*;
     use crate::test_fixtures::{make_repo, make_worktree};
     use std::fs;
+    use std::time::SystemTime;
 
     #[test]
     fn cwd_candidates_do_not_duplicate_the_primary_cwd() {
@@ -600,21 +593,21 @@ mod tests {
         make_repo(&repo);
 
         let sessions = vec![
-            AgentSessionInfo {
+            SessionInfo {
                 path: PathBuf::from("unbound"),
                 id: Some("u".into()),
                 cwd: None,
                 title: None,
                 modified: SystemTime::UNIX_EPOCH,
             },
-            AgentSessionInfo {
+            SessionInfo {
                 path: PathBuf::from("match"),
                 id: Some("m".into()),
                 cwd: Some(repo.to_string_lossy().into_owned()),
                 title: None,
                 modified: SystemTime::UNIX_EPOCH,
             },
-            AgentSessionInfo {
+            SessionInfo {
                 path: PathBuf::from("other"),
                 id: Some("o".into()),
                 cwd: Some(dir.path().join("other").to_string_lossy().into_owned()),
@@ -641,7 +634,7 @@ mod tests {
 
         // A session recorded in the main checkout shows up when browsing the
         // worktree, and one recorded in the worktree shows up from the main.
-        let main_session = vec![AgentSessionInfo {
+        let main_session = vec![SessionInfo {
             path: PathBuf::from("main-session"),
             id: Some("m".into()),
             cwd: Some(main.to_string_lossy().into_owned()),
@@ -653,7 +646,7 @@ mod tests {
             1
         );
 
-        let worktree_session = vec![AgentSessionInfo {
+        let worktree_session = vec![SessionInfo {
             path: PathBuf::from("wt-session"),
             id: Some("w".into()),
             cwd: Some(worktree.to_string_lossy().into_owned()),

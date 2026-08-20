@@ -7,7 +7,7 @@ use std::time::UNIX_EPOCH;
 use crate::agents::{
     extract_content_text, jsonl_files, list_recent_jsonl_sessions, parse_jsonl_meta,
     parse_jsonl_session, pretty_json_value, push_block, AgentBlockKind, AgentProvider,
-    AgentSession, AgentSessionInfo, AgentSessionMeta, AgentSessionProvider,
+    AgentSession, AgentSessionMeta, AgentSessionProvider, SessionInfo,
 };
 
 const PROVIDER_NAME: &str = "Cursor";
@@ -26,7 +26,7 @@ impl AgentSessionProvider for CursorProvider {
         AgentProvider::Cursor
     }
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
+    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
         let root = cursor_transcripts_root();
         if !root.exists() {
             return Ok(Vec::new());
@@ -48,7 +48,7 @@ impl AgentSessionProvider for CursorProvider {
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .map(str::to_string);
-            sessions.push(AgentSessionInfo {
+            sessions.push(SessionInfo {
                 path,
                 id,
                 cwd: None,

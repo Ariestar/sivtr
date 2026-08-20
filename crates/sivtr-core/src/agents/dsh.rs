@@ -29,8 +29,8 @@ use std::path::{Path, PathBuf};
 
 use crate::agents::{
     extract_content_text, list_sessions_matching, pretty_json_string, push_block, push_tool_block,
-    AgentBlockKind, AgentProvider, AgentSession, AgentSessionInfo, AgentSessionMeta,
-    AgentSessionProvider,
+    AgentBlockKind, AgentProvider, AgentSession, AgentSessionMeta, AgentSessionProvider,
+    SessionInfo,
 };
 
 const PROVIDER_NAME: &str = "Dsh";
@@ -63,7 +63,7 @@ impl AgentSessionProvider for DshProvider {
         AgentProvider::Dsh
     }
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
+    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
         let root = sessions_root();
         list_sessions_matching(
             PROVIDER_NAME,

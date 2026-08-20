@@ -13,10 +13,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::ai::AgentProvider;
-#[cfg(test)]
-use crate::ai::AgentSessionProvider;
 use crate::record::{WorkPath, WorkRecord, WorkRecordIndex, WorkRef, WorkRefSelector};
-use crate::{session, workspace};
+use crate::session_source::{source_by_namespace, workspace_sources, SessionSource};
 
 /// Prefix of the error [`load_workspace_source`] raises when a selector
 /// matches no records. An empty source is a normal browse outcome (a
@@ -70,36 +68,28 @@ pub enum LoadMode {
     Full,
 }
 
-/// Cache namespace for terminal session logs (no `AgentProvider` exists).
-pub const TERMINAL_NAMESPACE: &str = "terminal";
-
-/// Build the record index for a workspace: terminal records plus agent records
-/// for the given providers, deduplicated and sorted newest-first.
+/// Build the record index for a workspace: discover sessions from each
+/// source (terminal, agent providers, …), deduplicate records, and sort
+/// newest-first.
 ///
-/// `recent_sessions` truncates how many recent agent sessions each provider
-/// contributes (terminal logs are always fully loaded for the workspace).
+/// `recent_sessions` truncates how many recent sessions each source
+/// contributes.
 pub fn load_workspace_records(
-    providers: &[AgentProvider],
+    sources: &[Box<dyn SessionSource>],
     cwd: &Path,
     recent_sessions: Option<usize>,
     mode: LoadMode,
 ) -> Result<QueryResult> {
     let mut tasks: Vec<(&'static str, PathBuf)> = Vec::new();
-    tasks.extend(
-        workspace::terminal_log_paths_for_workspace(cwd)?
-            .into_iter()
-            .map(|path| (TERMINAL_NAMESPACE, path)),
-    );
-    for provider in providers {
-        let source = provider.session_provider();
-        let mut sessions = source.list_recent_sessions(Some(cwd))?;
+    for source in sources {
+        let mut sessions = source.list_sessions(Some(cwd))?;
         if let Some(limit) = recent_sessions {
             sessions.truncate(limit);
         }
         tasks.extend(
             sessions
                 .into_iter()
-                .map(|info| (provider.name(), info.path)),
+                .map(|info| (source.namespace(), info.path)),
         );
     }
 
@@ -130,7 +120,8 @@ pub fn load_workspace_source(
             .provider()
             .map(|provider| vec![provider])
             .unwrap_or_else(all_agent_providers);
-        let result = load_workspace_records(&providers, cwd, None, mode)?;
+        let sources = workspace_sources(&providers);
+        let result = load_workspace_records(&sources, cwd, None, mode)?;
         let index = WorkRecordIndex::new(result.records);
         let record = index
             .resolve(&reference)
@@ -144,7 +135,9 @@ pub fn load_workspace_source(
     }
 
     let selector: WorkRefSelector = source.parse()?;
-    let result = load_workspace_records(&selector.providers(), cwd, None, mode)?;
+    let providers = selector.providers();
+    let sources = workspace_sources(&providers);
+    let result = load_workspace_records(&sources, cwd, None, mode)?;
     let mut records = Vec::new();
     let mut anchors = Vec::new();
 
@@ -190,26 +183,11 @@ pub fn load_session_records(
     if let Some(records) = load_cached_view(&cache_path, path) {
         return Ok(records);
     }
-    let records = parse_session_file(namespace, path)?;
+    let source = source_by_namespace(namespace)
+        .with_context(|| format!("unknown session namespace `{namespace}`"))?;
+    let records = source.parse_file(path)?;
     store_cached_session(namespace, path, &records);
     Ok(records)
-}
-
-/// Parse one session file into records, dispatching by source namespace:
-/// terminal logs vs provider transcripts.
-fn parse_session_file(namespace: &str, path: &Path) -> Result<Vec<WorkRecord>> {
-    if namespace == TERMINAL_NAMESPACE {
-        let entries = session::load_entries(path).context("Failed to read session log")?;
-        Ok(entries
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, entry)| WorkRecord::terminal(entry, path, idx))
-            .collect())
-    } else {
-        let provider = AgentProvider::from_name(namespace)
-            .with_context(|| format!("unknown session namespace `{namespace}`"))?;
-        parse_agent_session_file(provider, path).map_err(anyhow::Error::msg)
-    }
 }
 
 /// Load many session files in parallel, through the per-file cache, and
@@ -276,17 +254,6 @@ struct CachedAgentSession {
     mtime_nanos: u32,
     size: u64,
     records: Vec<WorkRecord>,
-}
-
-fn parse_agent_session_file(
-    provider: AgentProvider,
-    path: &Path,
-) -> Result<Vec<WorkRecord>, String> {
-    let source = provider.session_provider();
-    source
-        .parse_session_file(path)
-        .map(|session| WorkRecord::chat_turns(provider, &session))
-        .map_err(|error| format!("{error:#}"))
 }
 
 fn load_cached_view(cache_path: &Path, source: &Path) -> Option<Vec<WorkRecord>> {
@@ -358,33 +325,32 @@ fn without_parts(records: &[WorkRecord]) -> Vec<WorkRecord> {
 }
 
 /// Serial single-source parse path, kept for tests that drive a mocked
-/// `AgentSessionProvider` (the production path parses sessions in parallel).
+/// `SessionSource` (the production path parses sessions in parallel).
 #[cfg(test)]
-fn agent_records_from_source(
-    source: &dyn AgentSessionProvider,
+fn records_from_source(
+    source: &dyn SessionSource,
     cwd: &Path,
     recent_sessions: Option<usize>,
     skipped: &mut Vec<SkippedSession>,
 ) -> Result<Vec<WorkRecord>> {
     let mut records = Vec::new();
-    let mut sessions = source.list_recent_sessions(Some(cwd))?;
+    let mut sessions = source.list_sessions(Some(cwd))?;
     if let Some(limit) = recent_sessions {
         sessions.truncate(limit);
     }
 
     for info in sessions {
-        let session = match source.parse_session_file(&info.path) {
-            Ok(session) => session,
+        match source.parse_file(&info.path) {
+            Ok(session_records) => records.extend(session_records),
             Err(error) => {
                 skipped.push(SkippedSession {
-                    namespace: source.provider().name().to_string(),
+                    namespace: source.namespace().to_string(),
                     path: info.path,
                     error: format!("{error:#}"),
                 });
                 continue;
             }
-        };
-        records.extend(WorkRecord::chat_turns(source.provider(), &session));
+        }
     }
 
     Ok(records)
@@ -508,12 +474,11 @@ fn rewrite_record_session_display_id(record: &mut WorkRecord, display_id: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai::{
-        AgentBlock, AgentBlockKind, AgentSession, AgentSessionInfo, AgentSessionProvider,
-    };
+    use crate::ai::{AgentBlock, AgentBlockKind, AgentSession};
     use crate::record::{
         WorkChannel, WorkPart, WorkPartData, WorkRecordKind, WorkSessionRef, WorkSource, WorkTime,
     };
+    use crate::session_source::SessionInfo;
     use anyhow::Result;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime};
@@ -613,14 +578,14 @@ mod tests {
         let cwd = PathBuf::from("/repo");
         let source = BrokenAgentSource {
             infos: vec![
-                AgentSessionInfo {
+                SessionInfo {
                     path: PathBuf::from("broken.jsonl"),
                     id: Some("broken".to_string()),
                     cwd: Some("/repo".to_string()),
                     title: Some("broken".to_string()),
                     modified: SystemTime::UNIX_EPOCH + Duration::from_secs(2),
                 },
-                AgentSessionInfo {
+                SessionInfo {
                     path: PathBuf::from("good.jsonl"),
                     id: Some("good".to_string()),
                     cwd: Some("/repo".to_string()),
@@ -630,34 +595,35 @@ mod tests {
             ],
         };
         let mut skipped = Vec::new();
-        let records = agent_records_from_source(&source, &cwd, Some(10), &mut skipped).unwrap();
+        let records =
+            records_from_source(&source, &cwd, Some(10), &mut skipped).expect("load records");
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].session.id, "good");
         assert_eq!(skipped.len(), 1);
         assert_eq!(skipped[0].path, PathBuf::from("broken.jsonl"));
-        assert_eq!(skipped[0].namespace, AgentProvider::Claude.name());
+        assert_eq!(skipped[0].namespace, "claude");
     }
 
     struct BrokenAgentSource {
-        infos: Vec<AgentSessionInfo>,
+        infos: Vec<SessionInfo>,
     }
 
-    impl AgentSessionProvider for BrokenAgentSource {
-        fn provider(&self) -> AgentProvider {
-            AgentProvider::Claude
+    impl SessionSource for BrokenAgentSource {
+        fn namespace(&self) -> &'static str {
+            "claude"
         }
 
-        fn list_recent_sessions(&self, _cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
+        fn list_sessions(&self, _cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
             Ok(self.infos.clone())
         }
 
-        fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
+        fn parse_file(&self, path: &Path) -> Result<Vec<WorkRecord>> {
             if path == Path::new("broken.jsonl") {
                 anyhow::bail!("synthetic parse error")
             }
 
-            Ok(AgentSession {
+            let session = AgentSession {
                 path: path.to_path_buf(),
                 id: Some("good".to_string()),
                 cwd: Some("/repo".to_string()),
@@ -680,7 +646,8 @@ mod tests {
                         start_line: None,
                     },
                 ],
-            })
+            };
+            Ok(WorkRecord::chat_turns(AgentProvider::Claude, &session))
         }
     }
 

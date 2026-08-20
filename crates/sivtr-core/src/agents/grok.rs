@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::agents::{
     extract_content_text, list_sessions_matching, parse_jsonl_session, pretty_json_string,
     pretty_json_value, push_block, push_tool_block, AgentBlockKind, AgentProvider, AgentSession,
-    AgentSessionInfo, AgentSessionMeta, AgentSessionProvider,
+    AgentSessionMeta, AgentSessionProvider, SessionInfo,
 };
 
 const PROVIDER_NAME: &str = "Grok";
@@ -39,7 +39,7 @@ impl AgentSessionProvider for GrokProvider {
         AgentProvider::Grok
     }
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
+    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
         list_sessions_matching(
             PROVIDER_NAME,
             &grok_sessions_dir(),

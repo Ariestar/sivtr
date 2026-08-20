@@ -93,7 +93,14 @@ pub enum QuerySourceResult {
 /// full load; pure metadata queries stay light and callers materialize part
 /// text on demand.
 pub fn query(source: &str, filter: Filter, cwd: Option<&Path>) -> Result<WorkSet> {
-    let mode = load_mode_for(&filter);
+    // Bounds that read part text (pattern, exclude, BM25 ranking) need a full
+    // load; metadata-only filters stay light and callers materialize part
+    // text on demand.
+    let mode = if filter.needs_parts() {
+        LoadMode::Full
+    } else {
+        LoadMode::Light
+    };
     if source == "@" {
         return apply_loaded(read_stdin()?, filter);
     }
@@ -328,16 +335,6 @@ fn run_local(source: &str, root: &Path, filter: Filter, mode: LoadMode) -> Resul
     )
 }
 
-/// Pick the load mode from the filter: bounds that read part text need a
-/// full load, metadata-only filters stay light.
-fn load_mode_for(filter: &Filter) -> LoadMode {
-    if filter.needs_parts() {
-        LoadMode::Full
-    } else {
-        LoadMode::Light
-    }
-}
-
 /// Load `source` from every addressable origin (all local workspaces plus the
 /// current workspace's remote mounts), merge them into one corpus, then apply
 /// the filter once — so reachability limit and relevance ranking are global
@@ -375,7 +372,6 @@ fn run_all(source: &str, cwd: &Path, filter: Filter) -> Result<WorkSet> {
 
     apply_loaded(WorkSet::new(cwd.display().to_string(), records), filter)
 }
-
 fn apply_loaded(set: WorkSet, filter: Filter) -> Result<WorkSet> {
     filter::apply(PathBuf::from(&set.cwd), set.records, set.anchors, filter)
 }
