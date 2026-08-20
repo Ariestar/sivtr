@@ -74,6 +74,12 @@ Keep this file limited to durable, cross-session guidance. Current progress, tem
 - Never force-push or rewrite shared branch history.
 - `main` accepts squash merges only. PR titles are Conventional Commits and become the squash subject.
 
+### Per-change workflow
+
+- Before any set of edits goes into commits, cut a working branch from `main` (`git checkout -b <topic>`). Commit directly on `main` only when the change is a one-off fix that will not become a PR.
+- Split the work into one commit per coherent unit (feature / refactor / docs / chore), never one big mixed commit, and never commit unrelated changes together.
+- Group related units that belong to the same module or feature area into one branch, and open one draft PR per branch. A PR's title is a Conventional Commit and becomes the squash subject on merge.
+
 ## Conventional Commits
 
 Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/):
@@ -105,7 +111,8 @@ Version-bump mapping per type lives in [Version Management](#version-management)
 ## Pull Request Workflow
 
 - Open or update a pull request only when the user explicitly asks.
-- Use a dedicated branch and follow any repository-specific branch naming convention. Do not perform feature work directly on the default branch.
+- Use a dedicated branch (`<type>/<short-topic>`, see [Branch discipline](#branch-discipline)) and follow any repository-specific branch naming convention. Do not perform feature work directly on the default branch.
+- When one branch depends on another unmerged branch, stack the PRs with `gh stack init <bottom> ... <top>` then `gh stack submit` (or `--open` to mark ready); each PR's base points at its dependency so diffs stay minimal until the base merges. `gh stack sync` keeps the stack in sync after upstream merges.
 - Before opening a pull request, inspect the working tree, commits, and complete diff against the intended base branch. Remove unrelated changes from the pull request scope.
 - Run the relevant checks before opening the pull request. Open every pull request as a draft and keep it a draft until the user explicitly asks to mark it ready for review — pushing commits or opening a non-draft pull request triggers GitHub's automated AI review, so do not trigger it before the user asks for review.
 - Follow the repository's existing pull request template. Do not replace or bypass project-specific requirements.
@@ -143,6 +150,7 @@ The tag step (`release-plz-release.yml`) pushes the `vX.Y.Z` tag with a PAT: the
 ### Branch discipline
 
 - One branch per task; merge back to main within 2–3 days. No long-lived parallel branches.
+- Branch naming: `<type>/<short-topic>` (e.g. `feat/search-index-cache`, `fix/daemon-start`), lowercased with dashes. Do not use a user's name, dates, or arbitrary numbers.
 - Delete branches and prune worktrees immediately after merging. Never leave worktree checkouts behind.
 - main must always be releasable; green CI is the merge gate. No feature work directly on main.
 

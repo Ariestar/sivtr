@@ -558,7 +558,8 @@ pub struct DiffArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct SearchArgs {
-    /// Source selector, e.g. terminal, agent, pi, pi/<session>/<turn>, terminal/<session>/<record>, @last, or @ctx[1,3]
+    /// Source selector, e.g. terminal, agent, pi, pi/<session>/<turn>, terminal/<session>/<record>, @last, or @ctx[1,3].
+    /// Prefix with `all:` (e.g. all:agent) to search every origin — all local workspaces plus the current workspace's remote mounts — as one corpus
     #[arg(value_name = "SOURCE")]
     pub source: String,
 
