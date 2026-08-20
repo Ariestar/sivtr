@@ -272,7 +272,7 @@ impl<'a> Searcher<'a> {
             IndexSource::Shared(index) => index,
             IndexSource::Lazy(cell) => {
                 lazy_slot = cell.borrow_mut();
-                lazy_slot.get_or_insert_with(|| Bm25Index::build(self.records))
+                lazy_slot.get_or_insert_with(|| super::index_cache::build_or_load(self.records))
             }
         };
 
