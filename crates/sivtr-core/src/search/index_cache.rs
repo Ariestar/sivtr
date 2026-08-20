@@ -31,11 +31,37 @@ struct CachedIndex {
 }
 
 /// Load the cached index for a corpus, or `None` on any mismatch — a stale or
-/// corrupt cache must never fail the search, only cost a rebuild.
+/// corrupt cache must never fail the search, only cost a rebuild. Expected
+/// misses (no cache file, version/fingerprint mismatch) stay silent; real
+/// I/O or decode failures on an existing file are diagnosed so persistent
+/// problems (permissions, disk state) surface instead of silently re-building
+/// every run.
 pub fn load_index(records: &[crate::record::WorkRecord]) -> Option<Bm25Index> {
     let fingerprint = fingerprint(records);
-    let bytes = std::fs::read(index_cache_path(fingerprint)).ok()?;
-    let cached: CachedIndex = rmp_serde::from_slice(&bytes).ok()?;
+    let path = index_cache_path(fingerprint);
+    if !path.exists() {
+        return None;
+    }
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!(
+                "sivtr: failed to read cached BM25 index {}: {error}",
+                path.display()
+            );
+            return None;
+        }
+    };
+    let cached: CachedIndex = match rmp_serde::from_slice(&bytes) {
+        Ok(cached) => cached,
+        Err(error) => {
+            eprintln!(
+                "sivtr: cached BM25 index {} is corrupt: {error}",
+                path.display()
+            );
+            return None;
+        }
+    };
     if cached.version != INDEX_CACHE_VERSION || cached.fingerprint != fingerprint {
         return None;
     }
@@ -43,14 +69,24 @@ pub fn load_index(records: &[crate::record::WorkRecord]) -> Option<Bm25Index> {
 }
 
 /// Best-effort write of a built index; failures only cost a rebuild next run.
+/// Failures are diagnosed (serialize error, write error) because the rebuild
+/// they cause is expensive (~3s).
 pub fn store_index(records: &[crate::record::WorkRecord], index: &Bm25Index) {
     let cached = CachedIndex {
         version: INDEX_CACHE_VERSION,
         fingerprint: fingerprint(records),
         index: index.clone(),
     };
-    if let Ok(bytes) = rmp_serde::to_vec(&cached) {
-        write_cache_atomic(&index_cache_path(cached.fingerprint), &bytes);
+    let bytes = match rmp_serde::to_vec(&cached) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("sivtr: failed to serialize BM25 index cache: {error}");
+            return;
+        }
+    };
+    let path = index_cache_path(cached.fingerprint);
+    if !write_cache_atomic(&path, &bytes) {
+        eprintln!("sivtr: failed to write BM25 index cache {}", path.display());
     }
 }
 
