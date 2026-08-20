@@ -340,13 +340,16 @@ fn run_all(source: &str, cwd: &Path, filter: Filter) -> Result<WorkSet> {
         .with_context(|| format!("failed to load `{source}` from every origin"))?;
 
     // Merge with per-ref dedup: a workref may appear in more than one origin
-    // (same provider session recorded from multiple checkouts).
+    // (same provider session recorded from multiple checkouts). `results` is
+    // in `registry.entries()` order, so pairing by position identifies which
+    // origin each outcome belongs to.
     let mut records: Vec<WorkRecord> = Vec::new();
     let mut seen: HashSet<WorkRef> = HashSet::new();
-    for result in results {
+    for (entry, result) in registry.entries().zip(results) {
         let QuerySourceResult::Ok(set) = result else {
             output::warning(format!(
-                "skipped an origin during `all:{source}`: {result:?}"
+                "skipped origin `{}` during `all:{source}`: {result:?}",
+                entry.origin.name
             ));
             continue;
         };
