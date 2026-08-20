@@ -15,6 +15,18 @@ use super::model::{
 /// Bump when the listing cache layout or meta parsing changes.
 const LISTING_CACHE_VERSION: u32 = 3;
 
+/// Directory stamps are trusted only after the filesystem mtime granularity
+/// window has passed, so a newly added file inside the same tick is not
+/// hidden by a stale cached directory entry.
+const DIR_STAMP_SETTLE_SECS: u64 = 3;
+
+fn is_settled(mtime_secs: u64) -> bool {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|now| now.as_secs().saturating_sub(mtime_secs) >= DIR_STAMP_SETTLE_SECS)
+        .unwrap_or(false)
+}
+
 /// One cached session file in a listing: fingerprint + parsed metadata.
 #[derive(Clone, Serialize, Deserialize)]
 struct ListingEntry {
@@ -160,7 +172,10 @@ fn collect_recent_sessions(
                 subdirs.push(path);
             }
         }
-        if let Some(stamp) = stamp {
+        // A directory written within the settle window may still gain entries
+        // in the same mtime tick on coarse-granularity filesystems; leave it
+        // uncached so the next call re-walks it.
+        if let Some(stamp) = stamp.filter(|stamp| is_settled(stamp.0)) {
             cache.dirs.insert(
                 dir,
                 DirEntry {
