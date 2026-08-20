@@ -119,6 +119,7 @@ Version-bump mapping per type lives in [Version Management](#version-management)
 - Write the pull request title in Conventional Commits style.
 - Keep the pull request body factual and concise. Include the purpose, main changes, validation actually performed, related issue when known, and any material risks or follow-up work.
 - After review feedback, address comments within scope, rerun affected checks, and summarize the resolution. Do not silently introduce unrelated changes.
+- CodeRabbit reviews every ready PR automatically. Reply to each review thread: when a finding is valid, fix it and reply naming the fixing commit so CodeRabbit re-reviews; when it is not applicable, reply with the reason — CodeRabbit may push back with specifics, suggest alternatives, or insist, then either fix, open a follow-up issue for valid but out-of-scope work, or hold the position. Resolve every thread before merge.
 - Do not merge, enable auto-merge, close, reopen, or change the base branch unless the user explicitly requests it.
 - Keep the remote source branch after merge.
 
