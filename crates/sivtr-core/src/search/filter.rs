@@ -91,10 +91,18 @@ impl Filter {
     }
 
     /// Whether applying this filter reads part text: per-line pattern and
-    /// exclude matching both scan `parts`, and BM25 ranking is built from
-    /// part text. Metadata-only bounds (time, status, kind, latest) do not.
+    /// exclude matching scan `parts`, BM25 ranking is built from part text,
+    /// parts-mode emits per-part hits, kind and field bounds match on
+    /// `part.kind()`, and input/output/command fields inspect part kinds.
+    /// Title/session bounds and the default content field with no pattern
+    /// stay metadata-only.
     pub fn needs_parts(&self) -> bool {
-        self.pattern.is_some() || self.exclude_regex.is_some() || self.rank.is_some()
+        self.pattern.is_some()
+            || self.exclude_regex.is_some()
+            || self.rank.is_some()
+            || self.mode == FilterMode::Parts
+            || self.kind.is_some()
+            || matches!(self.in_field, Field::Input | Field::Output | Field::Command)
     }
 
     /// Browse session list: newest-first, bounded by `latest` records.

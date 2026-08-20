@@ -595,7 +595,8 @@ mod tests {
             ],
         };
         let mut skipped = Vec::new();
-        let records = records_from_source(&source, &cwd, Some(10), &mut skipped).unwrap();
+        let records =
+            records_from_source(&source, &cwd, Some(10), &mut skipped).expect("load records");
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].session.id, "good");

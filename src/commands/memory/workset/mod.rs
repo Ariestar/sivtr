@@ -108,9 +108,8 @@ impl WorkSet {
             let Some(namespace) = namespace else {
                 continue;
             };
-            let Ok(full) = load_session_records(namespace, Path::new(path), LoadMode::Full) else {
-                continue;
-            };
+            let full = load_session_records(namespace, Path::new(path), LoadMode::Full)
+                .with_context(|| format!("Failed to load full session {path} for {namespace}"))?;
             for index in indices {
                 if let Some(record) = self.records.get_mut(*index) {
                     if let Some(full_record) = full

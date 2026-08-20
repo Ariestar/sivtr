@@ -56,7 +56,7 @@ impl SessionSource for TerminalSource {
         for path in workspace::terminal_log_paths_for_workspace(cwd)? {
             let modified = std::fs::metadata(&path)
                 .and_then(|meta| meta.modified())
-                .unwrap_or(SystemTime::UNIX_EPOCH);
+                .with_context(|| format!("Failed to stamp terminal log {}", path.display()))?;
             infos.push(SessionInfo {
                 path,
                 id: None,

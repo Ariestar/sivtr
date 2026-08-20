@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use crate::session_source::SessionSource;
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 pub mod claude;
 pub mod codex;
@@ -282,11 +282,18 @@ impl SessionSource for AgentProvider {
     }
 
     fn list_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        self.session_provider().list_recent_sessions(cwd)
+        self.session_provider()
+            .list_recent_sessions(cwd)
+            .with_context(|| format!("Failed to list {} sessions", self.name()))
     }
 
     fn parse_file(&self, path: &Path) -> Result<Vec<WorkRecord>> {
-        let session = self.session_provider().parse_session_file(path)?;
+        let session = self
+            .session_provider()
+            .parse_session_file(path)
+            .with_context(|| {
+                format!("Failed to parse {} session {}", self.name(), path.display())
+            })?;
         Ok(WorkRecord::chat_turns(*self, &session))
     }
 }
