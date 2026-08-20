@@ -84,9 +84,9 @@ pub fn resolve_output_format(
 }
 
 pub fn execute(args: &ShowArgs) -> Result<()> {
-    let set = run(args)?;
+    let mut set = run(args)?;
     print_workset(
-        &set,
+        &mut set,
         resolve_output_format(args.format, args.full, args.refs, args.json),
     )
 }
@@ -100,7 +100,12 @@ pub fn run(args: &ShowArgs) -> Result<workset::WorkSet> {
     )
 }
 
-pub fn print_workset(set: &workset::WorkSet, format: WorkSetOutputFormat) -> Result<()> {
+/// Render a WorkSet. Content formats (everything but bare refs) materialize
+/// part text first, so a light-loaded set renders fully.
+pub fn print_workset(set: &mut workset::WorkSet, format: WorkSetOutputFormat) -> Result<()> {
+    if format != WorkSetOutputFormat::Refs {
+        set.materialize_parts()?;
+    }
     match format {
         WorkSetOutputFormat::Full => print_full(set)?,
         WorkSetOutputFormat::WorkSet => {

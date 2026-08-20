@@ -2,6 +2,7 @@ pub mod bm25;
 pub mod eval;
 pub mod expand;
 pub mod filter;
+pub mod index_cache;
 pub mod types;
 
 pub use bm25::Bm25Index;

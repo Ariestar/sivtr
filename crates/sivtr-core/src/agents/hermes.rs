@@ -8,7 +8,7 @@ use crate::agents::{
     extract_content_text, filter_sessions_by_workspace, list_recent_jsonl_sessions,
     open_readonly_db, parse_jsonl_meta, parse_jsonl_session, pretty_json_string, pretty_json_value,
     push_block, system_time_from_unix_secs, AgentBlockKind, AgentProvider, AgentSession,
-    AgentSessionInfo, AgentSessionMeta, AgentSessionProvider,
+    AgentSessionMeta, AgentSessionProvider, SessionInfo,
 };
 
 const PROVIDER_NAME: &str = "Hermes";
@@ -31,7 +31,7 @@ impl AgentSessionProvider for HermesProvider {
         AgentProvider::Hermes
     }
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
+    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
         let mut sessions = Vec::new();
         sessions.extend(list_sqlite_sessions()?);
         // JSONL residual: keep sessions not already covered by state.db.
@@ -119,7 +119,7 @@ pub fn hermes_state_db_path() -> PathBuf {
     hermes_home().join(STATE_DB_NAME)
 }
 
-fn list_sqlite_sessions() -> Result<Vec<AgentSessionInfo>> {
+fn list_sqlite_sessions() -> Result<Vec<SessionInfo>> {
     let db_path = hermes_state_db_path();
     if !db_path.exists() {
         return Ok(Vec::new());
@@ -160,7 +160,7 @@ fn list_sqlite_sessions() -> Result<Vec<AgentSessionInfo>> {
             .or_else(|| default_title(source.as_deref(), model.as_deref()));
 
         let modified = system_time_from_unix_secs(ended_at.unwrap_or(started_at));
-        sessions.push(AgentSessionInfo {
+        sessions.push(SessionInfo {
             path: sqlite_session_path(&id),
             id: Some(id),
             cwd: non_empty_opt(cwd),

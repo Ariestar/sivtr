@@ -5,6 +5,11 @@
 //! - [`sqlite`]: readonly SQLite helpers (OpenCode/OpenClaw)
 //! - per-provider modules keep only storage paths + schema mapping
 
+use std::path::Path;
+
+use crate::session_source::SessionSource;
+use anyhow::{Context, Result};
+
 pub mod claude;
 pub mod codex;
 pub mod cursor;
@@ -23,8 +28,8 @@ pub mod qwen;
 pub mod sqlite;
 
 pub use jsonl::{
-    jsonl_files, list_chat_recording_sessions, list_recent_jsonl_sessions,
-    list_recent_log_sessions, parse_jsonl_meta, parse_jsonl_session,
+    jsonl_files, list_chat_recording_sessions, list_recent_jsonl_sessions, list_sessions_matching,
+    parse_jsonl_meta, parse_jsonl_session,
 };
 pub use model::*;
 pub use sqlite::{open_readonly_db, system_time_from_millis, system_time_from_unix_secs};
@@ -222,6 +227,15 @@ impl AgentProvider {
             .map(|spec| spec.provider)
     }
 
+    /// Resolve a provider from its registry name (see [`Self::name`]),
+    /// used to map cache namespaces back to a provider.
+    pub fn from_name(value: &str) -> Option<Self> {
+        Self::all()
+            .iter()
+            .find(|spec| spec.name.eq_ignore_ascii_case(value))
+            .map(|spec| spec.provider)
+    }
+
     pub fn spec(self) -> &'static AgentProviderSpec {
         Self::all()
             .iter()
@@ -257,5 +271,29 @@ impl AgentProvider {
     /// Comma-separated registered provider CLI names for help and errors.
     pub fn command_names_csv() -> String {
         Self::command_names().collect::<Vec<_>>().join(", ")
+    }
+}
+
+use crate::record::WorkRecord;
+
+impl SessionSource for AgentProvider {
+    fn namespace(&self) -> &'static str {
+        self.command_name()
+    }
+
+    fn list_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
+        self.session_provider()
+            .list_recent_sessions(cwd)
+            .with_context(|| format!("Failed to list {} sessions", self.name()))
+    }
+
+    fn parse_file(&self, path: &Path) -> Result<Vec<WorkRecord>> {
+        let session = self
+            .session_provider()
+            .parse_session_file(path)
+            .with_context(|| {
+                format!("Failed to parse {} session {}", self.name(), path.display())
+            })?;
+        Ok(WorkRecord::chat_turns(*self, &session))
     }
 }

@@ -8,7 +8,7 @@ use std::time::UNIX_EPOCH;
 use crate::agents::{
     extract_content_text, filter_sessions_by_workspace, jsonl_files, open_readonly_db,
     pretty_json_value, push_block, system_time_from_millis, AgentBlockKind, AgentProvider,
-    AgentSession, AgentSessionInfo, AgentSessionProvider,
+    AgentSession, AgentSessionProvider, SessionInfo,
 };
 
 const SESSION_PATH_PREFIX: &str = "openclaw-session-";
@@ -31,7 +31,7 @@ impl AgentSessionProvider for OpenClawProvider {
         AgentProvider::OpenClaw
     }
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
+    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
         let mut sessions = Vec::new();
         sessions.extend(list_sqlite_sessions()?);
         sessions.extend(list_legacy_jsonl_sessions()?);
@@ -107,7 +107,7 @@ fn agent_db_path(agent_id: &str) -> Option<PathBuf> {
     )
 }
 
-fn list_sqlite_sessions() -> Result<Vec<AgentSessionInfo>> {
+fn list_sqlite_sessions() -> Result<Vec<SessionInfo>> {
     let root = agents_dir();
     if !root.exists() {
         return Ok(Vec::new());
@@ -131,7 +131,7 @@ fn list_sqlite_sessions() -> Result<Vec<AgentSessionInfo>> {
     Ok(out)
 }
 
-fn list_sessions_from_db(db_path: &Path, agent_id: &str) -> Result<Vec<AgentSessionInfo>> {
+fn list_sessions_from_db(db_path: &Path, agent_id: &str) -> Result<Vec<SessionInfo>> {
     let conn = open_readonly_db(db_path)?;
     // Current OpenClaw schema: session_entries(session_key, session_id, entry_json, updated_at, ...)
     let mut stmt = match conn.prepare(
@@ -179,7 +179,7 @@ fn list_sessions_from_db(db_path: &Path, agent_id: &str) -> Result<Vec<AgentSess
             .map(str::to_string)
             .or_else(|| Some(session_key.clone()));
 
-        sessions.push(AgentSessionInfo {
+        sessions.push(SessionInfo {
             path: openclaw_session_path(agent_id, &session_id),
             id: Some(session_id),
             cwd,
@@ -236,7 +236,7 @@ fn parse_sqlite_session(db_path: &Path, agent_id: &str, session_id: &str) -> Res
     Ok(session)
 }
 
-fn list_legacy_jsonl_sessions() -> Result<Vec<AgentSessionInfo>> {
+fn list_legacy_jsonl_sessions() -> Result<Vec<SessionInfo>> {
     let root = agents_dir();
     if !root.exists() {
         return Ok(Vec::new());
@@ -265,7 +265,7 @@ fn list_legacy_jsonl_sessions() -> Result<Vec<AgentSessionInfo>> {
             let modified = fs::metadata(&path)
                 .and_then(|meta| meta.modified())
                 .unwrap_or(UNIX_EPOCH);
-            out.push(AgentSessionInfo {
+            out.push(SessionInfo {
                 path,
                 id: Some(id),
                 cwd: None,

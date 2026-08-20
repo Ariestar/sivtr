@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::agents::{
-    extract_content_text, filter_sessions_by_workspace, parse_jsonl_session, pretty_json_string,
+    extract_content_text, list_sessions_matching, parse_jsonl_session, pretty_json_string,
     pretty_json_value, push_block, push_tool_block, AgentBlockKind, AgentProvider, AgentSession,
-    AgentSessionInfo, AgentSessionProvider,
+    AgentSessionMeta, AgentSessionProvider, SessionInfo,
 };
 
 const PROVIDER_NAME: &str = "Grok";
@@ -39,39 +39,17 @@ impl AgentSessionProvider for GrokProvider {
         AgentProvider::Grok
     }
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
-        let root = grok_sessions_dir();
-        if !root.exists() {
-            return Ok(Vec::new());
-        }
-
-        let mut sessions = Vec::new();
-        for entry in fs::read_dir(&root)
-            .with_context(|| format!("Failed to read Grok sessions dir {}", root.display()))?
-        {
-            let entry = entry?;
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            // Each cwd bucket contains session dirs (and occasionally non-session files).
-            for session_entry in fs::read_dir(&path)
-                .with_context(|| format!("Failed to read Grok cwd sessions {}", path.display()))?
-            {
-                let session_entry = session_entry?;
-                let session_path = session_entry.path();
-                if !session_path.is_dir() {
-                    continue;
-                }
-                if let Some(info) = session_info_from_dir(&session_path)? {
-                    sessions.push(info);
-                }
-            }
-        }
-
-        sessions.sort_by_key(|session| session.modified);
-        sessions.reverse();
-        Ok(filter_sessions_by_workspace(sessions, cwd))
+    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
+        list_sessions_matching(
+            PROVIDER_NAME,
+            &grok_sessions_dir(),
+            cwd,
+            |path, is_dir| {
+                is_dir
+                    && (path.join(SUMMARY_FILE).exists() || path.join(CHAT_HISTORY_FILE).exists())
+            },
+            session_dir_meta,
+        )
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
@@ -129,37 +107,25 @@ struct SummaryMeta {
     modified: SystemTime,
 }
 
-fn session_info_from_dir(session_dir: &Path) -> Result<Option<AgentSessionInfo>> {
-    let summary_path = session_dir.join(SUMMARY_FILE);
-    let history_path = session_dir.join(CHAT_HISTORY_FILE);
-    if !summary_path.exists() && !history_path.exists() {
-        return Ok(None);
-    }
-
-    let meta = read_summary(&summary_path)?.unwrap_or_else(|| SummaryMeta {
-        id: session_dir
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(str::to_string),
-        cwd: None,
-        title: None,
-        modified: fs::metadata(session_dir)
-            .and_then(|meta| meta.modified())
-            .unwrap_or(UNIX_EPOCH),
-    });
-
-    Ok(Some(AgentSessionInfo {
-        path: session_dir.to_path_buf(),
-        id: meta.id.or_else(|| {
-            session_dir
+/// Listing metadata for one session directory: id/cwd/title from
+/// `summary.json` when present, else the directory name. Recency is derived
+/// from the session directory stamp by the shared listing cache.
+fn session_dir_meta(path: &Path) -> Result<AgentSessionMeta> {
+    Ok(match read_summary(&path.join(SUMMARY_FILE))? {
+        Some(meta) => AgentSessionMeta {
+            id: meta.id,
+            cwd: meta.cwd,
+            cwd_history: Vec::new(),
+            title: meta.title,
+        },
+        None => AgentSessionMeta {
+            id: path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .map(str::to_string)
-        }),
-        cwd: meta.cwd,
-        title: meta.title,
-        modified: meta.modified,
-    }))
+                .map(str::to_string),
+            ..AgentSessionMeta::default()
+        },
+    })
 }
 
 fn read_summary(path: &Path) -> Result<Option<SummaryMeta>> {
