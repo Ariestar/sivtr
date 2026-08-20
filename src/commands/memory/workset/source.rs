@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use sivtr_core::origin::{Entry, Reach};
-use sivtr_core::query::{load_workspace_source, NO_RECORD_FOR_SELECTOR};
+use sivtr_core::query::{load_workspace_source, LoadMode, NO_RECORD_FOR_SELECTOR};
 use sivtr_core::record::{expand_source, WorkPath, WorkRecord, WorkRef};
 
 use crate::commands::memory::filter::{self, Filter};
@@ -88,8 +88,19 @@ pub enum QuerySourceResult {
 /// Unified query: local and remote share one shape.
 ///
 /// Remote is only transport: same `Filter` is sent, peer runs the same local path
-/// on the share root, result comes back.
+/// on the share root, result comes back. The load mode is derived from the
+/// filter: bounds that read part text (pattern, exclude, BM25 ranking) force a
+/// full load; pure metadata queries stay light and callers materialize part
+/// text on demand.
 pub fn query(source: &str, filter: Filter, cwd: Option<&Path>) -> Result<WorkSet> {
+    // Bounds that read part text (pattern, exclude, BM25 ranking) need a full
+    // load; metadata-only filters stay light and callers materialize part
+    // text on demand.
+    let mode = if filter.needs_parts() {
+        LoadMode::Full
+    } else {
+        LoadMode::Light
+    };
     if source == "@" {
         return apply_loaded(read_stdin()?, filter);
     }
@@ -113,7 +124,7 @@ pub fn query(source: &str, filter: Filter, cwd: Option<&Path>) -> Result<WorkSet
             );
         }
         if scope.eq_ignore_ascii_case("local") {
-            return run_local(path, &cwd, filter);
+            return run_local(path, &cwd, filter, mode);
         }
         if scope.eq_ignore_ascii_case("all") {
             return run_all(path, &cwd, filter);
@@ -135,7 +146,7 @@ pub fn query(source: &str, filter: Filter, cwd: Option<&Path>) -> Result<WorkSet
         }
         return match registry.resolve(&scope)? {
             Some(entry) => match &entry.reach {
-                Reach::Local { root } => run_local(path, Path::new(root), filter),
+                Reach::Local { root } => run_local(path, Path::new(root), filter, mode),
                 Reach::Remote { workspace_key } => try_remote_timed(
                     workspace_key,
                     &entry.origin.name,
@@ -157,7 +168,7 @@ pub fn query(source: &str, filter: Filter, cwd: Option<&Path>) -> Result<WorkSet
         };
     }
 
-    run_local(&source, &cwd, filter)
+    run_local(&source, &cwd, filter, mode)
 }
 
 /// Load many sources in parallel — local and remote share one scheduler.
@@ -289,13 +300,15 @@ fn is_timeout_error(message: &str) -> bool {
 /// Peer-side query on a share root, optional redact. An empty workspace has
 /// no sessions and reports an empty result instead of erroring, so one
 /// member's empty contribution cannot abort a group fan-out.
+///
+/// The peer renders the response, so records are always loaded in full.
 pub fn run_on_share(
     root: &Path,
     source: &str,
     filter: Filter,
     redact: bool,
 ) -> Result<(Vec<WorkRecord>, Vec<WorkRef>)> {
-    match run_local(source, root, filter.for_remote_peer()) {
+    match run_local(source, root, filter.for_remote_peer(), LoadMode::Full) {
         Ok(mut set) => {
             if redact {
                 set.records = set
@@ -313,8 +326,8 @@ pub fn run_on_share(
     }
 }
 
-fn run_local(source: &str, root: &Path, filter: Filter) -> Result<WorkSet> {
-    let result = load_workspace_source(root, source)?;
+fn run_local(source: &str, root: &Path, filter: Filter, mode: LoadMode) -> Result<WorkSet> {
+    let result = load_workspace_source(root, source, mode)?;
     warn_skipped(&result.skipped);
     apply_loaded(
         WorkSet::with_anchors(root.display().to_string(), result.records, result.anchors),
@@ -359,7 +372,6 @@ fn run_all(source: &str, cwd: &Path, filter: Filter) -> Result<WorkSet> {
 
     apply_loaded(WorkSet::new(cwd.display().to_string(), records), filter)
 }
-
 fn apply_loaded(set: WorkSet, filter: Filter) -> Result<WorkSet> {
     filter::apply(PathBuf::from(&set.cwd), set.records, set.anchors, filter)
 }
@@ -512,7 +524,10 @@ pub fn load_context_records(
     let mut records = Vec::new();
     let mut seen_records = HashSet::new();
     for source in sources {
-        let set = query(&source, Filter::none(), Some(cwd))?;
+        // Context expansion renders full record bodies, so bypass the
+        // filter-driven light mode and force a full load.
+        let mut set = query(&source, Filter::none(), Some(cwd))?;
+        set.materialize_parts()?;
         for record in set.records {
             let key = record.work_ref.whole().to_string();
             if seen_records.insert(key) {

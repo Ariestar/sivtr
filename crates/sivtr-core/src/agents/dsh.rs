@@ -28,9 +28,9 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::agents::{
-    extract_content_text, list_recent_log_sessions, pretty_json_string, push_block,
-    push_tool_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionInfo,
-    AgentSessionMeta, AgentSessionProvider,
+    extract_content_text, list_sessions_matching, pretty_json_string, push_block, push_tool_block,
+    AgentBlockKind, AgentProvider, AgentSession, AgentSessionMeta, AgentSessionProvider,
+    SessionInfo,
 };
 
 const PROVIDER_NAME: &str = "Dsh";
@@ -63,13 +63,13 @@ impl AgentSessionProvider for DshProvider {
         AgentProvider::Dsh
     }
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
+    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
         let root = sessions_root();
-        list_recent_log_sessions(
+        list_sessions_matching(
             PROVIDER_NAME,
             &root,
             cwd,
-            dsh_log_files(&root)?,
+            |path, is_dir| !is_dir && is_dsh_log(path),
             parse_session_meta,
         )
     }
@@ -106,27 +106,6 @@ fn is_dsh_log(path: &Path) -> bool {
         path.file_name().and_then(|name| name.to_str()),
         Some("session.jsonl") | Some("session.jsonl.zstd")
     )
-}
-
-fn dsh_log_files(root: &Path) -> Result<Vec<PathBuf>> {
-    if !root.exists() {
-        return Ok(Vec::new());
-    }
-    let mut files = Vec::new();
-    collect_dsh_log_files(root, &mut files)?;
-    Ok(files)
-}
-
-fn collect_dsh_log_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in fs::read_dir(dir).with_context(|| format!("Failed to read {}", dir.display()))? {
-        let path = entry?.path();
-        if path.is_dir() {
-            collect_dsh_log_files(&path, files)?;
-        } else if is_dsh_log(&path) {
-            files.push(path);
-        }
-    }
-    Ok(())
 }
 
 /// Read a whole session log as text, decompressing `.jsonl.zstd` artifacts.

@@ -20,8 +20,8 @@ use std::path::{Path, PathBuf};
 
 use crate::agents::{
     list_chat_recording_sessions, parse_jsonl_session, pretty_json_value, push_parts_blocks,
-    push_tool_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionInfo,
-    AgentSessionMeta, AgentSessionProvider,
+    push_tool_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionMeta,
+    AgentSessionProvider, SessionInfo,
 };
 
 const PROVIDER_NAME: &str = "Qwen";
@@ -37,7 +37,7 @@ impl AgentSessionProvider for QwenProvider {
         AgentProvider::Qwen
     }
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
+    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
         list_chat_recording_sessions(PROVIDER_NAME, &qwen_tmp_dir(), cwd, parse_session_meta)
     }
 

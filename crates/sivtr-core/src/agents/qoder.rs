@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::agents::{
     extract_content_text, filter_sessions_by_workspace, parse_jsonl_meta, parse_jsonl_session,
     pretty_json_value, push_block, push_tool_block, AgentBlockKind, AgentProvider, AgentSession,
-    AgentSessionInfo, AgentSessionMeta, AgentSessionProvider,
+    AgentSessionMeta, AgentSessionProvider, SessionInfo,
 };
 
 const PROVIDER_NAME: &str = "Qoder";
@@ -34,7 +34,7 @@ impl AgentSessionProvider for QoderProvider {
         AgentProvider::Qoder
     }
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
+    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
         list_recent_sessions_in(&qoder_projects_dir(), cwd)
     }
 
@@ -48,7 +48,7 @@ impl AgentSessionProvider for QoderCnProvider {
         AgentProvider::QoderCn
     }
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
+    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
         list_recent_sessions_in(&qoder_cn_projects_dir(), cwd)
     }
 
@@ -59,7 +59,7 @@ impl AgentSessionProvider for QoderCnProvider {
 
 /// Scan `projects/<cwd-slug>/<session>.jsonl` under `root`, newest first.
 /// Shared by the global and CN Qoder providers; only `root` differs.
-fn list_recent_sessions_in(root: &Path, cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
+fn list_recent_sessions_in(root: &Path, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
     if !root.exists() {
         return Ok(Vec::new());
     }
@@ -86,7 +86,7 @@ fn list_recent_sessions_in(root: &Path, cwd: Option<&Path>) -> Result<Vec<AgentS
                     let modified = fs::metadata(&path)
                         .and_then(|m| m.modified())
                         .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                    sessions.push(AgentSessionInfo {
+                    sessions.push(SessionInfo {
                         path,
                         id: meta.id,
                         cwd: meta.cwd,

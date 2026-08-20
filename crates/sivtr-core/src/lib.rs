@@ -10,6 +10,7 @@ pub mod query;
 pub mod record;
 pub mod search;
 pub mod session;
+pub mod session_source;
 pub mod time;
 pub mod workspace;
 

@@ -90,6 +90,21 @@ impl Filter {
         Self::default()
     }
 
+    /// Whether applying this filter reads part text: per-line pattern and
+    /// exclude matching scan `parts`, BM25 ranking is built from part text,
+    /// parts-mode emits per-part hits, kind and field bounds match on
+    /// `part.kind()`, and input/output/command fields inspect part kinds.
+    /// Title/session bounds and the default content field with no pattern
+    /// stay metadata-only.
+    pub fn needs_parts(&self) -> bool {
+        self.pattern.is_some()
+            || self.exclude_regex.is_some()
+            || self.rank.is_some()
+            || self.mode == FilterMode::Parts
+            || self.kind.is_some()
+            || matches!(self.in_field, Field::Input | Field::Output | Field::Command)
+    }
+
     /// Browse session list: newest-first, bounded by `latest` records.
     pub fn browse_session_page(latest: usize) -> Self {
         Self {
@@ -272,7 +287,7 @@ impl<'a> Searcher<'a> {
             IndexSource::Shared(index) => index,
             IndexSource::Lazy(cell) => {
                 lazy_slot = cell.borrow_mut();
-                lazy_slot.get_or_insert_with(|| Bm25Index::build(self.records))
+                lazy_slot.get_or_insert_with(|| super::index_cache::build_or_load(self.records))
             }
         };
 

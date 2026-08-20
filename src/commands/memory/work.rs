@@ -11,7 +11,7 @@ use crate::commands::memory::filter;
 use crate::commands::memory::records::current_work_record_index;
 use crate::commands::memory::show;
 use crate::commands::memory::work_json::{session_meta, WorkJsonSessionMeta};
-use crate::commands::memory::workset::{self, WorkSet};
+use crate::commands::memory::workset;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WorkSessionSource {
@@ -86,43 +86,30 @@ fn execute_sessions(args: &WorkSessionsArgs) -> Result<()> {
 
 fn execute_records(args: &WorkRecordsArgs) -> Result<()> {
     let cwd = resolve_cwd(args.cwd.as_deref())?;
-    let set = workset::query(&args.source, filter::Filter::none(), Some(&cwd))?;
-    let display_cwd = set.cwd;
-    let records = set.records;
-    let record_anchors = set
-        .anchors
-        .into_iter()
-        .map(|anchor| anchor.whole())
-        .collect::<Vec<_>>();
-    let mut set = WorkSet::with_anchors(
-        display_cwd,
-        workset::records_for_anchors(&records, &record_anchors),
-        record_anchors,
-    );
+    let mut set = workset::query(&args.source, filter::Filter::none(), Some(&cwd))?;
     set.save_last()?;
     if let Some(name) = args.save.as_deref() {
         set.save_as(name)?;
     }
     show::print_workset(
-        &set,
+        &mut set,
         show::resolve_output_format(args.format, false, args.refs, args.json),
     )
 }
 
 fn execute_parts(args: &WorkPartsArgs) -> Result<()> {
     let cwd = resolve_cwd(args.cwd.as_deref())?;
-    let set = workset::query(
+    let mut set = workset::query(
         &args.source,
         filter::from_work_parts_args(args)?,
         Some(&cwd),
     )?;
-    let mut set = set;
     set.save_last()?;
     if let Some(name) = args.save.as_deref() {
         set.save_as(name)?;
     }
     show::print_workset(
-        &set,
+        &mut set,
         show::resolve_output_format(args.format, false, args.refs, args.json),
     )
 }

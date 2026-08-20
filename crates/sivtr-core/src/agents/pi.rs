@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use crate::agents::{
     extract_content_text, list_recent_jsonl_sessions, parse_jsonl_meta, parse_jsonl_session,
-    pretty_json_value, push_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionInfo,
-    AgentSessionMeta, AgentSessionProvider,
+    pretty_json_value, push_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionMeta,
+    AgentSessionProvider, SessionInfo,
 };
 
 const PROVIDER_NAME: &str = "Pi";
@@ -18,7 +18,7 @@ impl AgentSessionProvider for PiProvider {
         AgentProvider::Pi
     }
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<AgentSessionInfo>> {
+    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
         list_recent_jsonl_sessions(PROVIDER_NAME, &pi_sessions_dir(), cwd, parse_session_meta)
     }
 
