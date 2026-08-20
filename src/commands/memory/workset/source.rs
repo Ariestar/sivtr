@@ -6,7 +6,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use sivtr_core::origin::Reach;
+use sivtr_core::origin::{Entry, Reach};
 use sivtr_core::query::{load_workspace_source, LoadMode, NO_RECORD_FOR_SELECTOR};
 use sivtr_core::record::{expand_source, WorkPath, WorkRecord, WorkRef};
 
@@ -40,6 +40,9 @@ pub struct QuerySource {
     /// Selector accepted by [`query`] (`codex`, `desk:terminal`, …).
     pub selector: String,
     pub transport: QueryTransport,
+    /// Local sources load from this root instead of the caller's cwd
+    /// (`None` = caller cwd). Lets one batch span many local workspaces.
+    pub root: Option<PathBuf>,
 }
 
 impl QuerySource {
@@ -47,6 +50,7 @@ impl QuerySource {
         Self {
             selector: selector.into(),
             transport: QueryTransport::Local,
+            root: None,
         }
     }
 
@@ -54,6 +58,22 @@ impl QuerySource {
         Self {
             selector: selector.into(),
             transport: QueryTransport::Remote,
+            root: None,
+        }
+    }
+
+    /// Build a source from a registry entry: local workspaces load from
+    /// their own root, remote mounts keep the `alias:path` selector the
+    /// peer-side dispatcher already understands. Adding an origin kind means
+    /// one new arm here — `query_many` then schedules it unchanged.
+    pub fn from_entry(entry: &Entry, source: &str) -> Self {
+        match &entry.reach {
+            Reach::Local { root } => Self {
+                selector: source.to_string(),
+                transport: QueryTransport::Local,
+                root: Some(PathBuf::from(root)),
+            },
+            Reach::Remote { .. } => Self::remote(format!("{}:{source}", entry.origin.name)),
         }
     }
 }
@@ -99,6 +119,9 @@ pub fn query(source: &str, filter: Filter, cwd: Option<&Path>) -> Result<WorkSet
         if scope.eq_ignore_ascii_case("local") {
             return run_local(path, &cwd, filter, mode);
         }
+        if scope.eq_ignore_ascii_case("all") {
+            return run_all(path, &cwd, filter);
+        }
         let scope = scope.to_ascii_lowercase();
 
         // One lookup: the registry is the single alias table (local
@@ -141,12 +164,11 @@ pub fn query(source: &str, filter: Filter, cwd: Option<&Path>) -> Result<WorkSet
     run_local(&source, &cwd, filter, mode)
 }
 
-/// Load many sources. Locals run first (fail hard); remotes run in parallel with
-/// a per-source timeout. Order of `results` matches `sources`.
-///
-/// This is the multi-source schedule layer shared by browse (and later search
-/// `--all`). Each remote still uses [`query`]; speedup comes from overlapping
-/// RTT and failing stuck peers without blocking the batch.
+/// Load many sources in parallel — local and remote share one scheduler.
+/// A local source may carry its own root ([`QuerySource::root`]) so one batch
+/// spans every local workspace; remotes run with a per-source timeout and
+/// out-of-order arrival, and a source's failure never drops the others.
+/// Order of `results` matches `sources`.
 pub fn query_many(
     sources: &[QuerySource],
     filter: Filter,
@@ -161,104 +183,67 @@ pub fn query_many(
         .map(Path::to_path_buf)
         .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
 
-    let mut results: Vec<Option<QuerySourceResult>> = sources.iter().map(|_| None).collect();
-
-    let mut remote_idxs = Vec::new();
-    for (idx, source) in sources.iter().enumerate() {
-        if source.transport == QueryTransport::Remote {
-            remote_idxs.push(idx);
-            continue;
-        }
-        match query(&source.selector, filter.clone(), Some(&cwd)) {
-            Ok(set) => results[idx] = Some(QuerySourceResult::Ok(set)),
-            Err(error) => {
-                let message = error.to_string();
-                // Empty selector is normal for browse; keep parity with single-source callers.
-                if message.starts_with(NO_RECORD_FOR_SELECTOR) {
-                    results[idx] = Some(QuerySourceResult::Ok(WorkSet::with_anchors(
-                        cwd.display().to_string(),
-                        Vec::new(),
-                        Vec::new(),
-                    )));
-                } else {
-                    return Err(error).context(format!("Failed to load `{}`", source.selector));
-                }
-            }
-        }
-    }
-
-    if remote_idxs.is_empty() {
-        return Ok(results
-            .into_iter()
-            .map(|slot| slot.expect("local result filled"))
-            .collect());
-    }
-
     let (tx, rx) = mpsc::channel();
-    let workers = remote_idxs.len();
-    for &idx in &remote_idxs {
-        let selector = sources[idx].selector.clone();
+    let mut pending = 0;
+    for (idx, source) in sources.iter().enumerate() {
+        let selector = source.selector.clone();
         let filter = filter.clone();
         let cwd = cwd.clone();
+        let root = source.root.clone();
+        let remote = source.transport == QueryTransport::Remote;
         let tx = tx.clone();
+        pending += 1;
         thread::spawn(move || {
-            let result = match query_remote_bounded(&selector, filter, &cwd, remote_timeout) {
-                Ok(set) => Ok(set),
-                Err(error) => {
-                    let message = error.to_string();
-                    if message.starts_with(NO_RECORD_FOR_SELECTOR) {
-                        Ok(WorkSet::with_anchors(
-                            cwd.display().to_string(),
-                            Vec::new(),
-                            Vec::new(),
-                        ))
-                    } else if is_timeout_error(&message) {
-                        Err("timeout".to_string())
-                    } else {
-                        Err(format!("{error:#}"))
-                    }
-                }
+            let result = if remote {
+                query_remote_bounded(&selector, filter, &cwd, remote_timeout)
+            } else {
+                query(&selector, filter, root.as_deref())
             };
-            let _ = tx.send((idx, result));
+            let normalized = normalize_source_result(result, &cwd);
+            let _ = tx.send((idx, normalized));
         });
     }
     drop(tx);
 
-    let mut remaining = workers;
+    let mut results: Vec<Option<QuerySourceResult>> = sources.iter().map(|_| None).collect();
+    let mut remaining = pending;
     while remaining > 0 {
-        match rx.recv_timeout(remote_timeout + Duration::from_secs(1)) {
-            Ok((idx, Ok(set))) => {
-                results[idx] = Some(QuerySourceResult::Ok(set));
+        match rx.recv() {
+            Ok((idx, result)) => {
+                results[idx] = Some(result);
                 remaining -= 1;
             }
-            Ok((idx, Err(message))) => {
-                results[idx] = Some(QuerySourceResult::Err(message));
-                remaining -= 1;
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                for &idx in &remote_idxs {
-                    if results[idx].is_none() {
-                        results[idx] = Some(QuerySourceResult::Err("timeout".to_string()));
-                    }
-                }
-                break;
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                for &idx in &remote_idxs {
-                    if results[idx].is_none() {
-                        results[idx] =
-                            Some(QuerySourceResult::Err("load worker exited".to_string()));
-                    }
-                }
-                break;
-            }
+            Err(_) => break, // all senders dropped
         }
     }
 
     Ok(results
         .into_iter()
-        .map(|slot| slot.expect("every source has a result"))
+        .map(|slot| slot.unwrap_or(QuerySourceResult::Err("load worker exited".to_string())))
         .collect())
+}
+
+/// Canonical per-source outcome: an empty selector (no records for the
+/// source, e.g. a workspace without terminal logs) is an empty result, not an
+/// error — the batch keeps the rest. Timeouts report as `timeout`.
+fn normalize_source_result(result: Result<WorkSet>, cwd: &Path) -> QuerySourceResult {
+    match result {
+        Ok(set) => QuerySourceResult::Ok(set),
+        Err(error) => {
+            let message = error.to_string();
+            if message.starts_with(NO_RECORD_FOR_SELECTOR) {
+                QuerySourceResult::Ok(WorkSet::with_anchors(
+                    cwd.display().to_string(),
+                    Vec::new(),
+                    Vec::new(),
+                ))
+            } else if is_timeout_error(&message) {
+                QuerySourceResult::Err("timeout".to_string())
+            } else {
+                QuerySourceResult::Err(format!("{error:#}"))
+            }
+        }
+    }
 }
 
 fn query_remote_bounded(
@@ -351,6 +336,44 @@ fn load_mode_for(filter: &Filter) -> LoadMode {
     } else {
         LoadMode::Light
     }
+}
+
+/// Load `source` from every addressable origin (all local workspaces plus the
+/// current workspace's remote mounts), merge them into one corpus, then apply
+/// the filter once — so reachability limit and relevance ranking are global
+/// across origins, not per-origin.
+fn run_all(source: &str, cwd: &Path, filter: Filter) -> Result<WorkSet> {
+    // Passive enumeration, same as `ws list` / `sivtr_status`: mounts are
+    // listed only while the daemon is already running. `all:` never starts
+    // the daemon, so a pure-local query is not blocked on daemon startup.
+    let registry = crate::origins::collect(cwd)?;
+
+    let sources: Vec<QuerySource> = registry
+        .entries()
+        .map(|entry| QuerySource::from_entry(entry, source))
+        .collect();
+    let results = query_many(&sources, Filter::none(), Some(cwd), REMOTE_QUERY_TIMEOUT)
+        .with_context(|| format!("failed to load `{source}` from every origin"))?;
+
+    // Merge with per-ref dedup: a workref may appear in more than one origin
+    // (same provider session recorded from multiple checkouts).
+    let mut records: Vec<WorkRecord> = Vec::new();
+    let mut seen: HashSet<WorkRef> = HashSet::new();
+    for result in results {
+        let QuerySourceResult::Ok(set) = result else {
+            output::warning(format!(
+                "skipped an origin during `all:{source}`: {result:?}"
+            ));
+            continue;
+        };
+        for record in set.records {
+            if seen.insert(record.work_ref.whole()) {
+                records.push(record);
+            }
+        }
+    }
+
+    apply_loaded(WorkSet::new(cwd.display().to_string(), records), filter)
 }
 
 fn apply_loaded(set: WorkSet, filter: Filter) -> Result<WorkSet> {

@@ -92,6 +92,11 @@ impl OriginRegistry {
         self.entries.iter().map(|entry| &entry.origin)
     }
 
+    /// Entries (display origin + reach payload) in construction order.
+    pub fn entries(&self) -> impl Iterator<Item = &Entry> + '_ {
+        self.entries.iter()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

@@ -14,7 +14,9 @@ use crate::commands::memory::workset::WorkSet;
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct SearchParams {
-    /// Source selector: terminal, agent, pi, desk:terminal, @last, ...
+    /// Source selector: terminal, agent, pi, desk:terminal, @last, or all:<src>
+    /// (e.g. all:agent searches every origin — all local workspaces plus the
+    /// current workspace's remote mounts — as one corpus).
     pub source: String,
     /// Plain-text query: BM25 ranks the source by these terms (no regex).
     /// With match_regex present, the regex bounds the set and this query ranks it.

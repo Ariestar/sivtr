@@ -95,6 +95,7 @@ Source forms:
 - `terminal`, `agent`, `codex`, `claude`, `cursor`, `opencode`, `openclaw`, `grok`, `hermes`, `pi`, `qoder`
 - `terminal/<session>/<record>`, `<provider>/<session>/<turn>`, `<provider>/<session>/<turn>/p<part>`, and selector variants
 - `origin:body` for another local workspace or named remote, for example `desk:terminal/...`, `docs:codex/4`
+- `all:<src>` searches every origin as one corpus (all local workspaces plus the current workspace's remote mounts): `all:agent "workflow 最佳实践"`
 - `@last`, `@name`, `@name[1]`, `@name[1,3]`, `@name[1..5]`, `@name[1..3,8]`
 - `@` reads a WorkSet from stdin in shell pipelines
 
