@@ -54,7 +54,10 @@ impl SessionSource for TerminalSource {
         };
         let mut infos = Vec::new();
         let paths = workspace::terminal_log_paths_for_workspace(cwd).with_context(|| {
-            format!("Failed to list terminal sessions for workspace {}", cwd.display())
+            format!(
+                "Failed to list terminal sessions for workspace {}",
+                cwd.display()
+            )
         })?;
         for path in paths {
             let modified = std::fs::metadata(&path)
