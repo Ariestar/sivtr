@@ -102,22 +102,14 @@ pub enum QuerySourceResult {
     Err(String),
 }
 
-/// Unified query: local and remote share one shape.
+/// Unified query: local, remote, and group sources share one shape.
 ///
-/// Remote is only transport: same `Filter` is sent, peer runs the same local path
-/// on the share root, result comes back. The load mode is derived from the
-/// filter: bounds that read part text (pattern, exclude, BM25 ranking) force a
-/// full load; pure metadata queries stay light and callers materialize part
-/// text on demand.
+/// Remote is only transport: same `Filter` is sent, peer runs the same local
+/// path on the share root, result comes back. The load mode is derived from
+/// the filter: bounds that read part text (pattern, exclude, BM25 ranking)
+/// force a full load; pure metadata queries stay light and callers
+/// materialize part text on demand.
 pub fn query(source: &str, filter: Filter, cwd: Option<&Path>) -> Result<WorkSet> {
-    // Bounds that read part text (pattern, exclude, BM25 ranking) need a full
-    // load; metadata-only filters stay light and callers materialize part
-    // text on demand.
-    let mode = if filter.needs_parts() {
-        LoadMode::Full
-    } else {
-        LoadMode::Light
-    };
     if source == "@" {
         return apply_loaded(read_stdin()?, filter);
     }
@@ -129,79 +121,123 @@ pub fn query(source: &str, filter: Filter, cwd: Option<&Path>) -> Result<WorkSet
         .map(Path::to_path_buf)
         .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
 
-    let source = expand_source(source)?;
-
-    if let Some((scope, path)) = source.split_once(':') {
-        if path.is_empty() {
-            anyhow::bail!("source `{source}` is missing a selector after `:`");
-        }
-        if path.starts_with('/') {
-            anyhow::bail!(
-                "Invalid source `{source}`; use `scope:path` (for example `desk:terminal`), not `://`"
-            );
-        }
-        if scope.eq_ignore_ascii_case("local") {
-            return run_local(path, &cwd, filter, mode);
-        }
-        if scope.eq_ignore_ascii_case("all") {
-            return run_all(path, &cwd, filter);
-        }
-        let scope = scope.to_ascii_lowercase();
-
-        // One lookup: the registry is the single alias table (local
-        // workspaces, remote mounts), each entry carrying its reach payload;
-        // resolution applies kind precedence on name collisions.
-        // The registry lists mounts only while the daemon is already running,
-        // so a passive miss is retried once with the daemon up — a cold
-        // `desk:terminal` query must still resolve its mount. Groups
-        // (`team`, `team/alice`) are a roster fan-out over many devices, not
-        // a single origin, so they are tried only on a miss.
-        let mut registry = crate::origins::collect(&cwd)?;
-        if registry.resolve(&scope)?.is_none() {
-            serve::ensure_running()?;
-            registry = crate::origins::collect(&cwd)?;
-        }
-        return match registry.resolve(&scope)? {
-            Some(entry) => match &entry.reach {
-                Reach::Local { root } => run_local(path, Path::new(root), filter, mode),
-                Reach::Remote { workspace_key } => try_remote_timed(
-                    workspace_key,
-                    &entry.origin.name,
-                    path,
-                    filter,
-                    &cwd,
-                    Duration::from_secs(30),
-                )
-                .with_context(|| format!("remote mount `{}` unavailable", entry.origin.name)),
-            },
-            None => {
-                // Not a registry origin; check if it is a group scope.
-                if split_group_scope(&scope).is_some() {
-                    let mut results =
-                        query_many(&[QuerySource::group(&source)], filter, Some(&cwd))?;
-                    return match results.pop() {
-                        Some(QuerySourceResult::Ok(set)) => Ok(set),
-                        Some(QuerySourceResult::Err(message)) => {
-                            anyhow::bail!("{message}")
-                        }
-                        None => anyhow::bail!("group query produced no result"),
-                    };
-                }
-                anyhow::bail!(
-                    "unknown scope `{scope}`; use `sivtr ws list` for local workspaces, `sivtr remote list` for remotes, or `sivtr group list` for groups"
-                )
-            }
-        };
-    }
-
-    run_local(&source, &cwd, filter, mode)
+    let sources = resolve_source(source, &cwd)?;
+    let results = query_many(&sources, filter.clone(), Some(&cwd))?;
+    merge_and_apply(results, &cwd, filter)
 }
 
-/// Load many sources in parallel — local and remote share one scheduler.
-/// A local source may carry its own root ([`QuerySource::root`]) so one batch
-/// spans every local workspace; remotes run with a per-source timeout and
-/// out-of-order arrival, and a source's failure never drops the others.
-/// Order of `results` matches `sources`.
+/// Resolve a source expression into the concrete sources it addresses.
+/// Every scope shape (bare selector, `local:`, `all:`, registry aliases,
+/// groups) collapses into a [`QuerySource`] list here; [`query_many`] then
+/// schedules them unchanged.
+fn resolve_source(source: &str, cwd: &Path) -> Result<Vec<QuerySource>> {
+    let source = expand_source(source)?;
+
+    let Some((scope, path)) = source.split_once(':') else {
+        return Ok(vec![QuerySource {
+            selector: source,
+            transport: QueryTransport::Local,
+            root: Some(cwd.to_path_buf()),
+            timeout: REMOTE_QUERY_TIMEOUT,
+        }]);
+    };
+    if path.is_empty() {
+        anyhow::bail!("source `{source}` is missing a selector after `:`");
+    }
+    if path.starts_with('/') {
+        anyhow::bail!(
+            "Invalid source `{source}`; use `scope:path` (for example `desk:terminal`), not `://`"
+        );
+    }
+    if scope.eq_ignore_ascii_case("local") {
+        return Ok(vec![QuerySource {
+            selector: path.to_string(),
+            transport: QueryTransport::Local,
+            root: Some(cwd.to_path_buf()),
+            timeout: REMOTE_QUERY_TIMEOUT,
+        }]);
+    }
+    if scope.eq_ignore_ascii_case("all") {
+        let registry = crate::origins::collect(cwd)?;
+        let sources: Vec<QuerySource> = registry
+            .entries()
+            .map(|entry| QuerySource::from_entry(entry, path))
+            .collect();
+        return Ok(sources);
+    }
+
+    let scope = scope.to_ascii_lowercase();
+
+    // One lookup: the registry is the single alias table (local workspaces,
+    // remote mounts), each entry carrying its reach payload. The registry
+    // lists mounts only while the daemon is already running, so a passive
+    // miss is retried once with the daemon up — a cold `desk:terminal` query
+    // must still resolve its mount. Groups (`team`, `team/alice`) are a
+    // roster fan-out over many devices, not a single origin, so they are
+    // tried only on a miss.
+    let mut registry = crate::origins::collect(cwd)?;
+    if registry.resolve(&scope)?.is_none() {
+        serve::ensure_running()?;
+        registry = crate::origins::collect(cwd)?;
+    }
+    if let Some(entry) = registry.resolve(&scope)? {
+        return match &entry.reach {
+            Reach::Local { root } => Ok(vec![QuerySource {
+                selector: path.to_string(),
+                transport: QueryTransport::Local,
+                root: Some(PathBuf::from(root)),
+                timeout: REMOTE_QUERY_TIMEOUT,
+            }]),
+            Reach::Remote { .. } => Ok(vec![QuerySource::remote(format!(
+                "{}:{path}",
+                entry.origin.name
+            ))]),
+        };
+    }
+    if split_group_scope(&scope).is_some() {
+        return Ok(vec![QuerySource::group(&source)]);
+    }
+    anyhow::bail!(
+        "unknown scope `{scope}`; use `sivtr ws list` for local workspaces, `sivtr remote list` for remotes, or `sivtr group list` for groups"
+    )
+}
+
+/// Merge per-source outcomes into one corpus, then apply the filter once
+/// across the merged records. A failed source drops without aborting the
+/// batch; when every source failed, the first error is what the caller sees.
+fn merge_and_apply(results: Vec<QuerySourceResult>, cwd: &Path, filter: Filter) -> Result<WorkSet> {
+    let mut records: Vec<WorkRecord> = Vec::new();
+    let mut seen: HashSet<WorkRef> = HashSet::new();
+    let mut errors: Vec<String> = Vec::new();
+    for result in results {
+        match result {
+            QuerySourceResult::Ok(set) => {
+                for record in set.records {
+                    if seen.insert(record.work_ref.whole()) {
+                        records.push(record);
+                    }
+                }
+            }
+            QuerySourceResult::Err(message) => errors.push(message),
+        }
+    }
+    if records.is_empty() {
+        if let Some(first) = errors.first() {
+            anyhow::bail!("{first}");
+        }
+        return apply_loaded(WorkSet::new(cwd.display().to_string(), Vec::new()), filter);
+    }
+    for error in &errors {
+        output::warning(format!("skipped an origin: {error}"));
+    }
+    apply_loaded(WorkSet::new(cwd.display().to_string(), records), filter)
+}
+
+/// Load many sources in parallel — local, remote, and group share one
+/// scheduler. A local source may carry its own root ([`QuerySource::root`])
+/// so one batch spans every local workspace; remotes run with a per-source
+/// timeout and out-of-order arrival, and a source's failure never drops the
+/// others. Order of `results` matches `sources`.
 pub fn query_many(
     sources: &[QuerySource],
     filter: Filter,
@@ -214,6 +250,15 @@ pub fn query_many(
     let cwd = cwd
         .map(Path::to_path_buf)
         .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
+
+    // Bounds that read part text (pattern, exclude, BM25 ranking) need a full
+    // load; metadata-only filters stay light and callers materialize part
+    // text on demand.
+    let mode = if filter.needs_parts() {
+        LoadMode::Full
+    } else {
+        LoadMode::Light
+    };
 
     let (tx, rx) = mpsc::channel();
     let mut pending = 0;
@@ -228,7 +273,10 @@ pub fn query_many(
         pending += 1;
         thread::spawn(move || {
             let result = match transport {
-                QueryTransport::Local => query(&selector, filter, root.as_deref()),
+                QueryTransport::Local => {
+                    let root = root.as_deref().unwrap_or(&cwd);
+                    run_local(&selector, root, filter, mode)
+                }
                 QueryTransport::Remote => query_remote_bounded(&selector, filter, &cwd, timeout),
                 QueryTransport::Group => group_query(&selector, filter, &cwd),
             };
@@ -285,21 +333,20 @@ fn query_remote_bounded(
     cwd: &Path,
     read_timeout: Duration,
 ) -> Result<WorkSet> {
-    // Only confirmed mounts need the timed IPC path, so the daemon socket
-    // itself respects the interactive deadline. Everything else — groups,
-    // named local workspaces, plain selectors — goes through the unified
-    // [`query`], which resolves it in one registry lookup.
+    // Remote sources are always `alias:path` — resolve_source pins them, and
+    // browse builds them from registry origins. Anything else is a bug in
+    // the caller, not a selector to re-resolve.
     let Some((scope, path)) = selector.split_once(':') else {
-        return query(selector, filter, Some(cwd));
+        anyhow::bail!("remote source `{selector}` must be `alias:path`");
     };
     if path.is_empty() || path.starts_with('/') || scope.eq_ignore_ascii_case("local") {
-        return query(selector, filter, Some(cwd));
+        anyhow::bail!("remote source `{selector}` must be `alias:path`");
     }
     // Remote mounts need the daemon; start it before the passive lookup.
     serve::ensure_running()?;
     let registry = crate::origins::collect(cwd)?;
     let Some(entry) = registry.resolve(scope)? else {
-        return query(selector, filter, Some(cwd));
+        anyhow::bail!("unknown remote alias `{scope}`; use `sivtr remote list`");
     };
     match &entry.reach {
         Reach::Remote { workspace_key } => try_remote_timed(
@@ -311,7 +358,7 @@ fn query_remote_bounded(
             read_timeout,
         )
         .with_context(|| format!("remote mount `{}` unavailable", entry.origin.name)),
-        _ => query(selector, filter, Some(cwd)),
+        _ => anyhow::bail!("`{scope}` is not a remote mount"),
     }
 }
 
@@ -361,43 +408,6 @@ fn run_local(source: &str, root: &Path, filter: Filter, mode: LoadMode) -> Resul
     )
 }
 
-/// Load `source` from every addressable origin (all local workspaces plus the
-/// current workspace's remote mounts), merge them into one corpus, then apply
-/// the filter once — so reachability limit and relevance ranking are global
-/// across origins, not per-origin.
-fn run_all(source: &str, cwd: &Path, filter: Filter) -> Result<WorkSet> {
-    // Passive enumeration, same as `ws list` / `sivtr_status`: mounts are
-    // listed only while the daemon is already running. `all:` never starts
-    // the daemon, so a pure-local query is not blocked on daemon startup.
-    let registry = crate::origins::collect(cwd)?;
-
-    let sources: Vec<QuerySource> = registry
-        .entries()
-        .map(|entry| QuerySource::from_entry(entry, source))
-        .collect();
-    let results = query_many(&sources, Filter::none(), Some(cwd))
-        .with_context(|| format!("failed to load `{source}` from every origin"))?;
-
-    // Merge with per-ref dedup: a workref may appear in more than one origin
-    // (same provider session recorded from multiple checkouts).
-    let mut records: Vec<WorkRecord> = Vec::new();
-    let mut seen: HashSet<WorkRef> = HashSet::new();
-    for result in results {
-        let QuerySourceResult::Ok(set) = result else {
-            output::warning(format!(
-                "skipped an origin during `all:{source}`: {result:?}"
-            ));
-            continue;
-        };
-        for record in set.records {
-            if seen.insert(record.work_ref.whole()) {
-                records.push(record);
-            }
-        }
-    }
-
-    apply_loaded(WorkSet::new(cwd.display().to_string(), records), filter)
-}
 fn apply_loaded(set: WorkSet, filter: Filter) -> Result<WorkSet> {
     filter::apply(PathBuf::from(&set.cwd), set.records, set.anchors, filter)
 }
@@ -574,7 +584,7 @@ pub fn load_context_records(
 
 #[cfg(test)]
 mod tests {
-    use super::split_group_scope;
+    use super::{resolve_source, split_group_scope, QueryTransport};
 
     #[test]
     fn group_scope_splits_team_and_member_forms() {
@@ -600,5 +610,32 @@ mod tests {
         assert_eq!(split_group_scope(""), None);
         assert_eq!(split_group_scope("team/"), None);
         assert_eq!(split_group_scope("a b"), None);
+    }
+
+    #[test]
+    fn resolve_bare_selector_is_local_with_cwd_root() {
+        let cwd = std::path::Path::new("/repo");
+        let sources = resolve_source("terminal", cwd).expect("resolve");
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].selector, "terminal");
+        assert_eq!(sources[0].transport, QueryTransport::Local);
+        assert_eq!(sources[0].root.as_deref(), Some(cwd));
+    }
+
+    #[test]
+    fn resolve_local_prefix_strips_the_scope() {
+        let cwd = std::path::Path::new("/repo");
+        let sources = resolve_source("local:codex", cwd).expect("resolve");
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].selector, "codex");
+        assert_eq!(sources[0].transport, QueryTransport::Local);
+        assert_eq!(sources[0].root.as_deref(), Some(cwd));
+    }
+
+    #[test]
+    fn resolve_rejects_empty_or_absolute_paths() {
+        let cwd = std::path::Path::new("/repo");
+        assert!(resolve_source("desk:", cwd).is_err());
+        assert!(resolve_source("desk:/absolute", cwd).is_err());
     }
 }
