@@ -1,10 +1,15 @@
 # release-plz drives version bumps, the changelog, and tagging.
 #
 # Version strategy (0.x):
-# - Only `feat`/`fix` commits open a Release PR (`release_commits`); docs,
-#   perf, chore, refactor, ci, test do NOT bump a version on their own — they
-#   ride along with the next feature/fix release, so the version moves only
-#   when real functionality ships.
+# - `feat`/`fix` commits open a Release PR (`release_commits`); docs, perf,
+#   chore, refactor, ci, test do NOT bump a version on their own — they ride
+#   along with the next feature/fix release, so the version moves only when
+#   real functionality ships.
+# - Once a Release PR is open, later `feat`/`fix` commits accumulate in it
+#   (the version is not bumped again); merging it is what publishes. The
+#   release cadence — merge PATCH PRs immediately, hold MINOR PRs until
+#   enough features accumulate — is a process decision, not a config one;
+#   see AGENTS.md "Release cadence".
 # - `feat` bumps MINOR and `fix` bumps PATCH in 0.x
 #   (`features_always_increment_minor` keeps feature work visible as a MINOR
 #   even before 1.0). `feat!` / `BREAKING CHANGE` also bump MINOR in 0.x.
