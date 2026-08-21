@@ -12,9 +12,9 @@ on:
   push:
     branches:
       - main
-  # Manual trigger: open the MINOR Release PR for accumulated feat commits.
-  # feat does not open a Release PR automatically (release_commits = "^(fix)[(:]");
-  # run this workflow when the batched features are ready to ship.
+  # Manual trigger: re-run the Release-PR job on demand (e.g. to pick up
+  # commits that landed after the PR was opened, or after a push event was
+  # skipped). Normal cadence is push-driven; see AGENTS.md "Release cadence".
   workflow_dispatch:
 
 permissions:

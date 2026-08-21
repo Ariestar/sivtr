@@ -138,8 +138,11 @@ How this project versions and releases changes. AI agents must follow this when 
 
 #### Release cadence
 
-- **PATCH (fix) — automatic.** `release_commits` matches only `fix`, so any `fix:` merged to `main` opens a Release PR immediately; merge it to ship the hotfix.
-- **MINOR (feat) — batched, agent-triggered.** `feat:` / `feat!` never open a Release PR on their own; they accumulate in `CHANGELOG.md` `[Unreleased]`. When enough features have piled up (rule of thumb: 3+ `feat` commits, or 2+ weeks since the last MINOR), run `gh workflow run release-plz.yml` to open the MINOR Release PR for the accumulated batch, review it, then merge. Do not batch so long that hotfix PATCH releases pile up inside one MINOR (see Common traps).
+Single track: `release_commits` matches `feat|fix`, so any of them merged to `main` opens a Release PR and later `feat`/`fix` accumulate in it (the version is not bumped again). Merging the Release PR is the release; the cadence is a merge-timing decision, not a config one:
+
+- **PATCH (fix) — ship promptly.** When the open Release PR only contains `fix:` commits (version bumps to `0.x.y`), merge it soon after CI passes so hotfixes land without waiting on features.
+- **MINOR (feat) — batch.** When the open Release PR contains `feat:` / `feat!` commits (version bumps to `0.x.0`), hold it until enough features have piled up (rule of thumb: 3+ `feat` commits, or 2+ weeks since the last MINOR), then merge. Do not batch so long that hotfix PATCH releases pile up inside one MINOR (see Common traps).
+- Either way, re-run `gh workflow run release-plz.yml` (`workflow_dispatch`) to refresh the Release PR if the push event missed it.
 
 1. `feat:` → MINOR (`0.4.1` → `0.5.0`); `fix:` → PATCH (`0.4.1` → `0.4.2`); `feat!` / `BREAKING CHANGE` → still MINOR in `0.x`, flagged as breaking in the changelog; `chore` / `docs` / `ci` / `refactor` / `test` / `perf` / `build` → no version bump.
    - Only `feat`/`fix` commits open a Release PR (`release_commits` in `release-plz.toml`); non-versioned work rides along with the next release instead of shipping its own.
