@@ -50,11 +50,6 @@ pub fn resolve_workspace_for_dir(cwd: &Path) -> Result<Option<WorkspacePaths>> {
     Ok(Some(paths_for_root(root)?))
 }
 
-pub fn ensure_current_workspace() -> Result<Option<WorkspacePaths>> {
-    let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
-    ensure_workspace_for_dir(&cwd)
-}
-
 pub fn ensure_workspace_for_dir(cwd: &Path) -> Result<Option<WorkspacePaths>> {
     let Some(paths) = resolve_workspace_for_dir(cwd)? else {
         return Ok(None);

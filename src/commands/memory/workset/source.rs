@@ -1,8 +1,6 @@
 use std::collections::HashSet;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
-use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -17,7 +15,7 @@ use crate::output;
 
 use super::WorkSet;
 
-/// Default deadline for one remote source inside [`query_many`].
+/// Default deadline for one remote source inside [`query_sources`].
 pub const REMOTE_QUERY_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Socket-read headroom for one group fan-out inside [`query`]: the daemon
@@ -25,12 +23,12 @@ pub const REMOTE_QUERY_TIMEOUT: Duration = Duration::from_secs(3);
 /// must stay above that budget plus local query time.
 const GROUP_QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// How one source is scheduled inside [`query_many`].
+/// How one source is scheduled inside [`query_sources`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QueryTransport {
     /// Disk-local (or named local workspace). Failures abort the batch caller if desired.
     Local,
-    /// Mounted remote alias. Failures are isolated when using [`query_many`].
+    /// Mounted remote alias. Failures are isolated when using [`query_sources`].
     Remote,
     /// Group roster fan-out (`team:...`, `team/alice:...`): the daemon dials
     /// every member share in parallel and returns the merged result.
@@ -48,6 +46,10 @@ pub struct QuerySource {
     pub root: Option<PathBuf>,
     /// Deadline for remote dials and group fan-out; local loads ignore it.
     pub timeout: Duration,
+    /// Pre-resolved remote `workspace_key` for `alias:path` sources built
+    /// from the registry; `None` means re-resolve on first use (browse-built
+    /// sources). Avoids resolving the registry twice for the same query.
+    pub workspace_key: Option<String>,
 }
 
 impl QuerySource {
@@ -57,6 +59,17 @@ impl QuerySource {
             transport: QueryTransport::Local,
             root: None,
             timeout: REMOTE_QUERY_TIMEOUT,
+            workspace_key: None,
+        }
+    }
+
+    pub fn local_at(selector: impl Into<String>, root: PathBuf) -> Self {
+        Self {
+            selector: selector.into(),
+            transport: QueryTransport::Local,
+            root: Some(root),
+            timeout: REMOTE_QUERY_TIMEOUT,
+            workspace_key: None,
         }
     }
 
@@ -66,6 +79,7 @@ impl QuerySource {
             transport: QueryTransport::Remote,
             root: None,
             timeout: REMOTE_QUERY_TIMEOUT,
+            workspace_key: None,
         }
     }
 
@@ -75,27 +89,29 @@ impl QuerySource {
             transport: QueryTransport::Group,
             root: None,
             timeout: GROUP_QUERY_TIMEOUT,
+            workspace_key: None,
         }
     }
 
     /// Build a source from a registry entry: local workspaces load from
     /// their own root, remote mounts keep the `alias:path` selector the
     /// peer-side dispatcher already understands. Adding an origin kind means
-    /// one new arm here — `query_many` then schedules it unchanged.
+    /// one new arm here — `query_sources` then schedules it unchanged.
     pub fn from_entry(entry: &Entry, source: &str) -> Self {
         match &entry.reach {
-            Reach::Local { root } => Self {
-                selector: source.to_string(),
-                transport: QueryTransport::Local,
-                root: Some(PathBuf::from(root)),
+            Reach::Local { root } => Self::local_at(source.to_string(), PathBuf::from(root)),
+            Reach::Remote { workspace_key } => Self {
+                selector: format!("{}:{source}", entry.origin.name),
+                transport: QueryTransport::Remote,
+                root: None,
                 timeout: REMOTE_QUERY_TIMEOUT,
+                workspace_key: Some(workspace_key.clone()),
             },
-            Reach::Remote { .. } => Self::remote(format!("{}:{source}", entry.origin.name)),
         }
     }
 }
 
-/// Per-source outcome from [`query_many`]. Failures never drop other sources.
+/// Per-source outcome from [`query_sources`]. Failures never drop other sources.
 #[derive(Debug)]
 pub enum QuerySourceResult {
     Ok(WorkSet),
@@ -122,24 +138,20 @@ pub fn query(source: &str, filter: Filter, cwd: Option<&Path>) -> Result<WorkSet
         .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
 
     let sources = resolve_source(source, &cwd)?;
-    let results = query_many(&sources, filter.clone(), Some(&cwd))?;
+    let results = query_sources(&sources, filter.clone(), Some(&cwd))?;
     merge_and_apply(results, &cwd, filter)
 }
 
 /// Resolve a source expression into the concrete sources it addresses.
 /// Every scope shape (bare selector, `local:`, `all:`, registry aliases,
-/// groups) collapses into a [`QuerySource`] list here; [`query_many`] then
+/// groups) collapses into a [`QuerySource`] list here; [`query_sources`] then
 /// schedules them unchanged.
 fn resolve_source(source: &str, cwd: &Path) -> Result<Vec<QuerySource>> {
     let source = expand_source(source)?;
 
+    // Bare selector: the current workspace's local source.
     let Some((scope, path)) = source.split_once(':') else {
-        return Ok(vec![QuerySource {
-            selector: source,
-            transport: QueryTransport::Local,
-            root: Some(cwd.to_path_buf()),
-            timeout: REMOTE_QUERY_TIMEOUT,
-        }]);
+        return Ok(vec![QuerySource::local_at(source, cwd.to_path_buf())]);
     };
     if path.is_empty() {
         anyhow::bail!("source `{source}` is missing a selector after `:`");
@@ -149,57 +161,46 @@ fn resolve_source(source: &str, cwd: &Path) -> Result<Vec<QuerySource>> {
             "Invalid source `{source}`; use `scope:path` (for example `desk:terminal`), not `://`"
         );
     }
-    if scope.eq_ignore_ascii_case("local") {
-        return Ok(vec![QuerySource {
-            selector: path.to_string(),
-            transport: QueryTransport::Local,
-            root: Some(cwd.to_path_buf()),
-            timeout: REMOTE_QUERY_TIMEOUT,
-        }]);
-    }
-    if scope.eq_ignore_ascii_case("all") {
-        let registry = crate::origins::collect(cwd)?;
-        let sources: Vec<QuerySource> = registry
-            .entries()
-            .map(|entry| QuerySource::from_entry(entry, path))
-            .collect();
-        return Ok(sources);
-    }
 
     let scope = scope.to_ascii_lowercase();
-
-    // One lookup: the registry is the single alias table (local workspaces,
-    // remote mounts), each entry carrying its reach payload. The registry
-    // lists mounts only while the daemon is already running, so a passive
-    // miss is retried once with the daemon up — a cold `desk:terminal` query
-    // must still resolve its mount. Groups (`team`, `team/alice`) are a
-    // roster fan-out over many devices, not a single origin, so they are
-    // tried only on a miss.
-    let mut registry = crate::origins::collect(cwd)?;
-    if registry.resolve(&scope)?.is_none() {
-        serve::ensure_running()?;
-        registry = crate::origins::collect(cwd)?;
+    match scope.as_str() {
+        "local" => Ok(vec![QuerySource::local_at(
+            path.to_string(),
+            cwd.to_path_buf(),
+        )]),
+        "all" => {
+            // Passive enumeration, same as `ws list`: mounts are listed only
+            // while the daemon is already running. `all:` never starts the
+            // daemon, so a pure-local query is not blocked on daemon startup.
+            let registry = crate::origins::collect(cwd)?;
+            Ok(registry
+                .entries()
+                .map(|entry| QuerySource::from_entry(entry, path))
+                .collect())
+        }
+        // Everything else is a named origin (local workspace or remote
+        // mount) or a group. The registry is the single alias table;
+        // resolution applies kind precedence on name collisions.
+        scope => {
+            let mut registry = crate::origins::collect(cwd)?;
+            // The registry lists mounts only while the daemon is already
+            // running, so a passive miss is retried once with the daemon up
+            // — a cold `desk:terminal` query must still resolve its mount.
+            if registry.resolve(scope)?.is_none() {
+                serve::ensure_running()?;
+                registry = crate::origins::collect(cwd)?;
+            }
+            match registry.resolve(scope)? {
+                Some(entry) => Ok(vec![QuerySource::from_entry(entry, path)]),
+                None if split_group_scope(scope).is_some() => {
+                    Ok(vec![QuerySource::group(&source)])
+                }
+                None => anyhow::bail!(
+                    "unknown scope `{scope}`; use `sivtr ws list` for local workspaces, `sivtr remote list` for remotes, or `sivtr group list` for groups"
+                ),
+            }
+        }
     }
-    if let Some(entry) = registry.resolve(&scope)? {
-        return match &entry.reach {
-            Reach::Local { root } => Ok(vec![QuerySource {
-                selector: path.to_string(),
-                transport: QueryTransport::Local,
-                root: Some(PathBuf::from(root)),
-                timeout: REMOTE_QUERY_TIMEOUT,
-            }]),
-            Reach::Remote { .. } => Ok(vec![QuerySource::remote(format!(
-                "{}:{path}",
-                entry.origin.name
-            ))]),
-        };
-    }
-    if split_group_scope(&scope).is_some() {
-        return Ok(vec![QuerySource::group(&source)]);
-    }
-    anyhow::bail!(
-        "unknown scope `{scope}`; use `sivtr ws list` for local workspaces, `sivtr remote list` for remotes, or `sivtr group list` for groups"
-    )
 }
 
 /// Merge per-source outcomes into one corpus, then apply the filter once
@@ -238,7 +239,7 @@ fn merge_and_apply(results: Vec<QuerySourceResult>, cwd: &Path, filter: Filter) 
 /// so one batch spans every local workspace; remotes run with a per-source
 /// timeout and out-of-order arrival, and a source's failure never drops the
 /// others. Order of `results` matches `sources`.
-pub fn query_many(
+pub fn query_sources(
     sources: &[QuerySource],
     filter: Filter,
     cwd: Option<&Path>,
@@ -250,6 +251,7 @@ pub fn query_many(
     let cwd = cwd
         .map(Path::to_path_buf)
         .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
+    let cwd = cwd.as_path();
 
     // Bounds that read part text (pattern, exclude, BM25 ranking) need a full
     // load; metadata-only filters stay light and callers materialize part
@@ -260,45 +262,45 @@ pub fn query_many(
         LoadMode::Light
     };
 
-    let (tx, rx) = mpsc::channel();
-    let mut pending = 0;
-    for (idx, source) in sources.iter().enumerate() {
-        let selector = source.selector.clone();
-        let filter = filter.clone();
-        let cwd = cwd.clone();
-        let root = source.root.clone();
-        let timeout = source.timeout;
-        let transport = source.transport;
-        let tx = tx.clone();
-        pending += 1;
-        thread::spawn(move || {
-            let result = match transport {
-                QueryTransport::Local => {
-                    let root = root.as_deref().unwrap_or(&cwd);
-                    run_local(&selector, root, filter, mode)
-                }
-                QueryTransport::Remote => query_remote_bounded(&selector, filter, &cwd, timeout),
-                QueryTransport::Group => group_query(&selector, filter, &cwd),
-            };
-            let normalized = normalize_source_result(result, &cwd);
-            let _ = tx.send((idx, normalized));
-        });
-    }
-    drop(tx);
+    // Scoped threads borrow `sources` and `cwd` instead of cloning per
+    // worker; only the filter (consumed by each load path) is cloned. Each
+    // worker reports `(idx, outcome)`, joined in list order so a slow source
+    // never stalls the others' completion.
+    let outcomes = std::thread::scope(|scope| {
+        let handles: Vec<_> = sources
+            .iter()
+            .enumerate()
+            .map(|(idx, source)| {
+                let filter = filter.clone();
+                scope.spawn(move || {
+                    let result = match source.transport {
+                        QueryTransport::Local => {
+                            let root = source.root.as_deref().unwrap_or(cwd);
+                            run_local(&source.selector, root, filter, mode)
+                        }
+                        QueryTransport::Remote => query_remote_bounded(
+                            &source.selector,
+                            source.workspace_key.as_deref(),
+                            filter,
+                            cwd,
+                            source.timeout,
+                        ),
+                        QueryTransport::Group => group_query(&source.selector, filter, cwd),
+                    };
+                    (idx, normalize_source_result(result, cwd))
+                })
+            })
+            .collect();
 
-    let mut results: Vec<Option<QuerySourceResult>> = sources.iter().map(|_| None).collect();
-    let mut remaining = pending;
-    while remaining > 0 {
-        match rx.recv() {
-            Ok((idx, result)) => {
-                results[idx] = Some(result);
-                remaining -= 1;
-            }
-            Err(_) => break, // all senders dropped
+        let mut outcomes: Vec<Option<QuerySourceResult>> = sources.iter().map(|_| None).collect();
+        for handle in handles {
+            let (idx, outcome) = handle.join().expect("query worker panicked");
+            outcomes[idx] = Some(outcome);
         }
-    }
+        outcomes
+    });
 
-    Ok(results
+    Ok(outcomes
         .into_iter()
         .map(|slot| slot.unwrap_or(QuerySourceResult::Err("load worker exited".to_string())))
         .collect())
@@ -329,6 +331,7 @@ fn normalize_source_result(result: Result<WorkSet>, cwd: &Path) -> QuerySourceRe
 
 fn query_remote_bounded(
     selector: &str,
+    workspace_key: Option<&str>,
     filter: Filter,
     cwd: &Path,
     read_timeout: Duration,
@@ -342,24 +345,23 @@ fn query_remote_bounded(
     if path.is_empty() || path.starts_with('/') || scope.eq_ignore_ascii_case("local") {
         anyhow::bail!("remote source `{selector}` must be `alias:path`");
     }
-    // Remote mounts need the daemon; start it before the passive lookup.
-    serve::ensure_running()?;
-    let registry = crate::origins::collect(cwd)?;
-    let Some(entry) = registry.resolve(scope)? else {
-        anyhow::bail!("unknown remote alias `{scope}`; use `sivtr remote list`");
+    // Pre-resolved sources skip the registry; browse-built ones resolve here.
+    let workspace_key = match workspace_key {
+        Some(key) => key.to_string(),
+        None => {
+            serve::ensure_running()?;
+            let registry = crate::origins::collect(cwd)?;
+            let Some(entry) = registry.resolve(scope)? else {
+                anyhow::bail!("unknown remote alias `{scope}`; use `sivtr remote list`");
+            };
+            let Reach::Remote { workspace_key } = &entry.reach else {
+                anyhow::bail!("`{scope}` is not a remote mount");
+            };
+            workspace_key.clone()
+        }
     };
-    match &entry.reach {
-        Reach::Remote { workspace_key } => try_remote_timed(
-            workspace_key,
-            &entry.origin.name,
-            path,
-            filter,
-            cwd,
-            read_timeout,
-        )
-        .with_context(|| format!("remote mount `{}` unavailable", entry.origin.name)),
-        _ => anyhow::bail!("`{scope}` is not a remote mount"),
-    }
+    try_remote_timed(&workspace_key, scope, path, filter, cwd, read_timeout)
+        .with_context(|| format!("remote mount `{scope}` unavailable"))
 }
 
 fn is_timeout_error(message: &str) -> bool {

@@ -227,15 +227,6 @@ impl AgentProvider {
             .map(|spec| spec.provider)
     }
 
-    /// Resolve a provider from its registry name (see [`Self::name`]),
-    /// used to map cache namespaces back to a provider.
-    pub fn from_name(value: &str) -> Option<Self> {
-        Self::all()
-            .iter()
-            .find(|spec| spec.name.eq_ignore_ascii_case(value))
-            .map(|spec| spec.provider)
-    }
-
     pub fn spec(self) -> &'static AgentProviderSpec {
         Self::all()
             .iter()

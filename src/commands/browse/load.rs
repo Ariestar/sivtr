@@ -298,7 +298,7 @@ impl SourceLoadPump {
                 } else {
                     QuerySource::local(selector)
                 };
-                let (result, exhausted) = match workset::query_many(
+                let (result, exhausted) = match workset::query_sources(
                     &[qs],
                     Filter::browse_session_page(budget),
                     Some(&cwd),
@@ -358,7 +358,7 @@ impl SourceLoadPump {
                 } else {
                     QuerySource::local(sel)
                 };
-                let result = match workset::query_many(&[qs], Filter::none(), Some(&cwd)) {
+                let result = match workset::query_sources(&[qs], Filter::none(), Some(&cwd)) {
                     Ok(mut results) => match results.pop() {
                         Some(QuerySourceResult::Ok(mut set)) => match set.materialize_parts() {
                             Ok(()) => {
