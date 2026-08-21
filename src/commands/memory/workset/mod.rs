@@ -3,7 +3,6 @@ pub mod store;
 
 pub(crate) use source::{
     load_context_records, query, query_many, run_on_share, QuerySource, QuerySourceResult,
-    REMOTE_QUERY_TIMEOUT,
 };
 pub(crate) use store::{cleanup_saved, delete_saved, list_saved, load_saved, save_named};
 

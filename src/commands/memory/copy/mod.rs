@@ -14,7 +14,6 @@ pub use plan::{parse_address_dialogues, CopyFilters, CopyPlan, Projection};
 
 use anyhow::{Context, Result};
 use sivtr_core::ai::AgentProvider;
-use sivtr_core::origin::OriginKind;
 use sivtr_core::record::WorkRecord;
 
 use crate::commands::browse;
@@ -128,7 +127,7 @@ fn session_source_from_records(records: &[WorkRecord]) -> Option<WorkspaceSource
     let cwd = std::env::current_dir().ok()?;
     let registry = crate::origins::collect(&cwd).ok()?;
     let entry = registry.resolve(scope).ok()??;
-    Some(if entry.origin.kind == OriginKind::Remote {
+    Some(if entry.origin.kind == "remote" {
         WorkspaceSource::remote(scope, kind)
     } else {
         WorkspaceSource::local(kind)

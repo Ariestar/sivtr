@@ -21,9 +21,9 @@ fn list() -> Result<()> {
 
     for origin in registry.all() {
         let label = if origin.current {
-            format!("{}:current", origin.kind.label())
+            format!("{}:current", origin.kind)
         } else {
-            origin.kind.label().to_string()
+            origin.kind.clone()
         };
         output::detail(origin.name.clone(), format!("[{label}] {}", origin.detail));
     }

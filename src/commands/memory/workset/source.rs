@@ -32,6 +32,9 @@ pub enum QueryTransport {
     Local,
     /// Mounted remote alias. Failures are isolated when using [`query_many`].
     Remote,
+    /// Group roster fan-out (`team:...`, `team/alice:...`): the daemon dials
+    /// every member share in parallel and returns the merged result.
+    Group,
 }
 
 /// One source to load via the unified query path.
@@ -43,6 +46,8 @@ pub struct QuerySource {
     /// Local sources load from this root instead of the caller's cwd
     /// (`None` = caller cwd). Lets one batch span many local workspaces.
     pub root: Option<PathBuf>,
+    /// Deadline for remote dials and group fan-out; local loads ignore it.
+    pub timeout: Duration,
 }
 
 impl QuerySource {
@@ -51,6 +56,7 @@ impl QuerySource {
             selector: selector.into(),
             transport: QueryTransport::Local,
             root: None,
+            timeout: REMOTE_QUERY_TIMEOUT,
         }
     }
 
@@ -59,6 +65,16 @@ impl QuerySource {
             selector: selector.into(),
             transport: QueryTransport::Remote,
             root: None,
+            timeout: REMOTE_QUERY_TIMEOUT,
+        }
+    }
+
+    pub fn group(selector: impl Into<String>) -> Self {
+        Self {
+            selector: selector.into(),
+            transport: QueryTransport::Group,
+            root: None,
+            timeout: GROUP_QUERY_TIMEOUT,
         }
     }
 
@@ -72,6 +88,7 @@ impl QuerySource {
                 selector: source.to_string(),
                 transport: QueryTransport::Local,
                 root: Some(PathBuf::from(root)),
+                timeout: REMOTE_QUERY_TIMEOUT,
             },
             Reach::Remote { .. } => Self::remote(format!("{}:{source}", entry.origin.name)),
         }
@@ -155,16 +172,25 @@ pub fn query(source: &str, filter: Filter, cwd: Option<&Path>) -> Result<WorkSet
                     &cwd,
                     Duration::from_secs(30),
                 )
-                .with_context(|| {
-                    format!("remote mount `{}` unavailable", entry.origin.name)
-                }),
+                .with_context(|| format!("remote mount `{}` unavailable", entry.origin.name)),
             },
-            None => match try_group(&scope, path, filter, &cwd)? {
-                Some(set) => Ok(set),
-                None => anyhow::bail!(
+            None => {
+                // Not a registry origin; check if it is a group scope.
+                if split_group_scope(&scope).is_some() {
+                    let mut results =
+                        query_many(&[QuerySource::group(&source)], filter, Some(&cwd))?;
+                    return match results.pop() {
+                        Some(QuerySourceResult::Ok(set)) => Ok(set),
+                        Some(QuerySourceResult::Err(message)) => {
+                            anyhow::bail!("{message}")
+                        }
+                        None => anyhow::bail!("group query produced no result"),
+                    };
+                }
+                anyhow::bail!(
                     "unknown scope `{scope}`; use `sivtr ws list` for local workspaces, `sivtr remote list` for remotes, or `sivtr group list` for groups"
-                ),
-            },
+                )
+            }
         };
     }
 
@@ -180,7 +206,6 @@ pub fn query_many(
     sources: &[QuerySource],
     filter: Filter,
     cwd: Option<&Path>,
-    remote_timeout: Duration,
 ) -> Result<Vec<QuerySourceResult>> {
     if sources.is_empty() {
         return Ok(Vec::new());
@@ -197,14 +222,15 @@ pub fn query_many(
         let filter = filter.clone();
         let cwd = cwd.clone();
         let root = source.root.clone();
-        let remote = source.transport == QueryTransport::Remote;
+        let timeout = source.timeout;
+        let transport = source.transport;
         let tx = tx.clone();
         pending += 1;
         thread::spawn(move || {
-            let result = if remote {
-                query_remote_bounded(&selector, filter, &cwd, remote_timeout)
-            } else {
-                query(&selector, filter, root.as_deref())
+            let result = match transport {
+                QueryTransport::Local => query(&selector, filter, root.as_deref()),
+                QueryTransport::Remote => query_remote_bounded(&selector, filter, &cwd, timeout),
+                QueryTransport::Group => group_query(&selector, filter, &cwd),
             };
             let normalized = normalize_source_result(result, &cwd);
             let _ = tx.send((idx, normalized));
@@ -349,7 +375,7 @@ fn run_all(source: &str, cwd: &Path, filter: Filter) -> Result<WorkSet> {
         .entries()
         .map(|entry| QuerySource::from_entry(entry, source))
         .collect();
-    let results = query_many(&sources, Filter::none(), Some(cwd), REMOTE_QUERY_TIMEOUT)
+    let results = query_many(&sources, Filter::none(), Some(cwd))
         .with_context(|| format!("failed to load `{source}` from every origin"))?;
 
     // Merge with per-ref dedup: a workref may appear in more than one origin
@@ -409,15 +435,21 @@ fn try_remote_timed(
 }
 
 /// Group fan-out: `team:...` (all members), `team/alice:...` (one member), or
-/// `team/alice/proj-b:...` (one member, one contributed share). Returns
-/// `Ok(None)` when `scope` is not a group on this device so the caller can
-/// continue the scope cascade.
-fn try_group(scope: &str, path: &str, filter: Filter, cwd: &Path) -> Result<Option<WorkSet>> {
+/// `team/alice/proj-b:...` (one member, one contributed share). The daemon
+/// answers `None` when the group is unknown, which a scheduled [`QuerySource`]
+/// treats as a hard error — the scope was already pinned to a group by the
+/// caller.
+fn group_query(selector: &str, filter: Filter, cwd: &Path) -> Result<WorkSet> {
     use crate::remote::ipc;
     use crate::remote::protocol::{LocalRequest, LocalResponse};
 
+    let Some((scope, path)) = selector.split_once(':') else {
+        anyhow::bail!("group source `{selector}` is missing a selector after `:`");
+    };
     let Some((group, member, share)) = split_group_scope(scope) else {
-        return Ok(None);
+        anyhow::bail!(
+            "`{scope}` is not a group scope; use `team:`, `team/alice:`, or `team/alice/proj-b:`"
+        );
     };
     crate::commands::remote::serve::ensure_running()
         .context("failed to start the sivtr daemon for a group query")?;
@@ -436,7 +468,9 @@ fn try_group(scope: &str, path: &str, filter: Filter, cwd: &Path) -> Result<Opti
     )
     .context("group query failed")?
     {
-        LocalResponse::GroupQuery(None) => Ok(None),
+        LocalResponse::GroupQuery(None) => {
+            anyhow::bail!("unknown group; use `sivtr group list` to see groups")
+        }
         LocalResponse::GroupQuery(Some(response)) => {
             if !response.skipped.is_empty() {
                 output::info(format!(
@@ -444,11 +478,11 @@ fn try_group(scope: &str, path: &str, filter: Filter, cwd: &Path) -> Result<Opti
                     response.skipped.join(", ")
                 ));
             }
-            Ok(Some(WorkSet::with_anchors(
+            Ok(WorkSet::with_anchors(
                 cwd.display().to_string(),
                 response.query.records,
                 response.query.anchors,
-            )))
+            ))
         }
         response => anyhow::bail!("Unexpected daemon response: {response:?}"),
     }

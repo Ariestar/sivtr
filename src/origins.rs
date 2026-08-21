@@ -10,7 +10,7 @@
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 
-use sivtr_core::origin::{Entry, Origin, OriginKind, OriginRegistry, Reach};
+use sivtr_core::origin::{Entry, Origin, OriginRegistry, Reach};
 use sivtr_core::workspace;
 
 use crate::commands::remote::serve;
@@ -29,14 +29,17 @@ pub fn collect(cwd: &Path) -> Result<OriginRegistry> {
     let current_key = workspace::resolve_workspace_for_dir(cwd)?.map(|paths| paths.key);
     for meta in workspace::list_workspaces()? {
         let current = current_key.as_deref() == Some(meta.key.as_str());
+        let reach = Reach::Local {
+            root: meta.root.clone(),
+        };
         entries.push(Entry {
             origin: Origin {
                 name: workspace::workspace_alias(&meta),
-                kind: OriginKind::Local,
+                kind: reach.label().to_string(),
                 current,
                 detail: format!("{} ({})", meta.root, meta.key),
             },
-            reach: Reach::Local { root: meta.root },
+            reach,
         });
     }
 
@@ -51,16 +54,17 @@ pub fn collect(cwd: &Path) -> Result<OriginRegistry> {
             })? {
                 LocalResponse::Mounts(mounts) => {
                     for mount in mounts {
+                        let reach = Reach::Remote {
+                            workspace_key: workspace_key.to_string(),
+                        };
                         entries.push(Entry {
                             origin: Origin {
                                 name: mount.alias.clone(),
-                                kind: OriginKind::Remote,
+                                kind: reach.label().to_string(),
                                 current: false,
                                 detail: format!("{}/{}", mount.peer_name, mount.share_name),
                             },
-                            reach: Reach::Remote {
-                                workspace_key: workspace_key.to_string(),
-                            },
+                            reach,
                         });
                     }
                 }
