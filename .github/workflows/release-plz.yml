@@ -12,6 +12,10 @@ on:
   push:
     branches:
       - main
+  # Manual trigger: re-run the Release-PR job on demand (e.g. to pick up
+  # commits that landed after the PR was opened, or after a push event was
+  # skipped). Normal cadence is push-driven; see AGENTS.md "Release cadence".
+  workflow_dispatch:
 
 permissions:
   contents: write
