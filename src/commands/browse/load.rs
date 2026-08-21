@@ -16,6 +16,7 @@ use crate::commands::memory::filter::Filter;
 use crate::commands::memory::workset::{
     self, QuerySource, QuerySourceResult, REMOTE_QUERY_TIMEOUT,
 };
+use sivtr_core::query::LoadMode;
 use crate::pane::{
     keep_keys, MetaNeed, Pane, PaneInput, SlidingPane, StorePhase, Viewport, WindowRow,
     FETCH_CEILING, FETCH_FLOOR,
@@ -306,6 +307,7 @@ impl SourceLoadPump {
                     Filter::browse_session_page(budget),
                     Some(&cwd),
                     REMOTE_QUERY_TIMEOUT,
+                    LoadMode::Light,
                 ) {
                     Ok(mut results) => match results.pop() {
                         Some(QuerySourceResult::Ok(set)) => {
@@ -367,6 +369,7 @@ impl SourceLoadPump {
                     Filter::none(),
                     Some(&cwd),
                     REMOTE_QUERY_TIMEOUT,
+                    LoadMode::Light,
                 ) {
                     Ok(mut results) => match results.pop() {
                         Some(QuerySourceResult::Ok(mut set)) => match set.materialize_parts() {

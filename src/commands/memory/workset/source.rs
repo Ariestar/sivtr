@@ -85,6 +85,17 @@ pub enum QuerySourceResult {
     Err(String),
 }
 
+/// Bounds that read part text (pattern, exclude, BM25 ranking) need a full
+/// load; metadata-only filters stay light and callers materialize part
+/// text on demand.
+fn load_mode_for(filter: &Filter) -> LoadMode {
+    if filter.needs_parts() {
+        LoadMode::Full
+    } else {
+        LoadMode::Light
+    }
+}
+
 /// Unified query: local and remote share one shape.
 ///
 /// Remote is only transport: same `Filter` is sent, peer runs the same local path
@@ -93,14 +104,7 @@ pub enum QuerySourceResult {
 /// full load; pure metadata queries stay light and callers materialize part
 /// text on demand.
 pub fn query(source: &str, filter: Filter, cwd: Option<&Path>) -> Result<WorkSet> {
-    // Bounds that read part text (pattern, exclude, BM25 ranking) need a full
-    // load; metadata-only filters stay light and callers materialize part
-    // text on demand.
-    let mode = if filter.needs_parts() {
-        LoadMode::Full
-    } else {
-        LoadMode::Light
-    };
+    let mode = load_mode_for(&filter);
     if source == "@" {
         return apply_loaded(read_stdin()?, filter);
     }
@@ -181,6 +185,7 @@ pub fn query_many(
     filter: Filter,
     cwd: Option<&Path>,
     remote_timeout: Duration,
+    mode: LoadMode,
 ) -> Result<Vec<QuerySourceResult>> {
     if sources.is_empty() {
         return Ok(Vec::new());
@@ -204,7 +209,13 @@ pub fn query_many(
             let result = if remote {
                 query_remote_bounded(&selector, filter, &cwd, remote_timeout)
             } else {
-                query(&selector, filter, root.as_deref())
+                // Local sources carry their own root (one batch spans many
+                // workspaces); fall back to the caller cwd. The mode is
+                // explicit here: a batched call may stage with a trivial
+                // filter and apply the real one after the merge, so it must
+                // not be re-derived from the staging filter.
+                let root = root.as_deref().unwrap_or(&cwd);
+                run_local(&selector, root, filter, mode)
             };
             let normalized = normalize_source_result(result, &cwd);
             let _ = tx.send((idx, normalized));
@@ -349,17 +360,29 @@ fn run_all(source: &str, cwd: &Path, filter: Filter) -> Result<WorkSet> {
         .entries()
         .map(|entry| QuerySource::from_entry(entry, source))
         .collect();
-    let results = query_many(&sources, Filter::none(), Some(cwd), REMOTE_QUERY_TIMEOUT)
-        .with_context(|| format!("failed to load `{source}` from every origin"))?;
+    // Stage every source with the trivial filter (merge + final filter after),
+    // but request the load depth the real filter needs: parts-bearing bounds
+    // must see full records even though the staging filter says none.
+    let results = query_many(
+        &sources,
+        Filter::none(),
+        Some(cwd),
+        REMOTE_QUERY_TIMEOUT,
+        load_mode_for(&filter),
+    )
+    .with_context(|| format!("failed to load `{source}` from every origin"))?;
 
     // Merge with per-ref dedup: a workref may appear in more than one origin
-    // (same provider session recorded from multiple checkouts).
+    // (same provider session recorded from multiple checkouts). `results` is
+    // in `registry.entries()` order, so pairing by position identifies which
+    // origin each outcome belongs to.
     let mut records: Vec<WorkRecord> = Vec::new();
     let mut seen: HashSet<WorkRef> = HashSet::new();
-    for result in results {
+    for (entry, result) in registry.entries().zip(results) {
         let QuerySourceResult::Ok(set) = result else {
             output::warning(format!(
-                "skipped an origin during `all:{source}`: {result:?}"
+                "skipped origin `{}` during `all:{source}`: {result:?}",
+                entry.origin.name
             ));
             continue;
         };
