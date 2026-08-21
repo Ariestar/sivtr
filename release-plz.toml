@@ -1,10 +1,12 @@
 # release-plz drives version bumps, the changelog, and tagging.
 #
 # Version strategy (0.x):
-# - Only `feat`/`fix` commits open a Release PR (`release_commits`); docs,
-#   perf, chore, refactor, ci, test do NOT bump a version on their own — they
-#   ride along with the next feature/fix release, so the version moves only
-#   when real functionality ships.
+# - Only `fix` commits open a Release PR automatically (`release_commits`):
+#   PATCH releases ship on demand as hotfixes land. `feat` commits do NOT
+#   open a Release PR — they accumulate in [Unreleased] until an agent or
+#   maintainer runs `gh workflow run release-plz.yml` to open the next MINOR
+#   Release PR (see AGENTS.md "Release cadence"). This keeps MINOR releases
+#   batched instead of shipping one per feature.
 # - `feat` bumps MINOR and `fix` bumps PATCH in 0.x
 #   (`features_always_increment_minor` keeps feature work visible as a MINOR
 #   even before 1.0). `feat!` / `BREAKING CHANGE` also bump MINOR in 0.x.
@@ -31,7 +33,7 @@ publish = false
 release_always = false
 pr_labels = ["release"]
 features_always_increment_minor = true
-release_commits = "^(feat|fix)[(:]"
+release_commits = "^(fix)[(:]"
 
 [[package]]
 name = "sivtr-core"

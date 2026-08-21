@@ -136,6 +136,11 @@ How this project versions and releases changes. AI agents must follow this when 
 
 [release-plz](https://release-plz.dev) drives versioning, changelog, and tagging (`release-plz.toml` + `.github/workflows/release-plz*.yml`). On every push to `main` it keeps a **Release PR** up to date: it bumps `[workspace.package]` version, syncs the `sivtr-core` pin and `Cargo.lock`, and drafts a Keep a Changelog section in `CHANGELOG.md` from Conventional Commit squash titles. Merging that PR is the release.
 
+#### Release cadence
+
+- **PATCH (fix) — automatic.** `release_commits` matches only `fix`, so any `fix:` merged to `main` opens a Release PR immediately; merge it to ship the hotfix.
+- **MINOR (feat) — batched, agent-triggered.** `feat:` / `feat!` never open a Release PR on their own; they accumulate in `CHANGELOG.md` `[Unreleased]`. When enough features have piled up (rule of thumb: 3+ `feat` commits, or 2+ weeks since the last MINOR), run `gh workflow run release-plz.yml` to open the MINOR Release PR for the accumulated batch, review it, then merge. Do not batch so long that hotfix PATCH releases pile up inside one MINOR (see Common traps).
+
 1. `feat:` → MINOR (`0.4.1` → `0.5.0`); `fix:` → PATCH (`0.4.1` → `0.4.2`); `feat!` / `BREAKING CHANGE` → still MINOR in `0.x`, flagged as breaking in the changelog; `chore` / `docs` / `ci` / `refactor` / `test` / `perf` / `build` → no version bump.
    - Only `feat`/`fix` commits open a Release PR (`release_commits` in `release-plz.toml`); non-versioned work rides along with the next release instead of shipping its own.
    - semver-check runs only on `sivtr-core` (the published library). `sivtr` is a binary; its internal API changes never inflate the version — breaking changes there are signaled by `feat!` / `BREAKING CHANGE` commits.

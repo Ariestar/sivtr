@@ -12,6 +12,10 @@ on:
   push:
     branches:
       - main
+  # Manual trigger: open the MINOR Release PR for accumulated feat commits.
+  # feat does not open a Release PR automatically (release_commits = "^(fix)[(:]");
+  # run this workflow when the batched features are ready to ship.
+  workflow_dispatch:
 
 permissions:
   contents: write
