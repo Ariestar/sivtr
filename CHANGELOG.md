@@ -7,10 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.6.0](https://github.com/Ariestar/sivtr/compare/v0.5.1...v0.6.0) - 2026-08-18
+## [0.6.0](https://github.com/Ariestar/sivtr/compare/v0.5.1...v0.6.0) - 2026-08-20
+
+### Added
+
+- *(search)* unify terminal and agent sources behind a SessionSource trait ([#180](https://github.com/Ariestar/sivtr/pull/180))
+- *(search)* incremental listing cache and light/full session views ([#179](https://github.com/Ariestar/sivtr/pull/179))
+- *(search)* weight agent dialogue content over tool output ([#175](https://github.com/Ariestar/sivtr/pull/175))
+- *(search)* add all: scope for unified cross-origin retrieval ([#174](https://github.com/Ariestar/sivtr/pull/174))
+
+### Fixed
+
+- *(search)* cap all searches at 5 results by default ([#170](https://github.com/Ariestar/sivtr/pull/170))
+- *(release)* trigger release.yml on tag push and gate version bumps ([#169](https://github.com/Ariestar/sivtr/pull/169))
+- *(deps)* update astro monorepo ([#168](https://github.com/Ariestar/sivtr/pull/168))
+- *(deps)* update astro monorepo ([#171](https://github.com/Ariestar/sivtr/pull/171))
 
 ### Other
 
+- *(deps)* update rust crate rmcp to v3.1.4 ([#173](https://github.com/Ariestar/sivtr/pull/173))
+- *(deps)* update dependency @types/vscode to v1.134.0 ([#172](https://github.com/Ariestar/sivtr/pull/172))
+- *(search)* reuse cached BM25 indexes across processes ([#178](https://github.com/Ariestar/sivtr/pull/178))
+- codify per-change branch and commit workflow ([#177](https://github.com/Ariestar/sivtr/pull/177))
+- gitignore agent eval snapshots ([#176](https://github.com/Ariestar/sivtr/pull/176))
 - sync skills provider list and release token note ([#167](https://github.com/Ariestar/sivtr/pull/167))
 - *(zh-cn)* mirror reference and usage alignment ([#166](https://github.com/Ariestar/sivtr/pull/166))
 - *(usage)* align usage guides with v0.5 features ([#165](https://github.com/Ariestar/sivtr/pull/165))
