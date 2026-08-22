@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/Ariestar/sivtr/compare/v0.6.0...v0.7.0) - 2026-08-22
+
+### Added
+
+- *(agents)* add ZCode agent provider ([#191](https://github.com/Ariestar/sivtr/pull/191))
+
+### Fixed
+
+- *(search)* keep metadata-only records in browse queries ([#190](https://github.com/Ariestar/sivtr/pull/190))
+
+### Other
+
+- *(deps)* update rust crate uuid to v1.25.0 ([#193](https://github.com/Ariestar/sivtr/pull/193))
+- *(search)* unify query routing into a single pipeline ([#189](https://github.com/Ariestar/sivtr/pull/189))
+- document single-track release cadence (PATCH prompt, MINOR batched) ([#188](https://github.com/Ariestar/sivtr/pull/188))
+
 ## [0.6.0](https://github.com/Ariestar/sivtr/compare/v0.5.1...v0.6.0) - 2026-08-20
 
 ### Added
