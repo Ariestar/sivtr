@@ -21,6 +21,7 @@ pub enum AgentProvider {
     Qoder,
     QoderCn,
     Qwen,
+    Zcode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -113,7 +113,7 @@ pub(crate) const fn provider_colors(provider: AgentProvider) -> ProviderColors {
         },
         AgentProvider::Hermes => ProviderColors {
             dark: Color::Rgb(250, 204, 21), // yellow-400
-            light: Color::Rgb(202, 138, 4), // yellow-600
+            light: Color::Rgb(161, 98, 7),  // yellow-700
             ansi: Color::LightYellow,
             ansi_light: Color::DarkGray,
         },
@@ -158,6 +158,12 @@ pub(crate) const fn provider_colors(provider: AgentProvider) -> ProviderColors {
             light: Color::Rgb(192, 38, 211), // fuchsia-600
             ansi: Color::LightMagenta,
             ansi_light: Color::Magenta,
+        },
+        AgentProvider::Zcode => ProviderColors {
+            dark: Color::Rgb(163, 230, 53), // lime-400
+            light: Color::Rgb(63, 98, 18),  // lime-800
+            ansi: Color::LightGreen,
+            ansi_light: Color::DarkGray,
         },
     }
 }
@@ -518,11 +524,17 @@ mod tests {
 
     #[test]
     fn provider_colors_cover_every_agent_with_distinct_schemes() {
+        let mut seen_dark = std::collections::HashSet::new();
         for spec in AgentProvider::all() {
             let colors = provider_colors(spec.provider);
             assert_ne!(
                 colors.dark, colors.light,
                 "{} must have a light variant distinct from its dark one",
+                spec.name
+            );
+            assert!(
+                seen_dark.insert(colors.dark),
+                "{} collides with another provider's dark color",
                 spec.name
             );
         }
@@ -591,6 +603,38 @@ mod tests {
         }
         for spec in AgentProvider::all() {
             assert_dark_foreground(spec.name, provider_colors(spec.provider).ansi_light);
+        }
+    }
+
+    #[test]
+    fn light_theme_colors_keep_contrast_on_white() {
+        // Light-palette label colors render on a white terminal background;
+        // each must clear WCAG AA for large text / UI components (3:1).
+        // Expose the exact floor here so a new provider cannot silently ship
+        // an unreadable light color.
+        let contrast = |color: Color| {
+            let Color::Rgb(r, g, b) = color else {
+                return f64::INFINITY;
+            };
+            let linear = |channel: u8| {
+                let value = channel as f64 / 255.0;
+                if value <= 0.04045 {
+                    value / 12.92
+                } else {
+                    ((value + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            let luminance = 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+            (1.0 + 0.05) / (luminance + 0.05)
+        };
+        for spec in AgentProvider::all() {
+            let light = provider_colors(spec.provider).light;
+            assert!(
+                contrast(light) >= 3.0,
+                "{} light color {light:?} has contrast {:.1}:1 on white; darken it",
+                spec.name,
+                contrast(light)
+            );
         }
     }
 
