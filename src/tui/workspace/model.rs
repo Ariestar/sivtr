@@ -62,6 +62,7 @@ impl WorkspaceSourceKind {
             Self::Agent(AgentProvider::Gemini) => "gmi",
             Self::Agent(AgentProvider::Goose) => "gse",
             Self::Agent(AgentProvider::Qwen) => "qwn",
+            Self::Agent(AgentProvider::Zcode) => "zcd",
         }
     }
 

@@ -26,6 +26,7 @@ pub mod pi;
 pub mod qoder;
 pub mod qwen;
 pub mod sqlite;
+pub mod zcode;
 
 pub use jsonl::{
     jsonl_files, list_chat_recording_sessions, list_recent_jsonl_sessions, list_sessions_matching,
@@ -157,6 +158,14 @@ const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
         current_session_id_env: None,
         factory: qwen_provider,
     },
+    AgentProviderSpec {
+        provider: AgentProvider::Zcode,
+        name: "ZCode",
+        command_name: "zcode",
+        current_transcript_env: None,
+        current_session_id_env: None,
+        factory: zcode_provider,
+    },
 ];
 
 fn codex_provider() -> Box<dyn AgentSessionProvider> {
@@ -213,6 +222,10 @@ fn goose_provider() -> Box<dyn AgentSessionProvider> {
 
 fn qwen_provider() -> Box<dyn AgentSessionProvider> {
     Box::new(crate::agents::qwen::QwenProvider)
+}
+
+fn zcode_provider() -> Box<dyn AgentSessionProvider> {
+    Box::new(crate::agents::zcode::ZcodeProvider)
 }
 
 impl AgentProvider {

@@ -1123,8 +1123,9 @@ mod tests {
     fn mcp_host_registry_covers_every_managed_provider() {
         // dsh configures MCP clients as plugin rows in the harness profile's
         // `cordis.patch.yml`, not a standalone file, so it has no managed
-        // host entry here; it must fail loudly, never panic.
-        let unmanaged: &[AgentProvider] = &[AgentProvider::Dsh];
+        // host entry here; it must fail loudly, never panic. ZCode has no
+        // managed MCP config surface yet, so it is unmanaged for now too.
+        let unmanaged: &[AgentProvider] = &[AgentProvider::Dsh, AgentProvider::Zcode];
         let managed: Vec<AgentProvider> = AgentProvider::all()
             .iter()
             .map(|spec| spec.provider)

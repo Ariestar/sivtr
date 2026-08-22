@@ -159,6 +159,12 @@ pub(crate) const fn provider_colors(provider: AgentProvider) -> ProviderColors {
             ansi: Color::LightMagenta,
             ansi_light: Color::Magenta,
         },
+        AgentProvider::Zcode => ProviderColors {
+            dark: Color::Rgb(129, 140, 248), // indigo-400
+            light: Color::Rgb(79, 70, 229),  // indigo-600
+            ansi: Color::LightBlue,
+            ansi_light: Color::Blue,
+        },
     }
 }
 
