@@ -492,6 +492,15 @@ fn record_anchor_hits(
             .collect();
     }
 
+    // A metadata-only record (light view with empty `parts`, as browse
+    // session lists load) matches an unrestricted content query — one that
+    // reads no part text (no pattern, exclude, rank, or kind bound).
+    // Without this, empty parts can never match, so session lists come back
+    // empty once the meta cache is warm.
+    if record.parts.is_empty() && !filter.needs_parts() && filter.in_field == Field::Content {
+        return vec![hit(anchor.clone())];
+    }
+
     let matched_meta = filter.kind.is_none()
         && filter.in_field == Field::All
         && meta_matches(record, Field::All, pattern);
@@ -835,6 +844,35 @@ mod tests {
             .expect("search");
         assert_eq!(hits[0].anchor.to_string(), "terminal/s1/2");
         assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn browse_keeps_metadata_only_records_with_empty_parts() {
+        // Light session views (browse meta queries) carry empty `parts`; an
+        // unrestricted browse query must still match them, or session lists
+        // come back empty once the meta cache is warm.
+        let mut meta_only = record("s1", 1, "a", "x");
+        meta_only.parts.clear();
+        let records = vec![meta_only];
+        let hits = Searcher::new(&records)
+            .search(
+                &Filter::browse_session_page(100),
+                &anchors(&records),
+                Path::new("."),
+            )
+            .expect("search");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].anchor.to_string(), "terminal/s1/1");
+
+        // A pattern still never matches an empty-part record.
+        let filter = Filter {
+            pattern: Some("KUBECTL".into()),
+            ..Filter::browse_session_page(100)
+        };
+        let hits = Searcher::new(&records)
+            .search(&filter, &anchors(&records), Path::new("."))
+            .expect("search");
+        assert!(hits.is_empty());
     }
 
     #[test]

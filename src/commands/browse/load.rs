@@ -5,7 +5,6 @@
 //! only fulfills those requests over workset.
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -747,9 +746,7 @@ fn session_search_title(session_id: &str, records: &[WorkRecord]) -> String {
 
 fn record_modified(record: &WorkRecord) -> Option<SystemTime> {
     let stamp = record.time.primary_at()?;
-    let dt = DateTime::parse_from_rfc3339(stamp)
-        .ok()
-        .map(|dt| dt.with_timezone(&Utc))?;
+    let dt = sivtr_core::time::parse_timestamp(stamp)?;
     let secs = dt.timestamp().max(0) as u64;
     let nanos = dt.timestamp_subsec_nanos();
     Some(UNIX_EPOCH + Duration::from_secs(secs) + Duration::from_nanos(nanos.into()))
