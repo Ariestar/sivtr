@@ -497,10 +497,7 @@ fn record_anchor_hits(
     // reads no part text (no pattern, exclude, rank, or kind bound).
     // Without this, empty parts can never match, so session lists come back
     // empty once the meta cache is warm.
-    if record.parts.is_empty()
-        && !filter.needs_parts()
-        && filter.in_field == Field::Content
-    {
+    if record.parts.is_empty() && !filter.needs_parts() && filter.in_field == Field::Content {
         return vec![hit(anchor.clone())];
     }
 
