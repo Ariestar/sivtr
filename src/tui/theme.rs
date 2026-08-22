@@ -160,10 +160,10 @@ pub(crate) const fn provider_colors(provider: AgentProvider) -> ProviderColors {
             ansi_light: Color::Magenta,
         },
         AgentProvider::Zcode => ProviderColors {
-            dark: Color::Rgb(129, 140, 248), // indigo-400
-            light: Color::Rgb(79, 70, 229),  // indigo-600
-            ansi: Color::LightBlue,
-            ansi_light: Color::Blue,
+            dark: Color::Rgb(163, 230, 53),  // lime-400
+            light: Color::Rgb(101, 163, 13), // lime-600
+            ansi: Color::LightGreen,
+            ansi_light: Color::DarkGray,
         },
     }
 }
@@ -524,11 +524,17 @@ mod tests {
 
     #[test]
     fn provider_colors_cover_every_agent_with_distinct_schemes() {
+        let mut seen_dark = std::collections::HashSet::new();
         for spec in AgentProvider::all() {
             let colors = provider_colors(spec.provider);
             assert_ne!(
                 colors.dark, colors.light,
                 "{} must have a light variant distinct from its dark one",
+                spec.name
+            );
+            assert!(
+                seen_dark.insert(colors.dark),
+                "{} collides with another provider's dark color",
                 spec.name
             );
         }

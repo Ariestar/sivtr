@@ -75,22 +75,28 @@ fn list_sessions(cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
     }
 
     let conn = open_readonly_db(&db_path)?;
-    let mut stmt = conn.prepare(
-        "select id, title, directory, time_updated from session \
-         where time_archived is null order by time_updated desc",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, i64>(3)?,
-        ))
-    })?;
+    let mut stmt = conn
+        .prepare(
+            "select id, title, directory, time_updated from session \
+             where time_archived is null order by time_updated desc",
+        )
+        .context("Failed to list ZCode sessions")?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })
+        .context("Failed to read ZCode session rows")?;
 
     let mut sessions = Vec::new();
     for row in rows {
-        let (id, title, directory, time_updated) = row?;
+        let (id, title, directory, time_updated) = row.with_context(|| {
+            format!("Failed to read ZCode session row in {}", db_path.display())
+        })?;
         sessions.push(SessionInfo {
             path: session_path(&id),
             id: Some(display_id(&id).to_string()),
@@ -111,7 +117,8 @@ fn parse_session(row_id: &str) -> Result<AgentSession> {
             [row_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .optional()?;
+        .optional()
+        .context("Failed to query ZCode session header")?;
     let Some((title, directory)) = header else {
         anyhow::bail!("no ZCode session row for id {row_id}");
     };
@@ -124,23 +131,30 @@ fn parse_session(row_id: &str) -> Result<AgentSession> {
         blocks: Vec::new(),
     };
 
-    let mut stmt = conn.prepare(
-        "select m.data, p.data, p.time_created from part p \
-         join message m on m.id = p.message_id \
-         where p.session_id = ?1 order by m.sequence, p.sequence",
-    )?;
-    let rows = stmt.query_map([row_id], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, i64>(2)?,
-        ))
-    })?;
+    let mut stmt = conn
+        .prepare(
+            "select m.data, p.data, p.time_created from part p \
+             join message m on m.id = p.message_id \
+             where p.session_id = ?1 order by m.sequence, p.sequence",
+        )
+        .context("Failed to query ZCode session parts")?;
+    let rows = stmt
+        .query_map([row_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .context("Failed to read ZCode session parts")?;
 
     for row in rows {
-        let (message_json, part_json, time_created) = row?;
-        let message: Value = serde_json::from_str(&message_json).unwrap_or(Value::Null);
-        let part: Value = serde_json::from_str(&part_json).unwrap_or(Value::Null);
+        let (message_json, part_json, time_created) =
+            row.with_context(|| format!("Failed to read ZCode session {row_id} part row"))?;
+        let message: Value = serde_json::from_str(&message_json)
+            .with_context(|| format!("Invalid ZCode message JSON in session {row_id}"))?;
+        let part: Value = serde_json::from_str(&part_json)
+            .with_context(|| format!("Invalid ZCode part JSON in session {row_id}"))?;
         apply_part(&mut session, &message, &part, time_created);
     }
 
@@ -194,18 +208,14 @@ fn apply_tool_part(session: &mut AgentSession, part: &Value, timestamp: Option<S
             pretty_json_value(input),
         );
     }
-    if let Some(output) = state
-        .get("output")
-        .or_else(|| state.get("error"))
-        .and_then(Value::as_str)
-    {
-        push_block(
-            session,
-            AgentBlockKind::ToolOutput,
-            timestamp,
-            label,
-            output,
-        );
+    if let Some(output) = state.get("output").or_else(|| state.get("error")) {
+        // Structured tool results (objects/arrays) are rendered as JSON so
+        // they stay in the transcript instead of being dropped by as_str.
+        let text = match output.as_str() {
+            Some(text) => text.to_string(),
+            None => pretty_json_value(output),
+        };
+        push_block(session, AgentBlockKind::ToolOutput, timestamp, label, text);
     }
 }
 
@@ -241,8 +251,9 @@ mod tests {
 
     fn write_db(dir: &Path) {
         let db = dir.join("cli").join("db").join("db.sqlite");
-        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
-        let conn = Connection::open(&db).unwrap();
+        std::fs::create_dir_all(db.parent().expect("db has a parent"))
+            .expect("create ZCode db directory");
+        let conn = Connection::open(&db).expect("open test ZCode db");
         conn.execute_batch(
             r#"
             create table session (
@@ -282,7 +293,7 @@ mod tests {
                 ('p7', 'm2', 'sess_uuid-1', 7000, '{"type":"text","text":"system reminder","synthetic":true}', 5);
             "#,
         )
-        .unwrap();
+        .expect("seed test ZCode db");
     }
 
     #[test]
@@ -295,24 +306,31 @@ mod tests {
     #[test]
     fn session_path_round_trips_id() {
         let path = session_path("sess_uuid-1");
-        assert_eq!(session_id_from_path(&path).unwrap(), "sess_uuid-1");
+        assert_eq!(
+            session_id_from_path(&path).expect("round-trip a session id"),
+            "sess_uuid-1"
+        );
     }
 
     #[test]
     fn lists_and_parses_zcode_sessions() {
         let _guard = env_lock();
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().expect("create temp dir");
         let original = std::env::var_os("ZCODE_HOME");
         std::env::set_var("ZCODE_HOME", dir.path());
         write_db(dir.path());
 
-        let sessions = ZcodeProvider.list_recent_sessions(None).unwrap();
+        let sessions = ZcodeProvider
+            .list_recent_sessions(None)
+            .expect("list ZCode sessions");
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id.as_deref(), Some("uuid-1"));
         assert_eq!(sessions[0].cwd.as_deref(), Some("D:/Coding/alpha"));
         assert_eq!(sessions[0].title.as_deref(), Some("First task"));
 
-        let session = ZcodeProvider.parse_session_file(&sessions[0].path).unwrap();
+        let session = ZcodeProvider
+            .parse_session_file(&sessions[0].path)
+            .expect("parse ZCode session");
         assert_eq!(session.id.as_deref(), Some("uuid-1"));
         let kinds: Vec<_> = session.blocks.iter().map(|b| b.kind).collect();
         assert_eq!(
@@ -343,12 +361,12 @@ mod tests {
     #[test]
     fn missing_session_row_errors() {
         let _guard = env_lock();
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().expect("create temp dir");
         let original = std::env::var_os("ZCODE_HOME");
         std::env::set_var("ZCODE_HOME", dir.path());
         let error = ZcodeProvider
             .parse_session_file(&session_path("sess_missing"))
-            .unwrap_err();
+            .expect_err("missing session row must error");
         assert!(format!("{error:#}").contains("Failed to load"));
         match original {
             Some(value) => std::env::set_var("ZCODE_HOME", value),
