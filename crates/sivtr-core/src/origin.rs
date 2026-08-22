@@ -109,8 +109,10 @@ impl OriginRegistry {
             _ => {
                 // Remote wins a cross-kind collision; same-kind collisions stay
                 // ambiguous.
-                matched.sort_by_key(|entry| entry.origin.kind == "local");
-                if matched[0].origin.kind == matched[1].origin.kind {
+                matched.sort_by_key(|entry| matches!(entry.reach, Reach::Local { .. }));
+                if matches!(matched[0].reach, Reach::Local { .. })
+                    == matches!(matched[1].reach, Reach::Local { .. })
+                {
                     let details: Vec<&str> = matched
                         .iter()
                         .map(|entry| entry.origin.detail.as_str())

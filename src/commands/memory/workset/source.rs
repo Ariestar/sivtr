@@ -210,9 +210,11 @@ fn merge_and_apply(results: Vec<QuerySourceResult>, cwd: &Path, filter: Filter) 
     let mut records: Vec<WorkRecord> = Vec::new();
     let mut seen: HashSet<WorkRef> = HashSet::new();
     let mut errors: Vec<String> = Vec::new();
+    let mut any_ok = false;
     for result in results {
         match result {
             QuerySourceResult::Ok(set) => {
+                any_ok = true;
                 for record in set.records {
                     if seen.insert(record.work_ref.whole()) {
                         records.push(record);
@@ -222,7 +224,7 @@ fn merge_and_apply(results: Vec<QuerySourceResult>, cwd: &Path, filter: Filter) 
             QuerySourceResult::Err(message) => errors.push(message),
         }
     }
-    if records.is_empty() {
+    if !any_ok {
         if let Some(first) = errors.first() {
             anyhow::bail!("{first}");
         }
@@ -285,7 +287,9 @@ pub fn query_sources(
                             cwd,
                             source.timeout,
                         ),
-                        QueryTransport::Group => group_query(&source.selector, filter, cwd),
+                        QueryTransport::Group => {
+                            group_query(&source.selector, filter, cwd, source.timeout)
+                        }
                     };
                     (idx, normalize_source_result(result, cwd))
                 })
@@ -293,9 +297,13 @@ pub fn query_sources(
             .collect();
 
         let mut outcomes: Vec<Option<QuerySourceResult>> = sources.iter().map(|_| None).collect();
-        for handle in handles {
-            let (idx, outcome) = handle.join().expect("query worker panicked");
-            outcomes[idx] = Some(outcome);
+        for (slot, handle) in handles.into_iter().enumerate() {
+            // A panicked worker must not abort the batch; it becomes that
+            // source's error, and the rest still complete.
+            outcomes[slot] = Some(match handle.join() {
+                Ok((_idx, outcome)) => outcome,
+                Err(_) => QuerySourceResult::Err("query worker panicked".to_string()),
+            });
         }
         outcomes
     });
@@ -451,7 +459,12 @@ fn try_remote_timed(
 /// answers `None` when the group is unknown, which a scheduled [`QuerySource`]
 /// treats as a hard error — the scope was already pinned to a group by the
 /// caller.
-fn group_query(selector: &str, filter: Filter, cwd: &Path) -> Result<WorkSet> {
+fn group_query(
+    selector: &str,
+    filter: Filter,
+    cwd: &Path,
+    read_timeout: Duration,
+) -> Result<WorkSet> {
     use crate::remote::ipc;
     use crate::remote::protocol::{LocalRequest, LocalResponse};
 
@@ -476,7 +489,7 @@ fn group_query(selector: &str, filter: Filter, cwd: &Path) -> Result<WorkSet> {
             source: path.to_string(),
             filter,
         },
-        GROUP_QUERY_TIMEOUT,
+        read_timeout,
     )
     .context("group query failed")?
     {

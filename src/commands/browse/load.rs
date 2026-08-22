@@ -22,6 +22,7 @@ use crate::tui::workspace::{
     SourceLoadMarker, WorkspaceSession, WorkspaceSource, WorkspaceSourceKind,
 };
 use sivtr_core::ai::AgentProvider;
+use sivtr_core::origin::Reach;
 use sivtr_core::record::WorkRecord;
 
 /// Session meta without dialogue bodies.
@@ -647,10 +648,11 @@ pub fn workspace_source_catalog(
     // Mount aliases come from the same origin registry every query path uses;
     // it lists mounts only while the daemon is already running.
     let registry = crate::origins::collect(cwd).context("Failed to collect the origin registry")?;
-    for origin in registry.all() {
-        if origin.kind != "remote" {
+    for entry in registry.entries() {
+        if !matches!(entry.reach, Reach::Remote { .. }) {
             continue;
         }
+        let origin = &entry.origin;
         sources.push(WorkspaceSource::remote(
             &origin.name,
             WorkspaceSourceKind::Terminal,
