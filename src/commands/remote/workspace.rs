@@ -19,11 +19,12 @@ fn list() -> Result<()> {
         return Ok(());
     }
 
-    for origin in registry.all() {
+    for entry in registry.entries() {
+        let origin = &entry.origin;
         let label = if origin.current {
-            format!("{}:current", origin.kind.label())
+            format!("{}:current", entry.reach.label())
         } else {
-            origin.kind.label().to_string()
+            entry.reach.label().to_string()
         };
         output::detail(origin.name.clone(), format!("[{label}] {}", origin.detail));
     }

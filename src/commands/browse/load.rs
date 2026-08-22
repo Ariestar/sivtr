@@ -13,9 +13,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::commands::memory::filter::Filter;
-use crate::commands::memory::workset::{
-    self, QuerySource, QuerySourceResult, REMOTE_QUERY_TIMEOUT,
-};
+use crate::commands::memory::workset::{self, QuerySource, QuerySourceResult};
 use crate::pane::{
     keep_keys, MetaNeed, Pane, PaneInput, SlidingPane, StorePhase, Viewport, WindowRow,
     FETCH_CEILING, FETCH_FLOOR,
@@ -24,7 +22,7 @@ use crate::tui::workspace::{
     SourceLoadMarker, WorkspaceSession, WorkspaceSource, WorkspaceSourceKind,
 };
 use sivtr_core::ai::AgentProvider;
-use sivtr_core::origin::OriginKind;
+use sivtr_core::origin::Reach;
 use sivtr_core::record::WorkRecord;
 
 /// Session meta without dialogue bodies.
@@ -301,11 +299,10 @@ impl SourceLoadPump {
                 } else {
                     QuerySource::local(selector)
                 };
-                let (result, exhausted) = match workset::query_many(
+                let (result, exhausted) = match workset::query_sources(
                     &[qs],
                     Filter::browse_session_page(budget),
                     Some(&cwd),
-                    REMOTE_QUERY_TIMEOUT,
                 ) {
                     Ok(mut results) => match results.pop() {
                         Some(QuerySourceResult::Ok(set)) => {
@@ -362,12 +359,7 @@ impl SourceLoadPump {
                 } else {
                     QuerySource::local(sel)
                 };
-                let result = match workset::query_many(
-                    &[qs],
-                    Filter::none(),
-                    Some(&cwd),
-                    REMOTE_QUERY_TIMEOUT,
-                ) {
+                let result = match workset::query_sources(&[qs], Filter::none(), Some(&cwd)) {
                     Ok(mut results) => match results.pop() {
                         Some(QuerySourceResult::Ok(mut set)) => match set.materialize_parts() {
                             Ok(()) => {
@@ -656,10 +648,11 @@ pub fn workspace_source_catalog(
     // Mount aliases come from the same origin registry every query path uses;
     // it lists mounts only while the daemon is already running.
     let registry = crate::origins::collect(cwd).context("Failed to collect the origin registry")?;
-    for origin in registry.all() {
-        if origin.kind != OriginKind::Remote {
+    for entry in registry.entries() {
+        if !matches!(entry.reach, Reach::Remote { .. }) {
             continue;
         }
+        let origin = &entry.origin;
         sources.push(WorkspaceSource::remote(
             &origin.name,
             WorkspaceSourceKind::Terminal,
