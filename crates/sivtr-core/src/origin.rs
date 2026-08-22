@@ -26,9 +26,10 @@ use serde::{Deserialize, Serialize};
 pub struct Origin {
     /// Logical name (scope name / alias), used by [`OriginRegistry::resolve`].
     pub name: String,
-    /// Stable lowercase label of the reach kind (`"local"` / `"remote"`),
-    /// composed from [`Reach::label`] at construction.
-    pub kind: String,
+    /// Stable lowercase label of the reach kind (`"local"` / `"remote"`).
+    /// Private: derived from [`Reach`] by [`Entry::new`], so classification
+    /// always agrees with the reach. Serialized for MCP consumers.
+    kind: String,
     /// Whether this origin is the current context (e.g. the current workspace).
     pub current: bool,
     /// Display projection composed by the source (e.g. `root (key)`).
@@ -62,6 +63,20 @@ impl Reach {
 pub struct Entry {
     pub origin: Origin,
     pub reach: Reach,
+}
+
+impl Entry {
+    /// Build an entry with `kind` derived from the reach — the two can never
+    /// disagree, since every consumer reads classification from one source.
+    pub fn new(name: String, current: bool, detail: String, reach: Reach) -> Self {
+        let origin = Origin {
+            name,
+            kind: reach.label().to_string(),
+            current,
+            detail,
+        };
+        Self { origin, reach }
+    }
 }
 
 /// Every origin addressable from the current context.
@@ -131,28 +146,22 @@ mod tests {
 
     fn sample() -> OriginRegistry {
         OriginRegistry::new(vec![
-            Entry {
-                origin: Origin {
-                    name: "sivtr".to_string(),
-                    kind: "local".to_string(),
-                    current: true,
-                    detail: "D:\\Coding\\sivtr (key1)".to_string(),
-                },
-                reach: Reach::Local {
+            Entry::new(
+                "sivtr".to_string(),
+                true,
+                "D:\\Coding\\sivtr (key1)".to_string(),
+                Reach::Local {
                     root: "D:\\Coding\\sivtr".to_string(),
                 },
-            },
-            Entry {
-                origin: Origin {
-                    name: "desk".to_string(),
-                    kind: "remote".to_string(),
-                    current: false,
-                    detail: "alice/sivtr".to_string(),
-                },
-                reach: Reach::Remote {
+            ),
+            Entry::new(
+                "desk".to_string(),
+                false,
+                "alice/sivtr".to_string(),
+                Reach::Remote {
                     workspace_key: "key1".to_string(),
                 },
-            },
+            ),
         ])
     }
 
@@ -204,28 +213,22 @@ mod tests {
     #[test]
     fn resolve_errors_on_ambiguous_names() {
         let registry = OriginRegistry::new(vec![
-            Entry {
-                origin: Origin {
-                    name: "return".to_string(),
-                    kind: "local".to_string(),
-                    current: false,
-                    detail: "D:\\a (k1)".to_string(),
-                },
-                reach: Reach::Local {
+            Entry::new(
+                "return".to_string(),
+                false,
+                "D:\\a (k1)".to_string(),
+                Reach::Local {
                     root: "D:\\a".to_string(),
                 },
-            },
-            Entry {
-                origin: Origin {
-                    name: "return".to_string(),
-                    kind: "local".to_string(),
-                    current: false,
-                    detail: "D:\\b (k2)".to_string(),
-                },
-                reach: Reach::Local {
+            ),
+            Entry::new(
+                "return".to_string(),
+                false,
+                "D:\\b (k2)".to_string(),
+                Reach::Local {
                     root: "D:\\b".to_string(),
                 },
-            },
+            ),
         ]);
         let error = registry.resolve("return").expect_err("ambiguous");
         assert!(error.to_string().contains("ambiguous origin `return`"));
@@ -236,31 +239,24 @@ mod tests {
         // A mount alias may equal a local workspace's basename; the mount
         // resolves (remote lookup ran before local workspaces pre-registry).
         let registry = OriginRegistry::new(vec![
-            Entry {
-                origin: Origin {
-                    name: "proj".to_string(),
-                    kind: "local".to_string(),
-                    current: true,
-                    detail: "D:\\a\\proj (k1)".to_string(),
-                },
-                reach: Reach::Local {
+            Entry::new(
+                "proj".to_string(),
+                true,
+                "D:\\a\\proj (k1)".to_string(),
+                Reach::Local {
                     root: "D:\\a\\proj".to_string(),
                 },
-            },
-            Entry {
-                origin: Origin {
-                    name: "proj".to_string(),
-                    kind: "remote".to_string(),
-                    current: false,
-                    detail: "alice/proj".to_string(),
-                },
-                reach: Reach::Remote {
+            ),
+            Entry::new(
+                "proj".to_string(),
+                false,
+                "alice/proj".to_string(),
+                Reach::Remote {
                     workspace_key: "k1".to_string(),
                 },
-            },
+            ),
         ]);
         let entry = registry.resolve("proj").expect("resolve").expect("found");
-        assert_eq!(entry.origin.kind, "remote");
         assert!(matches!(&entry.reach, Reach::Remote { workspace_key } if workspace_key == "k1"));
     }
 
