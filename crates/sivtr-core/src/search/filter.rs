@@ -493,13 +493,12 @@ fn record_anchor_hits(
     }
 
     // A metadata-only record (light view with empty `parts`, as browse
-    // session lists load) matches an unrestricted content query — no
-    // pattern, no kind bound, default field. Without this, empty parts can
-    // never match, so session lists come back empty once the meta cache is
-    // warm.
+    // session lists load) matches an unrestricted content query — one that
+    // reads no part text (no pattern, exclude, rank, or kind bound).
+    // Without this, empty parts can never match, so session lists come back
+    // empty once the meta cache is warm.
     if record.parts.is_empty()
-        && filter.kind.is_none()
-        && pattern.is_none()
+        && !filter.needs_parts()
         && filter.in_field == Field::Content
     {
         return vec![hit(anchor.clone())];
