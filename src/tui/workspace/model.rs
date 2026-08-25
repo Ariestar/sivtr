@@ -201,6 +201,9 @@ pub(crate) struct WorkspacePickedContent {
     pub(crate) source: WorkspaceSource,
     pub(crate) units: Vec<TextPair>,
     pub(crate) selection: CommandSelection,
+    /// Exact record/part anchors represented by the pick. Clipboard callers
+    /// ignore this; publication callers use it to preserve the selection.
+    pub(crate) anchors: Vec<WorkRef>,
 }
 
 #[derive(Clone, Debug)]

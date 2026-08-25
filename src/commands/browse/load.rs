@@ -45,12 +45,16 @@ const BODY_FETCH_CAP: usize = 2;
 #[derive(Clone, Debug, Default)]
 pub struct SourceLoadState {
     pub pane: SessionPane,
+    /// Preloaded in-memory catalogs (`run_with_sessions`) must not be replaced
+    /// by a provider-wide metadata fetch on kick or Refresh.
+    pinned: bool,
 }
 
 impl SourceLoadState {
     pub fn idle() -> Self {
         Self {
             pane: SessionPane::default(),
+            pinned: false,
         }
     }
 
@@ -75,7 +79,25 @@ impl SourceLoadState {
             .collect();
         Self {
             pane: SessionPane::ready(rows, budget, true),
+            pinned: true,
         }
+    }
+
+    /// Explicit catalog reload (`R` / forced kick). Pinned in-memory pickers
+    /// return `None` so the provider session list cannot merge in.
+    pub fn force_catalog_meta(&mut self, viewport: Viewport) -> Option<MetaNeed> {
+        if self.pinned {
+            None
+        } else {
+            self.pane.force_meta(viewport)
+        }
+    }
+
+    /// Normal catalog states start idle and need a provider metadata load.
+    /// States built by an in-memory picker source are already ready and must
+    /// not be refreshed back to the provider's full session catalog.
+    pub fn needs_initial_refresh(&self) -> bool {
+        matches!(self.pane.store().phase, StorePhase::Idle)
     }
 
     pub fn marker(&self) -> SourceLoadMarker {
@@ -191,7 +213,7 @@ impl SourceLoadPump {
                 continue;
             }
             let need: Option<MetaNeed> = if force {
-                states[idx].pane.force_meta(viewport)
+                states[idx].force_catalog_meta(viewport)
             } else {
                 states[idx].pane.ensure_meta(viewport)
             };
@@ -212,12 +234,15 @@ impl SourceLoadPump {
             if !selected.get(idx).copied().unwrap_or(false) {
                 continue;
             }
+            if states[idx].pinned {
+                continue;
+            }
             // An explicit refresh is a retry: drop recorded body failures so
             // transient errors (remote timeouts, temporary transport issues)
             // get another chance once connectivity recovers.
             self.body_failed
                 .retain(|k, _| !k.starts_with(&format!("{idx}\0")));
-            if let Some(need) = states[idx].pane.force_meta(viewport) {
+            if let Some(need) = states[idx].force_catalog_meta(viewport) {
                 self.spawn_meta(idx, source, need.gen, need.budget);
             }
         }
@@ -824,6 +849,69 @@ mod tests {
     }
 
     #[test]
+    fn non_forced_kick_preserves_preloaded_session_body() {
+        let source = WorkspaceSource::agent(AgentProvider::Codex);
+        let session = WorkspaceSession {
+            source: source.clone(),
+            session_id: "s1".into(),
+            modified: UNIX_EPOCH,
+            title: "s1".into(),
+            search_title: "s1".into(),
+            records: vec![test_record("s1", 1, "payload", "2026-07-17T10:00:00Z")],
+            body_loaded: true,
+        };
+        let state = SourceLoadState::ready_from_sessions(vec![session], 1);
+        assert!(!state.needs_initial_refresh());
+        let mut column = SessionColumn::new(vec![source], vec![state], PathBuf::from("."));
+
+        column.kick(
+            &[true],
+            Viewport {
+                first: 0,
+                visible: 10,
+            },
+            false,
+        );
+
+        let body = column.states[0]
+            .body("s1")
+            .expect("preloaded session body should remain available");
+        assert_eq!(body.len(), 1);
+        assert_eq!(body[0].work_ref.to_string(), "codex/s1/1");
+    }
+
+    #[test]
+    fn forced_refresh_does_not_fetch_preloaded_catalog() {
+        let source = WorkspaceSource::agent(AgentProvider::Codex);
+        let session = WorkspaceSession {
+            source: source.clone(),
+            session_id: "s1".into(),
+            modified: UNIX_EPOCH,
+            title: "s1".into(),
+            search_title: "s1".into(),
+            records: vec![test_record("s1", 1, "payload", "2026-07-17T10:00:00Z")],
+            body_loaded: true,
+        };
+        let mut state = SourceLoadState::ready_from_sessions(vec![session], 1);
+        let viewport = Viewport {
+            first: 0,
+            visible: 10,
+        };
+        assert!(state.force_catalog_meta(viewport).is_none());
+        assert!(!state.pane.store().list_inflight);
+
+        let mut column = SessionColumn::new(vec![source], vec![state], PathBuf::from("."));
+        column.refresh(&[true], viewport);
+        assert!(!column.states[0].pane.store().list_inflight);
+        assert_eq!(column.states[0].pane.len(), 1);
+        let body = column.states[0]
+            .body("s1")
+            .expect("preloaded session body should remain available");
+        assert_eq!(body.len(), 1);
+        assert_eq!(body[0].work_ref.to_string(), "codex/s1/1");
+    }
+
+    #[test]
     fn body_load_failure_is_preserved_and_not_retried() {
         let source = WorkspaceSource::agent(AgentProvider::Codex);
         let sources = vec![source.clone()];
@@ -836,6 +924,7 @@ mod tests {
         };
         let state = SourceLoadState {
             pane: SessionPane::ready(vec![WindowRow::meta_only("s1".into(), meta)], 10, true),
+            ..Default::default()
         };
         let mut column = SessionColumn::new(sources.clone(), vec![state], PathBuf::from("."));
 
@@ -869,6 +958,7 @@ mod tests {
         };
         let state = SourceLoadState {
             pane: SessionPane::ready(vec![WindowRow::meta_only("s1".into(), meta)], 10, true),
+            ..Default::default()
         };
         let mut column = SessionColumn::new(sources.clone(), vec![state], PathBuf::from("."));
 
@@ -922,6 +1012,7 @@ mod tests {
                 10,
                 true,
             ),
+            ..Default::default()
         };
         let mut column = SessionColumn::new(sources.clone(), vec![state], PathBuf::from("."));
 
@@ -970,6 +1061,7 @@ mod tests {
         };
         let state = SourceLoadState {
             pane: SessionPane::ready(vec![WindowRow::meta_only("s1".into(), meta)], 10, true),
+            ..Default::default()
         };
         let mut column = SessionColumn::new(sources.clone(), vec![state], PathBuf::from("."));
 
@@ -1021,6 +1113,7 @@ mod tests {
         };
         let state = SourceLoadState {
             pane: SessionPane::ready(vec![WindowRow::meta_only("s1".into(), meta)], 10, true),
+            ..Default::default()
         };
         let mut column = SessionColumn::new(sources.clone(), vec![state], PathBuf::from("."));
 
@@ -1076,6 +1169,7 @@ mod tests {
             .collect();
         let state = SourceLoadState {
             pane: SessionPane::ready(rows, 10, true),
+            ..Default::default()
         };
         let mut column = SessionColumn::new(sources.clone(), vec![state], PathBuf::from("."));
 

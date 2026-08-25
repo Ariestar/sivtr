@@ -64,6 +64,9 @@ pub(crate) fn run(
     // Unified Pane stack — each implements crate::pane::Pane.
     // New panes: construct + poll/ensure with PaneInput; no special picker branches.
     let mut source_pane = SourcePane::from_catalog(&sources);
+    let refresh_initial = source_states
+        .iter()
+        .any(SourceLoadState::needs_initial_refresh);
     let mut sessions_pane = SessionColumn::new(sources.clone(), source_states, cwd.clone());
     let mut dialogue_pane = DialoguePane::default();
     let mut content_pane = ContentPane::default();
@@ -71,7 +74,10 @@ pub(crate) fn run(
         first: 0,
         visible: 24,
     };
-    sessions_pane.kick(&selected_sources, bootstrap, true);
+    // `run_with_sessions` supplies an exact, already materialized session for
+    // publication picking. Do not refresh that state from the provider, or a
+    // different (usually newest) session can replace the requested records.
+    sessions_pane.kick(&selected_sources, bootstrap, refresh_initial);
     // Meta-only list — dialogue bodies live in SessionColumn, not here.
     let mut all_sessions = sessions_pane.collect(&selected_sources);
     let mut sessions = all_sessions.clone();
@@ -1637,6 +1643,10 @@ mod tests {
             text.contains("\"stdout\""),
             "tool result body missing: {text}"
         );
+        assert_eq!(
+            picked.anchors,
+            vec![record.work_ref.with_part(2), record.work_ref.with_part(3)]
+        );
         assert!(
             !text.contains("user text"),
             "unmarked input block leaked: {text}"
@@ -2443,6 +2453,8 @@ mod tests {
             picked.selection,
             CommandSelection::RecentExplicit(vec![1, 2])
         );
+        assert_eq!(picked.anchors.len(), 2);
+        assert!(picked.anchors.iter().all(|anchor| anchor.part().is_none()));
     }
 
     #[test]

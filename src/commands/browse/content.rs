@@ -11,7 +11,7 @@ use crate::tui::search::{WorkspaceSearchMatch, WorkspaceSearchOutput};
 use crate::tui::workspace::{
     selected_indices, WorkspaceDialogue, WorkspacePickedContent, WorkspaceSession,
 };
-use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
+use sivtr_core::record::{work_atoms, WorkAt, WorkPartKind, WorkRecord, WorkRef};
 
 use super::panes::ContentPane;
 use super::text::filter_lines_by_spec;
@@ -51,6 +51,11 @@ pub(super) fn workspace_picked_content_for_copy_with_line_filter(
         && matches!(shortcut, WorkspaceCopyShortcut::Displayed))
     .then_some(target)
     .flatten();
+    let anchors = picked_indices
+        .iter()
+        .filter_map(|idx| dialogues.get(*idx))
+        .flat_map(|dialogue| copy_shortcut_anchors(dialogue, shortcut, display_target))
+        .collect();
     let units = picked_indices
         .into_iter()
         .filter_map(|idx| dialogues.get(idx))
@@ -67,7 +72,49 @@ pub(super) fn workspace_picked_content_for_copy_with_line_filter(
         source: dialogues[source_idx].source.clone(),
         units,
         selection,
+        anchors,
     })
+}
+
+fn copy_shortcut_anchors(
+    dialogue: &WorkspaceDialogue,
+    shortcut: WorkspaceCopyShortcut,
+    display_target: Option<WorkAt>,
+) -> Vec<WorkRef> {
+    match shortcut {
+        WorkspaceCopyShortcut::Displayed => {
+            dialogue.content_ref(display_target).into_iter().collect()
+        }
+        WorkspaceCopyShortcut::Input => half_atom_anchors(dialogue, true),
+        WorkspaceCopyShortcut::Output => half_atom_anchors(dialogue, false),
+        WorkspaceCopyShortcut::Command => command_part_anchors(dialogue),
+    }
+}
+
+fn half_atom_anchors(dialogue: &WorkspaceDialogue, input: bool) -> Vec<WorkRef> {
+    let Some(record) = dialogue.record.as_ref() else {
+        return Vec::new();
+    };
+    work_atoms(record, input)
+        .into_iter()
+        .flat_map(|atom| {
+            atom.part_seqs
+                .into_iter()
+                .map(|seq| record.work_ref.with_part(seq))
+        })
+        .collect()
+}
+
+fn command_part_anchors(dialogue: &WorkspaceDialogue) -> Vec<WorkRef> {
+    let Some(record) = dialogue.record.as_ref() else {
+        return Vec::new();
+    };
+    record
+        .parts
+        .iter()
+        .filter(|part| part.kind() == WorkPartKind::Command)
+        .map(|part| record.work_ref.with_part(part.seq))
+        .collect()
 }
 
 #[cfg(test)]
@@ -137,6 +184,7 @@ pub(super) fn workspace_picked_content_for_marked_blocks(
 ) -> Option<WorkspacePickedContent> {
     let picked_indices = picked_dialogue_indices(selected_dialogues, dialogue_idx);
     let mut texts = Vec::new();
+    let mut anchors = Vec::new();
     for dialogue_idx in picked_indices {
         let Some(record) = dialogues
             .get(dialogue_idx)
@@ -149,11 +197,19 @@ pub(super) fn workspace_picked_content_for_marked_blocks(
             (false, ContentIoFocus::Output),
         ] {
             for block in half_blocks(record, input) {
-                collect_marked_blocks(&block, half, dialogue_idx, content_pane, record, &mut texts);
+                collect_marked_blocks(
+                    &block,
+                    half,
+                    dialogue_idx,
+                    content_pane,
+                    record,
+                    &mut texts,
+                    &mut anchors,
+                );
             }
         }
     }
-    picked_for_texts(dialogues, selected_dialogues, dialogue_idx, texts)
+    picked_for_texts(dialogues, selected_dialogues, dialogue_idx, texts, anchors)
 }
 
 /// Push every marked block's body, descending into run members (a marked
@@ -165,6 +221,7 @@ fn collect_marked_blocks(
     content_pane: &ContentPane,
     record: &WorkRecord,
     texts: &mut Vec<String>,
+    anchors: &mut Vec<WorkRef>,
 ) {
     if content_pane
         .marked(half, dialogue_idx)
@@ -173,9 +230,24 @@ fn collect_marked_blocks(
         .unwrap_or(false)
     {
         texts.push(block.body(record));
+        let work_ref = &record.work_ref;
+        anchors.extend(
+            block
+                .parts
+                .iter()
+                .map(|index| work_ref.with_part(record.parts[*index].seq)),
+        );
     }
     for child in &block.children {
-        collect_marked_blocks(child, half, dialogue_idx, content_pane, record, texts);
+        collect_marked_blocks(
+            child,
+            half,
+            dialogue_idx,
+            content_pane,
+            record,
+            texts,
+            anchors,
+        );
     }
 }
 
@@ -200,6 +272,11 @@ pub(super) fn workspace_picked_content_for_cursor_block(
         selected_dialogues,
         dialogue_idx,
         vec![block.body(record)],
+        block
+            .parts
+            .iter()
+            .map(|index| record.work_ref.with_part(record.parts[*index].seq))
+            .collect(),
     )
 }
 
@@ -221,6 +298,7 @@ fn picked_for_texts(
     selected_dialogues: &[bool],
     dialogue_idx: usize,
     texts: Vec<String>,
+    anchors: Vec<WorkRef>,
 ) -> Option<WorkspacePickedContent> {
     if texts.is_empty() {
         return None;
@@ -234,6 +312,7 @@ fn picked_for_texts(
             plain,
         }],
         selection: CommandSelection::RecentExplicit(vec![1]),
+        anchors,
     })
 }
 
@@ -464,6 +543,182 @@ mod tests {
         assert!(
             all.contains("$ git status"),
             "dialogue B marked block missing: {all}"
+        );
+    }
+
+    fn full_chat_turn(index: usize) -> WorkRecord {
+        WorkRecord {
+            schema_version: 2,
+            work_ref: WorkRef::agent(AgentProvider::Codex, "test", index + 1),
+            kind: WorkRecordKind::ChatTurn,
+            source: WorkSource {
+                channel: WorkChannel::Chat,
+                provider: Some("codex".to_string()),
+            },
+            session: WorkSessionRef {
+                id: "test".to_string(),
+                canonical_id: Some("test-session-0123456789abcdef".to_string()),
+                path: None,
+            },
+            cwd: None,
+            time: WorkTime::default(),
+            status: None,
+            title: "turn".to_string(),
+            parts: vec![
+                WorkPart {
+                    seq: 1,
+                    occurred_at: None,
+                    data: WorkPartData::User {
+                        content: "user question".to_string(),
+                    },
+                },
+                WorkPart {
+                    seq: 2,
+                    occurred_at: None,
+                    data: WorkPartData::Skill {
+                        skill: Some("lookup".to_string()),
+                        content: "skill body".to_string(),
+                    },
+                },
+                WorkPart {
+                    seq: 3,
+                    occurred_at: None,
+                    data: WorkPartData::ToolCall {
+                        call_id: Some("c1".to_string()),
+                        tool: Some("Bash".to_string()),
+                        input: serde_json::json!({ "command": "ls" }),
+                    },
+                },
+                WorkPart {
+                    seq: 4,
+                    occurred_at: None,
+                    data: WorkPartData::ToolResult {
+                        call_id: Some("c1".to_string()),
+                        tool: Some("Bash".to_string()),
+                        output: serde_json::json!({ "stdout": "ok" }),
+                        start_line: None,
+                    },
+                },
+                WorkPart {
+                    seq: 5,
+                    occurred_at: None,
+                    data: WorkPartData::Thinking {
+                        content: "internal reasoning".to_string(),
+                    },
+                },
+                WorkPart {
+                    seq: 6,
+                    occurred_at: None,
+                    data: WorkPartData::Assistant {
+                        content: "assistant reply".to_string(),
+                    },
+                },
+            ],
+        }
+    }
+
+    fn dialogue_with_copy(record: WorkRecord) -> WorkspaceDialogue {
+        WorkspaceDialogue {
+            source: WorkspaceSource::agent(AgentProvider::Codex),
+            work_ref: Some(record.work_ref.clone()),
+            copy: WorkspaceCopyParts {
+                input: crate::tui::workspace::TextPair {
+                    plain: "user question".to_string(),
+                    ansi: String::new(),
+                },
+                output: crate::tui::workspace::TextPair {
+                    plain: "assistant reply".to_string(),
+                    ansi: String::new(),
+                },
+                command: crate::tui::workspace::TextPair::default(),
+            },
+            record: Some(record),
+        }
+    }
+
+    fn part_seqs(picked: &WorkspacePickedContent) -> Vec<usize> {
+        picked
+            .anchors
+            .iter()
+            .map(|anchor| {
+                anchor
+                    .part()
+                    .expect("copy confirm should attach part anchors")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn copy_shortcuts_attach_half_scoped_publish_anchors() {
+        let dialogues = [dialogue_with_copy(full_chat_turn(0))];
+        let selected = [false];
+
+        let input = workspace_picked_content_for_copy(
+            &dialogues,
+            &selected,
+            0,
+            WorkspaceCopyShortcut::Input,
+        );
+        assert_eq!(input.units[0].plain, "user question");
+        assert_eq!(part_seqs(&input), vec![1, 2]);
+
+        let output = workspace_picked_content_for_copy(
+            &dialogues,
+            &selected,
+            0,
+            WorkspaceCopyShortcut::Output,
+        );
+        assert_eq!(output.units[0].plain, "assistant reply");
+        assert_eq!(part_seqs(&output), vec![3, 4, 5, 6]);
+
+        let command = workspace_picked_content_for_copy(
+            &dialogues,
+            &selected,
+            0,
+            WorkspaceCopyShortcut::Command,
+        );
+        assert!(command.units[0].plain.is_empty());
+        assert!(command.anchors.is_empty());
+
+        let displayed = workspace_picked_content(&dialogues, &selected, 0, None);
+        assert_eq!(displayed.anchors.len(), 1);
+        assert!(displayed.anchors[0].part().is_none());
+    }
+
+    #[test]
+    fn cursor_and_marked_block_anchors_stay_part_scoped() {
+        let record = full_chat_turn(0);
+        let dialogues = [dialogue_with_copy(record.clone())];
+        let selected = [true];
+        let mut pane = ContentPane::default();
+        pane.ensure(ContentCtx {
+            dialogues: &dialogues,
+            highlighted_idx: 0,
+            mode: ContentViewMode::Reading,
+            target: None,
+            area: ratatui::layout::Rect::new(0, 0, 60, 20),
+            io_focus: ContentIoFocus::Input,
+            expanded: &ExpandedBlocks::default(),
+        });
+        pane.toggle_mark(ContentIoFocus::Input, 0, 0);
+
+        let marked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
+            .expect("marked user block");
+        assert_eq!(part_seqs(&marked), vec![1]);
+
+        let cursor = workspace_picked_content_for_cursor_block(
+            &dialogues,
+            &selected,
+            0,
+            ContentIoFocus::Output,
+            0,
+        )
+        .expect("cursor output block");
+        assert!(cursor.anchors.iter().all(|anchor| anchor.part().is_some()));
+        assert!(
+            !part_seqs(&cursor).contains(&1),
+            "cursor output block must not widen to the user part: {:?}",
+            cursor.anchors
         );
     }
 }

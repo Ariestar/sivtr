@@ -204,6 +204,54 @@ h1 {
 
 .message.assistant { border-left-color: var(--accent); }
 
+.message.atom.tool,
+.message.atom.skill,
+.message.atom.thinking {
+  border-left-color: var(--dim);
+  background: color-mix(in srgb, var(--focus-bg) 55%, var(--panel));
+}
+
+.message.atom.tool .role,
+.message.atom.skill .role,
+.message.atom.thinking .role { color: var(--muted-text); }
+
+.atom-details summary {
+  color: var(--key-hint);
+  cursor: pointer;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.8rem;
+  margin-bottom: 0.65rem;
+}
+
+.atom-details[open] summary { margin-bottom: 0.8rem; }
+
+.atom-part + .atom-part {
+  border-top: 1px dashed var(--border);
+  margin-top: 0.8rem;
+  padding-top: 0.8rem;
+}
+
+.part-kind {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  margin: 0 0 0.35rem;
+  text-transform: uppercase;
+}
+
+.share-gap {
+  background: var(--focus-bg);
+  border-top: 1px dashed var(--border);
+  border-bottom: 1px dashed var(--border);
+  color: var(--footer);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0.03em;
+  padding: 0.65rem 1.15rem;
+  text-align: center;
+}
+
 .role {
   display: flex;
   align-items: center;

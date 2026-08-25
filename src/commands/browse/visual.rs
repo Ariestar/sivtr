@@ -337,7 +337,8 @@ pub(super) fn workspace_picked_content_for_visual_selection(
     content_mode: ContentViewMode,
     selection: ContentSelection,
 ) -> WorkspacePickedContent {
-    let source = workspace_picked_content(dialogues, selected_dialogues, dialogue_idx, None).source;
+    let base = workspace_picked_content(dialogues, selected_dialogues, dialogue_idx, None);
+    let source = base.source;
     let plain = selected_content_text(content_area, text, content_mode, selection);
     WorkspacePickedContent {
         source,
@@ -346,6 +347,11 @@ pub(super) fn workspace_picked_content_for_visual_selection(
             plain,
         }],
         selection: CommandSelection::RecentExplicit(vec![1]),
+        // A visual text range can cut through a part and therefore has no
+        // exact atomic anchor. Clipboard callers still receive the text;
+        // publication selection rejects this path instead of widening it to
+        // the whole dialogue.
+        anchors: Vec::new(),
     }
 }
 

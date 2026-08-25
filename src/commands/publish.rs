@@ -5,21 +5,25 @@ use aes_gcm::{
     aead::{AeadInPlace, KeyInit},
     Aes256Gcm, Key, Nonce,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Utc};
 use flate2::{write::GzEncoder, Compression};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
+use sivtr_core::record::{work_atoms, WorkRecord, WorkRef};
 use sivtr_core::{
     config::SivtrConfig,
     publication::{
-        create_publication_draft, PublicationDraft, PublicationExpiry, PublicationPolicy,
+        create_publication_draft, PublicConversationSnapshot, PublicationDraft, PublicationExpiry,
+        PublicationPolicy,
     },
     workspace,
 };
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{IsTerminal, Write};
 use std::time::Duration;
+use std::time::UNIX_EPOCH;
 
 use crate::cli::{
     PublishAction, PublishCommand, PublishCreateArgs, PublishFormat, PublishIdArgs,
@@ -27,6 +31,7 @@ use crate::cli::{
 };
 use crate::commands::memory::{filter::Filter, workset};
 use crate::output;
+use crate::tui::workspace::{WorkspaceFocus, WorkspaceSession, WorkspaceSource};
 
 const ENVELOPE_LIMIT: usize = 5 * 1024 * 1024;
 const ENVELOPE_MAGIC: &[u8; 8] = b"SIVTPUB1";
@@ -109,8 +114,7 @@ pub fn execute(command: PublishCommand) -> Result<()> {
     }
 }
 
-fn load_draft(source: &str, title: Option<String>, expiry: &str) -> Result<PublicationDraft> {
-    let expires = PublicationExpiry::parse(expiry)?;
+fn load_publication_set(source: &str) -> Result<workset::WorkSet> {
     // Preview must be offline.  Named remote/group scopes are rejected before
     // the unified WorkSet query has a chance to start a daemon or dial a peer.
     if source.contains(':') && !source.starts_with("local:") {
@@ -118,6 +122,21 @@ fn load_draft(source: &str, title: Option<String>, expiry: &str) -> Result<Publi
     }
     let mut set = workset::query(source, Filter::none(), None)
         .with_context(|| format!("failed to resolve publication source `{source}`"))?;
+    set.materialize_parts()?;
+    Ok(set)
+}
+
+fn load_draft(source: &str, title: Option<String>, expiry: &str) -> Result<PublicationDraft> {
+    let mut set = load_publication_set(source)?;
+    load_draft_from_set(&mut set, title, expiry)
+}
+
+fn load_draft_from_set(
+    set: &mut workset::WorkSet,
+    title: Option<String>,
+    expiry: &str,
+) -> Result<PublicationDraft> {
+    let expires = PublicationExpiry::parse(expiry)?;
     set.materialize_parts()?;
     create_publication_draft(
         &set.records,
@@ -130,36 +149,130 @@ fn load_draft(source: &str, title: Option<String>, expiry: &str) -> Result<Publi
     )
 }
 
+fn pick_publication_set(source: &str) -> Result<workset::WorkSet> {
+    let set = load_publication_set(source)?;
+    let first = set
+        .records
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("publication source contains no records"))?;
+    let provider = first
+        .work_ref
+        .provider()
+        .ok_or_else(|| anyhow::anyhow!("publication picker only supports agent sessions"))?;
+    let session_id = first.session.id.clone();
+    ensure!(
+        first.kind == sivtr_core::record::WorkRecordKind::ChatTurn && first.work_ref.is_local(),
+        "publication picker only supports one local agent session"
+    );
+    ensure!(
+        set.records.iter().all(|record| {
+            record.kind == sivtr_core::record::WorkRecordKind::ChatTurn
+                && record.work_ref.is_local()
+                && record.work_ref.provider() == Some(provider)
+                && record.session.id == session_id
+        }),
+        "publication picker requires exactly one local agent session"
+    );
+
+    let workspace_source = WorkspaceSource::agent(provider);
+    let session = WorkspaceSession {
+        source: workspace_source.clone(),
+        session_id,
+        modified: UNIX_EPOCH,
+        title: first.title.clone(),
+        search_title: first.title.clone(),
+        records: set.records.clone(),
+        body_loaded: true,
+    };
+    let picked = crate::commands::browse::run_with_sessions(
+        workspace_source,
+        vec![session],
+        WorkspaceFocus::Dialogues,
+    )?;
+    ensure!(!picked.anchors.is_empty(), "publication selection is empty");
+    let anchors = expand_picker_anchors(&set.records, &picked.anchors)?;
+    ensure!(!anchors.is_empty(), "publication selection is empty");
+    Ok(publication_workset(set, anchors))
+}
+
+fn publication_workset(set: workset::WorkSet, anchors: Vec<WorkRef>) -> workset::WorkSet {
+    let records = workset::records_for_anchors(&set.records, &anchors);
+    workset::WorkSet::with_anchors(set.cwd, records, anchors)
+}
+
+fn expand_picker_anchors(records: &[WorkRecord], picked: &[WorkRef]) -> Result<Vec<WorkRef>> {
+    let mut selected: BTreeMap<String, (usize, BTreeSet<usize>)> = BTreeMap::new();
+    for anchor in picked {
+        let record_index = records
+            .iter()
+            .position(|record| record.work_ref.whole() == anchor.whole())
+            .ok_or_else(|| anyhow::anyhow!("picker anchor `{anchor}` has no record"))?;
+        let record = &records[record_index];
+        let entry = selected
+            .entry(record.work_ref.whole().to_string())
+            .or_insert_with(|| (record_index, BTreeSet::new()));
+        let mut atoms = work_atoms(record, true);
+        atoms.extend(work_atoms(record, false));
+        if let Some(seq) = anchor.part() {
+            let atom = atoms
+                .iter()
+                .find(|atom| atom.part_seqs.contains(&seq))
+                .ok_or_else(|| anyhow::anyhow!("picker anchor `{anchor}` has no atom"))?;
+            entry.1.extend(atom.part_seqs.iter().copied());
+        } else {
+            entry
+                .1
+                .extend(atoms.into_iter().flat_map(|atom| atom.part_seqs));
+        }
+    }
+
+    let mut groups = selected.into_values().collect::<Vec<_>>();
+    groups.sort_by_key(|(record_index, _)| records[*record_index].work_ref.index());
+    let mut anchors = Vec::new();
+    for (record_index, selected_parts) in groups {
+        let record = &records[record_index];
+        let mut seqs = selected_parts.into_iter().collect::<Vec<_>>();
+        seqs.sort_unstable();
+        anchors.extend(seqs.into_iter().map(|seq| record.work_ref.with_part(seq)));
+    }
+    Ok(anchors)
+}
+
 fn preview(args: PublishPreviewArgs) -> Result<()> {
-    let draft = load_draft(&args.source, args.title, &args.expires)?;
+    if args.save.is_some() && !args.pick {
+        bail!("publish preview --save requires --pick");
+    }
+    let draft = if args.pick {
+        if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+            bail!("publish preview --pick requires an interactive terminal");
+        }
+        let mut set = pick_publication_set(&args.source)?;
+        if let Some(name) = args.save.as_deref() {
+            set.save_as(name)?;
+            output::success(format!("saved @{name}"));
+        }
+        load_draft_from_set(&mut set, args.title, &args.expires)?
+    } else {
+        load_draft(&args.source, args.title, &args.expires)?
+    };
     match args.format {
         PublishFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&draft.snapshot)?);
             print_risks(&draft);
         }
         PublishFormat::Human => {
-            println!("标题: {}", draft.snapshot.title);
-            println!("Provider: {}", draft.snapshot.provider);
-            println!("轮次数: {}", draft.turn_count());
-            println!("消息数: {}", draft.item_count());
-            println!("预计过期: {}", draft.snapshot.expires_at);
-            println!("内容 SHA-256: {}", draft.content_sha256);
-            println!("自动脱敏: {} 项", draft.redaction_count);
-            if draft.risks.is_empty() {
-                println!("风险提示: 无");
-            } else {
-                println!("风险提示:");
-                for risk in &draft.risks {
-                    println!(
-                        "  - {}: {} 项{}",
-                        risk.kind,
-                        risk.count,
-                        format_item_indices(&risk.item_indices)
-                    );
-                }
-            }
+            print!("{}", format_human_preview_meta(&draft));
             println!();
-            for item in &draft.snapshot.items {
+            print_snapshot_items(&draft.snapshot);
+        }
+    }
+    Ok(())
+}
+
+fn print_snapshot_items(snapshot: &PublicConversationSnapshot) {
+    match snapshot {
+        PublicConversationSnapshot::V1(snapshot) => {
+            for item in &snapshot.items {
                 println!(
                     "[{}]",
                     match item.role {
@@ -171,8 +284,25 @@ fn preview(args: PublishPreviewArgs) -> Result<()> {
                 println!();
             }
         }
+        PublicConversationSnapshot::V2(snapshot) => {
+            for item in &snapshot.items {
+                if item.gap_before {
+                    println!("[部分内容未分享]");
+                    println!();
+                }
+                let label = item
+                    .label
+                    .as_deref()
+                    .map(|label| format!(" ({label})"))
+                    .unwrap_or_default();
+                println!("[{:?}{}]", item.kind, label);
+                for part in &item.parts {
+                    println!("{}", part.text);
+                }
+                println!();
+            }
+        }
     }
-    Ok(())
 }
 
 fn create(args: PublishCreateArgs) -> Result<()> {
@@ -184,7 +314,7 @@ fn create(args: PublishCreateArgs) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("encrypted publication envelope size overflow"))?;
     if envelope_size > ENVELOPE_LIMIT {
         bail!(
-            "encrypted publication envelope is {} bytes; v1 maximum is 5 MiB; narrow the WorkSet",
+            "encrypted publication envelope is {} bytes; maximum is 5 MiB; narrow the WorkSet",
             envelope_size
         );
     }
@@ -214,15 +344,15 @@ fn create(args: PublishCreateArgs) -> Result<()> {
     let viewer_key = random_token(32)?;
     let management_token = random_token(32)?;
     let now = Utc::now().to_rfc3339();
-    let expires_at = draft.snapshot.expires_at.clone();
+    let expires_at = draft.snapshot.expires_at().to_string();
     let mut db = PublicationDb::open()?;
     db.insert_pending(&PublicationRow {
         id: id.clone(),
         endpoint: endpoint.clone(),
         viewer_key: viewer_key.clone(),
         management_token: management_token.clone(),
-        title: draft.snapshot.title.clone(),
-        provider: draft.snapshot.provider.clone(),
+        title: draft.snapshot.title().to_string(),
+        provider: draft.snapshot.provider().to_string(),
         source_refs: serde_json::to_string(&draft.source_refs)?,
         content_sha256: draft.content_sha256.clone(),
         redaction_count: draft.redaction_count as i64,
@@ -253,7 +383,7 @@ fn create(args: PublishCreateArgs) -> Result<()> {
     }
     println!("{}", publication_url(&endpoint, &id, &viewer_key));
     output::detail("publication", &id);
-    output::detail("expires", &draft.snapshot.expires_at);
+    output::detail("expires", draft.snapshot.expires_at());
     Ok(())
 }
 
@@ -334,17 +464,58 @@ fn revoke(args: PublishRevokeArgs) -> Result<()> {
     }
 }
 
-fn print_create_summary(draft: &PublicationDraft, expiry: &str, envelope_size: usize) {
-    output::detail("title", &draft.snapshot.title);
-    output::detail("turns", draft.turn_count());
-    output::detail("messages", draft.item_count());
-    output::detail("envelope", format!("{envelope_size} bytes"));
-    output::detail("redactions", draft.redaction_count);
-    output::detail("expiry", expiry);
-    output::detail(
-        "source",
-        "local WorkSet; original refs and paths stay local",
+fn format_human_preview_meta(draft: &PublicationDraft) -> String {
+    let mut out = format!(
+        "标题: {}\nProvider: {}\nSchema: v{}\n轮次数: {}\n消息数: {}\n预计过期: {}\n内容 SHA-256: {}\n自动脱敏: {} 项\n",
+        draft.snapshot.title(),
+        draft.snapshot.provider(),
+        draft.snapshot.schema_version(),
+        draft.turn_count(),
+        draft.item_count(),
+        draft.snapshot.expires_at(),
+        draft.content_sha256,
+        draft.redaction_count,
     );
+    if draft.risks.is_empty() {
+        out.push_str("风险提示: 无\n");
+    } else {
+        out.push_str("风险提示:\n");
+        for risk in &draft.risks {
+            out.push_str(&format!(
+                "  - {}: {} 项{}\n",
+                risk.kind,
+                risk.count,
+                format_item_indices(&risk.item_indices)
+            ));
+        }
+    }
+    out
+}
+
+fn format_create_summary(
+    draft: &PublicationDraft,
+    expiry: &str,
+    envelope_size: usize,
+) -> Vec<(&'static str, String)> {
+    vec![
+        ("title", draft.snapshot.title().to_string()),
+        ("turns", draft.turn_count().to_string()),
+        ("messages", draft.item_count().to_string()),
+        ("schema", format!("v{}", draft.snapshot.schema_version())),
+        ("envelope", format!("{envelope_size} bytes")),
+        ("redactions", draft.redaction_count.to_string()),
+        ("expiry", expiry.to_string()),
+        (
+            "source",
+            "local WorkSet; original refs and paths stay local".to_string(),
+        ),
+    ]
+}
+
+fn print_create_summary(draft: &PublicationDraft, expiry: &str, envelope_size: usize) {
+    for (label, value) in format_create_summary(draft, expiry, envelope_size) {
+        output::detail(label, value);
+    }
 }
 
 fn print_risks(draft: &PublicationDraft) {
@@ -654,7 +825,7 @@ mod tests {
         };
         let draft = PublicationDraft {
             canonical_json: serde_json::to_string(&snapshot).unwrap(),
-            snapshot,
+            snapshot: PublicConversationSnapshot::V1(snapshot),
             content_sha256: "x".into(),
             redaction_count: 0,
             risks: vec![],
@@ -748,5 +919,182 @@ mod tests {
             resolve_endpoint(&config).unwrap(),
             "https://share.hnnulwh.cn"
         );
+    }
+
+    fn chat_turn(session: &str, index: usize, thinking: &str, tool_out: &str) -> WorkRecord {
+        WorkRecord {
+            schema_version: 3,
+            work_ref: WorkRef::agent(sivtr_core::ai::AgentProvider::Codex, session, index),
+            kind: sivtr_core::record::WorkRecordKind::ChatTurn,
+            source: sivtr_core::record::WorkSource {
+                channel: sivtr_core::record::WorkChannel::Chat,
+                provider: Some("codex".into()),
+            },
+            session: sivtr_core::record::WorkSessionRef {
+                id: session.into(),
+                canonical_id: None,
+                path: None,
+            },
+            cwd: None,
+            time: sivtr_core::record::WorkTime::default(),
+            status: None,
+            title: "Demo".into(),
+            parts: vec![
+                sivtr_core::record::WorkPart {
+                    seq: 1,
+                    occurred_at: None,
+                    data: sivtr_core::record::WorkPartData::User {
+                        content: "question".into(),
+                    },
+                },
+                sivtr_core::record::WorkPart {
+                    seq: 2,
+                    occurred_at: None,
+                    data: sivtr_core::record::WorkPartData::ToolCall {
+                        call_id: Some("c1".into()),
+                        tool: Some("Bash".into()),
+                        input: serde_json::json!({"command": "ls"}),
+                    },
+                },
+                sivtr_core::record::WorkPart {
+                    seq: 3,
+                    occurred_at: None,
+                    data: sivtr_core::record::WorkPartData::ToolResult {
+                        call_id: Some("c1".into()),
+                        tool: Some("Bash".into()),
+                        output: serde_json::json!({"stdout": tool_out}),
+                        start_line: None,
+                    },
+                },
+                sivtr_core::record::WorkPart {
+                    seq: 4,
+                    occurred_at: None,
+                    data: sivtr_core::record::WorkPartData::Thinking {
+                        content: thinking.into(),
+                    },
+                },
+                sivtr_core::record::WorkPart {
+                    seq: 5,
+                    occurred_at: None,
+                    data: sivtr_core::record::WorkPartData::Assistant {
+                        content: "reply".into(),
+                    },
+                },
+            ],
+        }
+    }
+
+    fn seqs(anchors: &[WorkRef]) -> Vec<usize> {
+        anchors
+            .iter()
+            .map(|anchor| anchor.part().expect("part anchor"))
+            .collect()
+    }
+
+    #[test]
+    fn expand_picker_anchors_scopes_whole_part_and_half_refs() {
+        let record = chat_turn("session", 1, "thinking", "ok");
+        let whole = expand_picker_anchors(&[record.clone()], &[record.work_ref.whole()]).unwrap();
+        assert_eq!(seqs(&whole), vec![1, 2, 3, 4, 5]);
+
+        let tool_pair =
+            expand_picker_anchors(&[record.clone()], &[record.work_ref.with_part(2)]).unwrap();
+        assert_eq!(seqs(&tool_pair), vec![2, 3]);
+
+        let input_half =
+            expand_picker_anchors(&[record.clone()], &[record.work_ref.with_part(1)]).unwrap();
+        assert_eq!(seqs(&input_half), vec![1]);
+
+        let other = chat_turn("other", 1, "x", "y");
+        assert!(expand_picker_anchors(&[record], &[other.work_ref.whole()]).is_err());
+    }
+
+    #[test]
+    fn pick_saved_workset_drops_unselected_turn_bodies() {
+        let first = chat_turn("session", 1, "SECRET_TURN1", "tool-1");
+        let selected = chat_turn("session", 2, "keep-thinking", "keep-tool");
+        let last = chat_turn("session", 3, "secret-think", "SECRET_TURN3");
+        let anchors = vec![
+            selected.work_ref.with_part(1),
+            selected.work_ref.with_part(5),
+        ];
+        let set = workset::WorkSet::with_anchors(
+            ".",
+            vec![first, selected.clone(), last],
+            vec![selected.work_ref.whole()],
+        );
+        let slim = publication_workset(set, anchors.clone());
+        assert_eq!(slim.records.len(), 1);
+        assert_eq!(slim.records[0].work_ref.index(), 2);
+        let persisted = serde_json::to_string(&slim.records).unwrap();
+        assert!(!persisted.contains("SECRET_TURN1"));
+        assert!(!persisted.contains("SECRET_TURN3"));
+        assert!(persisted.contains("keep-thinking"));
+        assert!(persisted.contains("keep-tool"));
+
+        let policy = PublicationPolicy {
+            published_at: Some(
+                DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            ),
+            ..PublicationPolicy::default()
+        };
+        let full = create_publication_draft(
+            &[
+                chat_turn("session", 1, "SECRET_TURN1", "tool-1"),
+                selected.clone(),
+                chat_turn("session", 3, "secret-think", "SECRET_TURN3"),
+            ],
+            &anchors,
+            &policy,
+        )
+        .unwrap();
+        let from_saved = create_publication_draft(&slim.records, &slim.anchors, &policy).unwrap();
+        assert_eq!(full.content_sha256, from_saved.content_sha256);
+        let PublicConversationSnapshot::V2(snapshot) = &from_saved.snapshot else {
+            panic!("pick-saved WorkSet is schema v2");
+        };
+        assert!(snapshot.items[0].gap_before);
+    }
+
+    #[test]
+    fn human_preview_and_create_summary_name_schema_version() {
+        let v1_record = chat_turn("session", 1, "thinking", "ok");
+        let v1 = create_publication_draft(
+            std::slice::from_ref(&v1_record),
+            &[],
+            &PublicationPolicy::default(),
+        )
+        .unwrap();
+        let v2 = create_publication_draft(
+            std::slice::from_ref(&v1_record),
+            &[
+                v1_record.work_ref.with_part(1),
+                v1_record.work_ref.with_part(5),
+            ],
+            &PublicationPolicy::default(),
+        )
+        .unwrap();
+
+        let v1_preview = format_human_preview_meta(&v1);
+        let v2_preview = format_human_preview_meta(&v2);
+        assert!(
+            v1_preview.contains("Schema: v1"),
+            "v1 preview missing schema: {v1_preview}"
+        );
+        assert!(
+            v2_preview.contains("Schema: v2"),
+            "v2 preview missing schema: {v2_preview}"
+        );
+
+        let v1_summary = format_create_summary(&v1, "7d", 12);
+        let v2_summary = format_create_summary(&v2, "7d", 12);
+        assert!(v1_summary
+            .iter()
+            .any(|(label, value)| *label == "schema" && value == "v1"));
+        assert!(v2_summary
+            .iter()
+            .any(|(label, value)| *label == "schema" && value == "v2"));
     }
 }
