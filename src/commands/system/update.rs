@@ -27,15 +27,18 @@ pub fn latest_version() -> Result<String> {
         .call()
         .context("cannot reach GitHub")?;
 
-    let path = response.get_uri().path();
-    let tag = release_tag_from_path(path)
-        .with_context(|| format!("unexpected release redirect target: {path}"))?;
-    Ok(tag.to_string())
+    Ok(release_tag_from_path(response.get_uri().path())?.to_string())
 }
 
-fn release_tag_from_path(path: &str) -> Option<&str> {
-    let tag = path.rsplit_once("/releases/tag/")?.1;
-    (!tag.is_empty() && !tag.contains('/')).then_some(tag)
+fn release_tag_from_path(path: &str) -> Result<&str> {
+    let tag = path
+        .rsplit_once("/releases/tag/")
+        .with_context(|| format!("release redirect path is missing /releases/tag/: {path}"))?
+        .1;
+    if tag.is_empty() || tag.contains('/') {
+        bail!("release redirect path contains an invalid tag: {path}");
+    }
+    Ok(tag)
 }
 
 pub fn execute() -> Result<()> {
@@ -245,10 +248,10 @@ mod tests {
     #[test]
     fn tag_from_redirect_path() {
         assert_eq!(
-            release_tag_from_path("/Ariestar/sivtr/releases/tag/v0.6.0"),
-            Some("v0.6.0")
+            release_tag_from_path("/Ariestar/sivtr/releases/tag/v0.6.0").expect("valid tag"),
+            "v0.6.0"
         );
-        assert_eq!(release_tag_from_path("/Ariestar/sivtr/releases/tag/"), None);
-        assert_eq!(release_tag_from_path("/Ariestar/sivtr"), None);
+        assert!(release_tag_from_path("/Ariestar/sivtr/releases/tag/").is_err());
+        assert!(release_tag_from_path("/Ariestar/sivtr").is_err());
     }
 }
