@@ -994,19 +994,29 @@ mod tests {
     #[test]
     fn expand_picker_anchors_scopes_whole_part_and_half_refs() {
         let record = chat_turn("session", 1, "thinking", "ok");
-        let whole = expand_picker_anchors(&[record.clone()], &[record.work_ref.whole()]).unwrap();
+        let whole =
+            expand_picker_anchors(std::slice::from_ref(&record), &[record.work_ref.whole()])
+                .unwrap();
         assert_eq!(seqs(&whole), vec![1, 2, 3, 4, 5]);
 
-        let tool_pair =
-            expand_picker_anchors(&[record.clone()], &[record.work_ref.with_part(2)]).unwrap();
+        let tool_pair = expand_picker_anchors(
+            std::slice::from_ref(&record),
+            &[record.work_ref.with_part(2)],
+        )
+        .unwrap();
         assert_eq!(seqs(&tool_pair), vec![2, 3]);
 
-        let input_half =
-            expand_picker_anchors(&[record.clone()], &[record.work_ref.with_part(1)]).unwrap();
+        let input_half = expand_picker_anchors(
+            std::slice::from_ref(&record),
+            &[record.work_ref.with_part(1)],
+        )
+        .unwrap();
         assert_eq!(seqs(&input_half), vec![1]);
 
         let other = chat_turn("other", 1, "x", "y");
-        assert!(expand_picker_anchors(&[record], &[other.work_ref.whole()]).is_err());
+        assert!(
+            expand_picker_anchors(std::slice::from_ref(&record), &[other.work_ref.whole()]).is_err()
+        );
     }
 
     #[test]
