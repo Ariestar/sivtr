@@ -40,6 +40,10 @@ Remote access is read-only. Secret redaction is on by default before records lea
 
 Full guide: [Remote Access](/usage/remote-access/).
 
+`sivtr publish` is a separate outbound boundary: an immutable snapshot from a local WorkSet, not a live mount. v1 allows consecutive turns from one local agent session and projects only User/Assistant text. The hosted service stores AES-256-GCM ciphertext; the viewing key stays in the URL fragment. Set `[publish].endpoint` explicitly; there is no automatic failover between self-host and Cloudflare.
+
+Guide: [Publish conversation links](/usage/publish/).
+
 ## Shared mirrors should be read-only
 
 When sharing exported sessions across local accounts, prefer read-only access for consumers:

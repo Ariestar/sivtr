@@ -34,6 +34,9 @@ mode = "auto"
 
 [mcp]
 idle_exit_secs = 60
+
+[publish]
+endpoint = "https://share.hnnulwh.cn"
 ```
 
 ## editor
@@ -118,3 +121,14 @@ idle_exit_secs = 60
 | Key | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
 | `idle_exit_secs` | integer | `60` | 无工具调用多少秒后 stdio MCP server 退出；`0` 表示保持到宿主关闭 stdin。`sivtr mcp serve --idle-exit` flag 覆盖此值。 |
+
+## publish
+
+```toml
+[publish]
+endpoint = "https://share.hnnulwh.cn"
+```
+
+| Key | 类型 | 默认值 | 含义 |
+| --- | --- | --- | --- |
+| `endpoint` | string | `""` | 加密公开链接服务的 origin。必须显式配置；CLI 不会在自建和 Cloudflare 之间自动切换。 |

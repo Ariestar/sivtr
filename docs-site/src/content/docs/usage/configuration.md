@@ -3,7 +3,7 @@ title: Configuration
 description: Create, inspect, edit, and understand sivtr configuration.
 ---
 
-`sivtr` uses a TOML config file in the platform config directory. Configuration controls editor handoff, history retention, Codex mirrors, TUI theme, MCP idle exit, and the Windows hotkey chord.
+`sivtr` uses a TOML config file in the platform config directory. Configuration controls editor handoff, history retention, Codex mirrors, TUI theme, MCP idle exit, the Windows hotkey chord, and the browser publication endpoint.
 
 ## Commands
 
@@ -40,7 +40,12 @@ mode = "auto"
 
 [mcp]
 idle_exit_secs = 60
+
+[publish]
+endpoint = ""
 ```
+
+`[publish].endpoint` is empty until you set the publication service you operate, for example a self-hosted `https://share.hnnulwh.cn`. The CLI never fails over between backends.
 
 For a field-by-field reference, see [Config File](/reference/config-file/).
 

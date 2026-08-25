@@ -65,6 +65,7 @@ sivtr search agent --match "panic" --format timeline
 | Teach agents the memory workflow | [Skills and Reusable Procedures](/usage/skills/) |
 | See practical community workflows | [Playbooks](/playbooks/) |
 | Search and dereference memory | [Search and Show Results](/usage/search-and-show/) |
+| Publish a read-only browser conversation link | [Publish conversation links](/usage/publish/) |
 | Share and add remote memory | [Remote Access](/usage/remote-access/) |
 | Open pickers quickly | [Launch Pickers and Hotkeys](/usage/launchers-and-hotkeys/) |
 | Check exact syntax | [CLI Reference](/reference/cli/) |

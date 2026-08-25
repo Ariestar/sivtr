@@ -73,6 +73,7 @@ export default defineConfig({
             'usage/compare-command-blocks',
             'usage/ai-sessions',
             'usage/search-and-show',
+            'usage/publish',
             'usage/skills',
             'usage/remote-access',
             'usage/history',

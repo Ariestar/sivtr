@@ -502,6 +502,30 @@ sivtr serve logs
 sivtr serve stop
 ```
 
+## publish
+
+`publish` projects a local WorkSet into an immutable, client-encrypted browser snapshot. It is not `share`: `share` is a live workspace mount that needs Sivtr/daemon; `publish` uploads ciphertext only, and viewers need no Sivtr install.
+
+```bash
+sivtr publish preview <SOURCE> [--title <TITLE>] [--expires 7d] [--format human|json]
+sivtr publish create <SOURCE> [--title <TITLE>] [--expires 7d] [--yes] [--allow-warnings]
+sivtr publish list [--json]
+sivtr publish link <PUBLICATION_ID>
+sivtr publish revoke <PUBLICATION_ID> [--yes]
+```
+
+v1 accepts consecutive local agent records from one provider and session, and publishes only User/Assistant text. Search defaults to newest-first and `--latest 5`; publish sorts by record index before the continuity check. `[publish].endpoint` is empty until you set it. Non-interactive create requires `--yes`. Path/email/internal-URL warnings require `--allow-warnings` in every environment, including a TTY.
+
+Typical flow:
+
+```bash
+sivtr search codex/<session-id> --sort oldest --latest 50 --save share_ready --refs
+sivtr publish preview '@share_ready'
+sivtr publish create '@share_ready' --expires 7d --yes
+```
+
+Quote `'@share_ready'` in PowerShell so `@` is not treated as splatting.
+
 ## share
 
 ```bash

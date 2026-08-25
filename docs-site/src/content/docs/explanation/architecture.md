@@ -54,6 +54,7 @@ sivtr/
 | `commands/capture/` | run, pipe, copy, init, flush, import, diff, clear, browse |
 | `commands/memory/` | search, filter, var, nav, zoom, show, work, WorkSet store |
 | `commands/remote/` | serve, share, remote (git-remote style names), peer, workspace list |
+| `commands/publish.rs` | local WorkSet privacy projection, AES-GCM envelope, public-link registry and revoke |
 | `commands/system/` | config, doctor, history, hotkey, codex export, migrate, version |
 | `remote/` | device daemon, identity, SQLite state, protocol, local IPC |
 | `app.rs` | captured-output browser state machine |

@@ -40,6 +40,14 @@ sivtr remote add desk <invite> # peer 在其 workspace 里给 remote 起名
 
 完整指南见 [远程访问](/zh-cn/usage/remote-access/)。
 
+## 浏览器只读发布
+
+`sivtr publish` 是另一条明确的外发边界：它不是实时设备到设备 mount，而是从本地 WorkSet 生成一次不可变快照。v1 只允许单个本地 Agent session 的连续对话轮次，并且只投影 User/Assistant；所有原始 WorkSet、WorkRef、`cwd`、session path、工具结构和 provider 事件都会留在本机。
+
+公开服务只接收 AES-256-GCM 密文。解密密钥位于链接 fragment，不会随 HTTP 请求发送给托管服务；因此查看者无需账号，发布者设备离线也不影响查看。链接持有者均可阅读，默认 7 天失效（可选 1/30/90 天），可以在本机用 `sivtr publish revoke` 提前撤销。管理凭据只保存在独立的 `publication-state.db`；数据库丢失时 v1 没有账号恢复路径。
+
+发布前必须检查 `preview` 的最终文本和风险报告。高置信度 token、私钥、Bearer 和 secret assignment 会自动替换为 `[REDACTED]`；路径、邮箱和内网地址不会擅自改写，只会阻止非交互发布，除非显式使用 `--allow-warnings`。
+
 ## 共享 mirror 应尽量只读
 
 在本机多账号之间共享导出 session 时，建议给消费者只读权限：

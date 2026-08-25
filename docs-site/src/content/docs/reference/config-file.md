@@ -34,6 +34,9 @@ mode = "auto"
 
 [mcp]
 idle_exit_secs = 60
+
+[publish]
+endpoint = "https://share.hnnulwh.cn"
 ```
 
 ## editor
@@ -118,3 +121,14 @@ idle_exit_secs = 60
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `idle_exit_secs` | integer | `60` | Seconds without tool calls before the stdio MCP server exits; `0` keeps it alive until the host closes stdin. The `sivtr mcp serve --idle-exit` flag overrides this. |
+
+## publish
+
+```toml
+[publish]
+endpoint = "https://share.hnnulwh.cn"
+```
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `endpoint` | string | `""` | Origin of the encrypted publication service. Required before `publish create`; the CLI does not fail over between self-host and Cloudflare. |

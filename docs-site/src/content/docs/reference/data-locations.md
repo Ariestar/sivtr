@@ -112,6 +112,7 @@ Cross-device remote memory uses a device-scoped daemon. Override the root with `
 | --- | --- |
 | `identity.key` | Stable device identity for iroh |
 | `remote-state.db` | SQLite peers, shares, grants, invites, mounts, audit |
+| `publication-state.db` | Local public-snapshot ids, expiry, source summary, viewer key, and revoke token; never the plaintext snapshot |
 | `daemon.json` | Running daemon control info (port, token, node id) |
 | `daemon.lock` | Single-instance lock |
 | `daemon.log` | Daemon log file (`sivtr serve logs`) |

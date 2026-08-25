@@ -3,7 +3,7 @@ title: 配置
 description: 创建、查看、编辑并理解 sivtr 配置。
 ---
 
-`sivtr` 使用平台配置目录中的 TOML 配置文件。配置控制编辑器交接、history 保留、Codex mirror、TUI 主题、MCP idle 退出和 Windows 热键按键。
+`sivtr` 使用平台配置目录中的 TOML 配置文件。配置控制编辑器交接、history 保留、Codex mirror、TUI 主题、MCP idle 退出、Windows 热键按键和浏览器公开链接 endpoint。
 
 ## 命令
 
@@ -40,7 +40,12 @@ mode = "auto"
 
 [mcp]
 idle_exit_secs = 60
+
+[publish]
+endpoint = ""
 ```
+
+`[publish].endpoint` 默认空。创建公开链接前必须写成实际服务地址，例如自建的 `https://share.hnnulwh.cn`。CLI 只打这一个 URL，不会在 Cloudflare Worker 和自建之间自动切换。
 
 字段级说明见[配置文件](/zh-cn/reference/config-file/)。
 
