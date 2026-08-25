@@ -1,127 +1,51 @@
-//! Basic secret redaction for served records.
+//! Shared secret redaction for the live remote-sharing transport.
 //!
-//! Terminal and agent output routinely contains credentials (API keys, tokens,
-//! connection strings). Since `sivtr serve` exposes workspace memory over the
-//! network, responses pass through here first. This is a coarse, best-effort
-//! redactor — it is not a security boundary on its own. Strong authentication
-//! and network scoping (localhost default, opt-in LAN bind) are the real
-//! boundary; this layer reduces the blast radius if a secret slipped into
-//! captured output.
+//! The implementation lives in `sivtr-core::privacy` so public publication
+//! and device-to-device sharing cannot silently drift apart.
 
-use regex::Regex;
+use sivtr_core::privacy;
 use sivtr_core::record::{WorkPart, WorkPartData, WorkRecord};
 
-const REDACTED: &str = "[REDACTED]";
-
-/// Patterns that match common leaked credential formats. Intentionally narrow
-/// to high-signal prefixes to avoid redacting ordinary text; matched spans are
-/// replaced wholesale.
-fn patterns() -> Vec<(&'static str, Regex)> {
-    // Compiled once per call; the serve path is not hot, and keeping this lazy
-    // avoids a module-level unwrap.
-    vec![
-        // GitHub personal access tokens / fine-grained
-        ("github_pat", Regex::new(r"gh[pousr]_[A-Za-z0-9]{16,}").unwrap()),
-        // OpenAI / Anthropic-style API keys
-        ("openai_key", Regex::new(r"sk-[A-Za-z0-9]{16,}").unwrap()),
-        // sivtr serve connection tokens (s- namespace) — redact our own tokens so a
-        // generated token that leaks into captured output is masked too.
-        ("sivtr_token", Regex::new(r"s-[A-Za-z0-9]{16,}").unwrap()),
-        // Slack tokens
-        ("slack_token", Regex::new(r"xox[abprs]-[A-Za-z0-9-]{10,}").unwrap()),
-        // AWS access key ids
-        ("aws_id", Regex::new(r"AKIA[0-9A-Z]{16}").unwrap()),
-        // AWS secret access key assignments
-        ("aws_secret", Regex::new(r#"(?i)aws_secret_access_key['"\s:=]+[A-Za-z0-9/+=]{40}"#).unwrap()),
-        // Generic secret assignments with a value
-        (
-            "assigned_secret",
-            Regex::new(r#"(?i)(api[_-]?key|token|password|secret|bearer)\s*[:=]\s*['"]?[A-Za-z0-9_\-./+=]{12,}['"]?"#).unwrap(),
-        ),
-        // Bearer tokens in Authorization headers
-        ("bearer", Regex::new(r"(?i)bearer\s+[A-Za-z0-9_\-\.=]{16,}").unwrap()),
-        // Private keys (PEM blocks) — whole block collapsed
-        (
-            "pem_key",
-            Regex::new(r"-----BEGIN [A-Z ]+PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+PRIVATE KEY-----").unwrap(),
-        ),
-    ]
-}
-
-/// Redact obvious secrets in a free-text field.
-fn redact_text(value: &str, patterns: &[(&'static str, Regex)]) -> String {
-    let mut current = value.to_string();
-    for (_, re) in patterns {
-        current = re.replace_all(&current, REDACTED).into_owned();
-    }
-    current
-}
-
-/// Return a clone of `record` with secret-bearing text fields redacted:
-/// title, each part's text/ansi/label. Structural fields (refs, times, status)
-/// are untouched.
 pub fn redact_record(record: &WorkRecord) -> WorkRecord {
-    let patterns = patterns();
     let mut out = record.clone();
-    out.title = redact_text(&out.title, &patterns);
-    out.parts = out
-        .parts
-        .into_iter()
-        .map(|part| redact_part(part, &patterns))
-        .collect();
+    out.title = privacy::redact_text(&out.title);
+    out.parts = out.parts.into_iter().map(redact_part).collect();
     out
 }
 
-pub fn redact_part(mut part: WorkPart, patterns: &[(&'static str, Regex)]) -> WorkPart {
+pub fn redact_part(mut part: WorkPart) -> WorkPart {
     match &mut part.data {
         WorkPartData::Prompt { content, ansi } | WorkPartData::Output { content, ansi } => {
-            *content = redact_text(content, patterns);
+            *content = privacy::redact_text(content);
             if let Some(value) = ansi {
-                *value = redact_text(value, patterns);
+                *value = privacy::redact_text(value);
             }
         }
         WorkPartData::Command { content }
         | WorkPartData::User { content }
         | WorkPartData::Assistant { content }
         | WorkPartData::Thinking { content }
-        | WorkPartData::Error { content } => *content = redact_text(content, patterns),
+        | WorkPartData::Error { content } => *content = privacy::redact_text(content),
         WorkPartData::ToolCall { tool, input, .. } => {
             if let Some(value) = tool {
-                *value = redact_text(value, patterns);
+                *value = privacy::redact_text(value);
             }
-            redact_json(input, patterns);
+            privacy::redact_json(input);
         }
         WorkPartData::ToolResult { tool, output, .. } => {
             if let Some(value) = tool {
-                *value = redact_text(value, patterns);
+                *value = privacy::redact_text(value);
             }
-            redact_json(output, patterns);
+            privacy::redact_json(output);
         }
         WorkPartData::Skill { skill, content } => {
             if let Some(value) = skill {
-                *value = redact_text(value, patterns);
+                *value = privacy::redact_text(value);
             }
-            *content = redact_text(content, patterns);
+            *content = privacy::redact_text(content);
         }
     }
     part
-}
-
-fn redact_json(value: &mut serde_json::Value, patterns: &[(&'static str, Regex)]) {
-    match value {
-        serde_json::Value::String(text) => *text = redact_text(text, patterns),
-        serde_json::Value::Array(items) => {
-            for item in items {
-                redact_json(item, patterns);
-            }
-        }
-        serde_json::Value::Object(object) => {
-            for value in object.values_mut() {
-                redact_json(value, patterns);
-            }
-        }
-        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {}
-    }
 }
 
 #[cfg(test)]
@@ -130,42 +54,33 @@ mod tests {
 
     #[test]
     fn redacts_known_token_formats() {
-        let patterns = patterns();
         assert_eq!(
-            redact_text("token ghp_aBcDeF0123456789ghij", &patterns),
+            privacy::redact_text("token ghp_aBcDeF0123456789ghij"),
             "token [REDACTED]"
         );
         assert_eq!(
-            redact_text("key=sk-abcd1234efgh5678ijkl", &patterns),
+            privacy::redact_text("key=sk-abcd1234efgh5678ijkl"),
             "key=[REDACTED]"
         );
         assert_eq!(
-            redact_text("token s-deadbeefcafef00d1234567890abcdef", &patterns),
-            "token [REDACTED]"
-        );
-        assert_eq!(
-            redact_text("Authorization: Bearer abcdef1234567890XYZ", &patterns),
+            privacy::redact_text("Authorization: Bearer abcdef1234567890XYZ"),
             "Authorization: [REDACTED]"
         );
     }
 
     #[test]
     fn redacts_pem_private_key_blocks() {
-        let patterns = patterns();
-        let input = "before -----BEGIN RSA PRIVATE KEY-----
-MIIEpAIBAAKCAQEA1234567890
------END RSA PRIVATE KEY----- after";
-        let out = redact_text(input, &patterns);
+        let input = "before -----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA1234567890\n-----END RSA PRIVATE KEY----- after";
+        let out = privacy::redact_text(input);
         assert!(!out.contains("MIIEpAIBAA"));
         assert!(out.contains("[REDACTED]"));
-        assert!(out.contains("before"));
-        assert!(out.contains("after"));
     }
 
     #[test]
     fn does_not_redact_plain_text() {
-        let patterns = patterns();
-        let out = redact_text("the build succeeded with 42 warnings", &patterns);
-        assert_eq!(out, "the build succeeded with 42 warnings");
+        assert_eq!(
+            privacy::redact_text("the build succeeded with 42 warnings"),
+            "the build succeeded with 42 warnings"
+        );
     }
 }

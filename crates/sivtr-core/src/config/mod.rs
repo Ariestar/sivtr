@@ -18,6 +18,8 @@ pub struct SivtrConfig {
     pub theme: ThemeConfig,
     /// MCP stdio server settings.
     pub mcp: McpConfig,
+    /// Browser publication service settings.
+    pub publish: PublishConfig,
 }
 
 /// Editor configuration.
@@ -86,6 +88,15 @@ pub struct McpConfig {
     /// host closes stdin. Hosts respawn the server on the next tool use, so
     /// an idle server never lingers.
     pub idle_exit_secs: u64,
+}
+
+/// Endpoint for encrypted browser publications.  Empty until the operator
+/// sets a URL that speaks the `/api/v1` publication contract.  v1 has no
+/// built-in default host and does not fail over between backends.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PublishConfig {
+    pub endpoint: String,
 }
 
 // --- Defaults ---
@@ -216,6 +227,14 @@ mod tests {
         assert!(toml.contains("[mcp]"));
         assert!(toml.contains("idle_exit_secs = 60"));
         assert_eq!(SivtrConfig::default().mcp.idle_exit_secs, 60);
+    }
+
+    #[test]
+    fn serializes_publish_endpoint() {
+        let toml = to_toml_string(&SivtrConfig::default()).unwrap();
+        assert!(toml.contains("[publish]"));
+        assert!(toml.contains("endpoint = \"\""));
+        assert!(SivtrConfig::default().publish.endpoint.is_empty());
     }
 
     #[test]

@@ -1,0 +1,8 @@
+{
+  "rules": [
+    { "id": "expire-1d", "conditions": { "prefix": "v1/1d/" }, "expiration": { "days": 1 } },
+    { "id": "expire-7d", "conditions": { "prefix": "v1/7d/" }, "expiration": { "days": 7 } },
+    { "id": "expire-30d", "conditions": { "prefix": "v1/30d/" }, "expiration": { "days": 30 } },
+    { "id": "expire-90d", "conditions": { "prefix": "v1/90d/" }, "expiration": { "days": 90 } }
+  ]
+}

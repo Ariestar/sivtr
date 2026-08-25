@@ -6,12 +6,14 @@
 //! browse/    workspace TUI product surface
 //! select     relative dialogue selection (1 / A..B)
 //! remote/    share/mount/serve CLI
+//! publish    encrypted browser snapshots (local WorkSet -> public link)
 //! system/    doctor/hotkey/mcp/…
 //! ```
 
 pub mod browse;
 pub mod interactive;
 pub mod memory;
+pub mod publish;
 pub mod remote;
 pub mod select;
 pub mod system;
