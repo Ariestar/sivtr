@@ -27,14 +27,15 @@ pub fn latest_version() -> Result<String> {
         .call()
         .context("cannot reach GitHub")?;
 
-    let tag = response
-        .get_uri()
-        .path()
-        .rsplit('/')
-        .next()
-        .context("invalid redirect URL from GitHub")?;
-
+    let path = response.get_uri().path();
+    let tag = release_tag_from_path(path)
+        .with_context(|| format!("unexpected release redirect target: {path}"))?;
     Ok(tag.to_string())
+}
+
+fn release_tag_from_path(path: &str) -> Option<&str> {
+    let tag = path.rsplit_once("/releases/tag/")?.1;
+    (!tag.is_empty() && !tag.contains('/')).then_some(tag)
 }
 
 pub fn execute() -> Result<()> {
@@ -243,9 +244,11 @@ mod tests {
 
     #[test]
     fn tag_from_redirect_path() {
-        let path = "/Ariestar/sivtr/releases/tag/v0.6.0";
-        assert_eq!(path.rsplit('/').next(), Some("v0.6.0"));
-        let malformed = "https://github.com/Ariestar/sivtr";
-        assert_eq!(malformed.rsplit('/').next(), Some("sivtr"));
+        assert_eq!(
+            release_tag_from_path("/Ariestar/sivtr/releases/tag/v0.6.0"),
+            Some("v0.6.0")
+        );
+        assert_eq!(release_tag_from_path("/Ariestar/sivtr/releases/tag/"), None);
+        assert_eq!(release_tag_from_path("/Ariestar/sivtr"), None);
     }
 }
