@@ -10,7 +10,7 @@ The result is a one-shot snapshot, not a live share. Later edits in the original
 ## Three things to remember
 
 1. Quote WorkSet names in PowerShell: `'@share_ready'`.
-2. v1 publishes consecutive turns from one local agent session. Search keeps the 5 newest hits by default; publish sorts those records by index, but they still have to be adjacent in the session.
+2. There are two selection modes: a whole-record WorkSet produces schema v1 with consecutive User/Assistant turns; `--pick` produces schema v2 with arbitrary atoms and non-contiguous parts from one local agent session.
 3. The full URL is the credential. Anyone who has it can read the snapshot.
 
 ## Configure the endpoint first
@@ -53,6 +53,28 @@ sivtr publish preview '@share_ready' --format human
 
 Tokens, private keys, Bearer values, and secret assignments become `[REDACTED]`. Absolute paths, emails, and internal URLs are warnings only.
 
+### Pick atomic content
+
+Use `--pick` when a complete turn is too broad, or when the public snapshot should include selected tool, skill, or thinking atoms:
+
+```powershell
+# Preview a selection without saving it
+sivtr publish preview codex/<session-id> --pick --format human
+
+# Save the exact part anchors for reuse
+sivtr publish preview codex/<session-id> --pick --save share_ready
+
+# Preview and create from the same selection
+sivtr publish preview '@share_ready' --format human
+sivtr publish create '@share_ready' --expires 7d --yes
+```
+
+The picker accepts exactly one local agent session. It supports whole-dialogue selection, marked content blocks, cross-page selection, and non-contiguous turns. `Space` marks a dialogue or content block, `v` selects a block range, `J`/`K` moves between selected dialogues, and `Tab` switches Input/Output. Press `Enter` on Dialogues to submit whole-dialogue selection; press `y` in Content to submit the current or marked blocks; `Enter` in Content folds or expands the focused block. A character range that does not identify a complete block is rejected instead of being widened to a whole turn.
+
+User, Assistant, Skill, and Thinking are separate atoms. A ToolCall and its ToolResult form one inseparable Tool atom; selecting either side expands to both. The saved WorkSet contains only the selected local anchors and the records those anchors belong to; unselected turns are not stored. The public snapshot does not contain WorkRef, session IDs, record/part numbers, paths, or `cwd`.
+
+Whole-record WorkSets remain schema v1 and require adjacent record indices. Part-anchor WorkSets are schema v2, allow gaps, and show “部分内容未分享” (some content was not shared) between separated selections. Whole and part anchors cannot be mixed.
+
 ## Create the link
 
 ```powershell
@@ -88,6 +110,6 @@ Management tokens live only in local `publication-state.db`. If that database is
 | Publisher online? | No | Usually yes |
 | Server sees | Ciphertext only | Records over the remote protocol |
 
-v1 does not publish terminal records, remotes, mixed sessions, tool/thinking/skill parts, refs, `cwd`, or attachments.
+Both modes reject terminal records, remotes/groups, mixed providers or sessions, WorkRefs, `cwd`, session paths, provider envelopes, and attachments. v1 projects only consecutive User/Assistant turns; v2 can project User, Assistant, Tool, Skill, and Thinking atoms, with ToolCall and ToolResult kept together.
 
 See also the [CLI reference](/reference/cli/) and [configuration](/usage/configuration/).
