@@ -8,27 +8,33 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::time::Duration;
 
+use ureq::ResponseExt;
+
 use crate::output;
 
 const REPO: &str = "Ariestar/sivtr";
 const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Latest published release tag from the GitHub API, e.g. `v0.4.0`.
+/// Latest published release tag, e.g. `v0.6.0`.
+///
+/// Follows the `releases/latest` redirect to `/releases/tag/<tag>`, avoiding
+/// the rate-limited GitHub API entirely.  No GitHub CLI required.
 pub fn latest_version() -> Result<String> {
-    let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
-    let mut response = agent(CHECK_TIMEOUT)
-        .get(&url)
+    let response = agent(CHECK_TIMEOUT)
+        .get("https://github.com/Ariestar/sivtr/releases/latest")
         .header("User-Agent", "sivtr-update")
         .call()
-        .context("cannot reach GitHub API")?;
-    let body = response
-        .body_mut()
-        .read_to_vec()
-        .context("failed to read GitHub API response")?;
-    let release: Release =
-        serde_json::from_slice(&body).context("failed to parse GitHub release metadata")?;
-    Ok(release.tag_name)
+        .context("cannot reach GitHub")?;
+
+    let tag = response
+        .get_uri()
+        .path()
+        .rsplit('/')
+        .next()
+        .context("invalid redirect URL from GitHub")?;
+
+    Ok(tag.to_string())
 }
 
 pub fn execute() -> Result<()> {
@@ -204,11 +210,6 @@ fn parse_version(version: &str) -> Option<(u64, u64, u64)> {
     Some((major, minor, patch))
 }
 
-#[derive(serde::Deserialize)]
-struct Release {
-    tag_name: String,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,5 +239,13 @@ mod tests {
             Some("abc".to_string())
         );
         assert_eq!(checksum_for(sums, "missing.zip"), None);
+    }
+
+    #[test]
+    fn tag_from_redirect_path() {
+        let path = "/Ariestar/sivtr/releases/tag/v0.6.0";
+        assert_eq!(path.rsplit('/').next(), Some("v0.6.0"));
+        let malformed = "https://github.com/Ariestar/sivtr";
+        assert_eq!(malformed.rsplit('/').next(), Some("sivtr"));
     }
 }
