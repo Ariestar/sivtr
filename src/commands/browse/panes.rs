@@ -145,6 +145,7 @@ fn shell_from_row(
 ///
 /// `sessions` is the **meta** list (titles/ids/body_loaded). Turn bodies are
 /// read through `records` (product: `SessionColumn::body_for`).
+#[derive(Clone, Copy)]
 pub struct DialogueCtx<'a> {
     pub sessions: &'a [WorkspaceSession],
     pub session_idx: usize,

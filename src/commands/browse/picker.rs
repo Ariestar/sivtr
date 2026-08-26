@@ -236,17 +236,20 @@ pub(crate) fn run(
             .with_selected(&selected_sessions)
             .with_neighbors(1),
         );
-        // Body hydrate is async — list updates when poll sets sessions_dirty.
-        if selected_sessions.len() != sessions.len() {
-            selected_sessions.resize(sessions.len(), false);
-        }
-        let session_idx = selected_index(&session_state).min(sessions.len().saturating_sub(1));
-        session_state.select((!sessions.is_empty()).then_some(session_idx));
-
         let dialogue_focus_hint = pending_match
             .as_ref()
             .map(|matched| matched.dialogue_index)
             .unwrap_or_else(|| selected_index(&dialogue_state));
+        // Body always from SessionColumn — list is meta-only in both browse and search.
+        let records = |s: &crate::tui::workspace::WorkspaceSession| sessions_pane.body_for(s);
+        let dialogue_ctx = DialogueCtx {
+            sessions: &sessions,
+            session_idx,
+            selected_sessions: &selected_sessions,
+            records: &records,
+        };
+        let dialogue_viewport =
+            Viewport::from_panel(dialogue_state.offset(), panel_inner_rows(layout.dialogues));
         if selected_dialogues.len() != dialogue_pane.len() {
             resize_workspace_dialogue_selection(
                 dialogue_pane.len(),
@@ -254,22 +257,14 @@ pub(crate) fn run(
                 &mut range_anchor,
             );
         }
-        // Body always from SessionColumn — list is meta-only in both browse and search.
-        let records = |s: &crate::tui::workspace::WorkspaceSession| sessions_pane.body_for(s);
         dialogue_pane.ensure(
-            DialogueCtx {
-                sessions: &sessions,
-                session_idx,
-                selected_sessions: &selected_sessions,
-                records: &records,
-            },
-            &PaneInput::new(
-                Viewport::from_panel(dialogue_state.offset(), panel_inner_rows(layout.dialogues)),
-                dialogue_focus_hint,
-            )
-            .with_selected(&selected_dialogues)
-            .with_neighbors(1),
+            dialogue_ctx,
+            &PaneInput::new(dialogue_viewport, dialogue_focus_hint)
+                .with_selected(&selected_dialogues)
+                .with_neighbors(1),
         );
+        // Growing the list invalidates both mask and focus hint: resize, then
+        // re-run the keep policy with a focus the grown list can hold.
         if selected_dialogues.len() != dialogue_pane.len() {
             resize_workspace_dialogue_selection(
                 dialogue_pane.len(),
@@ -277,17 +272,9 @@ pub(crate) fn run(
                 &mut range_anchor,
             );
             dialogue_pane.ensure(
-                DialogueCtx {
-                    sessions: &sessions,
-                    session_idx,
-                    selected_sessions: &selected_sessions,
-                    records: &records,
-                },
+                dialogue_ctx,
                 &PaneInput::new(
-                    Viewport::from_panel(
-                        dialogue_state.offset(),
-                        panel_inner_rows(layout.dialogues),
-                    ),
+                    dialogue_viewport,
                     dialogue_focus_hint.min(dialogue_pane.len().saturating_sub(1)),
                 )
                 .with_selected(&selected_dialogues)
