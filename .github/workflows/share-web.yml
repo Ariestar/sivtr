@@ -1,0 +1,92 @@
+name: Share web
+
+on:
+  pull_request:
+    paths:
+      - "share-web/**"
+      - ".github/workflows/share-web.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Deployment target (dry-run on pull requests; deploy only after approval)"
+        required: true
+        default: staging
+        type: choice
+        options: [staging, proxy, production]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: share-web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify share web
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: share-web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run test
+      - run: bun run build
+      - run: bunx wrangler deploy --dry-run --env staging
+
+  deploy-staging:
+    if: github.event_name == 'workflow_dispatch' && inputs.environment == 'staging'
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: staging
+    defaults:
+      run:
+        working-directory: share-web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: bun run deploy:staging
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+  deploy-production:
+    if: github.event_name == 'workflow_dispatch' && inputs.environment == 'production'
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: share-web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: bun run deploy:production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+  deploy-proxy:
+    if: github.event_name == 'workflow_dispatch' && inputs.environment == 'proxy'
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: share-web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: bun run deploy:proxy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

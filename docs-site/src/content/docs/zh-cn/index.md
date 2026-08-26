@@ -65,6 +65,7 @@ sivtr search agent --match "panic" --format timeline
 | 让 Agent 学会 memory workflow | [Skill 与可复用流程](/zh-cn/usage/skills/) |
 | 查看社区玩法 | [玩法实例](/zh-cn/playbooks/) |
 | 搜索和按 ref 展示记忆 | [搜索和展示结果](/zh-cn/usage/search-and-show/) |
+| 发布浏览器只读对话链接 | [发布对话链接](/zh-cn/usage/publish/) |
 | 分享并添加远端记忆 | [远程访问](/zh-cn/usage/remote-access/) |
 | 快速打开 picker | [启动器和热键](/zh-cn/usage/launchers-and-hotkeys/) |
 | 查询精确语法 | [CLI 参考](/zh-cn/reference/cli/) |

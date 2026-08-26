@@ -342,6 +342,9 @@ pub enum Commands {
     /// Show a captured terminal or AI workspace ref
     Show(ShowArgs),
 
+    /// Publish an encrypted, browser-readable conversation snapshot
+    Publish(PublishCommand),
+
     /// Manage the read-only MCP server for agent hosts
     Mcp(McpCommand),
 
@@ -914,6 +917,87 @@ pub struct ShowArgs {
     /// Alias for --format workset
     #[arg(long, conflicts_with = "format")]
     pub json: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct PublishCommand {
+    #[command(subcommand)]
+    pub action: PublishAction,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PublishAction {
+    /// Build the final public snapshot locally without contacting the service
+    Preview(PublishPreviewArgs),
+    /// Create an immutable encrypted public snapshot
+    Create(PublishCreateArgs),
+    /// List local publication metadata (never prints full links)
+    List(PublishListArgs),
+    /// Print one complete browser link
+    Link(PublishIdArgs),
+    /// Revoke one publication
+    Revoke(PublishRevokeArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct PublishPreviewArgs {
+    /// Source ref or WorkSet reference (for example @share_ready or @)
+    pub source: String,
+    /// Optional public title
+    #[arg(long)]
+    pub title: Option<String>,
+    /// Link lifetime: 1d, 7d, 30d, or 90d
+    #[arg(long, default_value = "7d")]
+    pub expires: String,
+    /// Output format
+    #[arg(long, value_enum, default_value_t = PublishFormat::Human)]
+    pub format: PublishFormat,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct PublishCreateArgs {
+    /// Source ref or WorkSet reference (for example @share_ready or @)
+    pub source: String,
+    /// Optional public title
+    #[arg(long)]
+    pub title: Option<String>,
+    /// Link lifetime: 1d, 7d, 30d, or 90d
+    #[arg(long, default_value = "7d")]
+    pub expires: String,
+    /// Confirm without an interactive prompt
+    #[arg(long)]
+    pub yes: bool,
+    /// Allow non-automatic privacy warnings in non-interactive mode
+    #[arg(long)]
+    pub allow_warnings: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct PublishListArgs {
+    /// Print machine-readable metadata
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct PublishIdArgs {
+    /// Publication id returned by `publish create`
+    pub publication_id: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct PublishRevokeArgs {
+    /// Publication id returned by `publish create`
+    pub publication_id: String,
+    /// Confirm without an interactive prompt
+    #[arg(long)]
+    pub yes: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum PublishFormat {
+    Human,
+    Json,
 }
 
 #[derive(Parser, Debug)]
@@ -1631,6 +1715,52 @@ mod tests {
                 .is_err()
         );
         assert!(Cli::try_parse_from(["sivtr", "show", "@last", "--refs", "--json"]).is_err());
+    }
+
+    #[test]
+    fn publish_parses_preview_and_create_flags() {
+        let cli = Cli::try_parse_from([
+            "sivtr",
+            "publish",
+            "preview",
+            "@share_ready",
+            "--expires",
+            "30d",
+            "--format",
+            "json",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Publish(command)) => match command.action {
+                PublishAction::Preview(args) => {
+                    assert_eq!(args.source, "@share_ready");
+                    assert_eq!(args.expires, "30d");
+                    assert_eq!(args.format, PublishFormat::Json);
+                }
+                _ => panic!("expected publish preview"),
+            },
+            _ => panic!("expected publish command"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "sivtr",
+            "publish",
+            "create",
+            "@",
+            "--yes",
+            "--allow-warnings",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Publish(command)) => match command.action {
+                PublishAction::Create(args) => {
+                    assert!(args.yes);
+                    assert!(args.allow_warnings);
+                }
+                _ => panic!("expected publish create"),
+            },
+            _ => panic!("expected publish command"),
+        }
     }
 
     #[test]

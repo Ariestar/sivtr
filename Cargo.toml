@@ -89,6 +89,7 @@ getrandom = "0.4"
 fs2 = "0.4"
 rusqlite = { version = "0.40", features = ["bundled"] }
 sha2 = "0.11"
+aes-gcm = "0.10"
 iroh = "1.0"
 base64 = "0.23"
 anyhow = "1"

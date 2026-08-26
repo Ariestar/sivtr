@@ -12,6 +12,7 @@
 pub mod browse;
 pub mod interactive;
 pub mod memory;
+pub mod publish;
 pub mod remote;
 pub mod select;
 pub mod system;

@@ -1,0 +1,33 @@
+{
+  "name": "@sivtr/share-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "start:self-host": "node server/self-host.mjs",
+    "e2e": "playwright test",
+    "deploy:staging": "wrangler deploy --env staging",
+    "deploy:proxy": "wrangler deploy --env proxy",
+    "deploy:production": "wrangler deploy --env production",
+    "dry-run": "wrangler deploy --dry-run --env staging",
+    "dry-run:proxy": "wrangler deploy --dry-run --env proxy"
+  },
+  "dependencies": {
+    "@cloudflare/workers-types": "^5.20260825.1",
+    "dompurify": "^3.2.6",
+    "fflate": "^0.8.2",
+    "marked": "^16.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^24.0.0",
+    "@vitejs/plugin-basic-ssl": "^2.1.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.1.0",
+    "vitest": "^3.2.0",
+    "wrangler": "^4.30.0"
+  }
+}

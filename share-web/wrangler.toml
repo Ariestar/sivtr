@@ -1,0 +1,110 @@
+name = "sivtr-share-web"
+main = "src/worker.ts"
+compatibility_date = "2026-08-25"
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+[[r2_buckets]]
+binding = "PUBLICATIONS"
+bucket_name = "sivtr-publications"
+
+[[ratelimits]]
+name = "CREATE_LIMITER"
+namespace_id = "1001"
+simple = { limit = 5, period = 60 }
+
+[[ratelimits]]
+name = "GET_LIMITER"
+namespace_id = "1002"
+simple = { limit = 120, period = 60 }
+
+[[ratelimits]]
+name = "REVOKE_LIMITER"
+namespace_id = "1003"
+simple = { limit = 20, period = 60 }
+
+[vars]
+CREATE_ENABLED = "true"
+
+[env.staging]
+name = "sivtr-share-web-staging"
+
+[[env.staging.r2_buckets]]
+binding = "PUBLICATIONS"
+bucket_name = "sivtr-publications-staging"
+
+[[env.staging.ratelimits]]
+name = "CREATE_LIMITER"
+namespace_id = "1101"
+simple = { limit = 5, period = 60 }
+
+[[env.staging.ratelimits]]
+name = "GET_LIMITER"
+namespace_id = "1102"
+simple = { limit = 120, period = 60 }
+
+[[env.staging.ratelimits]]
+name = "REVOKE_LIMITER"
+namespace_id = "1103"
+simple = { limit = 20, period = 60 }
+
+[env.staging.vars]
+CREATE_ENABLED = "true"
+
+[env.proxy]
+# Production Worker/R2 backend exposed through the user's own Nginx server.
+# This environment intentionally has no custom-domain route: Nginx forwards
+# https://share.hnnulwh.cn to the workers.dev hostname printed by Wrangler.
+name = "sivtr-share-web-proxy"
+workers_dev = true
+
+[[env.proxy.r2_buckets]]
+binding = "PUBLICATIONS"
+bucket_name = "sivtr-publications"
+
+[[env.proxy.ratelimits]]
+name = "CREATE_LIMITER"
+namespace_id = "1001"
+simple = { limit = 5, period = 60 }
+
+[[env.proxy.ratelimits]]
+name = "GET_LIMITER"
+namespace_id = "1002"
+simple = { limit = 120, period = 60 }
+
+[[env.proxy.ratelimits]]
+name = "REVOKE_LIMITER"
+namespace_id = "1003"
+simple = { limit = 20, period = 60 }
+
+[env.proxy.vars]
+CREATE_ENABLED = "true"
+
+[env.production]
+name = "sivtr-share-web"
+routes = [{ pattern = "share.sivtr.dev", custom_domain = true }]
+
+[[env.production.r2_buckets]]
+binding = "PUBLICATIONS"
+bucket_name = "sivtr-publications"
+
+[[env.production.ratelimits]]
+name = "CREATE_LIMITER"
+namespace_id = "1001"
+simple = { limit = 5, period = 60 }
+
+[[env.production.ratelimits]]
+name = "GET_LIMITER"
+namespace_id = "1002"
+simple = { limit = 120, period = 60 }
+
+[[env.production.ratelimits]]
+name = "REVOKE_LIMITER"
+namespace_id = "1003"
+simple = { limit = 20, period = 60 }
+
+[env.production.vars]
+CREATE_ENABLED = "true"

@@ -1,0 +1,23 @@
+:root { color-scheme: light dark; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #101319; color: #edf2f7; }
+body { margin: 0; }
+main { max-width: 920px; margin: 0 auto; padding: 3rem 1.25rem 5rem; }
+header { border-bottom: 1px solid #334155; margin-bottom: 2rem; padding-bottom: 1.25rem; }
+h1 { font-size: clamp(1.5rem, 4vw, 2.25rem); margin: 0 0 .5rem; overflow-wrap: anywhere; }
+.meta { color: #94a3b8; font-size: .9rem; margin: 0; }
+.conversation { display: grid; gap: 1.25rem; }
+.message { border: 1px solid #334155; border-radius: 12px; padding: 1rem 1.15rem; overflow-wrap: anywhere; }
+.message.user { background: #172033; }
+.message.assistant { background: #18251f; }
+.message h2 { font-size: .8rem; letter-spacing: .06em; text-transform: uppercase; color: #94a3b8; margin: 0 0 .75rem; }
+.markdown { line-height: 1.65; }
+.code-block { position: relative; }
+.markdown pre { overflow: auto; background: #0b0f14; padding: .8rem; border-radius: 8px; }
+.copy-code { position: absolute; right: .5rem; top: .5rem; font-size: .75rem; }
+.markdown code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.markdown a { color: #7dd3fc; }
+.error { text-align: center; padding: 15vh 1rem; }
+.error p { color: #cbd5e1; }
+button { border: 1px solid #64748b; background: #1e293b; color: inherit; border-radius: 7px; padding: .55rem 1rem; cursor: pointer; }
+button:hover { background: #334155; }
+.status { color: #94a3b8; }
+@media (max-width: 600px) { main { padding-top: 1.5rem; } .message { padding: .8rem; } }
