@@ -21,11 +21,13 @@ use super::content::{
     WorkspaceCopyShortcut,
 };
 use super::nav::{
-    move_workspace_cursor, reset_workspace_after_source_change, reset_workspace_dialogue_state,
-    shown_dialogue_idx, ContentBlockCursor, RangeAnchor,
+    invalidate_panes_below, move_workspace_cursor, shown_dialogue_idx, ContentBlockCursor,
+    RangeAnchor,
 };
 use super::panes::ContentPane;
-use super::selection::{apply_range_selection, select_sources, WorkspaceSourceSelection};
+use super::selection::{
+    apply_range_selection, focused_mask, select_sources, WorkspaceSourceSelection,
+};
 use super::vim::open_vim_view;
 use super::PICK_CANCELLED_MESSAGE;
 
@@ -114,10 +116,20 @@ pub(super) fn apply_workspace_help_action(
             }
         }
         WorkspaceHelpAction::ToggleSelection => match *focus {
-            WorkspaceFocus::Source => {
+            WorkspaceFocus::Content => {
+                // Pane-native selection: Space marks the focused block for
+                // batch copy, like Space toggles a list row. Multi-select
+                // pages one dialogue at a time, so the shown dialogue owns
+                // the mark regardless of the selection count.
+                let shown = shown_dialogue_idx(selected_dialogues, *content_page, dialogue_idx);
+                if let Some(block) = content_cursor.get() {
+                    content_pane.toggle_mark(shown, block);
+                }
+            }
+            pane => {
                 if toggle_list_row(
-                    *focus,
-                    selected_index(source_state),
+                    pane,
+                    focused_row(pane, source_state, session_idx, dialogue_idx),
                     selected_sources,
                     selected_sessions,
                     selected_dialogues,
@@ -127,42 +139,6 @@ pub(super) fn apply_workspace_help_action(
                     content_scrolls,
                 ) {
                     return Ok(HelpDispatch::Refresh);
-                }
-            }
-            WorkspaceFocus::Sessions => {
-                toggle_list_row(
-                    *focus,
-                    session_idx,
-                    selected_sources,
-                    selected_sessions,
-                    selected_dialogues,
-                    range_anchor,
-                    session_state,
-                    dialogue_state,
-                    content_scrolls,
-                );
-            }
-            WorkspaceFocus::Dialogues => {
-                toggle_list_row(
-                    *focus,
-                    dialogue_idx,
-                    selected_sources,
-                    selected_sessions,
-                    selected_dialogues,
-                    range_anchor,
-                    session_state,
-                    dialogue_state,
-                    content_scrolls,
-                );
-            }
-            WorkspaceFocus::Content => {
-                // Pane-native selection: Space marks the focused block for
-                // batch copy, like Space toggles a list row. Multi-select
-                // pages one dialogue at a time, so the shown dialogue owns
-                // the mark regardless of the selection count.
-                let shown = shown_dialogue_idx(selected_dialogues, *content_page, dialogue_idx);
-                if let Some(block) = content_cursor.get() {
-                    content_pane.toggle_mark(shown, block);
                 }
             }
         },
@@ -183,37 +159,20 @@ pub(super) fn apply_workspace_help_action(
                 content_scrolls.clear();
             }
         }
-        WorkspaceHelpAction::SelectAllSources => {
-            select_sources(sources, selected_sources, WorkspaceSourceSelection::All);
-            reset_workspace_after_source_change(
-                session_state,
-                selected_sessions,
-                dialogue_state,
-                selected_dialogues,
-                range_anchor,
-                content_scrolls,
-            );
-            return Ok(HelpDispatch::Refresh);
-        }
-        WorkspaceHelpAction::SelectAgentSources => {
-            select_sources(sources, selected_sources, WorkspaceSourceSelection::Agents);
-            reset_workspace_after_source_change(
-                session_state,
-                selected_sessions,
-                dialogue_state,
-                selected_dialogues,
-                range_anchor,
-                content_scrolls,
-            );
-            return Ok(HelpDispatch::Refresh);
-        }
-        WorkspaceHelpAction::SelectTerminalSource => {
+        WorkspaceHelpAction::SelectAllSources
+        | WorkspaceHelpAction::SelectAgentSources
+        | WorkspaceHelpAction::SelectTerminalSource => {
             select_sources(
                 sources,
                 selected_sources,
-                WorkspaceSourceSelection::Terminal,
+                match action {
+                    WorkspaceHelpAction::SelectAgentSources => WorkspaceSourceSelection::Agents,
+                    WorkspaceHelpAction::SelectTerminalSource => WorkspaceSourceSelection::Terminal,
+                    _ => WorkspaceSourceSelection::All,
+                },
             );
-            reset_workspace_after_source_change(
+            invalidate_panes_below(
+                WorkspaceFocus::Source,
                 session_state,
                 selected_sessions,
                 dialogue_state,
@@ -224,36 +183,6 @@ pub(super) fn apply_workspace_help_action(
             return Ok(HelpDispatch::Refresh);
         }
         WorkspaceHelpAction::RangeSelect => match *focus {
-            // Every pane shares one range-selection semantic: `v` anchors,
-            // moves extend, `v` again selects the span. Only the completing
-            // `v` (which changes selection) rebuilds panes below.
-            WorkspaceFocus::Source => {
-                if apply_range_selection(
-                    range_anchor,
-                    *focus,
-                    selected_sources,
-                    selected_index(source_state),
-                ) {
-                    reset_workspace_after_source_change(
-                        session_state,
-                        selected_sessions,
-                        dialogue_state,
-                        selected_dialogues,
-                        range_anchor,
-                        content_scrolls,
-                    );
-                    return Ok(HelpDispatch::Refresh);
-                }
-            }
-            WorkspaceFocus::Sessions => {
-                if apply_range_selection(range_anchor, *focus, selected_sessions, session_idx) {
-                    reset_workspace_dialogue_state(0, dialogue_state, selected_dialogues);
-                    content_scrolls.clear();
-                }
-            }
-            WorkspaceFocus::Dialogues => {
-                apply_range_selection(range_anchor, *focus, selected_dialogues, dialogue_idx);
-            }
             WorkspaceFocus::Content => {
                 // The span covers block ids instead of list rows, and only
                 // visible blocks are in it — a folded run is one unit, so
@@ -272,6 +201,33 @@ pub(super) fn apply_workspace_help_action(
                                 .filter(|id| span.contains(id)),
                         );
                     }
+                }
+            }
+            // Every list pane shares one range-selection semantic: `v`
+            // anchors, moves extend, `v` again selects the span. Only the
+            // completing `v` (which changes selection) rebuilds panes below.
+            pane => {
+                let idx = focused_row(pane, source_state, session_idx, dialogue_idx);
+                let Some(mask) = focused_mask(
+                    pane,
+                    selected_sources,
+                    selected_sessions,
+                    selected_dialogues,
+                ) else {
+                    return Ok(HelpDispatch::Continue);
+                };
+                if apply_range_selection(range_anchor, pane, mask, idx)
+                    && invalidate_panes_below(
+                        pane,
+                        session_state,
+                        selected_sessions,
+                        dialogue_state,
+                        selected_dialogues,
+                        range_anchor,
+                        content_scrolls,
+                    )
+                {
+                    return Ok(HelpDispatch::Refresh);
                 }
             }
         },
@@ -419,7 +375,10 @@ pub(super) fn apply_workspace_help_action(
             *show_search = true;
             search_query.clear();
             *search_dirty = true;
-            reset_workspace_after_source_change(
+            // Search replaces the session list wholesale: drop everything the
+            // panes below the sources were showing.
+            invalidate_panes_below(
+                WorkspaceFocus::Source,
                 session_state,
                 selected_sessions,
                 dialogue_state,
@@ -475,6 +434,21 @@ pub(super) fn toggle_fullscreen(
     }
 }
 
+/// Row the cursor sits on in `pane`'s list. Sessions and Dialogues arrive
+/// pre-clamped from the redraw; the source list is read off its own state.
+fn focused_row(
+    pane: WorkspaceFocus,
+    source_state: &ListState,
+    session_idx: usize,
+    dialogue_idx: usize,
+) -> usize {
+    match pane {
+        WorkspaceFocus::Sessions => session_idx,
+        WorkspaceFocus::Dialogues => dialogue_idx,
+        _ => selected_index(source_state),
+    }
+}
+
 /// Toggle the focused list row's selection mark — the single path shared by
 /// the Space key and a dot-gutter click. `true` when panes below need a
 /// refresh (a Source toggle reshapes the session/dialogue trees).
@@ -490,39 +464,27 @@ pub(super) fn toggle_list_row(
     dialogue_state: &mut ListState,
     content_scrolls: &mut ContentScrolls,
 ) -> bool {
-    match focus {
-        WorkspaceFocus::Source => {
-            if let Some(selected) = selected_sources.get_mut(idx) {
-                *selected = !*selected;
-            }
-            reset_workspace_after_source_change(
-                session_state,
-                selected_sessions,
-                dialogue_state,
-                selected_dialogues,
-                range_anchor,
-                content_scrolls,
-            );
-            true
-        }
-        WorkspaceFocus::Sessions => {
-            if let Some(selected) = selected_sessions.get_mut(idx) {
-                *selected = !*selected;
-            }
-            range_anchor.clear();
-            reset_workspace_dialogue_state(0, dialogue_state, selected_dialogues);
-            content_scrolls.clear();
-            false
-        }
-        WorkspaceFocus::Dialogues => {
-            if let Some(selected) = selected_dialogues.get_mut(idx) {
-                *selected = !*selected;
-            }
-            range_anchor.clear();
-            false
-        }
-        WorkspaceFocus::Content => false,
+    let Some(mask) = focused_mask(
+        focus,
+        selected_sources,
+        selected_sessions,
+        selected_dialogues,
+    ) else {
+        return false;
+    };
+    if let Some(selected) = mask.get_mut(idx) {
+        *selected = !*selected;
     }
+    range_anchor.clear();
+    invalidate_panes_below(
+        focus,
+        session_state,
+        selected_sessions,
+        dialogue_state,
+        selected_dialogues,
+        range_anchor,
+        content_scrolls,
+    )
 }
 
 pub(super) fn set_focus(

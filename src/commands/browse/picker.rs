@@ -30,10 +30,9 @@ use super::content::{
 use super::help::{apply_workspace_help_action, set_focus, toggle_list_row, HelpDispatch};
 use super::load::{SessionColumn, SessionCtx, SourceLoadState};
 use super::nav::{
-    clamp_list_state, dot_gutter_hit, move_workspace_cursor, open_link_target,
-    reset_workspace_after_source_change, reset_workspace_dialogue_state,
-    resize_workspace_dialogue_selection, row_list_index, shown_dialogue_idx, source_list_index,
-    ContentBlockCursor, RangeAnchor,
+    clamp_list_state, dot_gutter_hit, invalidate_panes_below, move_workspace_cursor,
+    open_link_target, reset_workspace_dialogue_state, resize_workspace_dialogue_selection,
+    row_list_index, shown_dialogue_idx, source_list_index, ContentBlockCursor, RangeAnchor,
 };
 use super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane, SourcePane};
 use super::selection::{has_selected_sessions, refresh_next_level};
@@ -639,7 +638,8 @@ pub(crate) fn run(
                             search_dirty = true;
                             search_apply_pending = false;
                             search_cursor = 0;
-                            reset_workspace_after_source_change(
+                            invalidate_panes_below(
+                                WorkspaceFocus::Source,
                                 &mut session_state,
                                 &mut selected_sessions,
                                 &mut dialogue_state,
@@ -836,7 +836,8 @@ pub(crate) fn run(
                             search_dirty = true;
                             search_cursor = 0;
                             search_apply_pending = false;
-                            reset_workspace_after_source_change(
+                            invalidate_panes_below(
+                                WorkspaceFocus::Source,
                                 &mut session_state,
                                 &mut selected_sessions,
                                 &mut dialogue_state,
@@ -1291,7 +1292,8 @@ fn search_query_edited(
     *search_dirty = true;
     *search_cursor = 0;
     *search_apply_pending = true;
-    reset_workspace_after_source_change(
+    invalidate_panes_below(
+        WorkspaceFocus::Source,
         session_state,
         selected_sessions,
         dialogue_state,

@@ -131,20 +131,37 @@ pub(super) fn shown_dialogue_idx(
         .unwrap_or(dialogue_idx)
 }
 
-pub(super) fn reset_workspace_after_source_change(
+/// Discard whatever the panes right of `focus` derived from its selection,
+/// after that selection changed. `true` when the change reaches back to the
+/// sources, so the caller must reload sessions.
+pub(super) fn invalidate_panes_below(
+    focus: WorkspaceFocus,
     session_state: &mut ListState,
     selected_sessions: &mut Vec<bool>,
     dialogue_state: &mut ListState,
     selected_dialogues: &mut Vec<bool>,
     range_anchor: &mut RangeAnchor,
     content_scrolls: &mut ContentScrolls,
-) {
-    session_state.select(None);
-    selected_sessions.clear();
-    dialogue_state.select(None);
-    selected_dialogues.clear();
-    range_anchor.clear();
-    content_scrolls.clear();
+) -> bool {
+    match focus {
+        WorkspaceFocus::Source => {
+            session_state.select(None);
+            selected_sessions.clear();
+            dialogue_state.select(None);
+            selected_dialogues.clear();
+            range_anchor.clear();
+            content_scrolls.clear();
+            true
+        }
+        WorkspaceFocus::Sessions => {
+            reset_workspace_dialogue_state(0, dialogue_state, selected_dialogues);
+            content_scrolls.clear();
+            false
+        }
+        // Dialogues feed the content pane, which rebuilds from the shown
+        // dialogue every redraw; Content has nothing to its right.
+        WorkspaceFocus::Dialogues | WorkspaceFocus::Content => false,
+    }
 }
 
 pub(super) fn resize_workspace_dialogue_selection(

@@ -131,6 +131,23 @@ pub(super) fn has_selected_sessions(selected_sessions: &[bool]) -> bool {
     selected_sessions.iter().any(|selected| *selected)
 }
 
+/// The selection mask `focus` owns, or `None` for Content — it marks blocks
+/// instead of rows. One lookup for every row-selection key (Space, `v`), so
+/// the panes stop repeating "which mask goes with which focus".
+pub(super) fn focused_mask<'a>(
+    focus: WorkspaceFocus,
+    selected_sources: &'a mut [bool],
+    selected_sessions: &'a mut [bool],
+    selected_dialogues: &'a mut [bool],
+) -> Option<&'a mut [bool]> {
+    match focus {
+        WorkspaceFocus::Source => Some(selected_sources),
+        WorkspaceFocus::Sessions => Some(selected_sessions),
+        WorkspaceFocus::Dialogues => Some(selected_dialogues),
+        WorkspaceFocus::Content => None,
+    }
+}
+
 /// Range-select rows: first `v` anchors at `idx`, the next completes the
 /// span between anchor and `idx`. `true` when this press completed a span,
 /// so the caller can rebuild the panes below it. The span rule itself is
