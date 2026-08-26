@@ -19,6 +19,22 @@ pub struct PaneInput<'a> {
     pub force: bool,
 }
 
+/// Set the listed rows to one state: select them all when any of them is
+/// unselected, clear them all otherwise. This is the range-selection rule
+/// every pane uses for `v` and range clicks, and the only place it lives.
+/// The ids need not be contiguous — the content pane's visible blocks skip
+/// the ids a fold is hiding — and out-of-range ids are ignored.
+pub fn toggle_row_ids(mask: &mut [bool], ids: impl Iterator<Item = usize> + Clone) {
+    let select = ids
+        .clone()
+        .any(|id| mask.get(id).is_some_and(|flag| !*flag));
+    for id in ids {
+        if let Some(flag) = mask.get_mut(id) {
+            *flag = select;
+        }
+    }
+}
+
 /// Native multi-select: a boolean mask plus a range anchor, with one
 /// toggle / range-toggle / clear API shared by every pane (source, session,
 /// dialogue, and content blocks). Panes own a `Selection` when their rows
@@ -75,19 +91,11 @@ impl Selection {
         }
     }
 
-    /// Toggle every row between the anchor and `idx` to the same state:
-    /// select the range when any of its rows is unselected, clear it
-    /// otherwise — the range-click semantics the list panes use.
-    pub fn toggle_range(&mut self, idx: usize) {
-        let anchor = self.anchor.unwrap_or(idx);
-        let (start, end) = (anchor.min(idx), anchor.max(idx));
-        if let Some(range) = self.mask.get_mut(start..=end) {
-            let select = range.iter().any(|flag| !*flag);
-            for flag in range {
-                *flag = select;
-            }
-        }
-        self.anchor = Some(idx);
+    /// Range-select the given rows through [`toggle_row_ids`], leaving the
+    /// anchor on the last of them.
+    pub fn toggle_ids(&mut self, ids: impl Iterator<Item = usize> + Clone) {
+        self.anchor = ids.clone().last();
+        toggle_row_ids(&mut self.mask, ids);
     }
 }
 
@@ -152,14 +160,18 @@ mod tests {
     }
 
     #[test]
-    fn selection_range_toggles_between_anchor_and_index() {
+    fn selection_range_toggles_every_listed_row_to_one_state() {
         let mut selection = Selection::new(5);
         selection.toggle(1);
-        selection.toggle_range(3);
+        selection.toggle_ids(1..=3);
         assert_eq!(selection.mask(), &[false, true, true, true, false]);
         // Second range over the same rows clears them.
-        selection.toggle_range(1);
+        selection.toggle_ids(1..=3);
         assert_eq!(selection.mask(), &[false, false, false, false, false]);
+        // Gaps are allowed (folded blocks are skipped) and out-of-range ids
+        // are ignored.
+        selection.toggle_ids([0, 3, 9].into_iter());
+        assert_eq!(selection.mask(), &[true, false, false, true, false]);
     }
 
     #[test]

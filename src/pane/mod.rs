@@ -12,6 +12,6 @@ mod model;
 mod sliding;
 mod store;
 
-pub use model::{Pane, PaneInput, Selection};
+pub use model::{toggle_row_ids, Pane, PaneInput, Selection};
 pub use sliding::{MetaNeed, SlidingPane};
 pub use store::{keep_keys, StorePhase, Viewport, WindowRow, FETCH_CEILING, FETCH_FLOOR};

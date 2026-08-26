@@ -8,7 +8,7 @@ use ratatui::widgets::ListState;
 use crate::tui::workspace::{selected_index, WorkspaceFocus, WorkspaceSession, WorkspaceSource};
 
 use super::load::SessionColumn;
-use crate::pane::Viewport;
+use crate::pane::{toggle_row_ids, Viewport};
 
 /// Active rows: multi-select if any, otherwise the focused row.
 pub(super) fn active_mask(selected: &[bool], focus_idx: usize, len: usize) -> Vec<bool> {
@@ -131,25 +131,23 @@ pub(super) fn has_selected_sessions(selected_sessions: &[bool]) -> bool {
 }
 
 /// Range-select rows: first `v` anchors at `idx`, the next completes the
-/// span between anchor and `idx` (inverting the span if any row is unselected).
+/// span between anchor and `idx`. The span rule itself is
+/// [`toggle_row_ids`], shared with the content pane's block range.
 /// Shared by every list pane (Source/Sessions/Dialogues).
 pub(super) fn apply_range_selection(
     range_anchor: &mut Option<usize>,
     selected: &mut [bool],
     idx: usize,
 ) {
-    if let Some(anchor) = range_anchor.take() {
-        // Reject out-of-bounds endpoints before iterating: a stray large
-        // index must not walk a near-empty mask for the whole span.
-        let Some(span) = selected.get_mut(anchor.min(idx)..=anchor.max(idx)) else {
-            return;
-        };
-        let select = span.iter().any(|flag| !*flag);
-        for flag in span {
-            *flag = select;
-        }
-    } else {
+    let Some(anchor) = range_anchor.take() else {
         *range_anchor = Some(idx);
+        return;
+    };
+    // Reject out-of-bounds endpoints before iterating: a stray large
+    // index must not walk a near-empty mask for the whole span.
+    let (lo, hi) = (anchor.min(idx), anchor.max(idx));
+    if hi < selected.len() {
+        toggle_row_ids(selected, lo..=hi);
     }
 }
 

@@ -297,22 +297,26 @@ pub(super) fn apply_workspace_help_action(
             }
             WorkspaceFocus::Content => {
                 // Block range: `v` anchors the cursor block, moves extend,
-                // and a second `v` toggles marks across the anchor..cursor
-                // span of the continuous input+output block sequence.
+                // and a second `v` marks the anchor..cursor span of the
+                // continuous input+output block sequence. Only visible blocks
+                // are in the span — a folded run is one unit, so marking its
+                // hidden members too would copy their bodies twice.
                 if let Some(cursor_block) = content_cursor.get() {
                     match *content_range_anchor {
                         Some(anchor_block) => {
                             let shown =
                                 shown_dialogue_idx(selected_dialogues, *content_page, dialogue_idx);
-                            let (lo, hi) = (
-                                anchor_block.min(cursor_block),
-                                anchor_block.max(cursor_block),
+                            let span =
+                                anchor_block.min(cursor_block)..=anchor_block.max(cursor_block);
+                            content_pane.toggle_mark_range(
+                                shown,
+                                content_blocks
+                                    .0
+                                    .iter()
+                                    .chain(content_blocks.1)
+                                    .map(|block| block.id)
+                                    .filter(|id| span.contains(id)),
                             );
-                            for block in content_blocks.0.iter().chain(content_blocks.1) {
-                                if (lo..=hi).contains(&block.id) {
-                                    content_pane.toggle_mark(shown, block.id);
-                                }
-                            }
                             *content_range_anchor = None;
                         }
                         _ => *content_range_anchor = Some(cursor_block),
