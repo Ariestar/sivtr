@@ -5,28 +5,39 @@
 
 use ratatui::widgets::ListState;
 
-use crate::tui::workspace::{selected_index, WorkspaceFocus, WorkspaceSession, WorkspaceSource};
+use crate::tui::workspace::{
+    selected_index, selected_indices, WorkspaceFocus, WorkspaceSession, WorkspaceSource,
+};
 
 use super::load::SessionColumn;
 use super::nav::RangeAnchor;
 use crate::pane::{toggle_row_ids, Viewport};
 
-/// Active rows: multi-select if any, otherwise the focused row.
-pub(super) fn active_mask(selected: &[bool], focus_idx: usize, len: usize) -> Vec<bool> {
-    assert_eq!(
-        selected.len(),
-        len,
-        "selection mask length must match list length"
-    );
-    if selected.iter().any(|selected| *selected) {
-        return selected.to_vec();
+/// Rows a pane-wide action applies to: every selected row in row order, or
+/// the focused row alone when nothing is selected. `len` is the pane's row
+/// count, so a stale focus clamps to the last row and an empty pane yields
+/// nothing. The one answer to "which rows does this act on" — refresh, copy,
+/// and dialogue projection all ask it.
+pub(super) fn active_rows(selected: &[bool], focus_idx: usize, len: usize) -> Vec<usize> {
+    let rows = selected_indices(selected);
+    if !rows.is_empty() {
+        return rows;
     }
-    if len == 0 {
-        return Vec::new();
+    match len {
+        0 => Vec::new(),
+        len => vec![focus_idx.min(len - 1)],
     }
-    let mut out = vec![false; len];
-    out[focus_idx.min(len - 1)] = true;
-    out
+}
+
+/// [`active_rows`] as a mask, for the transports that reload by mask.
+fn active_mask(selected: &[bool], focus_idx: usize, len: usize) -> Vec<bool> {
+    let mut mask = vec![false; len];
+    for row in active_rows(selected, focus_idx, len) {
+        if let Some(flag) = mask.get_mut(row) {
+            *flag = true;
+        }
+    }
+    mask
 }
 
 /// Refresh the next level under active rows of the focused pane.
@@ -63,7 +74,7 @@ pub(super) fn refresh_next_level(
         WorkspaceFocus::Sessions | WorkspaceFocus::Dialogues => parent_source_mask(
             sources,
             sessions,
-            &active_mask(
+            &active_rows(
                 selected_sessions,
                 selected_index(session_state),
                 sessions.len(),
@@ -85,13 +96,10 @@ pub(super) fn refresh_next_level(
 fn parent_source_mask(
     sources: &[WorkspaceSource],
     sessions: &[WorkspaceSession],
-    active_sessions: &[bool],
+    active_sessions: &[usize],
 ) -> Vec<bool> {
     let mut parent = vec![false; sources.len()];
-    for (session_idx, session) in sessions.iter().enumerate() {
-        if !active_sessions.get(session_idx).copied().unwrap_or(false) {
-            continue;
-        }
+    for session in active_sessions.iter().filter_map(|row| sessions.get(*row)) {
         if let Some(source_idx) = sources.iter().position(|source| source == &session.source) {
             parent[source_idx] = true;
         }

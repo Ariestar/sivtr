@@ -1,6 +1,6 @@
 //! Dialogue construction, content copy, line filter, and search targeting.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossterm::event::KeyCode;
 
 use crate::commands::select::CommandSelection;
@@ -8,11 +8,12 @@ use crate::tui::content::block::{dialogue_blocks, Block};
 use crate::tui::content::view::{line_count, ContentViewMode};
 use crate::tui::search::{WorkspaceSearchMatch, WorkspaceSearchOutput};
 use crate::tui::workspace::{
-    selected_indices, WorkspaceDialogue, WorkspacePickedContent, WorkspaceSession,
+    WorkspaceDialogue, WorkspacePickedContent, WorkspaceSession, WorkspaceSource,
 };
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
 
 use super::panes::ContentPane;
+use super::selection::active_rows;
 use super::text::filter_lines_by_spec;
 use super::vim::{VimBlock, VimView};
 
@@ -24,15 +25,11 @@ pub(super) enum WorkspaceCopyShortcut {
     Command,
 }
 
-/// Selected dialogue indices in selection order, falling back to the
-/// focused row when nothing is selected (copy targets one dialogue then).
-fn picked_dialogue_indices(selected_dialogues: &[bool], dialogue_idx: usize) -> Vec<usize> {
-    let selected = selected_indices(selected_dialogues);
-    if selected.is_empty() {
-        vec![dialogue_idx]
-    } else {
-        selected
-    }
+/// Source a copy is attributed to: the first picked dialogue's.
+fn picked_source(dialogues: &[WorkspaceDialogue], picked: &[usize]) -> Option<WorkspaceSource> {
+    dialogues
+        .get(*picked.first()?)
+        .map(|dialogue| dialogue.source.clone())
 }
 
 pub(super) fn workspace_picked_content_for_copy_with_line_filter(
@@ -44,8 +41,9 @@ pub(super) fn workspace_picked_content_for_copy_with_line_filter(
     target: Option<WorkAt>,
     content_mode: ContentViewMode,
 ) -> Result<WorkspacePickedContent> {
-    let picked_indices = picked_dialogue_indices(selected_dialogues, dialogue_idx);
-    let source_idx = picked_indices[0];
+    let picked_indices = active_rows(selected_dialogues, dialogue_idx, dialogues.len());
+    let source =
+        picked_source(dialogues, &picked_indices).context("copy needs at least one dialogue")?;
     let display_target = (picked_indices.len() == 1
         && matches!(shortcut, WorkspaceCopyShortcut::Displayed))
     .then_some(target)
@@ -63,7 +61,7 @@ pub(super) fn workspace_picked_content_for_copy_with_line_filter(
     let units = apply_workspace_line_filter(units, line_filter)?;
     let selection = CommandSelection::RecentExplicit((1..=units.len()).collect());
     Ok(WorkspacePickedContent {
-        source: dialogues[source_idx].source.clone(),
+        source,
         units,
         selection,
     })
@@ -134,7 +132,7 @@ pub(super) fn workspace_picked_content_for_marked_blocks(
     dialogue_idx: usize,
     content_pane: &ContentPane,
 ) -> Option<WorkspacePickedContent> {
-    let picked_indices = picked_dialogue_indices(selected_dialogues, dialogue_idx);
+    let picked_indices = active_rows(selected_dialogues, dialogue_idx, dialogues.len());
     let mut texts = Vec::new();
     for dialogue_idx in picked_indices {
         let Some(record) = dialogues
@@ -219,7 +217,8 @@ fn picked_for_texts(
         return None;
     }
     let plain = texts.join("\n\n");
-    let source = workspace_picked_content(dialogues, selected_dialogues, dialogue_idx, None).source;
+    let picked = active_rows(selected_dialogues, dialogue_idx, dialogues.len());
+    let source = picked_source(dialogues, &picked)?;
     Some(WorkspacePickedContent {
         source,
         units: vec![crate::tui::workspace::TextPair {

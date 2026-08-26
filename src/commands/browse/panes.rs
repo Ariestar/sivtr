@@ -16,6 +16,7 @@ use crate::tui::workspace::{
 use sivtr_core::ai::AgentSelection;
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
 
+use super::selection::active_rows;
 use super::text::record_to_copy_parts;
 
 // ── Source ──────────────────────────────────────────────────────────────
@@ -275,22 +276,6 @@ fn dialogue_from_record(session: &WorkspaceSession, record: &WorkRecord) -> Work
     }
 }
 
-fn active_session_indices(
-    sessions: &[WorkspaceSession],
-    session_idx: usize,
-    selected_sessions: &[bool],
-) -> Vec<usize> {
-    let selected = crate::tui::workspace::selected_indices(selected_sessions);
-    if !selected.is_empty() {
-        return selected;
-    }
-    if sessions.is_empty() {
-        Vec::new()
-    } else {
-        vec![session_idx.min(sessions.len() - 1)]
-    }
-}
-
 fn fingerprint<'a>(
     sessions: &[WorkspaceSession],
     session_idx: usize,
@@ -298,7 +283,7 @@ fn fingerprint<'a>(
     records: &dyn Fn(&WorkspaceSession) -> Option<&'a [WorkRecord]>,
 ) -> DialogueFingerprint {
     DialogueFingerprint {
-        sessions: active_session_indices(sessions, session_idx, selected_sessions)
+        sessions: active_rows(selected_sessions, session_idx, sessions.len())
             .into_iter()
             .filter_map(|i| {
                 let s = sessions.get(i)?;
@@ -319,7 +304,7 @@ fn meta_prefix<'a>(
     Vec<WindowRow<DialogueKey, DialogueMeta, WorkspaceDialogue>>,
     bool,
 ) {
-    let indices = active_session_indices(sessions, session_idx, selected_sessions);
+    let indices = active_rows(selected_sessions, session_idx, sessions.len());
     if indices.is_empty() {
         return (Vec::new(), true);
     }
@@ -385,7 +370,7 @@ fn body_for_key<'a>(
     records: &dyn Fn(&WorkspaceSession) -> Option<&'a [WorkRecord]>,
     key: &DialogueKey,
 ) -> Option<WorkspaceDialogue> {
-    for i in active_session_indices(sessions, session_idx, selected_sessions) {
+    for i in active_rows(selected_sessions, session_idx, sessions.len()) {
         let Some(session) = sessions.get(i) else {
             continue;
         };
