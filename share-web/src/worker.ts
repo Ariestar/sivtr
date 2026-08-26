@@ -11,9 +11,9 @@ export interface Env {
 
 const MAX_ENVELOPE_BYTES = 5 * 1024 * 1024;
 const MAGIC = new TextEncoder().encode("SIVTPUB1");
-const ID_RE = /^(1d|7d|30d|90d)_([A-Za-z0-9_-]{22})$/;
+const ID_RE = /^(90d|30d|3d|7d|2h|1d)_([A-Za-z0-9_-]{22})$/;
 
-type ExpiryClass = "1d" | "7d" | "30d" | "90d";
+type ExpiryClass = "2h" | "1d" | "3d" | "7d" | "30d" | "90d";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -153,7 +153,14 @@ function validEnvelope(body: Uint8Array): boolean {
 }
 
 function expiryMs(expiry: ExpiryClass): number {
-  return { "1d": 86_400_000, "7d": 604_800_000, "30d": 2_592_000_000, "90d": 7_776_000_000 }[expiry];
+  return {
+    "2h": 7_200_000,
+    "1d": 86_400_000,
+    "3d": 259_200_000,
+    "7d": 604_800_000,
+    "30d": 2_592_000_000,
+    "90d": 7_776_000_000,
+  }[expiry];
 }
 
 function isExpired(value: string | undefined): boolean {
@@ -208,3 +215,4 @@ function logEvent(kind: string, request: Request, status: number, latencyMs: num
 }
 
 export { expiryMs, isExpired, parseId, readCappedBody, validEnvelope };
+

@@ -9,9 +9,18 @@ describe("publication route primitives", () => {
   });
 
   it("uses the locked expiry classes", () => {
+    expect(expiryMs("2h")).toBe(7_200_000);
     expect(expiryMs("1d")).toBe(86_400_000);
+    expect(expiryMs("3d")).toBe(259_200_000);
     expect(expiryMs("90d")).toBe(7_776_000_000);
     expect(isExpired("2000-01-01T00:00:00.000Z")).toBe(true);
+  });
+
+  it("does not confuse 3d with 30d prefixes", () => {
+    const token = "0123456789abcdefghijkl";
+    expect(parseId(`3d_${token}`)?.expiry).toBe("3d");
+    expect(parseId(`30d_${token}`)?.expiry).toBe("30d");
+    expect(parseId(`2h_${token}`)?.key).toBe(`v1/2h/${token}`);
   });
 
   it("only accepts the v1 gzip envelope header", () => {
@@ -76,3 +85,4 @@ describe("publication route primitives", () => {
     expect(body).toBeNull();
   });
 });
+
