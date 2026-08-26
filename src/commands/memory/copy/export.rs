@@ -7,8 +7,7 @@ use crate::commands::browse::{filter_lines_by_spec, select_lines};
 use crate::output;
 use crate::tui::workspace::{TextPair, WorkspacePickedContent};
 
-use super::plan::{CopyFilters, DialogueSelect};
-use crate::commands::select::resolve_selector;
+use super::plan::CopyFilters;
 
 /// Export TUI-picked content to the clipboard.
 ///
@@ -20,11 +19,8 @@ pub fn export_picked(
     lines: Option<&str>,
     ansi: bool,
 ) -> Result<()> {
-    let empty = format!("selected {} content is empty", picked.source.label());
-    let success = format!("copied {} content to clipboard", picked.source.label());
     finish_units(
         &picked.units,
-        &picked.selection,
         &CopyFilters {
             print: print_full,
             ansi,
@@ -33,49 +29,32 @@ pub fn export_picked(
             prompt: None,
             cwd: None,
         },
-        &empty,
-        &success,
+        &picked.source.label(),
     )
 }
 
-pub(super) fn finish_units(
-    units: &[TextPair],
-    selection: &DialogueSelect,
-    filters: &CopyFilters,
-    empty_message: &str,
-    success_message: &str,
-) -> Result<()> {
-    let indices = resolve_selector(selection, units.len())?;
-    let selected: Vec<TextPair> = indices
+/// Join every unit that carries text and sink it, naming `label` in both the
+/// empty warning and the success line. The single path both copy surfaces —
+/// the CLI plan and the TUI pick — end on.
+pub(super) fn finish_units(units: &[TextPair], filters: &CopyFilters, label: &str) -> Result<()> {
+    let kept: Vec<TextPair> = units
         .iter()
-        .filter_map(|idx| units.get(*idx).cloned())
         .filter(|unit| !unit.plain.trim().is_empty())
+        .cloned()
         .collect();
-    if selected.is_empty() {
-        output::warning(empty_message);
+    if kept.is_empty() {
+        output::warning(format!("selected {label} content is empty"));
         return Ok(());
     }
-    let text = join_text_pairs(&selected, "\n\n");
-    finish_text(text, filters, success_message)
+    let count = kept.len();
+    finish_text(
+        join_text_pairs(&kept),
+        filters,
+        &format!("copied {count} item(s) from {label} to clipboard"),
+    )
 }
 
-pub(super) fn finish_text_pairs(
-    pairs: &[TextPair],
-    filters: &CopyFilters,
-    success_message: &str,
-) -> Result<()> {
-    if pairs.is_empty() {
-        output::warning("selected content is empty");
-        return Ok(());
-    }
-    finish_text(join_text_pairs(pairs, "\n\n"), filters, success_message)
-}
-
-pub(super) fn finish_text(
-    mut text: TextPair,
-    filters: &CopyFilters,
-    success_message: &str,
-) -> Result<()> {
+fn finish_text(mut text: TextPair, filters: &CopyFilters, success_message: &str) -> Result<()> {
     if let Some(pattern) = filters.regex.as_deref() {
         text = filter_lines_by_regex(&text, pattern)?;
     }
@@ -99,22 +78,30 @@ pub(super) fn finish_text(
     Ok(())
 }
 
-pub(super) fn join_text_pairs(pairs: &[TextPair], separator: &str) -> TextPair {
+fn join_text_pairs(pairs: &[TextPair]) -> TextPair {
     TextPair {
         plain: pairs
             .iter()
             .map(|pair| pair.plain.as_str())
             .collect::<Vec<_>>()
-            .join(separator),
+            .join(
+                "
+
+",
+            ),
         ansi: pairs
             .iter()
             .map(|pair| pair.ansi.as_str())
             .collect::<Vec<_>>()
-            .join(separator),
+            .join(
+                "
+
+",
+            ),
     }
 }
 
-pub(super) fn filter_lines_by_regex(text: &TextPair, pattern: &str) -> Result<TextPair> {
+fn filter_lines_by_regex(text: &TextPair, pattern: &str) -> Result<TextPair> {
     let regex = Regex::new(pattern)
         .with_context(|| format!("Invalid regex `{pattern}`. Check the pattern syntax."))?;
     let indices = text

@@ -23,7 +23,7 @@ use crate::tui::workspace::{
     WorkspaceFocus, WorkspaceSession, WorkspaceSource, WorkspaceSourceKind,
 };
 
-use export::finish_text_pairs;
+use export::finish_units;
 use load::load_for_plan;
 use project::project_record;
 
@@ -40,23 +40,10 @@ pub fn execute(plan: CopyPlan) -> Result<()> {
     let prompt = plan.filters.prompt.as_deref();
     let mut units = Vec::new();
     for record in &loaded.records {
-        let unit = project_record(record, loaded.projection, prompt)?;
-        if !unit.plain.trim().is_empty() {
-            units.push(unit);
-        }
+        units.push(project_record(record, loaded.projection, prompt)?);
     }
 
-    if units.is_empty() {
-        output::warning(format!("selected {} content is empty", loaded.label));
-        return Ok(());
-    }
-
-    let count = units.len();
-    finish_text_pairs(
-        &units,
-        &plan.filters,
-        &format!("copied {count} item(s) from {} to clipboard", loaded.label),
-    )
+    finish_units(&units, &plan.filters, &loaded.label)
 }
 
 fn execute_pick(plan: &CopyPlan) -> Result<()> {

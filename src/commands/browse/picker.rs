@@ -1206,7 +1206,6 @@ mod tests {
     };
     use super::super::nav::move_workspace_cursor;
     use super::super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane};
-    use crate::commands::select::CommandSelection;
     use crate::pane::{Pane, PaneInput, Viewport};
     use crate::tui::content::view::ContentViewMode;
     use crate::tui::search::{
@@ -2226,10 +2225,6 @@ mod tests {
         assert!(picked.units[0].plain.contains("text 2"));
         assert!(picked.units[1].plain.contains("text 3"));
         assert!(!picked.units[0].plain.contains("text 1"));
-        assert_eq!(
-            picked.selection,
-            CommandSelection::RecentExplicit(vec![1, 2])
-        );
     }
 
     #[test]
