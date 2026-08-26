@@ -147,8 +147,11 @@ pub(super) fn workspace_picked_content_for_marked_blocks(
     picked_for_texts(dialogues, selected_dialogues, dialogue_idx, texts)
 }
 
-/// Push every marked block's body, descending into run members (a marked
-/// member of a folded run carries its own id, separate from the run's).
+/// Push every marked block's body. A run's body already spans its members,
+/// so a marked run closes the branch: marking the run and a member of it —
+/// which an expanded run lets a click or a `v` span do — must not copy that
+/// member twice. Members are only collected on their own when the run itself
+/// is unmarked.
 fn collect_marked_blocks(
     block: &Block,
     dialogue_idx: usize,
@@ -163,6 +166,7 @@ fn collect_marked_blocks(
         .unwrap_or(false)
     {
         texts.push(block.body(record));
+        return;
     }
     for child in &block.children {
         collect_marked_blocks(child, dialogue_idx, content_pane, record, texts);
@@ -457,5 +461,46 @@ mod tests {
             all.contains("$ git status"),
             "dialogue B marked block missing: {all}"
         );
+    }
+
+    #[test]
+    fn a_marked_run_copies_its_members_once() {
+        let mut base = record("A", "Bash", "ls", 0);
+        // A second consecutive tool call folds both into one run: block 1 is
+        // the run, blocks 2 and 3 its members.
+        base.parts.push(WorkPart {
+            seq: 3,
+            occurred_at: None,
+            data: WorkPartData::ToolCall {
+                call_id: Some("c2".to_string()),
+                tool: Some("Bash".to_string()),
+                input: serde_json::json!({ "command": "git status" }),
+            },
+        });
+        let dialogues = [dialogue(base)];
+        let mut pane = ContentPane::default();
+        pane.ensure(ContentCtx {
+            dialogues: &dialogues,
+            highlighted_idx: 0,
+            mode: ContentViewMode::Reading,
+            target: None,
+            area: ratatui::layout::Rect::new(0, 0, 60, 20),
+            io_focus: ContentIoFocus::Output,
+            expanded: &ExpandedBlocks::default(),
+        });
+        // An expanded run shows its header and its members, so a `v` span or
+        // two clicks can mark both; the run's body already spans the member.
+        pane.toggle_mark(0, 1);
+        pane.toggle_mark(0, 2);
+
+        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &[true], 0, &pane)
+            .expect("marked run");
+        let all = picked
+            .units
+            .iter()
+            .map(|unit| unit.plain.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(all.matches("$ ls").count(), 1, "member copied twice: {all}");
     }
 }

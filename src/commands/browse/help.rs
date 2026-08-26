@@ -145,8 +145,8 @@ pub(super) fn apply_workspace_help_action(
         WorkspaceHelpAction::RangeSelect => match *focus {
             WorkspaceFocus::Content => {
                 // The span covers block ids instead of list rows, and only
-                // visible blocks are in it — a folded run is one unit, so
-                // marking its hidden members too would copy them twice.
+                // visible blocks are in it: a folded run is one unit, and its
+                // header already carries every member's body.
                 if let Some(cursor_block) = content_cursor.get() {
                     if let Some(span) = rows.range(*focus, cursor_block) {
                         let shown = shown_dialogue_idx(&rows.dialogues, *content_page);
