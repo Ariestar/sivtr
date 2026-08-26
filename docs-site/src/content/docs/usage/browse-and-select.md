@@ -32,7 +32,6 @@ Layout: Source · Sessions · Dialogues · Content. Content splits into **Input*
 | `r` | Toggle read/raw content (structure markers + fold tags vs expanded payloads) |
 | `Ctrl-d` / `Ctrl-u` · `PgDn` / `PgUp` | Scroll content |
 | `g` / `G` | Content top / bottom |
-| `J` / `K` | Page next/previous selected dialogue (Content, multi-select) |
 | `i` / `o` / `y` / `c` | Copy input / output / block / command |
 | `Enter` | Confirm / open next / copy; fold/unfold the cursor block (Content) |
 | `/` | Search |

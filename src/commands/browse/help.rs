@@ -19,9 +19,7 @@ use super::content::{
     workspace_picked_content_for_copy_with_line_filter, workspace_picked_content_for_cursor_block,
     WorkspaceCopyShortcut,
 };
-use super::nav::{
-    invalidate_panes_below, move_workspace_cursor, shown_dialogue_idx, ContentBlockCursor,
-};
+use super::nav::{invalidate_panes_below, move_workspace_cursor, ContentBlockCursor};
 use super::panes::ContentPane;
 use super::selection::{select_sources, WorkspaceSourceSelection};
 use super::vim::open_vim_view;
@@ -47,8 +45,6 @@ pub(super) fn apply_workspace_help_action(
     content_io_focus: &mut ContentIoFocus,
     content_mode: &mut ContentViewMode,
     expanded: &mut ExpandedBlocks,
-    // Which marked dialogue the content pane shows (multi-select paging).
-    content_page: &mut usize,
     content_cursor: &mut ContentBlockCursor,
     content_pane: &mut ContentPane,
     content_blocks: (&[BlockText], &[BlockText]),
@@ -96,12 +92,11 @@ pub(super) fn apply_workspace_help_action(
         WorkspaceHelpAction::ToggleSelection => match *focus {
             WorkspaceFocus::Content => {
                 // Pane-native selection: Space marks the focused block for
-                // batch copy, like Space toggles a list row. Multi-select
-                // pages one dialogue at a time, so the shown dialogue owns
-                // the mark regardless of the selection count.
-                let shown = shown_dialogue_idx(&rows.dialogues, *content_page);
+                // batch copy, like Space toggles a list row. The content pane
+                // shows the dialogue under the dialogue cursor, so that row
+                // owns the mark.
                 if let Some(block) = content_cursor.get() {
-                    content_pane.toggle_mark(shown, block);
+                    content_pane.toggle_mark(rows.dialogues.cursor(), block);
                 }
             }
             pane => {
@@ -110,23 +105,6 @@ pub(super) fn apply_workspace_help_action(
                 }
             }
         },
-        // Multi-select paging: J/K flip the content pane to the next /
-        // previous marked dialogue. The redraw resets the fold state and
-        // cursor when the shown dialogue changes; marks follow their
-        // dialogue and stay, so a later copy can join pages.
-        WorkspaceHelpAction::NextDialoguePage if *focus == WorkspaceFocus::Content => {
-            let count = rows.dialogues.marked();
-            if count > 1 {
-                *content_page = (*content_page + 1).min(count.saturating_sub(1));
-                content_scrolls.clear();
-            }
-        }
-        WorkspaceHelpAction::PreviousDialoguePage if *focus == WorkspaceFocus::Content => {
-            if rows.dialogues.marked() > 1 {
-                *content_page = content_page.saturating_sub(1);
-                content_scrolls.clear();
-            }
-        }
         WorkspaceHelpAction::SelectAllSources
         | WorkspaceHelpAction::SelectAgentSources
         | WorkspaceHelpAction::SelectTerminalSource => {
@@ -149,9 +127,8 @@ pub(super) fn apply_workspace_help_action(
                 // header already carries every member's body.
                 if let Some(cursor_block) = content_cursor.get() {
                     if let Some(span) = rows.range(*focus, cursor_block) {
-                        let shown = shown_dialogue_idx(&rows.dialogues, *content_page);
                         content_pane.toggle_mark_range(
-                            shown,
+                            rows.dialogues.cursor(),
                             content_blocks
                                 .0
                                 .iter()
@@ -178,7 +155,7 @@ pub(super) fn apply_workspace_help_action(
         WorkspaceHelpAction::OpenVim if can_open_dialogue_vim(*focus, dialogue_count) => {
             let view = dialogue_text_vim_view(workspace_content_text(
                 dialogues,
-                shown_dialogue_idx(&rows.dialogues, *content_page),
+                rows.dialogues.cursor(),
                 *content_mode,
                 content_at,
             ));
@@ -269,13 +246,14 @@ pub(super) fn apply_workspace_help_action(
         WorkspaceHelpAction::CopyBlock if dialogue_count > 0 => {
             // y copies the block under the content cursor (call + result
             // bodies); marked blocks take over in the picker beforehand.
-            // The block id belongs to the *displayed* dialogue, so resolve
-            // the shown index like the marked paths do, not the focused row.
-            let shown = shown_dialogue_idx(&rows.dialogues, *content_page);
+            // The block id belongs to the *displayed* dialogue — the one under
+            // the dialogue cursor.
             let block_id = content_cursor.get().unwrap_or(0);
-            if let Some(picked) =
-                workspace_picked_content_for_cursor_block(dialogues, shown, block_id)
-            {
+            if let Some(picked) = workspace_picked_content_for_cursor_block(
+                dialogues,
+                rows.dialogues.cursor(),
+                block_id,
+            ) {
                 return Ok(HelpDispatch::Picked(picked));
             }
         }
@@ -331,8 +309,6 @@ pub(super) fn apply_workspace_help_action(
         | WorkspaceHelpAction::ToggleContentMode
         | WorkspaceHelpAction::ToggleContentIo
         | WorkspaceHelpAction::ToggleBlockFold
-        | WorkspaceHelpAction::NextDialoguePage
-        | WorkspaceHelpAction::PreviousDialoguePage
         | WorkspaceHelpAction::CopyInput
         | WorkspaceHelpAction::CopyOutput
         | WorkspaceHelpAction::CopyBlock

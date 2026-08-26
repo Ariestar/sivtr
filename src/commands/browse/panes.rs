@@ -367,9 +367,9 @@ pub struct ContentCtx<'a> {
 /// the per-dialogue block multi-select (native pane selection): clicking a
 /// block's dot toggles its id, and content (copy, fold) consumes the mask.
 /// Block ids are dialogue-global (input blocks first, output blocks after),
-/// so one mask per dialogue spans both halves. Marks are keyed by dialogue
-/// so multi-select paging (J/K) keeps every page's marks; the picker clears
-/// the whole set when the selection changes.
+/// so one mask per dialogue spans both halves. Marks are keyed by dialogue,
+/// so walking the content cursor into another dialogue keeps the marks left
+/// behind for as long as that dialogue still has a materialized body.
 ///
 /// Not a [`crate::pane::Pane`]: its rows are the shown dialogue's rendered
 /// lines, not a window over a growing list, so there is nothing to grow,
@@ -447,9 +447,15 @@ impl ContentPane {
             .toggle_ids(blocks);
     }
 
-    /// Drop every dialogue's marks (the set of markable dialogues changed).
-    pub fn clear_marks(&mut self) {
-        self.marked.clear();
+    /// Drop the marks of every dialogue `dialogues` no longer carries a body
+    /// for — the only ones a copy could read. A mark on any other index names
+    /// a dialogue that is gone.
+    pub fn retain_marks(&mut self, dialogues: &[WorkspaceDialogue]) {
+        self.marked.retain(|idx, _| {
+            dialogues
+                .get(*idx)
+                .is_some_and(|dialogue| dialogue.record.is_some())
+        });
     }
 
     pub fn marked_count(&self) -> usize {

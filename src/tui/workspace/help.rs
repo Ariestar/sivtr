@@ -26,10 +26,6 @@ pub(crate) enum WorkspaceHelpAction {
     ToggleContentIo,
     /// Content half: expand/collapse the cursor block.
     ToggleBlockFold,
-    /// Multi-select paging: flip the content pane to the next selected dialogue.
-    NextDialoguePage,
-    /// Multi-select paging: flip the content pane to the previous selected dialogue.
-    PreviousDialoguePage,
     Copy,
     CopyInput,
     CopyOutput,
@@ -281,20 +277,6 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
             description: "expand/collapse block",
             action: WorkspaceHelpAction::ToggleBlockFold,
             footer_label: Some("fold"),
-            footer_panes: CNT,
-        },
-        WorkspaceHelpEntry {
-            key: "J",
-            description: "next selected dialogue",
-            action: WorkspaceHelpAction::NextDialoguePage,
-            footer_label: Some("page"),
-            footer_panes: CNT,
-        },
-        WorkspaceHelpEntry {
-            key: "K",
-            description: "previous selected dialogue",
-            action: WorkspaceHelpAction::PreviousDialoguePage,
-            footer_label: Some("page"),
             footer_panes: CNT,
         },
         WorkspaceHelpEntry {
