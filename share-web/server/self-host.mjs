@@ -6,10 +6,12 @@ import { fileURLToPath } from "node:url";
 
 const MAX_ENVELOPE_BYTES = 5 * 1024 * 1024;
 const MAGIC = Buffer.from("SIVTPUB1", "ascii");
-const ID_RE = /^(1d|7d|30d|90d)_([A-Za-z0-9_-]{22})$/;
+const ID_RE = /^(90d|30d|3d|7d|2h|1d)_([A-Za-z0-9_-]{22})$/;
 const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
 const EXPIRY_MS = {
+  "2h": 7_200_000,
   "1d": 86_400_000,
+  "3d": 259_200_000,
   "7d": 604_800_000,
   "30d": 2_592_000_000,
   "90d": 7_776_000_000,
@@ -351,3 +353,4 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
 }
 
 export { MAX_ENVELOPE_BYTES, parseId, validEnvelope };
+

@@ -12,7 +12,9 @@ pub const PUBLICATION_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum PublicationExpiry {
+    TwoHours,
     OneDay,
+    ThreeDays,
     #[default]
     SevenDays,
     ThirtyDays,
@@ -22,17 +24,21 @@ pub enum PublicationExpiry {
 impl PublicationExpiry {
     pub fn parse(value: &str) -> Result<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
+            "2h" => Ok(Self::TwoHours),
             "1d" => Ok(Self::OneDay),
+            "3d" => Ok(Self::ThreeDays),
             "7d" => Ok(Self::SevenDays),
             "30d" => Ok(Self::ThirtyDays),
             "90d" => Ok(Self::NinetyDays),
-            _ => bail!("invalid publication expiry `{value}`; expected 1d, 7d, 30d, or 90d"),
+            _ => bail!("invalid publication expiry `{value}`; expected 2h, 1d, 3d, 7d, 30d, or 90d"),
         }
     }
 
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::TwoHours => "2h",
             Self::OneDay => "1d",
+            Self::ThreeDays => "3d",
             Self::SevenDays => "7d",
             Self::ThirtyDays => "30d",
             Self::NinetyDays => "90d",
@@ -40,12 +46,14 @@ impl PublicationExpiry {
     }
 
     fn duration(self) -> Duration {
-        Duration::days(match self {
-            Self::OneDay => 1,
-            Self::SevenDays => 7,
-            Self::ThirtyDays => 30,
-            Self::NinetyDays => 90,
-        })
+        match self {
+            Self::TwoHours => Duration::hours(2),
+            Self::OneDay => Duration::days(1),
+            Self::ThreeDays => Duration::days(3),
+            Self::SevenDays => Duration::days(7),
+            Self::ThirtyDays => Duration::days(30),
+            Self::NinetyDays => Duration::days(90),
+        }
     }
 }
 
@@ -400,4 +408,17 @@ mod tests {
             .collect();
         assert_eq!(assistant, ["a", "b", "c"]);
     }
+
+    #[test]
+    fn publication_expiry_parses_short_and_legacy_lifetimes() {
+        assert_eq!(PublicationExpiry::parse("2h").unwrap(), PublicationExpiry::TwoHours);
+        assert_eq!(PublicationExpiry::parse("3d").unwrap(), PublicationExpiry::ThreeDays);
+        assert_eq!(PublicationExpiry::TwoHours.as_str(), "2h");
+        assert_eq!(PublicationExpiry::ThreeDays.as_str(), "3d");
+        assert_eq!(PublicationExpiry::TwoHours.duration(), Duration::hours(2));
+        assert_eq!(PublicationExpiry::ThreeDays.duration(), Duration::days(3));
+        assert!(PublicationExpiry::parse("4h").is_err());
+        assert_eq!(PublicationExpiry::parse("90d").unwrap(), PublicationExpiry::NinetyDays);
+    }
 }
+
