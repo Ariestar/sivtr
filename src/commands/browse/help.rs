@@ -11,7 +11,7 @@ use crate::tui::terminal::suspend;
 use crate::tui::workspace::{
     can_open_dialogue_vim, selected_count, selected_index, workspace_content_text, ContentIoFocus,
     ContentScrolls, ExpandedBlocks, WorkspaceDialogue, WorkspaceFocus, WorkspaceHelpAction,
-    WorkspacePickedContent, WorkspaceSession, WorkspaceSource,
+    WorkspacePickedContent, WorkspaceSource,
 };
 use sivtr_core::record::WorkAt;
 
@@ -21,8 +21,8 @@ use super::content::{
     WorkspaceCopyShortcut,
 };
 use super::nav::{
-    move_workspace_cursor_down, move_workspace_cursor_up, reset_workspace_after_source_change,
-    reset_workspace_dialogue_state, shown_dialogue_idx, ContentBlockCursor,
+    move_workspace_cursor, reset_workspace_after_source_change, reset_workspace_dialogue_state,
+    shown_dialogue_idx, ContentBlockCursor,
 };
 use super::panes::ContentPane;
 use super::selection::{apply_range_selection, select_sources, WorkspaceSourceSelection};
@@ -69,7 +69,7 @@ pub(super) fn apply_workspace_help_action(
     search_dirty: &mut bool,
     content_at: Option<WorkAt>,
     line_filter: Option<&str>,
-    sessions: &[WorkspaceSession],
+    session_count: usize,
     dialogues: &[WorkspaceDialogue],
     session_idx: usize,
     dialogue_idx: usize,
@@ -105,24 +105,11 @@ pub(super) fn apply_workspace_help_action(
             content_range_anchor,
             WorkspaceFocus::Content,
         ),
-        WorkspaceHelpAction::MoveUp => move_workspace_cursor_up(
+        WorkspaceHelpAction::MoveUp | WorkspaceHelpAction::MoveDown => move_workspace_cursor(
+            action == WorkspaceHelpAction::MoveUp,
             *focus,
-            sources,
-            sessions,
-            dialogue_count,
-            selected_sessions,
-            source_state,
-            session_state,
-            dialogue_state,
-            selected_dialogues,
-            content_scrolls,
-            content_cursor,
-            content_blocks,
-        ),
-        WorkspaceHelpAction::MoveDown => move_workspace_cursor_down(
-            *focus,
-            sources,
-            sessions,
+            sources.len(),
+            session_count,
             dialogue_count,
             selected_sessions,
             source_state,

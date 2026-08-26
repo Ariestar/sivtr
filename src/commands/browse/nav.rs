@@ -7,7 +7,7 @@ use std::process::Command;
 use crate::tui::content::block::BlockText;
 use crate::tui::workspace::{
     selected_index, selected_indices, ContentIoFocus, ContentScrolls, WorkspaceFocus,
-    WorkspaceSession, WorkspaceSource,
+    WorkspaceSource,
 };
 
 use super::selection::has_selected_sessions;
@@ -124,11 +124,16 @@ pub(super) fn clamp_list_state(state: &mut ListState, len: usize) {
     state.select(selected);
 }
 
+/// Move the focused pane's cursor one row (`up` or down). Every list pane
+/// follows one rule: clamp to the row count, and a move that does not change
+/// the row does nothing — so bumping the first or last row never resets the
+/// panes below it. Content moves its block cursor instead.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn move_workspace_cursor_up(
+pub(super) fn move_workspace_cursor(
+    up: bool,
     focus: WorkspaceFocus,
-    sources: &[WorkspaceSource],
-    sessions: &[WorkspaceSession],
+    source_count: usize,
+    session_count: usize,
     dialogue_count: usize,
     selected_sessions: &[bool],
     source_state: &mut ListState,
@@ -139,73 +144,39 @@ pub(super) fn move_workspace_cursor_up(
     content_cursor: &mut ContentBlockCursor,
     content_blocks: (&[BlockText], &[BlockText]),
 ) {
-    match focus {
-        WorkspaceFocus::Source => {
-            let next = selected_index(source_state).saturating_sub(1);
-            source_state.select((!sources.is_empty()).then_some(next));
-        }
-        WorkspaceFocus::Sessions => {
-            let next = selected_index(session_state).saturating_sub(1);
-            if next != selected_index(session_state) {
-                session_state.select((!sessions.is_empty()).then_some(next));
-                if !has_selected_sessions(selected_sessions) {
-                    reset_workspace_dialogue_state(0, dialogue_state, selected_dialogues);
-                }
-                content_scrolls.clear();
-            }
-        }
-        WorkspaceFocus::Dialogues => {
-            let next = selected_index(dialogue_state).saturating_sub(1);
-            dialogue_state.select((dialogue_count > 0).then_some(next));
-            content_scrolls.clear();
-        }
+    let (state, len) = match focus {
+        WorkspaceFocus::Source => (&mut *source_state, source_count),
+        WorkspaceFocus::Sessions => (&mut *session_state, session_count),
+        WorkspaceFocus::Dialogues => (&mut *dialogue_state, dialogue_count),
         WorkspaceFocus::Content => {
-            move_content_cursor(true, content_cursor, content_blocks);
+            move_content_cursor(up, content_cursor, content_blocks);
+            return;
         }
+    };
+    if len == 0 {
+        state.select(None);
+        return;
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) fn move_workspace_cursor_down(
-    focus: WorkspaceFocus,
-    sources: &[WorkspaceSource],
-    sessions: &[WorkspaceSession],
-    dialogue_count: usize,
-    selected_sessions: &[bool],
-    source_state: &mut ListState,
-    session_state: &mut ListState,
-    dialogue_state: &mut ListState,
-    selected_dialogues: &mut Vec<bool>,
-    content_scrolls: &mut ContentScrolls,
-    content_cursor: &mut ContentBlockCursor,
-    content_blocks: (&[BlockText], &[BlockText]),
-) {
+    let current = selected_index(state);
+    let next = if up {
+        current.saturating_sub(1)
+    } else {
+        (current + 1).min(len - 1)
+    };
+    if next == current {
+        return;
+    }
+    state.select(Some(next));
+    // A row change invalidates what the panes to the right derived from it.
     match focus {
-        WorkspaceFocus::Source => {
-            let current = selected_index(source_state);
-            let next = (current + 1).min(sources.len().saturating_sub(1));
-            source_state.select((!sources.is_empty()).then_some(next));
-        }
         WorkspaceFocus::Sessions => {
-            let current = selected_index(session_state);
-            let next = (current + 1).min(sessions.len().saturating_sub(1));
-            if next != current {
-                session_state.select((!sessions.is_empty()).then_some(next));
-                if !has_selected_sessions(selected_sessions) {
-                    reset_workspace_dialogue_state(0, dialogue_state, selected_dialogues);
-                }
-                content_scrolls.clear();
+            if !has_selected_sessions(selected_sessions) {
+                reset_workspace_dialogue_state(0, dialogue_state, selected_dialogues);
             }
-        }
-        WorkspaceFocus::Dialogues => {
-            let current = selected_index(dialogue_state);
-            let next = (current + 1).min(dialogue_count.saturating_sub(1));
-            dialogue_state.select((dialogue_count > 0).then_some(next));
             content_scrolls.clear();
         }
-        WorkspaceFocus::Content => {
-            move_content_cursor(false, content_cursor, content_blocks);
-        }
+        WorkspaceFocus::Dialogues => content_scrolls.clear(),
+        _ => {}
     }
 }
 

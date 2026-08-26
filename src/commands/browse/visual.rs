@@ -13,11 +13,10 @@ use crate::tui::content::view::{
 };
 use crate::tui::workspace::{
     ContentIoFocus, ContentScrolls, WorkspaceDialogue, WorkspaceFocus, WorkspacePickedContent,
-    WorkspaceSession, WorkspaceSource,
 };
 
 use super::content::workspace_picked_content;
-use super::nav::{move_workspace_cursor_down, move_workspace_cursor_up};
+use super::nav::move_workspace_cursor;
 
 /// Lines per wheel notch: web-like scroll steps (lists move selection by the
 /// same amount, content by the same line count).
@@ -353,8 +352,8 @@ pub(super) fn workspace_picked_content_for_visual_selection(
 pub(super) fn apply_workspace_mouse_scroll(
     focus: WorkspaceFocus,
     scroll_up: bool,
-    sources: &[WorkspaceSource],
-    sessions: &[WorkspaceSession],
+    source_count: usize,
+    session_count: usize,
     dialogue_count: usize,
     selected_sessions: &[bool],
     source_state: &mut ListState,
@@ -385,36 +384,20 @@ pub(super) fn apply_workspace_mouse_scroll(
         return;
     }
     for _ in 0..MOUSE_SCROLL_LINES {
-        if scroll_up {
-            move_workspace_cursor_up(
-                focus,
-                sources,
-                sessions,
-                dialogue_count,
-                selected_sessions,
-                source_state,
-                session_state,
-                dialogue_state,
-                selected_dialogues,
-                content_scrolls,
-                content_cursor,
-                content_frame.texts.block_slices(),
-            );
-        } else {
-            move_workspace_cursor_down(
-                focus,
-                sources,
-                sessions,
-                dialogue_count,
-                selected_sessions,
-                source_state,
-                session_state,
-                dialogue_state,
-                selected_dialogues,
-                content_scrolls,
-                content_cursor,
-                content_frame.texts.block_slices(),
-            );
-        }
+        move_workspace_cursor(
+            scroll_up,
+            focus,
+            source_count,
+            session_count,
+            dialogue_count,
+            selected_sessions,
+            source_state,
+            session_state,
+            dialogue_state,
+            selected_dialogues,
+            content_scrolls,
+            content_cursor,
+            content_frame.texts.block_slices(),
+        );
     }
 }

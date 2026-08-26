@@ -30,8 +30,8 @@ use super::content::{
 use super::help::{apply_workspace_help_action, set_focus, toggle_list_row, HelpDispatch};
 use super::load::{SessionColumn, SessionCtx, SourceLoadState};
 use super::nav::{
-    clamp_list_state, dot_gutter_hit, move_workspace_cursor_down, move_workspace_cursor_up,
-    open_link_target, reset_workspace_after_source_change, reset_workspace_dialogue_state,
+    clamp_list_state, dot_gutter_hit, move_workspace_cursor, open_link_target,
+    reset_workspace_after_source_change, reset_workspace_dialogue_state,
     resize_workspace_dialogue_selection, row_list_index, shown_dialogue_idx, source_list_index,
     ContentBlockCursor,
 };
@@ -650,27 +650,12 @@ pub(crate) fn run(
                         KeyCode::Enter => {
                             show_search = false;
                         }
-                        KeyCode::Up => {
-                            move_workspace_cursor_up(
+                        KeyCode::Up | KeyCode::Down => {
+                            move_workspace_cursor(
+                                key.code == KeyCode::Up,
                                 focus,
-                                &sources,
-                                &sessions,
-                                dialogue_count,
-                                &selected_sessions,
-                                &mut source_state,
-                                &mut session_state,
-                                &mut dialogue_state,
-                                &mut selected_dialogues,
-                                &mut content_scrolls,
-                                &mut content_cursor,
-                                content_frame.texts.block_slices(),
-                            );
-                        }
-                        KeyCode::Down => {
-                            move_workspace_cursor_down(
-                                focus,
-                                &sources,
-                                &sessions,
+                                sources.len(),
+                                sessions.len(),
                                 dialogue_count,
                                 &selected_sessions,
                                 &mut source_state,
@@ -778,7 +763,7 @@ pub(crate) fn run(
                                 &mut search_dirty,
                                 active_content_at,
                                 line_filter_spec(&line_filter),
-                                &sessions,
+                                sessions.len(),
                                 &dialogues,
                                 session_idx,
                                 dialogue_idx,
@@ -908,7 +893,7 @@ pub(crate) fn run(
                         &mut search_dirty,
                         active_content_at,
                         line_filter_spec(&line_filter),
-                        &sessions,
+                        sessions.len(),
                         &dialogues,
                         session_idx,
                         dialogue_idx,
@@ -1162,8 +1147,8 @@ pub(crate) fn run(
                             apply_workspace_mouse_scroll(
                                 scroll_focus,
                                 matches!(mouse.kind, MouseEventKind::ScrollUp),
-                                &sources,
-                                &sessions,
+                                sources.len(),
+                                sessions.len(),
                                 dialogue_count,
                                 &selected_sessions,
                                 &mut source_state,
@@ -1376,7 +1361,7 @@ mod tests {
         workspace_picked_content_with_line_filter, workspace_search_target_ref,
         WorkspaceCopyShortcut,
     };
-    use super::super::nav::{clamp_list_state, move_workspace_cursor_up};
+    use super::super::nav::{clamp_list_state, move_workspace_cursor};
     use super::super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane};
     use crate::commands::select::CommandSelection;
     use crate::pane::{Pane, PaneInput, Viewport};
@@ -2370,12 +2355,7 @@ mod tests {
     }
 
     #[test]
-    fn move_workspace_cursor_up_uses_dialogue_count_for_dialogue_focus() {
-        let sessions = vec![workspace_test_session(
-            "session",
-            WorkspaceSource::agent(AgentProvider::Codex),
-            &["dialogue"],
-        )];
+    fn move_workspace_cursor_clamps_to_the_row_count_and_skips_no_op_moves() {
         let mut source_state = ListState::default();
         source_state.select(Some(0));
         let mut session_state = ListState::default();
@@ -2384,11 +2364,14 @@ mod tests {
         dialogue_state.select(Some(0));
         let mut selected_dialogues = Vec::new();
         let mut content_scrolls = ContentScrolls::default();
+        let mut content_cursor = super::super::nav::ContentBlockCursor::default();
 
-        move_workspace_cursor_up(
+        // An empty dialogue list has no row to land on.
+        move_workspace_cursor(
+            true,
             WorkspaceFocus::Dialogues,
-            &[WorkspaceSource::agent(AgentProvider::Codex)],
-            &sessions,
+            1,
+            1,
             0,
             &[false],
             &mut source_state,
@@ -2396,11 +2379,32 @@ mod tests {
             &mut dialogue_state,
             &mut selected_dialogues,
             &mut content_scrolls,
-            &mut super::super::nav::ContentBlockCursor::default(),
+            &mut content_cursor,
             (&[], &[]),
         );
-
         assert_eq!(dialogue_state.selected(), None);
+
+        // A move that cannot change the row leaves the panes below it alone:
+        // bumping the last dialogue must not reset the content scroll.
+        dialogue_state.select(Some(0));
+        content_scrolls.set(ContentIoFocus::Output, 7);
+        move_workspace_cursor(
+            false,
+            WorkspaceFocus::Dialogues,
+            1,
+            1,
+            1,
+            &[false],
+            &mut source_state,
+            &mut session_state,
+            &mut dialogue_state,
+            &mut selected_dialogues,
+            &mut content_scrolls,
+            &mut content_cursor,
+            (&[], &[]),
+        );
+        assert_eq!(dialogue_state.selected(), Some(0));
+        assert_eq!(content_scrolls.get(ContentIoFocus::Output), 7);
     }
 
     #[test]
