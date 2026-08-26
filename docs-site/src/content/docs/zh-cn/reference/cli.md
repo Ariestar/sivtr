@@ -443,7 +443,7 @@ v1 只接受同一 provider、同一 session 中连续的本地 Agent record，�
 
 `preview` 完全离线生成最终快照和风险报告；已识别的 token、私钥、Bearer 和 secret assignment 自动替换为 `[REDACTED]`，绝对路径、邮箱和内网地址只警告。创建前会显示轮次数、大小、脱敏项和期限；非交互环境必须使用 `--yes`，存在未自动处理的风险时还必须使用 `--allow-warnings`。`[publish].endpoint` 默认是 `https://share.hnnulwh.cn`，可在 `config.toml` 里改成自建或其他兼容服务。成功创建时 stdout 只输出完整链接，说明和警告写 stderr，方便复制。
 
-密钥只放在 URL fragment（`#k=...`），托管服务只保存 AES-256-GCM 密文、管理 token 哈希、期限和 envelope 版本。链接默认 7 天，可选 `1d/7d/30d/90d`，不提供永久链接；修改内容必须创建新链接。链接持有者均可查看，管理 token 只保存在本机的独立 `publication-state.db` 中。
+密钥只放在 URL fragment（`#k=...`），托管服务只保存 AES-256-GCM 密文、管理 token 哈希、期限和 envelope 版本。链接默认 7 天，可选 `2h/1d/3d/7d/30d`；旧版 `90d` 链接仍可读取，但不再出现在选择面板中，也不提供永久链接。修改内容必须创建新链接。链接持有者均可查看，管理 token 只保存在本机的独立 `publication-state.db` 中。
 
 典型流程：
 
@@ -927,4 +927,3 @@ sivtr clear [--all]
 ## 共享语法
 
 Recency selector、`--session`、provider、`--regex`、`--lines`、`--ansi`、`--print` 和 workspace ref 见 [Selector 和 Filter](/zh-cn/reference/selectors-and-filters/)。
-

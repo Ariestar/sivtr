@@ -69,6 +69,14 @@ sivtr search codex/abc123 --sort oldest --latest 50 --save share_ready --refs
 
 ## 原子选择：预览时精确到 part
 
+如果只需要查看并留下整轮 WorkSet，不需要打开原子选择器：
+
+```powershell
+sivtr publish preview codex/<session-id> --save share_ready
+```
+
+这会离线预览整轮内容，同时保存 `@share_ready`，后续可直接创建链接。
+
 当一整轮里只有部分内容适合公开，或需要把工具输出、Skill、Thinking 一起纳入快照时，使用 `--pick`。它复用 workspace 浏览器的选择界面，不增加另一套选择语义：
 
 ```powershell
@@ -83,7 +91,7 @@ sivtr publish preview '@share_ready' --format human
 sivtr publish create '@share_ready' --expires 7d --yes
 ```
 
-`--pick` 只接受**单个本地 Agent session**。`codex/<session-id>` 是最直接的输入；不能选择 terminal、remote、group，也不能把不同 provider 或不同 session 拼在一起。`--save` 必须和 `--pick` 同时出现，保存的是精确的 part anchors，而不是一次新的全文搜索。
+`--pick` 只接受**单个本地 Agent session**。`codex/<session-id>` 是最直接的输入；不能选择 terminal、remote、group，也不能把不同 provider 或不同 session 拼在一起。`--save` 可以保存整轮 WorkSet，也可以和 `--pick` 一起保存精确的 part anchors。
 
 ### 选择器里的操作
 
@@ -96,6 +104,7 @@ sivtr publish create '@share_ready' --expires 7d --yes
 | Content | `v` 选择块区间；`J` / `K` 翻到下一个 / 上一个已选轮次 | 支持轮内部分选择和跨页选择 |
 | Content | `Tab` 切换 Input / Output；`Enter` 折叠或展开光标块 | 选择仍以完整原子为边界 |
 | Dialogues | `Enter` 提交整轮选择；Content 用 `y` 提交当前或已标记块 | 返回预览并生成选择结果 |
+| 任意视图 | `p` 打开发布浮板；`j` / `k` 选择 `2h`、`1d`、`3d`、`7d`、`30d`；`Enter` 确认 | 直接生成链接并复制到剪贴板 |
 | 任意视图 | `q` / `Esc` 退出选择器 | 取消本次预览，不保存选择 |
 
 不要拖拽只覆盖半个原子的字符范围来“凑”选择。发布选择需要完整 block；只产生文本范围而没有完整 block anchor 时，会明确报 `publication selection is empty`，不会擅自扩大成整轮。
@@ -163,13 +172,14 @@ sivtr publish create '@share_ready' --expires 7d --yes
 有效期可以选择：
 
 ```text
+2h    2 小时
 1d    1 天
+3d    3 天
 7d    7 天，默认值
 30d   30 天
-90d   90 天
 ```
 
-没有永久链接选项。
+旧版 `90d` 链接仍可读取，但不再出现在选择面板中；没有永久链接选项。
 
 如果风险报告里还有未自动处理的路径、邮箱或内网地址警告，**无论是否在交互终端**，都必须加上 `--allow-warnings`：
 
@@ -336,12 +346,12 @@ WorkSet 里的轮次排序后仍有缺口（例如关键词搜索跳过了中间
 
 `--pick` 需要真实交互式终端。脚本、管道、CI 或重定向环境不能打开选择器；在交互 PowerShell 中执行，再把保存的 WorkSet 交给后续自动化创建。
 
-### `publish preview --save requires --pick`
+### `publish preview --save`
 
-`--save` 只用于保存原子选择，不能单独使用。要保存整轮搜索结果，请使用：
+`--save` 可以单独保存整轮 WorkSet，也可以和 `--pick` 一起保存原子选择。保存后使用：
 
 ```powershell
-sivtr search codex/<session-id> --sort oldest --latest 50 --save share_ready --refs
+sivtr publish create '@share_ready' --expires 7d --yes
 ```
 
 ### `publication selection is empty`
@@ -387,4 +397,3 @@ sivtr search codex/<session-id> --sort oldest --latest 50 --save share_ready --r
 如果对话包含高敏感内容，建议使用更短的 `1d` 有效期，并在确认查看者完成阅读后主动撤销。
 
 更多精确参数见 [CLI 参考](/zh-cn/reference/cli/)，配置说明见 [配置](/zh-cn/usage/configuration/)。
-

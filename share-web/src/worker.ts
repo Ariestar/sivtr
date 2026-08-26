@@ -10,6 +10,7 @@ export interface Env {
 }
 
 const MAX_ENVELOPE_BYTES = 5 * 1024 * 1024;
+const MAX_PUBLICATION_CLOCK_SKEW_MS = 60_000;
 const MAGIC = new TextEncoder().encode("SIVTPUB1");
 const ID_RE = /^(90d|30d|3d|7d|2h|1d)_([A-Za-z0-9_-]{22})$/;
 
@@ -73,7 +74,8 @@ async function put(request: Request, env: Env, publication: NonNullable<ReturnTy
   const body = await readCappedBody(request.body, MAX_ENVELOPE_BYTES);
   if (!body) return json({ error: "payload_too_large" }, 413);
   if (!validEnvelope(body)) return json({ error: "invalid_envelope" }, 400);
-  const createdAt = new Date();
+  const createdAt = publicationTime(request.headers.get("x-sivtr-published-at"), Date.now());
+  if (!createdAt) return json({ error: "invalid_publication_time" }, 400);
   const expiresAt = new Date(createdAt.getTime() + expiryMs(publication.expiry));
   const managementHash = await sha256(token);
   const existing = await env.PUBLICATIONS.head(publication.key);
@@ -169,6 +171,13 @@ function isExpired(value: string | undefined): boolean {
   return !Number.isFinite(timestamp) || timestamp <= Date.now();
 }
 
+function publicationTime(value: string | null, now: number): Date | null {
+  if (!value) return new Date(now);
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp) || Math.abs(timestamp - now) > MAX_PUBLICATION_CLOCK_SKEW_MS) return null;
+  return new Date(timestamp);
+}
+
 async function limited(binding: RateLimit | undefined, key: string): Promise<boolean> {
   if (!binding) return false;
   return !(await binding.limit({ key })).success;
@@ -215,4 +224,3 @@ function logEvent(kind: string, request: Request, status: number, latencyMs: num
 }
 
 export { expiryMs, isExpired, parseId, readCappedBody, validEnvelope };
-

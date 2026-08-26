@@ -42,7 +42,10 @@ describe("self-hosted publication service", () => {
     let clock = Date.parse("2026-08-25T00:00:00Z");
     const fixture = await start({ now: () => clock });
     const id = `1d_${"d".repeat(22)}`;
-    expect((await put(fixture.base, id, TOKEN, validEnvelope())).status).toBe(201);
+    const publishedAt = new Date(clock).toISOString();
+    expect((await put(fixture.base, id, TOKEN, validEnvelope(), publishedAt)).status).toBe(201);
+    const metadataText = await readFile(join(fixture.dataDir, "v1", "1d", `${"d".repeat(22)}.json`), "utf8");
+    expect(JSON.parse(metadataText).created_at).toBe(publishedAt);
     clock += 86_400_000;
     expect((await fetch(`${fixture.base}/api/v1/publications/${id}`)).status).toBe(404);
     await expect(readFile(join(fixture.dataDir, "v1", "1d", `${"d".repeat(22)}.json`))).rejects.toMatchObject({ code: "ENOENT" });
@@ -91,10 +94,12 @@ function validEnvelope(suffix = "x") {
   return Buffer.concat([Buffer.from("SIVTPUB1", "ascii"), Buffer.from([1, 1]), Buffer.alloc(12), Buffer.from(suffix), Buffer.alloc(16)]);
 }
 
-function put(base, id, token, body) {
+function put(base, id, token, body, publishedAt) {
+  const headers = { "x-sivtr-management-token": token, "content-type": "application/octet-stream" };
+  if (publishedAt) headers["x-sivtr-published-at"] = publishedAt;
   return fetch(`${base}/api/v1/publications/${id}`, {
     method: "PUT",
-    headers: { "x-sivtr-management-token": token, "content-type": "application/octet-stream" },
+    headers,
     body,
   });
 }

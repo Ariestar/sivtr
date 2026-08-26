@@ -14,6 +14,7 @@ use serde::Serialize;
 use sivtr_core::record::{work_atoms, WorkRecord, WorkRef};
 use sivtr_core::{
     config::SivtrConfig,
+    origin::Reach,
     publication::{
         create_publication_draft, PublicConversationSnapshot, PublicationDraft, PublicationExpiry,
         PublicationPolicy,
@@ -117,15 +118,33 @@ pub fn execute(command: PublishCommand) -> Result<()> {
 }
 
 fn load_publication_set(source: &str) -> Result<workset::WorkSet> {
-    // Preview must be offline.  Named remote/group scopes are rejected before
-    // the unified WorkSet query has a chance to start a daemon or dial a peer.
-    if source.contains(':') && !source.starts_with("local:") {
-        bail!("publish v1 accepts local WorkSets only; remote/group scopes are not publishable");
-    }
+    ensure_local_publication_source(source)?;
     let mut set = workset::query(source, Filter::none(), None)
         .with_context(|| format!("failed to resolve publication source `{source}`"))?;
     set.materialize_parts()?;
     Ok(set)
+}
+
+
+fn ensure_local_publication_source(source: &str) -> Result<()> {
+    // Resolve named scopes through the origin registry before querying so a
+    // remote alias or group cannot start a daemon or dial a peer.
+    let Some((scope, _)) = source.split_once(':') else {
+        return Ok(());
+    };
+    if scope.eq_ignore_ascii_case("local") || (source.len() >= 2 && source.as_bytes()[1] == b':') {
+        return Ok(());
+    }
+    let cwd = std::env::current_dir().context("failed to resolve current directory")?;
+    let registry = crate::origins::collect(&cwd).context("failed to resolve publication scope")?;
+    let entry = registry.resolve(scope)?.ok_or_else(|| {
+        anyhow::anyhow!("publication scope `{scope}` is not a registered local workspace")
+    })?;
+    ensure!(
+        matches!(&entry.reach, Reach::Local { .. }),
+        "publication scope `{scope}` is remote or grouped; only local WorkSets are publishable"
+    );
+    Ok(())
 }
 
 fn load_draft_from_set(
@@ -320,9 +339,8 @@ fn print_snapshot_items(snapshot: &PublicConversationSnapshot) {
     }
 }
 
-fn publication_envelope_size(draft: &PublicationDraft) -> Result<usize> {
-    let envelope_preview = compress_snapshot(&draft)?;
-    let envelope_size = envelope_preview
+fn publication_envelope_size(compressed: &[u8]) -> Result<usize> {
+    let envelope_size = compressed
         .len()
         .checked_add(8 + 2 + 12 + 16)
         .ok_or_else(|| anyhow::anyhow!("encrypted publication envelope size overflow"))?;
@@ -335,14 +353,14 @@ fn publication_envelope_size(draft: &PublicationDraft) -> Result<usize> {
     Ok(envelope_size)
 }
 
-fn mint_draft(draft: PublicationDraft, expires: &str) -> Result<String> {
+fn mint_draft(draft: PublicationDraft, expires: &str, compressed: Vec<u8>) -> Result<String> {
     let config = SivtrConfig::load()?;
     let endpoint = resolve_endpoint(&config)?;
     let expiry = PublicationExpiry::parse(expires)?;
     let id = format!("{}_{}", expiry.as_str(), random_token(16)?);
     let viewer_key = random_token(32)?;
     let management_token = random_token(32)?;
-    let now = Utc::now().to_rfc3339();
+    let created_at = draft.snapshot.published_at().to_string();
     let expires_at = draft.snapshot.expires_at().to_string();
     let mut db = PublicationDb::open()?;
     db.insert_pending(&PublicationRow {
@@ -352,7 +370,8 @@ fn mint_draft(draft: PublicationDraft, expires: &str) -> Result<String> {
         management_token: management_token.clone(),
         title: draft.snapshot.title().to_string(),
         provider: draft.snapshot.provider().to_string(),
-        source_refs: serde_json::to_string(&draft.source_refs)?,
+        source_refs: serde_json::to_string(&draft.source_refs)
+            .context("failed to serialize publication source references")?,
         content_sha256: draft.content_sha256.clone(),
         redaction_count: draft.redaction_count as i64,
         warning_count: draft
@@ -361,19 +380,19 @@ fn mint_draft(draft: PublicationDraft, expires: &str) -> Result<String> {
             .filter(|risk| is_warning_only(&risk.kind))
             .map(|risk| risk.count as i64)
             .sum(),
-        created_at: now,
+        created_at: created_at.clone(),
         expires_at,
         status: PublicationStatus::Pending,
         last_error: None,
     })?;
-    let envelope = match encrypt_snapshot(&draft, &id, &viewer_key) {
+    let envelope = match encrypt_snapshot(compressed, &id, &viewer_key) {
         Ok(value) => value,
         Err(error) => {
             let _ = db.mark_failed(&id, &error.to_string());
             return Err(error);
         }
     };
-    if let Err(error) = upload(&endpoint, &id, &management_token, &envelope) {
+    if let Err(error) = upload(&endpoint, &id, &management_token, &created_at, &envelope) {
         let _ = db.mark_failed(&id, &error.to_string());
         return Err(error);
     }
@@ -388,7 +407,8 @@ fn mint_draft(draft: PublicationDraft, expires: &str) -> Result<String> {
 fn create(args: PublishCreateArgs) -> Result<()> {
     let mut set = load_publication_set(&args.source)?;
     let draft = load_draft_from_set(&mut set, args.title.clone(), &args.expires)?;
-    let envelope_size = publication_envelope_size(&draft)?;
+    let compressed = compress_snapshot(&draft)?;
+    let envelope_size = publication_envelope_size(&compressed)?;
     let has_warnings = draft.risks.iter().any(|risk| is_warning_only(&risk.kind));
     print_create_summary(&draft, &args.expires, envelope_size);
     if has_warnings {
@@ -408,7 +428,12 @@ fn create(args: PublishCreateArgs) -> Result<()> {
         }
     }
     require_allow_warnings(has_warnings, args.allow_warnings)?;
-    let url = mint_draft(draft, &args.expires)?;
+    // Rebuild after confirmation so the snapshot expiry starts at the actual
+    // create operation, not before an interactive prompt or warning review.
+    let final_draft = load_draft_from_set(&mut set, args.title, &args.expires)?;
+    let compressed = compress_snapshot(&final_draft)?;
+    let _ = publication_envelope_size(&compressed)?;
+    let url = mint_draft(final_draft, &args.expires, compressed)?;
     println!("{url}");
     Ok(())
 }
@@ -420,16 +445,14 @@ fn list(args: PublishListArgs) -> Result<()> {
     let items = rows.iter().map(list_item).collect::<Vec<_>>();
     if args.json {
         println!("{}", serde_json::to_string_pretty(&items)?);
+    } else if items.is_empty() {
+        println!("暂无公开链接");
     } else {
-        if items.is_empty() {
-            println!("暂无公开链接");
-        } else {
-            for item in items {
-                println!(
-                    "{}\t{}\t{}\t{}\t{}",
-                    item.publication_id, item.status, item.title, item.provider, item.expires_at
-                );
-            }
+        for item in items {
+            println!(
+                "{}\t{}\t{}\t{}\t{}",
+                item.publication_id, item.status, item.title, item.provider, item.expires_at
+            );
         }
     }
     Ok(())
@@ -604,8 +627,12 @@ fn random_token(length: usize) -> Result<String> {
 fn compress_snapshot(draft: &PublicationDraft) -> Result<Vec<u8>> {
     ensure_snapshot_plaintext_limit(draft.canonical_json.len())?;
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(draft.canonical_json.as_bytes())?;
-    Ok(encoder.finish()?)
+    encoder
+        .write_all(draft.canonical_json.as_bytes())
+        .context("failed to gzip publication snapshot")?;
+    encoder
+        .finish()
+        .context("failed to finish publication snapshot compression")
 }
 
 fn ensure_snapshot_plaintext_limit(len: usize) -> Result<()> {
@@ -617,14 +644,14 @@ fn ensure_snapshot_plaintext_limit(len: usize) -> Result<()> {
     Ok(())
 }
 
-fn encrypt_snapshot(draft: &PublicationDraft, id: &str, viewer_key: &str) -> Result<Vec<u8>> {
+fn encrypt_snapshot(compressed: Vec<u8>, id: &str, viewer_key: &str) -> Result<Vec<u8>> {
     let mut nonce_bytes = [0_u8; 12];
     getrandom::fill(&mut nonce_bytes).context("OS random source unavailable")?;
-    encrypt_snapshot_with_nonce(draft, id, viewer_key, nonce_bytes)
+    encrypt_snapshot_with_nonce(compressed, id, viewer_key, nonce_bytes)
 }
 
 fn encrypt_snapshot_with_nonce(
-    draft: &PublicationDraft,
+    mut compressed: Vec<u8>,
     id: &str,
     viewer_key: &str,
     nonce_bytes: [u8; 12],
@@ -635,7 +662,6 @@ fn encrypt_snapshot_with_nonce(
     let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
     let cipher = Aes256Gcm::new(key);
     let nonce = Nonce::from_slice(&nonce_bytes);
-    let mut compressed = compress_snapshot(draft)?;
     let aad = format!("sivtr-publication-v1:{id}");
     let tag = cipher
         .encrypt_in_place_detached(nonce, aad.as_bytes(), &mut compressed)
@@ -668,12 +694,19 @@ fn agent(timeout: Duration) -> ureq::Agent {
         .new_agent()
 }
 
-fn upload(endpoint: &str, id: &str, management_token: &str, envelope: &[u8]) -> Result<()> {
+fn upload(
+    endpoint: &str,
+    id: &str,
+    management_token: &str,
+    published_at: &str,
+    envelope: &[u8],
+) -> Result<()> {
     let url = format!("{endpoint}/api/v1/publications/{id}");
     let response = agent(Duration::from_secs(30))
         .put(&url)
         .header("Content-Type", "application/octet-stream")
         .header("X-Sivtr-Management-Token", management_token)
+        .header("X-Sivtr-Published-At", published_at)
         .send(envelope)
         .with_context(|| format!("publication upload failed: {url}"))?;
     if !response.status().is_success() {
@@ -717,17 +750,18 @@ struct PublicationDb {
 impl PublicationDb {
     fn open() -> Result<Self> {
         let dir = workspace::data_dir();
-        std::fs::create_dir_all(&dir)?;
-        restrict_directory(&dir)?;
+        std::fs::create_dir_all(&dir).context("failed to create publication data directory")?;
+        restrict_directory(&dir).context("failed to restrict publication data directory")?;
         let path = dir.join("publication-state.db");
-        let connection = Connection::open(&path)?;
-        restrict_file(&path)?;
+        let connection = Connection::open(&path).context("failed to open publication database")?;
+        restrict_file(&path).context("failed to restrict publication database")?;
         Self::from_connection(connection)
     }
 
     fn from_connection(connection: Connection) -> Result<Self> {
-        connection.execute_batch(
-            "CREATE TABLE IF NOT EXISTS publications (
+        connection
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS publications (
                 publication_id TEXT PRIMARY KEY,
                 endpoint TEXT NOT NULL,
                 viewer_key TEXT NOT NULL,
@@ -743,7 +777,8 @@ impl PublicationDb {
                 status TEXT NOT NULL,
                 last_error TEXT
             );",
-        )?;
+            )
+            .context("failed to initialize publication database schema")?;
         Ok(Self { connection })
     }
 
@@ -751,7 +786,8 @@ impl PublicationDb {
         self.connection.execute(
             "INSERT INTO publications (publication_id, endpoint, viewer_key, management_token, title, provider, source_refs, content_sha256, redaction_count, warning_count, created_at, expires_at, status, last_error) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
             params![row.id, row.endpoint, row.viewer_key, row.management_token, row.title, row.provider, row.source_refs, row.content_sha256, row.redaction_count, row.warning_count, row.created_at, row.expires_at, row.status.as_str(), row.last_error],
-        )?;
+        )
+        .context("failed to insert pending publication")?;
         Ok(())
     }
 
@@ -761,10 +797,12 @@ impl PublicationDb {
         status: PublicationStatus,
         error: Option<&str>,
     ) -> Result<()> {
-        self.connection.execute(
-            "UPDATE publications SET status = ?1, last_error = ?2 WHERE publication_id = ?3",
-            params![status.as_str(), error, id],
-        )?;
+        self.connection
+            .execute(
+                "UPDATE publications SET status = ?1, last_error = ?2 WHERE publication_id = ?3",
+                params![status.as_str(), error, id],
+            )
+            .context("failed to update publication status")?;
         Ok(())
     }
 
@@ -778,22 +816,36 @@ impl PublicationDb {
         self.update_status(id, PublicationStatus::Revoked, None)
     }
     fn record_error(&self, id: &str, error: &str) -> Result<()> {
-        self.connection.execute(
-            "UPDATE publications SET last_error = ?1 WHERE publication_id = ?2",
-            params![error, id],
-        )?;
+        self.connection
+            .execute(
+                "UPDATE publications SET last_error = ?1 WHERE publication_id = ?2",
+                params![error, id],
+            )
+            .context("failed to record publication error")?;
         Ok(())
     }
 
     fn find(&self, id: &str) -> Result<Option<PublicationRow>> {
-        self.connection.query_row("SELECT publication_id, endpoint, viewer_key, management_token, title, provider, source_refs, content_sha256, redaction_count, warning_count, created_at, expires_at, status, last_error FROM publications WHERE publication_id = ?1", params![id], row_from_query).optional().map_err(Into::into)
+        self.connection
+            .query_row(
+                "SELECT publication_id, endpoint, viewer_key, management_token, title, provider, source_refs, content_sha256, redaction_count, warning_count, created_at, expires_at, status, last_error FROM publications WHERE publication_id = ?1",
+                params![id],
+                row_from_query,
+            )
+            .optional()
+            .context("failed to query publication")
     }
 
     fn rows(&self) -> Result<Vec<PublicationRow>> {
-        let mut statement = self.connection.prepare("SELECT publication_id, endpoint, viewer_key, management_token, title, provider, source_refs, content_sha256, redaction_count, warning_count, created_at, expires_at, status, last_error FROM publications ORDER BY created_at DESC")?;
+        let mut statement = self
+            .connection
+            .prepare("SELECT publication_id, endpoint, viewer_key, management_token, title, provider, source_refs, content_sha256, redaction_count, warning_count, created_at, expires_at, status, last_error FROM publications ORDER BY created_at DESC")
+            .context("failed to prepare publication list query")?;
         let rows = statement
-            .query_map([], row_from_query)?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+            .query_map([], row_from_query)
+            .context("failed to query publication list")?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to read publication list")?;
         Ok(rows)
     }
 
@@ -801,15 +853,20 @@ impl PublicationDb {
         let now = Utc::now();
         let rows = self
             .connection
-            .prepare("SELECT publication_id, expires_at FROM publications WHERE status IN ('pending', 'active')")?
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+            .prepare("SELECT publication_id, expires_at FROM publications WHERE status IN ('pending', 'active')")
+            .context("failed to prepare publication expiry query")?
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .context("failed to query publication expiry")?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("failed to read publication expiry rows")?;
         for (id, expires_at) in rows {
             if is_expired_at(&expires_at, now) {
-                self.connection.execute(
-                    "UPDATE publications SET status = 'expired' WHERE publication_id = ?1",
-                    params![id],
-                )?;
+                self.connection
+                    .execute(
+                        "UPDATE publications SET status = 'expired' WHERE publication_id = ?1",
+                        params![id],
+                    )
+                    .context("failed to mark expired publication")?;
             }
         }
         Ok(())

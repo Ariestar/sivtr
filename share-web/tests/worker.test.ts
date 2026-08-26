@@ -33,6 +33,43 @@ describe("publication route primitives", () => {
     expect(validEnvelope(envelope)).toBe(false);
   });
 
+  it("keeps a recent client publication timestamp as the shared expiry authority", async () => {
+    const objects = new Map<string, { bytes: Uint8Array; customMetadata: Record<string, string> }>();
+    const bucket = {
+      async head(key: string) {
+        return objects.get(key) ?? null;
+      },
+      async put(key: string, body: Uint8Array, options: { customMetadata: Record<string, string>; onlyIf?: unknown }) {
+        objects.set(key, { bytes: new Uint8Array(body), customMetadata: options.customMetadata });
+        return {};
+      },
+    };
+    const env = { PUBLICATIONS: bucket, CREATE_ENABLED: "true" } as any;
+    const id = "7d_0123456789abcdefghijkx";
+    const publishedAt = new Date(Date.now() - 1_000).toISOString();
+    const envelope = new Uint8Array(39);
+    envelope.set(new TextEncoder().encode("SIVTPUB1"));
+    envelope[8] = 1;
+    envelope[9] = 1;
+
+    const response = await worker.fetch(
+      new Request(`https://share.sivtr.dev/api/v1/publications/${id}`, {
+        method: "PUT",
+        headers: {
+          "x-sivtr-management-token": "A".repeat(43),
+          "x-sivtr-published-at": publishedAt,
+          "content-type": "application/octet-stream",
+        },
+        body: envelope as unknown as BodyInit,
+      }),
+      env,
+      {} as any,
+    );
+
+    expect(response.status).toBe(201);
+    expect(objects.get("v1/7d/0123456789abcdefghijkx")?.customMetadata.created_at).toBe(publishedAt);
+  });
+
   it("keeps PUT/GET/DELETE opaque and makes revoke immediately unreadable", async () => {
     const objects = new Map<string, { bytes: Uint8Array; customMetadata: Record<string, string> }>();
     const bucket = {
@@ -85,4 +122,3 @@ describe("publication route primitives", () => {
     expect(body).toBeNull();
   });
 });
-

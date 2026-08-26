@@ -51,6 +51,12 @@ Preview never uploads:
 sivtr publish preview '@share_ready' --format human
 ```
 
+To preview and save a complete local session WorkSet in one step:
+
+```powershell
+sivtr publish preview codex/<session-id> --save share_ready
+```
+
 Tokens, private keys, Bearer values, and secret assignments become `[REDACTED]`. Absolute paths, emails, and internal URLs are warnings only.
 
 ### Pick atomic content
@@ -69,7 +75,7 @@ sivtr publish preview '@share_ready' --format human
 sivtr publish create '@share_ready' --expires 7d --yes
 ```
 
-The picker accepts exactly one local agent session. It supports whole-dialogue selection, marked content blocks, cross-page selection, and non-contiguous turns. `Space` marks a dialogue or content block, `v` selects a block range, `J`/`K` moves between selected dialogues, and `Tab` switches Input/Output. Press `Enter` on Dialogues to submit whole-dialogue selection; press `y` in Content to submit the current or marked blocks; `Enter` in Content folds or expands the focused block. A character range that does not identify a complete block is rejected instead of being widened to a whole turn.
+The picker accepts exactly one local agent session. It supports whole-dialogue selection, marked content blocks, cross-page selection, and non-contiguous turns. `Space` marks a dialogue or content block, `v` selects a block range, `J`/`K` moves between selected dialogues, and `Tab` switches Input/Output. Press `Enter` on Dialogues to submit whole-dialogue selection; press `y` in Content to submit the current or marked blocks; `Enter` in Content folds or expands the focused block. After selecting content, press `p` to open the publication panel, choose `2h`, `1d`, `3d`, `7d`, or `30d` with `j`/`k`, and press `Enter` to create and copy the link immediately. A character range that does not identify a complete block is rejected instead of being widened to a whole turn.
 
 User, Assistant, Skill, and Thinking are separate atoms. A ToolCall and its ToolResult form one inseparable Tool atom; selecting either side expands to both. The saved WorkSet contains only the selected local anchors and the records those anchors belong to; unselected turns are not stored. The public snapshot does not contain WorkRef, session IDs, record/part numbers, paths, or `cwd`.
 
@@ -81,7 +87,7 @@ Whole-record WorkSets remain schema v1 and require adjacent record indices. Part
 sivtr publish create '@share_ready' --expires 7d --yes
 ```
 
-Allowed lifetimes: `1d`, `7d` (default), `30d`, `90d`. There is no permanent link.
+Allowed lifetimes: `2h`, `1d`, `3d`, `7d` (default), `30d`. Existing `90d` links remain readable for compatibility; there is no permanent link.
 
 If the preview still has path, email, or internal-URL warnings, **`--allow-warnings` is required even in an interactive terminal**:
 
@@ -113,4 +119,3 @@ Management tokens live only in local `publication-state.db`. If that database is
 Both modes reject terminal records, remotes/groups, mixed providers or sessions, WorkRefs, `cwd`, session paths, provider envelopes, and attachments. v1 projects only consecutive User/Assistant turns; v2 can project User, Assistant, Tool, Skill, and Thinking atoms, with ToolCall and ToolResult kept together.
 
 See also the [CLI reference](/reference/cli/) and [configuration](/usage/configuration/).
-
