@@ -47,8 +47,6 @@ pub(super) fn apply_workspace_help_action(
     content_io_focus: &mut ContentIoFocus,
     content_mode: &mut ContentViewMode,
     expanded: &mut ExpandedBlocks,
-    content_input_lines: usize,
-    content_output_lines: usize,
     // Which marked dialogue the content pane shows (multi-select paging).
     content_page: &mut usize,
     content_cursor: &mut ContentBlockCursor,
@@ -208,10 +206,7 @@ pub(super) fn apply_workspace_help_action(
             content_scrolls.set(*content_io_focus, 0);
         }
         WorkspaceHelpAction::ScrollContentBottom if *focus == WorkspaceFocus::Content => {
-            let lines = match *content_io_focus {
-                ContentIoFocus::Input => content_input_lines,
-                ContentIoFocus::Output => content_output_lines,
-            };
+            let lines = content_pane.line_count(*content_io_focus);
             content_scrolls.set(*content_io_focus, lines.saturating_sub(1));
         }
         WorkspaceHelpAction::ToggleContentMode if *focus == WorkspaceFocus::Content => {
