@@ -451,4 +451,3 @@ pub(crate) struct WorkspaceFooterView<'a> {
     pub(crate) publish: bool,
     pub(crate) publish_error: Option<&'a str>,
 }
-

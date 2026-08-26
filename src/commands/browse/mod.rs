@@ -174,4 +174,3 @@ pub const PICK_CANCELLED_MESSAGE: &str = "Pick cancelled";
 pub fn is_pick_cancelled(error: &anyhow::Error) -> bool {
     error.to_string() == PICK_CANCELLED_MESSAGE
 }
-

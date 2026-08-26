@@ -119,4 +119,3 @@ Management tokens live only in local `publication-state.db`. If that database is
 Both modes reject terminal records, remotes/groups, mixed providers or sessions, WorkRefs, `cwd`, session paths, provider envelopes, and attachments. v1 projects only consecutive User/Assistant turns; v2 can project User, Assistant, Tool, Skill, and Thinking atoms, with ToolCall and ToolResult kept together.
 
 See also the [CLI reference](/reference/cli/) and [configuration](/usage/configuration/).
-

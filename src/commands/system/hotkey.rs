@@ -527,4 +527,3 @@ fn terminate_process(pid: u32) -> Result<()> {
 fn terminate_process(_pid: u32) -> Result<()> {
     anyhow::bail!("sivtr hotkey is currently supported on Windows only")
 }
-

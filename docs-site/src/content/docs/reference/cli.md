@@ -514,7 +514,7 @@ sivtr publish link <PUBLICATION_ID>
 sivtr publish revoke <PUBLICATION_ID> [--yes]
 ```
 
-Whole-record WorkSets use v1: they accept consecutive local agent records from one provider and session, and publish only User/Assistant text. `preview --pick` opens the interactive picker; `--save <NAME>` stores selected part anchors from that one session for a v2 snapshot. v2 supports User, Assistant, Tool, Skill, and Thinking atoms plus non-contiguous parts; ToolCall and ToolResult remain inseparable. `--save` requires `--pick`.
+Whole-record WorkSets use v1: they accept consecutive local agent records from one provider and session, and publish only User/Assistant text. `preview --pick` opens the interactive picker; `--save <NAME>` stores the selected part anchors from that one session for a v2 snapshot. Without `--pick`, `--save <NAME>` saves the whole-record WorkSet and does not create a v2 selection. v2 supports User, Assistant, Tool, Skill, and Thinking atoms plus non-contiguous parts; ToolCall and ToolResult remain inseparable.
 
 Both versions reject terminal records, remotes/groups, mixed sessions/providers, attachments, and cross-session evidence bundles. Public snapshots omit WorkSets, WorkRefs, `cwd`, session paths, and provider envelopes; whole and part anchors cannot be mixed. Search defaults to newest-first and `--latest 5`; v1 publish sorts by record index before the continuity check. `[publish].endpoint` defaults to `https://share.hnnulwh.cn` and can be changed in `config.toml`. Non-interactive create requires `--yes`. Path/email/internal-URL warnings require `--allow-warnings` in every environment, including a TTY.
 
@@ -932,4 +932,3 @@ Clears current shell session logs. `--all` clears all recorded session logs and 
 ## Shared syntax
 
 See [Selectors and Filters](/reference/selectors-and-filters/) for recency selectors, `--session`, providers, `--regex`, `--lines`, `--ansi`, `--print`, and workspace refs.
-

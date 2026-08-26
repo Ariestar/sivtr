@@ -288,4 +288,3 @@ mod tests {
             .all(|anchor| anchor.part().is_some()));
     }
 }
-

@@ -263,4 +263,3 @@ fn run_hotkey_serve(args: &HotkeyServeArgs) -> Result<()> {
 fn run_hotkey_pick_agent(args: &HotkeyPickAgentArgs) -> Result<()> {
     commands::system::hotkey::pick_agent(args)
 }
-

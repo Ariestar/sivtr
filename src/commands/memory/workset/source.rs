@@ -398,7 +398,7 @@ pub fn run_on_share(
                     .records
                     .iter()
                     .map(crate::remote::redact::redact_record)
-                    .collect();
+                    .collect::<Result<Vec<_>>>()?;
             }
             Ok((set.records, set.anchors))
         }

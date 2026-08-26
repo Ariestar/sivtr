@@ -614,4 +614,3 @@ pub(super) fn set_focus(
         *fullscreen = Some(next);
     }
 }
-

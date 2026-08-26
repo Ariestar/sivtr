@@ -1004,4 +1004,3 @@ mod tests {
         assert_eq!(title_span.style.fg, None);
     }
 }
-

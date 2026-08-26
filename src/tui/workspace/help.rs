@@ -435,4 +435,3 @@ pub(crate) fn workspace_footer_hotkeys(focus: WorkspaceFocus) -> String {
     }
     parts.join("  ")
 }
-

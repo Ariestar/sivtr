@@ -597,4 +597,3 @@ fn search_box_body_includes_current_target_ref() {
         "needle\n\nTarget: codex/session/1/4"
     );
 }
-

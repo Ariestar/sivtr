@@ -1,6 +1,6 @@
 //! Provider-neutral, privacy-minimized public conversation snapshots.
 
-use anyhow::{bail, ensure, Result};
+use anyhow::{bail, ensure, Context, Result};
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -169,6 +169,13 @@ impl PublicConversationSnapshot {
         match self {
             Self::V1(snapshot) => &snapshot.provider,
             Self::V2(snapshot) => &snapshot.provider,
+        }
+    }
+
+    pub fn published_at(&self) -> &str {
+        match self {
+            Self::V1(snapshot) => &snapshot.published_at,
+            Self::V2(snapshot) => &snapshot.published_at,
         }
     }
 
@@ -353,7 +360,7 @@ fn create_record_publication_draft(
                 _ => continue,
             };
             let raw = part.text().into_owned();
-            let (text, report) = privacy::redact_text_with_report(&raw);
+            let (text, report) = privacy::redact_text_with_report(&raw)?;
             redaction_count += report.redactions;
             for kind in report.warnings {
                 let entry = risk_map
@@ -390,7 +397,7 @@ fn create_record_publication_draft(
         .clone()
         .filter(|title| !title.trim().is_empty())
         .unwrap_or_else(|| first.title.clone());
-    let (title, title_report) = privacy::redact_text_with_report(&title_raw);
+    let (title, title_report) = privacy::redact_text_with_report(&title_raw)?;
     redaction_count += title_report.redactions;
     for kind in title_report.warnings {
         let entry = risk_map
@@ -414,7 +421,8 @@ fn create_record_publication_draft(
         expires_at: expires_at.to_rfc3339_opts(SecondsFormat::Millis, true),
         items,
     };
-    let canonical_json = serde_json::to_string(&snapshot)?;
+    let canonical_json =
+        serde_json::to_string(&snapshot).context("failed to serialize publication snapshot")?;
     let content_sha256 = hex_sha256(canonical_json.as_bytes());
     let risks = risk_map
         .into_values()
@@ -558,7 +566,7 @@ fn create_granular_publication_draft(
                 let part = record
                     .part_for_at(crate::record::WorkAt::Part(*seq))
                     .expect("validated atom part");
-                let (text, report) = privacy::redact_text_with_report(&part.text());
+                let (text, report) = privacy::redact_text_with_report(&part.text())?;
                 redaction_count += report.redactions;
                 for kind in report.warnings {
                     let entry = risk_map
@@ -594,7 +602,7 @@ fn create_granular_publication_draft(
                 .part_for_at(crate::record::WorkAt::Part(first_seq))
                 .expect("validated atom part");
             let label = if let Some(raw_label) = first_part.label() {
-                let (redacted, report) = privacy::redact_text_with_report(raw_label);
+                let (redacted, report) = privacy::redact_text_with_report(raw_label)?;
                 redaction_count += report.redactions;
                 for kind in report.warnings {
                     let entry = risk_map
@@ -646,7 +654,7 @@ fn create_granular_publication_draft(
         .clone()
         .filter(|title| !title.trim().is_empty())
         .unwrap_or_else(|| title_from_public_items(&items));
-    let (title, title_report) = privacy::redact_text_with_report(&title_raw);
+    let (title, title_report) = privacy::redact_text_with_report(&title_raw)?;
     redaction_count += title_report.redactions;
     for kind in title_report.warnings {
         let entry = risk_map
@@ -671,7 +679,8 @@ fn create_granular_publication_draft(
         expires_at: expires_at.to_rfc3339_opts(SecondsFormat::Millis, true),
         items,
     };
-    let canonical_json = serde_json::to_string(&snapshot)?;
+    let canonical_json =
+        serde_json::to_string(&snapshot).context("failed to serialize publication snapshot")?;
     let content_sha256 = granular_content_sha256(&snapshot)?;
     let risks = risk_map
         .into_values()
@@ -840,12 +849,15 @@ fn title_from_public_items(items: &[PublicConversationAtom]) -> String {
 /// snapshot envelope, but must not make preview and the subsequent create of
 /// the same saved selection look like different content.
 fn granular_content_sha256(snapshot: &PublicConversationV2) -> Result<String> {
-    let mut value = serde_json::to_value(snapshot)?;
+    let mut value = serde_json::to_value(snapshot)
+        .context("failed to serialize granular publication snapshot")?;
     if let serde_json::Value::Object(fields) = &mut value {
         fields.remove("published_at");
         fields.remove("expires_at");
     }
-    Ok(hex_sha256(serde_json::to_string(&value)?.as_bytes()))
+    let canonical = serde_json::to_string(&value)
+        .context("failed to serialize granular publication content")?;
+    Ok(hex_sha256(canonical.as_bytes()))
 }
 
 fn hex_sha256(bytes: &[u8]) -> String {
@@ -1323,4 +1335,3 @@ mod tests {
         );
     }
 }
-

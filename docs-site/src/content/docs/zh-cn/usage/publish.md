@@ -397,4 +397,3 @@ sivtr publish create '@share_ready' --expires 7d --yes
 如果对话包含高敏感内容，建议使用更短的 `1d` 有效期，并在确认查看者完成阅读后主动撤销。
 
 更多精确参数见 [CLI 参考](/zh-cn/reference/cli/)，配置说明见 [配置](/zh-cn/usage/configuration/)。
-

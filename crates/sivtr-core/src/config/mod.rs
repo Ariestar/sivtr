@@ -94,7 +94,7 @@ pub struct McpConfig {
 /// the only configurable publication integration point in v1; override
 /// `endpoint` in `config.toml` to use a self-hosted or staging service.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct PublishConfig {
     pub endpoint: String,
 }
@@ -201,7 +201,7 @@ mod tests {
             ..SivtrConfig::default()
         };
 
-        let toml = to_toml_string(&config).unwrap();
+        let toml = to_toml_string(&config).expect("serialize hotkey config");
 
         assert!(toml.contains("[hotkey]"));
         assert!(toml.contains("chord = \"alt+y\""));
@@ -216,7 +216,7 @@ mod tests {
             ..SivtrConfig::default()
         };
 
-        let toml = to_toml_string(&config).unwrap();
+        let toml = to_toml_string(&config).expect("serialize Codex config");
 
         assert!(toml.contains("[codex]"));
         assert!(toml.contains("session_dirs = ["));
@@ -230,7 +230,7 @@ mod tests {
             ..SivtrConfig::default()
         };
 
-        let toml = to_toml_string(&config).unwrap();
+        let toml = to_toml_string(&config).expect("serialize MCP config");
 
         assert!(toml.contains("[mcp]"));
         assert!(toml.contains("idle_exit_secs = 60"));
@@ -239,9 +239,14 @@ mod tests {
 
     #[test]
     fn serializes_publish_endpoint() {
-        let toml = to_toml_string(&SivtrConfig::default()).unwrap();
+        let toml = to_toml_string(&SivtrConfig::default()).expect("serialize publish config");
         assert!(toml.contains("[publish]"));
         assert!(toml.contains("endpoint = \"https://share.hnnulwh.cn\""));
+
+        assert!(
+            toml::from_str::<SivtrConfig>("[publish]\nendpont = \"https://example.com\"\n")
+                .is_err()
+        );
     }
 
     #[test]
@@ -253,7 +258,7 @@ mod tests {
             ..SivtrConfig::default()
         };
 
-        let toml = to_toml_string(&config).unwrap();
+        let toml = to_toml_string(&config).expect("serialize theme config");
         assert!(toml.contains("[theme]"));
         assert!(toml.contains("mode = \"light\""));
 
