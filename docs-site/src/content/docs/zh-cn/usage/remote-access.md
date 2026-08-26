@@ -7,6 +7,17 @@ description: 以只读方式分享 workspace，并用 remote 名挂接另一台�
 
 如果想先看协作场景，见 [远程协作记忆](/zh-cn/playbooks/remote-collaboration-memory/)。本页是功能指南。
 
+## 先决定用 `publish` 还是 `share`
+
+两者都叫“分享”，但授权边界不同：
+
+| 需求 | 使用 | 结果 |
+| --- | --- | --- |
+| 给不安装 Sivtr 的人一个浏览器链接，发布已经确定的内容 | [`sivtr publish`](/zh-cn/usage/publish/) | 不可变的加密只读快照；发布者可以离线；链接到期或可撤销 |
+| 让另一台 Sivtr 继续搜索一个 workspace 的当前记忆 | `sivtr share` + `sivtr remote` | 只读 workspace mount；需要 daemon、peer 授权；读取的是当前内容 |
+
+`publish preview --pick` 的原子选择只作用于浏览器快照，不会改变 `share` 暴露的 workspace，也不会把 remote/group 内容变成可发布输入。需要按 User、Assistant、Tool、Skill、Thinking 原子挑选时，请先阅读 [发布浏览器只读对话链接](/zh-cn/usage/publish/)；需要跨设备检索时，继续按本页的 share/invite/remote 流程操作。
+
 ## 模型
 
 | 部件 | 含义 |

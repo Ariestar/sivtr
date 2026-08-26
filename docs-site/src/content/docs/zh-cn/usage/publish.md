@@ -10,7 +10,7 @@ description: 用 Sivtr 把本地 Agent 对话安全地发布成浏览器可打�
 ## 先记住三件事
 
 1. PowerShell 里的 `@share_ready` 要加引号：`'@share_ready'`。
-2. `publish` 只能发布同一个本地 Agent session 中连续的对话轮次。搜索默认只留最近 5 条且 newest-first；发布前会按 index 升序排列，但仍要求这些轮次在 session 里相邻。
+2. `publish` 有两种选择模式：旧版全 record WorkSet 生成 schema v1，只发布连续整轮的 User/Assistant；`--pick` 进入原子选择器，生成 schema v2，可在同一个本地 Agent session 内选择任意原子和不连续片段。
 3. 链接本身就是查看凭据。拿到完整链接的人都可以查看，不要把链接放到公开 issue 或不可信群聊中。
 
 ## 先配置 endpoint
@@ -67,6 +67,59 @@ sivtr search codex/abc123 --sort oldest --latest 50 --save share_ready --refs
 
 尽量只选择真正需要分享的连续对话轮次。不要直接使用混合了多个 session 的 `@last`，否则发布时会被拒绝。也不要把终端日志、远程 workspace 或多个 Agent session 混在一起。带关键词的 BM25 搜索可能会跳过中间轮次，那种 WorkSet 不能直接 publish。
 
+## 原子选择：预览时精确到 part
+
+当一整轮里只有部分内容适合公开，或需要把工具输出、Skill、Thinking 一起纳入快照时，使用 `--pick`。它复用 workspace 浏览器的选择界面，不增加另一套选择语义：
+
+```powershell
+# 只预览，不保存选择
+sivtr publish preview codex/<session-id> --pick --format human
+
+# 选择后保存为可复用的 WorkSet
+sivtr publish preview codex/<session-id> --pick --save share_ready
+
+# 后续预览和创建都使用同一组原子 anchors
+sivtr publish preview '@share_ready' --format human
+sivtr publish create '@share_ready' --expires 7d --yes
+```
+
+`--pick` 只接受**单个本地 Agent session**。`codex/<session-id>` 是最直接的输入；不能选择 terminal、remote、group，也不能把不同 provider 或不同 session 拼在一起。`--save` 必须和 `--pick` 同时出现，保存的是精确的 part anchors，而不是一次新的全文搜索。
+
+### 选择器里的操作
+
+选择器从 Dialogues 视图打开。常用操作如下；按 `?` 可在当前版本查看完整帮助：
+
+| 位置 | 操作 | 发布含义 |
+| --- | --- | --- |
+| Dialogues | `Space` 标记当前轮；`a` 切换全部轮次 | 选择整轮，展开为该轮的全部原子 |
+| Content | `Space` 标记当前块；点击块左侧标记点 | 只选择标记的原子 |
+| Content | `v` 选择块区间；`J` / `K` 翻到下一个 / 上一个已选轮次 | 支持轮内部分选择和跨页选择 |
+| Content | `Tab` 切换 Input / Output；`Enter` 折叠或展开光标块 | 选择仍以完整原子为边界 |
+| Dialogues | `Enter` 提交整轮选择；Content 用 `y` 提交当前或已标记块 | 返回预览并生成选择结果 |
+| 任意视图 | `q` / `Esc` 退出选择器 | 取消本次预览，不保存选择 |
+
+不要拖拽只覆盖半个原子的字符范围来“凑”选择。发布选择需要完整 block；只产生文本范围而没有完整 block anchor 时，会明确报 `publication selection is empty`，不会擅自扩大成整轮。
+
+### 原子边界和排序
+
+- User、Assistant、Skill、Thinking 各自是一个原子。
+- 同一工具调用的 ToolCall 和 ToolResult 是一个不可拆分的 Tool 原子；选中其中一端会展开为完整的调用与结果。
+- 父级 run 被选中时，会展开为其中全部子原子；不会只发布折叠标签。
+- 可以跨轮次、跨页、非连续选择。Sivtr 会按原始 record index 和 part 顺序去重、排序；未选中的区间不会自动补入。
+- 如果非连续选择前方存在未分享内容，schema v2 会设置 `gap_before: true`，查看器显示“部分内容未分享”，但不会暴露缺口数量或本地位置。
+
+保存成功后，终端会显示 `saved @share_ready`。保存的 WorkSet 只包含选中的本地 anchors 以及这些 anchors 所属的 record，不会保留未选中轮次的正文；公开快照不会包含 WorkRef、session ID、record/part 序号、路径或 cwd。
+
+### 什么时候会生成 v1 或 v2
+
+| 输入 | 快照 schema | 内容 | 选择限制 |
+| --- | --- | --- | --- |
+| 全 record WorkSet（例如 `search --save`） | v1 | 连续整轮中的 User / Assistant | 同 provider、同 session、record index 连续 |
+| part-anchor WorkSet（`--pick`） | v2 | User、Assistant、Tool、Skill、Thinking 原子 | 同 provider、同一个本地 session；允许非连续 |
+| whole record 与 part anchor 混用 | 拒绝 | — | 明确报错，避免范围含义不确定 |
+
+如果原子选择为空、工具调用缺少配对结果，或者保存的 WorkSet 后来被手工混入 whole/part 两种 anchor，预览和创建都会拒绝，不会生成“看起来完整但语义不确定”的链接。
+
 ## 第三步：本地预览
 
 `preview` 完全在本地运行，不会上传内容：
@@ -78,7 +131,8 @@ sivtr publish preview '@share_ready' --format human
 预览会告诉你：
 
 - 标题和来源 provider；
-- 将发布多少轮对话；
+- 将发布多少轮对话和多少个公开项（v2 中公开项是原子，不等同于消息条数）；
+- 将使用 schema v1 还是 v2；
 - 快照大小和有效期；
 - 自动脱敏了多少项；
 - 是否发现路径、邮箱、内网地址等风险提示。
@@ -91,6 +145,12 @@ sivtr publish preview '@share_ready' --format human
 - 对话起止范围是否正确。
 
 识别出的 token、私钥、Bearer 和 secret assignment 会自动替换成 `[REDACTED]`。路径、邮箱和内网地址默认只警告，不会擅自改写正常对话。
+
+### 查看器对 v1/v2 的显示
+
+v1 的 User / Assistant 会按原顺序直接显示。v2 仍按原始时间顺序显示，但 Tool、Skill、Thinking 默认折叠，展开后可查看其脱敏后的 parts；Tool 原子会同时显示 call 和 result。非连续原子之间显示“部分内容未分享”。Markdown、链接和工具输出仍经过查看器的安全清理。
+
+同一个已保存的原子 WorkSet，`preview` 和随后 `create` 的内容 SHA-256 会保持一致；发布时间和过期时间属于 envelope 元数据，不会改变内容哈希。
 
 ## 第四步：创建链接
 
@@ -225,16 +285,17 @@ sivtr publish revoke 7d_xxxxxxxxxxxxxxxxxxxxxx --yes
 - 保持 HTTPS 证书、Nginx 和 Node 服务更新，并定期轮换、清理访问日志；
 - 第一次使用时先发布不含敏感信息的测试对话。
 
-## 当前 v1 不会发布什么
+## 内容边界：v1 与 v2
 
-v1 只支持同一 provider、同一 session 中连续的本地 Agent 对话轮次，并只保留 User 和 Assistant 文本。以下内容会被拒绝、排除或不进入公开快照：
+全 record 输入仍按 v1 处理：只支持同一 provider、同一 session 中连续的本地 Agent 对话轮次，并只保留 User 和 Assistant 文本。使用 `--pick` 保存 part anchors 后，v2 可以公开更多原子类型，但以下边界对两个版本都有效：
 
 - Terminal 记录；
 - remote/group 内容；
 - 跨 session 或跨 provider 内容；
-- ToolCall、ToolResult、Thinking、Skill；
 - WorkSet、WorkRef、`cwd`、session path；
 - provider 原始事件、附件和图片。
+
+在 v1 中，ToolCall、ToolResult、Thinking、Skill 不进入公开快照；在 v2 中它们分别投影为 Tool、Thinking、Skill 原子（ToolCall 与 ToolResult 必须成对）。所有原子内容经过同一套凭据脱敏、路径/邮箱/内网地址风险检查。
 
 ## 常见错误
 
@@ -270,6 +331,34 @@ PowerShell 里不要省略 `'@share_ready'` 的引号。
 ### `publication record indices must be strictly continuous`
 
 WorkSet 里的轮次排序后仍有缺口（例如关键词搜索跳过了中间几轮）。改成按 session 取一段连续窗口：`--sort oldest --latest N`，不要混入不相关命中。
+
+### `publish preview --pick requires an interactive terminal`
+
+`--pick` 需要真实交互式终端。脚本、管道、CI 或重定向环境不能打开选择器；在交互 PowerShell 中执行，再把保存的 WorkSet 交给后续自动化创建。
+
+### `publish preview --save requires --pick`
+
+`--save` 只用于保存原子选择，不能单独使用。要保存整轮搜索结果，请使用：
+
+```powershell
+sivtr search codex/<session-id> --sort oldest --latest 50 --save share_ready --refs
+```
+
+### `publication selection is empty`
+
+选择器没有收到完整 dialogue 或 block anchor。回到 Dialogues 用 `Space` 选择整轮，或在 Content 用 `Space` / `v` 标记完整块；不要只拖选半个原子的字符。
+
+### `publication selection must include complete tool atoms`
+
+工具调用和结果不可拆分。重新选择该工具块的完整 call/result；选择器通常会在选中一端时自动展开另一端，手工修改 WorkSet 时则必须保留两端。
+
+### `publication cannot mix whole-record and part anchors`
+
+同一个 WorkSet 不能同时表达“整轮”和“原子片段”。重新保存一个纯整轮 WorkSet（走 v1）或纯 part-anchor WorkSet（走 v2）。
+
+### `publication picker requires exactly one local agent session`
+
+原子选择器一次只处理一个本地 Agent session。不要把 terminal、remote/group、不同 provider 或多个 session 的记录放进 picker 输入。
 
 ### `non-interactive publish requires --yes`
 

@@ -1,17 +1,15 @@
-//! Content blocks: every workpart is a foldable block.
+//! Content blocks: every semantic work atom is a foldable block.
 //!
 //! A block is the smallest unit the content pane highlights, navigates, and
-//! folds: one workpart, or a ToolCall + ToolResult pair with the same call id
-//! (they read as one tool invocation). Consecutive structure blocks fold
+//! folds: one workpart, or a ToolCall + ToolResult semantic atom (they read as
+//! one tool invocation). Consecutive structure blocks fold
 //! into one run block that collapses to a single `kind xN` tag; expanding a
 //! run reveals its members below the tag, one call per line, each still
 //! folded and expandable in turn — two fold levels. Structure blocks default
 //! to their `<:…:>` tag; body blocks default to their full text — one fold
 //! model, no structure-only special cases.
 
-use std::collections::HashMap;
-
-use sivtr_core::record::{WorkPart, WorkPartData, WorkPartKind, WorkRecord};
+use sivtr_core::record::{work_atoms, WorkPart, WorkPartData, WorkPartKind, WorkRecord};
 
 use crate::tui::content::io::{ContentIoFocus, ExpandedBlocks};
 use crate::tui::content::tool::{part_body_text, tool_display_name, tool_tag_for_part};
@@ -122,66 +120,31 @@ fn kind_name(kind: WorkPartKind) -> &'static str {
     }
 }
 
-/// Partition one IO half's parts into blocks: a ToolCall and the ToolResult
-/// carrying the same call id fold into one unit — wherever the result lands,
-/// so interleaved parallel calls pair correctly — and consecutive structure
-/// units (tool / thinking / skill, mixed kinds allowed) fold into one run;
-/// anything else is one part per block. Blocks get stable DFS pre-order ids
-/// so the fold state and cursor survive folds.
+/// Partition one IO half's semantic atoms into display blocks. Tool call/result
+/// pairing comes from the core atom model; consecutive structure atoms fold into
+/// one run for compact reading. Blocks get stable DFS pre-order ids so fold
+/// state and cursor survive folds.
 pub(crate) fn half_blocks(record: &WorkRecord, input: bool) -> Vec<Block> {
-    let parts: Vec<usize> = record
+    let index_by_seq: std::collections::HashMap<usize, usize> = record
         .parts
         .iter()
         .enumerate()
         .filter(|(_, part)| part.kind().is_input() == input)
-        .map(|(idx, _)| idx)
+        .map(|(index, part)| (part.seq, index))
         .collect();
-
-    let mut units: Vec<Block> = Vec::new();
-    // Pair every ToolResult with the ToolCall that opened it by call id. The
-    // stream interleaves parallel calls (call A, call B, result A, result B),
-    // so adjacency is not enough: a result lands in the block its call
-    // opened wherever it appears. A result without a call id falls back to
-    // the nearest preceding id-less call, preserving the old adjacency rule.
-    let mut open_calls: HashMap<&str, usize> = HashMap::new();
-    // An id-less call pairs only with an id-less result of the same tool —
-    // two missing ids alone never match.
-    let mut last_idless_call: Option<(usize, Option<&str>)> = None;
-    for &part_idx in &parts {
-        let part = &record.parts[part_idx];
-        match part.kind() {
-            WorkPartKind::ToolCall => {
-                let block_idx = units.len();
-                units.push(Block::leaf(vec![part_idx], WorkPartKind::ToolCall));
-                if let Some(call_id) = part_call_id(part) {
-                    open_calls.insert(call_id, block_idx);
-                    last_idless_call = None;
-                } else {
-                    last_idless_call = Some((block_idx, part_tool(part)));
-                }
-            }
-            WorkPartKind::ToolResult => {
-                // Fold the result into its call's block; a result without a
-                // matching open call stands alone.
-                let target = part_call_id(part)
-                    .and_then(|id| open_calls.remove(id))
-                    .or_else(|| match last_idless_call {
-                        Some((block_idx, call_tool))
-                            if same_idless_tool(call_tool, part_tool(part)) =>
-                        {
-                            last_idless_call = None;
-                            Some(block_idx)
-                        }
-                        _ => None,
-                    });
-                match target {
-                    Some(block_idx) => units[block_idx].parts.push(part_idx),
-                    None => units.push(Block::leaf(vec![part_idx], WorkPartKind::ToolResult)),
-                }
-            }
-            kind => units.push(Block::leaf(vec![part_idx], kind)),
-        }
-    }
+    let units: Vec<Block> = work_atoms(record, input)
+        .into_iter()
+        .map(|atom| {
+            Block::leaf(
+                atom.part_seqs
+                    .into_iter()
+                    .filter_map(|seq| index_by_seq.get(&seq).copied())
+                    .collect(),
+                atom.kind,
+            )
+        })
+        .filter(|block| !block.parts.is_empty())
+        .collect();
 
     // Consecutive structure units fold into one run, whatever their kinds.
     let mut blocks: Vec<Block> = Vec::new();
@@ -260,30 +223,6 @@ fn tool_description(part: &WorkPart) -> Option<String> {
     }
     const MAX: usize = 40;
     Some(crate::tui::content::truncate_chars(&description, MAX))
-}
-
-fn part_call_id(part: &WorkPart) -> Option<&str> {
-    match &part.data {
-        WorkPartData::ToolCall { call_id, .. } | WorkPartData::ToolResult { call_id, .. } => {
-            call_id.as_deref()
-        }
-        _ => None,
-    }
-}
-
-/// Tool name for a ToolCall/ToolResult, used by the id-less pairing fallback.
-fn part_tool(part: &WorkPart) -> Option<&str> {
-    match &part.data {
-        WorkPartData::ToolCall { tool, .. } | WorkPartData::ToolResult { tool, .. } => {
-            tool.as_deref()
-        }
-        _ => None,
-    }
-}
-
-/// Two id-less parts pair only when both name the same tool.
-fn same_idless_tool(call_tool: Option<&str>, result_tool: Option<&str>) -> bool {
-    call_tool.is_some() && call_tool == result_tool
 }
 
 /// Render one IO half's blocks to their display segments, in display order:

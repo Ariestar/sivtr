@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
 
 const fixture = JSON.parse(readFileSync(new URL("../tests/fixtures/rust-publication-v1.json", import.meta.url), "utf8")) as { publication_id: string; key: string; envelope_base64url: string };
+const granularFixture = JSON.parse(readFileSync(new URL("../tests/fixtures/rust-publication-v2.json", import.meta.url), "utf8")) as { publication_id: string; key: string; envelope_base64url: string };
 const xssFixture = JSON.parse(readFileSync(new URL("../tests/fixtures/xss-publication-v1.json", import.meta.url), "utf8")) as { publication_id: string; key: string; envelope_base64url: string };
 
 test("missing fragment key is explicit and does not request a ciphertext", async ({ page }) => {
@@ -19,6 +20,17 @@ test("decrypts the Rust-generated v1 fixture in the browser", async ({ page }) =
   await page.goto(`/s/${fixture.publication_id}#k=${fixture.key}`);
   await expect(page.locator("h1")).toHaveText("t");
   await expect(page.locator(".meta")).toContainText("codex");
+});
+
+test("renders granular v2 atoms with collapsed tools and gap markers", async ({ page }) => {
+  await page.route(`**/api/v1/publications/${granularFixture.publication_id}`, async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/octet-stream", body: Buffer.from(granularFixture.envelope_base64url, "base64url") });
+  });
+  await page.goto(`/s/${granularFixture.publication_id}#k=${granularFixture.key}`);
+  await expect(page.locator("h1")).toHaveText("Granular fixture");
+  await expect(page.locator(".message.tool details")).toHaveCount(1);
+  await expect(page.locator(".share-gap")).toContainText(/部分内容未分享|Some content was not shared/);
+  await expect(page.locator(".message.tool details")).not.toHaveAttribute("open", "");
 });
 
 test("renders hostile Markdown as text without executing script", async ({ page }) => {

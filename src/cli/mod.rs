@@ -943,6 +943,12 @@ pub enum PublishAction {
 pub struct PublishPreviewArgs {
     /// Source ref or WorkSet reference (for example @share_ready or @)
     pub source: String,
+    /// Open the interactive session picker and select atomic content.
+    #[arg(long)]
+    pub pick: bool,
+    /// Save an atomic picker selection as a named WorkSet.
+    #[arg(long, value_name = "NAME")]
+    pub save: Option<String>,
     /// Optional public title
     #[arg(long)]
     pub title: Option<String>,
@@ -1724,6 +1730,9 @@ mod tests {
             "publish",
             "preview",
             "@share_ready",
+            "--pick",
+            "--save",
+            "share_ready",
             "--expires",
             "30d",
             "--format",
@@ -1734,6 +1743,8 @@ mod tests {
             Some(Commands::Publish(command)) => match command.action {
                 PublishAction::Preview(args) => {
                     assert_eq!(args.source, "@share_ready");
+                    assert!(args.pick);
+                    assert_eq!(args.save.as_deref(), Some("share_ready"));
                     assert_eq!(args.expires, "30d");
                     assert_eq!(args.format, PublishFormat::Json);
                 }

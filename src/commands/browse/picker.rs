@@ -64,6 +64,9 @@ pub(crate) fn run(
     // Unified Pane stack — each implements crate::pane::Pane.
     // New panes: construct + poll/ensure with PaneInput; no special picker branches.
     let mut source_pane = SourcePane::from_catalog(&sources);
+    let refresh_initial = source_states
+        .iter()
+        .any(SourceLoadState::needs_initial_refresh);
     let mut sessions_pane = SessionColumn::new(sources.clone(), source_states, cwd.clone());
     let mut dialogue_pane = DialoguePane::default();
     let mut content_pane = ContentPane::default();
@@ -71,7 +74,10 @@ pub(crate) fn run(
         first: 0,
         visible: 24,
     };
-    sessions_pane.kick(&selected_sources, bootstrap, true);
+    // `run_with_sessions` supplies an exact, already materialized session for
+    // publication picking. Do not refresh that state from the provider, or a
+    // different (usually newest) session can replace the requested records.
+    sessions_pane.kick(&selected_sources, bootstrap, refresh_initial);
     // Meta-only list — dialogue bodies live in SessionColumn, not here.
     let mut all_sessions = sessions_pane.collect(&selected_sources);
     let mut sessions = all_sessions.clone();
@@ -873,6 +879,7 @@ pub(crate) fn run(
                             &selected_dialogues,
                             dialogue_idx,
                             &content_pane,
+                            line_filter_spec(&line_filter),
                         ) {
                             return Ok(picked);
                         }
@@ -1623,19 +1630,25 @@ mod tests {
 
         // Nothing marked: the copy path yields None.
         assert!(
-            workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane).is_none()
+            workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane, None)
+                .is_none()
         );
 
         // Mark the tool block (output half): copy joins the call + result bodies.
         pane.toggle_mark(ContentIoFocus::Output, 0, 0);
-        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
-            .expect("marked copy");
+        let picked =
+            workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane, None)
+                .expect("marked copy");
         assert_eq!(picked.units.len(), 1);
         let text = &picked.units[0].plain;
         assert!(text.contains("$ ls"), "tool call body missing: {text}");
         assert!(
             text.contains("\"stdout\""),
             "tool result body missing: {text}"
+        );
+        assert_eq!(
+            picked.anchors,
+            vec![record.work_ref.with_part(2), record.work_ref.with_part(3)]
         );
         assert!(
             !text.contains("user text"),
@@ -1644,8 +1657,9 @@ mod tests {
 
         // Mark the user block (input half): both marked blocks are joined.
         pane.toggle_mark(ContentIoFocus::Input, 0, 0);
-        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
-            .expect("marked copy");
+        let picked =
+            workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane, None)
+                .expect("marked copy");
         let text = &picked.units[0].plain;
         assert!(text.contains("user text"));
         assert!(text.contains("$ ls"));
@@ -1712,8 +1726,9 @@ mod tests {
         // reply is id 0 in the output half). Copy joins the run's tool
         // bodies, never the user or assistant blocks.
         pane.toggle_mark(ContentIoFocus::Output, 0, 1);
-        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
-            .expect("marked copy");
+        let picked =
+            workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane, None)
+                .expect("marked copy");
         let text = &picked.units[0].plain;
         assert!(text.contains("cmd 0") && text.contains("cmd 2"), "{text}");
         assert!(
@@ -1798,8 +1813,9 @@ mod tests {
         let hit_id = hit_id.expect("a block is hit in the output half");
         pane.toggle_mark(ContentIoFocus::Output, 0, hit_id);
 
-        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
-            .expect("marked copy must not be None after a real dot hit");
+        let picked =
+            workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane, None)
+                .expect("marked copy must not be None after a real dot hit");
         let text = &picked.units[0].plain;
         assert!(text.contains("cmd 0") && text.contains("cmd 2"), "{text}");
         assert!(
@@ -1866,6 +1882,7 @@ mod tests {
             0,
             ContentIoFocus::Output,
             1,
+            None,
         )
         .expect("tool block copy must not be None");
         let text = &picked.units[0].plain;
@@ -1926,6 +1943,7 @@ mod tests {
             0,
             ContentIoFocus::Output,
             1,
+            None,
         )
         .expect("run member copy must not be None");
         let text = &picked.units[0].plain;
@@ -1947,8 +1965,9 @@ mod tests {
             expanded: &expanded,
         });
         pane.toggle_mark(ContentIoFocus::Output, 0, 1);
-        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
-            .expect("marked member copy");
+        let picked =
+            workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane, None)
+                .expect("marked member copy");
         let text = &picked.units[0].plain;
         assert!(text.contains("pat 0"), "first member missing: {text}");
         assert!(!text.contains("pat 1"), "second member leaked: {text}");
@@ -1997,6 +2016,7 @@ mod tests {
             0,
             ContentIoFocus::Output,
             0,
+            None,
         )
         .expect("cursor block copy");
         assert_eq!(picked.units.len(), 1);
@@ -2018,6 +2038,7 @@ mod tests {
             0,
             ContentIoFocus::Input,
             0,
+            None,
         )
         .expect("cursor block copy");
         assert_eq!(picked.units[0].plain, "user text");
@@ -2443,6 +2464,8 @@ mod tests {
             picked.selection,
             CommandSelection::RecentExplicit(vec![1, 2])
         );
+        assert_eq!(picked.anchors.len(), 2);
+        assert!(picked.anchors.iter().all(|anchor| anchor.part().is_none()));
     }
 
     #[test]
@@ -2533,6 +2556,10 @@ mod tests {
         // Displayed text is Reading-mode render of parts; filter applies to that text.
         assert!(displayed.units[0].plain.lines().count() >= 1);
         assert_eq!(input.units[0].plain, "ask 1\nask 3");
+        assert!(
+            displayed.anchors.is_empty() && input.anchors.is_empty(),
+            "line-filtered copies must not publish whole atoms"
+        );
     }
 
     #[test]
