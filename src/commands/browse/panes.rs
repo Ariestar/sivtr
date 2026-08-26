@@ -1,6 +1,7 @@
-//! Browse product panes implementing [`crate::pane::Pane`].
+//! Browse product panes.
 //!
-//! **New pane checklist**
+//! A pane whose rows are a window over a growing list implements
+//! [`crate::pane::Pane`]:
 //! 1. `struct MyPane { engine: SlidingPane<K,M,B>, … }`
 //! 2. `impl Pane for MyPane` — only map data + call SlidingPane ensure_*
 //! 3. Register in picker: `my_pane.poll(); my_pane.ensure(ctx, &input);`
@@ -18,45 +19,6 @@ use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
 
 use super::selection::active_rows;
 use super::text::record_to_copy_parts;
-
-// ── Source ──────────────────────────────────────────────────────────────
-
-pub type SourceEngine = SlidingPane<String, WorkspaceSource, ()>;
-
-/// Static catalog pane. Ensure is a no-op after construction.
-#[derive(Clone, Debug)]
-pub struct SourcePane {
-    engine: SourceEngine,
-}
-
-impl SourcePane {
-    pub fn from_catalog(sources: &[WorkspaceSource]) -> Self {
-        let rows = sources
-            .iter()
-            .map(|s| WindowRow::meta_only(s.selector(), s.clone()))
-            .collect();
-        Self {
-            engine: SlidingPane::ready(rows, sources.len().max(1), true),
-        }
-    }
-
-    #[cfg(test)]
-    pub fn exhausted(&self) -> bool {
-        self.engine.exhausted()
-    }
-}
-
-impl Pane for SourcePane {
-    type Ctx<'a> = ();
-
-    fn ensure(&mut self, _ctx: (), _input: &PaneInput<'_>) -> bool {
-        false
-    }
-
-    fn len(&self) -> usize {
-        self.engine.len()
-    }
-}
 
 // ── Dialogues ───────────────────────────────────────────────────────────
 
@@ -195,7 +157,7 @@ pub struct DialogueCtx<'a> {
 impl Pane for DialoguePane {
     type Ctx<'a> = DialogueCtx<'a>;
 
-    fn ensure(&mut self, ctx: DialogueCtx<'_>, input: &PaneInput<'_>) -> bool {
+    fn ensure(&mut self, ctx: DialogueCtx<'_>, input: &PaneInput<'_>) {
         let next = fingerprint(
             ctx.sessions,
             ctx.session_idx,
@@ -246,7 +208,6 @@ impl Pane for DialoguePane {
         if changed {
             self.generation = self.generation.wrapping_add(1);
         }
-        changed
     }
 
     fn len(&self) -> usize {
@@ -409,6 +370,10 @@ pub struct ContentCtx<'a> {
 /// so one mask per dialogue spans both halves. Marks are keyed by dialogue
 /// so multi-select paging (J/K) keeps every page's marks; the picker clears
 /// the whole set when the selection changes.
+///
+/// Not a [`crate::pane::Pane`]: its rows are the shown dialogue's rendered
+/// lines, not a window over a growing list, so there is nothing to grow,
+/// keep, or hydrate — `ensure` hands the caller the frame to render.
 #[derive(Default)]
 pub struct ContentPane {
     input_lines: usize,
@@ -571,27 +536,6 @@ mod tests {
             },
             &PaneInput::new(viewport, focus).with_selected(selected),
         );
-    }
-
-    #[test]
-    fn source_pane_is_exhausted_static() {
-        let sources = vec![
-            WorkspaceSource::terminal(),
-            WorkspaceSource::agent(AgentProvider::Codex),
-        ];
-        let mut pane = SourcePane::from_catalog(&sources);
-        assert!(pane.exhausted());
-        assert_eq!(pane.len(), 2);
-        assert!(!pane.ensure(
-            (),
-            &PaneInput::new(
-                Viewport {
-                    first: 0,
-                    visible: 40
-                },
-                0
-            )
-        ));
     }
 
     #[test]
@@ -791,11 +735,11 @@ mod tests {
         };
 
         let g0 = pane.generation();
-        assert!(ensure(&mut pane), "first ensure builds rows");
+        ensure(&mut pane);
         let g1 = pane.generation();
         assert!(g1 > g0, "row build must bump the generation");
 
-        assert!(!ensure(&mut pane), "steady-state ensure is a no-op");
+        ensure(&mut pane);
         assert_eq!(
             pane.generation(),
             g1,

@@ -34,7 +34,7 @@ use super::nav::{
     move_workspace_cursor, open_link_target, resize_workspace_dialogue_selection, row_list_index,
     shown_dialogue_idx, source_list_index, ContentBlockCursor, RangeAnchor,
 };
-use super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane, SourcePane};
+use super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane};
 use super::selection::refresh_next_level;
 use super::visual::{
     apply_workspace_mouse_scroll, handle_content_mouse_select, handle_visual_select_key,
@@ -60,9 +60,9 @@ pub(crate) fn run(
     let mut help_state = ListState::default();
     help_state.select(Some(0));
     let mut focus = initial_focus;
-    // Unified Pane stack — each implements crate::pane::Pane.
-    // New panes: construct + poll/ensure with PaneInput; no special picker branches.
-    let mut source_pane = SourcePane::from_catalog(&sources);
+    // Windowed panes implement crate::pane::Pane: construct + poll/ensure
+    // with PaneInput, no special picker branches. The source catalog is the
+    // static `sources` slice; content renders one dialogue, so neither is one.
     let mut sessions_pane = SessionColumn::new(sources.clone(), source_states, cwd.clone());
     let mut dialogue_pane = DialoguePane::default();
     let mut content_pane = ContentPane::default();
@@ -75,7 +75,7 @@ pub(crate) fn run(
     let mut all_sessions = sessions_pane.collect(&selected_sources);
     let mut sessions = all_sessions.clone();
     let mut sessions_dirty = false;
-    clamp_list_state(&mut source_state, source_pane.len());
+    clamp_list_state(&mut source_state, sources.len());
     clamp_list_state(&mut session_state, sessions.len());
     clamp_list_state(&mut dialogue_state, 0);
     let mut selected_sessions = vec![false; sessions.len()];
@@ -222,17 +222,7 @@ pub(crate) fn run(
             fullscreen,
         );
 
-        let _ = source_pane.ensure(
-            (),
-            &PaneInput::new(
-                Viewport::from_panel(source_state.offset(), panel_inner_rows(layout.source)),
-                selected_index(&source_state),
-            )
-            .with_selected(&selected_sources)
-            .with_neighbors(1),
-        );
-
-        let _ = sessions_pane.ensure(
+        sessions_pane.ensure(
             SessionCtx {
                 selected_sources: &selected_sources,
                 sessions: &sessions,
