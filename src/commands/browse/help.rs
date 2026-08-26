@@ -50,8 +50,8 @@ pub(super) fn apply_workspace_help_action(
     dialogue_state: &mut ListState,
     selected_dialogues: &mut Vec<bool>,
     range_anchor: &mut Option<usize>,
-    // Content block-range anchor for `v` (half + block id of the first press).
-    content_range_anchor: &mut Option<(ContentIoFocus, usize)>,
+    // Content block-range anchor for `v` (block id of the first press).
+    content_range_anchor: &mut Option<usize>,
     content_scrolls: &mut ContentScrolls,
     content_io_focus: &mut ContentIoFocus,
     content_mode: &mut ContentViewMode,
@@ -116,7 +116,6 @@ pub(super) fn apply_workspace_help_action(
             dialogue_state,
             selected_dialogues,
             content_scrolls,
-            *content_io_focus,
             content_cursor,
             content_blocks,
         ),
@@ -131,7 +130,6 @@ pub(super) fn apply_workspace_help_action(
             dialogue_state,
             selected_dialogues,
             content_scrolls,
-            *content_io_focus,
             content_cursor,
             content_blocks,
         ),
@@ -205,8 +203,8 @@ pub(super) fn apply_workspace_help_action(
                 // pages one dialogue at a time, so the shown dialogue owns
                 // the mark regardless of the selection count.
                 let shown = shown_dialogue_idx(selected_dialogues, *content_page, dialogue_idx);
-                if let Some((half, block)) = content_cursor.focused(*content_io_focus) {
-                    content_pane.toggle_mark(half, shown, block);
+                if let Some(block) = content_cursor.get() {
+                    content_pane.toggle_mark(shown, block);
                 }
             }
         },
@@ -298,29 +296,26 @@ pub(super) fn apply_workspace_help_action(
                 apply_range_selection(range_anchor, selected_dialogues, dialogue_idx);
             }
             WorkspaceFocus::Content => {
-                // Block range: `v` anchors the cursor block in the current
-                // half, moves extend, and a second `v` toggles marks across
-                // the anchor..cursor span. Switching half re-anchors.
-                if let Some((half, cursor_block)) = content_cursor.focused(*content_io_focus) {
+                // Block range: `v` anchors the cursor block, moves extend,
+                // and a second `v` toggles marks across the anchor..cursor
+                // span of the continuous input+output block sequence.
+                if let Some(cursor_block) = content_cursor.get() {
                     match *content_range_anchor {
-                        Some((anchor_half, anchor_block)) if anchor_half == half => {
+                        Some(anchor_block) => {
                             let shown =
                                 shown_dialogue_idx(selected_dialogues, *content_page, dialogue_idx);
-                            let blocks = match half {
-                                ContentIoFocus::Input => content_blocks.0,
-                                ContentIoFocus::Output => content_blocks.1,
-                            };
-                            let anchor = blocks.iter().position(|b| b.id == anchor_block);
-                            let cursor = blocks.iter().position(|b| b.id == cursor_block);
-                            if let (Some(anchor), Some(cursor)) = (anchor, cursor) {
-                                let (lo, hi) = (anchor.min(cursor), anchor.max(cursor));
-                                for block in &blocks[lo..=hi] {
-                                    content_pane.toggle_mark(half, shown, block.id);
+                            let (lo, hi) = (
+                                anchor_block.min(cursor_block),
+                                anchor_block.max(cursor_block),
+                            );
+                            for block in content_blocks.0.iter().chain(content_blocks.1) {
+                                if (lo..=hi).contains(&block.id) {
+                                    content_pane.toggle_mark(shown, block.id);
                                 }
                             }
                             *content_range_anchor = None;
                         }
-                        _ => *content_range_anchor = Some((half, cursor_block)),
+                        _ => *content_range_anchor = Some(cursor_block),
                     }
                 }
             }
@@ -379,8 +374,8 @@ pub(super) fn apply_workspace_help_action(
         }
         WorkspaceHelpAction::ToggleBlockFold if *focus == WorkspaceFocus::Content => {
             if *content_mode == ContentViewMode::Reading {
-                if let Some((half, block)) = content_cursor.focused(*content_io_focus) {
-                    expanded.toggle(half, block);
+                if let Some(block) = content_cursor.get() {
+                    expanded.toggle(block);
                     content_cursor.follow = true;
                 }
             }
@@ -442,12 +437,11 @@ pub(super) fn apply_workspace_help_action(
             // The block id belongs to the *displayed* dialogue, so resolve
             // the shown index like the marked paths do, not the focused row.
             let shown = shown_dialogue_idx(selected_dialogues, *content_page, dialogue_idx);
-            let block_id = content_cursor.get(*content_io_focus).unwrap_or(0);
+            let block_id = content_cursor.get().unwrap_or(0);
             if let Some(picked) = workspace_picked_content_for_cursor_block(
                 dialogues,
                 selected_dialogues,
                 shown,
-                *content_io_focus,
                 block_id,
             ) {
                 return Ok(HelpDispatch::Picked(picked));
@@ -599,7 +593,7 @@ pub(super) fn set_focus(
     focus: &mut WorkspaceFocus,
     fullscreen: &mut Option<WorkspaceFocus>,
     range_anchor: &mut Option<usize>,
-    content_range_anchor: &mut Option<(ContentIoFocus, usize)>,
+    content_range_anchor: &mut Option<usize>,
     next: WorkspaceFocus,
 ) {
     *focus = next;

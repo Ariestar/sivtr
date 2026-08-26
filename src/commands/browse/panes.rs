@@ -8,7 +8,6 @@
 //! Do **not** reimplement viewport growth, keep/evict, or blanking rules.
 
 use crate::pane::{Pane, PaneInput, Selection, SlidingPane, WindowRow};
-use crate::tui::content::block::{marked_mask_len, BlockText};
 use crate::tui::content::view::ContentViewMode;
 use crate::tui::workspace::{
     workspace_content_io_texts, ContentIoFocus, ContentIoFrame, ExpandedBlocks, WorkspaceDialogue,
@@ -421,51 +420,26 @@ pub struct ContentCtx<'a> {
 /// Tracks layout line counts for Input / Output halves separately and owns
 /// the per-dialogue block multi-select (native pane selection): clicking a
 /// block's dot toggles its id, and content (copy, fold) consumes the mask.
-/// Marks are keyed by dialogue so multi-select paging (J/K) keeps every
-/// page's marks; the picker clears the whole set when the selection changes.
+/// Block ids are dialogue-global (input blocks first, output blocks after),
+/// so one mask per dialogue spans both halves. Marks are keyed by dialogue
+/// so multi-select paging (J/K) keeps every page's marks; the picker clears
+/// the whole set when the selection changes.
 #[derive(Default)]
 pub struct ContentPane {
     input_lines: usize,
     output_lines: usize,
-    /// Marked block ids per dialogue per half, indexed by block id (dense
-    /// DFS ids): `dialogue_idx -> (input, output)`.
-    marked: std::collections::HashMap<usize, [Selection; 2]>,
+    /// Marked block ids per dialogue (dense dialogue-global ids).
+    marked: std::collections::HashMap<usize, Selection>,
 }
 
-/// Block-selection mask length of one half: the shown dialogue's *complete*
-/// block-id collection when its record is loaded (so marks for folded
-/// blocks survive resizing and are restored on expand), else the displayed
-/// segments of the current frame.
-fn block_mask_len(
-    dialogues: &[WorkspaceDialogue],
-    idx: usize,
-    input: bool,
-    displayed: &[BlockText],
-) -> usize {
-    let full = dialogues
+/// Block-selection mask length of the shown dialogue: its *complete* block
+/// count, so marks on blocks currently hidden by a fold survive a rebuild.
+/// A dialogue whose record is not loaded has no blocks to mark.
+fn block_mask_len(dialogues: &[WorkspaceDialogue], idx: usize) -> usize {
+    dialogues
         .get(idx)
         .and_then(|dialogue| dialogue.record.as_ref())
-        .map(|record| {
-            marked_mask_len(
-                crate::tui::content::block::half_blocks(record, input)
-                    .iter()
-                    .map(|block| block.id),
-            )
-        })
-        .unwrap_or(0);
-    full.max(marked_mask_len(displayed.iter().map(|block| block.id)))
-}
-
-fn half_selection_mut(
-    marked: &mut std::collections::HashMap<usize, [Selection; 2]>,
-    idx: usize,
-    half: ContentIoFocus,
-) -> &mut Selection {
-    let entry = marked.entry(idx).or_default();
-    match half {
-        ContentIoFocus::Input => &mut entry[0],
-        ContentIoFocus::Output => &mut entry[1],
-    }
+        .map_or(0, crate::tui::content::block::dialogue_block_count)
 }
 
 impl ContentPane {
@@ -476,7 +450,7 @@ impl ContentPane {
         }
     }
 
-    /// Build the frame for this context, resizing the block selection masks
+    /// Build the frame for this context, resizing the block selection mask
     /// of the shown dialogue's block ids. Rebuilds the cached layouts; call
     /// it only when the content actually changed.
     pub fn ensure(&mut self, ctx: ContentCtx<'_>) -> ContentIoFrame {
@@ -490,43 +464,24 @@ impl ContentPane {
         let frame = ContentIoFrame::build(ctx.area, texts, ctx.mode, ctx.io_focus);
         self.input_lines = frame.line_count(ContentIoFocus::Input);
         self.output_lines = frame.line_count(ContentIoFocus::Output);
-        half_selection_mut(&mut self.marked, ctx.highlighted_idx, ContentIoFocus::Input).resize(
-            block_mask_len(
-                ctx.dialogues,
-                ctx.highlighted_idx,
-                true,
-                &frame.texts.input_blocks,
-            ),
-        );
-        half_selection_mut(
-            &mut self.marked,
-            ctx.highlighted_idx,
-            ContentIoFocus::Output,
-        )
-        .resize(block_mask_len(
-            ctx.dialogues,
-            ctx.highlighted_idx,
-            false,
-            &frame.texts.output_blocks,
-        ));
+        self.marked
+            .entry(ctx.highlighted_idx)
+            .or_default()
+            .resize(block_mask_len(ctx.dialogues, ctx.highlighted_idx));
         frame
     }
 
-    /// Marked block mask of one dialogue's half (`mask[block_id]` = marked);
+    /// Marked block mask of one dialogue (`mask[block_id]` = marked);
     /// an unknown dialogue has no marks.
-    pub fn marked(&self, half: ContentIoFocus, dialogue_idx: usize) -> &[bool] {
-        let [input, output] = match self.marked.get(&dialogue_idx) {
-            Some(entry) => entry,
-            None => return &[],
-        };
-        match half {
-            ContentIoFocus::Input => input.mask(),
-            ContentIoFocus::Output => output.mask(),
+    pub fn marked(&self, dialogue_idx: usize) -> &[bool] {
+        match self.marked.get(&dialogue_idx) {
+            Some(selection) => selection.mask(),
+            None => &[],
         }
     }
 
-    pub fn toggle_mark(&mut self, half: ContentIoFocus, dialogue_idx: usize, block: usize) {
-        half_selection_mut(&mut self.marked, dialogue_idx, half).toggle(block);
+    pub fn toggle_mark(&mut self, dialogue_idx: usize, block: usize) {
+        self.marked.entry(dialogue_idx).or_default().toggle(block);
     }
 
     /// Drop every dialogue's marks (selection set changed).
@@ -537,7 +492,7 @@ impl ContentPane {
     pub fn marked_count(&self) -> usize {
         self.marked
             .values()
-            .map(|[input, output]| input.count() + output.count())
+            .map(|selection| selection.count())
             .sum()
     }
 }

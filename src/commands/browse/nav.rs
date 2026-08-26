@@ -31,41 +31,46 @@ pub(super) fn open_link_target(target: &str) -> Result<()> {
     Ok(())
 }
 
-/// Keyboard/mouse cursor over content blocks, one position per half (each
-/// half keeps its own, like the session/dialogue lists). `follow` asks the
+/// Keyboard/mouse cursor over content blocks, one position per dialogue
+/// across both IO halves (block ids are dialogue-global). `follow` asks the
 /// picker to keep the cursor block visible on the next redraw; keyboard
 /// moves set it, clicks do not (a clicked line is already visible).
 #[derive(Default)]
 pub(super) struct ContentBlockCursor {
-    pub(super) input: Option<usize>,
-    pub(super) output: Option<usize>,
+    pub(super) block: Option<usize>,
     pub(super) follow: bool,
 }
 
 impl ContentBlockCursor {
-    pub(super) fn get(&self, half: ContentIoFocus) -> Option<usize> {
-        match half {
-            ContentIoFocus::Input => self.input,
-            ContentIoFocus::Output => self.output,
-        }
+    pub(super) fn get(&self) -> Option<usize> {
+        self.block
     }
 
-    pub(super) fn set(&mut self, half: ContentIoFocus, block: usize) {
-        match half {
-            ContentIoFocus::Input => self.input = Some(block),
-            ContentIoFocus::Output => self.output = Some(block),
-        }
+    pub(super) fn set(&mut self, block: usize) {
+        self.block = Some(block);
     }
 
     pub(super) fn clear(&mut self) {
-        self.input = None;
-        self.output = None;
+        self.block = None;
         self.follow = false;
     }
 
-    /// `(half, block)` of the focused half, for the view highlight.
-    pub(super) fn focused(&self, focus: ContentIoFocus) -> Option<(ContentIoFocus, usize)> {
-        self.get(focus).map(|block| (focus, block))
+    /// `(half, block)` of the cursor, for the view highlight and block
+    /// operations. The half is the one whose displayed segments own the
+    /// cursor id; a block hidden by a fold has no half and no highlight.
+    pub(super) fn focused(
+        &self,
+        blocks: (&[BlockText], &[BlockText]),
+    ) -> Option<(ContentIoFocus, usize)> {
+        let block = self.block?;
+        let half = if blocks.0.iter().any(|segment| segment.id == block) {
+            ContentIoFocus::Input
+        } else if blocks.1.iter().any(|segment| segment.id == block) {
+            ContentIoFocus::Output
+        } else {
+            return None;
+        };
+        Some((half, block))
     }
 }
 
@@ -131,7 +136,6 @@ pub(super) fn move_workspace_cursor_up(
     dialogue_state: &mut ListState,
     selected_dialogues: &mut Vec<bool>,
     content_scrolls: &mut ContentScrolls,
-    content_io_focus: ContentIoFocus,
     content_cursor: &mut ContentBlockCursor,
     content_blocks: (&[BlockText], &[BlockText]),
 ) {
@@ -156,7 +160,7 @@ pub(super) fn move_workspace_cursor_up(
             content_scrolls.clear();
         }
         WorkspaceFocus::Content => {
-            move_content_cursor(true, content_cursor, content_blocks, content_io_focus);
+            move_content_cursor(true, content_cursor, content_blocks);
         }
     }
 }
@@ -173,7 +177,6 @@ pub(super) fn move_workspace_cursor_down(
     dialogue_state: &mut ListState,
     selected_dialogues: &mut Vec<bool>,
     content_scrolls: &mut ContentScrolls,
-    content_io_focus: ContentIoFocus,
     content_cursor: &mut ContentBlockCursor,
     content_blocks: (&[BlockText], &[BlockText]),
 ) {
@@ -201,38 +204,46 @@ pub(super) fn move_workspace_cursor_down(
             content_scrolls.clear();
         }
         WorkspaceFocus::Content => {
-            move_content_cursor(false, content_cursor, content_blocks, content_io_focus);
+            move_content_cursor(false, content_cursor, content_blocks);
         }
     }
 }
 
-/// Move the content block cursor within the focused half, clamped like a
-/// list selection; the next redraw keeps the cursor block visible. The walk
-/// follows the *visible* block sequence (the rendered segments), so folds —
-/// which change which blocks are shown — resolve the cursor id against the
-/// current segments and clamp to the nearest visible block.
+/// Move the content cursor across the whole dialogue: input blocks then
+/// output blocks form one continuous sequence, so j/k flows over the half
+/// boundary. The walk follows the *visible* block sequence (the rendered
+/// segments), so folds — which change which blocks are shown — resolve the
+/// cursor id against the current segments and clamp to the nearest visible
+/// block.
 fn move_content_cursor(
     up: bool,
     cursor: &mut ContentBlockCursor,
     blocks: (&[BlockText], &[BlockText]),
-    focus: ContentIoFocus,
 ) {
-    let blocks = match focus {
-        ContentIoFocus::Input => blocks.0,
-        ContentIoFocus::Output => blocks.1,
-    };
-    if blocks.is_empty() {
+    let (input_blocks, output_blocks) = blocks;
+    let input_len = input_blocks.len();
+    let total = input_len + output_blocks.len();
+    if total == 0 {
         return;
     }
-    let position = cursor
-        .get(focus)
-        .and_then(|id| blocks.iter().position(|block| block.id == id));
+    // Cursor's position in the continuous input + output sequence.
+    let position = cursor.get().and_then(|id| {
+        input_blocks
+            .iter()
+            .chain(output_blocks)
+            .position(|block| block.id == id)
+    });
     let next = match position {
         Some(pos) if up => pos.saturating_sub(1),
-        Some(pos) => (pos + 1).min(blocks.len() - 1),
+        Some(pos) => (pos + 1).min(total - 1),
         None => 0,
     };
-    cursor.set(focus, blocks[next].id);
+    let id = if next < input_len {
+        input_blocks[next].id
+    } else {
+        output_blocks[next - input_len].id
+    };
+    cursor.set(id);
     cursor.follow = true;
 }
 

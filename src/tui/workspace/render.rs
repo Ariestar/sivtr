@@ -125,17 +125,13 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
             ContentIoFocus::Input => "Input",
             ContentIoFocus::Output => "Output",
         };
-        // The block cursor highlights the focused half like the cursor row in
-        // the session/dialogue lists; it never depends on the panel being
+        // The block cursor highlights its half like the cursor row in the
+        // session/dialogue lists; it never depends on the panel being
         // focused, so scrolling content always shows where the cursor is.
         let cursor_block = view
             .content_block_cursor
             .filter(|(focus, _)| *focus == half)
             .map(|(_, block)| block);
-        let range_blocks = view
-            .content_range
-            .filter(|(focus, _, _)| *focus == half)
-            .map(|(_, anchor, cursor)| (anchor, cursor));
         render_content_panel(
             frame,
             area,
@@ -153,11 +149,8 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
                 .filter(|_| view.content_io_focus == half),
             content_search,
             cursor_block,
-            range_blocks,
-            match half {
-                ContentIoFocus::Input => view.content_marked_input,
-                ContentIoFocus::Output => view.content_marked_output,
-            },
+            view.content_range,
+            view.content_marked,
         );
     }
 

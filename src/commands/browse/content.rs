@@ -4,8 +4,7 @@ use anyhow::Result;
 use crossterm::event::KeyCode;
 
 use crate::commands::select::CommandSelection;
-use crate::tui::content::block::{half_blocks, Block};
-use crate::tui::content::io::ContentIoFocus;
+use crate::tui::content::block::{dialogue_blocks, Block};
 use crate::tui::content::view::{line_count, ContentViewMode};
 use crate::tui::search::{WorkspaceSearchMatch, WorkspaceSearchOutput};
 use crate::tui::workspace::{
@@ -144,13 +143,9 @@ pub(super) fn workspace_picked_content_for_marked_blocks(
         else {
             continue;
         };
-        for (input, half) in [
-            (true, ContentIoFocus::Input),
-            (false, ContentIoFocus::Output),
-        ] {
-            for block in half_blocks(record, input) {
-                collect_marked_blocks(&block, half, dialogue_idx, content_pane, record, &mut texts);
-            }
+        let (input_blocks, output_blocks) = dialogue_blocks(record);
+        for block in input_blocks.iter().chain(&output_blocks) {
+            collect_marked_blocks(block, dialogue_idx, content_pane, record, &mut texts);
         }
     }
     picked_for_texts(dialogues, selected_dialogues, dialogue_idx, texts)
@@ -160,14 +155,13 @@ pub(super) fn workspace_picked_content_for_marked_blocks(
 /// member of a folded run carries its own id, separate from the run's).
 fn collect_marked_blocks(
     block: &Block,
-    half: ContentIoFocus,
     dialogue_idx: usize,
     content_pane: &ContentPane,
     record: &WorkRecord,
     texts: &mut Vec<String>,
 ) {
     if content_pane
-        .marked(half, dialogue_idx)
+        .marked(dialogue_idx)
         .get(block.id)
         .copied()
         .unwrap_or(false)
@@ -175,7 +169,7 @@ fn collect_marked_blocks(
         texts.push(block.body(record));
     }
     for child in &block.children {
-        collect_marked_blocks(child, half, dialogue_idx, content_pane, record, texts);
+        collect_marked_blocks(child, dialogue_idx, content_pane, record, texts);
     }
 }
 
@@ -185,15 +179,14 @@ pub(super) fn workspace_picked_content_for_cursor_block(
     dialogues: &[WorkspaceDialogue],
     selected_dialogues: &[bool],
     dialogue_idx: usize,
-    half: ContentIoFocus,
     block_id: usize,
 ) -> Option<WorkspacePickedContent> {
     let dialogue = dialogues.get(dialogue_idx)?;
     let record = dialogue.record.as_ref()?;
-    let input = matches!(half, ContentIoFocus::Input);
-    let blocks = half_blocks(record, input);
-    let block = blocks
+    let (input_blocks, output_blocks) = dialogue_blocks(record);
+    let block = input_blocks
         .iter()
+        .chain(&output_blocks)
         .find_map(|block| find_block(block, block_id))?;
     picked_for_texts(
         dialogues,
@@ -450,7 +443,9 @@ mod tests {
                 io_focus: ContentIoFocus::Output,
                 expanded: &ExpandedBlocks::default(),
             });
-            pane.toggle_mark(ContentIoFocus::Output, idx, 0);
+            // Dialogue-global ids: the input user block is 0, so the output
+            // tool block is 1.
+            pane.toggle_mark(idx, 1);
         }
 
         let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
