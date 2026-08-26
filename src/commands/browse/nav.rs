@@ -183,6 +183,37 @@ pub(super) fn clamp_list_state(state: &mut ListState, len: usize) {
     state.select(selected);
 }
 
+/// Discard whatever the panes right of `focus` derived from the list row the
+/// cursor just left. Both ways a cursor lands on a new row share this rule: a
+/// j/k step (and the wheel, which steps) and a click's absolute jump.
+///
+/// Distinct from [`invalidate_panes_below`], which answers the same question
+/// after a *selection* change: a selected pane's list spans every marked row,
+/// so moving the cursor inside it changes nothing below.
+pub(super) fn invalidate_after_cursor_move(
+    focus: WorkspaceFocus,
+    selected_sessions: &[bool],
+    dialogue_state: &mut ListState,
+    selected_dialogues: &mut Vec<bool>,
+    content_scrolls: &mut ContentScrolls,
+) {
+    match focus {
+        WorkspaceFocus::Sessions => {
+            // The dialogue list spans every selected session, so it only
+            // follows the focused row while nothing is selected.
+            if !has_selected_sessions(selected_sessions) {
+                reset_workspace_dialogue_state(0, dialogue_state, selected_dialogues);
+            }
+            content_scrolls.clear();
+        }
+        // A different dialogue is on screen: its content starts at the top.
+        WorkspaceFocus::Dialogues => content_scrolls.clear(),
+        // Source feeds sessions through its selection, not its cursor;
+        // Content has no list row.
+        WorkspaceFocus::Source | WorkspaceFocus::Content => {}
+    }
+}
+
 /// Move the focused pane's cursor one row (`up` or down). Every list pane
 /// follows one rule: clamp to the row count, and a move that does not change
 /// the row does nothing — so bumping the first or last row never resets the
@@ -226,17 +257,13 @@ pub(super) fn move_workspace_cursor(
         return;
     }
     state.select(Some(next));
-    // A row change invalidates what the panes to the right derived from it.
-    match focus {
-        WorkspaceFocus::Sessions => {
-            if !has_selected_sessions(selected_sessions) {
-                reset_workspace_dialogue_state(0, dialogue_state, selected_dialogues);
-            }
-            content_scrolls.clear();
-        }
-        WorkspaceFocus::Dialogues => content_scrolls.clear(),
-        _ => {}
-    }
+    invalidate_after_cursor_move(
+        focus,
+        selected_sessions,
+        dialogue_state,
+        selected_dialogues,
+        content_scrolls,
+    );
 }
 
 /// Move the content cursor across the whole dialogue: input blocks then

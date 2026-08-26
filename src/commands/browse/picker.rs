@@ -30,12 +30,12 @@ use super::content::{
 use super::help::{apply_workspace_help_action, set_focus, toggle_list_row, HelpDispatch};
 use super::load::{SessionColumn, SessionCtx, SourceLoadState};
 use super::nav::{
-    clamp_list_state, dot_gutter_hit, invalidate_panes_below, move_workspace_cursor,
-    open_link_target, reset_workspace_dialogue_state, resize_workspace_dialogue_selection,
-    row_list_index, shown_dialogue_idx, source_list_index, ContentBlockCursor, RangeAnchor,
+    clamp_list_state, dot_gutter_hit, invalidate_after_cursor_move, invalidate_panes_below,
+    move_workspace_cursor, open_link_target, resize_workspace_dialogue_selection, row_list_index,
+    shown_dialogue_idx, source_list_index, ContentBlockCursor, RangeAnchor,
 };
 use super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane, SourcePane};
-use super::selection::{has_selected_sessions, refresh_next_level};
+use super::selection::refresh_next_level;
 use super::visual::{
     apply_workspace_mouse_scroll, handle_content_mouse_select, handle_visual_select_key,
     MouseSelectionStart, VisualContentContext, VisualSelectMode, MOUSE_SCROLL_LINES,
@@ -1207,13 +1207,13 @@ pub(crate) fn run(
                                         session_state.offset(),
                                     ) {
                                         session_state.select(Some(idx));
-                                        if !has_selected_sessions(&selected_sessions) {
-                                            reset_workspace_dialogue_state(
-                                                0,
-                                                &mut dialogue_state,
-                                                &mut selected_dialogues,
-                                            );
-                                        }
+                                        invalidate_after_cursor_move(
+                                            WorkspaceFocus::Sessions,
+                                            &selected_sessions,
+                                            &mut dialogue_state,
+                                            &mut selected_dialogues,
+                                            &mut content_scrolls,
+                                        );
                                         if dot_gutter_hit(layout.sessions, mouse.column) {
                                             toggle_list_row(
                                                 WorkspaceFocus::Sessions,
@@ -1227,7 +1227,6 @@ pub(crate) fn run(
                                                 &mut content_scrolls,
                                             );
                                         }
-                                        content_scrolls.clear();
                                     }
                                 }
                                 WorkspaceFocus::Dialogues => {
@@ -1238,6 +1237,13 @@ pub(crate) fn run(
                                         dialogue_state.offset(),
                                     ) {
                                         dialogue_state.select(Some(idx));
+                                        invalidate_after_cursor_move(
+                                            WorkspaceFocus::Dialogues,
+                                            &selected_sessions,
+                                            &mut dialogue_state,
+                                            &mut selected_dialogues,
+                                            &mut content_scrolls,
+                                        );
                                         if dot_gutter_hit(layout.dialogues, mouse.column) {
                                             toggle_list_row(
                                                 WorkspaceFocus::Dialogues,
@@ -1251,7 +1257,6 @@ pub(crate) fn run(
                                                 &mut content_scrolls,
                                             );
                                         }
-                                        content_scrolls.clear();
                                     }
                                 }
                                 WorkspaceFocus::Content => {}
