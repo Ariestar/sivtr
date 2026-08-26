@@ -40,7 +40,12 @@ mode = "auto"
 
 [mcp]
 idle_exit_secs = 60
+
+[publish]
+endpoint = "https://share.hnnulwh.cn"
 ```
+
+`[publish].endpoint` 是加密公开链接服务地址。当前正式入口使用 `https://share.hnnulwh.cn`，由 Nginx 反向代理到同一台服务器上仅监听 loopback 的 Sivtr publication 服务；staging 或其他托管方式可以改为兼容同一 `/api/v1` 契约的 endpoint。该配置不会增加第二套认证路径。
 
 字段级说明见[配置文件](/zh-cn/reference/config-file/)。
 

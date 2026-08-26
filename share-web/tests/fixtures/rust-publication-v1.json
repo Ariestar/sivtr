@@ -1,0 +1,6 @@
+{
+  "publication_id": "7d_0123456789abcdefghijkl",
+  "key": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+  "envelope_base64url": "U0lWVFBVQjEBAQECAwQFBgcICQoLDKT34J5q6uIs5cFf1NStIADYo7CLTqAj1VAraIMCAsxGGWx0YzVOjn2n6aQwuAJ6mP9Xeq9d3_WWtdFzLwtD2zM4lfBwP4RYZPsOGuNxZD78vnP9lKdnxrx0jO5NLsIT1EG87DF-NaG5yDfmoAuuNTSjipH5w8zcGbzXjAVdCiE9qDmZ0gfEEDFPyA",
+  "source": "Rust encrypt_snapshot_with_nonce; nonce=0102030405060708090a0b0c"
+}

@@ -1,0 +1,26 @@
+[Unit]
+Description=Sivtr encrypted publication service
+After=network.target
+
+[Service]
+Type=simple
+User=sivtr-share
+Group=sivtr-share
+WorkingDirectory=/opt/sivtr-share
+Environment=HOST=127.0.0.1
+Environment=PORT=8791
+Environment=DATA_DIR=/var/lib/sivtr-share
+Environment=DIST_DIR=/opt/sivtr-share/dist
+Environment=CREATE_ENABLED=true
+ExecStart=/usr/bin/node /opt/sivtr-share/server/self-host.mjs
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/sivtr-share
+
+[Install]
+WantedBy=multi-user.target

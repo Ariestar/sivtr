@@ -142,7 +142,7 @@ TUI 应保持快速和键盘优先,但需要从单个输出浏览扩展到多 so
 - [ ] peer rename / verify / disconnect 辅助命令。
 - [ ] 用 UDS 或 named-pipe 替换 localhost TCP 控制面。
 - [ ] 旧服务端协议版本协商。
-- [ ] 更细的 selective disclosure（按 session 分享，而不是整个 workspace）。
+- [x] 更细的 selective disclosure（`publish` 按单个本地 session 的连续轮次生成浏览器只读快照；更广泛 evidence bundle 仍未完成）。
 
 ## Privacy and lifecycle
 

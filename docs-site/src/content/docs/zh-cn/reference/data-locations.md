@@ -112,6 +112,7 @@ sivtr hotkey stop
 | --- | --- |
 | `identity.key` | iroh 使用的稳定设备身份 |
 | `remote-state.db` | SQLite：peers、shares、grants、invites、mounts、audit |
+| `publication-state.db` | SQLite：本机公开快照的 id、期限、来源摘要、查看密钥和撤销凭据；不保存公开快照明文 |
 | `daemon.json` | 运行中 daemon 控制信息（port、token、node id） |
 | `daemon.lock` | 单实例锁 |
 | `daemon.log` | daemon 日志（`sivtr serve logs`） |

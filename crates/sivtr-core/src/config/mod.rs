@@ -18,6 +18,8 @@ pub struct SivtrConfig {
     pub theme: ThemeConfig,
     /// MCP stdio server settings.
     pub mcp: McpConfig,
+    /// Browser publication service settings.
+    pub publish: PublishConfig,
 }
 
 /// Editor configuration.
@@ -88,6 +90,15 @@ pub struct McpConfig {
     pub idle_exit_secs: u64,
 }
 
+/// Endpoint for encrypted browser publications.  The endpoint is deliberately
+/// the only configurable publication integration point in v1; override
+/// `endpoint` in `config.toml` to use a self-hosted or staging service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PublishConfig {
+    pub endpoint: String,
+}
+
 // --- Defaults ---
 
 impl Default for HistoryConfig {
@@ -110,6 +121,14 @@ impl Default for HotkeyConfig {
 impl Default for McpConfig {
     fn default() -> Self {
         Self { idle_exit_secs: 60 }
+    }
+}
+
+impl Default for PublishConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: "https://share.hnnulwh.cn".to_string(),
+        }
     }
 }
 
@@ -216,6 +235,13 @@ mod tests {
         assert!(toml.contains("[mcp]"));
         assert!(toml.contains("idle_exit_secs = 60"));
         assert_eq!(SivtrConfig::default().mcp.idle_exit_secs, 60);
+    }
+
+    #[test]
+    fn serializes_publish_endpoint() {
+        let toml = to_toml_string(&SivtrConfig::default()).unwrap();
+        assert!(toml.contains("[publish]"));
+        assert!(toml.contains("endpoint = \"https://share.hnnulwh.cn\""));
     }
 
     #[test]

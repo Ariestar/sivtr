@@ -1,0 +1,34 @@
+# Sivtr publication reverse proxy for the local self-hosted service.
+# Copy this file to /etc/nginx/sites-available/share.hnnulwh.cn after DNS
+# points share.hnnulwh.cn at this server.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name share.hnnulwh.cn;
+
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name share.hnnulwh.cn;
+
+    ssl_certificate     /etc/nginx/ssl/share.hnnulwh.cn/share.hnnulwh.cn.pem;
+    ssl_certificate_key /etc/nginx/ssl/share.hnnulwh.cn/share.hnnulwh.cn.key;
+
+    # The application enforces the 5 MiB envelope limit; keep a small margin.
+    client_max_body_size 6m;
+
+    location / {
+        proxy_pass http://127.0.0.1:8791;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+
+        proxy_http_version 1.1;
+        proxy_read_timeout 60s;
+    }
+}

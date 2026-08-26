@@ -84,6 +84,9 @@ fn run() -> Result<()> {
         Some(Commands::Show(args)) => {
             commands::memory::show::execute(&args)?;
         }
+        Some(Commands::Publish(command)) => {
+            commands::publish::execute(command)?;
+        }
         Some(Commands::Mcp(cmd)) => {
             commands::system::mcp::execute(cmd)?;
         }

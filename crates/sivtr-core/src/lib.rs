@@ -6,6 +6,8 @@ pub mod config;
 pub mod export;
 pub mod history;
 pub mod origin;
+pub mod privacy;
+pub mod publication;
 pub mod query;
 pub mod record;
 pub mod search;
