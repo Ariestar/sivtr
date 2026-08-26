@@ -66,7 +66,7 @@ pub fn pick_agent(args: &HotkeyPickAgentArgs) -> Result<()> {
         // before show_pick_error_and_wait prompts.
         let picked =
             browse::run_without_panic_wait(&providers, args.all, WorkspaceFocus::Sessions)?;
-        copy::export_picked(&picked, false, None, None, false)
+        copy::handle_picker_result(picked, false, None, None, false)
     });
 
     match result {
@@ -527,3 +527,4 @@ fn terminate_process(pid: u32) -> Result<()> {
 fn terminate_process(_pid: u32) -> Result<()> {
     anyhow::bail!("sivtr hotkey is currently supported on Windows only")
 }
+

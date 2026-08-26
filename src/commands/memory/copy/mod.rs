@@ -59,6 +59,23 @@ pub fn execute(plan: CopyPlan) -> Result<()> {
     )
 }
 
+pub(crate) fn handle_picker_result(
+    result: browse::WorkspacePickerResult,
+    print_full: bool,
+    regex: Option<&str>,
+    lines: Option<&str>,
+    ansi: bool,
+) -> Result<()> {
+    match result {
+        browse::WorkspacePickerResult::Picked(picked) => {
+            export_picked(&picked, print_full, regex, lines, ansi)
+        }
+        browse::WorkspacePickerResult::Publish { set, expires } => {
+            crate::commands::publish::create_from_picker(set, &expires)
+        }
+    }
+}
+
 fn execute_pick(plan: &CopyPlan) -> Result<()> {
     match plan.address.as_deref() {
         None => {
@@ -68,8 +85,8 @@ fn execute_pick(plan: &CopyPlan) -> Result<()> {
                 .map(|spec| spec.provider)
                 .collect::<Vec<_>>();
             let picked = browse::run(&providers, false, WorkspaceFocus::Sessions)?;
-            export_picked(
-                &picked,
+            handle_picker_result(
+                picked,
                 plan.filters.print,
                 plan.filters.regex.as_deref(),
                 plan.filters.lines.as_deref(),
@@ -103,8 +120,8 @@ fn execute_pick(plan: &CopyPlan) -> Result<()> {
             };
             let picked =
                 browse::run_with_sessions(source, vec![session], WorkspaceFocus::Dialogues)?;
-            export_picked(
-                &picked,
+            handle_picker_result(
+                picked,
                 plan.filters.print,
                 plan.filters.regex.as_deref(),
                 plan.filters.lines.as_deref(),
@@ -151,3 +168,4 @@ pub fn plan_from_cli(
         filters,
     })
 }
+

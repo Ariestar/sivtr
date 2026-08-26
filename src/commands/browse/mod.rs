@@ -1,7 +1,7 @@
 //! Workspace browser: source catalog, on-demand load, and TUI picker.
 //!
 //! Product surface for bare `sivtr`, hotkey, and `copy --pick`. Returns
-//! [`WorkspacePickedContent`]; callers decide how to export (clipboard, etc.).
+//! [`WorkspacePickerResult`]; callers copy or publish the selection.
 //!
 //! Pane data capability lives in [`crate::pane`] (`SlidingPane`). This module
 //! owns loaders + picker orchestration only. `tui::pane` is chrome only.
@@ -14,6 +14,7 @@ mod panes;
 #[cfg(feature = "perf-benches")]
 pub mod perf;
 mod picker;
+mod publish_overlay;
 mod selection;
 mod text;
 mod vim;
@@ -27,11 +28,18 @@ use anyhow::{anyhow, Context, Result};
 use sivtr_core::ai::AgentProvider;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+use crate::commands::memory::workset::WorkSet;
 use crate::tui::terminal::{
     finish as finish_tui, init as init_tui, panic_payload_message, restore as restore_tui,
     wait_for_enter,
 };
 use crate::tui::workspace::{WorkspaceFocus, WorkspacePickedContent, WorkspaceSource};
+
+/// Outcome of the workspace picker: copy the selection, or publish a link.
+pub enum WorkspacePickerResult {
+    Picked(WorkspacePickedContent),
+    Publish { set: WorkSet, expires: String },
+}
 
 /// Run the workspace browser.
 ///
@@ -41,7 +49,7 @@ pub fn run(
     providers: &[AgentProvider],
     select_remotes: bool,
     initial_focus: WorkspaceFocus,
-) -> Result<WorkspacePickedContent> {
+) -> Result<WorkspacePickerResult> {
     run_catalog(providers, select_remotes, initial_focus, true)
 }
 
@@ -54,7 +62,7 @@ pub fn run_without_panic_wait(
     providers: &[AgentProvider],
     select_remotes: bool,
     initial_focus: WorkspaceFocus,
-) -> Result<WorkspacePickedContent> {
+) -> Result<WorkspacePickerResult> {
     run_catalog(providers, select_remotes, initial_focus, false)
 }
 
@@ -63,7 +71,7 @@ fn run_catalog(
     select_remotes: bool,
     initial_focus: WorkspaceFocus,
     wait_after_panic: bool,
-) -> Result<WorkspacePickedContent> {
+) -> Result<WorkspacePickerResult> {
     let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
     let sources = workspace_source_catalog(providers, &cwd)?;
     if sources.is_empty() {
@@ -95,7 +103,7 @@ pub fn run_with_sessions(
     source: WorkspaceSource,
     sessions: Vec<crate::tui::workspace::WorkspaceSession>,
     initial_focus: WorkspaceFocus,
-) -> Result<WorkspacePickedContent> {
+) -> Result<WorkspacePickerResult> {
     let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
     let loaded = sessions.len().max(1);
     let mut terminal = init_tui()?;
@@ -130,7 +138,7 @@ fn run_picker_guarded(
     cwd: std::path::PathBuf,
     initial_focus: WorkspaceFocus,
     wait_after_panic: bool,
-) -> Result<WorkspacePickedContent> {
+) -> Result<WorkspacePickerResult> {
     // This guard recovers the panic and reports it itself, so the terminal-
     // restoring hook must not also emit the default "uncaught panic" report.
     let _suppress = crate::tui::panic::SuppressDefaultReport::enter();
@@ -166,3 +174,4 @@ pub const PICK_CANCELLED_MESSAGE: &str = "Pick cancelled";
 pub fn is_pick_cancelled(error: &anyhow::Error) -> bool {
     error.to_string() == PICK_CANCELLED_MESSAGE
 }
+

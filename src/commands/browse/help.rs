@@ -35,6 +35,8 @@ pub(super) enum HelpDispatch {
     Picked(WorkspacePickedContent),
     /// Caller must refresh session/dialogue load (needs SessionColumn).
     Refresh,
+    /// Open the publication lifetime overlay for the current selection.
+    Publish,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -512,6 +514,7 @@ pub(super) fn apply_workspace_help_action(
         },
         WorkspaceHelpAction::Cancel => anyhow::bail!(PICK_CANCELLED_MESSAGE),
         WorkspaceHelpAction::Refresh => return Ok(HelpDispatch::Refresh),
+        WorkspaceHelpAction::Publish => return Ok(HelpDispatch::Publish),
         // Focus-gated arms that did not match: ignore.
         WorkspaceHelpAction::FocusDialogues
         | WorkspaceHelpAction::FocusContent

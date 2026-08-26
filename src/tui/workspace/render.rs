@@ -173,6 +173,8 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
             line_filter_error: view.line_filter_error,
             fullscreen: view.fullscreen,
             content_selection: view.content_selection,
+            publish: view.publish.is_some(),
+            publish_error: view.publish_error,
         },
     );
 
@@ -204,6 +206,8 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
             view.line_filter_error,
             view.line_filter_input_open,
         );
+    } else if let Some(publish) = view.publish {
+        render_publish_box(frame, centered_rect(chunks[0], 50, 42), publish);
     } else if view.show_help {
         render_help_panel(frame, chunks[0], view.help_state);
     }
@@ -238,9 +242,13 @@ fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>)
         line_filter_error,
         fullscreen,
         content_selection,
+        publish,
+        publish_error,
     } = footer;
 
-    let mut spans = if search.is_some() {
+    let mut spans = if publish {
+        footer_control_spans("j/k move  Enter create  Esc cancel")
+    } else if search.is_some() {
         let mut spans = if search.map(|search| search.input_open).unwrap_or(false) {
             footer_control_spans("type search  > session  # dialogue  Enter accept  Esc clear")
         } else {
@@ -270,7 +278,9 @@ fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>)
     if fullscreen.is_some() {
         spans.extend(footer_status_spans("fullscreen"));
     }
-    if let Some(error) = line_filter_error {
+    if let Some(error) = publish_error {
+        spans.extend(footer_status_spans(error));
+    } else if let Some(error) = line_filter_error {
         spans.extend(footer_status_spans(&format!("lines invalid: {error}")));
     } else if line_filter_input_open {
         spans.extend(footer_status_spans(&format!(
@@ -497,6 +507,55 @@ fn render_line_filter_box(
     let prompt = line_filter_prompt_text(line_filter, line_filter_error, input_open);
     let paragraph = Paragraph::new(prompt).block(panel_block(&Panel::new(":", title, true)));
     frame.render_widget(paragraph, area);
+}
+
+fn render_publish_box(
+    frame: &mut Frame,
+    area: Rect,
+    publish: crate::tui::workspace::WorkspacePublishView<'_>,
+) {
+    frame.render_widget(Clear, area);
+    let paragraph = Paragraph::new(publish_box_body(&publish)).block(panel_block(&Panel::new(
+        "",
+        publish_box_title(&publish),
+        true,
+    )));
+    frame.render_widget(paragraph, area);
+}
+
+pub(crate) fn publish_box_title(
+    publish: &crate::tui::workspace::WorkspacePublishView<'_>,
+) -> String {
+    format!(
+        "Publish  (v{} · {} items)",
+        publish.schema_version, publish.item_count
+    )
+}
+
+pub(crate) fn publish_box_body(
+    publish: &crate::tui::workspace::WorkspacePublishView<'_>,
+) -> String {
+    use sivtr_core::publication::PublicationExpiry;
+    let mut lines = Vec::new();
+    for (index, expiry) in PublicationExpiry::PICKER_CHOICES.iter().enumerate() {
+        let marker = if index == publish.selected { ">" } else { " " };
+        lines.push(format!("{marker} {}", expiry.as_str()));
+    }
+    lines.push(String::new());
+    lines.push(format!(
+        "{} redacted · {} warnings",
+        publish.redaction_count, publish.warning_count
+    ));
+    if publish.warning_count > 0 {
+        lines.push("Enter still creates the link.".to_string());
+    } else {
+        lines.push("Enter creates the link. Esc cancels.".to_string());
+    }
+    if let Some(error) = publish.error {
+        lines.push(String::new());
+        lines.push(error.to_string());
+    }
+    lines.join("\n")
 }
 
 pub(crate) fn line_filter_prompt_text(
@@ -945,3 +1004,4 @@ mod tests {
         assert_eq!(title_span.style.fg, None);
     }
 }
+

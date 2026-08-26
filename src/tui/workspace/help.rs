@@ -44,6 +44,8 @@ pub(crate) enum WorkspaceHelpAction {
     Cancel,
     /// Refresh next level under active rows (source→sessions, session→dialogues).
     Refresh,
+    /// Confirm the current atom/dialogue selection for a publication link.
+    Publish,
     /// Content half: jump scroll to top / bottom.
     ScrollContentTop,
     ScrollContentBottom,
@@ -327,6 +329,13 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
             footer_panes: NAV,
         },
         WorkspaceHelpEntry {
+            key: "p",
+            description: "publish selection",
+            action: WorkspaceHelpAction::Publish,
+            footer_label: Some("publish"),
+            footer_panes: NAV,
+        },
+        WorkspaceHelpEntry {
             key: "q",
             description: "cancel",
             action: WorkspaceHelpAction::Cancel,
@@ -426,3 +435,4 @@ pub(crate) fn workspace_footer_hotkeys(focus: WorkspaceFocus) -> String {
     }
     parts.join("  ")
 }
+

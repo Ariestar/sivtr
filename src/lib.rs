@@ -170,7 +170,7 @@ fn run_workspace(select_remotes: bool) -> Result<()> {
         .map(|spec| spec.provider)
         .collect::<Vec<_>>();
     let picked = commands::browse::run(&providers, select_remotes, WorkspaceFocus::Sessions)?;
-    commands::memory::copy::export_picked(&picked, false, None, None, false)
+    commands::memory::copy::handle_picker_result(picked, false, None, None, false)
 }
 
 fn run_copy_command(cmd: CopyCommand) -> Result<()> {
@@ -263,3 +263,4 @@ fn run_hotkey_serve(args: &HotkeyServeArgs) -> Result<()> {
 fn run_hotkey_pick_agent(args: &HotkeyPickAgentArgs) -> Result<()> {
     commands::system::hotkey::pick_agent(args)
 }
+

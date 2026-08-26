@@ -19,7 +19,7 @@ use crate::tui::workspace::{
     help_action_for_key, panel_inner_rows, render_workspace, search_match_half, selected_count,
     selected_index, workspace_help_entries, workspace_hit_test, workspace_layout, ContentIoFocus,
     ContentIoFrame, ContentScrolls, ExpandedBlocks, WorkspaceDialogue, WorkspaceFocus,
-    WorkspaceHelpAction, WorkspacePickedContent, WorkspaceSearchView, WorkspaceSession,
+    WorkspaceHelpAction, WorkspacePublishView, WorkspaceSearchView, WorkspaceSession,
     WorkspaceSource, WorkspaceView,
 };
 
@@ -36,11 +36,13 @@ use super::nav::{
     ContentBlockCursor,
 };
 use super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane, SourcePane};
+use super::publish_overlay::{self, OverlayKey, PublishOverlay};
 use super::selection::{has_selected_sessions, refresh_next_level};
 use super::visual::{
     apply_workspace_mouse_scroll, handle_content_mouse_select, handle_visual_select_key,
     MouseSelectionStart, VisualContentContext, VisualSelectMode, MOUSE_SCROLL_LINES,
 };
+use super::WorkspacePickerResult;
 use super::PICK_CANCELLED_MESSAGE;
 use crate::pane::{Pane, PaneInput, Viewport};
 
@@ -51,7 +53,7 @@ pub(crate) fn run(
     selected_sources: Vec<bool>,
     cwd: PathBuf,
     initial_focus: WorkspaceFocus,
-) -> Result<WorkspacePickedContent> {
+) -> Result<WorkspacePickerResult> {
     debug_assert_eq!(sources.len(), selected_sources.len());
     debug_assert_eq!(sources.len(), source_states.len());
     let mut selected_sources = selected_sources;
@@ -115,6 +117,8 @@ pub(crate) fn run(
     let mut mouse_down_select: Option<MouseSelectionStart> = None;
     let mut show_help = false;
     let mut show_search = false;
+    let mut publish_overlay: Option<PublishOverlay> = None;
+    let mut publish_error: Option<String> = None;
     let mut search_query = String::new();
     let mut search_output = WorkspaceSearchOutput::default();
     let mut search_engine: Option<(WorkspaceSearchIndex, Vec<WorkspaceSession>)> = None;
@@ -517,6 +521,17 @@ pub(crate) fn run(
                             .marked(ContentIoFocus::Output, shown_idx),
                         content_page: (selected > 1).then_some((content_page, selected)),
                         content_frame: &content_frame,
+                        publish: publish_overlay
+                            .as_ref()
+                            .map(|overlay| WorkspacePublishView {
+                                selected: overlay.selected,
+                                redaction_count: overlay.redaction_count,
+                                warning_count: overlay.warning_count,
+                                item_count: overlay.item_count,
+                                schema_version: overlay.schema_version,
+                                error: None,
+                            }),
+                        publish_error: publish_error.as_deref(),
                     },
                 )
             })?;
@@ -609,6 +624,25 @@ pub(crate) fn run(
                     anyhow::bail!(PICK_CANCELLED_MESSAGE);
                 }
 
+                if publish_overlay.is_some() {
+                    let action = publish_overlay.as_mut().map(|overlay| {
+                        publish_overlay::handle_key(key.code, &mut overlay.selected)
+                    });
+                    match action {
+                        Some(OverlayKey::Cancel) => publish_overlay = None,
+                        Some(OverlayKey::Confirm) => {
+                            let overlay = publish_overlay.take().expect("publish overlay");
+                            return Ok(WorkspacePickerResult::Publish {
+                                set: overlay.set,
+                                expires: publish_overlay::selected_expiry(overlay.selected)
+                                    .to_string(),
+                            });
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
                 if let Some(mode) = visual_select_mode.as_mut() {
                     let active = content_frame.active(content_io_focus, &mut content_scrolls);
                     if let Some(picked) = handle_visual_select_key(
@@ -623,7 +657,7 @@ pub(crate) fn run(
                         &selected_dialogues,
                         dialogue_idx,
                     )? {
-                        return Ok(picked);
+                        return Ok(WorkspacePickerResult::Picked(picked));
                     }
                     if matches!(key.code, KeyCode::Esc) {
                         visual_select_mode = None;
@@ -790,7 +824,27 @@ pub(crate) fn run(
                                 terminal,
                             )? {
                                 HelpDispatch::Continue => {}
-                                HelpDispatch::Picked(picked) => return Ok(picked),
+                                HelpDispatch::Picked(picked) => {
+                                    return Ok(WorkspacePickerResult::Picked(picked))
+                                }
+                                HelpDispatch::Publish => {
+                                    show_search = false;
+                                    show_help = false;
+                                    match publish_overlay::try_open(
+                                        &dialogues,
+                                        &selected_dialogues,
+                                        dialogue_idx,
+                                        &content_pane,
+                                        line_filter_spec(&line_filter),
+                                        cwd.to_string_lossy().into_owned(),
+                                    ) {
+                                        Ok(overlay) => {
+                                            publish_error = None;
+                                            publish_overlay = Some(overlay);
+                                        }
+                                        Err(message) => publish_error = Some(message),
+                                    }
+                                }
                                 HelpDispatch::Refresh => {
                                     let size = terminal.size()?;
                                     let layout = workspace_layout(
@@ -881,7 +935,7 @@ pub(crate) fn run(
                             &content_pane,
                             line_filter_spec(&line_filter),
                         ) {
-                            return Ok(picked);
+                            return Ok(WorkspacePickerResult::Picked(picked));
                         }
                     }
                     match apply_workspace_help_action(
@@ -921,7 +975,27 @@ pub(crate) fn run(
                         terminal,
                     )? {
                         HelpDispatch::Continue => {}
-                        HelpDispatch::Picked(picked) => return Ok(picked),
+                        HelpDispatch::Picked(picked) => {
+                            return Ok(WorkspacePickerResult::Picked(picked))
+                        }
+                        HelpDispatch::Publish => {
+                            show_search = false;
+                            show_help = false;
+                            match publish_overlay::try_open(
+                                &dialogues,
+                                &selected_dialogues,
+                                dialogue_idx,
+                                &content_pane,
+                                line_filter_spec(&line_filter),
+                                cwd.to_string_lossy().into_owned(),
+                            ) {
+                                Ok(overlay) => {
+                                    publish_error = None;
+                                    publish_overlay = Some(overlay);
+                                }
+                                Err(message) => publish_error = Some(message),
+                            }
+                        }
                         HelpDispatch::Refresh => {
                             let size = terminal.size()?;
                             let layout = workspace_layout(

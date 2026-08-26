@@ -146,7 +146,7 @@ fn load_draft_from_set(
     )
 }
 
-fn pick_publication_set(source: &str) -> Result<workset::WorkSet> {
+fn pick_publication_set(source: &str) -> Result<PickPublication> {
     let set = load_publication_set(source)?;
     let first = set
         .records
@@ -181,23 +181,43 @@ fn pick_publication_set(source: &str) -> Result<workset::WorkSet> {
         records: set.records.clone(),
         body_loaded: true,
     };
-    let picked = crate::commands::browse::run_with_sessions(
+    match crate::commands::browse::run_with_sessions(
         workspace_source,
         vec![session],
         WorkspaceFocus::Dialogues,
-    )?;
-    ensure!(!picked.anchors.is_empty(), "publication selection is empty");
-    let anchors = expand_picker_anchors(&set.records, &picked.anchors)?;
-    ensure!(!anchors.is_empty(), "publication selection is empty");
-    Ok(publication_workset(set, anchors))
+    )? {
+        crate::commands::browse::WorkspacePickerResult::Picked(picked) => {
+            ensure!(!picked.anchors.is_empty(), "publication selection is empty");
+            let anchors = expand_picker_anchors(&set.records, &picked.anchors)?;
+            ensure!(!anchors.is_empty(), "publication selection is empty");
+            Ok(PickPublication::Set(publication_workset(set, anchors)))
+        }
+        crate::commands::browse::WorkspacePickerResult::Publish { set, expires } => {
+            Ok(PickPublication::Published { set, expires })
+        }
+    }
 }
 
-fn publication_workset(set: workset::WorkSet, anchors: Vec<WorkRef>) -> workset::WorkSet {
+enum PickPublication {
+    Set(workset::WorkSet),
+    Published {
+        set: workset::WorkSet,
+        expires: String,
+    },
+}
+
+pub(crate) fn publication_workset(
+    set: workset::WorkSet,
+    anchors: Vec<WorkRef>,
+) -> workset::WorkSet {
     let records = workset::records_for_anchors(&set.records, &anchors);
     workset::WorkSet::with_anchors(set.cwd, records, anchors)
 }
 
-fn expand_picker_anchors(records: &[WorkRecord], picked: &[WorkRef]) -> Result<Vec<WorkRef>> {
+pub(crate) fn expand_picker_anchors(
+    records: &[WorkRecord],
+    picked: &[WorkRef],
+) -> Result<Vec<WorkRef>> {
     let mut selected: BTreeMap<String, (usize, BTreeSet<usize>)> = BTreeMap::new();
     for anchor in picked {
         let record_index = records
@@ -249,10 +269,17 @@ fn preview(args: PublishPreviewArgs) -> Result<()> {
         if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
             bail!("publish preview --pick requires an interactive terminal");
         }
-        let mut set = pick_publication_set(&args.source)?;
-        let draft = load_draft_from_set(&mut set, args.title, &args.expires)?;
-        maybe_save(&mut set, args.save.as_deref())?;
-        print_preview(draft, args.format)
+        match pick_publication_set(&args.source)? {
+            PickPublication::Set(mut set) => {
+                let draft = load_draft_from_set(&mut set, args.title, &args.expires)?;
+                maybe_save(&mut set, args.save.as_deref())?;
+                print_preview(draft, args.format)
+            }
+            PickPublication::Published { mut set, expires } => {
+                maybe_save(&mut set, args.save.as_deref())?;
+                create_from_picker(set, &expires)
+            }
+        }
     } else {
         let mut set = load_publication_set(&args.source)?;
         let draft = load_draft_from_set(&mut set, args.title, &args.expires)?;
@@ -276,52 +303,33 @@ fn print_preview(draft: PublicationDraft, format: PublishFormat) -> Result<()> {
     Ok(())
 }
 
-fn print_snapshot_items(snapshot: &PublicConversationSnapshot) {
-    match snapshot {
-        PublicConversationSnapshot::V1(snapshot) => {
-            for item in &snapshot.items {
-                println!(
-                    "[{}]",
-                    match item.role {
-                        sivtr_core::publication::PublicRole::User => "User",
-                        sivtr_core::publication::PublicRole::Assistant => "Assistant",
-                    }
-                );
-                println!("{}", item.text);
-                println!();
-            }
-        }
-        PublicConversationSnapshot::V2(snapshot) => {
-            for item in &snapshot.items {
-                if item.gap_before {
-                    println!("[部分内容未分享]");
-                    println!();
-                }
-                let label = item
-                    .label
-                    .as_deref()
-                    .map(|label| format!(" ({label})"))
-                    .unwrap_or_default();
-                println!("[{:?}{}]", item.kind, label);
-                for part in &item.parts {
-                    if part.gap_before {
-                        println!("[部分内容未分享]");
-                        println!();
-                    }
-                    println!("{}", part.text);
-                }
-                println!();
-                if item.gap_after {
-                    println!("[部分内容未分享]");
-                    println!();
-                }
-            }
-        }
+/// Create a link from a TUI-confirmed WorkSet: save `@share_ready`, upload, copy URL.
+pub(crate) fn create_from_picker(mut set: workset::WorkSet, expires: &str) -> Result<()> {
+    maybe_save(&mut set, Some("share_ready"))?;
+    let url = mint_publication(&mut set, None, expires, true)?;
+    match sivtr_core::export::clipboard::copy_to_clipboard(&url) {
+        Ok(()) => output::success("copied link to clipboard"),
+        Err(error) => output::warning(format!("could not copy link to clipboard: {error:#}")),
     }
+    println!("{url}");
+    Ok(())
+}
+
+fn mint_publication(
+    set: &mut workset::WorkSet,
+    title: Option<String>,
+    expires: &str,
+    allow_warnings: bool,
+) -> Result<String> {
+    let draft = load_draft_from_set(set, title, expires)?;
+    let _ = publication_envelope_size(&draft)?;
+    let has_warnings = draft.risks.iter().any(|risk| is_warning_only(&risk.kind));
+    require_allow_warnings(has_warnings, allow_warnings)?;
+    mint_draft(draft, expires)
 }
 
 fn publication_envelope_size(draft: &PublicationDraft) -> Result<usize> {
-    let envelope_preview = compress_snapshot(&draft)?;
+    let envelope_preview = compress_snapshot(draft)?;
     let envelope_size = envelope_preview
         .len()
         .checked_add(8 + 2 + 12 + 16)
@@ -383,6 +391,50 @@ fn mint_draft(draft: PublicationDraft, expires: &str) -> Result<String> {
     output::detail("publication", &id);
     output::detail("expires", draft.snapshot.expires_at());
     Ok(publication_url(&endpoint, &id, &viewer_key))
+}
+
+fn print_snapshot_items(snapshot: &PublicConversationSnapshot) {
+    match snapshot {
+        PublicConversationSnapshot::V1(snapshot) => {
+            for item in &snapshot.items {
+                println!(
+                    "[{}]",
+                    match item.role {
+                        sivtr_core::publication::PublicRole::User => "User",
+                        sivtr_core::publication::PublicRole::Assistant => "Assistant",
+                    }
+                );
+                println!("{}", item.text);
+                println!();
+            }
+        }
+        PublicConversationSnapshot::V2(snapshot) => {
+            for item in &snapshot.items {
+                if item.gap_before {
+                    println!("[部分内容未分享]");
+                    println!();
+                }
+                let label = item
+                    .label
+                    .as_deref()
+                    .map(|label| format!(" ({label})"))
+                    .unwrap_or_default();
+                println!("[{:?}{}]", item.kind, label);
+                for part in &item.parts {
+                    if part.gap_before {
+                        println!("[部分内容未分享]");
+                        println!();
+                    }
+                    println!("{}", part.text);
+                }
+                println!();
+                if item.gap_after {
+                    println!("[部分内容未分享]");
+                    println!();
+                }
+            }
+        }
+    }
 }
 
 fn create(args: PublishCreateArgs) -> Result<()> {

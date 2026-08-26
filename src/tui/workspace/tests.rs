@@ -527,6 +527,17 @@ fn help_action_for_key_is_focus_scoped() {
         ),
         None
     );
+    for focus in [
+        WorkspaceFocus::Source,
+        WorkspaceFocus::Sessions,
+        WorkspaceFocus::Dialogues,
+        WorkspaceFocus::Content,
+    ] {
+        assert_eq!(
+            help_action_for_key(KeyCode::Char('p'), KeyModifiers::NONE, focus),
+            Some(WorkspaceHelpAction::Publish)
+        );
+    }
 }
 
 #[test]
@@ -586,3 +597,4 @@ fn search_box_body_includes_current_target_ref() {
         "needle\n\nTarget: codex/session/1/4"
     );
 }
+
