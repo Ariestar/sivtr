@@ -16,6 +16,7 @@ use crate::tui::content::text::content_io_from_record;
 use crate::tui::content::view::{ContentSelection, ContentViewMode};
 use crate::tui::search::WorkspaceSearchScope;
 use crate::tui::theme;
+use crate::tui::workspace::rows::Rows;
 
 /// Indices of true entries in a selection mask, in order.
 pub(crate) fn selected_indices(mask: &[bool]) -> Vec<usize> {
@@ -23,11 +24,6 @@ pub(crate) fn selected_indices(mask: &[bool]) -> Vec<usize> {
         .enumerate()
         .filter_map(|(idx, selected)| selected.then_some(idx))
         .collect()
-}
-
-/// Count of true entries in a selection mask.
-pub(crate) fn selected_count(mask: &[bool]) -> usize {
-    mask.iter().filter(|selected| **selected).count()
 }
 
 /// Kind of memory source (local path body before any `scope:` prefix).
@@ -358,14 +354,12 @@ impl WorkspaceFocus {
 
 pub(crate) struct WorkspaceView<'a> {
     pub(crate) sources: &'a [WorkspaceSource],
-    pub(crate) selected_sources: &'a [bool],
     /// Per-source load marker (idle remote / ready / failed).
     pub(crate) source_markers: &'a [SourceLoadMarker],
     pub(crate) loading_tick: u8,
-    pub(crate) source_state: &'a ListState,
+    /// Cursor, marks, and the live range anchor of all three list panes.
+    pub(crate) rows: &'a Rows,
     pub(crate) sessions: &'a [WorkspaceSession],
-    pub(crate) selected_sessions: &'a [bool],
-    pub(crate) session_state: &'a ListState,
     /// `(source, session id)` pairs whose body hydration failed (spawn or
     /// query error). Rows render an error marker and the loader does not retry
     /// them. Source-qualified so a local session sharing an id with a remote
@@ -375,9 +369,6 @@ pub(crate) struct WorkspaceView<'a> {
     pub(crate) dialogue_titles: &'a [&'a str],
     /// Materialized dialogues for content/copy (focus ∪ multi-select bodies).
     pub(crate) dialogues: &'a [WorkspaceDialogue],
-    pub(crate) dialogue_state: &'a ListState,
-    pub(crate) selected_dialogues: &'a [bool],
-    pub(crate) range_anchor: Option<usize>,
     pub(crate) focus: WorkspaceFocus,
     pub(crate) content_scrolls: ContentScrolls,
     pub(crate) content_io_focus: ContentIoFocus,

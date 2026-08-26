@@ -2,7 +2,6 @@
 
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
-use ratatui::widgets::ListState;
 
 use crate::commands::select::CommandSelection;
 use crate::tui::content::io::ContentIoFrame;
@@ -12,7 +11,7 @@ use crate::tui::content::view::{
     ContentViewMode,
 };
 use crate::tui::workspace::{
-    ContentIoFocus, ContentScrolls, WorkspaceDialogue, WorkspaceFocus, WorkspacePickedContent,
+    ContentIoFocus, ContentScrolls, Rows, WorkspaceDialogue, WorkspaceFocus, WorkspacePickedContent,
 };
 
 use super::content::workspace_picked_content;
@@ -348,18 +347,10 @@ pub(super) fn workspace_picked_content_for_visual_selection(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn apply_workspace_mouse_scroll(
     focus: WorkspaceFocus,
     scroll_up: bool,
-    source_count: usize,
-    session_count: usize,
-    dialogue_count: usize,
-    selected_sessions: &[bool],
-    source_state: &mut ListState,
-    session_state: &mut ListState,
-    dialogue_state: &mut ListState,
-    selected_dialogues: &mut Vec<bool>,
+    rows: &mut Rows,
     content_scrolls: &mut ContentScrolls,
     content_io_focus: ContentIoFocus,
     content_cursor: &mut super::nav::ContentBlockCursor,
@@ -387,14 +378,7 @@ pub(super) fn apply_workspace_mouse_scroll(
         move_workspace_cursor(
             scroll_up,
             focus,
-            source_count,
-            session_count,
-            dialogue_count,
-            selected_sessions,
-            source_state,
-            session_state,
-            dialogue_state,
-            selected_dialogues,
+            rows,
             content_scrolls,
             content_cursor,
             content_frame.texts.block_slices(),

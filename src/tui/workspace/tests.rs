@@ -467,11 +467,11 @@ fn reading_mode_keeps_structure_runs_in_call_order() {
 #[test]
 fn content_title_includes_view_mode() {
     assert_eq!(
-        content_title(ContentViewMode::Reading, &[false, false], None),
+        content_title(ContentViewMode::Reading, 0, None),
         "Content (read)"
     );
     assert_eq!(
-        content_title(ContentViewMode::Raw, &[true, false], None),
+        content_title(ContentViewMode::Raw, 1, None),
         "Content (raw): 1 dialogue selected"
     );
 }
@@ -481,7 +481,7 @@ fn content_title_includes_current_dialogue_ref() {
     let work_ref = WorkRef::agent(AgentProvider::Codex, "session", 2);
 
     assert_eq!(
-        content_title(ContentViewMode::Reading, &[false], Some(&work_ref)),
+        content_title(ContentViewMode::Reading, 0, Some(&work_ref)),
         "Content (read) [codex/session/2]"
     );
 }

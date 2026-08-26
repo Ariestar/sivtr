@@ -3,15 +3,14 @@
 //! Key bindings live in `workspace_help_entries()`. This module only runs actions.
 
 use anyhow::Result;
-use ratatui::widgets::ListState;
 
 use crate::tui::content::block::BlockText;
 use crate::tui::content::view::ContentViewMode;
 use crate::tui::terminal::suspend;
 use crate::tui::workspace::{
-    can_open_dialogue_vim, selected_count, selected_index, workspace_content_text, ContentIoFocus,
-    ContentScrolls, ExpandedBlocks, WorkspaceDialogue, WorkspaceFocus, WorkspaceHelpAction,
-    WorkspacePickedContent, WorkspaceSource,
+    can_open_dialogue_vim, workspace_content_text, ContentIoFocus, ContentScrolls, ExpandedBlocks,
+    Rows, WorkspaceDialogue, WorkspaceFocus, WorkspaceHelpAction, WorkspacePickedContent,
+    WorkspaceSource,
 };
 use sivtr_core::record::WorkAt;
 
@@ -22,12 +21,9 @@ use super::content::{
 };
 use super::nav::{
     invalidate_panes_below, move_workspace_cursor, shown_dialogue_idx, ContentBlockCursor,
-    RangeAnchor,
 };
 use super::panes::ContentPane;
-use super::selection::{
-    apply_range_selection, focused_mask, select_sources, WorkspaceSourceSelection,
-};
+use super::selection::{select_sources, WorkspaceSourceSelection};
 use super::vim::open_vim_view;
 use super::PICK_CANCELLED_MESSAGE;
 
@@ -45,21 +41,15 @@ pub(super) fn apply_workspace_help_action(
     focus: &mut WorkspaceFocus,
     fullscreen: &mut Option<WorkspaceFocus>,
     sources: &[WorkspaceSource],
-    source_state: &mut ListState,
-    selected_sources: &mut [bool],
-    selected_sessions: &mut Vec<bool>,
-    session_state: &mut ListState,
-    dialogue_state: &mut ListState,
-    selected_dialogues: &mut Vec<bool>,
-    // The live `v` range anchor of whichever pane opened one.
-    range_anchor: &mut RangeAnchor,
+    // Cursor, marks, and the live `v` anchor of all three list panes.
+    rows: &mut Rows,
     content_scrolls: &mut ContentScrolls,
     content_io_focus: &mut ContentIoFocus,
     content_mode: &mut ContentViewMode,
     expanded: &mut ExpandedBlocks,
     content_input_lines: usize,
     content_output_lines: usize,
-    // Which selected dialogue the content pane shows (multi-select paging).
+    // Which marked dialogue the content pane shows (multi-select paging).
     content_page: &mut usize,
     content_cursor: &mut ContentBlockCursor,
     content_pane: &mut ContentPane,
@@ -70,49 +60,39 @@ pub(super) fn apply_workspace_help_action(
     search_dirty: &mut bool,
     content_at: Option<WorkAt>,
     line_filter: Option<&str>,
-    session_count: usize,
     dialogues: &[WorkspaceDialogue],
-    session_idx: usize,
-    dialogue_idx: usize,
-    dialogue_count: usize,
     terminal: &mut crate::tui::terminal::Tui,
 ) -> Result<HelpDispatch> {
+    let dialogue_count = rows.dialogues.len();
     match action {
         WorkspaceHelpAction::FocusSource => {
-            set_focus(focus, fullscreen, range_anchor, WorkspaceFocus::Source)
+            set_focus(focus, fullscreen, rows, WorkspaceFocus::Source)
         }
         WorkspaceHelpAction::FocusSessions => {
-            set_focus(focus, fullscreen, range_anchor, WorkspaceFocus::Sessions)
+            set_focus(focus, fullscreen, rows, WorkspaceFocus::Sessions)
         }
         WorkspaceHelpAction::FocusDialogues if dialogue_count > 0 => {
-            set_focus(focus, fullscreen, range_anchor, WorkspaceFocus::Dialogues)
+            set_focus(focus, fullscreen, rows, WorkspaceFocus::Dialogues)
         }
         WorkspaceHelpAction::FocusContent if dialogue_count > 0 => {
-            set_focus(focus, fullscreen, range_anchor, WorkspaceFocus::Content)
+            set_focus(focus, fullscreen, rows, WorkspaceFocus::Content)
         }
         WorkspaceHelpAction::MoveUp | WorkspaceHelpAction::MoveDown => move_workspace_cursor(
             action == WorkspaceHelpAction::MoveUp,
             *focus,
-            sources.len(),
-            session_count,
-            dialogue_count,
-            selected_sessions,
-            source_state,
-            session_state,
-            dialogue_state,
-            selected_dialogues,
+            rows,
             content_scrolls,
             content_cursor,
             content_blocks,
         ),
         WorkspaceHelpAction::PreviousPane => {
             if let Some(next_focus) = focus.previous(dialogue_count) {
-                set_focus(focus, fullscreen, range_anchor, next_focus);
+                set_focus(focus, fullscreen, rows, next_focus);
             }
         }
         WorkspaceHelpAction::NextPane => {
             if let Some(next_focus) = focus.next(dialogue_count) {
-                set_focus(focus, fullscreen, range_anchor, next_focus);
+                set_focus(focus, fullscreen, rows, next_focus);
             }
         }
         WorkspaceHelpAction::ToggleSelection => match *focus {
@@ -121,40 +101,30 @@ pub(super) fn apply_workspace_help_action(
                 // batch copy, like Space toggles a list row. Multi-select
                 // pages one dialogue at a time, so the shown dialogue owns
                 // the mark regardless of the selection count.
-                let shown = shown_dialogue_idx(selected_dialogues, *content_page, dialogue_idx);
+                let shown = shown_dialogue_idx(&rows.dialogues, *content_page);
                 if let Some(block) = content_cursor.get() {
                     content_pane.toggle_mark(shown, block);
                 }
             }
             pane => {
-                if toggle_list_row(
-                    pane,
-                    focused_row(pane, source_state, session_idx, dialogue_idx),
-                    selected_sources,
-                    selected_sessions,
-                    selected_dialogues,
-                    range_anchor,
-                    session_state,
-                    dialogue_state,
-                    content_scrolls,
-                ) {
+                if toggle_list_row(pane, rows.cursor(pane), rows, content_scrolls) {
                     return Ok(HelpDispatch::Refresh);
                 }
             }
         },
         // Multi-select paging: J/K flip the content pane to the next /
-        // previous selected dialogue. The redraw resets the fold state and
+        // previous marked dialogue. The redraw resets the fold state and
         // cursor when the shown dialogue changes; marks follow their
         // dialogue and stay, so a later copy can join pages.
         WorkspaceHelpAction::NextDialoguePage if *focus == WorkspaceFocus::Content => {
-            let count = selected_count(selected_dialogues);
+            let count = rows.dialogues.marked();
             if count > 1 {
                 *content_page = (*content_page + 1).min(count.saturating_sub(1));
                 content_scrolls.clear();
             }
         }
         WorkspaceHelpAction::PreviousDialoguePage if *focus == WorkspaceFocus::Content => {
-            if selected_count(selected_dialogues) > 1 {
+            if rows.dialogues.marked() > 1 {
                 *content_page = content_page.saturating_sub(1);
                 content_scrolls.clear();
             }
@@ -164,22 +134,14 @@ pub(super) fn apply_workspace_help_action(
         | WorkspaceHelpAction::SelectTerminalSource => {
             select_sources(
                 sources,
-                selected_sources,
+                rows.source.mask_mut(),
                 match action {
                     WorkspaceHelpAction::SelectAgentSources => WorkspaceSourceSelection::Agents,
                     WorkspaceHelpAction::SelectTerminalSource => WorkspaceSourceSelection::Terminal,
                     _ => WorkspaceSourceSelection::All,
                 },
             );
-            invalidate_panes_below(
-                WorkspaceFocus::Source,
-                session_state,
-                selected_sessions,
-                dialogue_state,
-                selected_dialogues,
-                range_anchor,
-                content_scrolls,
-            );
+            invalidate_panes_below(WorkspaceFocus::Source, rows, content_scrolls);
             return Ok(HelpDispatch::Refresh);
         }
         WorkspaceHelpAction::RangeSelect => match *focus {
@@ -188,9 +150,8 @@ pub(super) fn apply_workspace_help_action(
                 // visible blocks are in it — a folded run is one unit, so
                 // marking its hidden members too would copy them twice.
                 if let Some(cursor_block) = content_cursor.get() {
-                    if let Some(span) = range_anchor.span(*focus, cursor_block) {
-                        let shown =
-                            shown_dialogue_idx(selected_dialogues, *content_page, dialogue_idx);
+                    if let Some(span) = rows.range(*focus, cursor_block) {
+                        let shown = shown_dialogue_idx(&rows.dialogues, *content_page);
                         content_pane.toggle_mark_range(
                             shown,
                             content_blocks
@@ -207,39 +168,19 @@ pub(super) fn apply_workspace_help_action(
             // anchors, moves extend, `v` again selects the span. Only the
             // completing `v` (which changes selection) rebuilds panes below.
             pane => {
-                let idx = focused_row(pane, source_state, session_idx, dialogue_idx);
-                let Some(mask) = focused_mask(
-                    pane,
-                    selected_sources,
-                    selected_sessions,
-                    selected_dialogues,
-                ) else {
-                    return Ok(HelpDispatch::Continue);
-                };
-                if apply_range_selection(range_anchor, pane, mask, idx)
-                    && invalidate_panes_below(
-                        pane,
-                        session_state,
-                        selected_sessions,
-                        dialogue_state,
-                        selected_dialogues,
-                        range_anchor,
-                        content_scrolls,
-                    )
-                {
+                if rows.range_select(pane) && invalidate_panes_below(pane, rows, content_scrolls) {
                     return Ok(HelpDispatch::Refresh);
                 }
             }
         },
         WorkspaceHelpAction::ToggleAllDialogues if *focus == WorkspaceFocus::Dialogues => {
-            let select_all = selected_dialogues.iter().any(|selected| !selected);
-            selected_dialogues.fill(select_all);
-            range_anchor.clear();
+            rows.dialogues.toggle_all();
+            rows.close_ranges();
         }
         WorkspaceHelpAction::OpenVim if can_open_dialogue_vim(*focus, dialogue_count) => {
             let view = dialogue_text_vim_view(workspace_content_text(
                 dialogues,
-                shown_dialogue_idx(selected_dialogues, *content_page, dialogue_idx),
+                shown_dialogue_idx(&rows.dialogues, *content_page),
                 *content_mode,
                 content_at,
             ));
@@ -293,17 +234,15 @@ pub(super) fn apply_workspace_help_action(
             }
         }
         WorkspaceHelpAction::Copy => match *focus {
-            WorkspaceFocus::Source => {
-                set_focus(focus, fullscreen, range_anchor, WorkspaceFocus::Sessions)
-            }
+            WorkspaceFocus::Source => set_focus(focus, fullscreen, rows, WorkspaceFocus::Sessions),
             WorkspaceFocus::Sessions if dialogue_count > 0 => {
-                set_focus(focus, fullscreen, range_anchor, WorkspaceFocus::Dialogues)
+                set_focus(focus, fullscreen, rows, WorkspaceFocus::Dialogues)
             }
             WorkspaceFocus::Dialogues | WorkspaceFocus::Content => {
                 return Ok(HelpDispatch::Picked(workspace_picked_content(
                     dialogues,
-                    selected_dialogues,
-                    dialogue_idx,
+                    rows.dialogues.mask(),
+                    rows.dialogues.cursor(),
                     content_at,
                 )));
             }
@@ -313,8 +252,8 @@ pub(super) fn apply_workspace_help_action(
             return Ok(HelpDispatch::Picked(
                 workspace_picked_content_for_copy_with_line_filter(
                     dialogues,
-                    selected_dialogues,
-                    dialogue_idx,
+                    rows.dialogues.mask(),
+                    rows.dialogues.cursor(),
                     WorkspaceCopyShortcut::Input,
                     line_filter,
                     None,
@@ -326,8 +265,8 @@ pub(super) fn apply_workspace_help_action(
             return Ok(HelpDispatch::Picked(
                 workspace_picked_content_for_copy_with_line_filter(
                     dialogues,
-                    selected_dialogues,
-                    dialogue_idx,
+                    rows.dialogues.mask(),
+                    rows.dialogues.cursor(),
                     WorkspaceCopyShortcut::Output,
                     line_filter,
                     None,
@@ -340,11 +279,11 @@ pub(super) fn apply_workspace_help_action(
             // bodies); marked blocks take over in the picker beforehand.
             // The block id belongs to the *displayed* dialogue, so resolve
             // the shown index like the marked paths do, not the focused row.
-            let shown = shown_dialogue_idx(selected_dialogues, *content_page, dialogue_idx);
+            let shown = shown_dialogue_idx(&rows.dialogues, *content_page);
             let block_id = content_cursor.get().unwrap_or(0);
             if let Some(picked) = workspace_picked_content_for_cursor_block(
                 dialogues,
-                selected_dialogues,
+                rows.dialogues.mask(),
                 shown,
                 block_id,
             ) {
@@ -355,8 +294,8 @@ pub(super) fn apply_workspace_help_action(
             return Ok(HelpDispatch::Picked(
                 workspace_picked_content_for_copy_with_line_filter(
                     dialogues,
-                    selected_dialogues,
-                    dialogue_idx,
+                    rows.dialogues.mask(),
+                    rows.dialogues.cursor(),
                     WorkspaceCopyShortcut::Command,
                     line_filter,
                     None,
@@ -377,25 +316,17 @@ pub(super) fn apply_workspace_help_action(
             *search_dirty = true;
             // Search replaces the session list wholesale: drop everything the
             // panes below the sources were showing.
-            invalidate_panes_below(
-                WorkspaceFocus::Source,
-                session_state,
-                selected_sessions,
-                dialogue_state,
-                selected_dialogues,
-                range_anchor,
-                content_scrolls,
-            );
+            invalidate_panes_below(WorkspaceFocus::Source, rows, content_scrolls);
         }
         WorkspaceHelpAction::BackOrCancel => match *focus {
             WorkspaceFocus::Source | WorkspaceFocus::Sessions => {
                 anyhow::bail!(PICK_CANCELLED_MESSAGE)
             }
             WorkspaceFocus::Dialogues => {
-                set_focus(focus, fullscreen, range_anchor, WorkspaceFocus::Sessions);
+                set_focus(focus, fullscreen, rows, WorkspaceFocus::Sessions);
             }
             WorkspaceFocus::Content => {
-                set_focus(focus, fullscreen, range_anchor, WorkspaceFocus::Dialogues);
+                set_focus(focus, fullscreen, rows, WorkspaceFocus::Dialogues);
             }
         },
         WorkspaceHelpAction::Cancel => anyhow::bail!(PICK_CANCELLED_MESSAGE),
@@ -434,68 +365,32 @@ pub(super) fn toggle_fullscreen(
     }
 }
 
-/// Row the cursor sits on in `pane`'s list. Sessions and Dialogues arrive
-/// pre-clamped from the redraw; the source list is read off its own state.
-fn focused_row(
-    pane: WorkspaceFocus,
-    source_state: &ListState,
-    session_idx: usize,
-    dialogue_idx: usize,
-) -> usize {
-    match pane {
-        WorkspaceFocus::Sessions => session_idx,
-        WorkspaceFocus::Dialogues => dialogue_idx,
-        _ => selected_index(source_state),
-    }
-}
-
 /// Toggle the focused list row's selection mark — the single path shared by
 /// the Space key and a dot-gutter click. `true` when panes below need a
 /// refresh (a Source toggle reshapes the session/dialogue trees).
-#[allow(clippy::too_many_arguments)]
 pub(super) fn toggle_list_row(
     focus: WorkspaceFocus,
     idx: usize,
-    selected_sources: &mut [bool],
-    selected_sessions: &mut Vec<bool>,
-    selected_dialogues: &mut Vec<bool>,
-    range_anchor: &mut RangeAnchor,
-    session_state: &mut ListState,
-    dialogue_state: &mut ListState,
+    rows: &mut Rows,
     content_scrolls: &mut ContentScrolls,
 ) -> bool {
-    let Some(mask) = focused_mask(
-        focus,
-        selected_sources,
-        selected_sessions,
-        selected_dialogues,
-    ) else {
+    let Some(pane) = rows.pane_mut(focus) else {
         return false;
     };
-    if let Some(selected) = mask.get_mut(idx) {
-        *selected = !*selected;
-    }
-    range_anchor.clear();
-    invalidate_panes_below(
-        focus,
-        session_state,
-        selected_sessions,
-        dialogue_state,
-        selected_dialogues,
-        range_anchor,
-        content_scrolls,
-    )
+    pane.toggle(idx);
+    rows.close_ranges();
+    invalidate_panes_below(focus, rows, content_scrolls)
 }
 
 pub(super) fn set_focus(
     focus: &mut WorkspaceFocus,
     fullscreen: &mut Option<WorkspaceFocus>,
-    range_anchor: &mut RangeAnchor,
+    rows: &mut Rows,
     next: WorkspaceFocus,
 ) {
     *focus = next;
     // Range selection is per-pane: leaving a pane discards its anchor.
-    range_anchor.clear();
+    rows.close_ranges();
     if fullscreen.is_some() {
         *fullscreen = Some(next);
     }

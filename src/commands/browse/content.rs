@@ -8,12 +8,11 @@ use crate::tui::content::block::{dialogue_blocks, Block};
 use crate::tui::content::view::{line_count, ContentViewMode};
 use crate::tui::search::{WorkspaceSearchMatch, WorkspaceSearchOutput};
 use crate::tui::workspace::{
-    WorkspaceDialogue, WorkspacePickedContent, WorkspaceSession, WorkspaceSource,
+    active_rows, WorkspaceDialogue, WorkspacePickedContent, WorkspaceSession, WorkspaceSource,
 };
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
 
 use super::panes::ContentPane;
-use super::selection::active_rows;
 use super::text::filter_lines_by_spec;
 use super::vim::{VimBlock, VimView};
 

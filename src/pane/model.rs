@@ -24,7 +24,7 @@ pub struct PaneInput<'a> {
 /// every pane uses for `v` and range clicks, and the only place it lives.
 /// The ids need not be contiguous — the content pane's visible blocks skip
 /// the ids a fold is hiding — and out-of-range ids are ignored.
-pub fn toggle_row_ids(mask: &mut [bool], ids: impl Iterator<Item = usize> + Clone) {
+fn toggle_row_ids(mask: &mut [bool], ids: impl Iterator<Item = usize> + Clone) {
     let select = ids
         .clone()
         .any(|id| mask.get(id).is_some_and(|flag| !*flag));
@@ -39,11 +39,18 @@ pub fn toggle_row_ids(mask: &mut [bool], ids: impl Iterator<Item = usize> + Clon
 /// range-toggle API shared by every selectable pane. Panes own a `Selection`
 /// when their rows are selectable and hand the mask to the keep policy via
 /// [`PaneInput::selected`]; consumers (render, copy) read the mask. The live
-/// range anchor is not part of it — only one range is open at a time across
-/// every pane, so it lives once in the picker instead of per mask.
+/// range anchor is not part of it — a pane's anchor belongs with its cursor,
+/// which the mask knows nothing about.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Selection {
     mask: Vec<bool>,
+}
+
+impl From<Vec<bool>> for Selection {
+    /// A selection over a mask the caller already built (a pane's preset rows).
+    fn from(mask: Vec<bool>) -> Self {
+        Self { mask }
+    }
 }
 
 impl Selection {
@@ -52,9 +59,26 @@ impl Selection {
         self.mask.resize(len, false);
     }
 
+    /// Drop every mark and size to `len` — for the row-count changes that
+    /// leave the surviving marks naming different rows than they did.
+    pub fn reset(&mut self, len: usize) {
+        self.mask.clear();
+        self.mask.resize(len, false);
+    }
+
     /// Row mask: `mask[i]` is true when row `i` is selected.
     pub fn mask(&self) -> &[bool] {
         &self.mask
+    }
+
+    /// Row mask for the policies that set flags in place (source presets).
+    pub fn mask_mut(&mut self) -> &mut [bool] {
+        &mut self.mask
+    }
+
+    /// Is any row selected?
+    pub fn any(&self) -> bool {
+        self.mask.contains(&true)
     }
 
     pub fn count(&self) -> usize {

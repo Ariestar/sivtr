@@ -11,13 +11,12 @@
 use crate::pane::{Pane, PaneInput, Selection, SlidingPane, WindowRow};
 use crate::tui::content::view::ContentViewMode;
 use crate::tui::workspace::{
-    workspace_content_io_texts, ContentIoFocus, ContentIoFrame, ExpandedBlocks, WorkspaceDialogue,
-    WorkspaceSession, WorkspaceSource,
+    active_rows, workspace_content_io_texts, ContentIoFocus, ContentIoFrame, ExpandedBlocks,
+    WorkspaceDialogue, WorkspaceSession, WorkspaceSource,
 };
 use sivtr_core::ai::AgentSelection;
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
 
-use super::selection::active_rows;
 use super::text::record_to_copy_parts;
 
 // ── Dialogues ───────────────────────────────────────────────────────────
