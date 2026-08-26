@@ -74,6 +74,48 @@ impl ContentBlockCursor {
     }
 }
 
+/// The live `v` range anchor: which pane opened the range, and the row it
+/// started at (a list row index, or a content block id). Only one range can
+/// be open at a time — moving focus discards it — so one anchor serves every
+/// pane, and tagging it with its pane is what keeps a stale anchor from
+/// completing a span somewhere else.
+#[derive(Clone, Copy, Default)]
+pub(super) struct RangeAnchor(Option<(WorkspaceFocus, usize)>);
+
+impl RangeAnchor {
+    /// Row the open range started at, when it belongs to `pane`.
+    pub(super) fn get(&self, pane: WorkspaceFocus) -> Option<usize> {
+        self.0.and_then(|(open, row)| (open == pane).then_some(row))
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.0 = None;
+    }
+
+    /// Drop the anchor only if `pane` owns it (its rows just changed meaning).
+    pub(super) fn clear_pane(&mut self, pane: WorkspaceFocus) {
+        if self.get(pane).is_some() {
+            self.clear();
+        }
+    }
+
+    /// One `v` press on `row` of `pane`: opens the range and yields nothing,
+    /// or closes the one already open there and yields the span it covers.
+    pub(super) fn span(
+        &mut self,
+        pane: WorkspaceFocus,
+        row: usize,
+    ) -> Option<std::ops::RangeInclusive<usize>> {
+        match self.0.take() {
+            Some((open, anchor)) if open == pane => Some(anchor.min(row)..=anchor.max(row)),
+            _ => {
+                self.0 = Some((pane, row));
+                None
+            }
+        }
+    }
+}
+
 /// Index of the dialogue the content pane shows: the `page`-th selected
 /// dialogue when several are selected, otherwise the focused row. `page`
 /// is clamped to the current selection count.
@@ -94,25 +136,25 @@ pub(super) fn reset_workspace_after_source_change(
     selected_sessions: &mut Vec<bool>,
     dialogue_state: &mut ListState,
     selected_dialogues: &mut Vec<bool>,
-    range_anchor: &mut Option<usize>,
+    range_anchor: &mut RangeAnchor,
     content_scrolls: &mut ContentScrolls,
 ) {
     session_state.select(None);
     selected_sessions.clear();
     dialogue_state.select(None);
     selected_dialogues.clear();
-    *range_anchor = None;
+    range_anchor.clear();
     content_scrolls.clear();
 }
 
 pub(super) fn resize_workspace_dialogue_selection(
     dialogue_count: usize,
     selected_dialogues: &mut Vec<bool>,
-    range_anchor: &mut Option<usize>,
+    range_anchor: &mut RangeAnchor,
 ) {
     selected_dialogues.clear();
     selected_dialogues.resize(dialogue_count, false);
-    *range_anchor = None;
+    range_anchor.clear();
 }
 
 pub(super) fn clamp_list_state(state: &mut ListState, len: usize) {

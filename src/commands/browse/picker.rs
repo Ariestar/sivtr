@@ -33,7 +33,7 @@ use super::nav::{
     clamp_list_state, dot_gutter_hit, move_workspace_cursor, open_link_target,
     reset_workspace_after_source_change, reset_workspace_dialogue_state,
     resize_workspace_dialogue_selection, row_list_index, shown_dialogue_idx, source_list_index,
-    ContentBlockCursor,
+    ContentBlockCursor, RangeAnchor,
 };
 use super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane, SourcePane};
 use super::selection::{has_selected_sessions, refresh_next_level};
@@ -81,7 +81,7 @@ pub(crate) fn run(
     clamp_list_state(&mut dialogue_state, 0);
     let mut selected_sessions = vec![false; sessions.len()];
     let mut selected_dialogues = Vec::new();
-    let mut range_anchor = None;
+    let mut range_anchor = RangeAnchor::default();
     let mut content_scrolls = ContentScrolls::default();
     let mut content_io_focus = ContentIoFocus::Input;
     let mut content_mode = ContentViewMode::Reading;
@@ -101,9 +101,6 @@ pub(crate) fn run(
     // Block cursor (keyboard j/k + click), highlighted like a list row; one
     // position per dialogue, spanning both IO halves.
     let mut content_cursor = ContentBlockCursor::default();
-    // Content block-range anchor for `v` (dialogue-global block id); cleared
-    // when the focus or shown dialogue changes.
-    let mut content_range_anchor: Option<usize> = None;
     // Mouse-down anchor inside content; promoted to a real selection only by
     // the first drag, so a pure click never shows a selection flash.
     let mut mouse_down_select: Option<MouseSelectionStart> = None;
@@ -313,7 +310,7 @@ pub(crate) fn run(
         let dialogue_idx = dialogue_focus_hint.min(dialogue_count.saturating_sub(1));
         dialogue_state.select((dialogue_count > 0).then_some(dialogue_idx));
         if pending_match.is_some() {
-            range_anchor = None;
+            range_anchor.clear();
         }
         let active_content_at = active_workspace_content_at(
             search_has_query,
@@ -380,7 +377,9 @@ pub(crate) fn run(
                 last_block_click = None;
                 mouse_down_select = None;
                 content_cursor.clear();
-                content_range_anchor = None;
+                // Block ids belong to the shown dialogue: an open block range
+                // means nothing once a different dialogue is on screen.
+                range_anchor.clear_pane(WorkspaceFocus::Content);
                 expanded_key = Some(expand_key);
             }
             // Marks are keyed by dialogue index, so they only stay meaningful
@@ -478,7 +477,7 @@ pub(crate) fn run(
                         dialogues: &dialogues,
                         dialogue_state: &dialogue_state,
                         selected_dialogues: &selected_dialogues,
-                        range_anchor,
+                        range_anchor: range_anchor.get(focus),
                         focus,
                         content_scrolls,
                         content_io_focus,
@@ -511,7 +510,9 @@ pub(crate) fn run(
                         content_selection: visual_select_mode
                             .map(|mode: VisualSelectMode| mode.selection),
                         content_block_cursor: cursor_focus,
-                        content_range: content_range_anchor.zip(content_cursor.get()),
+                        content_range: range_anchor
+                            .get(WorkspaceFocus::Content)
+                            .zip(content_cursor.get()),
                         content_marked: content_pane.marked(shown_idx),
                         content_page: (selected > 1).then_some((content_page, selected)),
                         content_frame: &content_frame,
@@ -746,7 +747,6 @@ pub(crate) fn run(
                                 &mut dialogue_state,
                                 &mut selected_dialogues,
                                 &mut range_anchor,
-                                &mut content_range_anchor,
                                 &mut content_scrolls,
                                 &mut content_io_focus,
                                 &mut content_mode,
@@ -876,7 +876,6 @@ pub(crate) fn run(
                         &mut dialogue_state,
                         &mut selected_dialogues,
                         &mut range_anchor,
-                        &mut content_range_anchor,
                         &mut content_scrolls,
                         &mut content_io_focus,
                         &mut content_mode,
@@ -937,13 +936,7 @@ pub(crate) fn run(
                         if let Some(next_focus) =
                             WorkspaceFocus::from_number_key(ch, dialogue_count)
                         {
-                            set_focus(
-                                &mut focus,
-                                &mut fullscreen,
-                                &mut range_anchor,
-                                &mut content_range_anchor,
-                                next_focus,
-                            );
+                            set_focus(&mut focus, &mut fullscreen, &mut range_anchor, next_focus);
                         }
                     }
                 }
@@ -993,7 +986,6 @@ pub(crate) fn run(
                                     &mut focus,
                                     &mut fullscreen,
                                     &mut range_anchor,
-                                    &mut content_range_anchor,
                                     WorkspaceFocus::Content,
                                 );
                                 content_cursor.set(block);
@@ -1083,7 +1075,6 @@ pub(crate) fn run(
                                     &mut focus,
                                     &mut fullscreen,
                                     &mut range_anchor,
-                                    &mut content_range_anchor,
                                     WorkspaceFocus::Content,
                                 );
                             }
@@ -1172,7 +1163,6 @@ pub(crate) fn run(
                                 &mut focus,
                                 &mut fullscreen,
                                 &mut range_anchor,
-                                &mut content_range_anchor,
                                 clicked_focus,
                             );
                             match clicked_focus {
@@ -1294,7 +1284,7 @@ fn search_query_edited(
     selected_sessions: &mut Vec<bool>,
     dialogue_state: &mut ListState,
     selected_dialogues: &mut Vec<bool>,
-    range_anchor: &mut Option<usize>,
+    range_anchor: &mut RangeAnchor,
     content_scrolls: &mut ContentScrolls,
 ) {
     edit(search_query);

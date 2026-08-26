@@ -8,6 +8,7 @@ use ratatui::widgets::ListState;
 use crate::tui::workspace::{selected_index, WorkspaceFocus, WorkspaceSession, WorkspaceSource};
 
 use super::load::SessionColumn;
+use super::nav::RangeAnchor;
 use crate::pane::{toggle_row_ids, Viewport};
 
 /// Active rows: multi-select if any, otherwise the focused row.
@@ -131,60 +132,79 @@ pub(super) fn has_selected_sessions(selected_sessions: &[bool]) -> bool {
 }
 
 /// Range-select rows: first `v` anchors at `idx`, the next completes the
-/// span between anchor and `idx`. The span rule itself is
+/// span between anchor and `idx`. `true` when this press completed a span,
+/// so the caller can rebuild the panes below it. The span rule itself is
 /// [`toggle_row_ids`], shared with the content pane's block range.
 /// Shared by every list pane (Source/Sessions/Dialogues).
 pub(super) fn apply_range_selection(
-    range_anchor: &mut Option<usize>,
+    range_anchor: &mut RangeAnchor,
+    pane: WorkspaceFocus,
     selected: &mut [bool],
     idx: usize,
-) {
-    let Some(anchor) = range_anchor.take() else {
-        *range_anchor = Some(idx);
-        return;
+) -> bool {
+    let Some(span) = range_anchor.span(pane, idx) else {
+        return false;
     };
     // Reject out-of-bounds endpoints before iterating: a stray large
     // index must not walk a near-empty mask for the whole span.
-    let (lo, hi) = (anchor.min(idx), anchor.max(idx));
-    if hi < selected.len() {
-        toggle_row_ids(selected, lo..=hi);
+    if *span.end() < selected.len() {
+        toggle_row_ids(selected, span);
     }
+    true
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::nav::RangeAnchor;
     use super::apply_range_selection;
+    use crate::tui::workspace::WorkspaceFocus;
+
+    const PANE: WorkspaceFocus = WorkspaceFocus::Dialogues;
 
     #[test]
     fn first_v_anchors_second_v_selects_span() {
-        let mut anchor = None;
+        let mut anchor = RangeAnchor::default();
         let mut selected = [false; 5];
 
         // First `v` only anchors; nothing is selected yet.
-        apply_range_selection(&mut anchor, &mut selected, 4);
-        assert_eq!(anchor, Some(4));
+        assert!(!apply_range_selection(&mut anchor, PANE, &mut selected, 4));
+        assert_eq!(anchor.get(PANE), Some(4));
         assert!(!selected.iter().any(|flag| *flag));
 
         // Moving the cursor does not disturb the anchor.
-        apply_range_selection(&mut anchor, &mut selected, 1);
-        assert_eq!(anchor, None);
+        assert!(apply_range_selection(&mut anchor, PANE, &mut selected, 1));
+        assert_eq!(anchor.get(PANE), None);
         // Span 1..=4 toggled on; row 0 untouched.
         assert!(!selected[0]);
         assert!(selected[1..].iter().all(|flag| *flag));
     }
 
     #[test]
+    fn a_range_never_completes_against_another_panes_anchor() {
+        let mut anchor = RangeAnchor::default();
+        let mut selected = [false; 5];
+
+        apply_range_selection(&mut anchor, WorkspaceFocus::Sessions, &mut selected, 4);
+        // The Dialogues pane sees no open range: its `v` anchors instead of
+        // completing the session pane's span.
+        assert!(!apply_range_selection(&mut anchor, PANE, &mut selected, 1));
+        assert!(!selected.iter().any(|flag| *flag));
+        assert_eq!(anchor.get(WorkspaceFocus::Sessions), None);
+        assert_eq!(anchor.get(PANE), Some(1));
+    }
+
+    #[test]
     fn second_v_inverts_an_already_selected_span() {
-        let mut anchor = None;
+        let mut anchor = RangeAnchor::default();
         let mut selected = [true, true, false, false, true];
 
-        apply_range_selection(&mut anchor, &mut selected, 4);
-        apply_range_selection(&mut anchor, &mut selected, 2);
+        apply_range_selection(&mut anchor, PANE, &mut selected, 4);
+        apply_range_selection(&mut anchor, PANE, &mut selected, 2);
         // Span 2..=4 is currently false/false/true (mixed) → select all.
         assert!(selected[2..].iter().all(|flag| *flag));
 
-        apply_range_selection(&mut anchor, &mut selected, 4);
-        apply_range_selection(&mut anchor, &mut selected, 2);
+        apply_range_selection(&mut anchor, PANE, &mut selected, 4);
+        apply_range_selection(&mut anchor, PANE, &mut selected, 2);
         // Span is now all true → deselect all.
         assert!(selected[0]);
         assert!(selected[2..=4].iter().all(|flag| !*flag));
