@@ -497,7 +497,7 @@ impl ContentPane {
             .toggle_ids(blocks);
     }
 
-    /// Drop every dialogue's marks (selection set changed).
+    /// Drop every dialogue's marks (the set of markable dialogues changed).
     pub fn clear_marks(&mut self) {
         self.marked.clear();
     }
