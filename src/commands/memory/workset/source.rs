@@ -206,8 +206,11 @@ fn resolve_source(source: &str, cwd: &Path) -> Result<Vec<QuerySource>> {
 /// Merge per-source outcomes into one corpus, then apply the filter once
 /// across the merged records. A failed source drops without aborting the
 /// batch; when every source failed, the first error is what the caller sees.
+/// Anchors merge with the records: a source that resolved part anchors keeps
+/// them, and one that carried none contributes its records' whole refs.
 fn merge_and_apply(results: Vec<QuerySourceResult>, cwd: &Path, filter: Filter) -> Result<WorkSet> {
     let mut records: Vec<WorkRecord> = Vec::new();
+    let mut anchors: Vec<WorkRef> = Vec::new();
     let mut seen: HashSet<WorkRef> = HashSet::new();
     let mut errors: Vec<String> = Vec::new();
     let mut any_ok = false;
@@ -215,6 +218,7 @@ fn merge_and_apply(results: Vec<QuerySourceResult>, cwd: &Path, filter: Filter) 
         match result {
             QuerySourceResult::Ok(set) => {
                 any_ok = true;
+                anchors.extend(set.anchors());
                 for record in set.records {
                     if seen.insert(record.work_ref.whole()) {
                         records.push(record);
@@ -233,7 +237,14 @@ fn merge_and_apply(results: Vec<QuerySourceResult>, cwd: &Path, filter: Filter) 
     for error in &errors {
         output::warning(format!("skipped an origin: {error}"));
     }
-    apply_loaded(WorkSet::new(cwd.display().to_string(), records), filter)
+    apply_loaded(
+        WorkSet::with_anchors(
+            cwd.display().to_string(),
+            records,
+            crate::commands::memory::var::unique_anchors(anchors),
+        ),
+        filter,
+    )
 }
 
 /// Load many sources in parallel — local, remote, and group share one
@@ -599,7 +610,75 @@ pub fn load_context_records(
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_source, split_group_scope, QueryTransport};
+    use super::{merge_and_apply, resolve_source, split_group_scope, QueryTransport};
+    use crate::commands::memory::workset::{QuerySourceResult, WorkSet};
+    use sivtr_core::record::{
+        WorkChannel, WorkPart, WorkPartData, WorkRecord, WorkRecordKind, WorkSessionRef,
+        WorkSource, WorkTime,
+    };
+    use sivtr_core::search::Filter;
+
+    fn record(index: usize) -> WorkRecord {
+        WorkRecord {
+            schema_version: sivtr_core::record::RECORD_SCHEMA_VERSION,
+            work_ref: format!("terminal/session_1/{index}")
+                .parse()
+                .expect("valid work ref"),
+            kind: WorkRecordKind::TerminalCommand,
+            source: WorkSource {
+                channel: WorkChannel::Terminal,
+                provider: None,
+            },
+            session: WorkSessionRef {
+                id: "session_1".to_string(),
+                canonical_id: Some("session_1".to_string()),
+                path: None,
+            },
+            cwd: None,
+            time: WorkTime::default(),
+            status: None,
+            title: format!("record {index}"),
+            parts: (1..=2)
+                .map(|seq| WorkPart {
+                    seq,
+                    occurred_at: None,
+                    data: WorkPartData::Output {
+                        content: format!("record {index} part {seq}"),
+                        ansi: None,
+                    },
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn merging_sources_keeps_each_ones_anchor_granularity() {
+        let first = record(1);
+        let second = record(2);
+        let part = first.work_ref.with_part(2);
+        let results = vec![
+            QuerySourceResult::Ok(WorkSet::with_anchors(
+                "/repo",
+                vec![first],
+                vec![part.clone()],
+            )),
+            QuerySourceResult::Ok(WorkSet::new("/repo", vec![second.clone()])),
+        ];
+
+        let merged = merge_and_apply(results, std::path::Path::new("/repo"), Filter::none())
+            .expect("merge succeeds");
+        let mut refs = merged
+            .anchors()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        refs.sort();
+        assert_eq!(
+            refs,
+            vec![part.to_string(), second.work_ref.whole().to_string()],
+            "a part anchor must survive the merge alongside a record anchor"
+        );
+    }
 
     #[test]
     fn group_scope_splits_team_and_member_forms() {
