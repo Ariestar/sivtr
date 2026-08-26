@@ -14,7 +14,7 @@ use crate::tui::workspace::{
     ContentIoFocus, ContentScrolls, Rows, WorkspaceDialogue, WorkspaceFocus, WorkspacePickedContent,
 };
 
-use super::content::workspace_picked_content;
+use super::content::picked_source;
 use super::nav::move_workspace_cursor;
 
 /// Lines per wheel notch: web-like scroll steps (lists move selection by the
@@ -51,32 +51,29 @@ pub(super) fn handle_visual_select_key(
     content_mode: ContentViewMode,
     content_scroll: &mut usize,
     dialogues: &[WorkspaceDialogue],
-    selected_dialogues: &[bool],
     dialogue_idx: usize,
 ) -> Result<Option<WorkspacePickedContent>> {
     match key {
         KeyCode::Esc => return Ok(None),
         KeyCode::Enter | KeyCode::Char('y') => {
-            return Ok(Some(workspace_picked_content_for_visual_selection(
+            return Ok(workspace_picked_content_for_visual_selection(
                 dialogues,
-                selected_dialogues,
                 dialogue_idx,
                 content_area,
                 text,
                 content_mode,
                 mode.selection,
-            )?));
+            ));
         }
         KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
-            return Ok(Some(workspace_picked_content_for_visual_selection(
+            return Ok(workspace_picked_content_for_visual_selection(
                 dialogues,
-                selected_dialogues,
                 dialogue_idx,
                 content_area,
                 text,
                 content_mode,
                 mode.selection,
-            )?));
+            ));
         }
         KeyCode::Left | KeyCode::Char('h') => move_visual_cursor(
             mode,
@@ -326,19 +323,20 @@ pub(super) fn mouse_selection_kind(modifiers: KeyModifiers) -> ContentSelectionK
     }
 }
 
+/// Copy the visually selected text of the dialogue on screen, attributed to
+/// that dialogue — the selection covers its rendered content, so the shown
+/// index is the only one that can own it. `None` when that dialogue is gone.
 pub(super) fn workspace_picked_content_for_visual_selection(
     dialogues: &[WorkspaceDialogue],
-    selected_dialogues: &[bool],
     dialogue_idx: usize,
     content_area: ratatui::layout::Rect,
     text: &str,
     content_mode: ContentViewMode,
     selection: ContentSelection,
-) -> Result<WorkspacePickedContent> {
-    let source =
-        workspace_picked_content(dialogues, selected_dialogues, dialogue_idx, None)?.source;
+) -> Option<WorkspacePickedContent> {
+    let source = picked_source(dialogues, &[dialogue_idx])?;
     let plain = selected_content_text(content_area, text, content_mode, selection);
-    Ok(WorkspacePickedContent {
+    Some(WorkspacePickedContent {
         source,
         units: vec![crate::tui::workspace::TextPair {
             ansi: plain.clone(),
