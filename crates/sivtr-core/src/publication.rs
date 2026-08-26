@@ -221,7 +221,7 @@ pub fn create_publication_draft(
                 _ => continue,
             };
             let raw = part.text().into_owned();
-            let (text, report) = privacy::redact_text_with_report(&raw);
+            let (text, report) = privacy::redact_text_with_report(&raw)?;
             redaction_count += report.redactions;
             for kind in report.warnings {
                 let entry = risk_map
@@ -258,7 +258,7 @@ pub fn create_publication_draft(
         .clone()
         .filter(|title| !title.trim().is_empty())
         .unwrap_or_else(|| first.title.clone());
-    let (title, title_report) = privacy::redact_text_with_report(&title_raw);
+    let (title, title_report) = privacy::redact_text_with_report(&title_raw)?;
     redaction_count += title_report.redactions;
     for kind in title_report.warnings {
         let entry = risk_map

@@ -13,6 +13,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use sivtr_core::{
     config::SivtrConfig,
+    origin::Reach,
     publication::{
         create_publication_draft, PublicationDraft, PublicationExpiry, PublicationPolicy,
     },
@@ -113,11 +114,7 @@ pub fn execute(command: PublishCommand) -> Result<()> {
 
 fn load_draft(source: &str, title: Option<String>, expiry: &str) -> Result<PublicationDraft> {
     let expires = PublicationExpiry::parse(expiry)?;
-    // Preview must be offline.  Named remote/group scopes are rejected before
-    // the unified WorkSet query has a chance to start a daemon or dial a peer.
-    if source.contains(':') && !source.starts_with("local:") {
-        bail!("publish v1 accepts local WorkSets only; remote/group scopes are not publishable");
-    }
+    ensure_local_publication_source(source)?;
     let mut set = workset::query(source, Filter::none(), None)
         .with_context(|| format!("failed to resolve publication source `{source}`"))?;
     set.materialize_parts()?;
@@ -130,6 +127,28 @@ fn load_draft(source: &str, title: Option<String>, expiry: &str) -> Result<Publi
             published_at: None,
         },
     )
+}
+
+
+fn ensure_local_publication_source(source: &str) -> Result<()> {
+    // Resolve named scopes through the origin registry before querying so a
+    // remote alias or group cannot start a daemon or dial a peer.
+    let Some((scope, _)) = source.split_once(':') else {
+        return Ok(());
+    };
+    if scope.eq_ignore_ascii_case("local") || (source.len() >= 2 && source.as_bytes()[1] == b':') {
+        return Ok(());
+    }
+    let cwd = std::env::current_dir().context("failed to resolve current directory")?;
+    let registry = crate::origins::collect(&cwd).context("failed to resolve publication scope")?;
+    let entry = registry.resolve(scope)?.ok_or_else(|| {
+        anyhow::anyhow!("publication scope `{scope}` is not a registered local workspace")
+    })?;
+    ensure!(
+        matches!(&entry.reach, Reach::Local { .. }),
+        "publication scope `{scope}` is remote or grouped; only local WorkSets are publishable"
+    );
+    Ok(())
 }
 
 fn preview(args: PublishPreviewArgs) -> Result<()> {
