@@ -5,6 +5,7 @@ import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const MAX_ENVELOPE_BYTES = 5 * 1024 * 1024;
+const MAX_PUBLICATION_CLOCK_SKEW_MS = 60_000;
 const MAGIC = Buffer.from("SIVTPUB1", "ascii");
 const ID_RE = /^(90d|30d|3d|7d|2h|1d)_([A-Za-z0-9_-]{22})$/;
 const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
@@ -114,7 +115,8 @@ export async function createPublicationServer(options = {}) {
     const body = await readRequestBody(request);
     if (!validEnvelope(body)) throw new HttpError(400, "invalid_envelope");
 
-    const createdAt = new Date(now());
+    const createdAt = publicationTime(header(request, "x-sivtr-published-at"), now());
+    if (!createdAt) throw new HttpError(400, "invalid_publication_time");
     const expiresAt = new Date(createdAt.getTime() + EXPIRY_MS[publication.expiry]);
     const metadata = {
       management_token_sha256: sha256(token),
@@ -308,6 +310,13 @@ function isExpired(value, now) {
   return !Number.isFinite(timestamp) || timestamp <= now;
 }
 
+function publicationTime(value, current) {
+  if (!value) return new Date(current);
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp) || Math.abs(timestamp - current) > MAX_PUBLICATION_CLOCK_SKEW_MS) return null;
+  return new Date(timestamp);
+}
+
 function json(code, status, headers = {}) {
   const body = Buffer.from(JSON.stringify({ error: code }));
   return { status, body, size: body.byteLength, headers: { "Content-Type": "application/json; charset=utf-8", "Content-Length": String(body.byteLength), ...headers } };
@@ -353,4 +362,3 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
 }
 
 export { MAX_ENVELOPE_BYTES, parseId, validEnvelope };
-
