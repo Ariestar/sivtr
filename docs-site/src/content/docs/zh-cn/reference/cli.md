@@ -432,14 +432,14 @@ sivtr show @ctx -f timeline
 `publish` 把本地 WorkSet 投影成不可变、端侧加密的浏览器只读快照。它与 `share` 不同：`share` 是需要 Sivtr/daemon 的实时 workspace mount；`publish` 上传的只有密文，查看者无需登录或安装 Sivtr，分享者设备离线也能查看。
 
 ```bash
-sivtr publish preview <SOURCE> [--title <TITLE>] [--expires 7d] [--format human|json]
+sivtr publish preview <SOURCE> [--pick] [--save <NAME>] [--title <TITLE>] [--expires 7d] [--format human|json]
 sivtr publish create <SOURCE> [--title <TITLE>] [--expires 7d] [--yes] [--allow-warnings]
 sivtr publish list [--json]
 sivtr publish link <PUBLICATION_ID>
 sivtr publish revoke <PUBLICATION_ID> [--yes]
 ```
 
-v1 只接受同一 provider、同一 session 中连续的本地 Agent record，并只发布 User/Assistant 文本。Terminal、remote/group、part anchor、ToolCall/ToolResult/Thinking/Skill、附件和跨 session 证据包都会被排除或拒绝。公开快照不包含 WorkSet、WorkRef、`cwd`、session path 或本地 provider 原始事件。
+v1 只接受同一 provider、同一 session 中连续的本地 Agent record，并只发布 User/Assistant 文本。`preview --pick` 保存 part anchors，生成 v2 快照，可在同一 session 内选择 User、Assistant、Tool、Skill、Thinking 原子以及不连续片段；ToolCall 与 ToolResult 不可拆开。Terminal、remote/group、附件和跨 session 证据包仍会被拒绝。公开快照不包含 WorkSet、WorkRef、`cwd`、session path 或本地 provider 原始事件。
 
 `preview` 完全离线生成最终快照和风险报告；已识别的 token、私钥、Bearer 和 secret assignment 自动替换为 `[REDACTED]`，绝对路径、邮箱和内网地址只警告。创建前会显示轮次数、大小、脱敏项和期限；非交互环境必须使用 `--yes`，存在未自动处理的风险时还必须使用 `--allow-warnings`。`[publish].endpoint` 默认是 `https://share.hnnulwh.cn`，可在 `config.toml` 里改成自建或其他兼容服务。成功创建时 stdout 只输出完整链接，说明和警告写 stderr，方便复制。
 
@@ -451,6 +451,14 @@ v1 只接受同一 provider、同一 session 中连续的本地 Agent record，�
 sivtr search codex/<session-id> --save share_ready --refs
 sivtr publish preview @share_ready
 sivtr publish create @share_ready --expires 7d
+```
+
+原子选择流程：
+
+```powershell
+sivtr publish preview codex/<session-id> --pick --save share_ready
+sivtr publish preview '@share_ready' --format human
+sivtr publish create '@share_ready' --expires 7d --yes
 ```
 
 ## zoom
@@ -919,3 +927,4 @@ sivtr clear [--all]
 ## 共享语法
 
 Recency selector、`--session`、provider、`--regex`、`--lines`、`--ansi`、`--print` 和 workspace ref 见 [Selector 和 Filter](/zh-cn/reference/selectors-and-filters/)。
+

@@ -943,10 +943,16 @@ pub enum PublishAction {
 pub struct PublishPreviewArgs {
     /// Source ref or WorkSet reference (for example @share_ready or @)
     pub source: String,
+    /// Open the interactive session picker and select atomic content.
+    #[arg(long)]
+    pub pick: bool,
+    /// Save the previewed WorkSet as a named variable.
+    #[arg(long, value_name = "NAME")]
+    pub save: Option<String>,
     /// Optional public title
     #[arg(long)]
     pub title: Option<String>,
-    /// Link lifetime: 1d, 7d, 30d, or 90d
+    /// Link lifetime: 2h, 1d, 3d, 7d, or 30d
     #[arg(long, default_value = "7d")]
     pub expires: String,
     /// Output format
@@ -961,7 +967,7 @@ pub struct PublishCreateArgs {
     /// Optional public title
     #[arg(long)]
     pub title: Option<String>,
-    /// Link lifetime: 1d, 7d, 30d, or 90d
+    /// Link lifetime: 2h, 1d, 3d, 7d, or 30d
     #[arg(long, default_value = "7d")]
     pub expires: String,
     /// Confirm without an interactive prompt
@@ -1724,6 +1730,9 @@ mod tests {
             "publish",
             "preview",
             "@share_ready",
+            "--pick",
+            "--save",
+            "share_ready",
             "--expires",
             "30d",
             "--format",
@@ -1734,8 +1743,34 @@ mod tests {
             Some(Commands::Publish(command)) => match command.action {
                 PublishAction::Preview(args) => {
                     assert_eq!(args.source, "@share_ready");
+                    assert!(args.pick);
+                    assert_eq!(args.save.as_deref(), Some("share_ready"));
                     assert_eq!(args.expires, "30d");
                     assert_eq!(args.format, PublishFormat::Json);
+                }
+                _ => panic!("expected publish preview"),
+            },
+            _ => panic!("expected publish command"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "sivtr",
+            "publish",
+            "preview",
+            "codex/abc123",
+            "--save",
+            "share_ready",
+            "--expires",
+            "2h",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Publish(command)) => match command.action {
+                PublishAction::Preview(args) => {
+                    assert_eq!(args.source, "codex/abc123");
+                    assert!(!args.pick);
+                    assert_eq!(args.save.as_deref(), Some("share_ready"));
+                    assert_eq!(args.expires, "2h");
                 }
                 _ => panic!("expected publish preview"),
             },
@@ -2526,3 +2561,4 @@ pub enum HistoryAction {
         limit: usize,
     },
 }
+

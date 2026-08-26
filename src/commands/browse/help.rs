@@ -449,6 +449,7 @@ pub(super) fn apply_workspace_help_action(
                 shown,
                 *content_io_focus,
                 block_id,
+                line_filter,
             ) {
                 return Ok(HelpDispatch::Picked(picked));
             }
@@ -610,3 +611,4 @@ pub(super) fn set_focus(
         *fullscreen = Some(next);
     }
 }
+
