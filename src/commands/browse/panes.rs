@@ -81,14 +81,11 @@ impl DialoguePane {
         if rows.is_empty() {
             return;
         }
-        let any = selected.iter().any(|s| *s);
         let focus = focus.min(rows.len() - 1);
         for (i, row) in rows.iter().enumerate() {
-            let need_body = if any {
-                selected.get(i).copied().unwrap_or(false)
-            } else {
-                i == focus
-            };
+            // The cursor dialogue's body is always needed: the content pane
+            // shows it even when the selection marks other dialogues.
+            let need_body = i == focus || selected.get(i).copied().unwrap_or(false);
             let item = if need_body {
                 if let Some(body) = row.body.clone() {
                     body

@@ -15,7 +15,7 @@ This page documents the workspace picker TUI (the default `sivtr` interface). Th
 | `1` | Focus Sessions pane |
 | `2` | Focus Dialogues pane |
 | `3` | Focus Content pane |
-| `j` / `k` | Move down / up (Content: block cursor, crossing into the next dialogue) |
+| `j` / `k` | Move down / up (Content: block cursor, crossing into an adjacent dialogue) |
 | `h` / `l` | Focus previous / next pane |
 | `Space` | Toggle source/session/dialogue, or mark a content block |
 | `a` | Select all sources (Source) or toggle all dialogues (Dialogues) |
