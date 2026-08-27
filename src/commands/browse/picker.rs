@@ -176,7 +176,8 @@ pub(crate) fn run(
                         .map(|s| {
                             let mut full = s.clone();
                             if let Some(recs) = sessions_pane.body_for(s) {
-                                full.records = recs.to_vec();
+                                full.records.clear();
+                                full.records.extend(recs.iter().cloned());
                             }
                             full
                         })

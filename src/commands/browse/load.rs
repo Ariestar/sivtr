@@ -300,8 +300,7 @@ impl SourceLoadPump {
                     Ok(mut results) => match results.pop() {
                         Some(QuerySourceResult::Ok(set)) => {
                             let n = set.records().len();
-                            let mut sessions =
-                                sessions_from_records(&source, set.records().to_vec());
+                            let mut sessions = sessions_from_records(&source, set.into_records());
                             for s in &mut sessions {
                                 s.records.clear();
                                 s.body_loaded = false;
@@ -358,7 +357,7 @@ impl SourceLoadPump {
                         Some(QuerySourceResult::Ok(mut set)) => match set.materialize_parts() {
                             Ok(()) => {
                                 let mut sessions =
-                                    sessions_from_records(&source, set.records().to_vec());
+                                    sessions_from_records(&source, set.into_records());
                                 for s in &mut sessions {
                                     s.body_loaded = !s.records.is_empty();
                                 }
@@ -620,11 +619,11 @@ pub fn body_keep_set(
     sources: &[WorkspaceSource],
     sessions: &[WorkspaceSession],
     focus_idx: usize,
-    selected_sessions: &[bool],
+    session_scope: &[bool],
     neighbor_radius: usize,
 ) -> HashSet<(usize, String)> {
     let index_keys: Vec<usize> = (0..sessions.len()).collect();
-    let keep_idx = keep_keys(&index_keys, focus_idx, selected_sessions, neighbor_radius);
+    let keep_idx = keep_keys(&index_keys, focus_idx, session_scope, neighbor_radius);
     keep_idx
         .into_iter()
         .filter_map(|i| {

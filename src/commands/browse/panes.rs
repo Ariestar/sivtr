@@ -243,11 +243,11 @@ fn dialogue_from_record(session: &WorkspaceSession, record: &WorkRecord) -> Work
 fn fingerprint<'a>(
     sessions: &[WorkspaceSession],
     session_idx: usize,
-    selected_sessions: &[bool],
+    session_scope: &[bool],
     records: &dyn Fn(&WorkspaceSession) -> Option<&'a [WorkRecord]>,
 ) -> DialogueFingerprint {
     DialogueFingerprint {
-        sessions: active_rows(selected_sessions, session_idx, sessions.len())
+        sessions: active_rows(session_scope, session_idx, sessions.len())
             .into_iter()
             .filter_map(|i| {
                 let s = sessions.get(i)?;
@@ -261,14 +261,14 @@ fn fingerprint<'a>(
 fn meta_prefix<'a>(
     sessions: &[WorkspaceSession],
     session_idx: usize,
-    selected_sessions: &[bool],
+    session_scope: &[bool],
     records: &dyn Fn(&WorkspaceSession) -> Option<&'a [WorkRecord]>,
     budget: usize,
 ) -> (
     Vec<WindowRow<DialogueKey, DialogueMeta, WorkspaceDialogue>>,
     bool,
 ) {
-    let indices = active_rows(selected_sessions, session_idx, sessions.len());
+    let indices = active_rows(session_scope, session_idx, sessions.len());
     if indices.is_empty() {
         return (Vec::new(), true);
     }
@@ -330,11 +330,11 @@ fn meta_prefix<'a>(
 fn body_for_key<'a>(
     sessions: &[WorkspaceSession],
     session_idx: usize,
-    selected_sessions: &[bool],
+    session_scope: &[bool],
     records: &dyn Fn(&WorkspaceSession) -> Option<&'a [WorkRecord]>,
     key: &DialogueKey,
 ) -> Option<WorkspaceDialogue> {
-    for i in active_rows(selected_sessions, session_idx, sessions.len()) {
+    for i in active_rows(session_scope, session_idx, sessions.len()) {
         let Some(session) = sessions.get(i) else {
             continue;
         };

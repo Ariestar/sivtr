@@ -56,7 +56,8 @@ fn execute_sessions(args: &WorkSessionsArgs) -> Result<()> {
     let cwd = resolve_cwd(args.cwd.as_deref())?;
     let (display_cwd, records) = if let Some(source) = args.source.as_deref() {
         let set = workset::query(source, filter::Filter::none(), Some(&cwd))?;
-        (set.cwd.clone(), set.records().to_vec())
+        let display_cwd = set.cwd.clone();
+        (display_cwd, set.into_records())
     } else {
         let providers = args.provider.providers();
         let records = current_work_record_index(&providers, &cwd, None)?;
