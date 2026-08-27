@@ -213,7 +213,7 @@ mod tests {
         .expect("test record");
         let picked = PickedContent::WorkSet {
             source: WorkspaceSource::terminal(),
-            set: WorkSet::with_anchors("current", vec![record.clone()], vec![record.work_ref]),
+            set: WorkSet::from_parts("current", vec![record.clone()], vec![record.work_ref]),
             projection: WorkspacePickProjection::Command,
             line_filter: None,
         };

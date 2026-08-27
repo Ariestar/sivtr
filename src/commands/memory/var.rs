@@ -116,37 +116,43 @@ fn stdin_is_piped() -> bool {
 }
 
 fn merge_sets(base: WorkSet, addition: WorkSet) -> WorkSet {
-    let mut records_by_ref = records_by_ref(base.records);
-    for record in addition.records {
+    let cwd = base.cwd.clone();
+    let (base_records, mut anchors) = base.into_parts();
+    let (addition_records, addition_anchors) = addition.into_parts();
+    let mut records_by_ref = records_by_ref(base_records);
+    for record in addition_records {
         records_by_ref
             .entry(record.work_ref.whole().to_string())
             .or_insert(record);
     }
 
-    let mut anchors = base.anchors;
-    anchors.extend(addition.anchors);
+    anchors.extend(addition_anchors);
     anchors = unique_anchors(anchors);
     let records = records_for_unique_anchors(records_by_ref, &anchors);
-    WorkSet::with_anchors(base.cwd, records, anchors)
+    WorkSet::from_parts(cwd, records, anchors)
 }
 
 fn remove_anchors(base: WorkSet, remove: &HashSet<String>) -> WorkSet {
-    let records_by_ref = records_by_ref(base.records);
+    let cwd = base.cwd.clone();
+    let (base_records, anchors) = base.into_parts();
+    let records_by_ref = records_by_ref(base_records);
     let anchors = unique_anchors(
-        base.anchors
+        anchors
             .into_iter()
             .filter(|anchor| !remove.contains(&anchor.to_string()))
             .collect(),
     );
     let records = records_for_unique_anchors(records_by_ref, &anchors);
-    WorkSet::with_anchors(base.cwd, records, anchors)
+    WorkSet::from_parts(cwd, records, anchors)
 }
 
 fn dedup(set: WorkSet) -> WorkSet {
-    let records_by_ref = records_by_ref(set.records);
-    let anchors = unique_anchors(set.anchors);
+    let cwd = set.cwd.clone();
+    let (set_records, set_anchors) = set.into_parts();
+    let records_by_ref = records_by_ref(set_records);
+    let anchors = unique_anchors(set_anchors);
     let records = records_for_unique_anchors(records_by_ref, &anchors);
-    WorkSet::with_anchors(set.cwd, records, anchors)
+    WorkSet::from_parts(cwd, records, anchors)
 }
 
 pub(crate) fn unique_anchors(anchors: Vec<WorkRef>) -> Vec<WorkRef> {

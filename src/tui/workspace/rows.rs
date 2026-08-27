@@ -126,8 +126,6 @@ impl RowCursor {
     }
 }
 
-pub(crate) type CursorPane = RowCursor;
-
 /// One selectable scope list: a cursor plus scope marks.
 #[derive(Default)]
 pub(crate) struct ListPane {
@@ -150,9 +148,8 @@ impl DerefMut for ListPane {
 }
 
 impl ListPane {
-    /// A pane over `marks` — the caller already knows which rows start marked
-    /// (source presets); its length is the row count.
-    pub(crate) fn with_marks(marks: Vec<bool>) -> Self {
+    /// A scope pane over its initial row mask.
+    pub(crate) fn from_scope(marks: Vec<bool>) -> Self {
         let cursor = RowCursor::new(marks.len());
         let mut pane = Self {
             cursor,
@@ -162,32 +159,32 @@ impl ListPane {
         pane
     }
 
-    pub(crate) fn mask(&self) -> &[bool] {
+    pub(crate) fn scope_mask(&self) -> &[bool] {
         self.marks.mask()
     }
 
     /// Mask for the policies that set flags in place (source presets).
-    pub(crate) fn mask_mut(&mut self) -> &mut [bool] {
+    pub(crate) fn scope_mask_mut(&mut self) -> &mut [bool] {
         self.marks.mask_mut()
     }
 
-    pub(crate) fn marked(&self) -> usize {
+    pub(crate) fn scope_count(&self) -> usize {
         self.marks.count()
     }
 
-    pub(crate) fn has_marks(&self) -> bool {
+    pub(crate) fn has_scope(&self) -> bool {
         self.marks.any()
     }
 
     /// [`active_rows`] for this pane.
-    pub(crate) fn active(&self) -> Vec<usize> {
-        active_rows(self.mask(), self.cursor(), self.len())
+    pub(crate) fn active_scope_rows(&self) -> Vec<usize> {
+        active_rows(self.scope_mask(), self.cursor(), self.len())
     }
 
-    /// [`Self::active`] as a mask, for the transports that reload by mask.
-    pub(crate) fn active_mask(&self) -> Vec<bool> {
+    /// [`Self::active_scope_rows`] as a mask for the transports that reload.
+    pub(crate) fn active_scope_mask(&self) -> Vec<bool> {
         let mut mask = vec![false; self.len()];
-        for row in self.active() {
+        for row in self.active_scope_rows() {
             if let Some(flag) = mask.get_mut(row) {
                 *flag = true;
             }
@@ -195,13 +192,13 @@ impl ListPane {
         mask
     }
 
-    pub(crate) fn toggle(&mut self, idx: usize) {
+    pub(crate) fn toggle_scope(&mut self, idx: usize) {
         self.marks.toggle(idx);
     }
 
     /// Mark every row, or clear them all when they are already marked — the
     /// same one-state rule a `v` range follows, over the whole pane.
-    pub(crate) fn toggle_all(&mut self) {
+    pub(crate) fn toggle_scope_all(&mut self) {
         let len = self.len();
         self.marks.toggle_ids(0..len);
     }
@@ -251,7 +248,7 @@ impl ListPane {
 pub(crate) struct Rows {
     pub(crate) source: ListPane,
     pub(crate) sessions: ListPane,
-    pub(crate) dialogues: CursorPane,
+    pub(crate) dialogues: RowCursor,
     /// The only content-selection state. List and block marks are derived
     /// views; cursor/range state never decides what copy or MCP receives.
     pub(crate) selection: WorkSet,
@@ -263,7 +260,7 @@ impl Default for Rows {
         Self {
             source: ListPane::default(),
             sessions: ListPane::default(),
-            dialogues: CursorPane::default(),
+            dialogues: RowCursor::default(),
             selection: WorkSet::new(".", Vec::new()),
             content_anchor: None,
         }
@@ -271,9 +268,7 @@ impl Default for Rows {
 }
 
 impl Rows {
-    /// The pane `focus` names, or `None` for Content — it has no rows, it
-    /// marks blocks.
-    pub(crate) fn pane(&self, focus: WorkspaceFocus) -> Option<&ListPane> {
+    pub(crate) fn scope_pane(&self, focus: WorkspaceFocus) -> Option<&ListPane> {
         match focus {
             WorkspaceFocus::Source => Some(&self.source),
             WorkspaceFocus::Sessions => Some(&self.sessions),
@@ -281,7 +276,7 @@ impl Rows {
         }
     }
 
-    pub(crate) fn pane_mut(&mut self, focus: WorkspaceFocus) -> Option<&mut ListPane> {
+    pub(crate) fn scope_pane_mut(&mut self, focus: WorkspaceFocus) -> Option<&mut ListPane> {
         match focus {
             WorkspaceFocus::Source => Some(&mut self.source),
             WorkspaceFocus::Sessions => Some(&mut self.sessions),
@@ -320,8 +315,7 @@ impl Rows {
         self.content_anchor = None;
     }
 
-    /// One `v` press on `row` of `focus`. Rows are list rows for the three list
-    /// panes, block ids for Content.
+    /// One `v` press on `row` of `focus`. Rows are list rows or content block ids.
     pub(crate) fn range(
         &mut self,
         focus: WorkspaceFocus,
@@ -330,11 +324,12 @@ impl Rows {
         range_step(self.anchor_mut(focus), row)
     }
 
-    /// [`ListPane::range_select`] for the focused list pane; Content marks
-    /// blocks through [`Self::range`] instead.
+    /// [`ListPane::range_select`] for a scope pane; Dialogue and Content use
+    /// [`Self::range`] directly.
     #[cfg(test)]
     pub(crate) fn range_select(&mut self, focus: WorkspaceFocus) -> bool {
-        self.pane_mut(focus).is_some_and(ListPane::range_select)
+        self.scope_pane_mut(focus)
+            .is_some_and(ListPane::range_select)
     }
 }
 
@@ -347,14 +342,14 @@ mod tests {
 
     fn rows_of(marks: Vec<bool>) -> Rows {
         Rows {
-            source: ListPane::with_marks(marks),
+            source: ListPane::from_scope(marks),
             ..Rows::default()
         }
     }
 
     #[test]
     fn cursor_is_clamped_to_the_row_count() {
-        let mut pane = ListPane::with_marks(vec![false; 3]);
+        let mut pane = ListPane::from_scope(vec![false; 3]);
         // A non-empty pane always has a cursor, before any move.
         assert_eq!(pane.cursor(), 0);
         pane.select(9);
@@ -367,27 +362,27 @@ mod tests {
 
     #[test]
     fn active_rows_are_the_marks_or_the_cursor_alone() {
-        let mut pane = ListPane::with_marks(vec![false; 4]);
+        let mut pane = ListPane::from_scope(vec![false; 4]);
         pane.select(2);
-        assert_eq!(pane.active(), vec![2]);
-        pane.toggle(0);
-        pane.toggle(3);
-        assert_eq!(pane.active(), vec![0, 3]);
-        assert_eq!(pane.active_mask(), vec![true, false, false, true]);
+        assert_eq!(pane.active_scope_rows(), vec![2]);
+        pane.toggle_scope(0);
+        pane.toggle_scope(3);
+        assert_eq!(pane.active_scope_rows(), vec![0, 3]);
+        assert_eq!(pane.active_scope_mask(), vec![true, false, false, true]);
     }
 
     #[test]
     fn fit_keeps_the_rows_and_reset_starts_over() {
-        let mut pane = ListPane::with_marks(vec![false; 4]);
+        let mut pane = ListPane::from_scope(vec![false; 4]);
         pane.select(3);
-        pane.toggle(3);
+        pane.toggle_scope(3);
         // Same length: marks and cursor survive.
         pane.fit(4);
-        assert_eq!(pane.marked(), 1);
+        assert_eq!(pane.scope_count(), 1);
         assert_eq!(pane.cursor(), 3);
         // Shorter list: marks named other rows, so they go; the cursor clamps.
         pane.fit(2);
-        assert_eq!(pane.marked(), 0);
+        assert_eq!(pane.scope_count(), 0);
         assert_eq!(pane.cursor(), 1);
         // Reset returns to the first row of a freshly built list.
         pane.reset(5);
@@ -410,11 +405,11 @@ mod tests {
 
     #[test]
     fn toggle_all_marks_then_clears_every_row() {
-        let mut pane = ListPane::with_marks(vec![false, true, false]);
-        pane.toggle_all();
-        assert_eq!(pane.marked(), 3);
-        pane.toggle_all();
-        assert_eq!(pane.marked(), 0);
+        let mut pane = ListPane::from_scope(vec![false, true, false]);
+        pane.toggle_scope_all();
+        assert_eq!(pane.scope_count(), 3);
+        pane.toggle_scope_all();
+        assert_eq!(pane.scope_count(), 0);
     }
 
     #[test]
@@ -425,19 +420,19 @@ mod tests {
         // First `v` only anchors; nothing is marked yet.
         assert!(!rows.range_select(PANE));
         assert_eq!(rows.range_start(PANE), Some(4));
-        assert!(!rows.source.has_marks());
+        assert!(!rows.source.has_scope());
 
         // Moving the cursor does not disturb the anchor.
         rows.source.select(1);
         assert!(rows.range_select(PANE));
         assert_eq!(rows.range_start(PANE), None);
         // Span 1..=4 marked; row 0 untouched.
-        assert_eq!(rows.source.mask(), &[false, true, true, true, true]);
+        assert_eq!(rows.source.scope_mask(), &[false, true, true, true, true]);
     }
 
     #[test]
     fn second_v_inverts_an_already_marked_span() {
-        let mut pane = ListPane::with_marks(vec![true, true, false, false, true]);
+        let mut pane = ListPane::from_scope(vec![true, true, false, false, true]);
         let span = |pane: &mut ListPane, from: usize, to: usize| {
             pane.select(from);
             pane.range_select();
@@ -446,10 +441,10 @@ mod tests {
         };
         span(&mut pane, 4, 2);
         // Span 2..=4 was false/false/true (mixed) → mark all.
-        assert_eq!(pane.mask()[2..], [true, true, true]);
+        assert_eq!(pane.scope_mask()[2..], [true, true, true]);
         span(&mut pane, 4, 2);
         // Span is now all marked → clear it.
-        assert!(pane.mask()[0]);
-        assert_eq!(pane.mask()[2..], [false, false, false]);
+        assert!(pane.scope_mask()[0]);
+        assert_eq!(pane.scope_mask()[2..], [false, false, false]);
     }
 }

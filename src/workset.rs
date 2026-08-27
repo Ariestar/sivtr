@@ -14,7 +14,9 @@ pub struct WorkSet {
     pub cwd: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Materialized records backing every anchor.
     records: Vec<WorkRecord>,
+    /// Active selection positions; Whole covers every Part of its record.
     anchors: Vec<WorkRef>,
 }
 
@@ -24,10 +26,10 @@ impl WorkSet {
             .iter()
             .map(|record| record.work_ref.whole())
             .collect();
-        Self::with_anchors(cwd, records, anchors)
+        Self::from_parts(cwd, records, anchors)
     }
 
-    pub fn with_anchors(
+    pub fn from_parts(
         cwd: impl Into<String>,
         records: Vec<WorkRecord>,
         anchors: Vec<WorkRef>,
@@ -216,7 +218,7 @@ impl WorkSet {
             })
             .cloned()
             .collect();
-        Some(Self::with_anchors(self.cwd.clone(), records, anchors))
+        Some(Self::from_parts(self.cwd.clone(), records, anchors))
     }
 
     /// Remove a record and every Part anchor belonging to it.

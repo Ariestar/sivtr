@@ -133,7 +133,7 @@ pub(super) fn invalidate_after_cursor_move(
         WorkspaceFocus::Sessions => {
             // The dialogue list spans every marked session, so it only
             // follows the cursor row while nothing is marked.
-            if !rows.sessions.has_marks() {
+            if !rows.sessions.has_scope() {
                 rows.dialogues.reset(0);
             }
             content_scrolls.clear();
@@ -165,7 +165,7 @@ pub(super) fn move_workspace_cursor(
     let moved = match focus {
         WorkspaceFocus::Dialogues => rows.dialogues.step(up),
         WorkspaceFocus::Source | WorkspaceFocus::Sessions => {
-            rows.pane_mut(focus).is_some_and(|pane| pane.step(up))
+            rows.scope_pane_mut(focus).is_some_and(|pane| pane.step(up))
         }
         WorkspaceFocus::Content => false,
     };
@@ -279,7 +279,7 @@ pub(super) fn source_list_index(
 mod tests {
     use super::{move_content_cursor, row_list_index, ContentBlockCursor};
     use crate::tui::content::block::BlockText;
-    use crate::tui::workspace::{ContentScrolls, CursorPane, Rows};
+    use crate::tui::workspace::{ContentScrolls, RowCursor, Rows};
     use ratatui::layout::Rect;
     use sivtr_core::record::WorkPartKind;
 
@@ -301,7 +301,7 @@ mod tests {
     #[test]
     fn a_step_off_the_last_block_crosses_into_the_next_dialogue() {
         let mut rows = Rows::default();
-        rows.dialogues = CursorPane::new(2);
+        rows.dialogues = RowCursor::new(2);
         let mut scrolls = ContentScrolls::default();
         let mut cursor = ContentBlockCursor::default();
         let first = blocks(&[0]);

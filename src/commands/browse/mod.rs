@@ -71,7 +71,7 @@ fn run_catalog(
         anyhow::bail!("No terminal or AI sources configured");
     }
 
-    let selected_sources: Vec<bool> = sources
+    let source_scope: Vec<bool> = sources
         .iter()
         .map(|source| select_remotes || !source.is_remote())
         .collect();
@@ -83,7 +83,7 @@ fn run_catalog(
         &mut terminal,
         sources,
         source_states,
-        selected_sources,
+        source_scope,
         cwd,
         initial_focus,
         wait_after_panic,
@@ -127,7 +127,7 @@ fn run_picker_guarded(
     terminal: &mut crate::tui::terminal::Tui,
     sources: Vec<WorkspaceSource>,
     source_states: Vec<SourceLoadState>,
-    selected_sources: Vec<bool>,
+    source_scope: Vec<bool>,
     cwd: std::path::PathBuf,
     initial_focus: WorkspaceFocus,
     wait_after_panic: bool,
@@ -140,7 +140,7 @@ fn run_picker_guarded(
             terminal,
             sources,
             source_states,
-            selected_sources,
+            source_scope,
             cwd,
             initial_focus,
         )

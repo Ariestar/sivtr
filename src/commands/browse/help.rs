@@ -107,7 +107,7 @@ pub(super) fn apply_workspace_help_action(
                     content_cursor,
                 },
             ) {
-                let idx = rows.pane(*focus).map_or(0, |pane| pane.cursor());
+                let idx = rows.scope_pane(*focus).map_or(0, |pane| pane.cursor());
                 if toggle_list_row(*focus, idx, rows, content_scrolls) {
                     return Ok(HelpDispatch::Refresh);
                 }
@@ -116,7 +116,7 @@ pub(super) fn apply_workspace_help_action(
         WorkspaceHelpAction::SelectAgentSources | WorkspaceHelpAction::SelectTerminalSource => {
             select_sources(
                 sources,
-                rows.source.mask_mut(),
+                rows.source.scope_mask_mut(),
                 if action == WorkspaceHelpAction::SelectAgentSources {
                     WorkspaceSourceSelection::Agents
                 } else {
@@ -352,10 +352,10 @@ pub(super) fn toggle_list_row(
     rows: &mut Rows,
     content_scrolls: &mut ContentScrolls,
 ) -> bool {
-    let Some(pane) = rows.pane_mut(focus) else {
+    let Some(pane) = rows.scope_pane_mut(focus) else {
         return false;
     };
-    pane.toggle(idx);
+    pane.toggle_scope(idx);
     rows.close_ranges();
     invalidate_panes_below(focus, rows, content_scrolls)
 }

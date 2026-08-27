@@ -60,7 +60,7 @@ fn session_with_n(n: usize) -> WorkspaceSession {
 fn primed_dialogue_pane(n: usize) -> DialoguePane {
     let sessions = vec![session_with_n(n)];
     let mut pane = DialoguePane::default();
-    let selected_sessions = [true];
+    let session_scope = [true];
     let selected = vec![true; n];
     let vp = Viewport {
         first: 0,
@@ -77,7 +77,7 @@ fn primed_dialogue_pane(n: usize) -> DialoguePane {
         DialogueCtx {
             sessions: &sessions,
             session_idx: 0,
-            session_scope: &selected_sessions,
+            session_scope: &session_scope,
             records: &records,
         },
         &PaneInput::new(vp, 0)
@@ -139,7 +139,7 @@ impl HotPane {
 /// Grow meta twice (includes setup; measures ensure path).
 pub fn run_ensure_growth() -> (usize, usize) {
     let sessions = vec![session_with_n(500)];
-    let selected_sessions = [true];
+    let session_scope = [true];
     let mut pane = DialoguePane::default();
     let empty = [];
     let records = |s: &WorkspaceSession| {
@@ -153,7 +153,7 @@ pub fn run_ensure_growth() -> (usize, usize) {
         DialogueCtx {
             sessions: &sessions,
             session_idx: 0,
-            session_scope: &selected_sessions,
+            session_scope: &session_scope,
             records: &records,
         },
         &PaneInput::new(
@@ -170,7 +170,7 @@ pub fn run_ensure_growth() -> (usize, usize) {
         DialogueCtx {
             sessions: &sessions,
             session_idx: 0,
-            session_scope: &selected_sessions,
+            session_scope: &session_scope,
             records: &records,
         },
         &PaneInput::new(

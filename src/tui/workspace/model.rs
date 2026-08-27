@@ -327,7 +327,7 @@ pub(crate) struct WorkspaceView<'a> {
     /// Dialogue list titles only (no body materialize on paint).
     pub(crate) dialogue_titles: &'a [&'a str],
     /// WorkSet-derived dialogue selection for this frame.
-    pub(crate) dialogue_selected: &'a [bool],
+    pub(crate) dialogue_selection: &'a [bool],
     /// Materialized dialogues for content/copy (focus ∪ multi-select bodies).
     pub(crate) dialogues: &'a [WorkspaceDialogue],
     pub(crate) focus: WorkspaceFocus,

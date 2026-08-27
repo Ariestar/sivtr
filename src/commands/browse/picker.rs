@@ -70,7 +70,7 @@ pub(crate) fn run(
     // One cursor + mark set + range anchor per list pane. The source presets
     // arrive as a mask, so that pane starts from it.
     let mut rows = Rows::default();
-    rows.source = ListPane::with_marks(source_scope);
+    rows.source = ListPane::from_scope(source_scope);
     let mut help_state = ListState::default();
     help_state.select(Some(0));
     let mut focus = initial_focus;
@@ -84,9 +84,9 @@ pub(crate) fn run(
         first: 0,
         visible: 24,
     };
-    sessions_pane.kick(rows.source.mask(), bootstrap, true);
+    sessions_pane.kick(rows.source.scope_mask(), bootstrap, true);
     // Meta-only list — dialogue bodies live in SessionColumn, not here.
-    let mut all_sessions = sessions_pane.collect(rows.source.mask());
+    let mut all_sessions = sessions_pane.collect(rows.source.scope_mask());
     let mut sessions = all_sessions.clone();
     let mut sessions_dirty = false;
     rows.source.fit(sources.len());
@@ -135,7 +135,7 @@ pub(crate) fn run(
     // that skip redrawing (idle with no state change).
     let mut dialogues: Vec<WorkspaceDialogue> = Vec::new();
     let mut content_frame = ContentIoFrame::default();
-    // (engine generation, selected mask, focused index) for the projection in
+    // (engine generation, dialogue selection, focused index) for the projection in
     // `dialogues`; unchanged redraws reuse it instead of re-cloning bodies.
     let mut dialogues_key: Option<(u64, Vec<bool>, usize)> = None;
 
@@ -148,7 +148,7 @@ pub(crate) fn run(
             redraw = true;
         }
         if sessions_dirty {
-            all_sessions = sessions_pane.collect(rows.source.mask());
+            all_sessions = sessions_pane.collect(rows.source.scope_mask());
             sessions_dirty = false;
             reproject = true;
         }
@@ -224,16 +224,16 @@ pub(crate) fn run(
 
         sessions_pane.ensure(
             SessionCtx {
-                source_scope: rows.source.mask(),
+                source_scope: rows.source.scope_mask(),
                 sessions: &sessions,
-                session_scope: rows.sessions.mask(),
+                session_scope: rows.sessions.scope_mask(),
                 search_active: search_has_query,
             },
             &PaneInput::new(
                 Viewport::from_panel(rows.sessions.offset(), panel_inner_rows(layout.sessions)),
                 session_idx,
             )
-            .with_selected(rows.sessions.mask())
+            .with_selected(rows.sessions.scope_mask())
             .with_neighbors(1),
         );
         resolve_loaded_scopes(&mut rows, &sources, &sessions, &sessions_pane);
@@ -250,7 +250,7 @@ pub(crate) fn run(
             DialogueCtx {
                 sessions: &sessions,
                 session_idx,
-                session_scope: rows.sessions.mask(),
+                session_scope: rows.sessions.scope_mask(),
                 records: &records,
             },
             &PaneInput::new(dialogue_viewport, dialogue_focus_hint)
@@ -265,7 +265,7 @@ pub(crate) fn run(
                 DialogueCtx {
                     sessions: &sessions,
                     session_idx,
-                    session_scope: rows.sessions.mask(),
+                    session_scope: rows.sessions.scope_mask(),
                     records: &records,
                 },
                 &PaneInput::new(
@@ -285,7 +285,7 @@ pub(crate) fn run(
             DialogueCtx {
                 sessions: &sessions,
                 session_idx,
-                session_scope: rows.sessions.mask(),
+                session_scope: rows.sessions.scope_mask(),
                 records: &records,
             },
             &PaneInput::new(dialogue_viewport, dialogue_idx)
@@ -305,7 +305,7 @@ pub(crate) fn run(
         );
 
         // Materialize the dialogue projection only when the engine, the
-        // selected mask, or the focused row changed. Content scrolling and
+        // dialogue selection, or the focused row changed. Content scrolling and
         // other-pane activity reuse the last projection instead of cloning
         // dialogue bodies on every redraw.
         let materialize_key = (
@@ -437,7 +437,7 @@ pub(crate) fn run(
                         sessions: &sessions,
                         body_failures,
                         dialogue_titles: &dialogue_titles,
-                        dialogue_selected: &dialogue_selection,
+                        dialogue_selection: &dialogue_selection,
                         dialogues: &dialogues,
                         focus,
                         content_scrolls,

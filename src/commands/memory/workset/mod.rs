@@ -121,10 +121,26 @@ pub fn record_for_anchor<'a>(
     records: &'a [WorkRecord],
     anchor: &WorkRef,
 ) -> Option<&'a WorkRecord> {
+    find_record([records], anchor)
+}
+
+pub fn find_record<'a, I>(record_sets: I, anchor: &WorkRef) -> Option<&'a WorkRecord>
+where
+    I: IntoIterator<Item = &'a [WorkRecord]>,
+{
     let record_ref = anchor.whole();
-    records
-        .iter()
+    record_sets
+        .into_iter()
+        .flat_map(|records| records.iter())
         .find(|record| record.work_ref.whole() == record_ref)
+}
+
+pub fn require_record<'a, I>(record_sets: I, anchor: &WorkRef) -> Result<&'a WorkRecord>
+where
+    I: IntoIterator<Item = &'a [WorkRecord]>,
+{
+    find_record(record_sets, anchor)
+        .with_context(|| format!("No record found for ref `{}`", anchor.whole()))
 }
 
 pub fn load_reference(reference: &str) -> Result<WorkSet> {
@@ -284,7 +300,7 @@ mod tests {
             records[1].work_ref.with_part(1),
             records[0].work_ref.with_part(1),
         ];
-        let set = WorkSet::with_anchors(".", records, anchors);
+        let set = WorkSet::from_parts(".", records, anchors);
         let selected = apply_selection(set, WorkSetSelection::Indices(vec![2, 1]));
 
         let refs = selected
@@ -301,7 +317,7 @@ mod tests {
     #[test]
     fn whole_anchor_covers_and_replaces_parts() {
         let first = record(1);
-        let mut set = WorkSet::with_anchors(".", vec![first.clone()], vec![]);
+        let mut set = WorkSet::from_parts(".", vec![first.clone()], vec![]);
         set.include_parts(first.clone(), [1]);
         assert!(set.contains(&first.work_ref.with_part(1)));
         set.include_whole(first.clone());

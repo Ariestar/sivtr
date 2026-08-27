@@ -238,7 +238,7 @@ fn merge_and_apply(results: Vec<QuerySourceResult>, cwd: &Path, filter: Filter) 
         output::warning(format!("skipped an origin: {error}"));
     }
     apply_loaded(
-        WorkSet::with_anchors(
+        WorkSet::from_parts(
             cwd.display().to_string(),
             records,
             crate::commands::memory::var::unique_anchors(anchors),
@@ -334,7 +334,7 @@ fn normalize_source_result(result: Result<WorkSet>, cwd: &Path) -> QuerySourceRe
         Err(error) => {
             let message = error.to_string();
             if message.starts_with(NO_RECORD_FOR_SELECTOR) {
-                QuerySourceResult::Ok(WorkSet::with_anchors(
+                QuerySourceResult::Ok(WorkSet::from_parts(
                     cwd.display().to_string(),
                     Vec::new(),
                     Vec::new(),
@@ -425,7 +425,7 @@ fn run_local(source: &str, root: &Path, filter: Filter, mode: LoadMode) -> Resul
     let result = load_workspace_source(root, source, mode)?;
     warn_skipped(&result.skipped);
     apply_loaded(
-        WorkSet::with_anchors(root.display().to_string(), result.records, result.anchors),
+        WorkSet::from_parts(root.display().to_string(), result.records, result.anchors),
         filter,
     )
 }
@@ -459,7 +459,7 @@ fn try_remote_timed(
         },
         read_timeout,
     )? {
-        LocalResponse::Query(response) => Ok(WorkSet::with_anchors(
+        LocalResponse::Query(response) => Ok(WorkSet::from_parts(
             cwd.display().to_string(),
             response.records,
             response.anchors,
@@ -517,7 +517,7 @@ fn group_query(
                     response.skipped.join(", ")
                 ));
             }
-            Ok(WorkSet::with_anchors(
+            Ok(WorkSet::from_parts(
                 cwd.display().to_string(),
                 response.query.records,
                 response.query.anchors,
@@ -659,7 +659,7 @@ mod tests {
         let second = record(2);
         let part = first.work_ref.with_part(2);
         let results = vec![
-            QuerySourceResult::Ok(WorkSet::with_anchors(
+            QuerySourceResult::Ok(WorkSet::from_parts(
                 "/repo",
                 vec![first],
                 vec![part.clone()],
