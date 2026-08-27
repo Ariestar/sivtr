@@ -218,8 +218,8 @@ fn merge_and_apply(results: Vec<QuerySourceResult>, cwd: &Path, filter: Filter) 
         match result {
             QuerySourceResult::Ok(set) => {
                 any_ok = true;
-                anchors.extend(set.anchors());
-                for record in set.records {
+                anchors.extend(set.anchors().iter().cloned());
+                for record in set.into_records() {
                     if seen.insert(record.work_ref.whole()) {
                         records.push(record);
                     }
@@ -405,13 +405,14 @@ pub fn run_on_share(
     match run_local(source, root, filter.for_remote_peer(), LoadMode::Full) {
         Ok(mut set) => {
             if redact {
-                set.records = set
-                    .records
+                let records = set
+                    .records()
                     .iter()
                     .map(crate::remote::redact::redact_record)
                     .collect();
+                set.replace_records(records);
             }
-            Ok((set.records, set.anchors))
+            Ok(set.into_parts())
         }
         Err(error) if error.to_string().starts_with(NO_RECORD_FOR_SELECTOR) => {
             Ok((Vec::new(), Vec::new()))
@@ -430,7 +431,9 @@ fn run_local(source: &str, root: &Path, filter: Filter, mode: LoadMode) -> Resul
 }
 
 fn apply_loaded(set: WorkSet, filter: Filter) -> Result<WorkSet> {
-    filter::apply(PathBuf::from(&set.cwd), set.records, set.anchors, filter)
+    let cwd = PathBuf::from(&set.cwd);
+    let (records, anchors) = set.into_parts();
+    filter::apply(cwd, records, anchors, filter)
 }
 
 fn try_remote_timed(
@@ -597,7 +600,7 @@ pub fn load_context_records(
         // filter-driven light mode and force a full load.
         let mut set = query(&source, Filter::none(), Some(cwd))?;
         set.materialize_parts()?;
-        for record in set.records {
+        for record in set.into_records() {
             let key = record.work_ref.whole().to_string();
             if seen_records.insert(key) {
                 records.push(record);

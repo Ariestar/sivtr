@@ -92,7 +92,7 @@ fn drop(name: &str, sources: &[String]) -> Result<()> {
             crate::commands::memory::filter::Filter::none(),
             None,
         )?;
-        remove.extend(set.anchors().into_iter().map(|anchor| anchor.to_string()));
+        remove.extend(set.anchors().iter().map(ToString::to_string));
     }
     let mut result = remove_anchors(before, &remove);
     result.name = Some(name.to_string());

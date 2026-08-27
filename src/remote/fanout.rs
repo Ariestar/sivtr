@@ -223,8 +223,8 @@ pub(crate) async fn group_fan_out(
     let merged = filter::apply(PathBuf::new(), records, anchors, full)?;
     Ok(GroupQueryResponse {
         query: QueryResponse {
-            records: merged.records,
-            anchors: merged.anchors,
+            records: merged.records().to_vec(),
+            anchors: merged.anchors().to_vec(),
         },
         skipped,
     })

@@ -23,8 +23,14 @@ pub fn execute(args: &NavArgs) -> Result<()> {
         args.cwd.as_deref(),
     )?;
     let cwd = PathBuf::from(&source.cwd);
-    let all_records = workset::load_context_records(&source.records, &source.anchors, &cwd)?;
-    let anchors = navigate(&source.records, &source.anchors, &all_records, &args.motion)?;
+    let source_anchors = source.anchors().to_vec();
+    let all_records = workset::load_context_records(source.records(), &source_anchors, &cwd)?;
+    let anchors = navigate(
+        source.records(),
+        &source_anchors,
+        &all_records,
+        &args.motion,
+    )?;
     let records = workset::records_for_anchors(&all_records, &anchors);
     let mut set = WorkSet::with_anchors(source.cwd, records, anchors);
     set.save_last()?;

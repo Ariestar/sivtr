@@ -42,8 +42,8 @@ impl WorkSet {
         }
     }
 
-    pub fn anchors(&self) -> Vec<WorkRef> {
-        self.anchors.clone()
+    pub fn anchors(&self) -> &[WorkRef] {
+        &self.anchors
     }
 
     pub fn records(&self) -> &[WorkRecord] {
@@ -199,8 +199,9 @@ impl WorkSet {
     pub fn parts_only(&self) -> Option<Self> {
         let anchors: Vec<_> = self
             .anchors()
-            .into_iter()
+            .iter()
             .filter(|anchor| anchor.at != WorkAt::Whole)
+            .cloned()
             .collect();
         if anchors.is_empty() {
             return None;
