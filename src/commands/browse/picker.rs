@@ -35,7 +35,7 @@ use super::nav::{
     open_link_target, row_list_index, source_list_index, ContentBlockCursor,
 };
 use super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane};
-use super::selection::{refresh_next_level, resolve_loaded_scopes, source_records};
+use super::selection::{refresh_next_level, resolve_loaded_scopes, toggle_row_selection};
 use super::visual::{
     apply_workspace_mouse_scroll, handle_content_mouse_select, handle_visual_select_key,
     MouseSelectionStart, VisualContentContext, VisualSelectMode, MOUSE_SCROLL_LINES,
@@ -1135,12 +1135,15 @@ pub(crate) fn run(
                                         if vertical && dot_gutter_hit(layout.source, mouse.column) {
                                             let session_records =
                                                 session_record_snapshot(&sessions, &sessions_pane);
-                                            rows.selection.toggle_records(source_records(
+                                            toggle_row_selection(
+                                                WorkspaceFocus::Source,
+                                                idx,
+                                                &mut rows,
                                                 &sources,
                                                 &sessions,
                                                 &session_records,
-                                                idx,
-                                            ));
+                                                &dialogues,
+                                            );
                                             if toggle_list_row(
                                                 WorkspaceFocus::Source,
                                                 idx,
@@ -1169,9 +1172,15 @@ pub(crate) fn run(
                                         if dot_gutter_hit(layout.sessions, mouse.column) {
                                             let session_records =
                                                 session_record_snapshot(&sessions, &sessions_pane);
-                                            if let Some(records) = session_records.get(idx) {
-                                                rows.selection.toggle_records(records.clone());
-                                            }
+                                            toggle_row_selection(
+                                                WorkspaceFocus::Sessions,
+                                                idx,
+                                                &mut rows,
+                                                &sources,
+                                                &sessions,
+                                                &session_records,
+                                                &dialogues,
+                                            );
                                             toggle_list_row(
                                                 WorkspaceFocus::Sessions,
                                                 idx,
@@ -1195,12 +1204,15 @@ pub(crate) fn run(
                                             &mut content_scrolls,
                                         );
                                         if dot_gutter_hit(layout.dialogues, mouse.column) {
-                                            if let Some(record) = dialogues
-                                                .get(idx)
-                                                .and_then(|dialogue| dialogue.record.clone())
-                                            {
-                                                rows.selection.toggle_whole(record);
-                                            }
+                                            toggle_row_selection(
+                                                WorkspaceFocus::Dialogues,
+                                                idx,
+                                                &mut rows,
+                                                &sources,
+                                                &sessions,
+                                                &[],
+                                                &dialogues,
+                                            );
                                             invalidate_after_cursor_move(
                                                 WorkspaceFocus::Dialogues,
                                                 &mut rows,

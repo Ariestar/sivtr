@@ -4,7 +4,9 @@
 //! [`crate::tui::workspace::active_rows`]). `R` reloads the next hierarchy
 //! level under those rows.
 
-use crate::tui::workspace::{Rows, WorkspaceFocus, WorkspaceSession, WorkspaceSource};
+use crate::tui::workspace::{
+    Rows, WorkspaceDialogue, WorkspaceFocus, WorkspaceSession, WorkspaceSource,
+};
 
 use super::load::SessionColumn;
 use crate::pane::Viewport;
@@ -103,6 +105,37 @@ pub(super) fn source_records(
         .filter(|(_, session)| &session.source == source)
         .flat_map(|(idx, _)| session_records.get(idx).into_iter().flatten().cloned())
         .collect()
+}
+
+pub(super) fn toggle_row_selection(
+    focus: WorkspaceFocus,
+    idx: usize,
+    rows: &mut Rows,
+    sources: &[WorkspaceSource],
+    sessions: &[WorkspaceSession],
+    session_records: &[Vec<sivtr_core::record::WorkRecord>],
+    dialogues: &[WorkspaceDialogue],
+) {
+    match focus {
+        WorkspaceFocus::Source => {
+            rows.selection
+                .toggle_records(source_records(sources, sessions, session_records, idx))
+        }
+        WorkspaceFocus::Sessions => {
+            if let Some(records) = session_records.get(idx) {
+                rows.selection.toggle_records(records.clone());
+            }
+        }
+        WorkspaceFocus::Dialogues => {
+            if let Some(record) = dialogues
+                .get(idx)
+                .and_then(|dialogue| dialogue.record.clone())
+            {
+                rows.selection.toggle_whole(record);
+            }
+        }
+        WorkspaceFocus::Content => {}
+    }
 }
 
 /// Materialize records covered by marked source/session scopes. Scope masks

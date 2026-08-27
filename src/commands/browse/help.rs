@@ -20,8 +20,7 @@ use super::content::{
 use super::nav::{invalidate_panes_below, move_workspace_cursor, ContentBlockCursor};
 use super::panes::ContentPane;
 use super::selection::{
-    select_sources, source_records, toggle_dialogue, toggle_session, toggle_source,
-    WorkspaceSourceSelection,
+    select_sources, source_records, toggle_row_selection, WorkspaceSourceSelection,
 };
 use super::vim::open_vim_view;
 use super::PICK_CANCELLED_MESSAGE;
@@ -108,17 +107,41 @@ pub(super) fn apply_workspace_help_action(
                 }
             }
             WorkspaceFocus::Dialogues => {
-                toggle_dialogue(rows, dialogues, rows.dialogues.cursor());
+                toggle_row_selection(
+                    *focus,
+                    rows.dialogues.cursor(),
+                    rows,
+                    sources,
+                    sessions,
+                    session_records,
+                    dialogues,
+                );
             }
             WorkspaceFocus::Sessions => {
-                toggle_session(rows, session_records, rows.sessions.cursor());
+                toggle_row_selection(
+                    *focus,
+                    rows.sessions.cursor(),
+                    rows,
+                    sources,
+                    sessions,
+                    session_records,
+                    dialogues,
+                );
                 if toggle_list_row(*focus, rows.sessions.cursor(), rows, content_scrolls) {
                     return Ok(HelpDispatch::Refresh);
                 }
             }
             WorkspaceFocus::Source => {
                 let idx = rows.source.cursor();
-                toggle_source(rows, sources, sessions, session_records, idx);
+                toggle_row_selection(
+                    *focus,
+                    idx,
+                    rows,
+                    sources,
+                    sessions,
+                    session_records,
+                    dialogues,
+                );
                 if toggle_list_row(*focus, idx, rows, content_scrolls) {
                     return Ok(HelpDispatch::Refresh);
                 }
