@@ -226,24 +226,24 @@ fn move_content_cursor(
     if total == 0 {
         return;
     }
-    // Cursor's position in the continuous input + output sequence.
-    let position = cursor.get().and_then(|id| {
-        input_blocks
+    let ids: Vec<_> = input_blocks
+        .iter()
+        .chain(output_blocks)
+        .map(|block| block.id)
+        .collect();
+    let current_id = cursor.get();
+    let position = current_id.and_then(|id| ids.iter().position(|visible| *visible == id));
+    let next = match (current_id, position) {
+        (None, _) => 0,
+        (Some(_), Some(pos)) if up => pos.saturating_sub(1),
+        (Some(_), Some(pos)) => (pos + 1).min(total - 1),
+        (Some(id), None) if up => ids.iter().rposition(|visible| *visible < id).unwrap_or(0),
+        (Some(id), None) => ids
             .iter()
-            .chain(output_blocks)
-            .position(|block| block.id == id)
-    });
-    let next = match position {
-        Some(pos) if up => pos.saturating_sub(1),
-        Some(pos) => (pos + 1).min(total - 1),
-        None => 0,
+            .position(|visible| *visible > id)
+            .unwrap_or(total - 1),
     };
-    let id = if next < input_len {
-        input_blocks[next].id
-    } else {
-        output_blocks[next - input_len].id
-    };
-    cursor.set(id);
+    cursor.set(ids[next]);
     cursor.follow = true;
 }
 
@@ -309,8 +309,19 @@ pub(super) fn reset_workspace_dialogue_state(
 
 #[cfg(test)]
 mod tests {
-    use super::{row_list_index, shown_dialogue_idx};
+    use super::{move_content_cursor, row_list_index, shown_dialogue_idx, ContentBlockCursor};
+    use crate::tui::content::block::BlockText;
     use ratatui::layout::Rect;
+    use sivtr_core::record::WorkPartKind;
+
+    fn block(id: usize) -> BlockText {
+        BlockText {
+            id,
+            text: String::new(),
+            tight: false,
+            kind: WorkPartKind::Output,
+        }
+    }
 
     #[test]
     fn row_list_index_includes_scroll_offset() {
@@ -340,5 +351,19 @@ mod tests {
         assert_eq!(shown_dialogue_idx(&selected, 2, 0), 4);
         // A page past the end clamps to the last selected dialogue.
         assert_eq!(shown_dialogue_idx(&selected, 9, 0), 4);
+    }
+
+    #[test]
+    fn hidden_cursor_moves_to_the_nearest_visible_block() {
+        let blocks = [block(0), block(1), block(4)];
+        let mut cursor = ContentBlockCursor::default();
+        cursor.set(3);
+
+        move_content_cursor(true, &mut cursor, (&[], &blocks));
+        assert_eq!(cursor.get(), Some(1));
+
+        cursor.set(3);
+        move_content_cursor(false, &mut cursor, (&[], &blocks));
+        assert_eq!(cursor.get(), Some(4));
     }
 }
