@@ -404,7 +404,7 @@ impl ContentPane {
     /// WorkSet-derived block highlights for one dialogue. A Whole selection
     /// covers every block; a run highlights only when every part it owns is
     /// selected, while its children remain independently derived.
-    pub fn selection_mask(
+    pub fn block_selection_mask(
         dialogues: &[WorkspaceDialogue],
         dialogue_idx: usize,
         selection: &WorkSet,

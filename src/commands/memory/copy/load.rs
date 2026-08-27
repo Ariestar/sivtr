@@ -67,7 +67,7 @@ pub(crate) fn load_dialogues(
         return Ok(Vec::new());
     }
 
-    let mut records = set.records().to_vec();
+    let mut records = set.into_records();
     // Oldest → newest so relative select (from end) matches historical terminal semantics.
     records.sort_by_key(|r| (r.session.id.clone(), r.work_ref.index()));
     // Bare sources (e.g. `codex`, multi-session terminal) → newest session only.
@@ -118,7 +118,7 @@ fn load_pinned_ref(
     }
 
     let set = workset::query(expanded, Filter::none(), Some(cwd))?;
-    let record = workset::record_for_anchor(set.records(), work_ref)
+    let record = workset::find_record([set.records()], work_ref)
         .with_context(|| format!("No record found for ref `{expanded}`"))?
         .clone();
 

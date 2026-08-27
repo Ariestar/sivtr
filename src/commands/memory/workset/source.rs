@@ -574,7 +574,7 @@ pub fn load_context_records(
     let mut sources = Vec::new();
     let mut seen_sources = HashSet::new();
     for anchor in source_anchors {
-        let record = super::record_for_anchor(source_records, anchor)
+        let record = super::find_record([source_records], anchor)
             .with_context(|| format!("No record found for ref `{anchor}`"))?;
         let path = match &record.work_ref.path {
             WorkPath::Terminal { session, .. } => format!("terminal/{session}"),

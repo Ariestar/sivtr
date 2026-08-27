@@ -8,11 +8,13 @@ pub(crate) use store::{cleanup_saved, delete_saved, list_saved, load_saved, save
 
 use anyhow::{bail, Context, Result};
 use sivtr_core::query::{load_session_records, LoadMode};
-use sivtr_core::record::{WorkPath, WorkRecord, WorkRef};
+use sivtr_core::record::WorkPath;
 use std::collections::HashMap;
 use std::path::Path;
 
-pub use crate::workset::{records_for_anchors, WorkSet, WORKSET_SCHEMA_VERSION};
+pub use crate::workset::{
+    find_record, records_for_anchors, require_record, WorkSet, WORKSET_SCHEMA_VERSION,
+};
 
 fn apply_selection(mut set: WorkSet, selection: WorkSetSelection) -> WorkSet {
     let WorkSetSelection::Indices(indices) = selection else {
@@ -95,32 +97,6 @@ impl WorkSet {
         set.materialize_parts()?;
         save_named("last", &set)
     }
-}
-
-pub fn record_for_anchor<'a>(
-    records: &'a [WorkRecord],
-    anchor: &WorkRef,
-) -> Option<&'a WorkRecord> {
-    find_record([records], anchor)
-}
-
-pub fn find_record<'a, I>(record_sets: I, anchor: &WorkRef) -> Option<&'a WorkRecord>
-where
-    I: IntoIterator<Item = &'a [WorkRecord]>,
-{
-    let record_ref = anchor.whole();
-    record_sets
-        .into_iter()
-        .flat_map(|records| records.iter())
-        .find(|record| record.work_ref.whole() == record_ref)
-}
-
-pub fn require_record<'a, I>(record_sets: I, anchor: &WorkRef) -> Result<&'a WorkRecord>
-where
-    I: IntoIterator<Item = &'a [WorkRecord]>,
-{
-    find_record(record_sets, anchor)
-        .with_context(|| format!("No record found for ref `{}`", anchor.whole()))
 }
 
 pub fn load_reference(reference: &str) -> Result<WorkSet> {
@@ -321,6 +297,20 @@ mod tests {
         ))
         .expect("serialize WorkSet");
         value["anchors"] = serde_json::json!([first.work_ref.whole(), first.work_ref.with_part(1)]);
+        let set: WorkSet = serde_json::from_value(value).expect("deserialize WorkSet");
+        assert!(set.validate().is_err());
+    }
+
+    #[test]
+    fn validation_rejects_part_before_whole_loaded_from_json() {
+        let first = record(1);
+        let mut value = serde_json::to_value(WorkSet::from_parts(
+            ".",
+            vec![first.clone()],
+            vec![first.work_ref.whole()],
+        ))
+        .expect("serialize WorkSet");
+        value["anchors"] = serde_json::json!([first.work_ref.with_part(1), first.work_ref.whole()]);
         let set: WorkSet = serde_json::from_value(value).expect("deserialize WorkSet");
         assert!(set.validate().is_err());
     }

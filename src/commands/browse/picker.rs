@@ -417,7 +417,7 @@ pub(crate) fn run(
 
             let source_markers = sessions_pane.markers();
             let content_marked =
-                ContentPane::selection_mask(&dialogues, dialogue_idx, &rows.selection);
+                ContentPane::block_selection_mask(&dialogues, dialogue_idx, &rows.selection);
             let body_failures: HashSet<(WorkspaceSource, String)> = sessions
                 .iter()
                 .filter_map(|s| {

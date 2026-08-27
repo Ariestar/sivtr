@@ -1,6 +1,6 @@
 //! Canonical record and part selection shared by the TUI, CLI, and MCP.
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
@@ -98,7 +98,6 @@ impl WorkSet {
                 && self
                     .anchors
                     .iter()
-                    .skip(index + 1)
                     .any(|other| other.at != WorkAt::Whole && other.whole() == anchor.whole())
             {
                 bail!("WorkSet contains Part anchors shadowed by Whole");
@@ -272,12 +271,28 @@ pub fn records_for_anchors(records: &[WorkRecord], anchors: &[WorkRef]) -> Vec<W
         if !seen.insert(record_ref.clone()) {
             continue;
         }
-        if let Some(record) = records
-            .iter()
-            .find(|record| record.work_ref.whole() == record_ref)
-        {
+        if let Some(record) = find_record([records], anchor) {
             selected.push(record.clone());
         }
     }
     selected
+}
+
+pub fn find_record<'a, I>(record_sets: I, anchor: &WorkRef) -> Option<&'a WorkRecord>
+where
+    I: IntoIterator<Item = &'a [WorkRecord]>,
+{
+    let record_ref = anchor.whole();
+    record_sets
+        .into_iter()
+        .flat_map(|records| records.iter())
+        .find(|record| record.work_ref.whole() == record_ref)
+}
+
+pub fn require_record<'a, I>(record_sets: I, anchor: &WorkRef) -> Result<&'a WorkRecord>
+where
+    I: IntoIterator<Item = &'a [WorkRecord]>,
+{
+    find_record(record_sets, anchor)
+        .with_context(|| format!("No record found for ref `{}`", anchor.whole()))
 }
