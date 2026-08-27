@@ -75,8 +75,7 @@ fn run_catalog(
         .iter()
         .map(|source| select_remotes || !source.is_remote())
         .collect();
-    let source_states: Vec<SourceLoadState> =
-        sources.iter().map(|_| SourceLoadState::idle()).collect();
+    let source_states: Vec<SourceLoadState> = sources.iter().map(|_| Default::default()).collect();
 
     let mut terminal = init_tui()?;
     let result = run_picker_guarded(

@@ -48,12 +48,6 @@ pub struct SourceLoadState {
 }
 
 impl SourceLoadState {
-    pub fn idle() -> Self {
-        Self {
-            pane: SessionPane::default(),
-        }
-    }
-
     pub fn ready_from_sessions(sessions: Vec<WorkspaceSession>, budget: usize) -> Self {
         let rows = sessions
             .into_iter()

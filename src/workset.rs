@@ -35,11 +35,24 @@ impl WorkSet {
         records: Vec<WorkRecord>,
         anchors: Vec<WorkRef>,
     ) -> Self {
-        let mut canonical: Vec<WorkRef> = Vec::with_capacity(anchors.len());
-        for anchor in anchors {
+        let mut set = Self {
+            schema_version: WORKSET_SCHEMA_VERSION,
+            created_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+            cwd: cwd.into(),
+            name: None,
+            records,
+            anchors,
+        };
+        set.normalize_anchors();
+        set
+    }
+
+    fn normalize_anchors(&mut self) {
+        let mut canonical = Vec::with_capacity(self.anchors.len());
+        for anchor in self.anchors.drain(..) {
             let whole = anchor.whole();
             if anchor.at == WorkAt::Whole {
-                canonical.retain(|existing| existing.whole() != whole);
+                canonical.retain(|existing: &WorkRef| existing.whole() != whole);
                 canonical.push(anchor);
             } else if !canonical.iter().any(|existing| {
                 existing == &anchor || (existing.at == WorkAt::Whole && existing.whole() == whole)
@@ -47,14 +60,27 @@ impl WorkSet {
                 canonical.push(anchor);
             }
         }
-        Self {
-            schema_version: WORKSET_SCHEMA_VERSION,
-            created_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
-            cwd: cwd.into(),
-            name: None,
-            records,
-            anchors: canonical,
+        for record in &self.records {
+            if record.parts.is_empty() {
+                continue;
+            }
+            let whole = record.work_ref.whole();
+            let complete = record.parts.iter().all(|part| {
+                canonical
+                    .iter()
+                    .any(|anchor| anchor.at == WorkAt::Part(part.seq) && anchor.whole() == whole)
+            });
+            if !complete || canonical.iter().any(|anchor| anchor == &whole) {
+                continue;
+            }
+            let first = canonical
+                .iter()
+                .position(|anchor| anchor.whole() == whole)
+                .expect("complete parts must have a matching anchor");
+            canonical.retain(|anchor| anchor.whole() != whole);
+            canonical.insert(first, whole);
         }
+        self.anchors = canonical;
     }
 
     pub fn anchors(&self) -> &[WorkRef] {
@@ -102,6 +128,14 @@ impl WorkSet {
             {
                 bail!("WorkSet contains Part anchors shadowed by Whole");
             }
+            let Some(record) = find_record([self.records.as_slice()], anchor) else {
+                bail!("WorkSet anchor has no backing record");
+            };
+            if let WorkAt::Part(seq) = anchor.at {
+                if !record.parts.iter().any(|part| part.seq == seq) {
+                    bail!("WorkSet Part anchor has no matching part");
+                }
+            }
         }
         Ok(())
     }
@@ -142,18 +176,10 @@ impl WorkSet {
     /// and remains the only stored representation.
     pub fn include_parts(&mut self, record: WorkRecord, parts: impl IntoIterator<Item = usize>) {
         let parts: Vec<_> = parts.into_iter().collect();
+        if parts.is_empty() {
+            return;
+        }
         let whole = record.work_ref.whole();
-        if !record.parts.is_empty() && record.parts.iter().all(|part| parts.contains(&part.seq)) {
-            self.include_whole(record);
-            return;
-        }
-        if self
-            .anchors
-            .iter()
-            .any(|anchor| anchor.at == WorkAt::Whole && anchor.whole() == whole)
-        {
-            return;
-        }
         if !self
             .records
             .iter()
@@ -162,11 +188,9 @@ impl WorkSet {
             self.records.push(record.clone());
         }
         for seq in parts {
-            let anchor = whole.with_part(seq);
-            if !self.anchors.contains(&anchor) {
-                self.anchors.push(anchor);
-            }
+            self.anchors.push(whole.with_part(seq));
         }
+        self.normalize_anchors();
     }
 
     /// Toggle a complete record selection.
@@ -199,7 +223,28 @@ impl WorkSet {
         {
             let whole = record.work_ref.whole();
             let remove: HashSet<_> = parts.into_iter().map(|seq| whole.with_part(seq)).collect();
-            self.anchors.retain(|anchor| !remove.contains(anchor));
+            let had_whole = self
+                .anchors
+                .iter()
+                .any(|anchor| anchor.at == WorkAt::Whole && anchor.whole() == whole);
+            let insert_at = self
+                .anchors
+                .iter()
+                .position(|anchor| anchor.whole() == whole);
+            self.anchors.retain(|anchor| {
+                anchor.whole() != whole || (!had_whole && !remove.contains(anchor))
+            });
+            if had_whole {
+                let remaining = record
+                    .parts
+                    .iter()
+                    .map(|part| whole.with_part(part.seq))
+                    .filter(|anchor| !remove.contains(anchor));
+                if let Some(index) = insert_at {
+                    self.anchors.splice(index..index, remaining);
+                }
+            }
+            self.normalize_anchors();
             if !self.anchors.iter().any(|anchor| anchor.whole() == whole) {
                 self.records.retain(|item| item.work_ref.whole() != whole);
             }

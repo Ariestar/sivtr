@@ -349,9 +349,8 @@ pub(crate) struct WorkspaceView<'a> {
     /// Pending `v` block-range span `(anchor block, cursor block)`;
     /// its lines render with the same amber range style as the list panes.
     pub(crate) content_range: Option<(usize, usize)>,
-    /// Marked block mask (`mask[block_id]` = marked, dialogue-global ids),
-    /// owned by the content pane's native selection; consumed by the dot
-    /// gutter and copy.
+    /// WorkSet-derived block mask (`mask[block_id]` = marked, dialogue-global
+    /// ids), consumed by the dot gutter and copy.
     pub(crate) content_marked: &'a [bool],
     /// Dual IO layout + display texts, computed once per redraw by the picker
     /// and shared with the renderer (no per-frame duplicate layout).

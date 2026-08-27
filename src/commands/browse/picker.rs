@@ -25,8 +25,8 @@ use crate::tui::workspace::{
 
 use super::content::{
     active_workspace_content_at, handle_line_filter_key, handle_line_filter_paste,
-    line_filter_spec, workspace_block_parts, workspace_picked_content_for_selected_parts,
-    workspace_search_target_ref, PickedContent,
+    line_filter_spec, workspace_picked_content_for_selected_parts, workspace_search_target_ref,
+    PickedContent,
 };
 use super::help::{apply_workspace_help_action, set_focus, toggle_list_row, HelpDispatch};
 use super::load::{SessionColumn, SessionCtx, SourceLoadState};
@@ -35,7 +35,9 @@ use super::nav::{
     open_link_target, row_list_index, source_list_index, ContentBlockCursor,
 };
 use super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane};
-use super::selection::{refresh_next_level, resolve_loaded_scopes, toggle_row_selection};
+use super::selection::{
+    refresh_next_level, resolve_loaded_scopes, toggle_block_selection, toggle_row_selection,
+};
 use super::visual::{
     apply_workspace_mouse_scroll, handle_content_mouse_select, handle_visual_select_key,
     MouseSelectionStart, VisualContentContext, VisualSelectMode, MOUSE_SCROLL_LINES,
@@ -956,13 +958,7 @@ pub(crate) fn run(
                                     WorkspaceFocus::Content,
                                 );
                                 content_cursor.set(block);
-                                if let Some((_, record, parts)) = workspace_block_parts(
-                                    &dialogues,
-                                    rows.dialogues.cursor(),
-                                    block,
-                                ) {
-                                    rows.selection.toggle_parts(record, parts);
-                                }
+                                toggle_block_selection(&mut rows, &dialogues, block);
                                 continue;
                             }
                         }

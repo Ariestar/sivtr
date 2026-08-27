@@ -133,6 +133,18 @@ pub(super) fn toggle_row_selection(
     }
 }
 
+pub(super) fn toggle_block_selection(
+    rows: &mut Rows,
+    dialogues: &[WorkspaceDialogue],
+    block_id: usize,
+) {
+    if let Some((_, record, parts)) =
+        super::content::workspace_block_parts(dialogues, rows.dialogues.cursor(), block_id)
+    {
+        rows.selection.toggle_parts(record, parts);
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum SelectionAction {
     Toggle,
@@ -168,13 +180,7 @@ pub(super) fn apply_selection_action(
         SelectionAction::Toggle => {
             if focus == WorkspaceFocus::Content {
                 if let Some(block) = content_cursor.get() {
-                    if let Some((_, record, parts)) = super::content::workspace_block_parts(
-                        dialogues,
-                        rows.dialogues.cursor(),
-                        block,
-                    ) {
-                        rows.selection.toggle_parts(record, parts);
-                    }
+                    toggle_block_selection(rows, dialogues, block);
                 }
                 return false;
             }

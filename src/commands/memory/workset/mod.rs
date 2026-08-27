@@ -88,6 +88,7 @@ impl WorkSet {
     pub fn save_as(&mut self, name: &str) -> Result<()> {
         store::validate_name(name)?;
         self.materialize_parts()?;
+        self.validate()?;
         self.name = Some(name.to_string());
         save_named(name, self)
     }
@@ -95,6 +96,7 @@ impl WorkSet {
     pub fn save_last(&self) -> Result<()> {
         let mut set = self.clone();
         set.materialize_parts()?;
+        set.validate()?;
         save_named("last", &set)
     }
 }
@@ -316,6 +318,26 @@ mod tests {
     }
 
     #[test]
+    fn validation_rejects_anchor_without_backing_record() {
+        let first = record(1);
+        let mut value = serde_json::to_value(WorkSet::from_parts(".", vec![first.clone()], vec![]))
+            .expect("serialize WorkSet");
+        value["anchors"] = serde_json::json!([record(2).work_ref]);
+        let set: WorkSet = serde_json::from_value(value).expect("deserialize WorkSet");
+        assert!(set.validate().is_err());
+    }
+
+    #[test]
+    fn validation_rejects_part_anchor_without_matching_part() {
+        let first = record(1);
+        let mut value = serde_json::to_value(WorkSet::from_parts(".", vec![first.clone()], vec![]))
+            .expect("serialize WorkSet");
+        value["anchors"] = serde_json::json!([first.work_ref.with_part(99)]);
+        let set: WorkSet = serde_json::from_value(value).expect("deserialize WorkSet");
+        assert!(set.validate().is_err());
+    }
+
+    #[test]
     fn whole_anchor_covers_and_replaces_parts() {
         let first = record(1);
         let mut set = WorkSet::from_parts(".", vec![first.clone()], vec![]);
@@ -344,6 +366,26 @@ mod tests {
     }
 
     #[test]
+    fn incremental_part_selection_is_canonical_whole() {
+        let first = record(1);
+        let mut set = WorkSet::new(".", Vec::new());
+        set.include_parts(first.clone(), [1]);
+        set.include_parts(first.clone(), [2]);
+        assert_eq!(set.anchors(), vec![first.work_ref.whole()]);
+    }
+
+    #[test]
+    fn from_parts_collapses_complete_part_anchors() {
+        let first = record(1);
+        let set = WorkSet::from_parts(
+            ".",
+            vec![first.clone()],
+            vec![first.work_ref.with_part(1), first.work_ref.with_part(2)],
+        );
+        assert_eq!(set.anchors(), vec![first.work_ref.whole()]);
+    }
+
+    #[test]
     fn toggling_whole_replaces_narrow_selection() {
         let first = record(1);
         let mut set = WorkSet::new(".", Vec::new());
@@ -352,6 +394,17 @@ mod tests {
         assert_eq!(set.anchors(), vec![first.work_ref.whole()]);
         set.toggle_whole(first.clone());
         assert!(set.anchors().is_empty());
+    }
+
+    #[test]
+    fn toggling_part_from_whole_keeps_the_other_parts() {
+        let first = record(1);
+        let mut set = WorkSet::new(".", Vec::new());
+        set.include_whole(first.clone());
+        set.toggle_parts(first.clone(), [1]);
+        assert_eq!(set.anchors(), vec![first.work_ref.with_part(2)]);
+        assert!(!set.contains(&first.work_ref.with_part(1)));
+        assert!(set.contains(&first.work_ref.with_part(2)));
     }
 
     #[test]
