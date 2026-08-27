@@ -40,10 +40,13 @@ pub fn execute(plan: CopyPlan) -> Result<()> {
     let prompt = plan.filters.prompt.as_deref();
     let mut units = Vec::new();
     for record in &loaded.records {
-        units.push(project_record(record, loaded.projection, prompt)?);
+        units.push(
+            project_record(record, loaded.projection, prompt)
+                .context("project record for copy")?,
+        );
     }
 
-    finish_units(&units, &plan.filters, &loaded.label)
+    finish_units(&units, &plan.filters, &loaded.label).context("finish copy")
 }
 
 fn execute_pick(plan: &CopyPlan) -> Result<()> {

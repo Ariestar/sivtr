@@ -31,6 +31,7 @@ pub fn export_picked(
         },
         &picked.source.label(),
     )
+    .context("export picked content")
 }
 
 /// Join every unit that carries text and sink it, naming `label` in both the
