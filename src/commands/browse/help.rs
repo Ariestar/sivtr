@@ -239,7 +239,7 @@ pub(super) fn apply_workspace_help_action(
                     rows.dialogues.mask(),
                     rows.dialogues.cursor(),
                     content_at,
-                )));
+                )?));
             }
             WorkspaceFocus::Sessions => {}
         },

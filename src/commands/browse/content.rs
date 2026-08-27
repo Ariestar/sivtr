@@ -108,7 +108,7 @@ pub(super) fn workspace_picked_content(
     selected_dialogues: &[bool],
     dialogue_idx: usize,
     target: Option<WorkAt>,
-) -> WorkspacePickedContent {
+) -> Result<WorkspacePickedContent> {
     workspace_picked_content_with_line_filter(
         dialogues,
         selected_dialogues,
@@ -116,7 +116,6 @@ pub(super) fn workspace_picked_content(
         None,
         target,
     )
-    .expect("workspace copy without a line filter should not fail")
 }
 
 /// Picked content from the content pane's marked blocks: every selected

@@ -65,7 +65,7 @@ pub(super) fn handle_visual_select_key(
                 text,
                 content_mode,
                 mode.selection,
-            )));
+            )?));
         }
         KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
             return Ok(Some(workspace_picked_content_for_visual_selection(
@@ -76,7 +76,7 @@ pub(super) fn handle_visual_select_key(
                 text,
                 content_mode,
                 mode.selection,
-            )));
+            )?));
         }
         KeyCode::Left | KeyCode::Char('h') => move_visual_cursor(
             mode,
@@ -334,17 +334,18 @@ pub(super) fn workspace_picked_content_for_visual_selection(
     text: &str,
     content_mode: ContentViewMode,
     selection: ContentSelection,
-) -> WorkspacePickedContent {
-    let source = workspace_picked_content(dialogues, selected_dialogues, dialogue_idx, None).source;
+) -> Result<WorkspacePickedContent> {
+    let source =
+        workspace_picked_content(dialogues, selected_dialogues, dialogue_idx, None)?.source;
     let plain = selected_content_text(content_area, text, content_mode, selection);
-    WorkspacePickedContent {
+    Ok(WorkspacePickedContent {
         source,
         units: vec![crate::tui::workspace::TextPair {
             ansi: plain.clone(),
             plain,
         }],
         selection: CommandSelection::RecentExplicit(vec![1]),
-    }
+    })
 }
 
 pub(super) fn apply_workspace_mouse_scroll(
