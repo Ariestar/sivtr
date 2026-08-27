@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::time::SystemTime;
 
 use crate::commands::select::CommandSelection;
-use crate::tui::content::block::{fold_label_for_part, BlockText};
+use crate::tui::content::block::{dialogue_block_id, fold_label_for_part, BlockText};
 use crate::tui::content::io::{
     ContentIoFocus, ContentIoFrame, ContentIoTexts, ContentScrolls, ExpandedBlocks,
 };
@@ -259,12 +259,13 @@ impl WorkspaceDialogue {
                 return ContentIoTexts::new(Vec::new(), Vec::new());
             };
             let input = part.kind().is_input();
+            let block_id = dialogue_block_id(record, part.seq).expect("target part has a block");
             let shown = match mode {
                 ContentViewMode::Raw => true,
-                ContentViewMode::Reading => expanded.expanded(0, part.kind().is_structure()),
+                ContentViewMode::Reading => expanded.expanded(block_id, part.kind().is_structure()),
             };
             let segment = BlockText {
-                id: 0,
+                id: block_id,
                 text: if shown {
                     crate::tui::content::tool::part_body_text(part)
                 } else {

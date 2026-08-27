@@ -164,6 +164,23 @@ pub(crate) fn dialogue_block_count(record: &WorkRecord) -> usize {
     input.iter().chain(&output).map(Block::node_count).sum()
 }
 
+pub(crate) fn dialogue_block_id(record: &WorkRecord, seq: usize) -> Option<usize> {
+    let (input, output) = dialogue_blocks(record);
+    let part = record.parts.iter().position(|part| part.seq == seq)?;
+    input
+        .iter()
+        .chain(&output)
+        .find_map(|block| block_id_for_part(block, part))
+}
+
+fn block_id_for_part(block: &Block, part: usize) -> Option<usize> {
+    block
+        .children
+        .iter()
+        .find_map(|child| block_id_for_part(child, part))
+        .or_else(|| block.parts.contains(&part).then_some(block.id))
+}
+
 fn build_half_units(record: &WorkRecord, input: bool) -> Vec<Block> {
     let parts: Vec<usize> = record
         .parts
@@ -706,6 +723,7 @@ mod tests {
         assert_eq!(input.len(), 1);
         assert_eq!(output[0].children.len(), 2);
         assert_eq!(output[0].children[1].id, 3);
+        assert_eq!(dialogue_block_id(&rec, 3), Some(3));
     }
 
     /// Render one half through the dialogue-global block ids.
