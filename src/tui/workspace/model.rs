@@ -192,12 +192,6 @@ impl WorkspaceCopyParts {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct WorkspacePickedContent {
-    pub(crate) source: WorkspaceSource,
-    pub(crate) units: Vec<TextPair>,
-}
-
-#[derive(Clone, Debug)]
 pub(crate) struct WorkspaceSession {
     pub(crate) source: WorkspaceSource,
     /// Stable session identity for hydrate / selection (not display title).

@@ -64,7 +64,6 @@ fn parent_source_mask(
 
 #[derive(Clone, Copy)]
 pub(super) enum WorkspaceSourceSelection {
-    All,
     Agents,
     Terminal,
 }
@@ -80,7 +79,6 @@ pub(super) fn select_sources(
     let overlap = sources.len().min(selected_sources.len());
     for (idx, source) in sources.iter().take(overlap).enumerate() {
         selected_sources[idx] = match selection {
-            WorkspaceSourceSelection::All => true,
             WorkspaceSourceSelection::Agents => source.is_agent(),
             WorkspaceSourceSelection::Terminal => source.is_terminal(),
         };

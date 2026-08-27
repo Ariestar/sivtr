@@ -3,9 +3,11 @@
 use anyhow::{Context, Result};
 use regex::Regex;
 
-use crate::commands::browse::{filter_lines_by_spec, select_lines};
+use crate::commands::browse::{
+    filter_lines_by_spec, select_lines, PickedContent, WorkspacePickProjection,
+};
 use crate::output;
-use crate::tui::workspace::{TextPair, WorkspacePickedContent};
+use crate::tui::workspace::TextPair;
 
 use super::plan::CopyFilters;
 
@@ -13,14 +15,15 @@ use super::plan::CopyFilters;
 ///
 /// Product surfaces (bare `sivtr`, hotkey) own the browse call; copy only sinks.
 pub fn export_picked(
-    picked: &WorkspacePickedContent,
+    picked: &PickedContent,
     print_full: bool,
     regex: Option<&str>,
     lines: Option<&str>,
     ansi: bool,
 ) -> Result<()> {
+    let (units, label) = picked_units(picked)?;
     finish_units(
-        &picked.units,
+        &units,
         &CopyFilters {
             print: print_full,
             ansi,
@@ -29,9 +32,55 @@ pub fn export_picked(
             prompt: None,
             cwd: None,
         },
-        &picked.source.label(),
+        &label,
     )
     .context("export picked content")
+}
+
+fn picked_units(picked: &PickedContent) -> Result<(Vec<TextPair>, String)> {
+    match picked {
+        PickedContent::Text { source, units } => Ok((units.clone(), source.label())),
+        PickedContent::WorkSet {
+            source,
+            set,
+            projection,
+        } => {
+            let projection = match projection {
+                WorkspacePickProjection::Whole => super::plan::Projection::Both,
+                WorkspacePickProjection::Input => super::plan::Projection::Input,
+                WorkspacePickProjection::Output => super::plan::Projection::Output,
+                WorkspacePickProjection::Command => super::plan::Projection::Command,
+                WorkspacePickProjection::Parts => {
+                    super::plan::Projection::Exact(sivtr_core::record::WorkAt::Whole)
+                }
+            };
+            let anchors = set.anchors();
+            let units = anchors
+                .iter()
+                .map(|anchor| {
+                    let record = set
+                        .records
+                        .iter()
+                        .find(|record| record.work_ref.whole() == anchor.whole())
+                        .with_context(|| {
+                            format!("picked record `{}` is not materialized", anchor.whole())
+                        })?;
+                    let projection = if matches!(
+                        projection,
+                        super::plan::Projection::Both
+                            | super::plan::Projection::Exact(sivtr_core::record::WorkAt::Whole)
+                    ) && anchor.at != sivtr_core::record::WorkAt::Whole
+                    {
+                        super::plan::Projection::Exact(anchor.at)
+                    } else {
+                        projection
+                    };
+                    super::project::project_record(record, projection, None)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok((units, source.label()))
+        }
+    }
 }
 
 /// Join every unit that carries text and sink it, naming `label` in both the
@@ -117,6 +166,11 @@ fn filter_lines_by_regex(text: &TextPair, pattern: &str) -> Result<TextPair> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::browse::{PickedContent, WorkspacePickProjection};
+    use crate::commands::memory::workset::WorkSet;
+    use crate::tui::workspace::WorkspaceSource;
+    use sivtr_core::session::SessionEntry;
+    use std::path::Path;
 
     #[test]
     fn filters_by_regex() {
@@ -142,5 +196,24 @@ mod tests {
         )
         .unwrap();
         assert_eq!(filtered.ansi, "\x1b[31mwarn: b\x1b[0m");
+    }
+
+    #[test]
+    fn workset_pick_projects_its_records() {
+        let record = sivtr_core::record::WorkRecord::terminal(
+            &SessionEntry::new("PS C:\\repo>", "cargo test", "ok"),
+            Path::new("current"),
+            0,
+        )
+        .expect("test record");
+        let picked = PickedContent::WorkSet {
+            source: WorkspaceSource::terminal(),
+            set: WorkSet::with_anchors("current", vec![record.clone()], vec![record.work_ref]),
+            projection: WorkspacePickProjection::Command,
+        };
+
+        let (units, label) = picked_units(&picked).expect("projects workset");
+        assert_eq!(label, "terminal");
+        assert_eq!(units[0].plain, "cargo test");
     }
 }

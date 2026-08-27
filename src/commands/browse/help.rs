@@ -9,15 +9,13 @@ use crate::tui::content::view::ContentViewMode;
 use crate::tui::terminal::suspend;
 use crate::tui::workspace::{
     can_open_dialogue_vim, workspace_content_text, ContentIoFocus, ContentScrolls, ExpandedBlocks,
-    Rows, WorkspaceDialogue, WorkspaceFocus, WorkspaceHelpAction, WorkspacePickedContent,
-    WorkspaceSource,
+    Rows, WorkspaceDialogue, WorkspaceFocus, WorkspaceHelpAction, WorkspaceSource,
 };
 use sivtr_core::record::WorkAt;
 
 use super::content::{
-    dialogue_text_vim_view, workspace_picked_content,
-    workspace_picked_content_for_copy_with_line_filter, workspace_picked_content_for_cursor_block,
-    WorkspaceCopyShortcut,
+    dialogue_text_vim_view, workspace_picked_content_for_copy,
+    workspace_picked_content_for_cursor_block, PickedContent, WorkspaceCopyShortcut,
 };
 use super::nav::{invalidate_panes_below, move_workspace_cursor, ContentBlockCursor};
 use super::panes::ContentPane;
@@ -28,7 +26,7 @@ use super::PICK_CANCELLED_MESSAGE;
 /// Result of dispatching a help-table action.
 pub(super) enum HelpDispatch {
     Continue,
-    Picked(WorkspacePickedContent),
+    Picked(PickedContent),
     /// Caller must refresh session/dialogue load (needs SessionColumn).
     Refresh,
 }
@@ -105,21 +103,38 @@ pub(super) fn apply_workspace_help_action(
                 }
             }
         },
-        WorkspaceHelpAction::SelectAllSources
-        | WorkspaceHelpAction::SelectAgentSources
-        | WorkspaceHelpAction::SelectTerminalSource => {
+        WorkspaceHelpAction::SelectAgentSources | WorkspaceHelpAction::SelectTerminalSource => {
             select_sources(
                 sources,
                 rows.source.mask_mut(),
-                match action {
-                    WorkspaceHelpAction::SelectAgentSources => WorkspaceSourceSelection::Agents,
-                    WorkspaceHelpAction::SelectTerminalSource => WorkspaceSourceSelection::Terminal,
-                    _ => WorkspaceSourceSelection::All,
+                if action == WorkspaceHelpAction::SelectAgentSources {
+                    WorkspaceSourceSelection::Agents
+                } else {
+                    WorkspaceSourceSelection::Terminal
                 },
             );
             invalidate_panes_below(WorkspaceFocus::Source, rows, content_scrolls);
             return Ok(HelpDispatch::Refresh);
         }
+        WorkspaceHelpAction::ToggleAll => match *focus {
+            WorkspaceFocus::Content => {
+                let dialogue_idx = rows.dialogues.cursor();
+                let block_count = dialogues
+                    .get(dialogue_idx)
+                    .and_then(|dialogue| dialogue.record.as_ref())
+                    .map(crate::tui::content::block::dialogue_block_count)
+                    .unwrap_or(0);
+                content_pane.toggle_mark_range(dialogue_idx, 0..block_count);
+            }
+            pane => {
+                if let Some(list) = rows.pane_mut(pane) {
+                    list.toggle_all();
+                    rows.close_ranges();
+                    invalidate_panes_below(pane, rows, content_scrolls);
+                    return Ok(HelpDispatch::Refresh);
+                }
+            }
+        },
         WorkspaceHelpAction::RangeSelect => match *focus {
             WorkspaceFocus::Content => {
                 // The span covers block ids instead of list rows, and only
@@ -148,10 +163,6 @@ pub(super) fn apply_workspace_help_action(
                 }
             }
         },
-        WorkspaceHelpAction::ToggleAllDialogues if *focus == WorkspaceFocus::Dialogues => {
-            rows.dialogues.toggle_all();
-            rows.close_ranges();
-        }
         WorkspaceHelpAction::OpenVim if can_open_dialogue_vim(*focus, dialogue_count) => {
             let view = dialogue_text_vim_view(workspace_content_text(
                 dialogues,
@@ -211,37 +222,36 @@ pub(super) fn apply_workspace_help_action(
                 set_focus(focus, fullscreen, rows, WorkspaceFocus::Dialogues)
             }
             WorkspaceFocus::Dialogues | WorkspaceFocus::Content => {
-                return Ok(HelpDispatch::Picked(workspace_picked_content(
+                return Ok(HelpDispatch::Picked(workspace_picked_content_for_copy(
                     dialogues,
                     &rows.dialogues.active(),
+                    WorkspaceCopyShortcut::Displayed,
+                    line_filter,
                     content_at,
+                    *content_mode,
                 )?));
             }
             WorkspaceFocus::Sessions => {}
         },
         WorkspaceHelpAction::CopyInput if dialogue_count > 0 => {
-            return Ok(HelpDispatch::Picked(
-                workspace_picked_content_for_copy_with_line_filter(
-                    dialogues,
-                    &rows.dialogues.active(),
-                    WorkspaceCopyShortcut::Input,
-                    line_filter,
-                    None,
-                    *content_mode,
-                )?,
-            ));
+            return Ok(HelpDispatch::Picked(workspace_picked_content_for_copy(
+                dialogues,
+                &rows.dialogues.active(),
+                WorkspaceCopyShortcut::Input,
+                line_filter,
+                None,
+                *content_mode,
+            )?));
         }
         WorkspaceHelpAction::CopyOutput if dialogue_count > 0 => {
-            return Ok(HelpDispatch::Picked(
-                workspace_picked_content_for_copy_with_line_filter(
-                    dialogues,
-                    &rows.dialogues.active(),
-                    WorkspaceCopyShortcut::Output,
-                    line_filter,
-                    None,
-                    *content_mode,
-                )?,
-            ));
+            return Ok(HelpDispatch::Picked(workspace_picked_content_for_copy(
+                dialogues,
+                &rows.dialogues.active(),
+                WorkspaceCopyShortcut::Output,
+                line_filter,
+                None,
+                *content_mode,
+            )?));
         }
         WorkspaceHelpAction::CopyBlock if dialogue_count > 0 => {
             // y copies the block under the content cursor (call + result
@@ -253,21 +263,19 @@ pub(super) fn apply_workspace_help_action(
                 dialogues,
                 rows.dialogues.cursor(),
                 block_id,
-            ) {
+            )? {
                 return Ok(HelpDispatch::Picked(picked));
             }
         }
         WorkspaceHelpAction::CopyCommand if dialogue_count > 0 => {
-            return Ok(HelpDispatch::Picked(
-                workspace_picked_content_for_copy_with_line_filter(
-                    dialogues,
-                    &rows.dialogues.active(),
-                    WorkspaceCopyShortcut::Command,
-                    line_filter,
-                    None,
-                    *content_mode,
-                )?,
-            ));
+            return Ok(HelpDispatch::Picked(workspace_picked_content_for_copy(
+                dialogues,
+                &rows.dialogues.active(),
+                WorkspaceCopyShortcut::Command,
+                line_filter,
+                None,
+                *content_mode,
+            )?));
         }
         WorkspaceHelpAction::ToggleFullscreen => {
             *fullscreen = toggle_fullscreen(*fullscreen, *focus);
@@ -300,7 +308,6 @@ pub(super) fn apply_workspace_help_action(
         // Focus-gated arms that did not match: ignore.
         WorkspaceHelpAction::FocusDialogues
         | WorkspaceHelpAction::FocusContent
-        | WorkspaceHelpAction::ToggleAllDialogues
         | WorkspaceHelpAction::OpenVim
         | WorkspaceHelpAction::ScrollDown
         | WorkspaceHelpAction::ScrollUp

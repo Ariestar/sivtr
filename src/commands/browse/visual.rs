@@ -10,10 +10,10 @@ use crate::tui::content::view::{
     ContentViewMode,
 };
 use crate::tui::workspace::{
-    ContentIoFocus, ContentScrolls, Rows, WorkspaceDialogue, WorkspaceFocus, WorkspacePickedContent,
+    ContentIoFocus, ContentScrolls, Rows, WorkspaceDialogue, WorkspaceFocus,
 };
 
-use super::content::picked_source;
+use super::content::{picked_source, PickedContent};
 use super::nav::move_workspace_cursor;
 
 /// Lines per wheel notch: web-like scroll steps (lists move selection by the
@@ -51,7 +51,7 @@ pub(super) fn handle_visual_select_key(
     content_scroll: &mut usize,
     dialogues: &[WorkspaceDialogue],
     dialogue_idx: usize,
-) -> Result<Option<WorkspacePickedContent>> {
+) -> Result<Option<PickedContent>> {
     match key {
         KeyCode::Esc => return Ok(None),
         KeyCode::Enter | KeyCode::Char('y') => {
@@ -332,10 +332,10 @@ pub(super) fn workspace_picked_content_for_visual_selection(
     text: &str,
     content_mode: ContentViewMode,
     selection: ContentSelection,
-) -> Option<WorkspacePickedContent> {
+) -> Option<PickedContent> {
     let source = picked_source(dialogues, &[dialogue_idx])?;
     let plain = selected_content_text(content_area, text, content_mode, selection);
-    Some(WorkspacePickedContent {
+    Some(PickedContent::Text {
         source,
         units: vec![crate::tui::workspace::TextPair {
             ansi: plain.clone(),
