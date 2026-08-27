@@ -560,9 +560,8 @@ fn read_stdin() -> Result<WorkSet> {
     io::stdin()
         .read_to_string(&mut input)
         .context("Failed to read WorkSet from stdin")?;
-    let mut set: WorkSet =
+    let set: WorkSet =
         serde_json::from_str(&input).context("Failed to parse WorkSet from stdin")?;
-    set.ensure_anchors();
     Ok(set)
 }
 

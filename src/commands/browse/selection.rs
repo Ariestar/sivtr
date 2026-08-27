@@ -4,7 +4,7 @@
 //! [`crate::tui::workspace::active_rows`]). `R` reloads the next hierarchy
 //! level under those rows.
 
-use crate::tui::workspace::{active_rows, Rows, WorkspaceFocus, WorkspaceSession, WorkspaceSource};
+use crate::tui::workspace::{Rows, WorkspaceFocus, WorkspaceSession, WorkspaceSource};
 
 use super::load::SessionColumn;
 use crate::pane::Viewport;
@@ -88,34 +88,6 @@ pub(super) fn select_sources(
     }
 }
 
-/// The dialogue rows currently selected by the canonical WorkSet.
-pub(super) fn selected_dialogues(mask: &[bool], cursor: usize) -> Vec<usize> {
-    active_rows(mask, cursor, mask.len())
-}
-
-pub(super) fn toggle_dialogue(
-    rows: &mut Rows,
-    dialogues: &[crate::tui::workspace::WorkspaceDialogue],
-    idx: usize,
-) {
-    if let Some(record) = dialogues
-        .get(idx)
-        .and_then(|dialogue| dialogue.record.clone())
-    {
-        rows.selection.toggle_whole(record);
-    }
-}
-
-pub(super) fn toggle_session(
-    rows: &mut Rows,
-    session_records: &[Vec<sivtr_core::record::WorkRecord>],
-    idx: usize,
-) {
-    if let Some(records) = session_records.get(idx) {
-        rows.selection.toggle_records(records.clone());
-    }
-}
-
 pub(super) fn source_records(
     sources: &[WorkspaceSource],
     sessions: &[WorkspaceSession],
@@ -133,17 +105,30 @@ pub(super) fn source_records(
         .collect()
 }
 
-pub(super) fn toggle_source(
+/// Materialize records covered by marked source/session scopes. Scope masks
+/// drive loading; once bodies arrive, the canonical WorkSet owns the choice.
+pub(super) fn resolve_loaded_scopes(
     rows: &mut Rows,
     sources: &[WorkspaceSource],
     sessions: &[WorkspaceSession],
-    session_records: &[Vec<sivtr_core::record::WorkRecord>],
-    source_idx: usize,
+    sessions_pane: &SessionColumn,
 ) {
-    rows.selection.toggle_records(source_records(
-        sources,
-        sessions,
-        session_records,
-        source_idx,
-    ));
+    for (session_idx, session) in sessions.iter().enumerate() {
+        let source_idx = sources.iter().position(|source| source == &session.source);
+        let source_marked = source_idx
+            .and_then(|idx| rows.source.mask().get(idx))
+            .copied()
+            .unwrap_or(false);
+        let session_marked = rows
+            .sessions
+            .mask()
+            .get(session_idx)
+            .copied()
+            .unwrap_or(false);
+        if source_marked || session_marked {
+            if let Some(records) = sessions_pane.body_for(session) {
+                rows.selection.include_records(records.iter().cloned());
+            }
+        }
+    }
 }
