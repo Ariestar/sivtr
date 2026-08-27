@@ -184,7 +184,13 @@ pub(super) fn apply_selection_action(
                 }
                 return false;
             }
-            let idx = rows.pane(focus).map_or(0, |pane| pane.cursor());
+            let idx = match focus {
+                WorkspaceFocus::Dialogues => rows.dialogues.cursor(),
+                WorkspaceFocus::Source | WorkspaceFocus::Sessions => {
+                    rows.pane(focus).map_or(0, |pane| pane.cursor())
+                }
+                WorkspaceFocus::Content => 0,
+            };
             toggle_row_selection(
                 focus,
                 idx,

@@ -28,7 +28,7 @@ use crate::tui::workspace::model::{
     selected_indices, SourceLoadMarker, WorkspaceDialogue, WorkspaceFocus, WorkspaceFooterView,
     WorkspaceSearchView, WorkspaceSession, WorkspaceSource, WorkspaceView,
 };
-use crate::tui::workspace::rows::ListPane;
+use crate::tui::workspace::rows::{CursorPane, ListPane};
 use sivtr_core::record::{WorkAt, WorkRef};
 
 pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
@@ -700,7 +700,7 @@ fn render_dialogue_list(
     area: Rect,
     titles: &[&str],
     selected_dialogues: &[bool],
-    pane: &ListPane,
+    pane: &CursorPane,
     marked_sessions: usize,
     range_anchor: Option<usize>,
     search: Option<&WorkspaceSearchView<'_>>,

@@ -162,7 +162,14 @@ pub(super) fn move_workspace_cursor(
         move_content_cursor(up, rows, content_scrolls, content_cursor, content_blocks);
         return;
     }
-    if rows.pane_mut(focus).is_some_and(|pane| pane.step(up)) {
+    let moved = match focus {
+        WorkspaceFocus::Dialogues => rows.dialogues.step(up),
+        WorkspaceFocus::Source | WorkspaceFocus::Sessions => {
+            rows.pane_mut(focus).is_some_and(|pane| pane.step(up))
+        }
+        WorkspaceFocus::Content => false,
+    };
+    if moved {
         invalidate_after_cursor_move(focus, rows, content_scrolls);
     }
 }
@@ -272,7 +279,7 @@ pub(super) fn source_list_index(
 mod tests {
     use super::{move_content_cursor, row_list_index, ContentBlockCursor};
     use crate::tui::content::block::BlockText;
-    use crate::tui::workspace::{ContentScrolls, ListPane, Rows};
+    use crate::tui::workspace::{ContentScrolls, CursorPane, Rows};
     use ratatui::layout::Rect;
     use sivtr_core::record::WorkPartKind;
 
@@ -294,7 +301,7 @@ mod tests {
     #[test]
     fn a_step_off_the_last_block_crosses_into_the_next_dialogue() {
         let mut rows = Rows::default();
-        rows.dialogues = ListPane::with_marks(vec![false, false]);
+        rows.dialogues = CursorPane::new(2);
         let mut scrolls = ContentScrolls::default();
         let mut cursor = ContentBlockCursor::default();
         let first = blocks(&[0]);
