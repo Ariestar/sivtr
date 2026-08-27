@@ -1,11 +1,8 @@
 //! List-pane row state: cursor, marks, and the live range anchor.
 //!
-//! Three panes (Source / Sessions / Dialogues) are lists of rows. Each keeps a
-//! cursor, a mark mask, and its own `v` anchor, and they never move apart:
-//! every row key needs cursor and mask both, and a change in the row count
-//! clamps the one, resizes the other, and voids the anchor. [`ListPane`] holds
-//! them together — which is what lets the row helpers drop their `len`
-//! parameter, since the mask's length *is* the pane's row count.
+//! Source and Sessions are selectable scope lists; Dialogue is a cursor-only
+//! list. All share the same cursor/range state, while only scope lists carry
+//! marks. [`ListPane`] holds cursor state and marks together for those lists.
 //!
 //! [`Rows`] holds the three panes plus Content's block anchor, so "the focused
 //! pane's rows" is one lookup instead of a four-arm match at every call site.
@@ -131,7 +128,7 @@ impl RowCursor {
 
 pub(crate) type CursorPane = RowCursor;
 
-/// One selectable list pane: a cursor plus scope marks.
+/// One selectable scope list: a cursor plus scope marks.
 #[derive(Default)]
 pub(crate) struct ListPane {
     cursor: RowCursor,
@@ -245,7 +242,7 @@ impl ListPane {
     }
 }
 
-/// The three list panes and Content's block-range anchor.
+/// The scope lists, cursor-only Dialogue list, and Content's block-range anchor.
 ///
 /// Every list pane owns its own `v` anchor, so a stale one can never complete a
 /// span in another pane; only one is ever open at a time because moving focus
