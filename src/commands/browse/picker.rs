@@ -1296,14 +1296,15 @@ mod tests {
     use super::super::nav::move_workspace_cursor;
     use super::super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane};
     use crate::pane::{Pane, PaneInput, Viewport};
+    use crate::tui::content::text::workspace_content_text;
     use crate::tui::content::view::ContentViewMode;
     use crate::tui::search::{
         workspace_search_fingerprint, workspace_search_query, workspace_search_regex,
         WorkspaceSearchIndex, WorkspaceSearchMatch, WorkspaceSearchScope,
     };
     use crate::tui::workspace::{
-        ContentIoFocus, ContentScrolls, Rows, TextPair, WorkspaceCopyParts, WorkspaceDialogue,
-        WorkspaceFocus, WorkspaceSession, WorkspaceSource, WorkspaceSourceKind,
+        ContentIoFocus, ContentScrolls, Rows, TextPair, WorkspaceDialogue, WorkspaceFocus,
+        WorkspaceSession, WorkspaceSource, WorkspaceSourceKind,
     };
     use crossterm::event::{KeyCode, KeyModifiers};
     use sivtr_core::ai::AgentProvider;
@@ -1448,9 +1449,13 @@ mod tests {
             dialogues[0].record.as_ref().map(|r| r.title.as_str()),
             Some("o1")
         );
-        assert!(dialogues[0]
-            .content_text(ContentViewMode::Reading, None)
-            .contains("old:o1"));
+        assert!(workspace_content_text(
+            std::slice::from_ref(&dialogues[0]),
+            0,
+            ContentViewMode::Reading,
+            None,
+        )
+        .contains("old:o1"));
         assert_eq!(
             dialogues[0].work_ref.as_ref().unwrap().to_string(),
             "claude/test/1"
@@ -1482,7 +1487,14 @@ mod tests {
         assert_eq!(titles, [Some("c1"), Some("c2"), Some("a1")]);
         let texts: Vec<_> = dialogues
             .iter()
-            .map(|dialogue| dialogue.content_text(ContentViewMode::Reading, None))
+            .map(|dialogue| {
+                workspace_content_text(
+                    std::slice::from_ref(dialogue),
+                    0,
+                    ContentViewMode::Reading,
+                    None,
+                )
+            })
             .collect();
         assert!(texts[0].contains("codex session:c1"));
         assert!(texts[1].contains("codex session:c2"));
@@ -1538,7 +1550,6 @@ mod tests {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(record.work_ref.clone()),
             record: Some(record.clone()),
-            copy: WorkspaceCopyParts::default(),
         };
         let dialogues = [dialogue.clone()];
         let mut selection = crate::workset::WorkSet::new(".", Vec::new());
@@ -1607,7 +1618,6 @@ mod tests {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(record.work_ref.clone()),
             record: Some(record.clone()),
-            copy: WorkspaceCopyParts::default(),
         };
         let dialogues = [dialogue.clone()];
         let mut pane = ContentPane::default();
@@ -1696,7 +1706,6 @@ mod tests {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(record.work_ref.clone()),
             record: Some(record.clone()),
-            copy: WorkspaceCopyParts::default(),
         };
         let dialogues = [dialogue.clone()];
 
@@ -1755,7 +1764,6 @@ mod tests {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(record.work_ref.clone()),
             record: Some(record.clone()),
-            copy: WorkspaceCopyParts::default(),
         };
         let dialogues = [dialogue.clone()];
 
@@ -1809,7 +1817,6 @@ mod tests {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(record.work_ref.clone()),
             record: Some(record.clone()),
-            copy: WorkspaceCopyParts::default(),
         };
         let dialogues = [dialogue.clone()];
 
@@ -2275,17 +2282,6 @@ mod tests {
                 "question",
                 0,
             )),
-            copy: WorkspaceCopyParts {
-                input: TextPair {
-                    plain: "question".to_string(),
-                    ansi: String::new(),
-                },
-                output: TextPair {
-                    plain: "answer".to_string(),
-                    ansi: String::new(),
-                },
-                command: TextPair::default(),
-            },
         }];
 
         let input = workspace_picked_content_for_copy(
@@ -2330,20 +2326,6 @@ mod tests {
             "line 1\nline 2\nline 3",
             0,
         )];
-        // Override structured copy parts for input shortcut filtering.
-        let mut dialogues = dialogues;
-        dialogues[0].copy = WorkspaceCopyParts {
-            input: TextPair {
-                plain: "ask 1\nask 2\nask 3".to_string(),
-                ansi: String::new(),
-            },
-            output: TextPair {
-                plain: "answer 1\nanswer 2\nanswer 3".to_string(),
-                ansi: String::new(),
-            },
-            command: TextPair::default(),
-        };
-
         let displayed = workspace_picked_content_for_copy(
             &dialogues,
             &[0],
@@ -2365,7 +2347,7 @@ mod tests {
 
         // Displayed text is Reading-mode render of parts; filter applies to that text.
         assert!(picked_units(&displayed)[0].plain.lines().count() >= 1);
-        assert_eq!(picked_units(&input)[0].plain, "ask 1\nask 3");
+        assert_eq!(picked_units(&input)[0].plain, "line 1\nline 3");
     }
 
     #[test]
@@ -2463,20 +2445,6 @@ mod tests {
                 "cargo test",
                 0,
             )),
-            copy: WorkspaceCopyParts {
-                input: TextPair {
-                    plain: "PS C:\\repo> cargo test".to_string(),
-                    ansi: String::new(),
-                },
-                output: TextPair {
-                    plain: "ok".to_string(),
-                    ansi: String::new(),
-                },
-                command: TextPair {
-                    plain: "cargo test".to_string(),
-                    ansi: "cargo test".to_string(),
-                },
-            },
         }];
 
         let picked = workspace_picked_content_for_copy(
@@ -2504,7 +2472,12 @@ mod tests {
 
         let view = workspace_dialogue_vim_view(&dialogue);
         // Reading mode wraps dialogue with headings/markers — count lines from that render.
-        let expected = dialogue.content_text(ContentViewMode::Reading, None);
+        let expected = workspace_content_text(
+            std::slice::from_ref(&dialogue),
+            0,
+            ContentViewMode::Reading,
+            None,
+        );
         assert_eq!(view.raw, expected);
         assert_eq!(view.blocks.len(), 1);
         assert_eq!(view.blocks[0].start, 1);
@@ -2535,10 +2508,6 @@ mod tests {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
             record: Some(record),
-            copy: WorkspaceCopyParts::from_block(TextPair {
-                plain: "visible text".to_string(),
-                ansi: String::new(),
-            }),
         }];
 
         let picked = workspace_picked_content_for_copy(
@@ -2551,9 +2520,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(picked_units(&picked)[0].plain.trim(), "<:tool:tool call:>");
-        // Displayed copy uses Reading mode: fold marker only, no payload.
-        assert!(!picked_units(&picked)[0].plain.contains("hidden cargo test"));
+        assert!(picked_units(&picked)[0].plain.contains("hidden cargo test"));
         assert!(!picked_units(&picked)[0].plain.contains("codex/"));
     }
 
@@ -2635,16 +2602,10 @@ mod tests {
             plain,
             index,
         );
-        let pair = crate::commands::browse::text::record_text_to_pair(record.copy_text(
-            sivtr_core::record::RecordTextMode::Combined,
-            false,
-            None,
-        ));
         WorkspaceDialogue {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(record.work_ref.clone()),
             record: Some(record),
-            copy: WorkspaceCopyParts::from_block(pair),
         }
     }
 }

@@ -15,10 +15,7 @@ use crate::tui::workspace::{
     WorkspaceDialogue, WorkspaceSession, WorkspaceSource,
 };
 use crate::workset::WorkSet;
-use sivtr_core::ai::AgentSelection;
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
-
-use super::text::record_to_copy_parts;
 
 // ── Dialogues ───────────────────────────────────────────────────────────
 
@@ -143,12 +140,6 @@ fn shell_from_row(
         source: row.meta.source.clone(),
         work_ref: row.meta.work_ref.clone(),
         record: None,
-        copy: crate::tui::workspace::WorkspaceCopyParts::from_block(
-            crate::tui::workspace::TextPair {
-                plain: String::new(),
-                ansi: String::new(),
-            },
-        ),
     }
 }
 
@@ -245,7 +236,6 @@ fn dialogue_from_record(session: &WorkspaceSession, record: &WorkRecord) -> Work
         source: session.source.clone(),
         work_ref: Some(record.work_ref.clone()),
         record: Some(record.clone()),
-        copy: record_to_copy_parts(record, AgentSelection::LastTurn),
     }
 }
 

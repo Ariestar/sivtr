@@ -44,6 +44,7 @@ pub(crate) fn picked_units(picked: &PickedContent) -> Result<(Vec<TextPair>, Str
             source,
             set,
             projection,
+            line_filter,
         } => {
             let projection = match projection {
                 WorkspacePickProjection::Whole => super::plan::Projection::Both,
@@ -75,7 +76,11 @@ pub(crate) fn picked_units(picked: &PickedContent) -> Result<(Vec<TextPair>, Str
                     } else {
                         projection
                     };
-                    super::project::project_record(record, projection, None)
+                    let unit = super::project::project_record(record, projection, None)?;
+                    match line_filter.as_deref() {
+                        Some(filter) => filter_lines_by_spec(&unit, filter),
+                        None => Ok(unit),
+                    }
                 })
                 .collect::<Result<Vec<_>>>()?;
             Ok((units, source.label()))
@@ -210,6 +215,7 @@ mod tests {
             source: WorkspaceSource::terminal(),
             set: WorkSet::with_anchors("current", vec![record.clone()], vec![record.work_ref]),
             projection: WorkspacePickProjection::Command,
+            line_filter: None,
         };
 
         let (units, label) = picked_units(&picked).expect("projects workset");
