@@ -405,12 +405,9 @@ pub fn run_on_share(
     match run_local(source, root, filter.for_remote_peer(), LoadMode::Full) {
         Ok(mut set) => {
             if redact {
-                let records = set
-                    .records()
-                    .iter()
-                    .map(crate::remote::redact::redact_record)
-                    .collect();
-                set.replace_records(records);
+                for record in set.records_mut() {
+                    *record = crate::remote::redact::redact_record(record);
+                }
             }
             Ok(set.into_parts())
         }
@@ -565,6 +562,7 @@ fn read_stdin() -> Result<WorkSet> {
         .context("Failed to read WorkSet from stdin")?;
     let set: WorkSet =
         serde_json::from_str(&input).context("Failed to parse WorkSet from stdin")?;
+    set.validate().context("Invalid WorkSet from stdin")?;
     Ok(set)
 }
 

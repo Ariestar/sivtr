@@ -1,5 +1,6 @@
 //! Canonical record and part selection shared by the TUI, CLI, and MCP.
 
+use anyhow::{bail, Result};
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
@@ -34,13 +35,25 @@ impl WorkSet {
         records: Vec<WorkRecord>,
         anchors: Vec<WorkRef>,
     ) -> Self {
+        let mut canonical: Vec<WorkRef> = Vec::with_capacity(anchors.len());
+        for anchor in anchors {
+            let whole = anchor.whole();
+            if anchor.at == WorkAt::Whole {
+                canonical.retain(|existing| existing.whole() != whole);
+                canonical.push(anchor);
+            } else if !canonical.iter().any(|existing| {
+                existing == &anchor || (existing.at == WorkAt::Whole && existing.whole() == whole)
+            }) {
+                canonical.push(anchor);
+            }
+        }
         Self {
             schema_version: WORKSET_SCHEMA_VERSION,
             created_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
             cwd: cwd.into(),
             name: None,
             records,
-            anchors,
+            anchors: canonical,
         }
     }
 
@@ -64,13 +77,34 @@ impl WorkSet {
         (self.records, self.anchors)
     }
 
-    pub(crate) fn replace_records(&mut self, records: Vec<WorkRecord>) {
-        self.records = records;
+    pub(crate) fn select_anchors(&mut self, anchors: Vec<WorkRef>) {
+        self.records = records_for_anchors(&self.records, &anchors);
+        self.anchors = anchors;
     }
 
-    pub(crate) fn replace_selection(&mut self, records: Vec<WorkRecord>, anchors: Vec<WorkRef>) {
-        self.records = records;
-        self.anchors = anchors;
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.schema_version != WORKSET_SCHEMA_VERSION {
+            bail!(
+                "unsupported WorkSet schema version {}; expected {}",
+                self.schema_version,
+                WORKSET_SCHEMA_VERSION
+            );
+        }
+        for (index, anchor) in self.anchors.iter().enumerate() {
+            if self.anchors[..index].contains(anchor) {
+                bail!("WorkSet contains duplicate anchor");
+            }
+            if anchor.at == WorkAt::Whole
+                && self
+                    .anchors
+                    .iter()
+                    .skip(index + 1)
+                    .any(|other| other.at != WorkAt::Whole && other.whole() == anchor.whole())
+            {
+                bail!("WorkSet contains Part anchors shadowed by Whole");
+            }
+        }
+        Ok(())
     }
 
     /// Whether this selection covers an address. A Whole anchor covers every
@@ -228,4 +262,22 @@ impl WorkSet {
             .retain(|record| record.work_ref.whole() != whole);
         self.anchors.retain(|anchor| anchor.whole() != whole);
     }
+}
+
+pub fn records_for_anchors(records: &[WorkRecord], anchors: &[WorkRef]) -> Vec<WorkRecord> {
+    let mut selected = Vec::new();
+    let mut seen = HashSet::new();
+    for anchor in anchors {
+        let record_ref = anchor.whole();
+        if !seen.insert(record_ref.clone()) {
+            continue;
+        }
+        if let Some(record) = records
+            .iter()
+            .find(|record| record.work_ref.whole() == record_ref)
+        {
+            selected.push(record.clone());
+        }
+    }
+    selected
 }

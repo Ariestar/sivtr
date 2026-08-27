@@ -21,6 +21,8 @@ pub fn load_saved(name: &str) -> Result<WorkSet> {
         .with_context(|| format!("Failed to read WorkSet @{name} from {}", path.display()))?;
     let set: WorkSet = serde_json::from_str(&content)
         .with_context(|| format!("Failed to parse WorkSet @{name} from {}", path.display()))?;
+    set.validate()
+        .with_context(|| format!("Invalid WorkSet @{name}"))?;
     Ok(set)
 }
 

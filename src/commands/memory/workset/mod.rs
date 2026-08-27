@@ -9,10 +9,10 @@ pub(crate) use store::{cleanup_saved, delete_saved, list_saved, load_saved, save
 use anyhow::{bail, Context, Result};
 use sivtr_core::query::{load_session_records, LoadMode};
 use sivtr_core::record::{WorkPath, WorkRecord, WorkRef};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 
-pub use crate::workset::{WorkSet, WORKSET_SCHEMA_VERSION};
+pub use crate::workset::{records_for_anchors, WorkSet, WORKSET_SCHEMA_VERSION};
 
 fn apply_selection(mut set: WorkSet, selection: WorkSetSelection) -> WorkSet {
     let WorkSetSelection::Indices(indices) = selection else {
@@ -23,8 +23,7 @@ fn apply_selection(mut set: WorkSet, selection: WorkSetSelection) -> WorkSet {
         .into_iter()
         .map(|index| set.anchors()[index - 1].clone())
         .collect::<Vec<_>>();
-    let records = records_for_anchors(set.records(), &anchors);
-    set.replace_selection(records, anchors);
+    set.select_anchors(anchors);
     set
 }
 
@@ -96,24 +95,6 @@ impl WorkSet {
         set.materialize_parts()?;
         save_named("last", &set)
     }
-}
-
-pub fn records_for_anchors(records: &[WorkRecord], anchors: &[WorkRef]) -> Vec<WorkRecord> {
-    let mut selected = Vec::new();
-    let mut seen = HashSet::new();
-    for anchor in anchors {
-        let record_ref = anchor.whole();
-        if !seen.insert(record_ref.to_string()) {
-            continue;
-        }
-        if let Some(record) = records
-            .iter()
-            .find(|record| record.work_ref.whole() == record_ref)
-        {
-            selected.push(record.clone());
-        }
-    }
-    selected
 }
 
 pub fn record_for_anchor<'a>(
@@ -311,6 +292,37 @@ mod tests {
             refs,
             vec!["terminal/session_1/1/p1", "terminal/session_1/2/p1"]
         );
+    }
+
+    #[test]
+    fn from_parts_canonicalizes_duplicate_and_shadowed_anchors() {
+        let first = record(1);
+        let part = first.work_ref.with_part(1);
+        let set = WorkSet::from_parts(
+            ".",
+            vec![first.clone()],
+            vec![
+                part.clone(),
+                part,
+                first.work_ref.whole(),
+                first.work_ref.with_part(2),
+            ],
+        );
+        assert_eq!(set.anchors(), &[first.work_ref.whole()]);
+    }
+
+    #[test]
+    fn validation_rejects_shadowed_anchors_loaded_from_json() {
+        let first = record(1);
+        let mut value = serde_json::to_value(WorkSet::from_parts(
+            ".",
+            vec![first.clone()],
+            vec![first.work_ref.whole()],
+        ))
+        .expect("serialize WorkSet");
+        value["anchors"] = serde_json::json!([first.work_ref.whole(), first.work_ref.with_part(1)]);
+        let set: WorkSet = serde_json::from_value(value).expect("deserialize WorkSet");
+        assert!(set.validate().is_err());
     }
 
     #[test]
