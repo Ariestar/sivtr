@@ -13,7 +13,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 pub use crate::workset::{
-    find_record, records_for_anchors, require_record, WorkSet, WORKSET_SCHEMA_VERSION,
+    find_record, records_for_anchors, require_record, WorkSelectionAction, WorkSelectionKind,
+    WorkSelectionTarget, WorkSet, WORKSET_SCHEMA_VERSION,
 };
 
 fn apply_selection(mut set: WorkSet, selection: WorkSetSelection) -> WorkSet {
@@ -341,9 +342,20 @@ mod tests {
     fn whole_anchor_covers_and_replaces_parts() {
         let first = record(1);
         let mut set = WorkSet::from_parts(".", vec![first.clone()], vec![]);
-        set.include_parts(first.clone(), [1]);
+        set.apply_target(
+            WorkSelectionAction::Include,
+            WorkSelectionTarget::Parts {
+                record: first.clone(),
+                parts: vec![1],
+            },
+            [],
+        );
         assert!(set.contains(&first.work_ref.with_part(1)));
-        set.include_whole(first.clone());
+        set.apply_target(
+            WorkSelectionAction::Include,
+            WorkSelectionTarget::Whole(first.clone()),
+            [],
+        );
         assert_eq!(set.anchors(), vec![first.work_ref.whole()]);
         assert!(set.contains(&first.work_ref.with_part(1)));
     }
@@ -352,7 +364,14 @@ mod tests {
     fn part_anchors_deduplicate_without_collapsing() {
         let first = record(1);
         let mut set = WorkSet::new(".", Vec::new());
-        set.include_parts(first.clone(), [1, 1]);
+        set.apply_target(
+            WorkSelectionAction::Include,
+            WorkSelectionTarget::Parts {
+                record: first.clone(),
+                parts: vec![1, 1],
+            },
+            [],
+        );
         assert_eq!(set.anchors(), vec![first.work_ref.with_part(1)]);
     }
 
@@ -360,7 +379,14 @@ mod tests {
     fn complete_part_selection_is_canonical_whole() {
         let first = record(1);
         let mut set = WorkSet::new(".", Vec::new());
-        set.include_parts(first.clone(), [1, 2, 1]);
+        set.apply_target(
+            WorkSelectionAction::Include,
+            WorkSelectionTarget::Parts {
+                record: first.clone(),
+                parts: vec![1, 2, 1],
+            },
+            [],
+        );
         assert_eq!(set.anchors(), vec![first.work_ref.whole()]);
         assert!(set.contains(&first.work_ref.with_part(2)));
     }
@@ -369,8 +395,16 @@ mod tests {
     fn incremental_part_selection_is_canonical_whole() {
         let first = record(1);
         let mut set = WorkSet::new(".", Vec::new());
-        set.include_parts(first.clone(), [1]);
-        set.include_parts(first.clone(), [2]);
+        for parts in [vec![1], vec![2]] {
+            set.apply_target(
+                WorkSelectionAction::Include,
+                WorkSelectionTarget::Parts {
+                    record: first.clone(),
+                    parts,
+                },
+                [],
+            );
+        }
         assert_eq!(set.anchors(), vec![first.work_ref.whole()]);
     }
 
@@ -389,10 +423,25 @@ mod tests {
     fn toggling_whole_replaces_narrow_selection() {
         let first = record(1);
         let mut set = WorkSet::new(".", Vec::new());
-        set.include_parts(first.clone(), [1]);
-        set.toggle_whole(first.clone());
+        set.apply_target(
+            WorkSelectionAction::Include,
+            WorkSelectionTarget::Parts {
+                record: first.clone(),
+                parts: vec![1],
+            },
+            [],
+        );
+        set.apply_target(
+            WorkSelectionAction::Toggle,
+            WorkSelectionTarget::Whole(first.clone()),
+            [],
+        );
         assert_eq!(set.anchors(), vec![first.work_ref.whole()]);
-        set.toggle_whole(first.clone());
+        set.apply_target(
+            WorkSelectionAction::Toggle,
+            WorkSelectionTarget::Whole(first.clone()),
+            [],
+        );
         assert!(set.anchors().is_empty());
     }
 
@@ -400,11 +449,41 @@ mod tests {
     fn toggling_part_from_whole_keeps_the_other_parts() {
         let first = record(1);
         let mut set = WorkSet::new(".", Vec::new());
-        set.include_whole(first.clone());
-        set.toggle_parts(first.clone(), [1]);
+        set.apply_target(
+            WorkSelectionAction::Include,
+            WorkSelectionTarget::Whole(first.clone()),
+            [],
+        );
+        set.apply_target(
+            WorkSelectionAction::Toggle,
+            WorkSelectionTarget::Parts {
+                record: first.clone(),
+                parts: vec![1],
+            },
+            [],
+        );
         assert_eq!(set.anchors(), vec![first.work_ref.with_part(2)]);
         assert!(!set.contains(&first.work_ref.with_part(1)));
         assert!(set.contains(&first.work_ref.with_part(2)));
+    }
+
+    #[test]
+    fn scope_target_selects_all_matching_records() {
+        let records = vec![record(1), record(2)];
+        let target = WorkSelectionTarget::Scope {
+            scope: sivtr_core::record::WorkScope::Local,
+            kind: WorkSelectionKind::Terminal,
+            session: Some("session_1".to_string()),
+        };
+        let mut set = WorkSet::new(".", Vec::new());
+        set.apply_target(WorkSelectionAction::Toggle, target, records.clone());
+        assert_eq!(
+            set.anchors(),
+            &records
+                .iter()
+                .map(|r| r.work_ref.clone())
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

@@ -3,10 +3,70 @@
 use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
-use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
+use sivtr_core::ai::AgentProvider;
+use sivtr_core::record::{WorkAt, WorkPath, WorkRecord, WorkRef, WorkScope};
 use std::collections::HashSet;
 
 pub const WORKSET_SCHEMA_VERSION: u32 = 2;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum WorkSelectionKind {
+    Terminal,
+    Agent(AgentProvider),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WorkSelectionTarget {
+    Scope {
+        scope: WorkScope,
+        kind: WorkSelectionKind,
+        session: Option<String>,
+    },
+    Whole(WorkRecord),
+    Parts {
+        record: WorkRecord,
+        parts: Vec<usize>,
+    },
+    Many(Vec<WorkSelectionTarget>),
+}
+
+impl WorkSelectionTarget {
+    fn matches(&self, record: &WorkRecord) -> bool {
+        match self {
+            Self::Many(targets) => targets.iter().any(|target| target.matches(record)),
+            Self::Scope {
+                scope,
+                kind,
+                session,
+            } => {
+                if &record.work_ref.scope != scope {
+                    return false;
+                }
+                let path_matches = match (kind, &record.work_ref.path) {
+                    (WorkSelectionKind::Terminal, WorkPath::Terminal { .. }) => true,
+                    (WorkSelectionKind::Agent(expected), WorkPath::Agent { provider, .. }) => {
+                        expected == provider
+                    }
+                    _ => false,
+                };
+                path_matches
+                    && session
+                        .as_deref()
+                        .is_none_or(|expected| record.work_ref.session() == expected)
+            }
+            Self::Whole(selected) => selected.work_ref.whole() == record.work_ref.whole(),
+            Self::Parts {
+                record: selected, ..
+            } => selected.work_ref.whole() == record.work_ref.whole(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkSelectionAction {
+    Include,
+    Toggle,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkSet {
@@ -151,7 +211,7 @@ impl WorkSet {
 
     /// Include a complete record. Whole is the canonical representation for a
     /// record-wide selection, so any narrower anchors for it are removed.
-    pub fn include_whole(&mut self, record: WorkRecord) {
+    fn include_whole(&mut self, record: WorkRecord) {
         let whole = record.work_ref.whole();
         self.records.retain(|item| item.work_ref.whole() != whole);
         self.records.push(record);
@@ -159,7 +219,7 @@ impl WorkSet {
         self.anchors.push(whole);
     }
 
-    pub fn include_records(&mut self, records: impl IntoIterator<Item = WorkRecord>) {
+    fn include_records(&mut self, records: impl IntoIterator<Item = WorkRecord>) {
         for record in records {
             let whole = record.work_ref.whole();
             if !self
@@ -172,9 +232,37 @@ impl WorkSet {
         }
     }
 
+    pub fn apply_target(
+        &mut self,
+        action: WorkSelectionAction,
+        target: WorkSelectionTarget,
+        records: impl IntoIterator<Item = WorkRecord>,
+    ) {
+        match target {
+            WorkSelectionTarget::Scope { .. } | WorkSelectionTarget::Many(_) => {
+                let selected = records
+                    .into_iter()
+                    .filter(|record| target.matches(record))
+                    .collect();
+                match action {
+                    WorkSelectionAction::Include => self.include_records(selected),
+                    WorkSelectionAction::Toggle => self.toggle_records(selected),
+                }
+            }
+            WorkSelectionTarget::Whole(record) => match action {
+                WorkSelectionAction::Include => self.include_whole(record),
+                WorkSelectionAction::Toggle => self.toggle_whole(record),
+            },
+            WorkSelectionTarget::Parts { record, parts } => match action {
+                WorkSelectionAction::Include => self.include_parts(record, parts),
+                WorkSelectionAction::Toggle => self.toggle_parts(record, parts),
+            },
+        }
+    }
+
     /// Include selected parts of a record. A Whole anchor already covers them
     /// and remains the only stored representation.
-    pub fn include_parts(&mut self, record: WorkRecord, parts: impl IntoIterator<Item = usize>) {
+    fn include_parts(&mut self, record: WorkRecord, parts: impl IntoIterator<Item = usize>) {
         let parts: Vec<_> = parts.into_iter().collect();
         if parts.is_empty() {
             return;
@@ -194,7 +282,7 @@ impl WorkSet {
     }
 
     /// Toggle a complete record selection.
-    pub fn toggle_whole(&mut self, record: WorkRecord) {
+    fn toggle_whole(&mut self, record: WorkRecord) {
         if self
             .anchors
             .iter()
@@ -208,7 +296,7 @@ impl WorkSet {
 
     /// Toggle a set of parts. A fully selected set is removed; otherwise the
     /// missing parts are added and a Whole selection remains authoritative.
-    pub fn toggle_parts(&mut self, record: WorkRecord, parts: impl IntoIterator<Item = usize>) {
+    fn toggle_parts(&mut self, record: WorkRecord, parts: impl IntoIterator<Item = usize>) {
         let parts: Vec<_> = parts.into_iter().collect();
         if parts.is_empty() {
             return;
@@ -254,7 +342,7 @@ impl WorkSet {
     }
 
     /// Toggle every record in a scope using the same Whole rule.
-    pub fn toggle_records(&mut self, records: Vec<WorkRecord>) {
+    fn toggle_records(&mut self, records: Vec<WorkRecord>) {
         if records.is_empty() {
             return;
         }

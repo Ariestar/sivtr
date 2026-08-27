@@ -3,7 +3,7 @@
 use ratatui::prelude::Color;
 use ratatui::widgets::ListState;
 use sivtr_core::ai::AgentProvider;
-use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
+use sivtr_core::record::{WorkAt, WorkRecord, WorkRef, WorkScope};
 use std::collections::HashSet;
 use std::time::SystemTime;
 
@@ -16,6 +16,7 @@ use crate::tui::content::view::{ContentSelection, ContentViewMode};
 use crate::tui::search::WorkspaceSearchScope;
 use crate::tui::theme;
 use crate::tui::workspace::rows::Rows;
+use crate::workset::{WorkSelectionKind, WorkSelectionTarget};
 
 /// Indices of true entries in a selection mask, in order.
 pub(crate) fn selected_indices(mask: &[bool]) -> Vec<usize> {
@@ -142,6 +143,19 @@ impl WorkspaceSource {
 
     pub(crate) fn is_terminal(&self) -> bool {
         self.kind.is_terminal()
+    }
+
+    pub(crate) fn selection_target(&self, session: Option<&str>) -> WorkSelectionTarget {
+        WorkSelectionTarget::Scope {
+            scope: self.scope.as_deref().map_or(WorkScope::Local, |scope| {
+                WorkScope::Named(scope.to_string())
+            }),
+            kind: match self.kind {
+                WorkspaceSourceKind::Terminal => WorkSelectionKind::Terminal,
+                WorkspaceSourceKind::Agent(provider) => WorkSelectionKind::Agent(provider),
+            },
+            session: session.map(str::to_string),
+        }
     }
 }
 

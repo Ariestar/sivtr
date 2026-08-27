@@ -1303,6 +1303,7 @@ mod tests {
     };
     use super::super::nav::move_workspace_cursor;
     use super::super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane};
+    use crate::commands::browse::selection::toggle_row_selection;
     use crate::pane::{Pane, PaneInput, Viewport};
     use crate::tui::content::text::workspace_content_text;
     use crate::tui::content::view::ContentViewMode;
@@ -1311,8 +1312,8 @@ mod tests {
         WorkspaceSearchIndex, WorkspaceSearchMatch, WorkspaceSearchScope,
     };
     use crate::tui::workspace::{
-        ContentIoFocus, ContentScrolls, Rows, TextPair, WorkspaceDialogue, WorkspaceFocus,
-        WorkspaceSession, WorkspaceSource, WorkspaceSourceKind,
+        ContentIoFocus, ContentScrolls, ListPane, Rows, TextPair, WorkspaceDialogue,
+        WorkspaceFocus, WorkspaceSession, WorkspaceSource, WorkspaceSourceKind,
     };
     use crossterm::event::{KeyCode, KeyModifiers};
     use sivtr_core::ai::AgentProvider;
@@ -1517,6 +1518,58 @@ mod tests {
     }
 
     #[test]
+    fn session_selection_projects_to_every_dialogue_record() {
+        let source = WorkspaceSource::agent(AgentProvider::Codex);
+        let sessions = vec![workspace_test_session("test", source, &["d1", "d2"])];
+        let records: Vec<Vec<_>> = sessions
+            .iter()
+            .map(|session| session.records.clone())
+            .collect();
+        let mut rows = Rows::default();
+        rows.sessions = ListPane::from_scope(vec![false]);
+
+        toggle_row_selection(
+            WorkspaceFocus::Sessions,
+            0,
+            &mut rows,
+            &[],
+            &sessions,
+            &records,
+            &[],
+        );
+
+        assert_eq!(rows.selection.anchors().len(), 2);
+        assert!(sessions[0]
+            .records
+            .iter()
+            .all(|record| rows.selection.contains(&record.work_ref)));
+        let dialogues: Vec<_> = sessions[0]
+            .records
+            .iter()
+            .map(|record| WorkspaceDialogue {
+                source: sessions[0].source.clone(),
+                work_ref: Some(record.work_ref.clone()),
+                record: Some(record.clone()),
+            })
+            .collect();
+        assert_eq!(
+            dialogues
+                .iter()
+                .map(|dialogue| dialogue
+                    .work_ref
+                    .as_ref()
+                    .is_some_and(|reference| rows.selection.contains(reference)))
+                .collect::<Vec<_>>(),
+            vec![true, true]
+        );
+        assert!(
+            ContentPane::block_selection_mask(&dialogues, 0, &rows.selection)
+                .into_iter()
+                .all(|marked| marked)
+        );
+    }
+
+    #[test]
     fn marked_block_copy_with_real_sized_record_keeps_unmarked_blocks_out() {
         // A dialogue-sized record: user, assistant, then a run of three tool
         // pairs (output half). Marking one block must copy only its bodies.
@@ -1561,9 +1614,13 @@ mod tests {
         };
         let dialogues = [dialogue.clone()];
         let mut selection = crate::workset::WorkSet::new(".", Vec::new());
-        selection.include_parts(
-            record.clone(),
-            record.parts.iter().skip(2).map(|part| part.seq),
+        selection.apply_target(
+            crate::workset::WorkSelectionAction::Include,
+            crate::workset::WorkSelectionTarget::Parts {
+                record: record.clone(),
+                parts: record.parts.iter().skip(2).map(|part| part.seq).collect(),
+            },
+            [],
         );
         let picked = workspace_picked_content_for_selected_parts(&selection, &dialogues)
             .expect("selected parts");
@@ -1654,7 +1711,14 @@ mod tests {
         let (_, selected, parts) =
             workspace_block_parts(&dialogues, 0, hit_id).expect("selected block");
         let mut selection = crate::workset::WorkSet::new(".", Vec::new());
-        selection.include_parts(selected, parts);
+        selection.apply_target(
+            crate::workset::WorkSelectionAction::Include,
+            crate::workset::WorkSelectionTarget::Parts {
+                record: selected,
+                parts,
+            },
+            [],
+        );
         let picked = workspace_picked_content_for_selected_parts(&selection, &dialogues)
             .expect("selected parts");
         let text = picked_units(&picked)
@@ -1786,7 +1850,14 @@ mod tests {
         let (_, selected, parts) =
             workspace_block_parts(&dialogues, 0, 2).expect("selected member");
         let mut selection = crate::workset::WorkSet::new(".", Vec::new());
-        selection.include_parts(selected, parts);
+        selection.apply_target(
+            crate::workset::WorkSelectionAction::Include,
+            crate::workset::WorkSelectionTarget::Parts {
+                record: selected,
+                parts,
+            },
+            [],
+        );
         let picked = workspace_picked_content_for_selected_parts(&selection, &dialogues)
             .expect("selected member copy");
         let text = &picked_units(&picked)[0].plain;

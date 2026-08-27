@@ -9,7 +9,7 @@ use crate::tui::search::{WorkspaceSearchMatch, WorkspaceSearchOutput};
 use crate::tui::workspace::{WorkspaceDialogue, WorkspaceSession, WorkspaceSource};
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
 
-use crate::commands::memory::workset::WorkSet;
+use crate::commands::memory::workset::{WorkSelectionAction, WorkSelectionTarget, WorkSet};
 
 use super::text::filter_lines_by_spec;
 use super::vim::{VimBlock, VimView};
@@ -98,8 +98,19 @@ pub(super) fn workspace_picked_content_for_copy(
     let mut set = WorkSet::from_parts(cwd.display().to_string(), Vec::new(), Vec::new());
     for record in records {
         match display_target {
-            Some(WorkAt::Part(seq)) => set.include_parts(record, [seq]),
-            _ => set.include_whole(record),
+            Some(WorkAt::Part(seq)) => set.apply_target(
+                WorkSelectionAction::Include,
+                WorkSelectionTarget::Parts {
+                    record,
+                    parts: vec![seq],
+                },
+                [],
+            ),
+            _ => set.apply_target(
+                WorkSelectionAction::Include,
+                WorkSelectionTarget::Whole(record),
+                [],
+            ),
         }
     }
     Ok(PickedContent::WorkSet {
@@ -141,7 +152,11 @@ pub(super) fn workspace_picked_content_for_cursor_block(
     };
     let cwd = std::env::current_dir().context("copy needs a current directory")?;
     let mut set = WorkSet::from_parts(cwd.display().to_string(), Vec::new(), Vec::new());
-    set.include_parts(record, parts);
+    set.apply_target(
+        WorkSelectionAction::Include,
+        WorkSelectionTarget::Parts { record, parts },
+        [],
+    );
     Ok(Some(PickedContent::WorkSet {
         source,
         set,
@@ -316,7 +331,7 @@ pub(super) fn dialogue_text_vim_view(text: String) -> VimView {
 mod tests {
     use super::*;
     use crate::tui::workspace::WorkspaceSource;
-    use crate::workset::WorkSet;
+    use crate::workset::{WorkSelectionAction, WorkSelectionTarget, WorkSet};
     use sivtr_core::ai::AgentProvider;
     use sivtr_core::record::{
         WorkChannel, WorkPart, WorkPartData, WorkRecord, WorkRecordKind, WorkRef, WorkSessionRef,
@@ -375,8 +390,17 @@ mod tests {
         let b = dialogue(record("B", "Bash", "git status", 1));
         let dialogues = [a, b];
         let mut selection = WorkSet::new(".", Vec::new());
-        selection.include_parts(dialogues[0].record.clone().unwrap(), [2]);
-        selection.include_parts(dialogues[1].record.clone().unwrap(), [2]);
+        for dialogue in &dialogues {
+            let record = dialogue.record.clone().unwrap();
+            selection.apply_target(
+                WorkSelectionAction::Include,
+                WorkSelectionTarget::Parts {
+                    record,
+                    parts: vec![2],
+                },
+                [],
+            );
+        }
         let picked = workspace_picked_content_for_selected_parts(&selection, &dialogues)
             .expect("selected parts");
         let PickedContent::WorkSet {
@@ -406,7 +430,14 @@ mod tests {
         });
         let dialogues = [dialogue(base)];
         let mut selection = WorkSet::new(".", Vec::new());
-        selection.include_parts(dialogues[0].record.clone().unwrap(), [2, 3, 2]);
+        selection.apply_target(
+            WorkSelectionAction::Include,
+            WorkSelectionTarget::Parts {
+                record: dialogues[0].record.clone().unwrap(),
+                parts: vec![2, 3, 2],
+            },
+            [],
+        );
         let picked = workspace_picked_content_for_selected_parts(&selection, &dialogues)
             .expect("selected run");
         let PickedContent::WorkSet {
