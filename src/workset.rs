@@ -14,8 +14,8 @@ pub struct WorkSet {
     pub cwd: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    pub records: Vec<WorkRecord>,
-    pub anchors: Vec<WorkRef>,
+    records: Vec<WorkRecord>,
+    anchors: Vec<WorkRef>,
 }
 
 impl WorkSet {
@@ -44,6 +44,31 @@ impl WorkSet {
 
     pub fn anchors(&self) -> Vec<WorkRef> {
         self.anchors.clone()
+    }
+
+    pub fn records(&self) -> &[WorkRecord] {
+        &self.records
+    }
+
+    pub(crate) fn records_mut(&mut self) -> &mut [WorkRecord] {
+        &mut self.records
+    }
+
+    pub fn into_records(self) -> Vec<WorkRecord> {
+        self.records
+    }
+
+    pub fn into_parts(self) -> (Vec<WorkRecord>, Vec<WorkRef>) {
+        (self.records, self.anchors)
+    }
+
+    pub(crate) fn replace_records(&mut self, records: Vec<WorkRecord>) {
+        self.records = records;
+    }
+
+    pub(crate) fn replace_selection(&mut self, records: Vec<WorkRecord>, anchors: Vec<WorkRef>) {
+        self.records = records;
+        self.anchors = anchors;
     }
 
     /// Whether this selection covers an address. A Whole anchor covers every
@@ -88,7 +113,7 @@ impl WorkSet {
             return;
         }
         if self
-            .anchors()
+            .anchors
             .iter()
             .any(|anchor| anchor.at == WorkAt::Whole && anchor.whole() == whole)
         {
@@ -112,7 +137,7 @@ impl WorkSet {
     /// Toggle a complete record selection.
     pub fn toggle_whole(&mut self, record: WorkRecord) {
         if self
-            .anchors()
+            .anchors
             .iter()
             .any(|anchor| anchor.at == WorkAt::Whole && anchor.whole() == record.work_ref.whole())
         {
@@ -154,7 +179,7 @@ impl WorkSet {
             return;
         }
         let all_selected = records.iter().all(|record| {
-            self.anchors().iter().any(|anchor| {
+            self.anchors.iter().any(|anchor| {
                 anchor.at == WorkAt::Whole && anchor.whole() == record.work_ref.whole()
             })
         });
