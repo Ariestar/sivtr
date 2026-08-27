@@ -10,7 +10,7 @@ use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use sivtr_core::query::{load_session_records, LoadMode};
-use sivtr_core::record::{WorkPath, WorkRecord, WorkRef};
+use sivtr_core::record::{WorkAt, WorkPath, WorkRecord, WorkRef};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -137,6 +137,116 @@ impl WorkSet {
         } else {
             self.anchors.clone()
         }
+    }
+
+    /// Whether this selection covers an address. A Whole anchor covers every
+    /// Part of the same record.
+    pub fn contains(&self, anchor: &WorkRef) -> bool {
+        self.anchors().iter().any(|selected| {
+            selected == anchor
+                || (selected.at == sivtr_core::record::WorkAt::Whole
+                    && selected.whole() == anchor.whole())
+        })
+    }
+
+    /// Include a complete record. Whole is the canonical representation for a
+    /// record-wide selection, so any narrower anchors for it are removed.
+    pub fn include_whole(&mut self, record: WorkRecord) {
+        let whole = record.work_ref.whole();
+        self.records.retain(|item| item.work_ref.whole() != whole);
+        self.records.push(record);
+        self.anchors.retain(|anchor| anchor.whole() != whole);
+        self.anchors.push(whole);
+    }
+
+    /// Include selected parts of a record. A Whole anchor already covers them
+    /// and remains the only stored representation.
+    pub fn include_parts(&mut self, record: WorkRecord, parts: impl IntoIterator<Item = usize>) {
+        let whole = record.work_ref.whole();
+        if self
+            .anchors()
+            .iter()
+            .any(|anchor| anchor.at == sivtr_core::record::WorkAt::Whole && anchor.whole() == whole)
+        {
+            return;
+        }
+        if !self
+            .records
+            .iter()
+            .any(|item| item.work_ref.whole() == whole)
+        {
+            self.records.push(record.clone());
+        }
+        for seq in parts {
+            let anchor = whole.with_part(seq);
+            if !self.anchors.contains(&anchor) {
+                self.anchors.push(anchor);
+            }
+        }
+    }
+
+    /// Toggle a complete record selection.
+    pub fn toggle_whole(&mut self, record: WorkRecord) {
+        if self
+            .anchors()
+            .iter()
+            .any(|anchor| anchor.at == WorkAt::Whole && anchor.whole() == record.work_ref.whole())
+        {
+            self.exclude(&record.work_ref);
+        } else {
+            self.include_whole(record);
+        }
+    }
+
+    /// Toggle a set of parts. A fully selected set is removed; otherwise the
+    /// missing parts are added and a Whole selection remains authoritative.
+    pub fn toggle_parts(&mut self, record: WorkRecord, parts: impl IntoIterator<Item = usize>) {
+        let parts: Vec<_> = parts.into_iter().collect();
+        if parts.is_empty() {
+            return;
+        }
+        if parts
+            .iter()
+            .all(|seq| self.contains(&record.work_ref.with_part(*seq)))
+        {
+            let whole = record.work_ref.whole();
+            let remove: HashSet<_> = parts.into_iter().map(|seq| whole.with_part(seq)).collect();
+            self.anchors.retain(|anchor| !remove.contains(anchor));
+            if !self.anchors.iter().any(|anchor| anchor.whole() == whole) {
+                self.records.retain(|item| item.work_ref.whole() != whole);
+            }
+        } else {
+            self.include_parts(record, parts);
+        }
+    }
+
+    /// Toggle every record in a scope using the same Whole rule.
+    pub fn toggle_records(&mut self, records: Vec<WorkRecord>) {
+        if records.is_empty() {
+            return;
+        }
+        let all_selected = records.iter().all(|record| {
+            self.anchors().iter().any(|anchor| {
+                anchor.at == WorkAt::Whole && anchor.whole() == record.work_ref.whole()
+            })
+        });
+        if all_selected {
+            for record in records {
+                self.exclude(&record.work_ref);
+            }
+        } else {
+            for record in records {
+                self.include_whole(record);
+            }
+        }
+    }
+
+    /// Remove a record and every Part anchor belonging to it.
+    pub fn exclude(&mut self, record_ref: &WorkRef) {
+        let whole = record_ref.whole();
+        self.records
+            .retain(|record| record.work_ref.whole() != whole);
+        self.anchors.retain(|anchor| anchor.whole() != whole);
     }
 
     pub fn save_as(&mut self, name: &str) -> Result<()> {
@@ -350,6 +460,36 @@ mod tests {
             refs,
             vec!["terminal/session_1/1/p1", "terminal/session_1/2/p1"]
         );
+    }
+
+    #[test]
+    fn whole_anchor_covers_and_replaces_parts() {
+        let first = record(1);
+        let mut set = WorkSet::with_anchors(".", vec![first.clone()], vec![]);
+        set.include_parts(first.clone(), [1]);
+        assert!(set.contains(&first.work_ref.with_part(1)));
+        set.include_whole(first.clone());
+        assert_eq!(set.anchors(), vec![first.work_ref.whole()]);
+        assert!(set.contains(&first.work_ref.with_part(1)));
+    }
+
+    #[test]
+    fn part_anchors_deduplicate_without_collapsing() {
+        let first = record(1);
+        let mut set = WorkSet::new(".", Vec::new());
+        set.include_parts(first.clone(), [1, 1]);
+        assert_eq!(set.anchors(), vec![first.work_ref.with_part(1)]);
+    }
+
+    #[test]
+    fn toggling_whole_replaces_narrow_selection() {
+        let first = record(1);
+        let mut set = WorkSet::new(".", Vec::new());
+        set.include_parts(first.clone(), [1]);
+        set.toggle_whole(first.clone());
+        assert_eq!(set.anchors(), vec![first.work_ref.whole()]);
+        set.toggle_whole(first.clone());
+        assert!(set.anchors().is_empty());
     }
 
     #[test]

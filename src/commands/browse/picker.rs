@@ -391,21 +391,7 @@ pub(crate) fn run(
             }
 
             let source_markers = sessions_pane.markers();
-            let whole_dialogue_selected = rows
-                .dialogues
-                .mask()
-                .get(dialogue_idx)
-                .copied()
-                .unwrap_or(false);
-            let content_marked = if whole_dialogue_selected {
-                dialogues
-                    .get(dialogue_idx)
-                    .and_then(|dialogue| dialogue.record.as_ref())
-                    .map(crate::tui::content::block::dialogue_block_count)
-                    .map_or_else(Vec::new, |count| vec![true; count])
-            } else {
-                content_pane.marked(dialogue_idx).to_vec()
-            };
+            let content_marked = content_pane.marked(dialogue_idx).to_vec();
             let body_failures: HashSet<(WorkspaceSource, String)> = sessions
                 .iter()
                 .filter_map(|s| {

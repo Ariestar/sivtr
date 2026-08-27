@@ -69,18 +69,14 @@ pub(super) fn workspace_picked_content_for_copy(
     .then_some(target)
     .flatten();
     let mut records = Vec::new();
-    let mut anchors = Vec::new();
     let mut complete = true;
     for &idx in picked {
         let Some(dialogue) = dialogues.get(idx) else {
             complete = false;
             continue;
         };
-        if let (Some(record), Some(work_ref)) =
-            (dialogue.record.as_ref(), dialogue.work_ref.as_ref())
-        {
+        if let Some(record) = dialogue.record.as_ref() {
             records.push(record.clone());
-            anchors.push(work_ref.clone());
         } else {
             complete = false;
         }
@@ -100,9 +96,13 @@ pub(super) fn workspace_picked_content_for_copy(
                 anyhow::bail!("structured copy needs materialized dialogues");
             }
             let cwd = std::env::current_dir().context("copy needs a current directory")?;
+            let mut set = WorkSet::with_anchors(cwd.display().to_string(), Vec::new(), Vec::new());
+            for record in records {
+                set.include_whole(record);
+            }
             return Ok(PickedContent::WorkSet {
                 source,
-                set: WorkSet::with_anchors(cwd.display().to_string(), records, anchors),
+                set,
                 projection,
             });
         }
@@ -131,8 +131,7 @@ pub(super) fn workspace_picked_content_for_marked_blocks(
     dialogues: &[WorkspaceDialogue],
     content_pane: &ContentPane,
 ) -> Result<Option<PickedContent>> {
-    let mut records = Vec::new();
-    let mut anchors = Vec::new();
+    let mut contributions = Vec::new();
     // Attribution follows the first dialogue that actually contributed; no
     // contributor means nothing was marked, and there is nothing to copy.
     let mut source = None;
@@ -140,10 +139,7 @@ pub(super) fn workspace_picked_content_for_marked_blocks(
         let Some(record) = dialogue.record.as_ref() else {
             continue;
         };
-        let Some(base) = dialogue.work_ref.as_ref() else {
-            continue;
-        };
-        let mut dialogue_anchors = Vec::new();
+        let mut dialogue_parts = Vec::new();
         let (input_blocks, output_blocks) = dialogue_blocks(record);
         for block in input_blocks.iter().chain(&output_blocks) {
             collect_marked_blocks(
@@ -151,23 +147,25 @@ pub(super) fn workspace_picked_content_for_marked_blocks(
                 dialogue_idx,
                 content_pane,
                 record,
-                base,
-                &mut dialogue_anchors,
+                &mut dialogue_parts,
             );
         }
-        if !dialogue_anchors.is_empty() {
+        if !dialogue_parts.is_empty() {
             source.get_or_insert_with(|| dialogue.source.clone());
-            records.push(record.clone());
-            anchors.extend(dialogue_anchors);
+            contributions.push((record.clone(), dialogue_parts));
         }
     }
     let Some(source) = source else {
         return Ok(None);
     };
     let cwd = std::env::current_dir().context("copy needs a current directory")?;
+    let mut set = WorkSet::with_anchors(cwd.display().to_string(), Vec::new(), Vec::new());
+    for (record, parts) in contributions {
+        set.include_parts(record, parts);
+    }
     Ok(Some(PickedContent::WorkSet {
         source,
-        set: WorkSet::with_anchors(cwd.display().to_string(), records, anchors),
+        set,
         projection: WorkspacePickProjection::Parts,
     }))
 }
@@ -182,8 +180,7 @@ fn collect_marked_blocks(
     dialogue_idx: usize,
     content_pane: &ContentPane,
     record: &WorkRecord,
-    base: &WorkRef,
-    anchors: &mut Vec<WorkRef>,
+    parts: &mut Vec<usize>,
 ) {
     if content_pane
         .marked(dialogue_idx)
@@ -191,16 +188,11 @@ fn collect_marked_blocks(
         .copied()
         .unwrap_or(false)
     {
-        anchors.extend(
-            block
-                .parts
-                .iter()
-                .map(|&idx| base.with_part(record.parts[idx].seq)),
-        );
+        parts.extend(block.parts.iter().map(|&idx| record.parts[idx].seq));
         return;
     }
     for child in &block.children {
-        collect_marked_blocks(child, dialogue_idx, content_pane, record, base, anchors);
+        collect_marked_blocks(child, dialogue_idx, content_pane, record, parts);
     }
 }
 
@@ -224,18 +216,20 @@ pub(super) fn workspace_picked_content_for_cursor_block(
     let Some(block) = block else {
         return Ok(None);
     };
-    let Some(base) = dialogue.work_ref.as_ref() else {
+    if dialogue.work_ref.is_none() {
         return Ok(None);
-    };
+    }
     let cwd = std::env::current_dir().context("copy needs a current directory")?;
-    let anchors = block
+    let parts: Vec<usize> = block
         .parts
         .iter()
-        .map(|&idx| base.with_part(record.parts[idx].seq))
+        .map(|&idx| record.parts[idx].seq)
         .collect();
+    let mut set = WorkSet::with_anchors(cwd.display().to_string(), Vec::new(), Vec::new());
+    set.include_parts(record.clone(), parts);
     Ok(Some(PickedContent::WorkSet {
         source: dialogue.source.clone(),
-        set: WorkSet::with_anchors(cwd.display().to_string(), vec![record.clone()], anchors),
+        set,
         projection: WorkspacePickProjection::Parts,
     }))
 }
