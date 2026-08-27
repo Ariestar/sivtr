@@ -33,7 +33,7 @@ pub fn execute(args: &NavArgs) -> Result<()> {
     )?;
     let records = workset::records_for_anchors(&all_records, &anchors);
     let mut set = WorkSet::from_parts(source.cwd, records, anchors);
-    set.save_last()?;
+    workset::save_last(&set)?;
     show::print_workset(
         &mut set,
         show::resolve_output_format(args.format, false, args.refs, args.json),

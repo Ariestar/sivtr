@@ -237,12 +237,10 @@ fn merge_and_apply(results: Vec<QuerySourceResult>, cwd: &Path, filter: Filter) 
     for error in &errors {
         output::warning(format!("skipped an origin: {error}"));
     }
+    // `from_parts` normalizes the anchors (dedup + Whole canonical form), so
+    // the merged per-source anchors need no pre-dedup here.
     apply_loaded(
-        WorkSet::from_parts(
-            cwd.display().to_string(),
-            records,
-            crate::commands::memory::var::unique_anchors(anchors),
-        ),
+        WorkSet::from_parts(cwd.display().to_string(), records, anchors),
         filter,
     )
 }

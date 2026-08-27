@@ -16,7 +16,7 @@ use crate::tui::content::view::{ContentSelection, ContentViewMode};
 use crate::tui::search::WorkspaceSearchScope;
 use crate::tui::theme;
 use crate::tui::workspace::rows::Rows;
-use crate::workset::{WorkSelectionKind, WorkSelectionTarget};
+use sivtr_core::workset::{WorkSelectionKind, WorkSelectionTarget};
 
 /// Indices of true entries in a selection mask, in order.
 pub(crate) fn selected_indices(mask: &[bool]) -> Vec<usize> {

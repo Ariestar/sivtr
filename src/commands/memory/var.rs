@@ -35,7 +35,7 @@ fn set(name: &str, source: Option<&str>) -> Result<()> {
         None,
     )?;
     set = dedup(set);
-    set.save_as(name)?;
+    workset::save_as(&mut set, name)?;
     output::success(format!("saved @{name} ({} items)", set.anchors().len()));
     Ok(())
 }
@@ -127,30 +127,33 @@ fn merge_sets(base: WorkSet, addition: WorkSet) -> WorkSet {
     }
 
     anchors.extend(addition_anchors);
-    anchors = unique_anchors(anchors);
-    let records = records_for_unique_anchors(records_by_ref, &anchors);
-    WorkSet::from_parts(cwd, records, anchors)
+    rebuild(cwd, records_by_ref, anchors)
 }
 
 fn remove_anchors(base: WorkSet, remove: &HashSet<String>) -> WorkSet {
     let cwd = base.cwd.clone();
     let (base_records, anchors) = base.into_parts();
-    let records_by_ref = records_by_ref(base_records);
-    let anchors = unique_anchors(
-        anchors
-            .into_iter()
-            .filter(|anchor| !remove.contains(&anchor.to_string()))
-            .collect(),
-    );
-    let records = records_for_unique_anchors(records_by_ref, &anchors);
-    WorkSet::from_parts(cwd, records, anchors)
+    let anchors: Vec<_> = anchors
+        .into_iter()
+        .filter(|anchor| !remove.contains(&anchor.to_string()))
+        .collect();
+    rebuild(cwd, records_by_ref(base_records), anchors)
 }
 
 fn dedup(set: WorkSet) -> WorkSet {
     let cwd = set.cwd.clone();
     let (set_records, set_anchors) = set.into_parts();
-    let records_by_ref = records_by_ref(set_records);
-    let anchors = unique_anchors(set_anchors);
+    rebuild(cwd, records_by_ref(set_records), set_anchors)
+}
+
+/// Rebuild a WorkSet from its record map and anchors. `from_parts`
+/// normalizes the anchors (dedup + Whole canonical form), so no pre-dedup is
+/// needed here.
+fn rebuild(
+    cwd: String,
+    records_by_ref: HashMap<String, WorkRecord>,
+    anchors: Vec<WorkRef>,
+) -> WorkSet {
     let records = records_for_unique_anchors(records_by_ref, &anchors);
     WorkSet::from_parts(cwd, records, anchors)
 }

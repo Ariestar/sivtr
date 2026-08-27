@@ -7,12 +7,8 @@ pub(crate) use source::{
 pub(crate) use store::{cleanup_saved, delete_saved, list_saved, load_saved, save_named};
 
 use anyhow::{bail, Context, Result};
-use sivtr_core::query::{load_session_records, LoadMode};
-use sivtr_core::record::WorkPath;
-use std::collections::HashMap;
-use std::path::Path;
 
-pub use crate::workset::{
+pub use sivtr_core::workset::{
     find_record, records_for_anchors, require_record, WorkSelectionAction, WorkSelectionKind,
     WorkSelectionTarget, WorkSet, WORKSET_SCHEMA_VERSION,
 };
@@ -36,70 +32,23 @@ pub enum WorkSetSelection {
     Indices(Vec<usize>),
 }
 
-/// Cache namespace for a record's session file, used by [`materialize_parts`]
-/// to pick the right cache view when re-loading full records.
-fn session_namespace(path: &WorkPath) -> Option<&'static str> {
-    match path {
-        WorkPath::Agent { provider, .. } => Some(provider.command_name()),
-        WorkPath::Terminal { .. } => Some("terminal"),
-    }
+/// Persist a named WorkSet (`@name`). `materialize_parts` runs first so a
+/// light-loaded set saves complete records; [`WorkSet::validate`] rejects
+/// malformed sets before they hit disk.
+pub(crate) fn save_as(set: &mut WorkSet, name: &str) -> Result<()> {
+    store::validate_name(name)?;
+    set.materialize_parts()?;
+    set.validate()?;
+    set.name = Some(name.to_string());
+    save_named(name, set)
 }
 
-impl WorkSet {
-    /// Fill in `parts` for any light-loaded record (empty `parts`) whose
-    /// session file path is known.  Each session file is loaded once (full
-    /// view), then matching records are patched in place.  Records without a
-    /// session path (stdin sets) are already complete and stay untouched.
-    pub fn materialize_parts(&mut self) -> Result<()> {
-        // Group light records by their session file path, then load each
-        // session's full records once and patch matching parts back.
-        let mut needed: HashMap<String, Vec<usize>> = HashMap::new();
-        for (index, record) in self.records().iter().enumerate() {
-            if !record.parts.is_empty() {
-                continue;
-            }
-            let Some(path) = record.session.path.as_deref() else {
-                continue;
-            };
-            needed.entry(path.to_string()).or_default().push(index);
-        }
-
-        for (path, indices) in &needed {
-            // Any record in the group gives us the namespace; pick the first.
-            let namespace = session_namespace(&self.records()[indices[0]].work_ref.path);
-            let Some(namespace) = namespace else {
-                continue;
-            };
-            let full = load_session_records(namespace, Path::new(path), LoadMode::Full)
-                .with_context(|| format!("Failed to load full session {path} for {namespace}"))?;
-            for index in indices {
-                if let Some(record) = self.records_mut().get_mut(*index) {
-                    if let Some(full_record) = full
-                        .iter()
-                        .find(|r| r.work_ref.path.index() == record.work_ref.path.index())
-                    {
-                        record.parts = full_record.parts.clone();
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub fn save_as(&mut self, name: &str) -> Result<()> {
-        store::validate_name(name)?;
-        self.materialize_parts()?;
-        self.validate()?;
-        self.name = Some(name.to_string());
-        save_named(name, self)
-    }
-
-    pub fn save_last(&self) -> Result<()> {
-        let mut set = self.clone();
-        set.materialize_parts()?;
-        set.validate()?;
-        save_named("last", &set)
-    }
+/// Persist the `@last` WorkSet.
+pub(crate) fn save_last(set: &WorkSet) -> Result<()> {
+    let mut set = set.clone();
+    set.materialize_parts()?;
+    set.validate()?;
+    save_named("last", &set)
 }
 
 pub fn load_reference(reference: &str) -> Result<WorkSet> {

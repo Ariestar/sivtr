@@ -3,9 +3,12 @@
 use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
-use sivtr_core::ai::AgentProvider;
-use sivtr_core::record::{WorkAt, WorkPath, WorkRecord, WorkRef, WorkScope};
-use std::collections::HashSet;
+
+use crate::ai::AgentProvider;
+use crate::query::{load_session_records, LoadMode};
+use crate::record::{WorkAt, WorkPath, WorkRecord, WorkRef, WorkScope};
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 pub const WORKSET_SCHEMA_VERSION: u32 = 2;
 
@@ -151,7 +154,7 @@ impl WorkSet {
         &self.records
     }
 
-    pub(crate) fn records_mut(&mut self) -> &mut [WorkRecord] {
+    pub fn records_mut(&mut self) -> &mut [WorkRecord] {
         &mut self.records
     }
 
@@ -163,12 +166,12 @@ impl WorkSet {
         (self.records, self.anchors)
     }
 
-    pub(crate) fn select_anchors(&mut self, anchors: Vec<WorkRef>) {
+    pub fn select_anchors(&mut self, anchors: Vec<WorkRef>) {
         self.records = records_for_anchors(&self.records, &anchors);
         self.anchors = anchors;
     }
 
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         if self.schema_version != WORKSET_SCHEMA_VERSION {
             bail!(
                 "unsupported WorkSet schema version {}; expected {}",
@@ -393,6 +396,56 @@ impl WorkSet {
         self.records
             .retain(|record| record.work_ref.whole() != whole);
         self.anchors.retain(|anchor| anchor.whole() != whole);
+    }
+
+    /// Fill in `parts` for any light-loaded record (empty `parts`) whose
+    /// session file path is known. Each session file is loaded once (full
+    /// view), then matching records are patched in place. Records without a
+    /// session path (stdin sets) are already complete and stay untouched.
+    pub fn materialize_parts(&mut self) -> Result<()> {
+        // Group light records by their session file path, then load each
+        // session's full records once and patch matching parts back.
+        let mut needed: HashMap<String, Vec<usize>> = HashMap::new();
+        for (index, record) in self.records().iter().enumerate() {
+            if !record.parts.is_empty() {
+                continue;
+            }
+            let Some(path) = record.session.path.as_deref() else {
+                continue;
+            };
+            needed.entry(path.to_string()).or_default().push(index);
+        }
+
+        for (path, indices) in &needed {
+            // Any record in the group gives us the namespace; pick the first.
+            let namespace = session_namespace(&self.records()[indices[0]].work_ref.path);
+            let Some(namespace) = namespace else {
+                continue;
+            };
+            let full = load_session_records(namespace, Path::new(path), LoadMode::Full)
+                .with_context(|| format!("Failed to load full session {path} for {namespace}"))?;
+            for index in indices {
+                if let Some(record) = self.records_mut().get_mut(*index) {
+                    if let Some(full_record) = full
+                        .iter()
+                        .find(|r| r.work_ref.path.index() == record.work_ref.path.index())
+                    {
+                        record.parts = full_record.parts.clone();
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Cache namespace for a record's session file, used by
+/// [`WorkSet::materialize_parts`] to pick the right cache view when
+/// re-loading full records.
+fn session_namespace(path: &WorkPath) -> Option<&'static str> {
+    match path {
+        WorkPath::Agent { provider, .. } => Some(provider.command_name()),
+        WorkPath::Terminal { .. } => Some("terminal"),
     }
 }
 

@@ -8,7 +8,7 @@ use crate::tui::content::block::BlockText;
 use crate::tui::workspace::{
     Rows, WorkspaceDialogue, WorkspaceFocus, WorkspaceSession, WorkspaceSource,
 };
-use crate::workset::{WorkSelectionAction, WorkSelectionTarget};
+use sivtr_core::workset::{WorkSelectionAction, WorkSelectionTarget};
 
 use super::load::SessionColumn;
 use crate::pane::Viewport;

@@ -13,6 +13,7 @@ pub mod session;
 pub mod session_source;
 pub mod time;
 pub mod workspace;
+pub mod workset;
 
 pub use agents::claude;
 pub use agents::codex;

@@ -14,7 +14,7 @@ use crate::tui::workspace::{
     active_rows, workspace_content_io_texts, ContentIoFocus, ContentIoFrame, ExpandedBlocks,
     WorkspaceDialogue, WorkspaceSession, WorkspaceSource,
 };
-use crate::workset::WorkSet;
+use sivtr_core::workset::WorkSet;
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
 
 // ── Dialogues ───────────────────────────────────────────────────────────
@@ -370,7 +370,7 @@ pub struct ContentCtx<'a> {
 ///
 /// Not a [`crate::pane::Pane`]: its rows are the shown dialogue's rendered
 /// lines, not a window over a growing list, so there is nothing to grow,
-/// keep, or hydrate — `ensure` hands the caller the frame to render.
+/// keep, or hydrate — `frame` hands the caller the rendered layout.
 #[derive(Default)]
 pub struct ContentPane {
     input_lines: usize,
@@ -388,7 +388,7 @@ impl ContentPane {
     /// Build the frame for this context, resizing the block selection mask
     /// of the shown dialogue's block ids. Rebuilds the cached layouts; call
     /// it only when the content actually changed.
-    pub fn ensure(&mut self, ctx: ContentCtx<'_>) -> ContentIoFrame {
+    pub fn frame(&mut self, ctx: ContentCtx<'_>) -> ContentIoFrame {
         let texts = workspace_content_io_texts(
             ctx.dialogues,
             ctx.highlighted_idx,
@@ -416,8 +416,9 @@ impl ContentPane {
         else {
             return Vec::new();
         };
-        let mut marked = vec![false; crate::tui::content::block::dialogue_block_count(record)];
         let (input, output) = crate::tui::content::block::dialogue_blocks(record);
+        let mut marked =
+            vec![false; crate::tui::content::block::dialogue_block_count(&input, &output)];
         for block in input.iter().chain(&output) {
             mark_selected_blocks(block, record, selection, &mut marked);
         }

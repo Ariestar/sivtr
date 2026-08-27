@@ -373,7 +373,7 @@ pub(crate) fn run(
                 expanded_blocks.clone(),
             );
             if last_content_key.as_ref() != Some(&content_key) {
-                content_frame = content_pane.ensure(ContentCtx {
+                content_frame = content_pane.frame(ContentCtx {
                     dialogues: &dialogues,
                     highlighted_idx: dialogue_idx,
                     mode: content_mode,
@@ -1614,10 +1614,10 @@ mod tests {
             record: Some(record.clone()),
         };
         let dialogues = [dialogue.clone()];
-        let mut selection = crate::workset::WorkSet::new(".", Vec::new());
+        let mut selection = sivtr_core::workset::WorkSet::new(".", Vec::new());
         selection.apply_target(
-            crate::workset::WorkSelectionAction::Include,
-            crate::workset::WorkSelectionTarget::Parts {
+            sivtr_core::workset::WorkSelectionAction::Include,
+            sivtr_core::workset::WorkSelectionTarget::Parts {
                 record: record.clone(),
                 parts: record.parts.iter().skip(2).map(|part| part.seq).collect(),
             },
@@ -1688,7 +1688,7 @@ mod tests {
         let dialogues = [dialogue.clone()];
         let mut pane = ContentPane::default();
         let area = ratatui::layout::Rect::new(0, 0, 60, 20);
-        let frame = pane.ensure(ContentCtx {
+        let frame = pane.frame(ContentCtx {
             dialogues: &dialogues,
             highlighted_idx: 0,
             mode: ContentViewMode::Reading,
@@ -1711,10 +1711,10 @@ mod tests {
         let hit_id = hit_id.expect("a block is hit in the output half");
         let (_, selected, parts) =
             workspace_block_parts(&dialogues, 0, hit_id).expect("selected block");
-        let mut selection = crate::workset::WorkSet::new(".", Vec::new());
+        let mut selection = sivtr_core::workset::WorkSet::new(".", Vec::new());
         selection.apply_target(
-            crate::workset::WorkSelectionAction::Include,
-            crate::workset::WorkSelectionTarget::Parts {
+            sivtr_core::workset::WorkSelectionAction::Include,
+            sivtr_core::workset::WorkSelectionTarget::Parts {
                 record: selected,
                 parts,
             },
@@ -1850,10 +1850,10 @@ mod tests {
 
         let (_, selected, parts) =
             workspace_block_parts(&dialogues, 0, 2).expect("selected member");
-        let mut selection = crate::workset::WorkSet::new(".", Vec::new());
+        let mut selection = sivtr_core::workset::WorkSet::new(".", Vec::new());
         selection.apply_target(
-            crate::workset::WorkSelectionAction::Include,
-            crate::workset::WorkSelectionTarget::Parts {
+            sivtr_core::workset::WorkSelectionAction::Include,
+            sivtr_core::workset::WorkSelectionTarget::Parts {
                 record: selected,
                 parts,
             },
