@@ -146,6 +146,45 @@ fn content_preview_text_uses_structured_targeted_part_text_in_reading_mode() {
 }
 
 #[test]
+fn targeted_part_uses_its_dialogue_global_block_id() {
+    let record = chat_record(vec![
+        part(
+            1,
+            sivtr_core::record::WorkPartData::User {
+                content: "question".to_string(),
+            },
+        ),
+        part(
+            2,
+            sivtr_core::record::WorkPartData::Assistant {
+                content: "answer".to_string(),
+            },
+        ),
+        part(
+            3,
+            sivtr_core::record::WorkPartData::ToolCall {
+                call_id: None,
+                tool: Some("tool".to_string()),
+                input: tool_test_value("target body".to_string()),
+            },
+        ),
+    ]);
+    let dialogue = codex_dialogue(record);
+    let mut expanded = ExpandedBlocks::default();
+    let folded =
+        dialogue.content_io_texts(ContentViewMode::Reading, Some(WorkAt::Part(3)), &expanded);
+    assert_eq!(
+        crate::tui::content::block::dialogue_block_id(dialogue.record.as_ref().unwrap(), 3),
+        Some(2)
+    );
+    assert_eq!(folded.output.trim(), "<:tool:tool call:>");
+    expanded.toggle(2);
+    let open =
+        dialogue.content_io_texts(ContentViewMode::Reading, Some(WorkAt::Part(3)), &expanded);
+    assert!(open.output.contains("target body"));
+}
+
+#[test]
 fn reading_mode_folds_structure_and_raw_expands() {
     let record = chat_record(vec![
         part(

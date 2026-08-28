@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::time::SystemTime;
 
 use crate::commands::select::CommandSelection;
-use crate::tui::content::block::{fold_label_for_part, BlockText};
+use crate::tui::content::block::{dialogue_block_id, fold_label_for_part, BlockText};
 use crate::tui::content::io::{
     ContentIoFocus, ContentIoFrame, ContentIoTexts, ContentScrolls, ExpandedBlocks,
 };
@@ -259,19 +259,13 @@ impl WorkspaceDialogue {
                 return ContentIoTexts::new(Vec::new(), Vec::new());
             };
             let input = part.kind().is_input();
+            let block_id = dialogue_block_id(record, part.seq).expect("target part has a block");
             let shown = match mode {
                 ContentViewMode::Raw => true,
-                ContentViewMode::Reading => {
-                    let focus = if input {
-                        ContentIoFocus::Input
-                    } else {
-                        ContentIoFocus::Output
-                    };
-                    expanded.expanded(focus, 0, part.kind().is_structure())
-                }
+                ContentViewMode::Reading => expanded.expanded(block_id, part.kind().is_structure()),
             };
             let segment = BlockText {
-                id: 0,
+                id: block_id,
                 text: if shown {
                     crate::tui::content::tool::part_body_text(part)
                 } else {
@@ -397,16 +391,16 @@ pub(crate) struct WorkspaceView<'a> {
     pub(crate) line_filter_error: Option<&'a str>,
     pub(crate) fullscreen: Option<WorkspaceFocus>,
     pub(crate) content_selection: Option<ContentSelection>,
-    /// Block under the keyboard/mouse cursor per half; highlighted like a
-    /// list row when its half is focused.
+    /// Block under the keyboard/mouse cursor plus its half (derived from
+    /// the dialogue-global id); highlighted like a list row in that half.
     pub(crate) content_block_cursor: Option<(ContentIoFocus, usize)>,
-    /// Pending `v` block-range span `(half, anchor block, cursor block)`;
+    /// Pending `v` block-range span `(anchor block, cursor block)`;
     /// its lines render with the same amber range style as the list panes.
-    pub(crate) content_range: Option<(ContentIoFocus, usize, usize)>,
-    /// Marked block masks per half (`mask[block_id]` = marked), owned by the
-    /// content pane's native selection; consumed by the dot gutter and copy.
-    pub(crate) content_marked_input: &'a [bool],
-    pub(crate) content_marked_output: &'a [bool],
+    pub(crate) content_range: Option<(usize, usize)>,
+    /// Marked block mask (`mask[block_id]` = marked, dialogue-global ids),
+    /// owned by the content pane's native selection; consumed by the dot
+    /// gutter and copy.
+    pub(crate) content_marked: &'a [bool],
     /// Multi-select paging `(current_page, page_count)` when several
     /// dialogues are selected; the content pane shows one at a time.
     pub(crate) content_page: Option<(usize, usize)>,

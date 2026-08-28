@@ -97,13 +97,13 @@ pub(crate) fn run(
     let mut pending_block_toggle: Option<(ContentIoFocus, usize)> = None;
     // Last single click on a block (time + target); a second click on the
     // same block within the window folds it.
-    let mut last_block_click: Option<(std::time::Instant, ContentIoFocus, usize)> = None;
+    let mut last_block_click: Option<(std::time::Instant, usize)> = None;
     // Block cursor (keyboard j/k + click), highlighted like a list row; one
-    // position per half.
+    // position per dialogue, spanning both IO halves.
     let mut content_cursor = ContentBlockCursor::default();
-    // Content block-range anchor for `v` (half + block id); cleared when the
-    // focus, half, or shown dialogue changes.
-    let mut content_range_anchor: Option<(ContentIoFocus, usize)> = None;
+    // Content block-range anchor for `v` (dialogue-global block id); cleared
+    // when the focus or shown dialogue changes.
+    let mut content_range_anchor: Option<usize> = None;
     // Mouse-down anchor inside content; promoted to a real selection only by
     // the first drag, so a pure click never shows a selection flash.
     let mut mouse_down_select: Option<MouseSelectionStart> = None;
@@ -374,8 +374,7 @@ pub(crate) fn run(
                 selected_dialogues.clone(),
             );
             if expanded_key.as_ref() != Some(&expand_key) {
-                expanded_blocks.input.clear();
-                expanded_blocks.output.clear();
+                expanded_blocks.clear();
                 pending_block_toggle = None;
                 last_block_click = None;
                 mouse_down_select = None;
@@ -418,11 +417,14 @@ pub(crate) fn run(
                 );
                 last_content_key = Some(content_key);
             }
+            // Cursor block resolved against the frame's displayed segments
+            // once: the follow-scroll and the view highlight share it.
+            let cursor_focus = content_cursor.focused(content_frame.texts.block_slices());
             // Keyboard moves ask the next redraw to keep the cursor block in
             // view; clicks never set `follow`, so they keep the scroll as-is.
             if content_cursor.follow {
                 content_cursor.follow = false;
-                if let Some((half, block)) = content_cursor.focused(content_io_focus) {
+                if let Some((half, block)) = cursor_focus {
                     let area = content_frame.areas.area(half);
                     if let Some(range) = content_block_range(content_frame.layout(half), block) {
                         let visible = area.height.saturating_sub(2) as usize;
@@ -500,15 +502,9 @@ pub(crate) fn run(
                         fullscreen,
                         content_selection: visual_select_mode
                             .map(|mode: VisualSelectMode| mode.selection),
-                        content_block_cursor: content_cursor.focused(content_io_focus),
-                        content_range: content_range_anchor.and_then(|(half, anchor)| {
-                            content_cursor
-                                .focused(half)
-                                .map(|(_, cursor)| (half, anchor, cursor))
-                        }),
-                        content_marked_input: content_pane.marked(ContentIoFocus::Input, shown_idx),
-                        content_marked_output: content_pane
-                            .marked(ContentIoFocus::Output, shown_idx),
+                        content_block_cursor: cursor_focus,
+                        content_range: content_range_anchor.zip(content_cursor.get()),
+                        content_marked: content_pane.marked(shown_idx),
                         content_page: (selected > 1).then_some((content_page, selected)),
                         content_frame: &content_frame,
                     },
@@ -658,7 +654,6 @@ pub(crate) fn run(
                                 &mut dialogue_state,
                                 &mut selected_dialogues,
                                 &mut content_scrolls,
-                                content_io_focus,
                                 &mut content_cursor,
                                 content_frame.texts.block_slices(),
                             );
@@ -675,7 +670,6 @@ pub(crate) fn run(
                                 &mut dialogue_state,
                                 &mut selected_dialogues,
                                 &mut content_scrolls,
-                                content_io_focus,
                                 &mut content_cursor,
                                 content_frame.texts.block_slices(),
                             );
@@ -1009,7 +1003,7 @@ pub(crate) fn run(
                                     &mut content_range_anchor,
                                     WorkspaceFocus::Content,
                                 );
-                                content_cursor.set(half, block);
+                                content_cursor.set(block);
                                 // Dot marks belong to the shown dialogue
                                 // (multi-select pages one dialogue at a
                                 // time, so ids never repeat on screen).
@@ -1018,7 +1012,7 @@ pub(crate) fn run(
                                     content_page,
                                     dialogue_idx,
                                 );
-                                content_pane.toggle_mark(half, shown, block);
+                                content_pane.toggle_mark(shown, block);
                                 continue;
                             }
                         }
@@ -1104,20 +1098,18 @@ pub(crate) fn run(
                             // block; a second click on the same block within
                             // the window folds it (read mode only).
                             if matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left)) {
-                                if let Some((half, block)) = pending_block_toggle.take() {
-                                    content_cursor.set(half, block);
+                                if let Some((_, block)) = pending_block_toggle.take() {
+                                    content_cursor.set(block);
                                     let now = std::time::Instant::now();
-                                    let double_click = last_block_click.is_some_and(
-                                        |(at, last_half, last_block)| {
-                                            last_half == half
-                                                && last_block == block
+                                    let double_click =
+                                        last_block_click.is_some_and(|(at, last_block)| {
+                                            last_block == block
                                                 && now.duration_since(at)
                                                     < std::time::Duration::from_millis(400)
-                                        },
-                                    );
-                                    last_block_click = Some((now, half, block));
+                                        });
+                                    last_block_click = Some((now, block));
                                     if double_click && content_mode == ContentViewMode::Reading {
-                                        expanded_blocks.toggle(half, block);
+                                        expanded_blocks.toggle(block);
                                     }
                                     redraw = true;
                                 }
@@ -1626,8 +1618,10 @@ mod tests {
             workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane).is_none()
         );
 
-        // Mark the tool block (output half): copy joins the call + result bodies.
-        pane.toggle_mark(ContentIoFocus::Output, 0, 0);
+        // Mark the tool block (output half): copy joins the call + result
+        // bodies. Ids are dialogue-global — the input user block is 0, so the
+        // output pair is 1.
+        pane.toggle_mark(0, 1);
         let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
             .expect("marked copy");
         assert_eq!(picked.units.len(), 1);
@@ -1643,7 +1637,7 @@ mod tests {
         );
 
         // Mark the user block (input half): both marked blocks are joined.
-        pane.toggle_mark(ContentIoFocus::Input, 0, 0);
+        pane.toggle_mark(0, 0);
         let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
             .expect("marked copy");
         let text = &picked.units[0].plain;
@@ -1708,10 +1702,10 @@ mod tests {
             expanded: &crate::tui::content::io::ExpandedBlocks::default(),
         });
 
-        // Mark the output run block: the tool run is id 1 (assistant's
-        // reply is id 0 in the output half). Copy joins the run's tool
-        // bodies, never the user or assistant blocks.
-        pane.toggle_mark(ContentIoFocus::Output, 0, 1);
+        // Mark the output run block. Ids are dialogue-global: the input user
+        // block is 0, the assistant reply 1, so the tool run is 2. Copy joins
+        // the run's tool bodies, never the user or assistant blocks.
+        pane.toggle_mark(0, 2);
         let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
             .expect("marked copy");
         let text = &picked.units[0].plain;
@@ -1727,7 +1721,7 @@ mod tests {
     }
 
     #[test]
-    fn dot_marked_block_survives_ensure_and_matches_half_blocks_ids() {
+    fn dot_marked_block_survives_ensure_and_matches_dialogue_block_ids() {
         // Simulate the real click flow: build the frame, hit a block through
         // the layout (as the dot gutter does), toggle it, then run the copy
         // collection — it must find the block, never return None.
@@ -1796,7 +1790,7 @@ mod tests {
             }
         }
         let hit_id = hit_id.expect("a block is hit in the output half");
-        pane.toggle_mark(ContentIoFocus::Output, 0, hit_id);
+        pane.toggle_mark(0, hit_id);
 
         let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
             .expect("marked copy must not be None after a real dot hit");
@@ -1858,16 +1852,10 @@ mod tests {
         let dialogues = [dialogue.clone()];
         let selected = [true];
 
-        // Output half: assistant = id 0, grep tool pair = id 1. The cursor
-        // on the tool block copies only it.
-        let picked = workspace_picked_content_for_cursor_block(
-            &dialogues,
-            &selected,
-            0,
-            ContentIoFocus::Output,
-            1,
-        )
-        .expect("tool block copy must not be None");
+        // Dialogue-global ids: user = 0, assistant = 1, grep tool pair = 2.
+        // The cursor on the tool block copies only it.
+        let picked = workspace_picked_content_for_cursor_block(&dialogues, &selected, 0, 2)
+            .expect("tool block copy must not be None");
         let text = &picked.units[0].plain;
         assert!(text.contains("fn main"), "tool call missing: {text}");
         assert!(text.contains("\"matches\""), "tool result missing: {text}");
@@ -1879,10 +1867,10 @@ mod tests {
 
     #[test]
     fn run_member_block_copies_even_though_nested_under_the_run() {
-        // Two consecutive tool pairs merge into a run (id 0) with members
-        // (id 1, 2). The cursor may sit on a member after expanding the run;
-        // y must copy just that member, not fail because the member is not a
-        // top-level block.
+        // Two consecutive tool pairs merge into a run (id 1, after the input
+        // user block) with members (id 2, 3). The cursor may sit on a member
+        // after expanding the run; y must copy just that member, not fail
+        // because the member is not a top-level block.
         let mut record = workspace_test_record(
             WorkspaceSource::agent(AgentProvider::Codex),
             "cmd",
@@ -1919,15 +1907,9 @@ mod tests {
         let dialogues = [dialogue.clone()];
         let selected = [true];
 
-        // Member id 1 = the first tool of the run.
-        let picked = workspace_picked_content_for_cursor_block(
-            &dialogues,
-            &selected,
-            0,
-            ContentIoFocus::Output,
-            1,
-        )
-        .expect("run member copy must not be None");
+        // Member id 2 = the first tool of the run.
+        let picked = workspace_picked_content_for_cursor_block(&dialogues, &selected, 0, 2)
+            .expect("run member copy must not be None");
         let text = &picked.units[0].plain;
         assert!(text.contains("pat 0"), "first member missing: {text}");
         assert!(!text.contains("pat 1"), "second member leaked: {text}");
@@ -1936,7 +1918,7 @@ mod tests {
         // so the mask covers the member ids.
         let mut pane = ContentPane::default();
         let mut expanded = crate::tui::content::io::ExpandedBlocks::default();
-        expanded.toggle(ContentIoFocus::Output, 0);
+        expanded.toggle(1);
         pane.ensure(ContentCtx {
             dialogues: &dialogues,
             highlighted_idx: 0,
@@ -1946,7 +1928,7 @@ mod tests {
             io_focus: ContentIoFocus::Output,
             expanded: &expanded,
         });
-        pane.toggle_mark(ContentIoFocus::Output, 0, 1);
+        pane.toggle_mark(0, 2);
         let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
             .expect("marked member copy");
         let text = &picked.units[0].plain;
@@ -1990,15 +1972,10 @@ mod tests {
         let dialogues = [dialogue.clone()];
         let selected = [true];
 
-        // Cursor on the tool block (output half): call + result bodies only.
-        let picked = workspace_picked_content_for_cursor_block(
-            &dialogues,
-            &selected,
-            0,
-            ContentIoFocus::Output,
-            0,
-        )
-        .expect("cursor block copy");
+        // Cursor on the tool block (output half, id 1 after the input user
+        // block): call + result bodies only.
+        let picked = workspace_picked_content_for_cursor_block(&dialogues, &selected, 0, 1)
+            .expect("cursor block copy");
         assert_eq!(picked.units.len(), 1);
         let text = &picked.units[0].plain;
         assert!(text.contains("$ ls"), "tool call body missing: {text}");
@@ -2011,15 +1988,9 @@ mod tests {
             "other input block leaked: {text}"
         );
 
-        // Cursor on the user block (input half): just the user text.
-        let picked = workspace_picked_content_for_cursor_block(
-            &dialogues,
-            &selected,
-            0,
-            ContentIoFocus::Input,
-            0,
-        )
-        .expect("cursor block copy");
+        // Cursor on the user block (input half, id 0): just the user text.
+        let picked = workspace_picked_content_for_cursor_block(&dialogues, &selected, 0, 0)
+            .expect("cursor block copy");
         assert_eq!(picked.units[0].plain, "user text");
     }
 
@@ -2417,7 +2388,6 @@ mod tests {
             &mut dialogue_state,
             &mut selected_dialogues,
             &mut content_scrolls,
-            ContentIoFocus::Input,
             &mut super::super::nav::ContentBlockCursor::default(),
             (&[], &[]),
         );

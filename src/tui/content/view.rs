@@ -6,7 +6,7 @@ use regex::Regex;
 use std::rc::Rc;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::tui::content::block::{marked_mask_len, BlockText};
+use crate::tui::content::block::BlockText;
 use crate::tui::content::markdown::{render_markdown_lines, MarkdownLineKind};
 use crate::tui::pane::{panel_block, render_panel_scrollbar, Panel, PanelScroll};
 use sivtr_core::record::WorkPartKind;
@@ -93,8 +93,10 @@ pub(crate) struct ContentLink {
 pub(crate) struct ContentLayout {
     pub(crate) lines: Vec<ContentLine>,
     pub(crate) ownership: Vec<Option<usize>>,
-    /// Dot color per block id (dense DFS ids; hidden ids keep a placeholder).
-    pub(crate) kinds: Vec<WorkPartKind>,
+    /// Dot color per line, parallel to [`Self::ownership`]: block ids are
+    /// dialogue-global, so an id-keyed table would have to be padded across
+    /// the other half's range and would report a foreign id as a real kind.
+    pub(crate) kinds: Vec<Option<WorkPartKind>>,
 }
 
 /// Lay one half out once from its blocks. Empty halves use `text` (`<empty>`).
@@ -112,19 +114,20 @@ pub(crate) fn layout_content(
         return ContentLayout {
             lines,
             ownership: vec![None; n],
-            kinds: Vec::new(),
+            kinds: vec![None; n],
         };
     }
-    let mut kinds = vec![WorkPartKind::User; marked_mask_len(blocks.iter().map(|b| b.id))];
     let mut lines = Vec::new();
     let mut ownership = Vec::new();
+    let mut kinds = Vec::new();
     for (idx, segment) in blocks.iter().enumerate() {
-        kinds[segment.id] = segment.kind;
         let block_lines = all_content_lines(&segment.text, width, mode);
         ownership.extend(std::iter::repeat_n(Some(segment.id), block_lines.len()));
+        kinds.extend(std::iter::repeat_n(Some(segment.kind), block_lines.len()));
         lines.extend(block_lines);
         if idx + 1 < blocks.len() && !segment.tight {
             ownership.push(None);
+            kinds.push(None);
             lines.push(raw_content_line(""));
         }
     }
@@ -1164,7 +1167,8 @@ fn block_dot_lines(
                     let glyph = crate::tui::pane::selection_dot(marked);
                     Line::from(Span::styled(
                         glyph,
-                        Style::default().fg(block_dot_color(layout.kinds.get(block))),
+                        Style::default()
+                            .fg(block_dot_color(layout.kinds.get(idx).copied().flatten())),
                     ))
                 }
                 _ => Line::from("  "),
@@ -1176,7 +1180,7 @@ fn block_dot_lines(
 
 /// Dot color by block kind: the same palette the pane uses for roles, so a
 /// conversation's dots read like chat bubbles (user, tool, thinking, ...).
-fn block_dot_color(kind: Option<&WorkPartKind>) -> Color {
+fn block_dot_color(kind: Option<WorkPartKind>) -> Color {
     use WorkPartKind::{
         Assistant, Command, Error, Output, Prompt, Skill, Thinking, ToolCall, ToolResult, User,
     };

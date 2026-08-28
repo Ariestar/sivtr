@@ -380,7 +380,7 @@ pub(super) fn apply_workspace_mouse_scroll(
         let next = next.min(layout.lines.len().saturating_sub(1));
         content_scrolls.set(content_io_focus, next);
         if let Some(block) = content_block_at(layout, next) {
-            content_cursor.set(content_io_focus, block);
+            content_cursor.set(block);
         }
         return;
     }
@@ -397,7 +397,6 @@ pub(super) fn apply_workspace_mouse_scroll(
                 dialogue_state,
                 selected_dialogues,
                 content_scrolls,
-                content_io_focus,
                 content_cursor,
                 content_frame.texts.block_slices(),
             );
@@ -413,7 +412,6 @@ pub(super) fn apply_workspace_mouse_scroll(
                 dialogue_state,
                 selected_dialogues,
                 content_scrolls,
-                content_io_focus,
                 content_cursor,
                 content_frame.texts.block_slices(),
             );
