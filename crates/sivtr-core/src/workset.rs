@@ -169,6 +169,7 @@ impl WorkSet {
     pub fn select_anchors(&mut self, anchors: Vec<WorkRef>) {
         self.records = records_for_anchors(&self.records, &anchors);
         self.anchors = anchors;
+        self.normalize_anchors();
     }
 
     pub fn validate(&self) -> Result<()> {
