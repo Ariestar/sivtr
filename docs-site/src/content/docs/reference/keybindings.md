@@ -15,7 +15,7 @@ This page documents the workspace picker TUI (the default `sivtr` interface). Th
 | `1` | Focus Sessions pane |
 | `2` | Focus Dialogues pane |
 | `3` | Focus Content pane |
-| `j` / `k` | Move down / up (Content: block cursor) |
+| `j` / `k` | Move down / up (Content: block cursor, crossing into an adjacent dialogue) |
 | `h` / `l` | Focus previous / next pane |
 | `Space` | Toggle source/session/dialogue, or mark a content block |
 | `a` | Select all sources (Source) or toggle all dialogues (Dialogues) |
@@ -28,7 +28,6 @@ This page documents the workspace picker TUI (the default `sivtr` interface). Th
 | `r` | Toggle read/raw content mode in Content |
 | `Enter` | Focus next / copy (lists); fold/unfold the cursor block (Content) |
 | `i` / `o` / `y` / `c` | Copy input / output / input+output block / bare command |
-| `J` / `K` | Page next/previous selected dialogue (Content, multi-select) |
 | `z` | Toggle the focused pane fullscreen |
 | `?` | Toggle help overlay |
 | `/` | Open search |

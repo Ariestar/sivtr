@@ -31,7 +31,7 @@ use super::help::{apply_workspace_help_action, set_focus, toggle_list_row, HelpD
 use super::load::{SessionColumn, SessionCtx, SourceLoadState};
 use super::nav::{
     dot_gutter_hit, invalidate_after_cursor_move, invalidate_panes_below, move_workspace_cursor,
-    open_link_target, row_list_index, shown_dialogue_idx, source_list_index, ContentBlockCursor,
+    open_link_target, row_list_index, source_list_index, ContentBlockCursor,
 };
 use super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane};
 use super::selection::refresh_next_level;
@@ -123,13 +123,6 @@ pub(crate) fn run(
     // (engine generation, selected mask, focused index) for the projection in
     // `dialogues`; unchanged redraws reuse it instead of re-cloning bodies.
     let mut dialogues_key: Option<(u64, Vec<bool>, usize)> = None;
-    // Multi-select paging: which selected dialogue the content pane shows
-    // (J/K flip the page); single selection always shows the focused row.
-    let mut content_page = 0usize;
-    // Which dialogues may currently own a mark: the selection mask, plus the
-    // shown row when nothing is selected. Marks drop when that set changes;
-    // they belong to their dialogue and survive page flips.
-    let mut markable_key: Option<(Vec<bool>, Option<usize>)> = None;
 
     loop {
         // ── Unified pane poll/ensure ───────────────────────────────────────
@@ -294,16 +287,14 @@ pub(crate) fn run(
         );
         if dialogues_key.as_ref() != Some(&materialize_key) {
             dialogue_pane.materialize_into(rows.dialogues.mask(), dialogue_idx, &mut dialogues);
+            // Marks are keyed by dialogue index, and only the dialogues the
+            // projection carries a body for can be copied from.
+            content_pane.retain_marks(&dialogues);
             dialogues_key = Some(materialize_key.clone());
         }
 
         if redraw {
             redraw = false;
-            // Multi-select pages through one selected dialogue at a time
-            // (J/K flips the page); single selection shows the focused row.
-            let selected = rows.dialogues.marked();
-            content_page = content_page.min(selected.saturating_sub(1));
-            let shown_idx = shown_dialogue_idx(&rows.dialogues, content_page);
             // List: title borrows. Content/copy: materialize (body only for focus∪select).
             let dialogue_titles: Vec<&str> = dialogue_pane.titles().collect();
 
@@ -322,16 +313,13 @@ pub(crate) fn run(
             if let Some((half, _)) = pending_half {
                 content_io_focus = half;
             }
-            // Expansion indices are per-dialogue; reset when the shown
-            // dialogue's identity, page flip, target, or selection changes.
-            let dialogue_identity = dialogues
-                .get(shown_idx)
-                .map(|dialogue| (dialogue.source.clone(), dialogue.work_ref.clone()));
+            // Fold state is per-dialogue: reset it when another dialogue — or
+            // another targeted part of it — comes on screen.
             let expand_key = (
-                dialogue_identity,
-                shown_idx,
+                dialogues
+                    .get(dialogue_idx)
+                    .map(|dialogue| (dialogue.source.clone(), dialogue.work_ref.clone())),
                 active_content_at,
-                rows.dialogues.mask().to_vec(),
             );
             if expanded_key.as_ref() != Some(&expand_key) {
                 expanded_blocks.clear();
@@ -344,26 +332,12 @@ pub(crate) fn run(
                 rows.close_range(WorkspaceFocus::Content);
                 expanded_key = Some(expand_key);
             }
-            // Marks are keyed by dialogue index, so they only stay meaningful
-            // while the set of dialogues that can own one is unchanged: the
-            // selection mask, or — with nothing selected — the focused row
-            // alone. Page flips inside a selection keep the marks so a later
-            // copy can join pages.
-            let marks_key = (
-                rows.dialogues.mask().to_vec(),
-                (selected == 0).then_some(shown_idx),
-            );
-            if markable_key.as_ref() != Some(&marks_key) {
-                content_pane.clear_marks();
-                markable_key = Some(marks_key);
-            }
             // Rebuild the content frame (texts + cached layouts) only when
             // the shown dialogue, mode, focus, target, expansion, or pane
             // size changed. Scroll events reuse the cached layouts — wheel
             // input never re-lays-out the text, so it stays responsive.
             let content_key = (
                 materialize_key.clone(),
-                shown_idx,
                 active_content_at,
                 content_mode,
                 content_io_focus,
@@ -373,7 +347,7 @@ pub(crate) fn run(
             if last_content_key.as_ref() != Some(&content_key) {
                 content_frame = content_pane.ensure(ContentCtx {
                     dialogues: &dialogues,
-                    highlighted_idx: shown_idx,
+                    highlighted_idx: dialogue_idx,
                     mode: content_mode,
                     target: active_content_at,
                     area: layout.content,
@@ -386,6 +360,9 @@ pub(crate) fn run(
                 );
                 last_content_key = Some(content_key);
             }
+            // A j/k step that walked off this dialogue's blocks moved the
+            // dialogue cursor instead; the blocks it arrived at exist now.
+            content_cursor.land_crossing(content_frame.texts.block_slices());
             // Cursor block resolved against the frame's displayed segments
             // once: the follow-scroll and the view highlight share it.
             let cursor_focus = content_cursor.focused(content_frame.texts.block_slices());
@@ -469,8 +446,7 @@ pub(crate) fn run(
                         content_range: rows
                             .range_start(WorkspaceFocus::Content)
                             .zip(content_cursor.get()),
-                        content_marked: content_pane.marked(shown_idx),
-                        content_page: (selected > 1).then_some((content_page, selected)),
+                        content_marked: content_pane.marked(dialogue_idx),
                         content_frame: &content_frame,
                     },
                 )
@@ -571,7 +547,7 @@ pub(crate) fn run(
                         content_mode,
                         active.scroll,
                         &dialogues,
-                        shown_dialogue_idx(&rows.dialogues, content_page),
+                        rows.dialogues.cursor(),
                     )? {
                         return Ok(picked);
                     }
@@ -674,7 +650,6 @@ pub(crate) fn run(
                                 &mut content_io_focus,
                                 &mut content_mode,
                                 &mut expanded_blocks,
-                                &mut content_page,
                                 &mut content_cursor,
                                 &mut content_pane,
                                 content_frame.texts.block_slices(),
@@ -766,11 +741,9 @@ pub(crate) fn run(
                     // Marked blocks take over the block-copy action: y joins
                     // every marked block's body instead of copying one block.
                     if action == WorkspaceHelpAction::CopyBlock && content_pane.marked_count() > 0 {
-                        if let Some(picked) = workspace_picked_content_for_marked_blocks(
-                            &dialogues,
-                            &rows.dialogues.active(),
-                            &content_pane,
-                        ) {
+                        if let Some(picked) =
+                            workspace_picked_content_for_marked_blocks(&dialogues, &content_pane)
+                        {
                             return Ok(picked);
                         }
                     }
@@ -784,7 +757,6 @@ pub(crate) fn run(
                         &mut content_io_focus,
                         &mut content_mode,
                         &mut expanded_blocks,
-                        &mut content_page,
                         &mut content_cursor,
                         &mut content_pane,
                         content_frame.texts.block_slices(),
@@ -884,11 +856,9 @@ pub(crate) fn run(
                                     WorkspaceFocus::Content,
                                 );
                                 content_cursor.set(block);
-                                // Dot marks belong to the shown dialogue
-                                // (multi-select pages one dialogue at a
-                                // time, so ids never repeat on screen).
-                                let shown = shown_dialogue_idx(&rows.dialogues, content_page);
-                                content_pane.toggle_mark(shown, block);
+                                // Dot marks belong to the dialogue on screen —
+                                // the one under the dialogue cursor.
+                                content_pane.toggle_mark(rows.dialogues.cursor(), block);
                                 continue;
                             }
                         }
@@ -1447,14 +1417,14 @@ mod tests {
         });
 
         // Nothing marked: the copy path yields None.
-        assert!(workspace_picked_content_for_marked_blocks(&dialogues, &[0], &pane).is_none());
+        assert!(workspace_picked_content_for_marked_blocks(&dialogues, &pane).is_none());
 
         // Mark the tool block (output half): copy joins the call + result
         // bodies. Ids are dialogue-global — the input user block is 0, so the
         // output pair is 1.
         pane.toggle_mark(0, 1);
-        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &[0], &pane)
-            .expect("marked copy");
+        let picked =
+            workspace_picked_content_for_marked_blocks(&dialogues, &pane).expect("marked copy");
         assert_eq!(picked.units.len(), 1);
         let text = &picked.units[0].plain;
         assert!(text.contains("$ ls"), "tool call body missing: {text}");
@@ -1469,8 +1439,8 @@ mod tests {
 
         // Mark the user block (input half): both marked blocks are joined.
         pane.toggle_mark(0, 0);
-        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &[0], &pane)
-            .expect("marked copy");
+        let picked =
+            workspace_picked_content_for_marked_blocks(&dialogues, &pane).expect("marked copy");
         let text = &picked.units[0].plain;
         assert!(text.contains("user text"));
         assert!(text.contains("$ ls"));
@@ -1536,8 +1506,8 @@ mod tests {
         // block is 0, the assistant reply 1, so the tool run is 2. Copy joins
         // the run's tool bodies, never the user or assistant blocks.
         pane.toggle_mark(0, 2);
-        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &[0], &pane)
-            .expect("marked copy");
+        let picked =
+            workspace_picked_content_for_marked_blocks(&dialogues, &pane).expect("marked copy");
         let text = &picked.units[0].plain;
         assert!(text.contains("cmd 0") && text.contains("cmd 2"), "{text}");
         assert!(
@@ -1621,7 +1591,7 @@ mod tests {
         let hit_id = hit_id.expect("a block is hit in the output half");
         pane.toggle_mark(0, hit_id);
 
-        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &[0], &pane)
+        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &pane)
             .expect("marked copy must not be None after a real dot hit");
         let text = &picked.units[0].plain;
         assert!(text.contains("cmd 0") && text.contains("cmd 2"), "{text}");
@@ -1756,7 +1726,7 @@ mod tests {
             expanded: &expanded,
         });
         pane.toggle_mark(0, 2);
-        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &[0], &pane)
+        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &pane)
             .expect("marked member copy");
         let text = &picked.units[0].plain;
         assert!(text.contains("pat 0"), "first member missing: {text}");

@@ -103,29 +103,32 @@ pub(super) fn workspace_picked_content(
 
 /// Picked content from the content pane's marked blocks: every selected
 /// block's full body (regardless of fold state), joined in display order.
-/// Marks follow their dialogue (multi-select paging keeps them), so all
-/// marked dialogues contribute, in selection order. Dialogues without a
-/// record are skipped, keeping the blocks already collected. `None` when
-/// nothing is marked.
+/// Marks are keyed by dialogue, so every dialogue holding one contributes —
+/// including dialogues the content pane has since scrolled away from.
+/// Dialogues without a record are skipped, keeping the blocks already
+/// collected. `None` when nothing is marked.
 pub(super) fn workspace_picked_content_for_marked_blocks(
     dialogues: &[WorkspaceDialogue],
-    picked: &[usize],
     content_pane: &ContentPane,
 ) -> Option<WorkspacePickedContent> {
     let mut texts = Vec::new();
-    for &dialogue_idx in picked {
-        let Some(record) = dialogues
-            .get(dialogue_idx)
-            .and_then(|dialogue| dialogue.record.as_ref())
-        else {
+    // Attribution follows the first dialogue that actually contributed; no
+    // contributor means nothing was marked, and there is nothing to copy.
+    let mut source = None;
+    for (dialogue_idx, dialogue) in dialogues.iter().enumerate() {
+        let Some(record) = dialogue.record.as_ref() else {
             continue;
         };
+        let collected = texts.len();
         let (input_blocks, output_blocks) = dialogue_blocks(record);
         for block in input_blocks.iter().chain(&output_blocks) {
             collect_marked_blocks(block, dialogue_idx, content_pane, record, &mut texts);
         }
+        if texts.len() > collected {
+            source.get_or_insert_with(|| dialogue.source.clone());
+        }
     }
-    picked_for_texts(dialogues, picked, texts)
+    Some(picked_for_texts(source?, texts))
 }
 
 /// Push every marked block's body. A run's body already spans its members,
@@ -169,7 +172,10 @@ pub(super) fn workspace_picked_content_for_cursor_block(
         .iter()
         .chain(&output_blocks)
         .find_map(|block| find_block(block, block_id))?;
-    picked_for_texts(dialogues, &[dialogue_idx], vec![block.body(record)])
+    Some(picked_for_texts(
+        dialogue.source.clone(),
+        vec![block.body(record)],
+    ))
 }
 
 /// Depth-first block lookup: run members live nested in `children`, and the
@@ -185,23 +191,15 @@ fn find_block(block: &Block, id: usize) -> Option<&Block> {
 }
 
 /// One copy unit from already-collected block bodies.
-fn picked_for_texts(
-    dialogues: &[WorkspaceDialogue],
-    picked: &[usize],
-    texts: Vec<String>,
-) -> Option<WorkspacePickedContent> {
-    if texts.is_empty() {
-        return None;
-    }
+fn picked_for_texts(source: WorkspaceSource, texts: Vec<String>) -> WorkspacePickedContent {
     let plain = texts.join("\n\n");
-    let source = picked_source(dialogues, picked)?;
-    Some(WorkspacePickedContent {
+    WorkspacePickedContent {
         source,
         units: vec![crate::tui::workspace::TextPair {
             ansi: plain.clone(),
             plain,
         }],
-    })
+    }
 }
 
 pub(super) fn line_filter_spec(line_filter: &str) -> Option<&str> {
@@ -404,8 +402,8 @@ mod tests {
         let b = dialogue(record("B", "Bash", "git status", 1));
         let dialogues = [a, b];
         let mut pane = ContentPane::default();
-        // Multi-select paging ensures each dialogue in turn, keeping its
-        // marks; both end up owned by their dialogue.
+        // The content pane shows one dialogue at a time; walking the cursor
+        // onto each in turn keeps the marks left behind on the first.
         for idx in 0..2 {
             pane.ensure(ContentCtx {
                 dialogues: &dialogues,
@@ -421,7 +419,7 @@ mod tests {
             pane.toggle_mark(idx, 1);
         }
 
-        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &[0, 1], &pane)
+        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &pane)
             .expect("marked blocks across two dialogues");
         let joined: Vec<String> = picked.units.iter().map(|unit| unit.plain.clone()).collect();
         let all = joined.join("\n");
@@ -465,8 +463,8 @@ mod tests {
         pane.toggle_mark(0, 1);
         pane.toggle_mark(0, 2);
 
-        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &[0], &pane)
-            .expect("marked run");
+        let picked =
+            workspace_picked_content_for_marked_blocks(&dialogues, &pane).expect("marked run");
         let all = picked
             .units
             .iter()

@@ -390,9 +390,6 @@ pub(crate) struct WorkspaceView<'a> {
     /// owned by the content pane's native selection; consumed by the dot
     /// gutter and copy.
     pub(crate) content_marked: &'a [bool],
-    /// Multi-select paging `(current_page, page_count)` when several
-    /// dialogues are selected; the content pane shows one at a time.
-    pub(crate) content_page: Option<(usize, usize)>,
     /// Dual IO layout + display texts, computed once per redraw by the picker
     /// and shared with the renderer (no per-frame duplicate layout).
     pub(crate) content_frame: &'a ContentIoFrame,
