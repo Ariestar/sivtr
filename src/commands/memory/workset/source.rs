@@ -405,7 +405,8 @@ pub fn run_on_share(
         Ok(mut set) => {
             if redact {
                 for record in set.records_mut() {
-                    *record = crate::remote::redact::redact_record(record)?;
+                    *record = crate::remote::redact::redact_record(record)
+                        .context("redact shared record")?;
                 }
             }
             Ok(set.into_parts())

@@ -113,11 +113,12 @@ pub fn execute(command: PublishCommand) -> Result<()> {
 }
 
 fn load_draft(source: &str, title: Option<String>, expiry: &str) -> Result<PublicationDraft> {
-    let expires = PublicationExpiry::parse(expiry)?;
-    ensure_local_publication_source(source)?;
+    let expires = PublicationExpiry::parse(expiry).context("parse publication expiry")?;
+    ensure_local_publication_source(source).context("validate publication source scope")?;
     let mut set = workset::query(source, Filter::none(), None)
         .with_context(|| format!("failed to resolve publication source `{source}`"))?;
-    set.materialize_parts()?;
+    set.materialize_parts()
+        .context("materialize publication WorkSet")?;
     create_publication_draft(
         set.records(),
         set.anchors(),
@@ -127,6 +128,7 @@ fn load_draft(source: &str, title: Option<String>, expiry: &str) -> Result<Publi
             published_at: None,
         },
     )
+    .context("create publication draft")
 }
 
 fn ensure_local_publication_source(source: &str) -> Result<()> {
@@ -292,16 +294,14 @@ fn list(args: PublishListArgs) -> Result<()> {
     let items = rows.iter().map(list_item).collect::<Vec<_>>();
     if args.json {
         println!("{}", serde_json::to_string_pretty(&items)?);
+    } else if items.is_empty() {
+        println!("暂无公开链接");
     } else {
-        if items.is_empty() {
-            println!("暂无公开链接");
-        } else {
-            for item in items {
-                println!(
-                    "{}\t{}\t{}\t{}\t{}",
-                    item.publication_id, item.status, item.title, item.provider, item.expires_at
-                );
-            }
+        for item in items {
+            println!(
+                "{}\t{}\t{}\t{}\t{}",
+                item.publication_id, item.status, item.title, item.provider, item.expires_at
+            );
         }
     }
     Ok(())
@@ -435,8 +435,12 @@ fn random_token(length: usize) -> Result<String> {
 fn compress_snapshot(draft: &PublicationDraft) -> Result<Vec<u8>> {
     ensure_snapshot_plaintext_limit(draft.canonical_json.len())?;
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(draft.canonical_json.as_bytes())?;
-    Ok(encoder.finish()?)
+    encoder
+        .write_all(draft.canonical_json.as_bytes())
+        .context("write compressed publication snapshot")?;
+    encoder
+        .finish()
+        .context("finish compressed publication snapshot")
 }
 
 fn ensure_snapshot_plaintext_limit(len: usize) -> Result<()> {
