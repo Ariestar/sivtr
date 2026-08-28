@@ -19,9 +19,6 @@ pub fn run(args: &SearchArgs) -> Result<WorkSet> {
         filter::from_search_args(args)?,
         args.cwd.as_deref(),
     )?;
-    workset::save_last(&set)?;
-    if let Some(name) = args.save.as_deref() {
-        workset::save_as(&mut set, name)?;
-    }
+    workset::persist(&mut set, args.save.as_deref())?;
     Ok(set)
 }

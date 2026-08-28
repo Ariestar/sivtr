@@ -563,6 +563,14 @@ fn help_action_for_key_is_focus_scoped() {
         ),
         None
     );
+    assert_eq!(
+        help_action_for_key(
+            KeyCode::Char('p'),
+            KeyModifiers::NONE,
+            WorkspaceFocus::Dialogues
+        ),
+        Some(WorkspaceHelpAction::Publish)
+    );
     for focus in [
         WorkspaceFocus::Source,
         WorkspaceFocus::Sessions,

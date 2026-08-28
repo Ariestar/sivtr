@@ -27,10 +27,14 @@ Cloudflare account secrets and an approved GitHub Environment.
 
 ## R2 lifecycle
 
-Apply [`r2-lifecycle.json`](./r2-lifecycle.json) to the `sivtr-publications`
-bucket through the Cloudflare R2 lifecycle API before staging. The Worker
-still checks the exact `expires_at` on every GET/DELETE; lifecycle cleanup is
-only the eventual physical-delete safety net.
+Apply [`r2-lifecycle.json`](./r2-lifecycle.json) through the Cloudflare R2
+lifecycle API to each bucket before using that environment:
+
+- `sivtr-publications` for production and proxy;
+- `sivtr-publications-staging` for staging.
+
+The Worker still checks the exact `expires_at` on every GET/DELETE; lifecycle
+cleanup is only the eventual physical-delete safety net.
 
 ## Self-hosting `share.hnnulwh.cn`
 

@@ -1,17 +1,9 @@
 //! Browser publication: local projection, client-side encryption, and the
 //! small local registry needed to revoke bearer links later.
 
-use aes_gcm::{
-    aead::{AeadInPlace, KeyInit},
-    Aes256Gcm, Key, Nonce,
-};
 use anyhow::{bail, ensure, Context, Result};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use chrono::{DateTime, Utc};
-use flate2::{write::GzEncoder, Compression};
-use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-use sivtr_core::record::{work_atoms, WorkRecord, WorkRef};
+use sivtr_core::ai::AgentProvider;
 use sivtr_core::{
     config::SivtrConfig,
     origin::Reach,
@@ -19,79 +11,31 @@ use sivtr_core::{
         create_publication_draft, PublicConversationSnapshot, PublicationDraft, PublicationExpiry,
         PublicationPolicy,
     },
-    workspace,
 };
-use std::collections::{BTreeMap, BTreeSet};
-use std::io::{IsTerminal, Write};
-use std::path::Path;
-use std::time::Duration;
-use std::time::UNIX_EPOCH;
+use std::io::IsTerminal;
 
 use crate::cli::{
-    PublishAction, PublishCommand, PublishCreateArgs, PublishFormat, PublishIdArgs,
-    PublishListArgs, PublishPreviewArgs, PublishRevokeArgs,
+    PublishAction, PublishArgs, PublishCommand, PublishFormat, PublishIdArgs, PublishListArgs,
+    PublishPreviewArgs, PublishRevokeArgs,
 };
+use crate::commands::interactive;
 use crate::commands::memory::{filter::Filter, workset};
 use crate::output;
-use crate::tui::workspace::{WorkspaceFocus, WorkspaceSession, WorkspaceSource};
+use crate::tui::workspace::WorkspaceFocus;
 
-const ENVELOPE_LIMIT: usize = 5 * 1024 * 1024;
-const SNAPSHOT_PLAINTEXT_LIMIT: usize = 16 * 1024 * 1024;
-const ENVELOPE_MAGIC: &[u8; 8] = b"SIVTPUB1";
+mod registry;
+mod transport;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PublicationStatus {
-    Pending,
-    Active,
-    Revoked,
-    Expired,
-    Failed,
-}
-
-impl PublicationStatus {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Active => "active",
-            Self::Revoked => "revoked",
-            Self::Expired => "expired",
-            Self::Failed => "failed",
-        }
-    }
-}
-
-impl std::str::FromStr for PublicationStatus {
-    type Err = anyhow::Error;
-
-    fn from_str(value: &str) -> Result<Self> {
-        match value {
-            "pending" => Ok(Self::Pending),
-            "active" => Ok(Self::Active),
-            "revoked" => Ok(Self::Revoked),
-            "expired" => Ok(Self::Expired),
-            "failed" => Ok(Self::Failed),
-            _ => bail!("unknown publication status `{value}`"),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct PublicationRow {
-    id: String,
-    endpoint: String,
-    viewer_key: String,
-    management_token: String,
-    title: String,
-    provider: String,
-    source_refs: String,
-    content_sha256: String,
-    redaction_count: i64,
-    warning_count: i64,
-    created_at: String,
-    expires_at: String,
-    status: PublicationStatus,
-    last_error: Option<String>,
-}
+use registry::{is_expired, PublicationDb, PublicationRow, PublicationStatus};
+use transport::{
+    compress_snapshot, delete_remote, encrypt_snapshot, publication_envelope_size, publication_url,
+    random_token, resolve_endpoint, upload,
+};
+#[cfg(test)]
+use transport::{
+    encrypt_snapshot_with_nonce, ensure_snapshot_plaintext_limit, ENVELOPE_MAGIC,
+    SNAPSHOT_PLAINTEXT_LIMIT,
+};
 
 #[derive(Debug, Serialize)]
 struct PublicationListItem {
@@ -108,21 +52,48 @@ struct PublicationListItem {
 }
 
 pub fn execute(command: PublishCommand) -> Result<()> {
-    match command.action {
-        PublishAction::Preview(args) => preview(args),
-        PublishAction::Create(args) => create(args),
-        PublishAction::List(args) => list(args),
-        PublishAction::Link(args) => link(args),
-        PublishAction::Revoke(args) => revoke(args),
+    let PublishCommand {
+        action,
+        source,
+        title,
+        expires,
+        yes,
+        allow_warnings,
+    } = command;
+    match action {
+        Some(PublishAction::Preview(args)) => preview(args),
+        Some(PublishAction::List(args)) => list(args),
+        Some(PublishAction::Link(args)) => link(args),
+        Some(PublishAction::Revoke(args)) => revoke(args),
+        None => publish(PublishArgs {
+            source: source.ok_or_else(|| anyhow::anyhow!("publish requires a source"))?,
+            title,
+            expires,
+            yes,
+            allow_warnings,
+        }),
     }
 }
 
 fn load_publication_set(source: &str) -> Result<workset::WorkSet> {
     ensure_local_publication_source(source)?;
-    let mut set = workset::query(source, Filter::none(), None)
-        .with_context(|| format!("failed to resolve publication source `{source}`"))?;
-    set.materialize_parts()?;
+    let set = if source.starts_with('@') || is_selector_source(source) {
+        workset::query(source, Filter::none(), None)
+    } else {
+        workset::load_saved(source)
+            .with_context(|| format!("failed to load saved WorkSet `{source}`"))
+    }
+    .with_context(|| format!("failed to resolve publication source `{source}`"))?;
     Ok(set)
+}
+
+fn is_selector_source(source: &str) -> bool {
+    source.contains(['/', ':', '*'])
+        || matches!(
+            source.to_ascii_lowercase().as_str(),
+            "agent" | "all" | "terminal"
+        )
+        || AgentProvider::from_command_name(source).is_some()
 }
 
 fn ensure_local_publication_source(source: &str) -> Result<()> {
@@ -131,7 +102,7 @@ fn ensure_local_publication_source(source: &str) -> Result<()> {
     let Some((scope, _)) = source.split_once(':') else {
         return Ok(());
     };
-    if scope.eq_ignore_ascii_case("local") || (source.len() >= 2 && source.as_bytes()[1] == b':') {
+    if scope.eq_ignore_ascii_case("local") || is_windows_drive_path(source) {
         return Ok(());
     }
     let cwd = std::env::current_dir().context("failed to resolve current directory")?;
@@ -146,12 +117,18 @@ fn ensure_local_publication_source(source: &str) -> Result<()> {
     Ok(())
 }
 
+fn is_windows_drive_path(source: &str) -> bool {
+    source.len() >= 3
+        && source.as_bytes()[0].is_ascii_alphabetic()
+        && source.as_bytes()[1] == b':'
+        && matches!(source.as_bytes()[2], b'/' | b'\\')
+}
+
 fn load_draft_from_set(
     set: &mut workset::WorkSet,
     title: Option<String>,
-    expiry: &str,
+    expires: PublicationExpiry,
 ) -> Result<PublicationDraft> {
-    let expires = PublicationExpiry::parse(expiry)?;
     set.materialize_parts()?;
     create_publication_draft(
         set.records(),
@@ -164,125 +141,45 @@ fn load_draft_from_set(
     )
 }
 
-fn pick_publication_set(source: &str) -> Result<workset::WorkSet> {
-    let set = load_publication_set(source)?;
-    let first = set
-        .records()
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("publication source contains no records"))?;
-    let provider = first
-        .work_ref
-        .provider()
-        .ok_or_else(|| anyhow::anyhow!("publication picker only supports agent sessions"))?;
-    let session_id = first.session.id.clone();
-    ensure!(
-        first.kind == sivtr_core::record::WorkRecordKind::ChatTurn && first.work_ref.is_local(),
-        "publication picker only supports one local agent session"
-    );
-    ensure!(
-        set.records().iter().all(|record| {
-            record.kind == sivtr_core::record::WorkRecordKind::ChatTurn
-                && record.work_ref.is_local()
-                && record.work_ref.provider() == Some(provider)
-                && record.session.id == session_id
-        }),
-        "publication picker requires exactly one local agent session"
-    );
-
-    let workspace_source = WorkspaceSource::agent(provider);
-    let session = WorkspaceSession {
-        source: workspace_source.clone(),
-        session_id,
-        modified: UNIX_EPOCH,
-        title: first.title.clone(),
-        search_title: first.title.clone(),
-        records: set.records().to_vec(),
-        body_loaded: true,
-    };
-    let picked = crate::commands::browse::run_with_sessions(
-        workspace_source,
-        vec![session],
-        WorkspaceFocus::Dialogues,
-    )?;
-    let picked_anchors = match picked {
-        crate::commands::browse::PickedContent::WorkSet { set, .. } => set.anchors().to_vec(),
-        crate::commands::browse::PickedContent::Text { .. } => {
-            bail!("publication selection must remain a WorkSet")
-        }
-    };
-    ensure!(!picked_anchors.is_empty(), "publication selection is empty");
-    let anchors = expand_picker_anchors(set.records(), &picked_anchors)?;
-    ensure!(!anchors.is_empty(), "publication selection is empty");
-    Ok(publication_workset(set, anchors))
-}
-
-fn publication_workset(set: workset::WorkSet, anchors: Vec<WorkRef>) -> workset::WorkSet {
-    let records = workset::records_for_anchors(set.records(), &anchors);
-    workset::WorkSet::from_parts(set.cwd.clone(), records, anchors)
-}
-
-fn expand_picker_anchors(records: &[WorkRecord], picked: &[WorkRef]) -> Result<Vec<WorkRef>> {
-    let mut selected: BTreeMap<String, (usize, BTreeSet<usize>)> = BTreeMap::new();
-    for anchor in picked {
-        let record_index = records
-            .iter()
-            .position(|record| record.work_ref.whole() == anchor.whole())
-            .ok_or_else(|| anyhow::anyhow!("picker anchor `{anchor}` has no record"))?;
-        let record = &records[record_index];
-        let entry = selected
-            .entry(record.work_ref.whole().to_string())
-            .or_insert_with(|| (record_index, BTreeSet::new()));
-        let mut atoms = work_atoms(record, true);
-        atoms.extend(work_atoms(record, false));
-        if let Some(seq) = anchor.part() {
-            let atom = atoms
-                .iter()
-                .find(|atom| atom.part_seqs.contains(&seq))
-                .ok_or_else(|| anyhow::anyhow!("picker anchor `{anchor}` has no atom"))?;
-            entry.1.extend(atom.part_seqs.iter().copied());
-        } else {
-            entry
-                .1
-                .extend(atoms.into_iter().flat_map(|atom| atom.part_seqs));
-        }
-    }
-
-    let mut groups = selected.into_values().collect::<Vec<_>>();
-    groups.sort_by_key(|(record_index, _)| records[*record_index].work_ref.index());
-    let mut anchors = Vec::new();
-    for (record_index, selected_parts) in groups {
-        let record = &records[record_index];
-        let mut seqs = selected_parts.into_iter().collect::<Vec<_>>();
-        seqs.sort_unstable();
-        anchors.extend(seqs.into_iter().map(|seq| record.work_ref.with_part(seq)));
-    }
-    Ok(anchors)
-}
-
-fn maybe_save(set: &mut workset::WorkSet, name: Option<&str>) -> Result<()> {
-    let Some(name) = name else {
-        return Ok(());
-    };
-    workset::save_as(set, name)?;
-    output::success(format!("saved @{name}"));
-    Ok(())
-}
-
 fn preview(args: PublishPreviewArgs) -> Result<()> {
-    if args.pick {
-        if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
-            bail!("publish preview --pick requires an interactive terminal");
-        }
-        let mut set = pick_publication_set(&args.source)?;
-        let draft = load_draft_from_set(&mut set, args.title, &args.expires)?;
-        maybe_save(&mut set, args.save.as_deref())?;
-        print_preview(draft, args.format)
+    let expires = PublicationExpiry::parse(&args.expires)?;
+    let title = args.title.clone();
+    let draft = if let Some(source) = args.source {
+        let mut set = load_publication_set(&source)?;
+        load_draft_from_set(&mut set, title.clone(), expires)?
     } else {
-        let mut set = load_publication_set(&args.source)?;
-        let draft = load_draft_from_set(&mut set, args.title, &args.expires)?;
-        maybe_save(&mut set, args.save.as_deref())?;
-        print_preview(draft, args.format)
-    }
+        if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+            bail!("publish preview without a source requires an interactive terminal");
+        }
+        let providers = AgentProvider::all()
+            .iter()
+            .map(|spec| spec.provider)
+            .collect::<Vec<_>>();
+        match crate::commands::browse::run_preview(
+            &providers,
+            false,
+            WorkspaceFocus::Sessions,
+            title.clone(),
+            expires,
+        )? {
+            crate::commands::browse::PickerResult::Picked(
+                crate::commands::browse::PickedContent::WorkSet { mut set, .. },
+            ) => load_draft_from_set(&mut set, title.clone(), expires)?,
+            crate::commands::browse::PickerResult::Picked(
+                crate::commands::browse::PickedContent::Text { .. },
+            ) => bail!("publication preview requires a WorkSet selection"),
+            crate::commands::browse::PickerResult::Publish {
+                mut set,
+                expires,
+                save_name,
+                ..
+            } => {
+                save_picker_set(&mut set, save_name.as_deref())?;
+                load_draft_from_set(&mut set, title, expires)?
+            }
+        }
+    };
+    print_preview(draft, args.format)
 }
 
 fn print_preview(draft: PublicationDraft, format: PublishFormat) -> Result<()> {
@@ -344,25 +241,52 @@ fn print_snapshot_items(snapshot: &PublicConversationSnapshot) {
     }
 }
 
-fn publication_envelope_size(compressed: &[u8]) -> Result<usize> {
-    let envelope_size = compressed
-        .len()
-        .checked_add(8 + 2 + 12 + 16)
-        .ok_or_else(|| anyhow::anyhow!("encrypted publication envelope size overflow"))?;
-    if envelope_size > ENVELOPE_LIMIT {
-        bail!(
-            "encrypted publication envelope is {} bytes; maximum is 5 MiB; narrow the WorkSet",
-            envelope_size
-        );
+/// Create a link from a picker-confirmed WorkSet.
+pub(crate) fn create_from_picker(
+    mut set: workset::WorkSet,
+    expires: PublicationExpiry,
+    warning_count: usize,
+    save_name: Option<String>,
+    title: Option<String>,
+) -> Result<()> {
+    save_picker_set(&mut set, save_name.as_deref())?;
+    let allow_warnings = warning_count > 0;
+    if allow_warnings {
+        interactive::require_interactive("publish with privacy warnings")?;
+        if !dialoguer::Confirm::new()
+            .with_prompt("公开内容包含隐私风险，仍要创建链接？")
+            .default(false)
+            .interact()?
+        {
+            bail!("publication cancelled");
+        }
     }
-    Ok(envelope_size)
+    let url = mint_publication(&mut set, title, expires, allow_warnings)?;
+    if let Err(error) = sivtr_core::export::clipboard::copy_to_clipboard(&url) {
+        println!("{url}");
+        bail!("publication created, but clipboard copy failed: {error:#}");
+    }
+    output::success("copied link to clipboard");
+    println!("{url}");
+    Ok(())
 }
 
-fn mint_draft(draft: PublicationDraft, expires: &str, compressed: Vec<u8>) -> Result<String> {
+pub(crate) fn save_picker_set(set: &mut workset::WorkSet, name: Option<&str>) -> Result<()> {
+    if let Some(name) = name {
+        workset::save_as(set, name)?;
+        output::detail("saved", format!("@{name}"));
+    }
+    Ok(())
+}
+
+fn mint_draft(
+    draft: PublicationDraft,
+    expires: PublicationExpiry,
+    compressed: Vec<u8>,
+) -> Result<String> {
     let config = SivtrConfig::load()?;
     let endpoint = resolve_endpoint(&config)?;
-    let expiry = PublicationExpiry::parse(expires)?;
-    let id = format!("{}_{}", expiry.as_str(), random_token(16)?);
+    let id = format!("{}_{}", expires.as_str(), random_token(16)?);
     let viewer_key = random_token(32)?;
     let management_token = random_token(32)?;
     let created_at = draft.snapshot.published_at().to_string();
@@ -379,12 +303,7 @@ fn mint_draft(draft: PublicationDraft, expires: &str, compressed: Vec<u8>) -> Re
             .context("failed to serialize publication source references")?,
         content_sha256: draft.content_sha256.clone(),
         redaction_count: draft.redaction_count as i64,
-        warning_count: draft
-            .risks
-            .iter()
-            .filter(|risk| is_warning_only(&risk.kind))
-            .map(|risk| risk.count as i64)
-            .sum(),
+        warning_count: draft.warning_count() as i64,
         created_at: created_at.clone(),
         expires_at,
         status: PublicationStatus::Pending,
@@ -409,13 +328,29 @@ fn mint_draft(draft: PublicationDraft, expires: &str, compressed: Vec<u8>) -> Re
     Ok(publication_url(&endpoint, &id, &viewer_key))
 }
 
-fn create(args: PublishCreateArgs) -> Result<()> {
+fn mint_publication(
+    set: &mut workset::WorkSet,
+    title: Option<String>,
+    expires: PublicationExpiry,
+    allow_warnings: bool,
+) -> Result<String> {
+    let draft = load_draft_from_set(set, title, expires)?;
+    let compressed = compress_snapshot(&draft)?;
+    let _ = publication_envelope_size(&compressed)?;
+    require_allow_warnings(draft.warning_count() > 0, allow_warnings)?;
+    mint_draft(draft, expires, compressed)
+}
+
+fn publish(args: PublishArgs) -> Result<()> {
+    let expires = PublicationExpiry::parse(&args.expires)?;
     let mut set = load_publication_set(&args.source)?;
-    let draft = load_draft_from_set(&mut set, args.title.clone(), &args.expires)?;
+    let draft = load_draft_from_set(&mut set, args.title.clone(), expires)?;
     let compressed = compress_snapshot(&draft)?;
     let envelope_size = publication_envelope_size(&compressed)?;
-    let has_warnings = draft.risks.iter().any(|risk| is_warning_only(&risk.kind));
-    print_create_summary(&draft, &args.expires, envelope_size);
+    let has_warnings = draft.warning_count() > 0;
+    for (label, value) in format_create_summary(&draft, expires.as_str(), envelope_size) {
+        output::detail(label, value);
+    }
     if has_warnings {
         output::warning("存在未自动处理的路径、邮箱或内网地址风险；请确认公开内容");
     }
@@ -435,10 +370,7 @@ fn create(args: PublishCreateArgs) -> Result<()> {
     require_allow_warnings(has_warnings, args.allow_warnings)?;
     // Rebuild after confirmation so the snapshot expiry starts at the actual
     // create operation, not before an interactive prompt or warning review.
-    let final_draft = load_draft_from_set(&mut set, args.title, &args.expires)?;
-    let compressed = compress_snapshot(&final_draft)?;
-    let _ = publication_envelope_size(&compressed)?;
-    let url = mint_draft(final_draft, &args.expires, compressed)?;
+    let url = mint_publication(&mut set, args.title, expires, args.allow_warnings)?;
     println!("{url}");
     Ok(())
 }
@@ -453,10 +385,21 @@ fn list(args: PublishListArgs) -> Result<()> {
     } else if items.is_empty() {
         println!("暂无公开链接");
     } else {
-        for item in items {
+        let show_links = std::io::stdout().is_terminal();
+        for (row, item) in rows.iter().zip(items) {
+            let link = if row.status == PublicationStatus::Active && !is_expired(&row.expires_at)? {
+                let url = publication_url(&row.endpoint, &row.id, &row.viewer_key);
+                if show_links {
+                    format!("\x1b]8;;{url}\x1b\\{url}\x1b]8;;\x1b\\")
+                } else {
+                    format!("sivtr publish link {}", row.id)
+                }
+            } else {
+                "-".to_string()
+            };
             println!(
-                "{}\t{}\t{}\t{}\t{}",
-                item.publication_id, item.status, item.title, item.provider, item.expires_at
+                "{}\t{}\t{}\t{}\t{}\t{}",
+                item.publication_id, item.status, item.title, item.provider, item.expires_at, link
             );
         }
     }
@@ -464,10 +407,14 @@ fn list(args: PublishListArgs) -> Result<()> {
 }
 
 fn link(args: PublishIdArgs) -> Result<()> {
-    let db = PublicationDb::open()?;
-    let row = db
-        .find(&args.publication_id)?
-        .ok_or_else(|| anyhow::anyhow!("unknown publication id `{}`", args.publication_id))?;
+    let mut db = PublicationDb::open()?;
+    db.refresh_expired()?;
+    let row = resolve_publication(
+        &db,
+        args.publication_id,
+        |row| row.status == PublicationStatus::Active,
+        "Open which publication?",
+    )?;
     if row.status != PublicationStatus::Active {
         bail!(
             "publication `{}` is {} and has no usable link",
@@ -475,7 +422,7 @@ fn link(args: PublishIdArgs) -> Result<()> {
             row.status.as_str()
         );
     }
-    if is_expired(&row.expires_at) {
+    if is_expired(&row.expires_at)? {
         bail!("publication `{}` has expired", row.id);
     }
     println!(
@@ -486,17 +433,19 @@ fn link(args: PublishIdArgs) -> Result<()> {
 }
 
 fn revoke(args: PublishRevokeArgs) -> Result<()> {
-    let db = PublicationDb::open()?;
-    let row = db
-        .find(&args.publication_id)?
-        .ok_or_else(|| anyhow::anyhow!("unknown publication id `{}`", args.publication_id))?;
+    let mut db = PublicationDb::open()?;
+    db.refresh_expired()?;
+    let row = resolve_publication(
+        &db,
+        args.publication_id,
+        |row| row.status != PublicationStatus::Revoked,
+        "Revoke which publication?",
+    )?;
     if row.status == PublicationStatus::Revoked {
         return Ok(());
     }
     if !args.yes {
-        if !std::io::stdin().is_terminal() {
-            bail!("non-interactive revoke requires --yes");
-        }
+        interactive::require_interactive("revoke")?;
         if !dialoguer::Confirm::new()
             .with_prompt(format!("撤销 {}？", row.id))
             .default(false)
@@ -514,6 +463,43 @@ fn revoke(args: PublishRevokeArgs) -> Result<()> {
         Err(error) => {
             let _ = db.record_error(&row.id, &error.to_string());
             Err(error)
+        }
+    }
+}
+
+fn resolve_publication(
+    db: &PublicationDb,
+    id: Option<String>,
+    eligible: impl Fn(&PublicationRow) -> bool,
+    prompt: &str,
+) -> Result<PublicationRow> {
+    match id {
+        Some(id) => db
+            .find(&id)?
+            .ok_or_else(|| anyhow::anyhow!("unknown publication id `{id}`")),
+        None => {
+            interactive::require_interactive("choose a publication")?;
+            let candidates: Vec<_> = db.rows()?.into_iter().filter(eligible).collect();
+            if candidates.is_empty() {
+                bail!("no matching publications");
+            }
+            let labels = candidates
+                .iter()
+                .map(|row| {
+                    format!(
+                        "{}  {}  {}  {}",
+                        row.id,
+                        row.status.as_str(),
+                        row.title,
+                        row.expires_at
+                    )
+                })
+                .collect::<Vec<_>>();
+            let selected = interactive::select(prompt, &labels, 0)?;
+            candidates
+                .into_iter()
+                .nth(selected)
+                .ok_or_else(|| anyhow::anyhow!("publication selection is empty"))
         }
     }
 }
@@ -566,12 +552,6 @@ fn format_create_summary(
     ]
 }
 
-fn print_create_summary(draft: &PublicationDraft, expiry: &str, envelope_size: usize) {
-    for (label, value) in format_create_summary(draft, expiry, envelope_size) {
-        output::detail(label, value);
-    }
-}
-
 fn print_risks(draft: &PublicationDraft) {
     if draft.risks.is_empty() {
         eprintln!("risk warnings: none");
@@ -602,133 +582,9 @@ fn format_item_indices(indices: &[usize]) -> String {
     }
 }
 
-fn is_warning_only(kind: &str) -> bool {
-    matches!(kind, "absolute_path" | "email" | "internal_url")
-}
-
 fn require_allow_warnings(has_warnings: bool, allow_warnings: bool) -> Result<()> {
     if has_warnings && !allow_warnings {
         bail!("publish with privacy warnings requires --allow-warnings");
-    }
-    Ok(())
-}
-
-fn resolve_endpoint(config: &SivtrConfig) -> Result<String> {
-    let endpoint = config.publish.endpoint.trim().trim_end_matches('/');
-    if endpoint.is_empty() {
-        bail!(
-            "[publish].endpoint is not set; add the publication service URL to config.toml (for example https://share.hnnulwh.cn)"
-        );
-    }
-    Ok(endpoint.to_string())
-}
-
-fn random_token(length: usize) -> Result<String> {
-    let mut bytes = vec![0_u8; length];
-    getrandom::fill(&mut bytes).context("OS random source unavailable")?;
-    Ok(URL_SAFE_NO_PAD.encode(bytes))
-}
-
-fn compress_snapshot(draft: &PublicationDraft) -> Result<Vec<u8>> {
-    ensure_snapshot_plaintext_limit(draft.canonical_json.len())?;
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder
-        .write_all(draft.canonical_json.as_bytes())
-        .context("failed to gzip publication snapshot")?;
-    encoder
-        .finish()
-        .context("failed to finish publication snapshot compression")
-}
-
-fn ensure_snapshot_plaintext_limit(len: usize) -> Result<()> {
-    if len > SNAPSHOT_PLAINTEXT_LIMIT {
-        bail!(
-            "publication snapshot is {len} bytes uncompressed; maximum is 16 MiB; narrow the WorkSet"
-        );
-    }
-    Ok(())
-}
-
-fn encrypt_snapshot(compressed: Vec<u8>, id: &str, viewer_key: &str) -> Result<Vec<u8>> {
-    let mut nonce_bytes = [0_u8; 12];
-    getrandom::fill(&mut nonce_bytes).context("OS random source unavailable")?;
-    encrypt_snapshot_with_nonce(compressed, id, viewer_key, nonce_bytes)
-}
-
-fn encrypt_snapshot_with_nonce(
-    mut compressed: Vec<u8>,
-    id: &str,
-    viewer_key: &str,
-    nonce_bytes: [u8; 12],
-) -> Result<Vec<u8>> {
-    let key_bytes = URL_SAFE_NO_PAD
-        .decode(viewer_key)
-        .context("invalid generated viewer key")?;
-    let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
-    let cipher = Aes256Gcm::new(key);
-    let nonce = Nonce::from_slice(&nonce_bytes);
-    let aad = format!("sivtr-publication-v1:{id}");
-    let tag = cipher
-        .encrypt_in_place_detached(nonce, aad.as_bytes(), &mut compressed)
-        .map_err(|_| anyhow::anyhow!("AES-GCM encryption failed"))?;
-    let mut envelope = Vec::with_capacity(8 + 2 + 12 + compressed.len() + tag.len());
-    envelope.extend_from_slice(ENVELOPE_MAGIC);
-    envelope.extend_from_slice(&[1, 1]); // envelope v1, gzip compression
-    envelope.extend_from_slice(&nonce_bytes);
-    envelope.extend_from_slice(&compressed);
-    envelope.extend_from_slice(&tag);
-    if envelope.len() > ENVELOPE_LIMIT {
-        bail!("encrypted publication envelope exceeds 5 MiB");
-    }
-    Ok(envelope)
-}
-
-fn publication_url(endpoint: &str, id: &str, viewer_key: &str) -> String {
-    format!(
-        "{}/s/{}#k={}",
-        endpoint.trim_end_matches('/'),
-        id,
-        viewer_key
-    )
-}
-
-fn agent(timeout: Duration) -> ureq::Agent {
-    ureq::Agent::config_builder()
-        .timeout_global(Some(timeout))
-        .build()
-        .new_agent()
-}
-
-fn upload(
-    endpoint: &str,
-    id: &str,
-    management_token: &str,
-    published_at: &str,
-    envelope: &[u8],
-) -> Result<()> {
-    let url = format!("{endpoint}/api/v1/publications/{id}");
-    let response = agent(Duration::from_secs(30))
-        .put(&url)
-        .header("Content-Type", "application/octet-stream")
-        .header("X-Sivtr-Management-Token", management_token)
-        .header("X-Sivtr-Published-At", published_at)
-        .send(envelope)
-        .with_context(|| format!("publication upload failed: {url}"))?;
-    if !response.status().is_success() {
-        bail!("publication upload returned HTTP {}", response.status());
-    }
-    Ok(())
-}
-
-fn delete_remote(endpoint: &str, id: &str, management_token: &str) -> Result<()> {
-    let url = format!("{endpoint}/api/v1/publications/{id}");
-    let response = agent(Duration::from_secs(30))
-        .delete(&url)
-        .header("X-Sivtr-Management-Token", management_token)
-        .call()
-        .with_context(|| format!("publication revoke failed: {url}"))?;
-    if !response.status().is_success() {
-        bail!("publication revoke returned HTTP {}", response.status());
     }
     Ok(())
 }
@@ -748,195 +604,13 @@ fn list_item(row: &PublicationRow) -> PublicationListItem {
     }
 }
 
-struct PublicationDb {
-    connection: Connection,
-}
-
-impl PublicationDb {
-    fn open() -> Result<Self> {
-        let dir = workspace::data_dir();
-        std::fs::create_dir_all(&dir).context("failed to create publication data directory")?;
-        restrict_directory(&dir).context("failed to restrict publication data directory")?;
-        let path = dir.join("publication-state.db");
-        let connection = Connection::open(&path).context("failed to open publication database")?;
-        restrict_file(&path).context("failed to restrict publication database")?;
-        Self::from_connection(connection)
-    }
-
-    fn from_connection(connection: Connection) -> Result<Self> {
-        connection
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS publications (
-                publication_id TEXT PRIMARY KEY,
-                endpoint TEXT NOT NULL,
-                viewer_key TEXT NOT NULL,
-                management_token TEXT NOT NULL,
-                title TEXT NOT NULL,
-                provider TEXT NOT NULL,
-                source_refs TEXT NOT NULL,
-                content_sha256 TEXT NOT NULL,
-                redaction_count INTEGER NOT NULL,
-                warning_count INTEGER NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                status TEXT NOT NULL,
-                last_error TEXT
-            );",
-            )
-            .context("failed to initialize publication database schema")?;
-        Ok(Self { connection })
-    }
-
-    fn insert_pending(&mut self, row: &PublicationRow) -> Result<()> {
-        self.connection.execute(
-            "INSERT INTO publications (publication_id, endpoint, viewer_key, management_token, title, provider, source_refs, content_sha256, redaction_count, warning_count, created_at, expires_at, status, last_error) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
-            params![row.id, row.endpoint, row.viewer_key, row.management_token, row.title, row.provider, row.source_refs, row.content_sha256, row.redaction_count, row.warning_count, row.created_at, row.expires_at, row.status.as_str(), row.last_error],
-        )
-        .context("failed to insert pending publication")?;
-        Ok(())
-    }
-
-    fn update_status(
-        &self,
-        id: &str,
-        status: PublicationStatus,
-        error: Option<&str>,
-    ) -> Result<()> {
-        self.connection
-            .execute(
-                "UPDATE publications SET status = ?1, last_error = ?2 WHERE publication_id = ?3",
-                params![status.as_str(), error, id],
-            )
-            .context("failed to update publication status")?;
-        Ok(())
-    }
-
-    fn mark_active(&self, id: &str) -> Result<()> {
-        self.update_status(id, PublicationStatus::Active, None)
-    }
-    fn mark_failed(&self, id: &str, error: &str) -> Result<()> {
-        self.update_status(id, PublicationStatus::Failed, Some(error))
-    }
-    fn mark_revoked(&self, id: &str) -> Result<()> {
-        self.update_status(id, PublicationStatus::Revoked, None)
-    }
-    fn record_error(&self, id: &str, error: &str) -> Result<()> {
-        self.connection
-            .execute(
-                "UPDATE publications SET last_error = ?1 WHERE publication_id = ?2",
-                params![error, id],
-            )
-            .context("failed to record publication error")?;
-        Ok(())
-    }
-
-    fn find(&self, id: &str) -> Result<Option<PublicationRow>> {
-        self.connection
-            .query_row(
-                "SELECT publication_id, endpoint, viewer_key, management_token, title, provider, source_refs, content_sha256, redaction_count, warning_count, created_at, expires_at, status, last_error FROM publications WHERE publication_id = ?1",
-                params![id],
-                row_from_query,
-            )
-            .optional()
-            .context("failed to query publication")
-    }
-
-    fn rows(&self) -> Result<Vec<PublicationRow>> {
-        let mut statement = self
-            .connection
-            .prepare("SELECT publication_id, endpoint, viewer_key, management_token, title, provider, source_refs, content_sha256, redaction_count, warning_count, created_at, expires_at, status, last_error FROM publications ORDER BY created_at DESC")
-            .context("failed to prepare publication list query")?;
-        let rows = statement
-            .query_map([], row_from_query)
-            .context("failed to query publication list")?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .context("failed to read publication list")?;
-        Ok(rows)
-    }
-
-    fn refresh_expired(&mut self) -> Result<()> {
-        let now = Utc::now();
-        let rows = self
-            .connection
-            .prepare("SELECT publication_id, expires_at FROM publications WHERE status IN ('pending', 'active')")
-            .context("failed to prepare publication expiry query")?
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
-            .context("failed to query publication expiry")?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .context("failed to read publication expiry rows")?;
-        for (id, expires_at) in rows {
-            if is_expired_at(&expires_at, now) {
-                self.connection
-                    .execute(
-                        "UPDATE publications SET status = 'expired' WHERE publication_id = ?1",
-                        params![id],
-                    )
-                    .context("failed to mark expired publication")?;
-            }
-        }
-        Ok(())
-    }
-}
-
-fn is_expired(value: &str) -> bool {
-    is_expired_at(value, Utc::now())
-}
-
-fn is_expired_at(value: &str, now: DateTime<Utc>) -> bool {
-    DateTime::parse_from_rfc3339(value)
-        .map(|timestamp| timestamp.with_timezone(&Utc) <= now)
-        .unwrap_or(true)
-}
-
-#[cfg(unix)]
-fn restrict_directory(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn restrict_directory(_path: &Path) -> Result<()> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn restrict_file(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn restrict_file(_path: &Path) -> Result<()> {
-    Ok(())
-}
-
-fn row_from_query(row: &rusqlite::Row<'_>) -> rusqlite::Result<PublicationRow> {
-    Ok(PublicationRow {
-        id: row.get(0)?,
-        endpoint: row.get(1)?,
-        viewer_key: row.get(2)?,
-        management_token: row.get(3)?,
-        title: row.get(4)?,
-        provider: row.get(5)?,
-        source_refs: row.get(6)?,
-        content_sha256: row.get(7)?,
-        redaction_count: row.get(8)?,
-        warning_count: row.get(9)?,
-        created_at: row.get(10)?,
-        expires_at: row.get(11)?,
-        status: row
-            .get::<_, String>(12)?
-            .parse()
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
-        last_error: row.get(13)?,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use chrono::{DateTime, Utc};
+    use rusqlite::Connection;
+    use sivtr_core::record::{WorkRecord, WorkRef};
 
     #[test]
     fn envelope_has_publication_header_and_aad_is_id_bound() {
@@ -1055,6 +729,10 @@ mod tests {
             resolve_endpoint(&config).unwrap(),
             "https://share.hnnulwh.cn"
         );
+        config.publish.endpoint = "http://example.com".into();
+        assert!(resolve_endpoint(&config).is_err());
+        config.publish.endpoint = "http://127.0.0.1:8791".into();
+        assert_eq!(resolve_endpoint(&config).unwrap(), "http://127.0.0.1:8791");
     }
 
     fn chat_turn(session: &str, index: usize, thinking: &str, tool_out: &str) -> WorkRecord {
@@ -1128,21 +806,23 @@ mod tests {
     }
 
     #[test]
-    fn expand_picker_anchors_scopes_whole_part_and_half_refs() {
+    fn expand_publication_anchors_scopes_whole_part_and_half_refs() {
         let record = chat_turn("session", 1, "thinking", "ok");
-        let whole =
-            expand_picker_anchors(std::slice::from_ref(&record), &[record.work_ref.whole()])
-                .unwrap();
+        let whole = sivtr_core::publication::expand_publication_anchors(
+            std::slice::from_ref(&record),
+            &[record.work_ref.whole()],
+        )
+        .unwrap();
         assert_eq!(seqs(&whole), vec![1, 2, 3, 4, 5]);
 
-        let tool_pair = expand_picker_anchors(
+        let tool_pair = sivtr_core::publication::expand_publication_anchors(
             std::slice::from_ref(&record),
             &[record.work_ref.with_part(2)],
         )
         .unwrap();
         assert_eq!(seqs(&tool_pair), vec![2, 3]);
 
-        let input_half = expand_picker_anchors(
+        let input_half = sivtr_core::publication::expand_publication_anchors(
             std::slice::from_ref(&record),
             &[record.work_ref.with_part(1)],
         )
@@ -1150,10 +830,11 @@ mod tests {
         assert_eq!(seqs(&input_half), vec![1]);
 
         let other = chat_turn("other", 1, "x", "y");
-        assert!(
-            expand_picker_anchors(std::slice::from_ref(&record), &[other.work_ref.whole()])
-                .is_err()
-        );
+        assert!(sivtr_core::publication::expand_publication_anchors(
+            std::slice::from_ref(&record),
+            &[other.work_ref.whole()],
+        )
+        .is_err());
     }
 
     #[test]
@@ -1170,7 +851,8 @@ mod tests {
             vec![first, selected.clone(), last],
             vec![selected.work_ref.whole()],
         );
-        let slim = publication_workset(set, anchors.clone());
+        let mut slim = set;
+        slim.select_anchors(anchors.clone());
         assert_eq!(slim.records().len(), 1);
         assert_eq!(slim.records()[0].work_ref.index(), 2);
         let persisted = serde_json::to_string(slim.records()).unwrap();
@@ -1243,5 +925,20 @@ mod tests {
         assert!(v2_summary
             .iter()
             .any(|(label, value)| *label == "schema" && value == "v2"));
+    }
+
+    #[test]
+    fn publish_source_kind_does_not_fallback_between_name_and_selector() {
+        assert!(is_selector_source("codex"));
+        assert!(is_selector_source("codex/session/1"));
+        assert!(is_selector_source("desk:agent"));
+        assert!(is_selector_source("terminal"));
+        assert!(!is_selector_source("review"));
+    }
+
+    #[test]
+    fn only_drive_paths_bypass_origin_scope_validation() {
+        assert!(is_windows_drive_path("C:\\logs"));
+        assert!(!is_windows_drive_path("r:codex/session/1"));
     }
 }

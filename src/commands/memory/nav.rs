@@ -4,7 +4,6 @@ use std::path::PathBuf;
 
 use crate::cli::NavArgs;
 use crate::commands::memory::show;
-use crate::commands::memory::var;
 use crate::commands::memory::workset::{self, WorkSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,7 +49,7 @@ fn navigate(
     let mut anchors = source_anchors.to_vec();
     for step in steps {
         anchors = apply_step(source_records, &anchors, all_records, step)?;
-        anchors = var::unique_anchors(anchors);
+        anchors = workset::unique_anchors(anchors);
     }
     Ok(anchors)
 }

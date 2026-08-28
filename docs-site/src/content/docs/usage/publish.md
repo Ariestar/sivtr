@@ -9,8 +9,8 @@ The result is a one-shot snapshot, not a live share. Later edits in the original
 
 ## Three things to remember
 
-1. Quote WorkSet names in PowerShell: `'@share_ready'`.
-2. There are two selection modes: a whole-record WorkSet produces schema v1 with consecutive User/Assistant turns; `--pick` produces schema v2 with arbitrary atoms and non-contiguous parts from one local agent session.
+1. A saved WorkSet name can be passed directly, without `@`: `sivtr publish share_ready`.
+2. `sivtr publish preview` opens the existing TUI; the same WorkSet selection drives preview and publish.
 3. The full URL is the credential. Anyone who has it can read the snapshot.
 
 ## Configure the endpoint first
@@ -39,7 +39,8 @@ sivtr search codex/<session-id> --sort oldest --latest 50 --save share_ready --r
 
 `--latest 50` takes the 50 most recent turns in that session (search defaults to 5 when neither `--latest` nor `--limit` is set). `--sort oldest` stores them chronologically for reading; `publish` also sorts by record index before checking continuity.
 
-In PowerShell the saved set is `'@share_ready'`.
+Publish it with `sivtr publish share_ready`; the saved WorkSet remains reusable by
+the other WorkSet commands.
 
 Do not publish a mixed `@last`, terminal records, remotes, or a BM25 hit list that skipped turns.
 
@@ -48,46 +49,40 @@ Do not publish a mixed `@last`, terminal records, remotes, or a BM25 hit list th
 Preview never uploads:
 
 ```powershell
-sivtr publish preview '@share_ready' --format human
+sivtr publish preview share_ready --format human
 ```
 
 Tokens, private keys, Bearer values, and secret assignments become `[REDACTED]`. Absolute paths, emails, and internal URLs are warnings only.
 
 ### Pick atomic content
 
-Use `--pick` when a complete turn is too broad, or when the public snapshot should include selected tool, skill, or thinking atoms:
+Run preview without a source to choose content in the existing workspace TUI:
 
 ```powershell
-# Preview a selection without saving it
-sivtr publish preview codex/<session-id> --pick --format human
-
-# Save the exact part anchors for reuse
-sivtr publish preview codex/<session-id> --pick --save share_ready
-
-# Preview and create from the same selection
-sivtr publish preview '@share_ready' --format human
-sivtr publish create '@share_ready' --expires 7d --yes
+sivtr publish preview
 ```
 
-The picker accepts exactly one local agent session. It supports whole-dialogue selection, marked content blocks, cross-page selection, and non-contiguous turns. `Space` marks a dialogue or content block, `v` selects a block range, `J`/`K` moves between selected dialogues, and `Tab` switches Input/Output. Press `Enter` on Dialogues to submit whole-dialogue selection; press `y` in Content to submit the current or marked blocks; `Enter` in Content folds or expands the focused block. A character range that does not identify a complete block is rejected instead of being widened to a whole turn.
+The picker accepts exactly one local agent session for publication. It supports whole-dialogue selection, marked content blocks, cross-page selection, and non-contiguous turns. `Space` marks a dialogue or content block, `v` selects a block range, and `Tab` switches Input/Output. Press `Enter` on Dialogues or `y` in Content to return the selected WorkSet for preview. Press `p` to open the publication lifetime overlay; the bare workspace creates the link after confirmation, while `publish preview` prints the selected snapshot locally. A character range that does not identify a complete block is rejected instead of being widened to a whole turn.
 
-User, Assistant, Skill, and Thinking are separate atoms. A ToolCall and its ToolResult form one inseparable Tool atom; selecting either side expands to both. The saved WorkSet contains only the selected local anchors and the records those anchors belong to; unselected turns are not stored. The public snapshot does not contain WorkRef, session IDs, record/part numbers, paths, or `cwd`.
+User, Assistant, Skill, and Thinking are separate atoms. A ToolCall and its ToolResult form one inseparable Tool atom; selecting either side expands to both. The selected WorkSet is held for this preview unless a separate WorkSet command saved it explicitly or a name was entered in the publication panel. The public snapshot does not contain WorkRef, session IDs, record/part numbers, paths, or `cwd`.
 
 Whole-record WorkSets remain schema v1 and require adjacent record indices. Part-anchor WorkSets are schema v2, allow gaps, and show “部分内容未分享” (some content was not shared) between separated selections. Whole and part anchors cannot be mixed.
 
 ## Create the link
 
 ```powershell
-sivtr publish create '@share_ready' --expires 7d --yes
+sivtr publish share_ready --expires 7d --yes
 ```
 
-Allowed lifetimes: `1d`, `7d` (default), `30d`, `90d`. There is no permanent link.
+Allowed lifetimes: `2h`, `1d`, `3d`, `7d` (default), `30d`. There is no permanent link.
 
 If the preview still has path, email, or internal-URL warnings, **`--allow-warnings` is required even in an interactive terminal**:
 
 ```powershell
-sivtr publish create '@share_ready' --expires 7d --yes --allow-warnings
+sivtr publish share_ready --expires 7d --yes --allow-warnings
 ```
+
+The TUI `p` flow uses the same warning rule and asks for an explicit privacy confirmation after the picker.
 
 On success, stdout is only the URL. The host comes from `[publish].endpoint`. The decryption key is the `#k=...` fragment and is not sent to the server.
 
@@ -95,11 +90,15 @@ On success, stdout is only the URL. The host comes from `[publish].endpoint`. Th
 
 ```powershell
 sivtr publish list
-sivtr publish link 7d_xxxxxxxxxxxxxxxxxxxxxx
-sivtr publish revoke 7d_xxxxxxxxxxxxxxxxxxxxxx --yes
+sivtr publish link
+sivtr publish revoke
 ```
 
-Management tokens live only in local `publication-state.db`. If that database is lost, v1 cannot recover revoke rights.
+In an interactive terminal, `list` shows clickable active links. `link` and `revoke`
+choose a publication when no ID is supplied; `--yes` only skips the revoke
+confirmation and is required for non-interactive revocation. Management tokens
+live only in local `publication-state.db`; this applies to both v1 and v2, so
+losing that database means the management token cannot be recovered for revoke.
 
 ## `publish` vs `share`
 

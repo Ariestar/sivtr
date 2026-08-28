@@ -39,6 +39,8 @@ pub(crate) enum WorkspaceHelpAction {
     Cancel,
     /// Refresh next level under active rows (source→sessions, session→dialogues).
     Refresh,
+    /// Open the publication lifetime picker for the canonical selection.
+    Publish,
     /// Content half: jump scroll to top / bottom.
     ScrollContentTop,
     ScrollContentBottom,
@@ -301,6 +303,13 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
             footer_panes: NAV,
         },
         WorkspaceHelpEntry {
+            key: "p",
+            description: "publish selection",
+            action: WorkspaceHelpAction::Publish,
+            footer_label: Some("publish"),
+            footer_panes: NAV,
+        },
+        WorkspaceHelpEntry {
             key: "q",
             description: "cancel",
             action: WorkspaceHelpAction::Cancel,
@@ -357,10 +366,7 @@ fn key_matches(
     if modifiers.contains(KeyModifiers::CONTROL) {
         return false;
     }
-    match (want_code, code) {
-        (KeyCode::Char(a), KeyCode::Char(b)) => a == b,
-        (a, b) => a == b,
-    }
+    want_code == code
 }
 
 /// Resolve a pressed key through the help registry for the current focus.

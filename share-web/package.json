@@ -24,7 +24,6 @@
   "devDependencies": {
     "@playwright/test": "^1.55.0",
     "@types/node": "^24.0.0",
-    "@vitejs/plugin-basic-ssl": "^2.1.0",
     "typescript": "^5.9.0",
     "vite": "^7.1.0",
     "vitest": "^3.2.0",
