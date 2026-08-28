@@ -5,8 +5,9 @@ compatibility_date = "2026-08-25"
 [assets]
 directory = "./dist"
 binding = "ASSETS"
-not_found_handling = "single-page-application"
-run_worker_first = ["/api/*"]
+not_found_handling = "none"
+# Apply the Worker security-header wrapper to viewer HTML and the API.
+run_worker_first = ["/s/*", "/api/*"]
 
 [[r2_buckets]]
 binding = "PUBLICATIONS"
