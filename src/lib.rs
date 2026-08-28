@@ -169,8 +169,13 @@ fn run_workspace(select_remotes: bool) -> Result<()> {
         .iter()
         .map(|spec| spec.provider)
         .collect::<Vec<_>>();
-    let picked = commands::browse::run(&providers, select_remotes, WorkspaceFocus::Sessions)?;
-    commands::memory::copy::handle_picker_result(picked, false, None, None, false)
+    commands::finish_picker(
+        commands::browse::run(&providers, select_remotes, WorkspaceFocus::Sessions)?,
+        false,
+        None,
+        None,
+        false,
+    )
 }
 
 fn run_copy_command(cmd: CopyCommand) -> Result<()> {

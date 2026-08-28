@@ -1,7 +1,7 @@
 //! Workspace browser: source catalog, on-demand load, and TUI picker.
 //!
-//! Product surface for bare `sivtr`, hotkey, and `copy --pick`. Returns
-//! [`WorkspacePickerResult`]; callers copy or publish the selection.
+//! Product surface for bare `sivtr`, hotkey, and `copy --pick`. Returns a
+//! picker result; callers decide how to export or publish it.
 //!
 //! Pane data capability lives in [`crate::pane`] (`SlidingPane`). This module
 //! owns loaders + picker orchestration only. `tui::pane` is chrome only.
@@ -20,12 +20,15 @@ mod text;
 mod vim;
 mod visual;
 
+pub(crate) use content::{PickedContent, WorkspacePickProjection};
 pub(crate) use load::{workspace_source_catalog, SourceLoadState};
 pub(crate) use picker::run as run_picker;
 pub(crate) use text::{filter_lines_by_spec, record_text_to_pair, select_lines};
 
 use anyhow::{anyhow, Context, Result};
 use sivtr_core::ai::AgentProvider;
+use sivtr_core::publication::PublicationExpiry;
+use sivtr_core::workset::WorkSet;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use crate::commands::memory::workset::WorkSet;
@@ -33,7 +36,30 @@ use crate::tui::terminal::{
     finish as finish_tui, init as init_tui, panic_payload_message, restore as restore_tui,
     wait_for_enter,
 };
-use crate::tui::workspace::{WorkspaceFocus, WorkspacePickedContent, WorkspaceSource};
+use crate::tui::workspace::{WorkspaceFocus, WorkspaceSource};
+
+pub(crate) enum PickerResult {
+    Picked(PickedContent),
+    Publish {
+        set: WorkSet,
+        expires: PublicationExpiry,
+        warning_count: usize,
+        save_name: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PickerMode {
+    Browse,
+    Preview,
+}
+
+struct PickerOptions {
+    mode: PickerMode,
+    wait_after_panic: bool,
+    publish_title: Option<String>,
+    publish_expiry: PublicationExpiry,
+}
 
 /// Outcome of the workspace picker: copy the selection, or publish a link.
 pub enum WorkspacePickerResult {
@@ -49,8 +75,18 @@ pub fn run(
     providers: &[AgentProvider],
     select_remotes: bool,
     initial_focus: WorkspaceFocus,
-) -> Result<WorkspacePickerResult> {
-    run_catalog(providers, select_remotes, initial_focus, true)
+) -> Result<PickerResult> {
+    run_catalog(
+        providers,
+        select_remotes,
+        initial_focus,
+        PickerOptions {
+            mode: PickerMode::Browse,
+            wait_after_panic: true,
+            publish_title: None,
+            publish_expiry: PublicationExpiry::default(),
+        },
+    )
 }
 
 /// Like [`run`], but does not prompt for Enter after a recovered panic.
@@ -62,38 +98,68 @@ pub fn run_without_panic_wait(
     providers: &[AgentProvider],
     select_remotes: bool,
     initial_focus: WorkspaceFocus,
-) -> Result<WorkspacePickerResult> {
-    run_catalog(providers, select_remotes, initial_focus, false)
+) -> Result<PickerResult> {
+    run_catalog(
+        providers,
+        select_remotes,
+        initial_focus,
+        PickerOptions {
+            mode: PickerMode::Browse,
+            wait_after_panic: false,
+            publish_title: None,
+            publish_expiry: PublicationExpiry::default(),
+        },
+    )
+}
+
+/// Open the workspace picker as a local publication preview.
+pub(crate) fn run_preview(
+    providers: &[AgentProvider],
+    select_remotes: bool,
+    initial_focus: WorkspaceFocus,
+    publish_title: Option<String>,
+    publish_expiry: PublicationExpiry,
+) -> Result<PickerResult> {
+    run_catalog(
+        providers,
+        select_remotes,
+        initial_focus,
+        PickerOptions {
+            mode: PickerMode::Preview,
+            wait_after_panic: true,
+            publish_title,
+            publish_expiry,
+        },
+    )
 }
 
 fn run_catalog(
     providers: &[AgentProvider],
     select_remotes: bool,
     initial_focus: WorkspaceFocus,
-    wait_after_panic: bool,
-) -> Result<WorkspacePickerResult> {
+    options: PickerOptions,
+) -> Result<PickerResult> {
     let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
     let sources = workspace_source_catalog(providers, &cwd)?;
     if sources.is_empty() {
         anyhow::bail!("No terminal or AI sources configured");
     }
 
-    let selected_sources: Vec<bool> = sources
+    let source_scope: Vec<bool> = sources
         .iter()
         .map(|source| select_remotes || !source.is_remote())
         .collect();
-    let source_states: Vec<SourceLoadState> =
-        sources.iter().map(|_| SourceLoadState::idle()).collect();
+    let source_states: Vec<SourceLoadState> = sources.iter().map(|_| Default::default()).collect();
 
     let mut terminal = init_tui()?;
     let result = run_picker_guarded(
         &mut terminal,
         sources,
         source_states,
-        selected_sources,
+        source_scope,
         cwd,
         initial_focus,
-        wait_after_panic,
+        options,
     );
     finish_tui(&mut terminal, result)
 }
@@ -103,7 +169,7 @@ pub fn run_with_sessions(
     source: WorkspaceSource,
     sessions: Vec<crate::tui::workspace::WorkspaceSession>,
     initial_focus: WorkspaceFocus,
-) -> Result<WorkspacePickerResult> {
+) -> Result<PickerResult> {
     let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
     let loaded = sessions.len().max(1);
     let mut terminal = init_tui()?;
@@ -114,7 +180,12 @@ pub fn run_with_sessions(
         vec![true],
         cwd,
         initial_focus,
-        true,
+        PickerOptions {
+            mode: PickerMode::Browse,
+            wait_after_panic: true,
+            publish_title: None,
+            publish_expiry: PublicationExpiry::default(),
+        },
     );
     finish_tui(&mut terminal, result)
 }
@@ -134,11 +205,11 @@ fn run_picker_guarded(
     terminal: &mut crate::tui::terminal::Tui,
     sources: Vec<WorkspaceSource>,
     source_states: Vec<SourceLoadState>,
-    selected_sources: Vec<bool>,
+    source_scope: Vec<bool>,
     cwd: std::path::PathBuf,
     initial_focus: WorkspaceFocus,
-    wait_after_panic: bool,
-) -> Result<WorkspacePickerResult> {
+    options: PickerOptions,
+) -> Result<PickerResult> {
     // This guard recovers the panic and reports it itself, so the terminal-
     // restoring hook must not also emit the default "uncaught panic" report.
     let _suppress = crate::tui::panic::SuppressDefaultReport::enter();
@@ -147,9 +218,10 @@ fn run_picker_guarded(
             terminal,
             sources,
             source_states,
-            selected_sources,
+            source_scope,
             cwd,
             initial_focus,
+            &options,
         )
     })) {
         Ok(result) => result,
@@ -160,7 +232,7 @@ fn run_picker_guarded(
             // error once; just pause so the user can see the restored screen
             // before the report scrolls past. `wait_for_enter` reads from the
             // console itself, so a redirected stdin cannot skip the prompt.
-            if restored && wait_after_panic {
+            if restored && options.wait_after_panic {
                 wait_for_enter("press Enter to continue");
             }
             Err(anyhow!("TUI panicked: {message}"))

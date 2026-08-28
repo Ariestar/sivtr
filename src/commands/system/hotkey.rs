@@ -10,7 +10,6 @@ use crate::cli::{
     HotkeyStartArgs,
 };
 use crate::commands::browse;
-use crate::commands::memory::copy;
 use crate::tui::terminal::{panic_payload_message, wait_for_enter};
 use crate::tui::workspace::WorkspaceFocus;
 
@@ -64,9 +63,13 @@ pub fn pick_agent(args: &HotkeyPickAgentArgs) -> Result<()> {
         // The no-wait variant: this handler reports errors (and waits) itself,
         // so a panic recovered inside the picker must not consume an Enter
         // before show_pick_error_and_wait prompts.
-        let picked =
-            browse::run_without_panic_wait(&providers, args.all, WorkspaceFocus::Sessions)?;
-        copy::handle_picker_result(picked, false, None, None, false)
+        crate::commands::finish_picker(
+            browse::run_without_panic_wait(&providers, args.all, WorkspaceFocus::Sessions)?,
+            false,
+            None,
+            None,
+            false,
+        )
     });
 
     match result {

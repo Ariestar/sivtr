@@ -56,7 +56,8 @@ fn execute_sessions(args: &WorkSessionsArgs) -> Result<()> {
     let cwd = resolve_cwd(args.cwd.as_deref())?;
     let (display_cwd, records) = if let Some(source) = args.source.as_deref() {
         let set = workset::query(source, filter::Filter::none(), Some(&cwd))?;
-        (set.cwd, set.records)
+        let display_cwd = set.cwd.clone();
+        (display_cwd, set.into_records())
     } else {
         let providers = args.provider.providers();
         let records = current_work_record_index(&providers, &cwd, None)?;
@@ -87,10 +88,7 @@ fn execute_sessions(args: &WorkSessionsArgs) -> Result<()> {
 fn execute_records(args: &WorkRecordsArgs) -> Result<()> {
     let cwd = resolve_cwd(args.cwd.as_deref())?;
     let mut set = workset::query(&args.source, filter::Filter::none(), Some(&cwd))?;
-    set.save_last()?;
-    if let Some(name) = args.save.as_deref() {
-        set.save_as(name)?;
-    }
+    workset::persist(&mut set, args.save.as_deref())?;
     show::print_workset(
         &mut set,
         show::resolve_output_format(args.format, false, args.refs, args.json),
@@ -104,10 +102,7 @@ fn execute_parts(args: &WorkPartsArgs) -> Result<()> {
         filter::from_work_parts_args(args)?,
         Some(&cwd),
     )?;
-    set.save_last()?;
-    if let Some(name) = args.save.as_deref() {
-        set.save_as(name)?;
-    }
+    workset::persist(&mut set, args.save.as_deref())?;
     show::print_workset(
         &mut set,
         show::resolve_output_format(args.format, false, args.refs, args.json),

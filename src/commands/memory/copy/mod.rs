@@ -4,7 +4,7 @@
 //! Address uses the same source/ref language as search/show. Default address is
 //! the current terminal session; default dialogues is `1` (newest).
 
-mod export;
+pub(crate) mod export;
 pub(crate) mod load;
 mod plan;
 mod project;
@@ -23,7 +23,7 @@ use crate::tui::workspace::{
     WorkspaceFocus, WorkspaceSession, WorkspaceSource, WorkspaceSourceKind,
 };
 
-use export::finish_text_pairs;
+use export::finish_units;
 use load::load_for_plan;
 use project::project_record;
 
@@ -40,23 +40,12 @@ pub fn execute(plan: CopyPlan) -> Result<()> {
     let prompt = plan.filters.prompt.as_deref();
     let mut units = Vec::new();
     for record in &loaded.records {
-        let unit = project_record(record, loaded.projection, prompt)?;
-        if !unit.plain.trim().is_empty() {
-            units.push(unit);
-        }
+        units.push(
+            project_record(record, loaded.projection, prompt).context("project record for copy")?,
+        );
     }
 
-    if units.is_empty() {
-        output::warning(format!("selected {} content is empty", loaded.label));
-        return Ok(());
-    }
-
-    let count = units.len();
-    finish_text_pairs(
-        &units,
-        &plan.filters,
-        &format!("copied {count} item(s) from {} to clipboard", loaded.label),
-    )
+    finish_units(&units, &plan.filters, &loaded.label).context("finish copy")
 }
 
 pub(crate) fn handle_picker_result(
@@ -82,21 +71,14 @@ pub(crate) fn handle_picker_result(
 }
 
 fn execute_pick(plan: &CopyPlan) -> Result<()> {
-    match plan.address.as_deref() {
+    let picked = match plan.address.as_deref() {
         None => {
             // Full workspace browser (same product surface as bare `sivtr`).
             let providers = AgentProvider::all()
                 .iter()
                 .map(|spec| spec.provider)
                 .collect::<Vec<_>>();
-            let picked = browse::run(&providers, false, WorkspaceFocus::Sessions)?;
-            handle_picker_result(
-                picked,
-                plan.filters.print,
-                plan.filters.regex.as_deref(),
-                plan.filters.lines.as_deref(),
-                plan.filters.ansi,
-            )
+            browse::run(&providers, false, WorkspaceFocus::Sessions)
         }
         Some(address) => {
             let expanded = sivtr_core::record::expand_source(address)?;
@@ -123,17 +105,16 @@ fn execute_pick(plan: &CopyPlan) -> Result<()> {
                 records,
                 body_loaded: true,
             };
-            let picked =
-                browse::run_with_sessions(source, vec![session], WorkspaceFocus::Dialogues)?;
-            handle_picker_result(
-                picked,
-                plan.filters.print,
-                plan.filters.regex.as_deref(),
-                plan.filters.lines.as_deref(),
-                plan.filters.ansi,
-            )
+            browse::run_with_sessions(source, vec![session], WorkspaceFocus::Dialogues)
         }
-    }
+    }?;
+    crate::commands::finish_picker(
+        picked,
+        plan.filters.print,
+        plan.filters.regex.as_deref(),
+        plan.filters.lines.as_deref(),
+        plan.filters.ansi,
+    )
 }
 
 fn session_source_from_records(records: &[WorkRecord]) -> Option<WorkspaceSource> {

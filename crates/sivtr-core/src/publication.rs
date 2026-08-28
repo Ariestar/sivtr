@@ -19,8 +19,6 @@ pub enum PublicationExpiry {
     #[default]
     SevenDays,
     ThirtyDays,
-    /// Accepted for existing links and CLI compatibility; not offered in the picker.
-    NinetyDays,
 }
 
 impl PublicationExpiry {
@@ -43,9 +41,8 @@ impl PublicationExpiry {
             "3d" => Ok(Self::ThreeDays),
             "7d" => Ok(Self::SevenDays),
             "30d" => Ok(Self::ThirtyDays),
-            "90d" => Ok(Self::NinetyDays),
             _ => {
-                bail!("invalid publication expiry `{value}`; expected 2h, 1d, 3d, 7d, 30d, or 90d")
+                bail!("invalid publication expiry `{value}`; expected 2h, 1d, 3d, 7d, or 30d")
             }
         }
     }
@@ -57,7 +54,6 @@ impl PublicationExpiry {
             Self::ThreeDays => "3d",
             Self::SevenDays => "7d",
             Self::ThirtyDays => "30d",
-            Self::NinetyDays => "90d",
         }
     }
 
@@ -68,7 +64,6 @@ impl PublicationExpiry {
             Self::ThreeDays => Duration::days(3),
             Self::SevenDays => Duration::days(7),
             Self::ThirtyDays => Duration::days(30),
-            Self::NinetyDays => Duration::days(90),
         }
     }
 }
@@ -231,6 +226,19 @@ impl PublicationDraft {
         self.snapshot.item_count()
     }
 
+    pub fn warning_count(&self) -> usize {
+        self.risks
+            .iter()
+            .filter(|risk| {
+                matches!(
+                    risk.kind.as_str(),
+                    "absolute_path" | "email" | "internal_url"
+                )
+            })
+            .map(|risk| risk.count)
+            .sum()
+    }
+
     pub fn turn_count(&self) -> usize {
         self.source_refs
             .iter()
@@ -267,6 +275,71 @@ pub fn create_publication_draft(
         return create_granular_publication_draft(records, &normalized, policy);
     }
     create_record_publication_draft(records, &normalized, policy)
+}
+
+/// Expand selected publication anchors to complete atomic parts.
+pub fn expand_publication_anchors(
+    records: &[WorkRecord],
+    picked: &[WorkRef],
+) -> Result<Vec<WorkRef>> {
+    let mut selected: std::collections::BTreeMap<
+        String,
+        (usize, std::collections::BTreeSet<usize>),
+    > = std::collections::BTreeMap::new();
+    for anchor in picked {
+        let record_index = records
+            .iter()
+            .position(|record| record.work_ref.whole() == anchor.whole())
+            .ok_or_else(|| anyhow::anyhow!("publication anchor `{anchor}` has no record"))?;
+        let record = &records[record_index];
+        let entry = selected
+            .entry(record.work_ref.whole().to_string())
+            .or_insert_with(|| (record_index, std::collections::BTreeSet::new()));
+        let mut atoms = work_atoms(record, true);
+        atoms.extend(work_atoms(record, false));
+        if let Some(seq) = anchor.part() {
+            let atom = atoms
+                .iter()
+                .find(|atom| atom.part_seqs.contains(&seq))
+                .ok_or_else(|| anyhow::anyhow!("publication anchor `{anchor}` has no atom"))?;
+            entry.1.extend(atom.part_seqs.iter().copied());
+        } else {
+            entry
+                .1
+                .extend(atoms.into_iter().flat_map(|atom| atom.part_seqs));
+        }
+    }
+
+    let mut groups = selected.into_values().collect::<Vec<_>>();
+    groups.sort_by_key(|(record_index, _)| records[*record_index].work_ref.index());
+    let mut anchors = Vec::new();
+    for (record_index, selected_parts) in groups {
+        let record = &records[record_index];
+        let mut seqs = selected_parts.into_iter().collect::<Vec<_>>();
+        seqs.sort_unstable();
+        anchors.extend(seqs.into_iter().map(|seq| record.work_ref.with_part(seq)));
+    }
+    Ok(anchors)
+}
+
+fn add_risks(
+    risk_map: &mut std::collections::BTreeMap<String, PublicationRisk>,
+    warnings: impl IntoIterator<Item = String>,
+    item_index: Option<usize>,
+) {
+    for kind in warnings {
+        let entry = risk_map
+            .entry(kind.clone())
+            .or_insert_with(|| PublicationRisk {
+                kind,
+                count: 0,
+                item_indices: Vec::new(),
+            });
+        entry.count += 1;
+        if let Some(item_index) = item_index {
+            entry.item_indices.push(item_index);
+        }
+    }
 }
 
 fn create_record_publication_draft(
@@ -362,17 +435,8 @@ fn create_record_publication_draft(
             let raw = part.text().into_owned();
             let (text, report) = privacy::redact_text_with_report(&raw)?;
             redaction_count += report.redactions;
-            for kind in report.warnings {
-                let entry = risk_map
-                    .entry(kind.clone())
-                    .or_insert_with(|| PublicationRisk {
-                        kind,
-                        count: 0,
-                        item_indices: Vec::new(),
-                    });
-                entry.count += 1;
-                entry.item_indices.push(items.len() + 1);
-            }
+            let item_index = (!text.trim().is_empty()).then_some(items.len() + 1);
+            add_risks(&mut risk_map, report.warnings, item_index);
             if !text.trim().is_empty() {
                 items.push(PublicConversationItem {
                     role,
@@ -399,16 +463,7 @@ fn create_record_publication_draft(
         .unwrap_or_else(|| first.title.clone());
     let (title, title_report) = privacy::redact_text_with_report(&title_raw)?;
     redaction_count += title_report.redactions;
-    for kind in title_report.warnings {
-        let entry = risk_map
-            .entry(kind.clone())
-            .or_insert_with(|| PublicationRisk {
-                kind,
-                count: 0,
-                item_indices: Vec::new(),
-            });
-        entry.count += 1;
-    }
+    add_risks(&mut risk_map, title_report.warnings, None);
     let snapshot = PublicConversationV1 {
         schema_version: PUBLICATION_SCHEMA_VERSION,
         title: if title.trim().is_empty() {
@@ -560,7 +615,7 @@ fn create_granular_publication_draft(
             };
 
             let mut public_parts = Vec::new();
-            let atom_index = items.len() + 1;
+            let mut atom_warnings = Vec::new();
             let mut previous_seq = None;
             for seq in &atom.part_seqs {
                 let part = record
@@ -568,17 +623,7 @@ fn create_granular_publication_draft(
                     .expect("validated atom part");
                 let (text, report) = privacy::redact_text_with_report(&part.text())?;
                 redaction_count += report.redactions;
-                for kind in report.warnings {
-                    let entry = risk_map
-                        .entry(kind.clone())
-                        .or_insert_with(|| PublicationRisk {
-                            kind,
-                            count: 0,
-                            item_indices: Vec::new(),
-                        });
-                    entry.count += 1;
-                    entry.item_indices.push(atom_index);
-                }
+                atom_warnings.extend(report.warnings);
                 if !text.trim().is_empty() {
                     let part_gap_before = previous_seq
                         .is_some_and(|start| omitted_between(record, start, *seq, &selected));
@@ -596,29 +641,22 @@ fn create_granular_publication_draft(
                 previous_seq = Some(*seq);
             }
             if public_parts.is_empty() {
+                add_risks(&mut risk_map, atom_warnings, None);
                 continue;
             }
+            let atom_index = items.len() + 1;
             let first_part = record
                 .part_for_at(crate::record::WorkAt::Part(first_seq))
                 .expect("validated atom part");
             let label = if let Some(raw_label) = first_part.label() {
                 let (redacted, report) = privacy::redact_text_with_report(raw_label)?;
                 redaction_count += report.redactions;
-                for kind in report.warnings {
-                    let entry = risk_map
-                        .entry(kind.clone())
-                        .or_insert_with(|| PublicationRisk {
-                            kind,
-                            count: 0,
-                            item_indices: Vec::new(),
-                        });
-                    entry.count += 1;
-                    entry.item_indices.push(atom_index);
-                }
+                atom_warnings.extend(report.warnings);
                 (!redacted.trim().is_empty()).then_some(redacted)
             } else {
                 None
             };
+            add_risks(&mut risk_map, atom_warnings, Some(atom_index));
             items.push(PublicConversationAtom {
                 kind: atom_kind,
                 label,
@@ -656,16 +694,7 @@ fn create_granular_publication_draft(
         .unwrap_or_else(|| title_from_public_items(&items));
     let (title, title_report) = privacy::redact_text_with_report(&title_raw)?;
     redaction_count += title_report.redactions;
-    for kind in title_report.warnings {
-        let entry = risk_map
-            .entry(kind.clone())
-            .or_insert_with(|| PublicationRisk {
-                kind,
-                count: 0,
-                item_indices: Vec::new(),
-            });
-        entry.count += 1;
-    }
+    add_risks(&mut risk_map, title_report.warnings, None);
 
     let snapshot = PublicConversationV2 {
         schema_version: GRANULAR_PUBLICATION_SCHEMA_VERSION,
@@ -971,6 +1000,38 @@ mod tests {
         assert!(!json.contains("work_ref"));
         assert!(!json.contains("cwd"));
         assert!(!json.contains("session"));
+    }
+
+    #[test]
+    fn warning_count_only_includes_manual_privacy_warnings() {
+        let draft = PublicationDraft {
+            snapshot: PublicConversationSnapshot::V1(PublicConversationV1 {
+                schema_version: PUBLICATION_SCHEMA_VERSION,
+                title: "title".into(),
+                provider: "codex".into(),
+                published_at: "2026-01-01T00:00:00Z".into(),
+                expires_at: "2026-01-08T00:00:00Z".into(),
+                items: Vec::new(),
+            }),
+            canonical_json: "{}".into(),
+            content_sha256: "hash".into(),
+            redaction_count: 2,
+            risks: vec![
+                PublicationRisk {
+                    kind: "absolute_path".into(),
+                    count: 2,
+                    item_indices: vec![1, 2],
+                },
+                PublicationRisk {
+                    kind: "secret".into(),
+                    count: 3,
+                    item_indices: vec![1],
+                },
+            ],
+            source_provider: "codex".into(),
+            source_refs: Vec::new(),
+        };
+        assert_eq!(draft.warning_count(), 2);
     }
 
     #[test]
@@ -1311,7 +1372,7 @@ mod tests {
     }
 
     #[test]
-    fn publication_expiry_parses_picker_and_legacy_classes() {
+    fn publication_expiry_parses_picker_choices() {
         assert_eq!(
             PublicationExpiry::parse("2h").unwrap(),
             PublicationExpiry::TwoHours
@@ -1329,9 +1390,6 @@ mod tests {
             PublicationExpiry::SevenDays
         );
         assert!(PublicationExpiry::parse("4h").is_err());
-        assert_eq!(
-            PublicationExpiry::parse("90d").unwrap(),
-            PublicationExpiry::NinetyDays
-        );
+        assert!(PublicationExpiry::parse("90d").is_err());
     }
 }

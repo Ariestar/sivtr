@@ -1,62 +1,21 @@
-//! Browse product panes implementing [`crate::pane::Pane`].
+//! Browse product panes.
 //!
-//! **New pane checklist**
+//! A pane whose rows are a window over a growing list implements
+//! [`crate::pane::Pane`]:
 //! 1. `struct MyPane { engine: SlidingPane<K,M,B>, … }`
 //! 2. `impl Pane for MyPane` — only map data + call SlidingPane ensure_*
 //! 3. Register in picker: `my_pane.poll(); my_pane.ensure(ctx, &input);`
 //!
 //! Do **not** reimplement viewport growth, keep/evict, or blanking rules.
 
-use crate::pane::{Pane, PaneInput, Selection, SlidingPane, WindowRow};
-use crate::tui::content::block::{marked_mask_len, BlockText};
+use crate::pane::{Pane, PaneInput, SlidingPane, WindowRow};
 use crate::tui::content::view::ContentViewMode;
 use crate::tui::workspace::{
-    workspace_content_io_texts, ContentIoFocus, ContentIoFrame, ExpandedBlocks, WorkspaceDialogue,
-    WorkspaceSession, WorkspaceSource,
+    active_rows, workspace_content_io_texts, ContentIoFocus, ContentIoFrame, ExpandedBlocks,
+    WorkspaceDialogue, WorkspaceSession, WorkspaceSource,
 };
-use sivtr_core::ai::AgentSelection;
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
-
-use super::text::record_to_copy_parts;
-
-// ── Source ──────────────────────────────────────────────────────────────
-
-pub type SourceEngine = SlidingPane<String, WorkspaceSource, ()>;
-
-/// Static catalog pane. Ensure is a no-op after construction.
-#[derive(Clone, Debug)]
-pub struct SourcePane {
-    engine: SourceEngine,
-}
-
-impl SourcePane {
-    pub fn from_catalog(sources: &[WorkspaceSource]) -> Self {
-        let rows = sources
-            .iter()
-            .map(|s| WindowRow::meta_only(s.selector(), s.clone()))
-            .collect();
-        Self {
-            engine: SlidingPane::ready(rows, sources.len().max(1), true),
-        }
-    }
-
-    #[cfg(test)]
-    pub fn exhausted(&self) -> bool {
-        self.engine.exhausted()
-    }
-}
-
-impl Pane for SourcePane {
-    type Ctx<'a> = ();
-
-    fn ensure(&mut self, _ctx: (), _input: &PaneInput<'_>) -> bool {
-        false
-    }
-
-    fn len(&self) -> usize {
-        self.engine.len()
-    }
-}
+use sivtr_core::workset::WorkSet;
 
 // ── Dialogues ───────────────────────────────────────────────────────────
 
@@ -97,6 +56,20 @@ impl DialoguePane {
         self.generation
     }
 
+    /// WorkSet-derived selection for the dialogue rows currently in view.
+    pub fn selection_mask(&self, selection: &WorkSet) -> Vec<bool> {
+        self.engine
+            .rows()
+            .iter()
+            .map(|row| {
+                row.meta
+                    .work_ref
+                    .as_ref()
+                    .is_some_and(|work_ref| selection.contains(work_ref))
+            })
+            .collect()
+    }
+
     /// Index-stable rows for content/copy/vim.
     /// Clones **body only** for focus ∪ multi-select; other rows are title shells.
     #[cfg(test)]
@@ -107,7 +80,7 @@ impl DialoguePane {
     }
 
     /// Rebuild `out` from the engine rows. Callers cache `out` between calls
-    /// and only invoke this when `generation()`, the selected mask, or the
+    /// and only invoke this when `generation()`, the dialogue selection, or the
     /// focused index changed, so scrolling content does not re-clone bodies.
     pub fn materialize_into(
         &self,
@@ -120,14 +93,12 @@ impl DialoguePane {
         if rows.is_empty() {
             return;
         }
-        let any = selected.iter().any(|s| *s);
+        assert_eq!(selected.len(), rows.len());
         let focus = focus.min(rows.len() - 1);
         for (i, row) in rows.iter().enumerate() {
-            let need_body = if any {
-                selected.get(i).copied().unwrap_or(false)
-            } else {
-                i == focus
-            };
+            // The cursor dialogue's body is always needed: the content pane
+            // shows it even when the selection marks other dialogues.
+            let need_body = i == focus || selected[i];
             let item = if need_body {
                 if let Some(body) = row.body.clone() {
                     body
@@ -170,12 +141,6 @@ fn shell_from_row(
         source: row.meta.source.clone(),
         work_ref: row.meta.work_ref.clone(),
         record: None,
-        copy: crate::tui::workspace::WorkspaceCopyParts::from_block(
-            crate::tui::workspace::TextPair {
-                plain: String::new(),
-                ansi: String::new(),
-            },
-        ),
     }
 }
 
@@ -183,10 +148,11 @@ fn shell_from_row(
 ///
 /// `sessions` is the **meta** list (titles/ids/body_loaded). Turn bodies are
 /// read through `records` (product: `SessionColumn::body_for`).
+#[derive(Clone, Copy)]
 pub struct DialogueCtx<'a> {
     pub sessions: &'a [WorkspaceSession],
     pub session_idx: usize,
-    pub selected_sessions: &'a [bool],
+    pub session_scope: &'a [bool],
     /// Body lookup; returned slice lives as long as the storage behind the
     /// callback (`SessionColumn` / fixture table), not the `&session` arg.
     pub records: &'a dyn Fn(&WorkspaceSession) -> Option<&'a [WorkRecord]>,
@@ -195,11 +161,11 @@ pub struct DialogueCtx<'a> {
 impl Pane for DialoguePane {
     type Ctx<'a> = DialogueCtx<'a>;
 
-    fn ensure(&mut self, ctx: DialogueCtx<'_>, input: &PaneInput<'_>) -> bool {
+    fn ensure(&mut self, ctx: DialogueCtx<'_>, input: &PaneInput<'_>) {
         let next = fingerprint(
             ctx.sessions,
             ctx.session_idx,
-            ctx.selected_sessions,
+            ctx.session_scope,
             ctx.records,
         );
         let force = if next != self.fingerprint {
@@ -217,7 +183,7 @@ impl Pane for DialoguePane {
                 meta_prefix(
                     ctx.sessions,
                     ctx.session_idx,
-                    ctx.selected_sessions,
+                    ctx.session_scope,
                     ctx.records,
                     budget,
                 )
@@ -233,7 +199,7 @@ impl Pane for DialoguePane {
             let body = body_for_key(
                 ctx.sessions,
                 ctx.session_idx,
-                ctx.selected_sessions,
+                ctx.session_scope,
                 ctx.records,
                 key,
             );
@@ -246,7 +212,6 @@ impl Pane for DialoguePane {
         if changed {
             self.generation = self.generation.wrapping_add(1);
         }
-        changed
     }
 
     fn len(&self) -> usize {
@@ -272,34 +237,17 @@ fn dialogue_from_record(session: &WorkspaceSession, record: &WorkRecord) -> Work
         source: session.source.clone(),
         work_ref: Some(record.work_ref.clone()),
         record: Some(record.clone()),
-        copy: record_to_copy_parts(record, AgentSelection::LastTurn),
-    }
-}
-
-fn active_session_indices(
-    sessions: &[WorkspaceSession],
-    session_idx: usize,
-    selected_sessions: &[bool],
-) -> Vec<usize> {
-    let selected = crate::tui::workspace::selected_indices(selected_sessions);
-    if !selected.is_empty() {
-        return selected;
-    }
-    if sessions.is_empty() {
-        Vec::new()
-    } else {
-        vec![session_idx.min(sessions.len() - 1)]
     }
 }
 
 fn fingerprint<'a>(
     sessions: &[WorkspaceSession],
     session_idx: usize,
-    selected_sessions: &[bool],
+    session_scope: &[bool],
     records: &dyn Fn(&WorkspaceSession) -> Option<&'a [WorkRecord]>,
 ) -> DialogueFingerprint {
     DialogueFingerprint {
-        sessions: active_session_indices(sessions, session_idx, selected_sessions)
+        sessions: active_rows(session_scope, session_idx, sessions.len())
             .into_iter()
             .filter_map(|i| {
                 let s = sessions.get(i)?;
@@ -313,14 +261,14 @@ fn fingerprint<'a>(
 fn meta_prefix<'a>(
     sessions: &[WorkspaceSession],
     session_idx: usize,
-    selected_sessions: &[bool],
+    session_scope: &[bool],
     records: &dyn Fn(&WorkspaceSession) -> Option<&'a [WorkRecord]>,
     budget: usize,
 ) -> (
     Vec<WindowRow<DialogueKey, DialogueMeta, WorkspaceDialogue>>,
     bool,
 ) {
-    let indices = active_session_indices(sessions, session_idx, selected_sessions);
+    let indices = active_rows(session_scope, session_idx, sessions.len());
     if indices.is_empty() {
         return (Vec::new(), true);
     }
@@ -382,11 +330,11 @@ fn meta_prefix<'a>(
 fn body_for_key<'a>(
     sessions: &[WorkspaceSession],
     session_idx: usize,
-    selected_sessions: &[bool],
+    session_scope: &[bool],
     records: &dyn Fn(&WorkspaceSession) -> Option<&'a [WorkRecord]>,
     key: &DialogueKey,
 ) -> Option<WorkspaceDialogue> {
-    for i in active_session_indices(sessions, session_idx, selected_sessions) {
+    for i in active_rows(session_scope, session_idx, sessions.len()) {
         let Some(session) = sessions.get(i) else {
             continue;
         };
@@ -418,54 +366,15 @@ pub struct ContentCtx<'a> {
     pub expanded: &'a ExpandedBlocks,
 }
 
-/// Tracks layout line counts for Input / Output halves separately and owns
-/// the per-dialogue block multi-select (native pane selection): clicking a
-/// block's dot toggles its id, and content (copy, fold) consumes the mask.
-/// Marks are keyed by dialogue so multi-select paging (J/K) keeps every
-/// page's marks; the picker clears the whole set when the selection changes.
+/// Tracks layout line counts for Input / Output halves separately.
+///
+/// Not a [`crate::pane::Pane`]: its rows are the shown dialogue's rendered
+/// lines, not a window over a growing list, so there is nothing to grow,
+/// keep, or hydrate — `frame` hands the caller the rendered layout.
 #[derive(Default)]
 pub struct ContentPane {
     input_lines: usize,
     output_lines: usize,
-    /// Marked block ids per dialogue per half, indexed by block id (dense
-    /// DFS ids): `dialogue_idx -> (input, output)`.
-    marked: std::collections::HashMap<usize, [Selection; 2]>,
-}
-
-/// Block-selection mask length of one half: the shown dialogue's *complete*
-/// block-id collection when its record is loaded (so marks for folded
-/// blocks survive resizing and are restored on expand), else the displayed
-/// segments of the current frame.
-fn block_mask_len(
-    dialogues: &[WorkspaceDialogue],
-    idx: usize,
-    input: bool,
-    displayed: &[BlockText],
-) -> usize {
-    let full = dialogues
-        .get(idx)
-        .and_then(|dialogue| dialogue.record.as_ref())
-        .map(|record| {
-            marked_mask_len(
-                crate::tui::content::block::half_blocks(record, input)
-                    .iter()
-                    .map(|block| block.id),
-            )
-        })
-        .unwrap_or(0);
-    full.max(marked_mask_len(displayed.iter().map(|block| block.id)))
-}
-
-fn half_selection_mut(
-    marked: &mut std::collections::HashMap<usize, [Selection; 2]>,
-    idx: usize,
-    half: ContentIoFocus,
-) -> &mut Selection {
-    let entry = marked.entry(idx).or_default();
-    match half {
-        ContentIoFocus::Input => &mut entry[0],
-        ContentIoFocus::Output => &mut entry[1],
-    }
 }
 
 impl ContentPane {
@@ -476,10 +385,10 @@ impl ContentPane {
         }
     }
 
-    /// Build the frame for this context, resizing the block selection masks
+    /// Build the frame for this context, resizing the block selection mask
     /// of the shown dialogue's block ids. Rebuilds the cached layouts; call
     /// it only when the content actually changed.
-    pub fn ensure(&mut self, ctx: ContentCtx<'_>) -> ContentIoFrame {
+    pub fn frame(&mut self, ctx: ContentCtx<'_>) -> ContentIoFrame {
         let texts = workspace_content_io_texts(
             ctx.dialogues,
             ctx.highlighted_idx,
@@ -490,61 +399,49 @@ impl ContentPane {
         let frame = ContentIoFrame::build(ctx.area, texts, ctx.mode, ctx.io_focus);
         self.input_lines = frame.line_count(ContentIoFocus::Input);
         self.output_lines = frame.line_count(ContentIoFocus::Output);
-        half_selection_mut(&mut self.marked, ctx.highlighted_idx, ContentIoFocus::Input).resize(
-            block_mask_len(
-                ctx.dialogues,
-                ctx.highlighted_idx,
-                true,
-                &frame.texts.input_blocks,
-            ),
-        );
-        half_selection_mut(
-            &mut self.marked,
-            ctx.highlighted_idx,
-            ContentIoFocus::Output,
-        )
-        .resize(block_mask_len(
-            ctx.dialogues,
-            ctx.highlighted_idx,
-            false,
-            &frame.texts.output_blocks,
-        ));
         frame
     }
 
-    /// Marked block mask of one dialogue's half (`mask[block_id]` = marked);
-    /// an unknown dialogue has no marks.
-    pub fn marked(&self, half: ContentIoFocus, dialogue_idx: usize) -> &[bool] {
-        let [input, output] = match self.marked.get(&dialogue_idx) {
-            Some(entry) => entry,
-            None => return &[],
+    /// WorkSet-derived block highlights for one dialogue. A Whole selection
+    /// covers every block; a run highlights only when every part it owns is
+    /// selected, while its children remain independently derived.
+    pub fn block_selection_mask(
+        dialogues: &[WorkspaceDialogue],
+        dialogue_idx: usize,
+        selection: &WorkSet,
+    ) -> Vec<bool> {
+        let Some(record) = dialogues
+            .get(dialogue_idx)
+            .and_then(|dialogue| dialogue.record.as_ref())
+        else {
+            return Vec::new();
         };
-        match half {
-            ContentIoFocus::Input => input.mask(),
-            ContentIoFocus::Output => output.mask(),
+        let (input, output) = crate::tui::content::block::dialogue_blocks(record);
+        let mut marked =
+            vec![false; crate::tui::content::block::dialogue_block_count(&input, &output)];
+        for block in input.iter().chain(&output) {
+            mark_selected_blocks(block, record, selection, &mut marked);
         }
-    }
-
-    pub fn toggle_mark(&mut self, half: ContentIoFocus, dialogue_idx: usize, block: usize) {
-        half_selection_mut(&mut self.marked, dialogue_idx, half).toggle(block);
-    }
-
-    /// Drop every dialogue's marks (selection set changed).
-    pub fn clear_marks(&mut self) {
-        self.marked.clear();
-    }
-
-    pub fn marked_count(&self) -> usize {
-        self.marked
-            .values()
-            .map(|[input, output]| input.count() + output.count())
-            .sum()
+        marked
     }
 }
 
-// ── Compatibility helpers used by tests / selection ─────────────────────
-
-// (none — new panes implement `Pane` only)
+fn mark_selected_blocks(
+    block: &crate::tui::content::block::Block,
+    record: &WorkRecord,
+    selection: &WorkSet,
+    marked: &mut [bool],
+) {
+    if let Some(selected) = marked.get_mut(block.id) {
+        *selected = block
+            .parts
+            .iter()
+            .all(|&idx| selection.contains(&record.work_ref.with_part(record.parts[idx].seq)));
+    }
+    for child in &block.children {
+        mark_selected_blocks(child, record, selection, marked);
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -613,32 +510,11 @@ mod tests {
             DialogueCtx {
                 sessions,
                 session_idx: 0,
-                selected_sessions: &[true],
+                session_scope: &[true],
                 records: &records,
             },
             &PaneInput::new(viewport, focus).with_selected(selected),
         );
-    }
-
-    #[test]
-    fn source_pane_is_exhausted_static() {
-        let sources = vec![
-            WorkspaceSource::terminal(),
-            WorkspaceSource::agent(AgentProvider::Codex),
-        ];
-        let mut pane = SourcePane::from_catalog(&sources);
-        assert!(pane.exhausted());
-        assert_eq!(pane.len(), 2);
-        assert!(!pane.ensure(
-            (),
-            &PaneInput::new(
-                Viewport {
-                    first: 0,
-                    visible: 40
-                },
-                0
-            )
-        ));
     }
 
     #[test]
@@ -763,7 +639,7 @@ mod tests {
             DialogueCtx {
                 sessions: empty,
                 session_idx: 0,
-                selected_sessions: &[],
+                session_scope: &[],
                 records: &records,
             },
             &PaneInput::new(
@@ -830,7 +706,7 @@ mod tests {
                 DialogueCtx {
                     sessions: &sessions,
                     session_idx: 0,
-                    selected_sessions: &[false],
+                    session_scope: &[false],
                     records: &records,
                 },
                 &PaneInput::new(vp, 0).with_selected(&[false]),
@@ -838,11 +714,11 @@ mod tests {
         };
 
         let g0 = pane.generation();
-        assert!(ensure(&mut pane), "first ensure builds rows");
+        ensure(&mut pane);
         let g1 = pane.generation();
         assert!(g1 > g0, "row build must bump the generation");
 
-        assert!(!ensure(&mut pane), "steady-state ensure is a no-op");
+        ensure(&mut pane);
         assert_eq!(
             pane.generation(),
             g1,

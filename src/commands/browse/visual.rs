@@ -2,9 +2,7 @@
 
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
-use ratatui::widgets::ListState;
 
-use crate::commands::select::CommandSelection;
 use crate::tui::content::io::ContentIoFrame;
 use crate::tui::content::view::{
     clamp_content_position, content_block_at, content_position_in_text_row, content_text_area,
@@ -12,12 +10,11 @@ use crate::tui::content::view::{
     ContentViewMode,
 };
 use crate::tui::workspace::{
-    ContentIoFocus, ContentScrolls, WorkspaceDialogue, WorkspaceFocus, WorkspacePickedContent,
-    WorkspaceSession, WorkspaceSource,
+    ContentIoFocus, ContentScrolls, Rows, WorkspaceDialogue, WorkspaceFocus,
 };
 
-use super::content::workspace_picked_content;
-use super::nav::{move_workspace_cursor_down, move_workspace_cursor_up};
+use super::content::{picked_source, PickedContent};
+use super::nav::move_workspace_cursor;
 
 /// Lines per wheel notch: web-like scroll steps (lists move selection by the
 /// same amount, content by the same line count).
@@ -53,32 +50,29 @@ pub(super) fn handle_visual_select_key(
     content_mode: ContentViewMode,
     content_scroll: &mut usize,
     dialogues: &[WorkspaceDialogue],
-    selected_dialogues: &[bool],
     dialogue_idx: usize,
-) -> Result<Option<WorkspacePickedContent>> {
+) -> Result<Option<PickedContent>> {
     match key {
         KeyCode::Esc => return Ok(None),
         KeyCode::Enter | KeyCode::Char('y') => {
-            return Ok(Some(workspace_picked_content_for_visual_selection(
+            return Ok(workspace_picked_content_for_visual_selection(
                 dialogues,
-                selected_dialogues,
                 dialogue_idx,
                 content_area,
                 text,
                 content_mode,
                 mode.selection,
-            )));
+            ));
         }
         KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
-            return Ok(Some(workspace_picked_content_for_visual_selection(
+            return Ok(workspace_picked_content_for_visual_selection(
                 dialogues,
-                selected_dialogues,
                 dialogue_idx,
                 content_area,
                 text,
                 content_mode,
                 mode.selection,
-            )));
+            ));
         }
         KeyCode::Left | KeyCode::Char('h') => move_visual_cursor(
             mode,
@@ -328,45 +322,32 @@ pub(super) fn mouse_selection_kind(modifiers: KeyModifiers) -> ContentSelectionK
     }
 }
 
+/// Copy the visually selected text of the dialogue on screen, attributed to
+/// that dialogue — the selection covers its rendered content, so the shown
+/// index is the only one that can own it. `None` when that dialogue is gone.
 pub(super) fn workspace_picked_content_for_visual_selection(
     dialogues: &[WorkspaceDialogue],
-    selected_dialogues: &[bool],
     dialogue_idx: usize,
     content_area: ratatui::layout::Rect,
     text: &str,
     content_mode: ContentViewMode,
     selection: ContentSelection,
-) -> WorkspacePickedContent {
-    let base = workspace_picked_content(dialogues, selected_dialogues, dialogue_idx, None);
-    let source = base.source;
+) -> Option<PickedContent> {
+    let source = picked_source(dialogues, &[dialogue_idx])?;
     let plain = selected_content_text(content_area, text, content_mode, selection);
-    WorkspacePickedContent {
+    Some(PickedContent::Text {
         source,
         units: vec![crate::tui::workspace::TextPair {
             ansi: plain.clone(),
             plain,
         }],
-        selection: CommandSelection::RecentExplicit(vec![1]),
-        // A visual text range can cut through a part and therefore has no
-        // exact atomic anchor. Clipboard callers still receive the text;
-        // publication selection rejects this path instead of widening it to
-        // the whole dialogue.
-        anchors: Vec::new(),
-    }
+    })
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn apply_workspace_mouse_scroll(
     focus: WorkspaceFocus,
     scroll_up: bool,
-    sources: &[WorkspaceSource],
-    sessions: &[WorkspaceSession],
-    dialogue_count: usize,
-    selected_sessions: &[bool],
-    source_state: &mut ListState,
-    session_state: &mut ListState,
-    dialogue_state: &mut ListState,
-    selected_dialogues: &mut Vec<bool>,
+    rows: &mut Rows,
     content_scrolls: &mut ContentScrolls,
     content_io_focus: ContentIoFocus,
     content_cursor: &mut super::nav::ContentBlockCursor,
@@ -386,44 +367,18 @@ pub(super) fn apply_workspace_mouse_scroll(
         let next = next.min(layout.lines.len().saturating_sub(1));
         content_scrolls.set(content_io_focus, next);
         if let Some(block) = content_block_at(layout, next) {
-            content_cursor.set(content_io_focus, block);
+            content_cursor.set(block);
         }
         return;
     }
     for _ in 0..MOUSE_SCROLL_LINES {
-        if scroll_up {
-            move_workspace_cursor_up(
-                focus,
-                sources,
-                sessions,
-                dialogue_count,
-                selected_sessions,
-                source_state,
-                session_state,
-                dialogue_state,
-                selected_dialogues,
-                content_scrolls,
-                content_io_focus,
-                content_cursor,
-                content_frame.texts.block_slices(),
-            );
-        } else {
-            move_workspace_cursor_down(
-                focus,
-                sources,
-                sessions,
-                dialogue_count,
-                selected_sessions,
-                source_state,
-                session_state,
-                dialogue_state,
-                selected_dialogues,
-                content_scrolls,
-                content_io_focus,
-                content_cursor,
-                content_frame.texts.block_slices(),
-            );
-        }
+        move_workspace_cursor(
+            scroll_up,
+            focus,
+            rows,
+            content_scrolls,
+            content_cursor,
+            content_frame.texts.block_slices(),
+        );
     }
 }
-

@@ -2,9 +2,7 @@
 
 use super::help::{help_action_for_key, parse_help_key, WorkspaceHelpAction};
 use super::layout::can_open_dialogue_vim;
-use super::model::{
-    WorkspaceCopyParts, WorkspaceDialogue, WorkspaceFocus, WorkspaceSearchView, WorkspaceSource,
-};
+use super::model::{WorkspaceDialogue, WorkspaceFocus, WorkspaceSearchView, WorkspaceSource};
 use super::render::{
     content_title, current_content_dialogue, current_content_ref, line_filter_prompt_text,
     search_box_body, search_box_title,
@@ -55,7 +53,6 @@ fn codex_dialogue(record: WorkRecord) -> WorkspaceDialogue {
         source: WorkspaceSource::agent(AgentProvider::Codex),
         work_ref: Some(record.work_ref.clone()),
         record: Some(record),
-        copy: WorkspaceCopyParts::default(),
     }
 }
 
@@ -143,6 +140,45 @@ fn content_preview_text_uses_structured_targeted_part_text_in_reading_mode() {
     assert!(!text.contains("hidden tool call"));
     assert!(!text.contains("codex/session"));
     assert!(!text.contains("[r expand]"));
+}
+
+#[test]
+fn targeted_part_uses_its_dialogue_global_block_id() {
+    let record = chat_record(vec![
+        part(
+            1,
+            sivtr_core::record::WorkPartData::User {
+                content: "question".to_string(),
+            },
+        ),
+        part(
+            2,
+            sivtr_core::record::WorkPartData::Assistant {
+                content: "answer".to_string(),
+            },
+        ),
+        part(
+            3,
+            sivtr_core::record::WorkPartData::ToolCall {
+                call_id: None,
+                tool: Some("tool".to_string()),
+                input: tool_test_value("target body".to_string()),
+            },
+        ),
+    ]);
+    let dialogue = codex_dialogue(record);
+    let mut expanded = ExpandedBlocks::default();
+    let folded =
+        dialogue.content_io_texts(ContentViewMode::Reading, Some(WorkAt::Part(3)), &expanded);
+    assert_eq!(
+        crate::tui::content::block::dialogue_block_id(dialogue.record.as_ref().unwrap(), 3),
+        Some(2)
+    );
+    assert_eq!(folded.output.trim(), "<:tool:tool call:>");
+    expanded.toggle(2);
+    let open =
+        dialogue.content_io_texts(ContentViewMode::Reading, Some(WorkAt::Part(3)), &expanded);
+    assert!(open.output.contains("target body"));
 }
 
 #[test]
@@ -428,11 +464,11 @@ fn reading_mode_keeps_structure_runs_in_call_order() {
 #[test]
 fn content_title_includes_view_mode() {
     assert_eq!(
-        content_title(ContentViewMode::Reading, &[false, false], None),
+        content_title(ContentViewMode::Reading, 0, None),
         "Content (read)"
     );
     assert_eq!(
-        content_title(ContentViewMode::Raw, &[true, false], None),
+        content_title(ContentViewMode::Raw, 1, None),
         "Content (raw): 1 dialogue selected"
     );
 }
@@ -442,7 +478,7 @@ fn content_title_includes_current_dialogue_ref() {
     let work_ref = WorkRef::agent(AgentProvider::Codex, "session", 2);
 
     assert_eq!(
-        content_title(ContentViewMode::Reading, &[false], Some(&work_ref)),
+        content_title(ContentViewMode::Reading, 0, Some(&work_ref)),
         "Content (read) [codex/session/2]"
     );
 }
@@ -527,6 +563,14 @@ fn help_action_for_key_is_focus_scoped() {
         ),
         None
     );
+    assert_eq!(
+        help_action_for_key(
+            KeyCode::Char('p'),
+            KeyModifiers::NONE,
+            WorkspaceFocus::Dialogues
+        ),
+        Some(WorkspaceHelpAction::Publish)
+    );
     for focus in [
         WorkspaceFocus::Source,
         WorkspaceFocus::Sessions,
@@ -534,8 +578,8 @@ fn help_action_for_key_is_focus_scoped() {
         WorkspaceFocus::Content,
     ] {
         assert_eq!(
-            help_action_for_key(KeyCode::Char('p'), KeyModifiers::NONE, focus),
-            Some(WorkspaceHelpAction::Publish)
+            help_action_for_key(KeyCode::Char('a'), KeyModifiers::NONE, focus),
+            Some(WorkspaceHelpAction::ToggleAll)
         );
     }
 }
@@ -547,13 +591,11 @@ fn current_content_dialogue_uses_single_selected_dialogue() {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
             record: None,
-            copy: WorkspaceCopyParts::default(),
         },
         WorkspaceDialogue {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 2)),
             record: None,
-            copy: WorkspaceCopyParts::default(),
         },
     ];
 
@@ -571,7 +613,6 @@ fn current_content_ref_round_trips_active_part_target() {
         source: WorkspaceSource::agent(AgentProvider::Codex),
         work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 2)),
         record: None,
-        copy: WorkspaceCopyParts::default(),
     }];
 
     let current = current_content_ref(&dialogues, &[false], 0, Some(WorkAt::Part(1))).unwrap();

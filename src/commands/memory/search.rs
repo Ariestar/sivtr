@@ -14,14 +14,11 @@ pub fn execute(args: &SearchArgs) -> Result<()> {
 
 /// Unified query for search: local and remote both run load+filter at the data owner.
 pub fn run(args: &SearchArgs) -> Result<WorkSet> {
-    let mut workset = workset::query(
+    let mut set = workset::query(
         &args.source,
         filter::from_search_args(args)?,
         args.cwd.as_deref(),
     )?;
-    workset.save_last()?;
-    if let Some(name) = args.save.as_deref() {
-        workset.save_as(name)?;
-    }
-    Ok(workset)
+    workset::persist(&mut set, args.save.as_deref())?;
+    Ok(set)
 }

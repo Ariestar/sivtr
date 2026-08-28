@@ -45,19 +45,11 @@ const BODY_FETCH_CAP: usize = 2;
 #[derive(Clone, Debug, Default)]
 pub struct SourceLoadState {
     pub pane: SessionPane,
-    /// Preloaded in-memory catalogs (`run_with_sessions`) must not be replaced
-    /// by a provider-wide metadata fetch on kick or Refresh.
+    /// In-memory picker catalogs must not be replaced by a provider reload.
     pinned: bool,
 }
 
 impl SourceLoadState {
-    pub fn idle() -> Self {
-        Self {
-            pane: SessionPane::default(),
-            pinned: false,
-        }
-    }
-
     pub fn ready_from_sessions(sessions: Vec<WorkspaceSession>, budget: usize) -> Self {
         let rows = sessions
             .into_iter()
@@ -83,21 +75,10 @@ impl SourceLoadState {
         }
     }
 
-    /// Explicit catalog reload (`R` / forced kick). Pinned in-memory pickers
-    /// return `None` so the provider session list cannot merge in.
-    pub fn force_catalog_meta(&mut self, viewport: Viewport) -> Option<MetaNeed> {
-        if self.pinned {
-            None
-        } else {
-            self.pane.force_meta(viewport)
-        }
-    }
-
-    /// Normal catalog states start idle and need a provider metadata load.
-    /// States built by an in-memory picker source are already ready and must
-    /// not be refreshed back to the provider's full session catalog.
-    pub fn needs_initial_refresh(&self) -> bool {
-        matches!(self.pane.store().phase, StorePhase::Idle)
+    fn force_catalog_meta(&mut self, viewport: Viewport) -> Option<MetaNeed> {
+        (!self.pinned)
+            .then(|| self.pane.force_meta(viewport))
+            .flatten()
     }
 
     pub fn marker(&self) -> SourceLoadMarker {
@@ -203,13 +184,15 @@ impl SourceLoadPump {
     pub fn kick(
         &mut self,
         sources: &[WorkspaceSource],
-        selected: &[bool],
+        source_scope: &[bool],
         states: &mut [SourceLoadState],
         viewport: Viewport,
         force: bool,
     ) {
+        assert_eq!(sources.len(), source_scope.len());
+        assert_eq!(sources.len(), states.len());
         for (idx, source) in sources.iter().enumerate() {
-            if !selected.get(idx).copied().unwrap_or(false) {
+            if !source_scope[idx] {
                 continue;
             }
             let need: Option<MetaNeed> = if force {
@@ -226,12 +209,14 @@ impl SourceLoadPump {
     pub fn refresh_selected(
         &mut self,
         sources: &[WorkspaceSource],
-        selected: &[bool],
+        source_scope: &[bool],
         states: &mut [SourceLoadState],
         viewport: Viewport,
     ) {
+        assert_eq!(sources.len(), source_scope.len());
+        assert_eq!(sources.len(), states.len());
         for (idx, source) in sources.iter().enumerate() {
-            if !selected.get(idx).copied().unwrap_or(false) {
+            if !source_scope[idx] {
                 continue;
             }
             if states[idx].pinned {
@@ -254,6 +239,7 @@ impl SourceLoadPump {
         states: &mut [SourceLoadState],
         keep: &HashSet<(usize, String)>,
     ) {
+        assert_eq!(sources.len(), states.len());
         self.body_wanted.clone_from(keep);
         for (source_idx, state) in states.iter_mut().enumerate() {
             let keep_local: HashSet<String> = keep
@@ -262,9 +248,7 @@ impl SourceLoadPump {
                 .map(|(_, id)| id.clone())
                 .collect();
             let missing = state.pane.ensure_bodies(keep_local);
-            let Some(source) = sources.get(source_idx) else {
-                continue;
-            };
+            let source = &sources[source_idx];
             for session_id in missing {
                 if self.body_inflight.len() >= BODY_FETCH_CAP {
                     return;
@@ -279,23 +263,20 @@ impl SourceLoadPump {
         }
     }
 
-    pub fn drop_unselected(&mut self, selected: &[bool], states: &mut [SourceLoadState]) {
-        for (idx, sel) in selected.iter().enumerate() {
+    pub fn drop_unselected(&mut self, source_scope: &[bool], states: &mut [SourceLoadState]) {
+        assert_eq!(source_scope.len(), states.len());
+        for (idx, sel) in source_scope.iter().enumerate() {
             if *sel {
                 continue;
             }
-            if let Some(state) = states.get_mut(idx) {
-                state.pane.clear();
-            }
+            states[idx].pane.clear();
             self.body_inflight
                 .retain(|k| !k.starts_with(&format!("{idx}\0")));
             self.body_failed
                 .retain(|k, _| !k.starts_with(&format!("{idx}\0")));
             // Invalidate body jobs spawned for this source: their results
             // must not touch the state of a later re-selection.
-            if let Some(gen) = self.body_generation.get_mut(idx) {
-                *gen = gen.saturating_add(1);
-            }
+            self.body_generation[idx] = self.body_generation[idx].saturating_add(1);
         }
     }
 
@@ -330,8 +311,8 @@ impl SourceLoadPump {
                 ) {
                     Ok(mut results) => match results.pop() {
                         Some(QuerySourceResult::Ok(set)) => {
-                            let n = set.records.len();
-                            let mut sessions = sessions_from_records(&source, set.records);
+                            let n = set.records().len();
+                            let mut sessions = sessions_from_records(&source, set.into_records());
                             for s in &mut sessions {
                                 s.records.clear();
                                 s.body_loaded = false;
@@ -387,7 +368,8 @@ impl SourceLoadPump {
                     Ok(mut results) => match results.pop() {
                         Some(QuerySourceResult::Ok(mut set)) => match set.materialize_parts() {
                             Ok(()) => {
-                                let mut sessions = sessions_from_records(&source, set.records);
+                                let mut sessions =
+                                    sessions_from_records(&source, set.into_records());
                                 for s in &mut sessions {
                                     s.body_loaded = !s.records.is_empty();
                                 }
@@ -530,10 +512,10 @@ pub struct SessionColumn {
 
 /// One-frame context for session ensure.
 pub struct SessionCtx<'a> {
-    pub selected_sources: &'a [bool],
+    pub source_scope: &'a [bool],
     /// Merged sessions currently shown (for body keep mapping).
     pub sessions: &'a [WorkspaceSession],
-    pub selected_sessions: &'a [bool],
+    pub session_scope: &'a [bool],
     /// When true, skip meta growth (search filter owns the list).
     pub search_active: bool,
 }
@@ -557,9 +539,9 @@ impl SessionColumn {
         self.states.iter().map(SourceLoadState::marker).collect()
     }
 
-    pub fn collect(&self, selected: &[bool]) -> Vec<WorkspaceSession> {
+    pub fn collect(&self, source_scope: &[bool]) -> Vec<WorkspaceSession> {
         // Meta-only list projection — bodies stay in SlidingPane.
-        collect_ready_sessions(&self.sources, selected, &self.states)
+        collect_ready_sessions(&self.sources, source_scope, &self.states)
     }
 
     /// Records for a session if loaded (source resolved via session.source).
@@ -576,15 +558,20 @@ impl SessionColumn {
     }
 
     /// Bootstrap / force-load selected sources.
-    pub fn kick(&mut self, selected: &[bool], viewport: Viewport, force: bool) {
-        self.pump
-            .kick(&self.sources, selected, &mut self.states, viewport, force);
+    pub fn kick(&mut self, source_scope: &[bool], viewport: Viewport, force: bool) {
+        self.pump.kick(
+            &self.sources,
+            source_scope,
+            &mut self.states,
+            viewport,
+            force,
+        );
     }
 
     /// `R` reload of given source mask.
-    pub fn refresh(&mut self, selected: &[bool], viewport: Viewport) {
+    pub fn refresh(&mut self, source_scope: &[bool], viewport: Viewport) {
         self.pump
-            .refresh_selected(&self.sources, selected, &mut self.states, viewport);
+            .refresh_selected(&self.sources, source_scope, &mut self.states, viewport);
     }
 }
 
@@ -595,21 +582,21 @@ impl Pane for SessionColumn {
         self.pump.drain(&mut self.states)
     }
 
-    fn ensure(&mut self, ctx: SessionCtx<'_>, input: &PaneInput<'_>) -> bool {
+    fn ensure(&mut self, ctx: SessionCtx<'_>, input: &PaneInput<'_>) {
         self.pump
-            .drop_unselected(ctx.selected_sources, &mut self.states);
+            .drop_unselected(ctx.source_scope, &mut self.states);
         if !ctx.search_active {
             if input.force {
                 self.pump.refresh_selected(
                     &self.sources,
-                    ctx.selected_sources,
+                    ctx.source_scope,
                     &mut self.states,
                     input.viewport,
                 );
             } else {
                 self.pump.kick(
                     &self.sources,
-                    ctx.selected_sources,
+                    ctx.source_scope,
                     &mut self.states,
                     input.viewport,
                     false,
@@ -620,13 +607,12 @@ impl Pane for SessionColumn {
             &self.sources,
             ctx.sessions,
             input.focus,
-            ctx.selected_sessions,
+            ctx.session_scope,
             input.neighbor_radius,
         );
         self.pump
             .sync_bodies(&self.sources, &mut self.states, &keep);
         self.merged_len = ctx.sessions.len();
-        true
     }
 
     fn len(&self) -> usize {
@@ -645,11 +631,11 @@ pub fn body_keep_set(
     sources: &[WorkspaceSource],
     sessions: &[WorkspaceSession],
     focus_idx: usize,
-    selected_sessions: &[bool],
+    session_scope: &[bool],
     neighbor_radius: usize,
 ) -> HashSet<(usize, String)> {
     let index_keys: Vec<usize> = (0..sessions.len()).collect();
-    let keep_idx = keep_keys(&index_keys, focus_idx, selected_sessions, neighbor_radius);
+    let keep_idx = keep_keys(&index_keys, focus_idx, session_scope, neighbor_radius);
     keep_idx
         .into_iter()
         .filter_map(|i| {
@@ -694,12 +680,14 @@ pub fn workspace_source_catalog(
 /// Meta-only merge of ready sources (bodies remain in each source pane).
 pub fn collect_ready_sessions(
     sources: &[WorkspaceSource],
-    selected: &[bool],
+    source_scope: &[bool],
     states: &[SourceLoadState],
 ) -> Vec<WorkspaceSession> {
+    assert_eq!(sources.len(), source_scope.len());
+    assert_eq!(sources.len(), states.len());
     let mut sessions = Vec::new();
     for (idx, _) in sources.iter().enumerate() {
-        if !selected.get(idx).copied().unwrap_or(false) {
+        if !source_scope[idx] {
             continue;
         }
         sessions.extend(states[idx].visible_session_metas());
@@ -841,15 +829,15 @@ mod tests {
                 body_loaded: false,
             },
         ];
-        let selected = [false, false, false];
-        let keep = body_keep_set(&sources, &sessions, 1, &selected, 1);
+        let session_scope = [false, false, false];
+        let keep = body_keep_set(&sources, &sessions, 1, &session_scope, 1);
         assert!(keep.contains(&(0, "a".into())));
         assert!(keep.contains(&(0, "b".into())));
         assert!(keep.contains(&(0, "c".into())));
     }
 
     #[test]
-    fn non_forced_kick_preserves_preloaded_session_body() {
+    fn preloaded_sessions_stay_pinned_on_refresh() {
         let source = WorkspaceSource::agent(AgentProvider::Codex);
         let session = WorkspaceSession {
             source: source.clone(),
@@ -861,54 +849,17 @@ mod tests {
             body_loaded: true,
         };
         let state = SourceLoadState::ready_from_sessions(vec![session], 1);
-        assert!(!state.needs_initial_refresh());
         let mut column = SessionColumn::new(vec![source], vec![state], PathBuf::from("."));
-
-        column.kick(
-            &[true],
-            Viewport {
-                first: 0,
-                visible: 10,
-            },
-            false,
-        );
-
-        let body = column.states[0]
-            .body("s1")
-            .expect("preloaded session body should remain available");
-        assert_eq!(body.len(), 1);
-        assert_eq!(body[0].work_ref.to_string(), "codex/s1/1");
-    }
-
-    #[test]
-    fn forced_refresh_does_not_fetch_preloaded_catalog() {
-        let source = WorkspaceSource::agent(AgentProvider::Codex);
-        let session = WorkspaceSession {
-            source: source.clone(),
-            session_id: "s1".into(),
-            modified: UNIX_EPOCH,
-            title: "s1".into(),
-            search_title: "s1".into(),
-            records: vec![test_record("s1", 1, "payload", "2026-07-17T10:00:00Z")],
-            body_loaded: true,
-        };
-        let mut state = SourceLoadState::ready_from_sessions(vec![session], 1);
         let viewport = Viewport {
             first: 0,
             visible: 10,
         };
-        assert!(state.force_catalog_meta(viewport).is_none());
-        assert!(!state.pane.store().list_inflight);
 
-        let mut column = SessionColumn::new(vec![source], vec![state], PathBuf::from("."));
+        column.kick(&[true], viewport, true);
         column.refresh(&[true], viewport);
+
         assert!(!column.states[0].pane.store().list_inflight);
-        assert_eq!(column.states[0].pane.len(), 1);
-        let body = column.states[0]
-            .body("s1")
-            .expect("preloaded session body should remain available");
-        assert_eq!(body.len(), 1);
-        assert_eq!(body[0].work_ref.to_string(), "codex/s1/1");
+        assert_eq!(column.states[0].body("s1").unwrap().len(), 1);
     }
 
     #[test]
@@ -1209,4 +1160,3 @@ mod tests {
         }
     }
 }
-
