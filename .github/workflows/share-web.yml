@@ -35,6 +35,8 @@ jobs:
       - run: npm run typecheck
       - run: npm run test
       - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e
       - run: npx wrangler deploy --dry-run --env staging
 
   deploy-staging:

@@ -1,5 +1,5 @@
 import DOMPurify from "dompurify";
-import { gunzipSync } from "fflate";
+import { Gunzip } from "fflate";
 import { marked } from "marked";
 import "./style.css";
 
@@ -11,6 +11,9 @@ type Snapshot = {
   expires_at: string;
   items: Array<{ role: "user" | "assistant"; text: string; occurred_at: string | null }>;
 };
+
+const MAX_ENVELOPE_BYTES = 5 * 1024 * 1024;
+const MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024;
 
 const app = document.querySelector<HTMLElement>("#app")!;
 const isEnglish = navigator.language.toLowerCase().startsWith("en");
@@ -27,6 +30,7 @@ async function load(): Promise<void> {
     if (response.status === 404) return showError(t("链接已撤销、过期或不存在", "This link was revoked, expired, or does not exist."), false);
     if (!response.ok) throw new Error("network");
     const envelope = new Uint8Array(await response.arrayBuffer());
+    if (envelope.byteLength > MAX_ENVELOPE_BYTES) throw new Error("decrypt");
     const snapshot = await decryptEnvelope(envelope, key, id);
     if (snapshot.schema_version !== 1) return showError(t("不支持的快照版本", "This snapshot version is not supported."), false);
     render(snapshot);
@@ -50,11 +54,29 @@ async function decryptEnvelope(envelope: Uint8Array, encodedKey: string, id: str
     const ciphertext = envelope.slice(22);
     const key = await crypto.subtle.importKey("raw", base64url(encodedKey), "AES-GCM", false, ["decrypt"]);
     const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce, additionalData: new TextEncoder().encode(`sivtr-publication-v1:${id}`), tagLength: 128 }, key, ciphertext);
-    const json = new TextDecoder().decode(gunzipSync(new Uint8Array(plaintext)));
+    const json = new TextDecoder().decode(gunzipBounded(new Uint8Array(plaintext), MAX_SNAPSHOT_BYTES));
     return JSON.parse(json) as Snapshot;
   } catch {
     throw new Error("decrypt");
   }
+}
+
+function gunzipBounded(data: Uint8Array, maxBytes: number): Uint8Array {
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const gunzip = new Gunzip((chunk) => {
+    total += chunk.byteLength;
+    if (total > maxBytes) throw new Error("too large");
+    chunks.push(chunk);
+  });
+  gunzip.push(data, true);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
 }
 
 function base64url(value: string): Uint8Array {

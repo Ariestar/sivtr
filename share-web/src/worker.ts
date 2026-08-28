@@ -42,7 +42,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
   // `/s/:id` is intentionally a fixed shell; the server never inspects or
   // renders the encrypted snapshot, including its title.
   if (url.pathname === "/" || url.pathname.startsWith("/s/")) {
-    return env.ASSETS.fetch(new Request(new URL("/index.html", request.url), request));
+    return env.ASSETS.fetch(new Request(new URL("/", request.url), request));
   }
   return env.ASSETS.fetch(request);
 }
