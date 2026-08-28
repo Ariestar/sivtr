@@ -484,7 +484,20 @@ impl ContentPane {
         self.marked.entry(dialogue_idx).or_default().toggle(block);
     }
 
-    /// Drop every dialogue's marks (selection set changed).
+    /// Mark a block range: the same one-state rule the list panes use for
+    /// `v`, over the visible block ids the range spans.
+    pub fn toggle_mark_range(
+        &mut self,
+        dialogue_idx: usize,
+        blocks: impl Iterator<Item = usize> + Clone,
+    ) {
+        self.marked
+            .entry(dialogue_idx)
+            .or_default()
+            .toggle_ids(blocks);
+    }
+
+    /// Drop every dialogue's marks (the set of markable dialogues changed).
     pub fn clear_marks(&mut self) {
         self.marked.clear();
     }

@@ -135,9 +135,10 @@ pub(crate) fn run(
     // Multi-select paging: which selected dialogue the content pane shows
     // (J/K flip the page); single selection always shows the focused row.
     let mut content_page = 0usize;
-    // Last selection mask; marks drop when the selection set itself changes
-    // (they belong to their dialogue and survive page flips).
-    let mut previous_selection_key = None;
+    // Which dialogues may currently own a mark: the selection mask, plus the
+    // shown row when nothing is selected. Marks drop when that set changes;
+    // they belong to their dialogue and survive page flips.
+    let mut markable_key: Option<(Vec<bool>, Option<usize>)> = None;
 
     loop {
         // ── Unified pane poll/ensure ───────────────────────────────────────
@@ -382,11 +383,18 @@ pub(crate) fn run(
                 content_range_anchor = None;
                 expanded_key = Some(expand_key);
             }
-            // Marks belong to their dialogue (they survive page flips for
-            // cross-page copy); drop them when the selection set changes.
-            if previous_selection_key.as_ref() != Some(&selected_dialogues) {
+            // Marks are keyed by dialogue index, so they only stay meaningful
+            // while the set of dialogues that can own one is unchanged: the
+            // selection mask, or — with nothing selected — the focused row
+            // alone. Page flips inside a selection keep the marks so a later
+            // copy can join pages.
+            let marks_key = (
+                selected_dialogues.clone(),
+                (selected == 0).then_some(shown_idx),
+            );
+            if markable_key.as_ref() != Some(&marks_key) {
                 content_pane.clear_marks();
-                previous_selection_key = Some(selected_dialogues.clone());
+                markable_key = Some(marks_key);
             }
             // Rebuild the content frame (texts + cached layouts) only when
             // the shown dialogue, mode, focus, target, expansion, or pane
