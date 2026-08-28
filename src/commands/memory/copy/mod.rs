@@ -41,8 +41,7 @@ pub fn execute(plan: CopyPlan) -> Result<()> {
     let mut units = Vec::new();
     for record in &loaded.records {
         units.push(
-            project_record(record, loaded.projection, prompt)
-                .context("project record for copy")?,
+            project_record(record, loaded.projection, prompt).context("project record for copy")?,
         );
     }
 
