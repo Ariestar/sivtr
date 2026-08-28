@@ -1,21 +1,41 @@
 //! Dialogue construction, content copy, line filter, and search targeting.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossterm::event::KeyCode;
 
-use crate::commands::select::CommandSelection;
-use crate::tui::content::block::{half_blocks, Block};
-use crate::tui::content::io::ContentIoFocus;
+use crate::tui::content::block::{dialogue_blocks, Block};
 use crate::tui::content::view::{line_count, ContentViewMode};
 use crate::tui::search::{WorkspaceSearchMatch, WorkspaceSearchOutput};
-use crate::tui::workspace::{
-    selected_indices, WorkspaceDialogue, WorkspacePickedContent, WorkspaceSession,
-};
-use sivtr_core::record::{work_atoms, WorkAt, WorkPartKind, WorkRecord, WorkRef};
+use crate::tui::workspace::{WorkspaceDialogue, WorkspaceSession, WorkspaceSource};
+use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
 
-use super::panes::ContentPane;
+use crate::commands::memory::workset::{WorkSelectionAction, WorkSelectionTarget, WorkSet};
+
 use super::text::filter_lines_by_spec;
 use super::vim::{VimBlock, VimView};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WorkspacePickProjection {
+    Whole,
+    Input,
+    Output,
+    Command,
+    Parts,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum PickedContent {
+    WorkSet {
+        source: WorkspaceSource,
+        set: WorkSet,
+        projection: WorkspacePickProjection,
+        line_filter: Option<String>,
+    },
+    Text {
+        source: WorkspaceSource,
+        units: Vec<crate::tui::workspace::TextPair>,
+    },
+}
 
 #[derive(Clone, Copy)]
 pub(super) enum WorkspaceCopyShortcut {
@@ -25,273 +45,148 @@ pub(super) enum WorkspaceCopyShortcut {
     Command,
 }
 
-/// Selected dialogue indices in selection order, falling back to the
-/// focused row when nothing is selected (copy targets one dialogue then).
-fn picked_dialogue_indices(selected_dialogues: &[bool], dialogue_idx: usize) -> Vec<usize> {
-    let selected = selected_indices(selected_dialogues);
-    if selected.is_empty() {
-        vec![dialogue_idx]
-    } else {
-        selected
-    }
+/// Source a copy is attributed to: the first picked dialogue's.
+pub(super) fn picked_source(
+    dialogues: &[WorkspaceDialogue],
+    picked: &[usize],
+) -> Option<WorkspaceSource> {
+    dialogues
+        .get(*picked.first()?)
+        .map(|dialogue| dialogue.source.clone())
 }
 
-pub(super) fn workspace_picked_content_for_copy_with_line_filter(
+pub(super) fn workspace_picked_content_for_copy(
     dialogues: &[WorkspaceDialogue],
-    selected_dialogues: &[bool],
-    dialogue_idx: usize,
+    picked: &[usize],
     shortcut: WorkspaceCopyShortcut,
     line_filter: Option<&str>,
     target: Option<WorkAt>,
-    content_mode: ContentViewMode,
-) -> Result<WorkspacePickedContent> {
-    let picked_indices = picked_dialogue_indices(selected_dialogues, dialogue_idx);
-    let source_idx = picked_indices[0];
-    let display_target = (picked_indices.len() == 1
+    _content_mode: ContentViewMode,
+) -> Result<PickedContent> {
+    let source = picked_source(dialogues, picked).context("copy needs at least one dialogue")?;
+    let display_target = (picked.len() == 1
         && matches!(shortcut, WorkspaceCopyShortcut::Displayed))
     .then_some(target)
     .flatten();
-    let anchors = if line_filter.is_some() {
-        Vec::new()
-    } else {
-        picked_indices
-            .iter()
-            .filter_map(|idx| dialogues.get(*idx))
-            .flat_map(|dialogue| copy_shortcut_anchors(dialogue, shortcut, display_target))
-            .collect()
+    let mut records = Vec::new();
+    let mut complete = true;
+    for &idx in picked {
+        let Some(dialogue) = dialogues.get(idx) else {
+            complete = false;
+            continue;
+        };
+        if let Some(record) = dialogue.record.as_ref() {
+            records.push(record.clone());
+        } else {
+            complete = false;
+        }
+    }
+    let projection = match shortcut {
+        WorkspaceCopyShortcut::Displayed if target.is_none() => WorkspacePickProjection::Whole,
+        WorkspaceCopyShortcut::Displayed => WorkspacePickProjection::Parts,
+        WorkspaceCopyShortcut::Input => WorkspacePickProjection::Input,
+        WorkspaceCopyShortcut::Output => WorkspacePickProjection::Output,
+        WorkspaceCopyShortcut::Command => WorkspacePickProjection::Command,
     };
-    let units = picked_indices
-        .into_iter()
-        .filter_map(|idx| dialogues.get(idx))
-        .map(|dialogue| match shortcut {
-            WorkspaceCopyShortcut::Displayed => dialogue.display_unit(content_mode, display_target),
-            WorkspaceCopyShortcut::Input => dialogue.copy.input.clone(),
-            WorkspaceCopyShortcut::Output => dialogue.copy.output.clone(),
-            WorkspaceCopyShortcut::Command => dialogue.copy.command.clone(),
-        })
-        .collect::<Vec<_>>();
-    let units = apply_workspace_line_filter(units, line_filter)?;
-    let selection = CommandSelection::RecentExplicit((1..=units.len()).collect());
-    Ok(WorkspacePickedContent {
-        source: dialogues[source_idx].source.clone(),
-        units,
-        selection,
-        anchors,
+    if !complete {
+        anyhow::bail!("structured copy needs materialized dialogues");
+    }
+    if let Some(spec) = line_filter {
+        filter_lines_by_spec(&crate::tui::workspace::TextPair::default(), spec)?;
+    }
+    let cwd = std::env::current_dir().context("copy needs a current directory")?;
+    let mut set = WorkSet::from_parts(cwd.display().to_string(), Vec::new(), Vec::new());
+    for record in records {
+        match display_target {
+            Some(WorkAt::Part(seq)) => set.apply_target(
+                WorkSelectionAction::Include,
+                WorkSelectionTarget::Parts {
+                    record,
+                    parts: vec![seq],
+                },
+                [],
+            ),
+            _ => set.apply_target(
+                WorkSelectionAction::Include,
+                WorkSelectionTarget::Whole(record),
+                [],
+            ),
+        }
+    }
+    Ok(PickedContent::WorkSet {
+        source,
+        set,
+        projection,
+        line_filter: line_filter.map(str::to_string),
     })
 }
 
-fn copy_shortcut_anchors(
-    dialogue: &WorkspaceDialogue,
-    shortcut: WorkspaceCopyShortcut,
-    display_target: Option<WorkAt>,
-) -> Vec<WorkRef> {
-    match shortcut {
-        WorkspaceCopyShortcut::Displayed => {
-            dialogue.content_ref(display_target).into_iter().collect()
-        }
-        WorkspaceCopyShortcut::Input => half_atom_anchors(dialogue, true),
-        WorkspaceCopyShortcut::Output => half_atom_anchors(dialogue, false),
-        WorkspaceCopyShortcut::Command => command_part_anchors(dialogue),
-    }
-}
-
-fn half_atom_anchors(dialogue: &WorkspaceDialogue, input: bool) -> Vec<WorkRef> {
-    let Some(record) = dialogue.record.as_ref() else {
-        return Vec::new();
-    };
-    work_atoms(record, input)
-        .into_iter()
-        .flat_map(|atom| {
-            atom.part_seqs
-                .into_iter()
-                .map(|seq| record.work_ref.with_part(seq))
-        })
-        .collect()
-}
-
-fn command_part_anchors(dialogue: &WorkspaceDialogue) -> Vec<WorkRef> {
-    let Some(record) = dialogue.record.as_ref() else {
-        return Vec::new();
-    };
-    record
-        .parts
-        .iter()
-        .filter(|part| part.kind() == WorkPartKind::Command)
-        .map(|part| record.work_ref.with_part(part.seq))
-        .collect()
-}
-
-#[cfg(test)]
-pub(super) fn workspace_picked_content_for_copy(
+/// The Part subset of the canonical selection, attributed to its first
+/// materialized dialogue.
+pub(super) fn workspace_picked_content_for_selected_parts(
+    selection: &WorkSet,
     dialogues: &[WorkspaceDialogue],
-    selected_dialogues: &[bool],
-    dialogue_idx: usize,
-    shortcut: WorkspaceCopyShortcut,
-) -> WorkspacePickedContent {
-    workspace_picked_content_for_copy_with_line_filter(
-        dialogues,
-        selected_dialogues,
-        dialogue_idx,
-        shortcut,
-        None,
-        None,
-        ContentViewMode::Reading,
-    )
-    .expect("workspace copy without a line filter should not fail")
+) -> Option<PickedContent> {
+    let set = selection.parts_only()?;
+    let anchor = set.anchors().first()?.clone();
+    let source = dialogues.iter().find_map(|dialogue| {
+        (dialogue.work_ref.as_ref()?.whole() == anchor.whole()).then(|| dialogue.source.clone())
+    })?;
+    Some(PickedContent::WorkSet {
+        source,
+        set,
+        projection: WorkspacePickProjection::Parts,
+        line_filter: None,
+    })
 }
 
-pub(super) fn workspace_picked_content_with_line_filter(
-    dialogues: &[WorkspaceDialogue],
-    selected_dialogues: &[bool],
-    dialogue_idx: usize,
-    line_filter: Option<&str>,
-    target: Option<WorkAt>,
-) -> Result<WorkspacePickedContent> {
-    workspace_picked_content_for_copy_with_line_filter(
-        dialogues,
-        selected_dialogues,
-        dialogue_idx,
-        WorkspaceCopyShortcut::Displayed,
-        line_filter,
-        target,
-        ContentViewMode::Reading,
-    )
-}
-
-pub(super) fn workspace_picked_content(
-    dialogues: &[WorkspaceDialogue],
-    selected_dialogues: &[bool],
-    dialogue_idx: usize,
-    target: Option<WorkAt>,
-) -> WorkspacePickedContent {
-    workspace_picked_content_with_line_filter(
-        dialogues,
-        selected_dialogues,
-        dialogue_idx,
-        None,
-        target,
-    )
-    .expect("workspace copy without a line filter should not fail")
-}
-
-/// Picked content from the content pane's marked blocks: every selected
-/// block's full body (regardless of fold state), joined in display order.
-/// Marks follow their dialogue (multi-select paging keeps them), so all
-/// marked dialogues contribute, in selection order. Dialogues without a
-/// record are skipped, keeping the blocks already collected. `None` when
-/// nothing is marked.
-pub(super) fn workspace_picked_content_for_marked_blocks(
-    dialogues: &[WorkspaceDialogue],
-    selected_dialogues: &[bool],
-    dialogue_idx: usize,
-    content_pane: &ContentPane,
-    line_filter: Option<&str>,
-) -> Option<WorkspacePickedContent> {
-    let picked_indices = picked_dialogue_indices(selected_dialogues, dialogue_idx);
-    let mut texts = Vec::new();
-    let mut anchors = Vec::new();
-    for dialogue_idx in picked_indices {
-        let Some(record) = dialogues
-            .get(dialogue_idx)
-            .and_then(|dialogue| dialogue.record.as_ref())
-        else {
-            continue;
-        };
-        for (input, half) in [
-            (true, ContentIoFocus::Input),
-            (false, ContentIoFocus::Output),
-        ] {
-            for block in half_blocks(record, input) {
-                collect_marked_blocks(
-                    &block,
-                    half,
-                    dialogue_idx,
-                    content_pane,
-                    record,
-                    &mut texts,
-                    &mut anchors,
-                );
-            }
-        }
-    }
-    picked_for_texts(
-        dialogues,
-        selected_dialogues,
-        dialogue_idx,
-        texts,
-        anchors,
-        line_filter,
-    )
-}
-
-/// Push every marked block's body, descending into run members (a marked
-/// member of a folded run carries its own id, separate from the run's).
-fn collect_marked_blocks(
-    block: &Block,
-    half: ContentIoFocus,
-    dialogue_idx: usize,
-    content_pane: &ContentPane,
-    record: &WorkRecord,
-    texts: &mut Vec<String>,
-    anchors: &mut Vec<WorkRef>,
-) {
-    if content_pane
-        .marked(half, dialogue_idx)
-        .get(block.id)
-        .copied()
-        .unwrap_or(false)
-    {
-        texts.push(block.body(record));
-        let work_ref = &record.work_ref;
-        anchors.extend(
-            block
-                .parts
-                .iter()
-                .map(|index| work_ref.with_part(record.parts[*index].seq)),
-        );
-    }
-    for child in &block.children {
-        collect_marked_blocks(
-            child,
-            half,
-            dialogue_idx,
-            content_pane,
-            record,
-            texts,
-            anchors,
-        );
-    }
-}
-
-/// Copy the block under the content cursor: y without marked blocks joins
-/// just that block's call + result bodies, not the whole dialogue.
+/// Copy the block under the content cursor as its part anchors.
 pub(super) fn workspace_picked_content_for_cursor_block(
     dialogues: &[WorkspaceDialogue],
-    selected_dialogues: &[bool],
     dialogue_idx: usize,
-    half: ContentIoFocus,
     block_id: usize,
-    line_filter: Option<&str>,
-) -> Option<WorkspacePickedContent> {
+) -> Result<Option<PickedContent>> {
+    let Some((source, record, parts)) = workspace_block_parts(dialogues, dialogue_idx, block_id)
+    else {
+        return Ok(None);
+    };
+    let cwd = std::env::current_dir().context("copy needs a current directory")?;
+    let mut set = WorkSet::from_parts(cwd.display().to_string(), Vec::new(), Vec::new());
+    set.apply_target(
+        WorkSelectionAction::Include,
+        WorkSelectionTarget::Parts { record, parts },
+        [],
+    );
+    Ok(Some(PickedContent::WorkSet {
+        source,
+        set,
+        projection: WorkspacePickProjection::Parts,
+        line_filter: None,
+    }))
+}
+
+pub(super) fn workspace_block_parts(
+    dialogues: &[WorkspaceDialogue],
+    dialogue_idx: usize,
+    block_id: usize,
+) -> Option<(WorkspaceSource, WorkRecord, Vec<usize>)> {
     let dialogue = dialogues.get(dialogue_idx)?;
     let record = dialogue.record.as_ref()?;
-    let input = matches!(half, ContentIoFocus::Input);
-    let blocks = half_blocks(record, input);
-    let block = blocks
+    let (input_blocks, output_blocks) = dialogue_blocks(record);
+    let block = input_blocks
         .iter()
+        .chain(&output_blocks)
         .find_map(|block| find_block(block, block_id))?;
-    picked_for_texts(
-        dialogues,
-        selected_dialogues,
-        dialogue_idx,
-        vec![block.body(record)],
+    dialogue.work_ref.as_ref()?;
+    Some((
+        dialogue.source.clone(),
+        record.clone(),
         block
             .parts
             .iter()
-            .map(|index| record.work_ref.with_part(record.parts[*index].seq))
+            .map(|&idx| record.parts[idx].seq)
             .collect(),
-        line_filter,
-    )
+    ))
 }
 
 /// Depth-first block lookup: run members live nested in `children`, and the
@@ -306,51 +201,8 @@ fn find_block(block: &Block, id: usize) -> Option<&Block> {
         .find_map(|child| find_block(child, id))
 }
 
-/// One copy unit from already-collected block bodies.
-fn picked_for_texts(
-    dialogues: &[WorkspaceDialogue],
-    selected_dialogues: &[bool],
-    dialogue_idx: usize,
-    texts: Vec<String>,
-    anchors: Vec<WorkRef>,
-    line_filter: Option<&str>,
-) -> Option<WorkspacePickedContent> {
-    if texts.is_empty() {
-        return None;
-    }
-    let plain = texts.join("\n\n");
-    let source = workspace_picked_content(dialogues, selected_dialogues, dialogue_idx, None).source;
-    Some(WorkspacePickedContent {
-        source,
-        units: vec![crate::tui::workspace::TextPair {
-            ansi: plain.clone(),
-            plain,
-        }],
-        selection: CommandSelection::RecentExplicit(vec![1]),
-        anchors: if line_filter.is_some() {
-            Vec::new()
-        } else {
-            anchors
-        },
-    })
-}
-
 pub(super) fn line_filter_spec(line_filter: &str) -> Option<&str> {
     (!line_filter.is_empty()).then_some(line_filter)
-}
-
-pub(super) fn apply_workspace_line_filter(
-    units: Vec<crate::tui::workspace::TextPair>,
-    line_filter: Option<&str>,
-) -> Result<Vec<crate::tui::workspace::TextPair>> {
-    let Some(spec) = line_filter else {
-        return Ok(units);
-    };
-
-    units
-        .into_iter()
-        .map(|unit| filter_lines_by_spec(&unit, spec))
-        .collect()
 }
 
 pub(super) fn handle_line_filter_key(
@@ -448,7 +300,12 @@ pub(super) fn active_workspace_content_at(
 
 #[cfg(test)]
 pub(super) fn workspace_dialogue_vim_view(dialogue: &WorkspaceDialogue) -> VimView {
-    dialogue_text_vim_view(dialogue.content_text(ContentViewMode::Reading, None))
+    dialogue_text_vim_view(crate::tui::content::text::workspace_content_text(
+        std::slice::from_ref(dialogue),
+        0,
+        ContentViewMode::Reading,
+        None,
+    ))
 }
 
 pub(super) fn dialogue_text_vim_view(text: String) -> VimView {
@@ -473,14 +330,13 @@ pub(super) fn dialogue_text_vim_view(text: String) -> VimView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::browse::panes::{ContentCtx, ContentPane};
-    use crate::tui::content::io::{ContentIoFocus, ExpandedBlocks};
-    use crate::tui::workspace::{WorkspaceCopyParts, WorkspaceSource};
+    use crate::tui::workspace::WorkspaceSource;
     use sivtr_core::ai::AgentProvider;
     use sivtr_core::record::{
         WorkChannel, WorkPart, WorkPartData, WorkRecord, WorkRecordKind, WorkRef, WorkSessionRef,
         WorkSource, WorkTime,
     };
+    use sivtr_core::workset::{WorkSelectionAction, WorkSelectionTarget, WorkSet};
 
     fn record(title: &str, tool: &str, command: &str, index: usize) -> WorkRecord {
         let mut record = WorkRecord {
@@ -525,227 +381,72 @@ mod tests {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(record.work_ref.clone()),
             record: Some(record),
-            copy: WorkspaceCopyParts::default(),
         }
     }
 
     #[test]
-    fn marked_blocks_copy_joins_every_selected_dialogue() {
+    fn selected_parts_copy_every_selected_dialogue() {
         let a = dialogue(record("A", "Bash", "ls", 0));
         let b = dialogue(record("B", "Bash", "git status", 1));
         let dialogues = [a, b];
-        let selected = [true, true];
-        let mut pane = ContentPane::default();
-        // Multi-select paging ensures each dialogue in turn, keeping its
-        // marks; both end up owned by their dialogue.
-        for idx in 0..2 {
-            pane.ensure(ContentCtx {
-                dialogues: &dialogues,
-                highlighted_idx: idx,
-                mode: ContentViewMode::Reading,
-                target: None,
-                area: ratatui::layout::Rect::new(0, 0, 60, 20),
-                io_focus: ContentIoFocus::Output,
-                expanded: &ExpandedBlocks::default(),
-            });
-            pane.toggle_mark(ContentIoFocus::Output, idx, 0);
+        let mut selection = WorkSet::new(".", Vec::new());
+        for dialogue in &dialogues {
+            let record = dialogue.record.clone().unwrap();
+            selection.apply_target(
+                WorkSelectionAction::Include,
+                WorkSelectionTarget::Parts {
+                    record,
+                    parts: vec![2],
+                },
+                [],
+            );
         }
-
-        let picked =
-            workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane, None)
-                .expect("marked blocks across two dialogues");
-        let joined: Vec<String> = picked.units.iter().map(|unit| unit.plain.clone()).collect();
-        let all = joined.join("\n");
-        assert!(
-            all.contains("$ ls"),
-            "dialogue A marked block missing: {all}"
-        );
-        assert!(
-            all.contains("$ git status"),
-            "dialogue B marked block missing: {all}"
-        );
-    }
-
-    fn full_chat_turn(index: usize) -> WorkRecord {
-        WorkRecord {
-            schema_version: 2,
-            work_ref: WorkRef::agent(AgentProvider::Codex, "test", index + 1),
-            kind: WorkRecordKind::ChatTurn,
-            source: WorkSource {
-                channel: WorkChannel::Chat,
-                provider: Some("codex".to_string()),
-            },
-            session: WorkSessionRef {
-                id: "test".to_string(),
-                canonical_id: Some("test-session-0123456789abcdef".to_string()),
-                path: None,
-            },
-            cwd: None,
-            time: WorkTime::default(),
-            status: None,
-            title: "turn".to_string(),
-            parts: vec![
-                WorkPart {
-                    seq: 1,
-                    occurred_at: None,
-                    data: WorkPartData::User {
-                        content: "user question".to_string(),
-                    },
-                },
-                WorkPart {
-                    seq: 2,
-                    occurred_at: None,
-                    data: WorkPartData::Skill {
-                        skill: Some("lookup".to_string()),
-                        content: "skill body".to_string(),
-                    },
-                },
-                WorkPart {
-                    seq: 3,
-                    occurred_at: None,
-                    data: WorkPartData::ToolCall {
-                        call_id: Some("c1".to_string()),
-                        tool: Some("Bash".to_string()),
-                        input: serde_json::json!({ "command": "ls" }),
-                    },
-                },
-                WorkPart {
-                    seq: 4,
-                    occurred_at: None,
-                    data: WorkPartData::ToolResult {
-                        call_id: Some("c1".to_string()),
-                        tool: Some("Bash".to_string()),
-                        output: serde_json::json!({ "stdout": "ok" }),
-                        start_line: None,
-                    },
-                },
-                WorkPart {
-                    seq: 5,
-                    occurred_at: None,
-                    data: WorkPartData::Thinking {
-                        content: "internal reasoning".to_string(),
-                    },
-                },
-                WorkPart {
-                    seq: 6,
-                    occurred_at: None,
-                    data: WorkPartData::Assistant {
-                        content: "assistant reply".to_string(),
-                    },
-                },
-            ],
-        }
-    }
-
-    fn dialogue_with_copy(record: WorkRecord) -> WorkspaceDialogue {
-        WorkspaceDialogue {
-            source: WorkspaceSource::agent(AgentProvider::Codex),
-            work_ref: Some(record.work_ref.clone()),
-            copy: WorkspaceCopyParts {
-                input: crate::tui::workspace::TextPair {
-                    plain: "user question".to_string(),
-                    ansi: String::new(),
-                },
-                output: crate::tui::workspace::TextPair {
-                    plain: "assistant reply".to_string(),
-                    ansi: String::new(),
-                },
-                command: crate::tui::workspace::TextPair::default(),
-            },
-            record: Some(record),
-        }
-    }
-
-    fn part_seqs(picked: &WorkspacePickedContent) -> Vec<usize> {
-        picked
-            .anchors
-            .iter()
-            .map(|anchor| {
-                anchor
-                    .part()
-                    .expect("copy confirm should attach part anchors")
-            })
-            .collect()
+        let picked = workspace_picked_content_for_selected_parts(&selection, &dialogues)
+            .expect("selected parts");
+        let PickedContent::WorkSet {
+            set, projection, ..
+        } = picked
+        else {
+            panic!("marked blocks must remain addressable")
+        };
+        assert_eq!(projection, WorkspacePickProjection::Parts);
+        assert_eq!(set.anchors().len(), 2);
+        assert!(set.anchors().iter().all(|anchor| anchor.part().is_some()));
     }
 
     #[test]
-    fn copy_shortcuts_attach_half_scoped_publish_anchors() {
-        let dialogues = [dialogue_with_copy(full_chat_turn(0))];
-        let selected = [false];
-
-        let input = workspace_picked_content_for_copy(
-            &dialogues,
-            &selected,
-            0,
-            WorkspaceCopyShortcut::Input,
-        );
-        assert_eq!(input.units[0].plain, "user question");
-        assert_eq!(part_seqs(&input), vec![1, 2]);
-
-        let output = workspace_picked_content_for_copy(
-            &dialogues,
-            &selected,
-            0,
-            WorkspaceCopyShortcut::Output,
-        );
-        assert_eq!(output.units[0].plain, "assistant reply");
-        assert_eq!(part_seqs(&output), vec![3, 4, 5, 6]);
-
-        let command = workspace_picked_content_for_copy(
-            &dialogues,
-            &selected,
-            0,
-            WorkspaceCopyShortcut::Command,
-        );
-        assert!(command.units[0].plain.is_empty());
-        assert!(command.anchors.is_empty());
-
-        let displayed = workspace_picked_content(&dialogues, &selected, 0, None);
-        assert_eq!(displayed.anchors.len(), 1);
-        assert!(displayed.anchors[0].part().is_none());
-    }
-
-    #[test]
-    fn cursor_and_marked_block_anchors_stay_part_scoped() {
-        let record = full_chat_turn(0);
-        let dialogues = [dialogue_with_copy(record.clone())];
-        let selected = [true];
-        let mut pane = ContentPane::default();
-        pane.ensure(ContentCtx {
-            dialogues: &dialogues,
-            highlighted_idx: 0,
-            mode: ContentViewMode::Reading,
-            target: None,
-            area: ratatui::layout::Rect::new(0, 0, 60, 20),
-            io_focus: ContentIoFocus::Input,
-            expanded: &ExpandedBlocks::default(),
+    fn selected_run_parts_are_deduplicated() {
+        let mut base = record("A", "Bash", "ls", 0);
+        // A second consecutive tool call folds both into one run: block 1 is
+        // the run, blocks 2 and 3 its members.
+        base.parts.push(WorkPart {
+            seq: 3,
+            occurred_at: None,
+            data: WorkPartData::ToolCall {
+                call_id: Some("c2".to_string()),
+                tool: Some("Bash".to_string()),
+                input: serde_json::json!({ "command": "git status" }),
+            },
         });
-        pane.toggle_mark(ContentIoFocus::Input, 0, 0);
-
-        let marked =
-            workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane, None)
-                .expect("marked user block");
-        assert_eq!(part_seqs(&marked), vec![1]);
-        let filtered =
-            workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane, Some("1"))
-                .expect("filtered marked copy still has text");
-        assert!(filtered.anchors.is_empty());
-
-        let cursor = workspace_picked_content_for_cursor_block(
-            &dialogues,
-            &selected,
-            0,
-            ContentIoFocus::Output,
-            0,
-            None,
-        )
-        .expect("cursor output block");
-        assert!(cursor.anchors.iter().all(|anchor| anchor.part().is_some()));
-        assert!(
-            !part_seqs(&cursor).contains(&1),
-            "cursor output block must not widen to the user part: {:?}",
-            cursor.anchors
+        let dialogues = [dialogue(base)];
+        let mut selection = WorkSet::new(".", Vec::new());
+        selection.apply_target(
+            WorkSelectionAction::Include,
+            WorkSelectionTarget::Parts {
+                record: dialogues[0].record.clone().unwrap(),
+                parts: vec![2, 3, 2],
+            },
+            [],
         );
+        let picked = workspace_picked_content_for_selected_parts(&selection, &dialogues)
+            .expect("selected run");
+        let PickedContent::WorkSet {
+            set, projection, ..
+        } = picked
+        else {
+            panic!("marked blocks must remain addressable")
+        };
+        assert_eq!(projection, WorkspacePickProjection::Parts);
+        assert_eq!(set.anchors().len(), 2, "run members copied twice");
     }
 }
-

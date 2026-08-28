@@ -2,7 +2,7 @@
 
 use sivtr_core::record::{WorkAt, WorkRecord};
 
-use crate::tui::content::block::render_half;
+use crate::tui::content::block::{dialogue_blocks, render_half};
 use crate::tui::content::io::{ContentIoTexts, ExpandedBlocks};
 use crate::tui::content::view::ContentViewMode;
 use crate::tui::workspace::model::WorkspaceDialogue;
@@ -10,15 +10,17 @@ use crate::tui::workspace::model::WorkspaceDialogue;
 /// Read mode folds every block to its `<:…:>` tag (structure blocks by
 /// default, body blocks only when flipped); blocks listed in `expanded`
 /// show their full body instead. Raw mode always shows full blocks (the
-/// expand state only affects reading).
+/// expand state only affects reading). Block ids are dialogue-global, so
+/// the fold state spans the input/output boundary.
 pub(crate) fn content_io_from_record(
     record: &WorkRecord,
     reading: bool,
     expanded: &ExpandedBlocks,
 ) -> ContentIoTexts {
+    let (input_blocks, output_blocks) = dialogue_blocks(record);
     ContentIoTexts::new(
-        render_half(record, true, reading, expanded),
-        render_half(record, false, reading, expanded),
+        render_half(record, &input_blocks, reading, expanded),
+        render_half(record, &output_blocks, reading, expanded),
     )
 }
 
@@ -79,7 +81,7 @@ pub(crate) fn is_structure_marker(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::content_io_from_record;
-    use crate::tui::content::io::{ContentIoFocus, ExpandedBlocks};
+    use crate::tui::content::io::ExpandedBlocks;
     use sivtr_core::ai::AgentProvider;
     use sivtr_core::record::{WorkPart, WorkPartData, WorkRecord, WorkRef};
 
@@ -144,7 +146,7 @@ mod tests {
         assert!(!output.contains("file"));
 
         let mut expanded = ExpandedBlocks::default();
-        expanded.toggle(ContentIoFocus::Output, 0);
+        expanded.toggle(0);
         let io = content_io_from_record(&rec, true, &expanded);
         let output = &io.output;
         // The run opens to its member tags; bodies stay folded.
@@ -154,7 +156,7 @@ mod tests {
         assert!(!output.contains("file"));
 
         // Opening a member shows its body.
-        expanded.toggle(ContentIoFocus::Output, 1);
+        expanded.toggle(1);
         let io = content_io_from_record(&rec, true, &expanded);
         assert!(io.output.contains("$ ls"));
     }
@@ -163,7 +165,7 @@ mod tests {
     fn raw_mode_ignores_expand_state() {
         let rec = record(vec![tool_part(1, "Bash", "ls")]);
         let mut expanded = ExpandedBlocks::default();
-        expanded.toggle(ContentIoFocus::Output, 0);
+        expanded.toggle(0);
         let io = content_io_from_record(&rec, false, &expanded);
         assert_eq!(io.output, "$ ls");
     }
@@ -187,7 +189,7 @@ mod tests {
         // Expanding the run reveals member tags on adjacent lines (no blank
         // line between); the result payload stays folded.
         let mut expanded = ExpandedBlocks::default();
-        expanded.toggle(ContentIoFocus::Output, 0);
+        expanded.toggle(0);
         let io = content_io_from_record(&rec, true, &expanded);
         let output = &io.output;
         // The call+result pair is one member; its collapsed tag is the call
@@ -199,7 +201,7 @@ mod tests {
         assert!(!output.contains("file"));
 
         // Opening the result member shows its payload.
-        expanded.toggle(ContentIoFocus::Output, 1);
+        expanded.toggle(1);
         let io = content_io_from_record(&rec, true, &expanded);
         assert!(io.output.contains("ok"));
     }

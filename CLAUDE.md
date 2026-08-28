@@ -36,6 +36,7 @@ crates/sivtr-core/src/     ← Core library (no CLI deps)
   query/                   ← Workspace record/source loading
   search/                  ← Filter/Searcher pipeline, BM25 ranking (types.rs, filter.rs, bm25.rs, eval.rs)
   workspace.rs             ← Workspace resolution (git root → sessions), data_dir()
+  workset.rs               ← WorkSet / WorkSelection* canonical selection model
   config/                  ← SivtrConfig, serde TOML
   history/                 ← SQLite command history
   session.rs               ← Session log reading

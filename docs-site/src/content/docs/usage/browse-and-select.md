@@ -24,7 +24,7 @@ Layout: Source · Sessions · Dialogues · Content. Content splits into **Input*
 | `h` / `l` | Previous / next pane |
 | `j` / `k` | Move down / up |
 | `Space` | Toggle selection (source, session, or dialogue) · mark a content block |
-| `a` | Select all sources (Source) · toggle all dialogues (Dialogues) |
+| `a` | 切换当前面板的全部条目 |
 | `g` / `t` | Select agent sources / terminal source (Source) |
 | `R` | Refresh next level under active rows |
 | `v` | Range-select rows · block-range mark a span (Content) |
@@ -32,7 +32,6 @@ Layout: Source · Sessions · Dialogues · Content. Content splits into **Input*
 | `r` | Toggle read/raw content (structure markers + fold tags vs expanded payloads) |
 | `Ctrl-d` / `Ctrl-u` · `PgDn` / `PgUp` | Scroll content |
 | `g` / `G` | Content top / bottom |
-| `J` / `K` | Page next/previous selected dialogue (Content, multi-select) |
 | `i` / `o` / `y` / `c` | Copy input / output / block / command |
 | `Enter` | Confirm / open next / copy; fold/unfold the cursor block (Content) |
 | `/` | Search |

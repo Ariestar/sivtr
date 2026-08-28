@@ -59,6 +59,7 @@ Keep this file limited to durable, cross-session guidance. Current progress, tem
 
 ## Verification
 
+- Build after every code change (`cargo build`, or the project's equivalent). Never leave a change unbuilt, even a one-line edit.
 - Run the relevant project checks after making changes.
 - Fix failures caused by the current change, then rerun the checks.
 - If a relevant check cannot be run, state the reason explicitly.

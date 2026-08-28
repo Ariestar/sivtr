@@ -13,11 +13,10 @@ pub(crate) enum WorkspaceHelpAction {
     PreviousPane,
     NextPane,
     ToggleSelection,
-    SelectAllSources,
+    ToggleAll,
     SelectAgentSources,
     SelectTerminalSource,
     RangeSelect,
-    ToggleAllDialogues,
     OpenVim,
     ScrollDown,
     ScrollUp,
@@ -26,10 +25,6 @@ pub(crate) enum WorkspaceHelpAction {
     ToggleContentIo,
     /// Content half: expand/collapse the cursor block.
     ToggleBlockFold,
-    /// Multi-select paging: flip the content pane to the next selected dialogue.
-    NextDialoguePage,
-    /// Multi-select paging: flip the content pane to the previous selected dialogue.
-    PreviousDialoguePage,
     Copy,
     CopyInput,
     CopyOutput,
@@ -135,13 +130,6 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
             footer_panes: &[Source, Sessions, Dialogues, Content],
         },
         WorkspaceHelpEntry {
-            key: "a",
-            description: "select all sources",
-            action: WorkspaceHelpAction::SelectAllSources,
-            footer_label: Some("all"),
-            footer_panes: SRC,
-        },
-        WorkspaceHelpEntry {
             key: "g",
             description: "select agent sources",
             action: WorkspaceHelpAction::SelectAgentSources,
@@ -173,10 +161,10 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
         },
         WorkspaceHelpEntry {
             key: "a",
-            description: "toggle all dialogues",
-            action: WorkspaceHelpAction::ToggleAllDialogues,
-            footer_label: Some("all"),
-            footer_panes: DIA,
+            description: "切换全部",
+            action: WorkspaceHelpAction::ToggleAll,
+            footer_label: Some("全部"),
+            footer_panes: &[Source, Sessions, Dialogues, Content],
         },
         WorkspaceHelpEntry {
             key: "t",
@@ -281,20 +269,6 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
             description: "expand/collapse block",
             action: WorkspaceHelpAction::ToggleBlockFold,
             footer_label: Some("fold"),
-            footer_panes: CNT,
-        },
-        WorkspaceHelpEntry {
-            key: "J",
-            description: "next selected dialogue",
-            action: WorkspaceHelpAction::NextDialoguePage,
-            footer_label: Some("page"),
-            footer_panes: CNT,
-        },
-        WorkspaceHelpEntry {
-            key: "K",
-            description: "previous selected dialogue",
-            action: WorkspaceHelpAction::PreviousDialoguePage,
-            footer_label: Some("page"),
             footer_panes: CNT,
         },
         WorkspaceHelpEntry {

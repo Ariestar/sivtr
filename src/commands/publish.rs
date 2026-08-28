@@ -125,7 +125,6 @@ fn load_publication_set(source: &str) -> Result<workset::WorkSet> {
     Ok(set)
 }
 
-
 fn ensure_local_publication_source(source: &str) -> Result<()> {
     // Resolve named scopes through the origin registry before querying so a
     // remote alias or group cannot start a daemon or dial a peer.
@@ -155,8 +154,8 @@ fn load_draft_from_set(
     let expires = PublicationExpiry::parse(expiry)?;
     set.materialize_parts()?;
     create_publication_draft(
-        &set.records,
-        &set.anchors(),
+        set.records(),
+        set.anchors(),
         &PublicationPolicy {
             title,
             expires,
@@ -168,7 +167,7 @@ fn load_draft_from_set(
 fn pick_publication_set(source: &str) -> Result<workset::WorkSet> {
     let set = load_publication_set(source)?;
     let first = set
-        .records
+        .records()
         .first()
         .ok_or_else(|| anyhow::anyhow!("publication source contains no records"))?;
     let provider = first
@@ -181,7 +180,7 @@ fn pick_publication_set(source: &str) -> Result<workset::WorkSet> {
         "publication picker only supports one local agent session"
     );
     ensure!(
-        set.records.iter().all(|record| {
+        set.records().iter().all(|record| {
             record.kind == sivtr_core::record::WorkRecordKind::ChatTurn
                 && record.work_ref.is_local()
                 && record.work_ref.provider() == Some(provider)
@@ -197,7 +196,7 @@ fn pick_publication_set(source: &str) -> Result<workset::WorkSet> {
         modified: UNIX_EPOCH,
         title: first.title.clone(),
         search_title: first.title.clone(),
-        records: set.records.clone(),
+        records: set.records().to_vec(),
         body_loaded: true,
     };
     let picked = crate::commands::browse::run_with_sessions(
@@ -205,15 +204,21 @@ fn pick_publication_set(source: &str) -> Result<workset::WorkSet> {
         vec![session],
         WorkspaceFocus::Dialogues,
     )?;
-    ensure!(!picked.anchors.is_empty(), "publication selection is empty");
-    let anchors = expand_picker_anchors(&set.records, &picked.anchors)?;
+    let picked_anchors = match picked {
+        crate::commands::browse::PickedContent::WorkSet { set, .. } => set.anchors().to_vec(),
+        crate::commands::browse::PickedContent::Text { .. } => {
+            bail!("publication selection must remain a WorkSet")
+        }
+    };
+    ensure!(!picked_anchors.is_empty(), "publication selection is empty");
+    let anchors = expand_picker_anchors(set.records(), &picked_anchors)?;
     ensure!(!anchors.is_empty(), "publication selection is empty");
     Ok(publication_workset(set, anchors))
 }
 
 fn publication_workset(set: workset::WorkSet, anchors: Vec<WorkRef>) -> workset::WorkSet {
-    let records = workset::records_for_anchors(&set.records, &anchors);
-    workset::WorkSet::with_anchors(set.cwd, records, anchors)
+    let records = workset::records_for_anchors(set.records(), &anchors);
+    workset::WorkSet::from_parts(set.cwd.clone(), records, anchors)
 }
 
 fn expand_picker_anchors(records: &[WorkRecord], picked: &[WorkRef]) -> Result<Vec<WorkRef>> {
@@ -258,7 +263,7 @@ fn maybe_save(set: &mut workset::WorkSet, name: Option<&str>) -> Result<()> {
     let Some(name) = name else {
         return Ok(());
     };
-    set.save_as(name)?;
+    workset::save_as(set, name)?;
     output::success(format!("saved @{name}"));
     Ok(())
 }
@@ -953,13 +958,17 @@ mod tests {
             source_refs: vec![],
         };
         let key = URL_SAFE_NO_PAD.encode([7_u8; 32]);
-        let envelope = encrypt_snapshot(&draft, "7d_abc", &key).unwrap();
+        let compressed = compress_snapshot(&draft).unwrap();
+        let envelope = encrypt_snapshot(compressed.clone(), "7d_abc", &key).unwrap();
         assert_eq!(&envelope[..8], ENVELOPE_MAGIC);
         assert_eq!(envelope[8], 1);
         assert_eq!(envelope[9], 1);
-        assert_ne!(encrypt_snapshot(&draft, "7d_abc", &key).unwrap(), envelope);
+        assert_ne!(
+            encrypt_snapshot(compress_snapshot(&draft).unwrap(), "7d_abc", &key).unwrap(),
+            envelope
+        );
         let fixture = encrypt_snapshot_with_nonce(
-            &draft,
+            compressed,
             "7d_0123456789abcdefghijkl",
             &key,
             [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
@@ -1156,15 +1165,15 @@ mod tests {
             selected.work_ref.with_part(1),
             selected.work_ref.with_part(5),
         ];
-        let set = workset::WorkSet::with_anchors(
+        let set = workset::WorkSet::from_parts(
             ".",
             vec![first, selected.clone(), last],
             vec![selected.work_ref.whole()],
         );
         let slim = publication_workset(set, anchors.clone());
-        assert_eq!(slim.records.len(), 1);
-        assert_eq!(slim.records[0].work_ref.index(), 2);
-        let persisted = serde_json::to_string(&slim.records).unwrap();
+        assert_eq!(slim.records().len(), 1);
+        assert_eq!(slim.records()[0].work_ref.index(), 2);
+        let persisted = serde_json::to_string(slim.records()).unwrap();
         assert!(!persisted.contains("SECRET_TURN1"));
         assert!(!persisted.contains("SECRET_TURN3"));
         assert!(persisted.contains("keep-thinking"));
@@ -1188,7 +1197,7 @@ mod tests {
             &policy,
         )
         .unwrap();
-        let from_saved = create_publication_draft(&slim.records, &slim.anchors, &policy).unwrap();
+        let from_saved = create_publication_draft(slim.records(), slim.anchors(), &policy).unwrap();
         assert_eq!(full.content_sha256, from_saved.content_sha256);
         let PublicConversationSnapshot::V2(snapshot) = &from_saved.snapshot else {
             panic!("pick-saved WorkSet is schema v2");
@@ -1236,4 +1245,3 @@ mod tests {
             .any(|(label, value)| *label == "schema" && value == "v2"));
     }
 }
-

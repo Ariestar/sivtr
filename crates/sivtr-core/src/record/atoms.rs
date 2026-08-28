@@ -176,4 +176,3 @@ mod tests {
         assert_eq!(work_atoms(&record, false)[0].part_seqs, vec![1]);
     }
 }
-

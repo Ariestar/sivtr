@@ -10,7 +10,7 @@ use sivtr_core::search::{Field, PartKind};
 
 // MCP JSON schema exposes these as strings; serde still uses FromStr aliases.
 use crate::commands::memory::show::{self, WorkSetOutputFormat};
-use crate::commands::memory::workset::WorkSet;
+use sivtr_core::workset::WorkSet;
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct SearchParams {
@@ -320,7 +320,7 @@ pub fn memory_result(
     let detail = detail.unwrap_or("timeline");
     let anchors = set
         .anchors()
-        .into_iter()
+        .iter()
         .map(|anchor| anchor.to_string())
         .collect::<Vec<_>>();
     let count = anchors.len();
@@ -360,7 +360,7 @@ pub fn show_result(set: &WorkSet, mode: Option<&str>) -> anyhow::Result<ShowResu
     let mode = mode.unwrap_or("full");
     let anchors = set
         .anchors()
-        .into_iter()
+        .iter()
         .map(|anchor| anchor.to_string())
         .collect::<Vec<_>>();
     let count = anchors.len();

@@ -59,7 +59,7 @@ fn create_snapshot(path: &Path) -> Result<()> {
     let mut records = Vec::new();
     for source in ["terminal", "agent"] {
         let set = workset::query(source, filter::Filter::none(), Some(&cwd))?;
-        records.extend(set.records);
+        records.extend(set.into_records());
     }
     let snapshot = EvalSnapshot {
         queries: Vec::new(),

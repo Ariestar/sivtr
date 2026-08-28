@@ -35,7 +35,7 @@ fn set(name: &str, source: Option<&str>) -> Result<()> {
         None,
     )?;
     set = dedup(set);
-    set.save_as(name)?;
+    workset::save_as(&mut set, name)?;
     output::success(format!("saved @{name} ({} items)", set.anchors().len()));
     Ok(())
 }
@@ -92,7 +92,7 @@ fn drop(name: &str, sources: &[String]) -> Result<()> {
             crate::commands::memory::filter::Filter::none(),
             None,
         )?;
-        remove.extend(set.anchors().into_iter().map(|anchor| anchor.to_string()));
+        remove.extend(set.anchors().iter().map(ToString::to_string));
     }
     let mut result = remove_anchors(before, &remove);
     result.name = Some(name.to_string());
@@ -115,42 +115,47 @@ fn stdin_is_piped() -> bool {
     !io::stdin().is_terminal()
 }
 
-fn merge_sets(mut base: WorkSet, mut addition: WorkSet) -> WorkSet {
-    base.ensure_anchors();
-    addition.ensure_anchors();
-    let mut records_by_ref = records_by_ref(base.records);
-    for record in addition.records {
+fn merge_sets(base: WorkSet, addition: WorkSet) -> WorkSet {
+    let cwd = base.cwd.clone();
+    let (base_records, mut anchors) = base.into_parts();
+    let (addition_records, addition_anchors) = addition.into_parts();
+    let mut records_by_ref = records_by_ref(base_records);
+    for record in addition_records {
         records_by_ref
             .entry(record.work_ref.whole().to_string())
             .or_insert(record);
     }
 
-    let mut anchors = base.anchors;
-    anchors.extend(addition.anchors);
-    anchors = unique_anchors(anchors);
-    let records = records_for_unique_anchors(records_by_ref, &anchors);
-    WorkSet::with_anchors(base.cwd, records, anchors)
+    anchors.extend(addition_anchors);
+    rebuild(cwd, records_by_ref, anchors)
 }
 
-fn remove_anchors(mut base: WorkSet, remove: &HashSet<String>) -> WorkSet {
-    base.ensure_anchors();
-    let records_by_ref = records_by_ref(base.records);
-    let anchors = unique_anchors(
-        base.anchors
-            .into_iter()
-            .filter(|anchor| !remove.contains(&anchor.to_string()))
-            .collect(),
-    );
-    let records = records_for_unique_anchors(records_by_ref, &anchors);
-    WorkSet::with_anchors(base.cwd, records, anchors)
+fn remove_anchors(base: WorkSet, remove: &HashSet<String>) -> WorkSet {
+    let cwd = base.cwd.clone();
+    let (base_records, anchors) = base.into_parts();
+    let anchors: Vec<_> = anchors
+        .into_iter()
+        .filter(|anchor| !remove.contains(&anchor.to_string()))
+        .collect();
+    rebuild(cwd, records_by_ref(base_records), anchors)
 }
 
-fn dedup(mut set: WorkSet) -> WorkSet {
-    set.ensure_anchors();
-    let records_by_ref = records_by_ref(set.records);
-    let anchors = unique_anchors(set.anchors);
+fn dedup(set: WorkSet) -> WorkSet {
+    let cwd = set.cwd.clone();
+    let (set_records, set_anchors) = set.into_parts();
+    rebuild(cwd, records_by_ref(set_records), set_anchors)
+}
+
+/// Rebuild a WorkSet from its record map and anchors. `from_parts`
+/// normalizes the anchors (dedup + Whole canonical form), so no pre-dedup is
+/// needed here.
+fn rebuild(
+    cwd: String,
+    records_by_ref: HashMap<String, WorkRecord>,
+    anchors: Vec<WorkRef>,
+) -> WorkSet {
     let records = records_for_unique_anchors(records_by_ref, &anchors);
-    WorkSet::with_anchors(set.cwd, records, anchors)
+    WorkSet::from_parts(cwd, records, anchors)
 }
 
 pub(crate) fn unique_anchors(anchors: Vec<WorkRef>) -> Vec<WorkRef> {
