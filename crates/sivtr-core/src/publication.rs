@@ -18,7 +18,6 @@ pub enum PublicationExpiry {
     #[default]
     SevenDays,
     ThirtyDays,
-    NinetyDays,
 }
 
 impl PublicationExpiry {
@@ -29,9 +28,8 @@ impl PublicationExpiry {
             "3d" => Ok(Self::ThreeDays),
             "7d" => Ok(Self::SevenDays),
             "30d" => Ok(Self::ThirtyDays),
-            "90d" => Ok(Self::NinetyDays),
             _ => {
-                bail!("invalid publication expiry `{value}`; expected 2h, 1d, 3d, 7d, 30d, or 90d")
+                bail!("invalid publication expiry `{value}`; expected 2h, 1d, 3d, 7d, or 30d")
             }
         }
     }
@@ -43,7 +41,6 @@ impl PublicationExpiry {
             Self::ThreeDays => "3d",
             Self::SevenDays => "7d",
             Self::ThirtyDays => "30d",
-            Self::NinetyDays => "90d",
         }
     }
 
@@ -54,7 +51,6 @@ impl PublicationExpiry {
             Self::ThreeDays => Duration::days(3),
             Self::SevenDays => Duration::days(7),
             Self::ThirtyDays => Duration::days(30),
-            Self::NinetyDays => Duration::days(90),
         }
     }
 }
@@ -415,7 +411,7 @@ mod tests {
     }
 
     #[test]
-    fn publication_expiry_parses_short_and_legacy_lifetimes() {
+    fn publication_expiry_parses_supported_lifetimes() {
         assert_eq!(
             PublicationExpiry::parse("2h").unwrap(),
             PublicationExpiry::TwoHours
@@ -429,9 +425,6 @@ mod tests {
         assert_eq!(PublicationExpiry::TwoHours.duration(), Duration::hours(2));
         assert_eq!(PublicationExpiry::ThreeDays.duration(), Duration::days(3));
         assert!(PublicationExpiry::parse("4h").is_err());
-        assert_eq!(
-            PublicationExpiry::parse("90d").unwrap(),
-            PublicationExpiry::NinetyDays
-        );
+        assert!(PublicationExpiry::parse("90d").is_err());
     }
 }

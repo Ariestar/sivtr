@@ -946,7 +946,7 @@ pub struct PublishPreviewArgs {
     /// Optional public title
     #[arg(long)]
     pub title: Option<String>,
-    /// Link lifetime: 1d, 7d, 30d, or 90d
+    /// Link lifetime: 2h, 1d, 3d, 7d, or 30d
     #[arg(long, default_value = "7d")]
     pub expires: String,
     /// Output format
@@ -961,7 +961,7 @@ pub struct PublishCreateArgs {
     /// Optional public title
     #[arg(long)]
     pub title: Option<String>,
-    /// Link lifetime: 1d, 7d, 30d, or 90d
+    /// Link lifetime: 2h, 1d, 3d, 7d, or 30d
     #[arg(long, default_value = "7d")]
     pub expires: String,
     /// Confirm without an interactive prompt
