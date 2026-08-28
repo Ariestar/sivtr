@@ -174,23 +174,6 @@ pub(crate) struct TextPair {
     pub(crate) ansi: String,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct WorkspaceCopyParts {
-    pub(crate) input: TextPair,
-    pub(crate) output: TextPair,
-    pub(crate) command: TextPair,
-}
-
-impl WorkspaceCopyParts {
-    pub(crate) fn from_block(block: TextPair) -> Self {
-        Self {
-            input: block.clone(),
-            output: block,
-            command: TextPair::default(),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct WorkspaceSession {
     pub(crate) source: WorkspaceSource,
@@ -210,25 +193,9 @@ pub(crate) struct WorkspaceDialogue {
     pub(crate) source: WorkspaceSource,
     pub(crate) work_ref: Option<WorkRef>,
     pub(crate) record: Option<WorkRecord>,
-    pub(crate) copy: WorkspaceCopyParts,
 }
 
 impl WorkspaceDialogue {
-    /// Text used for copy shortcuts / vim on the currently displayed content.
-    /// Always derived from `record.parts` when present — never a stale cache.
-    pub(crate) fn display_unit(&self, mode: ContentViewMode, target: Option<WorkAt>) -> TextPair {
-        let plain = self.content_text(mode, target);
-        TextPair {
-            ansi: plain.clone(),
-            plain,
-        }
-    }
-
-    pub(crate) fn content_text(&self, mode: ContentViewMode, target: Option<WorkAt>) -> String {
-        self.content_io_texts(mode, target, &ExpandedBlocks::default())
-            .join_displayed()
-    }
-
     /// Input / Output bodies for the dual content panes with per-block fold
     /// state (every workpart is a block; structure blocks fold by default in
     /// read mode).

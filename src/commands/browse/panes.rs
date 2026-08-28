@@ -15,10 +15,7 @@ use crate::tui::workspace::{
     WorkspaceDialogue, WorkspaceSession, WorkspaceSource,
 };
 use crate::workset::WorkSet;
-use sivtr_core::ai::AgentSelection;
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
-
-use super::text::record_to_copy_parts;
 
 // ── Dialogues ───────────────────────────────────────────────────────────
 
@@ -143,12 +140,6 @@ fn shell_from_row(
         source: row.meta.source.clone(),
         work_ref: row.meta.work_ref.clone(),
         record: None,
-        copy: crate::tui::workspace::WorkspaceCopyParts::from_block(
-            crate::tui::workspace::TextPair {
-                plain: String::new(),
-                ansi: String::new(),
-            },
-        ),
     }
 }
 
@@ -160,7 +151,7 @@ fn shell_from_row(
 pub struct DialogueCtx<'a> {
     pub sessions: &'a [WorkspaceSession],
     pub session_idx: usize,
-    pub selected_sessions: &'a [bool],
+    pub session_scope: &'a [bool],
     /// Body lookup; returned slice lives as long as the storage behind the
     /// callback (`SessionColumn` / fixture table), not the `&session` arg.
     pub records: &'a dyn Fn(&WorkspaceSession) -> Option<&'a [WorkRecord]>,
@@ -173,7 +164,7 @@ impl Pane for DialoguePane {
         let next = fingerprint(
             ctx.sessions,
             ctx.session_idx,
-            ctx.selected_sessions,
+            ctx.session_scope,
             ctx.records,
         );
         let force = if next != self.fingerprint {
@@ -191,7 +182,7 @@ impl Pane for DialoguePane {
                 meta_prefix(
                     ctx.sessions,
                     ctx.session_idx,
-                    ctx.selected_sessions,
+                    ctx.session_scope,
                     ctx.records,
                     budget,
                 )
@@ -207,7 +198,7 @@ impl Pane for DialoguePane {
             let body = body_for_key(
                 ctx.sessions,
                 ctx.session_idx,
-                ctx.selected_sessions,
+                ctx.session_scope,
                 ctx.records,
                 key,
             );
@@ -245,7 +236,6 @@ fn dialogue_from_record(session: &WorkspaceSession, record: &WorkRecord) -> Work
         source: session.source.clone(),
         work_ref: Some(record.work_ref.clone()),
         record: Some(record.clone()),
-        copy: record_to_copy_parts(record, AgentSelection::LastTurn),
     }
 }
 
@@ -518,7 +508,7 @@ mod tests {
             DialogueCtx {
                 sessions,
                 session_idx: 0,
-                selected_sessions: &[true],
+                session_scope: &[true],
                 records: &records,
             },
             &PaneInput::new(viewport, focus).with_selected(selected),
@@ -647,7 +637,7 @@ mod tests {
             DialogueCtx {
                 sessions: empty,
                 session_idx: 0,
-                selected_sessions: &[],
+                session_scope: &[],
                 records: &records,
             },
             &PaneInput::new(
@@ -714,7 +704,7 @@ mod tests {
                 DialogueCtx {
                     sessions: &sessions,
                     session_idx: 0,
-                    selected_sessions: &[false],
+                    session_scope: &[false],
                     records: &records,
                 },
                 &PaneInput::new(vp, 0).with_selected(&[false]),

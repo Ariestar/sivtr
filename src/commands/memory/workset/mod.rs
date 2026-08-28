@@ -15,7 +15,6 @@ use std::path::Path;
 pub use crate::workset::{WorkSet, WORKSET_SCHEMA_VERSION};
 
 fn apply_selection(mut set: WorkSet, selection: WorkSetSelection) -> WorkSet {
-    set.ensure_anchors();
     let WorkSetSelection::Indices(indices) = selection else {
         return set;
     };
@@ -89,7 +88,6 @@ impl WorkSet {
     pub fn save_as(&mut self, name: &str) -> Result<()> {
         store::validate_name(name)?;
         self.materialize_parts()?;
-        self.ensure_anchors();
         self.name = Some(name.to_string());
         save_named(name, self)
     }
@@ -97,7 +95,6 @@ impl WorkSet {
     pub fn save_last(&self) -> Result<()> {
         let mut set = self.clone();
         set.materialize_parts()?;
-        set.ensure_anchors();
         save_named("last", &set)
     }
 }
@@ -241,14 +238,16 @@ mod tests {
             time: WorkTime::default(),
             status: None,
             title: format!("record {index}"),
-            parts: vec![WorkPart {
-                seq: 1,
-                occurred_at: None,
-                data: sivtr_core::record::WorkPartData::Output {
-                    content: format!("record {index}"),
-                    ansi: None,
-                },
-            }],
+            parts: (1..=2)
+                .map(|seq| WorkPart {
+                    seq,
+                    occurred_at: None,
+                    data: sivtr_core::record::WorkPartData::Output {
+                        content: format!("record {index} part {seq}"),
+                        ansi: None,
+                    },
+                })
+                .collect(),
         }
     }
 
@@ -316,6 +315,15 @@ mod tests {
         let mut set = WorkSet::new(".", Vec::new());
         set.include_parts(first.clone(), [1, 1]);
         assert_eq!(set.anchors(), vec![first.work_ref.with_part(1)]);
+    }
+
+    #[test]
+    fn complete_part_selection_is_canonical_whole() {
+        let first = record(1);
+        let mut set = WorkSet::new(".", Vec::new());
+        set.include_parts(first.clone(), [1, 2, 1]);
+        assert_eq!(set.anchors(), vec![first.work_ref.whole()]);
+        assert!(set.contains(&first.work_ref.with_part(2)));
     }
 
     #[test]

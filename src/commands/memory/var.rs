@@ -115,9 +115,7 @@ fn stdin_is_piped() -> bool {
     !io::stdin().is_terminal()
 }
 
-fn merge_sets(mut base: WorkSet, mut addition: WorkSet) -> WorkSet {
-    base.ensure_anchors();
-    addition.ensure_anchors();
+fn merge_sets(base: WorkSet, addition: WorkSet) -> WorkSet {
     let mut records_by_ref = records_by_ref(base.records);
     for record in addition.records {
         records_by_ref
@@ -132,8 +130,7 @@ fn merge_sets(mut base: WorkSet, mut addition: WorkSet) -> WorkSet {
     WorkSet::with_anchors(base.cwd, records, anchors)
 }
 
-fn remove_anchors(mut base: WorkSet, remove: &HashSet<String>) -> WorkSet {
-    base.ensure_anchors();
+fn remove_anchors(base: WorkSet, remove: &HashSet<String>) -> WorkSet {
     let records_by_ref = records_by_ref(base.records);
     let anchors = unique_anchors(
         base.anchors
@@ -145,8 +142,7 @@ fn remove_anchors(mut base: WorkSet, remove: &HashSet<String>) -> WorkSet {
     WorkSet::with_anchors(base.cwd, records, anchors)
 }
 
-fn dedup(mut set: WorkSet) -> WorkSet {
-    set.ensure_anchors();
+fn dedup(set: WorkSet) -> WorkSet {
     let records_by_ref = records_by_ref(set.records);
     let anchors = unique_anchors(set.anchors);
     let records = records_for_unique_anchors(records_by_ref, &anchors);

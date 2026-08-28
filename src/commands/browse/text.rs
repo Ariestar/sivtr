@@ -1,10 +1,9 @@
 //! Text helpers shared by the browser (line filters, record → copy parts).
 
 use anyhow::{Context, Result};
-use sivtr_core::ai::AgentSelection;
-use sivtr_core::record::{RecordTextMode, WorkRecord};
+use sivtr_core::record::RecordText;
 
-use crate::tui::workspace::{TextPair, WorkspaceCopyParts};
+use crate::tui::workspace::TextPair;
 
 pub fn filter_lines_by_spec(text: &TextPair, spec: &str) -> Result<TextPair> {
     let lines: Vec<&str> = text.plain.lines().collect();
@@ -72,32 +71,10 @@ fn parse_line_number(value: &str) -> Result<usize> {
     })
 }
 
-pub fn record_to_copy_parts(
-    record: &WorkRecord,
-    selection_mode: AgentSelection,
-) -> WorkspaceCopyParts {
-    match selection_mode {
-        AgentSelection::LastBlocks(_) | AgentSelection::All => WorkspaceCopyParts::from_block(
-            record_text_to_pair(record.copy_text(RecordTextMode::Combined, false, None)),
-        ),
-        _ => WorkspaceCopyParts::from(record.copy_parts(false)),
-    }
-}
-
-pub fn record_text_to_pair(text: sivtr_core::record::RecordText) -> TextPair {
+pub fn record_text_to_pair(text: RecordText) -> TextPair {
     let ansi = text.ansi.unwrap_or_else(|| text.plain.clone());
     TextPair {
         plain: text.plain,
         ansi,
-    }
-}
-
-impl From<sivtr_core::record::WorkRecordCopyParts> for WorkspaceCopyParts {
-    fn from(parts: sivtr_core::record::WorkRecordCopyParts) -> Self {
-        WorkspaceCopyParts {
-            input: record_text_to_pair(parts.input),
-            output: record_text_to_pair(parts.output),
-            command: record_text_to_pair(parts.command),
-        }
     }
 }

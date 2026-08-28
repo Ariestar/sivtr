@@ -29,6 +29,7 @@ pub(crate) enum PickedContent {
         source: WorkspaceSource,
         set: WorkSet,
         projection: WorkspacePickProjection,
+        line_filter: Option<String>,
     },
     Text {
         source: WorkspaceSource,
@@ -60,7 +61,7 @@ pub(super) fn workspace_picked_content_for_copy(
     shortcut: WorkspaceCopyShortcut,
     line_filter: Option<&str>,
     target: Option<WorkAt>,
-    content_mode: ContentViewMode,
+    _content_mode: ContentViewMode,
 ) -> Result<PickedContent> {
     let source = picked_source(dialogues, picked).context("copy needs at least one dialogue")?;
     let display_target = (picked.len() == 1
@@ -81,43 +82,32 @@ pub(super) fn workspace_picked_content_for_copy(
         }
     }
     let projection = match shortcut {
-        WorkspaceCopyShortcut::Displayed if line_filter.is_none() && target.is_none() => {
-            Some(WorkspacePickProjection::Whole)
-        }
-        WorkspaceCopyShortcut::Input => Some(WorkspacePickProjection::Input),
-        WorkspaceCopyShortcut::Output => Some(WorkspacePickProjection::Output),
-        WorkspaceCopyShortcut::Command => Some(WorkspacePickProjection::Command),
-        WorkspaceCopyShortcut::Displayed => None,
+        WorkspaceCopyShortcut::Displayed if target.is_none() => WorkspacePickProjection::Whole,
+        WorkspaceCopyShortcut::Displayed => WorkspacePickProjection::Parts,
+        WorkspaceCopyShortcut::Input => WorkspacePickProjection::Input,
+        WorkspaceCopyShortcut::Output => WorkspacePickProjection::Output,
+        WorkspaceCopyShortcut::Command => WorkspacePickProjection::Command,
     };
-    if let Some(projection) = projection {
-        if line_filter.is_none() {
-            if !complete {
-                anyhow::bail!("structured copy needs materialized dialogues");
-            }
-            let cwd = std::env::current_dir().context("copy needs a current directory")?;
-            let mut set = WorkSet::with_anchors(cwd.display().to_string(), Vec::new(), Vec::new());
-            for record in records {
-                set.include_whole(record);
-            }
-            return Ok(PickedContent::WorkSet {
-                source,
-                set,
-                projection,
-            });
+    if !complete {
+        anyhow::bail!("structured copy needs materialized dialogues");
+    }
+    if let Some(spec) = line_filter {
+        filter_lines_by_spec(&crate::tui::workspace::TextPair::default(), spec)?;
+    }
+    let cwd = std::env::current_dir().context("copy needs a current directory")?;
+    let mut set = WorkSet::with_anchors(cwd.display().to_string(), Vec::new(), Vec::new());
+    for record in records {
+        match display_target {
+            Some(WorkAt::Part(seq)) => set.include_parts(record, [seq]),
+            _ => set.include_whole(record),
         }
     }
-    let units = picked
-        .iter()
-        .filter_map(|&idx| dialogues.get(idx))
-        .map(|dialogue| match shortcut {
-            WorkspaceCopyShortcut::Displayed => dialogue.display_unit(content_mode, display_target),
-            WorkspaceCopyShortcut::Input => dialogue.copy.input.clone(),
-            WorkspaceCopyShortcut::Output => dialogue.copy.output.clone(),
-            WorkspaceCopyShortcut::Command => dialogue.copy.command.clone(),
-        })
-        .collect();
-    let units = apply_workspace_line_filter(units, line_filter)?;
-    Ok(PickedContent::Text { source, units })
+    Ok(PickedContent::WorkSet {
+        source,
+        set,
+        projection,
+        line_filter: line_filter.map(str::to_string),
+    })
 }
 
 /// The Part subset of the canonical selection, attributed to its first
@@ -135,6 +125,7 @@ pub(super) fn workspace_picked_content_for_selected_parts(
         source,
         set,
         projection: WorkspacePickProjection::Parts,
+        line_filter: None,
     })
 }
 
@@ -155,6 +146,7 @@ pub(super) fn workspace_picked_content_for_cursor_block(
         source,
         set,
         projection: WorkspacePickProjection::Parts,
+        line_filter: None,
     }))
 }
 
@@ -196,20 +188,6 @@ fn find_block(block: &Block, id: usize) -> Option<&Block> {
 
 pub(super) fn line_filter_spec(line_filter: &str) -> Option<&str> {
     (!line_filter.is_empty()).then_some(line_filter)
-}
-
-pub(super) fn apply_workspace_line_filter(
-    units: Vec<crate::tui::workspace::TextPair>,
-    line_filter: Option<&str>,
-) -> Result<Vec<crate::tui::workspace::TextPair>> {
-    let Some(spec) = line_filter else {
-        return Ok(units);
-    };
-
-    units
-        .into_iter()
-        .map(|unit| filter_lines_by_spec(&unit, spec))
-        .collect()
 }
 
 pub(super) fn handle_line_filter_key(
@@ -307,7 +285,12 @@ pub(super) fn active_workspace_content_at(
 
 #[cfg(test)]
 pub(super) fn workspace_dialogue_vim_view(dialogue: &WorkspaceDialogue) -> VimView {
-    dialogue_text_vim_view(dialogue.content_text(ContentViewMode::Reading, None))
+    dialogue_text_vim_view(crate::tui::content::text::workspace_content_text(
+        std::slice::from_ref(dialogue),
+        0,
+        ContentViewMode::Reading,
+        None,
+    ))
 }
 
 pub(super) fn dialogue_text_vim_view(text: String) -> VimView {
@@ -332,7 +315,7 @@ pub(super) fn dialogue_text_vim_view(text: String) -> VimView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::workspace::{WorkspaceCopyParts, WorkspaceSource};
+    use crate::tui::workspace::WorkspaceSource;
     use crate::workset::WorkSet;
     use sivtr_core::ai::AgentProvider;
     use sivtr_core::record::{
@@ -383,7 +366,6 @@ mod tests {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(record.work_ref.clone()),
             record: Some(record),
-            copy: WorkspaceCopyParts::default(),
         }
     }
 

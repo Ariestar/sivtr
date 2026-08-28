@@ -14,13 +14,13 @@ use crate::tui::workspace::{
 use sivtr_core::record::WorkAt;
 
 use super::content::{
-    dialogue_text_vim_view, workspace_block_parts, workspace_picked_content_for_copy,
+    dialogue_text_vim_view, workspace_picked_content_for_copy,
     workspace_picked_content_for_cursor_block, PickedContent, WorkspaceCopyShortcut,
 };
 use super::nav::{invalidate_panes_below, move_workspace_cursor, ContentBlockCursor};
 use super::panes::ContentPane;
 use super::selection::{
-    select_sources, source_records, toggle_dialogue, toggle_session, toggle_source,
+    apply_selection_action, select_sources, SelectionAction, SelectionContext,
     WorkspaceSourceSelection,
 };
 use super::vim::open_vim_view;
@@ -93,37 +93,26 @@ pub(super) fn apply_workspace_help_action(
                 set_focus(focus, fullscreen, rows, next_focus);
             }
         }
-        WorkspaceHelpAction::ToggleSelection => match *focus {
-            WorkspaceFocus::Content => {
-                // Pane-native selection: Space marks the focused block for
-                // batch copy, like Space toggles a list row. The content pane
-                // shows the dialogue under the dialogue cursor, so that row
-                // owns the mark.
-                if let Some(block) = content_cursor.get() {
-                    if let Some((_, record, parts)) =
-                        workspace_block_parts(dialogues, rows.dialogues.cursor(), block)
-                    {
-                        rows.selection.toggle_parts(record, parts);
-                    }
-                }
-            }
-            WorkspaceFocus::Dialogues => {
-                toggle_dialogue(rows, dialogues, rows.dialogues.cursor());
-            }
-            WorkspaceFocus::Sessions => {
-                toggle_session(rows, session_records, rows.sessions.cursor());
-                if toggle_list_row(*focus, rows.sessions.cursor(), rows, content_scrolls) {
-                    return Ok(HelpDispatch::Refresh);
-                }
-            }
-            WorkspaceFocus::Source => {
-                let idx = rows.source.cursor();
-                toggle_source(rows, sources, sessions, session_records, idx);
+        WorkspaceHelpAction::ToggleSelection => {
+            if apply_selection_action(
+                SelectionAction::Toggle,
+                *focus,
+                SelectionContext {
+                    rows,
+                    sources,
+                    sessions,
+                    session_records,
+                    dialogues,
+                    content_blocks: (content_blocks.0, content_blocks.1),
+                    content_cursor,
+                },
+            ) {
+                let idx = rows.pane(*focus).map_or(0, |pane| pane.cursor());
                 if toggle_list_row(*focus, idx, rows, content_scrolls) {
                     return Ok(HelpDispatch::Refresh);
                 }
             }
-        },
+        }
         WorkspaceHelpAction::SelectAgentSources | WorkspaceHelpAction::SelectTerminalSource => {
             select_sources(
                 sources,
@@ -137,108 +126,38 @@ pub(super) fn apply_workspace_help_action(
             invalidate_panes_below(WorkspaceFocus::Source, rows, content_scrolls);
             return Ok(HelpDispatch::Refresh);
         }
-        WorkspaceHelpAction::ToggleAll => match *focus {
-            WorkspaceFocus::Content => {
-                let dialogue_idx = rows.dialogues.cursor();
-                if let Some(record) = dialogues
-                    .get(dialogue_idx)
-                    .and_then(|dialogue| dialogue.record.as_ref())
-                {
-                    rows.selection.toggle_whole(record.clone());
-                }
+        WorkspaceHelpAction::ToggleAll => {
+            if apply_selection_action(
+                SelectionAction::ToggleAll,
+                *focus,
+                SelectionContext {
+                    rows,
+                    sources,
+                    sessions,
+                    session_records,
+                    dialogues,
+                    content_blocks: (content_blocks.0, content_blocks.1),
+                    content_cursor,
+                },
+            ) {
+                return Ok(HelpDispatch::Refresh);
             }
-            WorkspaceFocus::Dialogues => {
-                rows.selection.toggle_records(
-                    dialogues
-                        .iter()
-                        .filter_map(|dialogue| dialogue.record.clone())
-                        .collect(),
-                );
-            }
-            WorkspaceFocus::Sessions => {
-                rows.selection
-                    .toggle_records(session_records.iter().flatten().cloned().collect());
-                if let Some(list) = rows.pane_mut(WorkspaceFocus::Sessions) {
-                    list.toggle_all();
-                    rows.close_ranges();
-                    return Ok(HelpDispatch::Refresh);
-                }
-            }
-            WorkspaceFocus::Source => {
-                let records = (0..sources.len())
-                    .flat_map(|idx| source_records(sources, sessions, session_records, idx))
-                    .collect();
-                rows.selection.toggle_records(records);
-                if let Some(list) = rows.pane_mut(WorkspaceFocus::Source) {
-                    list.toggle_all();
-                    rows.close_ranges();
-                    return Ok(HelpDispatch::Refresh);
-                }
-            }
-        },
-        WorkspaceHelpAction::RangeSelect => match *focus {
-            WorkspaceFocus::Content => {
-                // The span covers block ids instead of list rows, and only
-                // visible blocks are in it: a folded run is one unit, and its
-                // header already carries every member's body.
-                if let Some(cursor_block) = content_cursor.get() {
-                    if let Some(span) = rows.range(*focus, cursor_block) {
-                        let mut record = None;
-                        let mut parts = Vec::new();
-                        for id in content_blocks
-                            .0
-                            .iter()
-                            .chain(content_blocks.1)
-                            .map(|block| block.id)
-                            .filter(|id| span.contains(id))
-                        {
-                            if let Some((_, selected, block_parts)) =
-                                workspace_block_parts(dialogues, rows.dialogues.cursor(), id)
-                            {
-                                record = Some(selected);
-                                parts.extend(block_parts);
-                            }
-                        }
-                        if let Some(record) = record {
-                            rows.selection.toggle_parts(record, parts);
-                        }
-                    }
-                }
-            }
-            WorkspaceFocus::Dialogues => {
-                if let Some(span) = rows.range(*focus, rows.dialogues.cursor()) {
-                    rows.selection.toggle_records(
-                        dialogues
-                            .iter()
-                            .enumerate()
-                            .filter(|(idx, _)| span.contains(idx))
-                            .filter_map(|(_, dialogue)| dialogue.record.clone())
-                            .collect(),
-                    );
-                }
-            }
-            WorkspaceFocus::Sessions => {
-                if let Some(span) = rows.range(*focus, rows.sessions.cursor()) {
-                    rows.selection.toggle_records(
-                        session_records
-                            .iter()
-                            .enumerate()
-                            .filter(|(idx, _)| span.contains(idx))
-                            .flat_map(|(_, records)| records.iter().cloned())
-                            .collect(),
-                    );
-                }
-            }
-            WorkspaceFocus::Source => {
-                if let Some(span) = rows.range(*focus, rows.source.cursor()) {
-                    let records = (0..sources.len())
-                        .filter(|idx| span.contains(idx))
-                        .flat_map(|idx| source_records(sources, sessions, session_records, idx))
-                        .collect();
-                    rows.selection.toggle_records(records);
-                }
-            }
-        },
+        }
+        WorkspaceHelpAction::RangeSelect => {
+            apply_selection_action(
+                SelectionAction::Range,
+                *focus,
+                SelectionContext {
+                    rows,
+                    sources,
+                    sessions,
+                    session_records,
+                    dialogues,
+                    content_blocks: (content_blocks.0, content_blocks.1),
+                    content_cursor,
+                },
+            );
+        }
         WorkspaceHelpAction::OpenVim if can_open_dialogue_vim(*focus, dialogue_count) => {
             let view = dialogue_text_vim_view(workspace_content_text(
                 dialogues,

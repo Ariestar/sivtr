@@ -2,9 +2,7 @@
 
 use super::help::{help_action_for_key, parse_help_key, WorkspaceHelpAction};
 use super::layout::can_open_dialogue_vim;
-use super::model::{
-    WorkspaceCopyParts, WorkspaceDialogue, WorkspaceFocus, WorkspaceSearchView, WorkspaceSource,
-};
+use super::model::{WorkspaceDialogue, WorkspaceFocus, WorkspaceSearchView, WorkspaceSource};
 use super::render::{
     content_title, current_content_dialogue, current_content_ref, line_filter_prompt_text,
     search_box_body, search_box_title,
@@ -55,7 +53,6 @@ fn codex_dialogue(record: WorkRecord) -> WorkspaceDialogue {
         source: WorkspaceSource::agent(AgentProvider::Codex),
         work_ref: Some(record.work_ref.clone()),
         record: Some(record),
-        copy: WorkspaceCopyParts::default(),
     }
 }
 
@@ -586,13 +583,11 @@ fn current_content_dialogue_uses_single_selected_dialogue() {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
             record: None,
-            copy: WorkspaceCopyParts::default(),
         },
         WorkspaceDialogue {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 2)),
             record: None,
-            copy: WorkspaceCopyParts::default(),
         },
     ];
 
@@ -610,7 +605,6 @@ fn current_content_ref_round_trips_active_part_target() {
         source: WorkspaceSource::agent(AgentProvider::Codex),
         work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 2)),
         record: None,
-        copy: WorkspaceCopyParts::default(),
     }];
 
     let current = current_content_ref(&dialogues, &[false], 0, Some(WorkAt::Part(1))).unwrap();

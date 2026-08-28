@@ -15,7 +15,6 @@ pub struct WorkSet {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub records: Vec<WorkRecord>,
-    #[serde(default)]
     pub anchors: Vec<WorkRef>,
 }
 
@@ -43,25 +42,14 @@ impl WorkSet {
         }
     }
 
-    pub fn ensure_anchors(&mut self) {
-        self.anchors = self.anchors();
-    }
-
     pub fn anchors(&self) -> Vec<WorkRef> {
-        if self.anchors.is_empty() {
-            self.records
-                .iter()
-                .map(|record| record.work_ref.whole())
-                .collect()
-        } else {
-            self.anchors.clone()
-        }
+        self.anchors.clone()
     }
 
     /// Whether this selection covers an address. A Whole anchor covers every
     /// Part of the same record.
     pub fn contains(&self, anchor: &WorkRef) -> bool {
-        self.anchors().iter().any(|selected| {
+        self.anchors.iter().any(|selected| {
             selected == anchor
                 || (selected.at == WorkAt::Whole && selected.whole() == anchor.whole())
         })
@@ -77,10 +65,28 @@ impl WorkSet {
         self.anchors.push(whole);
     }
 
+    pub fn include_records(&mut self, records: impl IntoIterator<Item = WorkRecord>) {
+        for record in records {
+            let whole = record.work_ref.whole();
+            if !self
+                .anchors
+                .iter()
+                .any(|anchor| anchor.at == WorkAt::Whole && anchor.whole() == whole)
+            {
+                self.include_whole(record);
+            }
+        }
+    }
+
     /// Include selected parts of a record. A Whole anchor already covers them
     /// and remains the only stored representation.
     pub fn include_parts(&mut self, record: WorkRecord, parts: impl IntoIterator<Item = usize>) {
+        let parts: Vec<_> = parts.into_iter().collect();
         let whole = record.work_ref.whole();
+        if !record.parts.is_empty() && record.parts.iter().all(|part| parts.contains(&part.seq)) {
+            self.include_whole(record);
+            return;
+        }
         if self
             .anchors()
             .iter()
@@ -121,6 +127,10 @@ impl WorkSet {
     pub fn toggle_parts(&mut self, record: WorkRecord, parts: impl IntoIterator<Item = usize>) {
         let parts: Vec<_> = parts.into_iter().collect();
         if parts.is_empty() {
+            return;
+        }
+        if !record.parts.is_empty() && record.parts.iter().all(|part| parts.contains(&part.seq)) {
+            self.toggle_whole(record);
             return;
         }
         if parts

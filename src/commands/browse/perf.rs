@@ -77,7 +77,7 @@ fn primed_dialogue_pane(n: usize) -> DialoguePane {
         DialogueCtx {
             sessions: &sessions,
             session_idx: 0,
-            selected_sessions: &selected_sessions,
+            session_scope: &selected_sessions,
             records: &records,
         },
         &PaneInput::new(vp, 0)
@@ -153,7 +153,7 @@ pub fn run_ensure_growth() -> (usize, usize) {
         DialogueCtx {
             sessions: &sessions,
             session_idx: 0,
-            selected_sessions: &selected_sessions,
+            session_scope: &selected_sessions,
             records: &records,
         },
         &PaneInput::new(
@@ -170,7 +170,7 @@ pub fn run_ensure_growth() -> (usize, usize) {
         DialogueCtx {
             sessions: &sessions,
             session_idx: 0,
-            selected_sessions: &selected_sessions,
+            session_scope: &selected_sessions,
             records: &records,
         },
         &PaneInput::new(
