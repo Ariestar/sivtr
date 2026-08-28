@@ -142,7 +142,7 @@ Core model landed: **Device Daemon + Identity + Share + Grant + Mount** over enc
 - [ ] Peer rename / verify / disconnect helpers.
 - [ ] UDS or named-pipe control plane instead of localhost TCP.
 - [ ] Protocol version negotiation for older servers.
-- [x] Richer selective disclosure (`publish` supports consecutive whole turns in v1 and arbitrary atoms/non-contiguous parts from one local agent session in v2).
+- [ ] Richer selective disclosure (share specific sessions, not whole workspaces).
 
 ## Privacy and lifecycle
 
@@ -226,4 +226,3 @@ The roadmap does not imply that `sivtr` will become:
 - **Provenance matters.** Summaries, profiles, and exports should be traceable back to source sessions and command output.
 - **Privacy is a lifecycle.** Redaction, retention, expiry, and forget are product features, not afterthoughts.
 - **Editor-friendly.** `sivtr` should hand off to existing editors and workflows instead of trying to own the whole developer environment.
-

@@ -45,8 +45,6 @@ const BODY_FETCH_CAP: usize = 2;
 #[derive(Clone, Debug, Default)]
 pub struct SourceLoadState {
     pub pane: SessionPane,
-    /// In-memory picker catalogs must not be replaced by a provider reload.
-    pinned: bool,
 }
 
 impl SourceLoadState {
@@ -71,14 +69,7 @@ impl SourceLoadState {
             .collect();
         Self {
             pane: SessionPane::ready(rows, budget, true),
-            pinned: true,
         }
-    }
-
-    fn force_catalog_meta(&mut self, viewport: Viewport) -> Option<MetaNeed> {
-        (!self.pinned)
-            .then(|| self.pane.force_meta(viewport))
-            .flatten()
     }
 
     pub fn marker(&self) -> SourceLoadMarker {
@@ -196,7 +187,7 @@ impl SourceLoadPump {
                 continue;
             }
             let need: Option<MetaNeed> = if force {
-                states[idx].force_catalog_meta(viewport)
+                states[idx].pane.force_meta(viewport)
             } else {
                 states[idx].pane.ensure_meta(viewport)
             };
@@ -219,15 +210,12 @@ impl SourceLoadPump {
             if !source_scope[idx] {
                 continue;
             }
-            if states[idx].pinned {
-                continue;
-            }
             // An explicit refresh is a retry: drop recorded body failures so
             // transient errors (remote timeouts, temporary transport issues)
             // get another chance once connectivity recovers.
             self.body_failed
                 .retain(|k, _| !k.starts_with(&format!("{idx}\0")));
-            if let Some(need) = states[idx].force_catalog_meta(viewport) {
+            if let Some(need) = states[idx].pane.force_meta(viewport) {
                 self.spawn_meta(idx, source, need.gen, need.budget);
             }
         }
@@ -837,32 +825,6 @@ mod tests {
     }
 
     #[test]
-    fn preloaded_sessions_stay_pinned_on_refresh() {
-        let source = WorkspaceSource::agent(AgentProvider::Codex);
-        let session = WorkspaceSession {
-            source: source.clone(),
-            session_id: "s1".into(),
-            modified: UNIX_EPOCH,
-            title: "s1".into(),
-            search_title: "s1".into(),
-            records: vec![test_record("s1", 1, "payload", "2026-07-17T10:00:00Z")],
-            body_loaded: true,
-        };
-        let state = SourceLoadState::ready_from_sessions(vec![session], 1);
-        let mut column = SessionColumn::new(vec![source], vec![state], PathBuf::from("."));
-        let viewport = Viewport {
-            first: 0,
-            visible: 10,
-        };
-
-        column.kick(&[true], viewport, true);
-        column.refresh(&[true], viewport);
-
-        assert!(!column.states[0].pane.store().list_inflight);
-        assert_eq!(column.states[0].body("s1").unwrap().len(), 1);
-    }
-
-    #[test]
     fn body_load_failure_is_preserved_and_not_retried() {
         let source = WorkspaceSource::agent(AgentProvider::Codex);
         let sources = vec![source.clone()];
@@ -875,7 +837,6 @@ mod tests {
         };
         let state = SourceLoadState {
             pane: SessionPane::ready(vec![WindowRow::meta_only("s1".into(), meta)], 10, true),
-            ..Default::default()
         };
         let mut column = SessionColumn::new(sources.clone(), vec![state], PathBuf::from("."));
 
@@ -909,7 +870,6 @@ mod tests {
         };
         let state = SourceLoadState {
             pane: SessionPane::ready(vec![WindowRow::meta_only("s1".into(), meta)], 10, true),
-            ..Default::default()
         };
         let mut column = SessionColumn::new(sources.clone(), vec![state], PathBuf::from("."));
 
@@ -963,7 +923,6 @@ mod tests {
                 10,
                 true,
             ),
-            ..Default::default()
         };
         let mut column = SessionColumn::new(sources.clone(), vec![state], PathBuf::from("."));
 
@@ -1012,7 +971,6 @@ mod tests {
         };
         let state = SourceLoadState {
             pane: SessionPane::ready(vec![WindowRow::meta_only("s1".into(), meta)], 10, true),
-            ..Default::default()
         };
         let mut column = SessionColumn::new(sources.clone(), vec![state], PathBuf::from("."));
 
@@ -1064,7 +1022,6 @@ mod tests {
         };
         let state = SourceLoadState {
             pane: SessionPane::ready(vec![WindowRow::meta_only("s1".into(), meta)], 10, true),
-            ..Default::default()
         };
         let mut column = SessionColumn::new(sources.clone(), vec![state], PathBuf::from("."));
 
@@ -1120,7 +1077,6 @@ mod tests {
             .collect();
         let state = SourceLoadState {
             pane: SessionPane::ready(rows, 10, true),
-            ..Default::default()
         };
         let mut column = SessionColumn::new(sources.clone(), vec![state], PathBuf::from("."));
 

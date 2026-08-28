@@ -40,10 +40,6 @@ Remote access is read-only. Secret redaction is on by default before records lea
 
 Full guide: [Remote Access](/usage/remote-access/).
 
-`sivtr publish` is a separate outbound boundary: an immutable snapshot from a local WorkSet, not a live mount. Whole-record WorkSets use v1 and project consecutive User/Assistant turns from one local agent session; `publish preview --pick` saves part anchors and uses v2 to select non-contiguous User, Assistant, Tool, Skill, and Thinking atoms within that session. Raw WorkSets, WorkRefs, `cwd`, session paths, and provider envelopes stay local; only the projected, redacted snapshot enters the encrypted envelope. The hosted service stores AES-256-GCM ciphertext; the viewing key stays in the URL fragment. `[publish].endpoint` defaults to `https://share.hnnulwh.cn` and can be changed in `config.toml`; there is no automatic failover between self-host and Cloudflare.
-
-Guide: [Publish conversation links](/usage/publish/).
-
 ## Shared mirrors should be read-only
 
 When sharing exported sessions across local accounts, prefer read-only access for consumers:
@@ -86,4 +82,3 @@ Set `auto_save = false` if captures should not be written automatically. Set `ma
 - Keep shared Codex mirrors separate from the source account's live config.
 - Prefer `--format json` / `--refs` search output for tooling, but remember JSON content can still include sensitive text.
 - Prefer short-lived invites and revoke grants (`sivtr share revoke`) when collaboration ends.
-
