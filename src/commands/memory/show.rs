@@ -123,7 +123,7 @@ fn anchor_items(set: &workset::WorkSet) -> Result<Vec<AnchorItem<'_>>> {
     set.anchors()
         .iter()
         .map(|anchor| {
-            let record = workset::record_for_anchor(set.records(), anchor)
+            let record = workset::find_record([set.records()], anchor)
                 .with_context(|| format!("No record found for anchor `{anchor}`"))?;
             Ok(AnchorItem {
                 anchor: anchor.clone(),

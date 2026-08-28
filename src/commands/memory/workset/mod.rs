@@ -7,12 +7,11 @@ pub(crate) use source::{
 pub(crate) use store::{cleanup_saved, delete_saved, list_saved, load_saved, save_named};
 
 use anyhow::{bail, Context, Result};
-use sivtr_core::query::{load_session_records, LoadMode};
-use sivtr_core::record::{WorkPath, WorkRecord, WorkRef};
-use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
-pub use crate::workset::{WorkSet, WORKSET_SCHEMA_VERSION};
+pub use sivtr_core::workset::{
+    find_record, records_for_anchors, require_record, WorkSelectionAction, WorkSelectionKind,
+    WorkSelectionTarget, WorkSet, WORKSET_SCHEMA_VERSION,
+};
 
 fn apply_selection(mut set: WorkSet, selection: WorkSetSelection) -> WorkSet {
     let WorkSetSelection::Indices(indices) = selection else {
@@ -23,8 +22,7 @@ fn apply_selection(mut set: WorkSet, selection: WorkSetSelection) -> WorkSet {
         .into_iter()
         .map(|index| set.anchors()[index - 1].clone())
         .collect::<Vec<_>>();
-    let records = records_for_anchors(set.records(), &anchors);
-    set.replace_selection(records, anchors);
+    set.select_anchors(anchors);
     set
 }
 
@@ -34,112 +32,23 @@ pub enum WorkSetSelection {
     Indices(Vec<usize>),
 }
 
-/// Cache namespace for a record's session file, used by [`materialize_parts`]
-/// to pick the right cache view when re-loading full records.
-fn session_namespace(path: &WorkPath) -> Option<&'static str> {
-    match path {
-        WorkPath::Agent { provider, .. } => Some(provider.command_name()),
-        WorkPath::Terminal { .. } => Some("terminal"),
-    }
+/// Persist a named WorkSet (`@name`). `materialize_parts` runs first so a
+/// light-loaded set saves complete records; [`WorkSet::validate`] rejects
+/// malformed sets before they hit disk.
+pub(crate) fn save_as(set: &mut WorkSet, name: &str) -> Result<()> {
+    store::validate_name(name)?;
+    set.materialize_parts()?;
+    set.validate()?;
+    set.name = Some(name.to_string());
+    save_named(name, set)
 }
 
-impl WorkSet {
-    /// Fill in `parts` for any light-loaded record (empty `parts`) whose
-    /// session file path is known.  Each session file is loaded once (full
-    /// view), then matching records are patched in place.  Records without a
-    /// session path (stdin sets) are already complete and stay untouched.
-    pub fn materialize_parts(&mut self) -> Result<()> {
-        // Group light records by their session file path, then load each
-        // session's full records once and patch matching parts back.
-        let mut needed: HashMap<String, Vec<usize>> = HashMap::new();
-        for (index, record) in self.records().iter().enumerate() {
-            if !record.parts.is_empty() {
-                continue;
-            }
-            let Some(path) = record.session.path.as_deref() else {
-                continue;
-            };
-            needed.entry(path.to_string()).or_default().push(index);
-        }
-
-        for (path, indices) in &needed {
-            // Any record in the group gives us the namespace; pick the first.
-            let namespace = session_namespace(&self.records()[indices[0]].work_ref.path);
-            let Some(namespace) = namespace else {
-                continue;
-            };
-            let full = load_session_records(namespace, Path::new(path), LoadMode::Full)
-                .with_context(|| format!("Failed to load full session {path} for {namespace}"))?;
-            for index in indices {
-                if let Some(record) = self.records_mut().get_mut(*index) {
-                    if let Some(full_record) = full
-                        .iter()
-                        .find(|r| r.work_ref.path.index() == record.work_ref.path.index())
-                    {
-                        record.parts = full_record.parts.clone();
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub fn save_as(&mut self, name: &str) -> Result<()> {
-        store::validate_name(name)?;
-        self.materialize_parts()?;
-        self.name = Some(name.to_string());
-        save_named(name, self)
-    }
-
-    pub fn save_last(&self) -> Result<()> {
-        let mut set = self.clone();
-        set.materialize_parts()?;
-        save_named("last", &set)
-    }
-}
-
-pub fn records_for_anchors(records: &[WorkRecord], anchors: &[WorkRef]) -> Vec<WorkRecord> {
-    let mut selected = Vec::new();
-    let mut seen = HashSet::new();
-    for anchor in anchors {
-        let record_ref = anchor.whole();
-        if !seen.insert(record_ref.to_string()) {
-            continue;
-        }
-        if let Some(record) = records
-            .iter()
-            .find(|record| record.work_ref.whole() == record_ref)
-        {
-            selected.push(record.clone());
-        }
-    }
-    selected
-}
-
-pub fn record_for_anchor<'a>(
-    records: &'a [WorkRecord],
-    anchor: &WorkRef,
-) -> Option<&'a WorkRecord> {
-    find_record([records], anchor)
-}
-
-pub fn find_record<'a, I>(record_sets: I, anchor: &WorkRef) -> Option<&'a WorkRecord>
-where
-    I: IntoIterator<Item = &'a [WorkRecord]>,
-{
-    let record_ref = anchor.whole();
-    record_sets
-        .into_iter()
-        .flat_map(|records| records.iter())
-        .find(|record| record.work_ref.whole() == record_ref)
-}
-
-pub fn require_record<'a, I>(record_sets: I, anchor: &WorkRef) -> Result<&'a WorkRecord>
-where
-    I: IntoIterator<Item = &'a [WorkRecord]>,
-{
-    find_record(record_sets, anchor)
-        .with_context(|| format!("No record found for ref `{}`", anchor.whole()))
+/// Persist the `@last` WorkSet.
+pub(crate) fn save_last(set: &WorkSet) -> Result<()> {
+    let mut set = set.clone();
+    set.materialize_parts()?;
+    set.validate()?;
+    save_named("last", &set)
 }
 
 pub fn load_reference(reference: &str) -> Result<WorkSet> {
@@ -314,12 +223,88 @@ mod tests {
     }
 
     #[test]
+    fn from_parts_canonicalizes_duplicate_and_shadowed_anchors() {
+        let first = record(1);
+        let part = first.work_ref.with_part(1);
+        let set = WorkSet::from_parts(
+            ".",
+            vec![first.clone()],
+            vec![
+                part.clone(),
+                part,
+                first.work_ref.whole(),
+                first.work_ref.with_part(2),
+            ],
+        );
+        assert_eq!(set.anchors(), &[first.work_ref.whole()]);
+    }
+
+    #[test]
+    fn validation_rejects_shadowed_anchors_loaded_from_json() {
+        let first = record(1);
+        let mut value = serde_json::to_value(WorkSet::from_parts(
+            ".",
+            vec![first.clone()],
+            vec![first.work_ref.whole()],
+        ))
+        .expect("serialize WorkSet");
+        value["anchors"] = serde_json::json!([first.work_ref.whole(), first.work_ref.with_part(1)]);
+        let set: WorkSet = serde_json::from_value(value).expect("deserialize WorkSet");
+        assert!(set.validate().is_err());
+    }
+
+    #[test]
+    fn validation_rejects_part_before_whole_loaded_from_json() {
+        let first = record(1);
+        let mut value = serde_json::to_value(WorkSet::from_parts(
+            ".",
+            vec![first.clone()],
+            vec![first.work_ref.whole()],
+        ))
+        .expect("serialize WorkSet");
+        value["anchors"] = serde_json::json!([first.work_ref.with_part(1), first.work_ref.whole()]);
+        let set: WorkSet = serde_json::from_value(value).expect("deserialize WorkSet");
+        assert!(set.validate().is_err());
+    }
+
+    #[test]
+    fn validation_rejects_anchor_without_backing_record() {
+        let first = record(1);
+        let mut value = serde_json::to_value(WorkSet::from_parts(".", vec![first.clone()], vec![]))
+            .expect("serialize WorkSet");
+        value["anchors"] = serde_json::json!([record(2).work_ref]);
+        let set: WorkSet = serde_json::from_value(value).expect("deserialize WorkSet");
+        assert!(set.validate().is_err());
+    }
+
+    #[test]
+    fn validation_rejects_part_anchor_without_matching_part() {
+        let first = record(1);
+        let mut value = serde_json::to_value(WorkSet::from_parts(".", vec![first.clone()], vec![]))
+            .expect("serialize WorkSet");
+        value["anchors"] = serde_json::json!([first.work_ref.with_part(99)]);
+        let set: WorkSet = serde_json::from_value(value).expect("deserialize WorkSet");
+        assert!(set.validate().is_err());
+    }
+
+    #[test]
     fn whole_anchor_covers_and_replaces_parts() {
         let first = record(1);
         let mut set = WorkSet::from_parts(".", vec![first.clone()], vec![]);
-        set.include_parts(first.clone(), [1]);
+        set.apply_target(
+            WorkSelectionAction::Include,
+            WorkSelectionTarget::Parts {
+                record: first.clone(),
+                parts: vec![1],
+            },
+            [],
+        );
         assert!(set.contains(&first.work_ref.with_part(1)));
-        set.include_whole(first.clone());
+        set.apply_target(
+            WorkSelectionAction::Include,
+            WorkSelectionTarget::Whole(first.clone()),
+            [],
+        );
         assert_eq!(set.anchors(), vec![first.work_ref.whole()]);
         assert!(set.contains(&first.work_ref.with_part(1)));
     }
@@ -328,7 +313,14 @@ mod tests {
     fn part_anchors_deduplicate_without_collapsing() {
         let first = record(1);
         let mut set = WorkSet::new(".", Vec::new());
-        set.include_parts(first.clone(), [1, 1]);
+        set.apply_target(
+            WorkSelectionAction::Include,
+            WorkSelectionTarget::Parts {
+                record: first.clone(),
+                parts: vec![1, 1],
+            },
+            [],
+        );
         assert_eq!(set.anchors(), vec![first.work_ref.with_part(1)]);
     }
 
@@ -336,20 +328,111 @@ mod tests {
     fn complete_part_selection_is_canonical_whole() {
         let first = record(1);
         let mut set = WorkSet::new(".", Vec::new());
-        set.include_parts(first.clone(), [1, 2, 1]);
+        set.apply_target(
+            WorkSelectionAction::Include,
+            WorkSelectionTarget::Parts {
+                record: first.clone(),
+                parts: vec![1, 2, 1],
+            },
+            [],
+        );
         assert_eq!(set.anchors(), vec![first.work_ref.whole()]);
         assert!(set.contains(&first.work_ref.with_part(2)));
+    }
+
+    #[test]
+    fn incremental_part_selection_is_canonical_whole() {
+        let first = record(1);
+        let mut set = WorkSet::new(".", Vec::new());
+        for parts in [vec![1], vec![2]] {
+            set.apply_target(
+                WorkSelectionAction::Include,
+                WorkSelectionTarget::Parts {
+                    record: first.clone(),
+                    parts,
+                },
+                [],
+            );
+        }
+        assert_eq!(set.anchors(), vec![first.work_ref.whole()]);
+    }
+
+    #[test]
+    fn from_parts_collapses_complete_part_anchors() {
+        let first = record(1);
+        let set = WorkSet::from_parts(
+            ".",
+            vec![first.clone()],
+            vec![first.work_ref.with_part(1), first.work_ref.with_part(2)],
+        );
+        assert_eq!(set.anchors(), vec![first.work_ref.whole()]);
     }
 
     #[test]
     fn toggling_whole_replaces_narrow_selection() {
         let first = record(1);
         let mut set = WorkSet::new(".", Vec::new());
-        set.include_parts(first.clone(), [1]);
-        set.toggle_whole(first.clone());
+        set.apply_target(
+            WorkSelectionAction::Include,
+            WorkSelectionTarget::Parts {
+                record: first.clone(),
+                parts: vec![1],
+            },
+            [],
+        );
+        set.apply_target(
+            WorkSelectionAction::Toggle,
+            WorkSelectionTarget::Whole(first.clone()),
+            [],
+        );
         assert_eq!(set.anchors(), vec![first.work_ref.whole()]);
-        set.toggle_whole(first.clone());
+        set.apply_target(
+            WorkSelectionAction::Toggle,
+            WorkSelectionTarget::Whole(first.clone()),
+            [],
+        );
         assert!(set.anchors().is_empty());
+    }
+
+    #[test]
+    fn toggling_part_from_whole_keeps_the_other_parts() {
+        let first = record(1);
+        let mut set = WorkSet::new(".", Vec::new());
+        set.apply_target(
+            WorkSelectionAction::Include,
+            WorkSelectionTarget::Whole(first.clone()),
+            [],
+        );
+        set.apply_target(
+            WorkSelectionAction::Toggle,
+            WorkSelectionTarget::Parts {
+                record: first.clone(),
+                parts: vec![1],
+            },
+            [],
+        );
+        assert_eq!(set.anchors(), vec![first.work_ref.with_part(2)]);
+        assert!(!set.contains(&first.work_ref.with_part(1)));
+        assert!(set.contains(&first.work_ref.with_part(2)));
+    }
+
+    #[test]
+    fn scope_target_selects_all_matching_records() {
+        let records = vec![record(1), record(2)];
+        let target = WorkSelectionTarget::Scope {
+            scope: sivtr_core::record::WorkScope::Local,
+            kind: WorkSelectionKind::Terminal,
+            session: Some("session_1".to_string()),
+        };
+        let mut set = WorkSet::new(".", Vec::new());
+        set.apply_target(WorkSelectionAction::Toggle, target, records.clone());
+        assert_eq!(
+            set.anchors(),
+            &records
+                .iter()
+                .map(|r| r.work_ref.clone())
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

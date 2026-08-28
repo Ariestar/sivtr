@@ -37,12 +37,12 @@ pub fn run(args: &ZoomArgs) -> Result<WorkSet> {
         expand_around(source.records(), &anchors, &all_records, before, after)?
     };
 
-    let mut workset = WorkSet::new(source.cwd, expanded);
-    workset.save_last()?;
+    let mut set = WorkSet::new(source.cwd, expanded);
+    workset::save_last(&set)?;
     if let Some(name) = args.save.as_deref() {
-        workset.save_as(name)?;
+        workset::save_as(&mut set, name)?;
     }
-    Ok(workset)
+    Ok(set)
 }
 
 fn expand_around(

@@ -10,7 +10,7 @@ use sivtr_core::search::{Field, PartKind};
 
 // MCP JSON schema exposes these as strings; serde still uses FromStr aliases.
 use crate::commands::memory::show::{self, WorkSetOutputFormat};
-use crate::commands::memory::workset::WorkSet;
+use sivtr_core::workset::WorkSet;
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct SearchParams {

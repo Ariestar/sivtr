@@ -11,7 +11,6 @@ pub mod output;
 pub mod pane;
 pub mod remote;
 pub mod tui;
-pub mod workset;
 
 use anyhow::Result;
 use clap::Parser;

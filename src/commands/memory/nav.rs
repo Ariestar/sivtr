@@ -33,7 +33,7 @@ pub fn execute(args: &NavArgs) -> Result<()> {
     )?;
     let records = workset::records_for_anchors(&all_records, &anchors);
     let mut set = WorkSet::from_parts(source.cwd, records, anchors);
-    set.save_last()?;
+    workset::save_last(&set)?;
     show::print_workset(
         &mut set,
         show::resolve_output_format(args.format, false, args.refs, args.json),
@@ -100,7 +100,8 @@ fn child(
     }
     match anchor.at {
         WorkAt::Whole => {
-            let record = workset::require_record([source_records, all_records], anchor)?;
+            let record = workset::require_record([source_records, all_records], anchor)
+                .with_context(|| format!("resolve child record for `{anchor}`"))?;
             let Some(part) = record.parts.get(index - 1) else {
                 return Ok(Vec::new());
             };
@@ -118,7 +119,8 @@ fn sibling(
 ) -> Result<Vec<WorkRef>> {
     match anchor.at {
         WorkAt::Whole => {
-            let record = workset::require_record([source_records, all_records], anchor)?;
+            let record = workset::require_record([source_records, all_records], anchor)
+                .with_context(|| format!("resolve sibling record for `{anchor}`"))?;
             let session_records = session_records_for(record, all_records);
             let Some(position) = session_records
                 .iter()
@@ -132,7 +134,8 @@ fn sibling(
             Ok(vec![session_records[target].work_ref.whole()])
         }
         WorkAt::Part(seq) => {
-            let record = workset::require_record([source_records, all_records], anchor)?;
+            let record = workset::require_record([source_records, all_records], anchor)
+                .with_context(|| format!("resolve sibling record for `{anchor}`"))?;
             let Some(position) = record.parts.iter().position(|part| part.seq == seq) else {
                 return Ok(Vec::new());
             };
@@ -156,7 +159,8 @@ fn window(
     }
     match anchor.at {
         WorkAt::Whole => {
-            let record = workset::require_record([source_records, all_records], anchor)?;
+            let record = workset::require_record([source_records, all_records], anchor)
+                .with_context(|| format!("resolve window record for `{anchor}`"))?;
             let session_records = session_records_for(record, all_records);
             let position = session_records
                 .iter()
@@ -170,7 +174,8 @@ fn window(
                 .collect())
         }
         WorkAt::Part(seq) => {
-            let record = workset::require_record([source_records, all_records], anchor)?;
+            let record = workset::require_record([source_records, all_records], anchor)
+                .with_context(|| format!("resolve window record for `{anchor}`"))?;
             let position = record
                 .parts
                 .iter()
@@ -191,7 +196,8 @@ fn session(
     source_records: &[WorkRecord],
     all_records: &[WorkRecord],
 ) -> Result<Vec<WorkRef>> {
-    let record = workset::require_record([source_records, all_records], anchor)?;
+    let record = workset::require_record([source_records, all_records], anchor)
+        .with_context(|| format!("resolve session record for `{anchor}`"))?;
     Ok(session_records_for(record, all_records)
         .into_iter()
         .map(|record| record.work_ref.whole())

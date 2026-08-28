@@ -158,10 +158,10 @@ pub(crate) fn half_blocks(record: &WorkRecord, input: bool) -> Vec<Block> {
 
 /// Size of a dialogue's id space: every block of both halves, nested run
 /// members included, so a mask of this length holds a mark on any block —
-/// even one currently hidden by a fold.
-pub(crate) fn dialogue_block_count(record: &WorkRecord) -> usize {
-    let (input, output) = dialogue_blocks(record);
-    input.iter().chain(&output).map(Block::node_count).sum()
+/// even one currently hidden by a fold. Takes the already-built halves
+/// ([`dialogue_blocks`]) so callers build the tree once.
+pub(crate) fn dialogue_block_count(input: &[Block], output: &[Block]) -> usize {
+    input.iter().chain(output).map(Block::node_count).sum()
 }
 
 pub(crate) fn dialogue_block_id(record: &WorkRecord, seq: usize) -> Option<usize> {
@@ -718,8 +718,8 @@ mod tests {
             tool_part(2, "Bash", "ls"),
             tool_part(3, "Read", "file"),
         ]);
-        assert_eq!(dialogue_block_count(&rec), 4);
         let (input, output) = dialogue_blocks(&rec);
+        assert_eq!(dialogue_block_count(&input, &output), 4);
         assert_eq!(input.len(), 1);
         assert_eq!(output[0].children.len(), 2);
         assert_eq!(output[0].children[1].id, 3);

@@ -279,7 +279,7 @@ pub(super) fn source_list_index(
 mod tests {
     use super::{move_content_cursor, row_list_index, ContentBlockCursor};
     use crate::tui::content::block::BlockText;
-    use crate::tui::workspace::{ContentScrolls, RowCursor, Rows};
+    use crate::tui::workspace::{ContentScrolls, Rows};
     use ratatui::layout::Rect;
     use sivtr_core::record::WorkPartKind;
 
@@ -301,7 +301,7 @@ mod tests {
     #[test]
     fn a_step_off_the_last_block_crosses_into_the_next_dialogue() {
         let mut rows = Rows::default();
-        rows.dialogues = RowCursor::new(2);
+        rows.dialogues.fit(2);
         let mut scrolls = ContentScrolls::default();
         let mut cursor = ContentBlockCursor::default();
         let first = blocks(&[0]);

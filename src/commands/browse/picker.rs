@@ -25,8 +25,8 @@ use crate::tui::workspace::{
 
 use super::content::{
     active_workspace_content_at, handle_line_filter_key, handle_line_filter_paste,
-    line_filter_spec, workspace_block_parts, workspace_picked_content_for_selected_parts,
-    workspace_search_target_ref, PickedContent,
+    line_filter_spec, workspace_picked_content_for_selected_parts, workspace_search_target_ref,
+    PickedContent,
 };
 use super::help::{apply_workspace_help_action, set_focus, toggle_list_row, HelpDispatch};
 use super::load::{SessionColumn, SessionCtx, SourceLoadState};
@@ -35,7 +35,7 @@ use super::nav::{
     open_link_target, row_list_index, source_list_index, ContentBlockCursor,
 };
 use super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane};
-use super::selection::{refresh_next_level, resolve_loaded_scopes, toggle_row_selection};
+use super::selection::{refresh_next_level, toggle_block_selection, toggle_row_selection};
 use super::visual::{
     apply_workspace_mouse_scroll, handle_content_mouse_select, handle_visual_select_key,
     MouseSelectionStart, VisualContentContext, VisualSelectMode, MOUSE_SCROLL_LINES,
@@ -174,7 +174,8 @@ pub(crate) fn run(
                         .map(|s| {
                             let mut full = s.clone();
                             if let Some(recs) = sessions_pane.body_for(s) {
-                                full.records = recs.to_vec();
+                                full.records.clear();
+                                full.records.extend(recs.iter().cloned());
                             }
                             full
                         })
@@ -236,7 +237,6 @@ pub(crate) fn run(
             .with_selected(rows.sessions.scope_mask())
             .with_neighbors(1),
         );
-        resolve_loaded_scopes(&mut rows, &sources, &sessions, &sessions_pane);
         let dialogue_focus_hint = pending_match
             .as_ref()
             .map(|matched| matched.dialogue_index)
@@ -370,7 +370,7 @@ pub(crate) fn run(
                 expanded_blocks.clone(),
             );
             if last_content_key.as_ref() != Some(&content_key) {
-                content_frame = content_pane.ensure(ContentCtx {
+                content_frame = content_pane.frame(ContentCtx {
                     dialogues: &dialogues,
                     highlighted_idx: dialogue_idx,
                     mode: content_mode,
@@ -417,7 +417,7 @@ pub(crate) fn run(
 
             let source_markers = sessions_pane.markers();
             let content_marked =
-                ContentPane::selection_mask(&dialogues, dialogue_idx, &rows.selection);
+                ContentPane::block_selection_mask(&dialogues, dialogue_idx, &rows.selection);
             let body_failures: HashSet<(WorkspaceSource, String)> = sessions
                 .iter()
                 .filter_map(|s| {
@@ -956,13 +956,7 @@ pub(crate) fn run(
                                     WorkspaceFocus::Content,
                                 );
                                 content_cursor.set(block);
-                                if let Some((_, record, parts)) = workspace_block_parts(
-                                    &dialogues,
-                                    rows.dialogues.cursor(),
-                                    block,
-                                ) {
-                                    rows.selection.toggle_parts(record, parts);
-                                }
+                                toggle_block_selection(&mut rows, &dialogues, block);
                                 continue;
                             }
                         }
@@ -1307,6 +1301,7 @@ mod tests {
     };
     use super::super::nav::move_workspace_cursor;
     use super::super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane};
+    use crate::commands::browse::selection::toggle_row_selection;
     use crate::pane::{Pane, PaneInput, Viewport};
     use crate::tui::content::text::workspace_content_text;
     use crate::tui::content::view::ContentViewMode;
@@ -1315,8 +1310,8 @@ mod tests {
         WorkspaceSearchIndex, WorkspaceSearchMatch, WorkspaceSearchScope,
     };
     use crate::tui::workspace::{
-        ContentIoFocus, ContentScrolls, Rows, TextPair, WorkspaceDialogue, WorkspaceFocus,
-        WorkspaceSession, WorkspaceSource, WorkspaceSourceKind,
+        ContentIoFocus, ContentScrolls, ListPane, Rows, TextPair, WorkspaceDialogue,
+        WorkspaceFocus, WorkspaceSession, WorkspaceSource, WorkspaceSourceKind,
     };
     use crossterm::event::{KeyCode, KeyModifiers};
     use sivtr_core::ai::AgentProvider;
@@ -1521,6 +1516,78 @@ mod tests {
     }
 
     #[test]
+    fn session_selection_projects_to_every_dialogue_record() {
+        let source = WorkspaceSource::agent(AgentProvider::Codex);
+        let sessions = vec![workspace_test_session("test", source, &["d1", "d2"])];
+        let records: Vec<Vec<_>> = sessions
+            .iter()
+            .map(|session| session.records.clone())
+            .collect();
+        let mut rows = Rows::default();
+        rows.sessions = ListPane::from_scope(vec![false]);
+
+        toggle_row_selection(
+            WorkspaceFocus::Sessions,
+            0,
+            &mut rows,
+            &[],
+            &sessions,
+            &records,
+            &[],
+        );
+
+        assert_eq!(rows.selection.anchors().len(), 2);
+        assert!(sessions[0]
+            .records
+            .iter()
+            .all(|record| rows.selection.contains(&record.work_ref)));
+        let dialogues: Vec<_> = sessions[0]
+            .records
+            .iter()
+            .map(|record| WorkspaceDialogue {
+                source: sessions[0].source.clone(),
+                work_ref: Some(record.work_ref.clone()),
+                record: Some(record.clone()),
+            })
+            .collect();
+        assert_eq!(
+            dialogues
+                .iter()
+                .map(|dialogue| dialogue
+                    .work_ref
+                    .as_ref()
+                    .is_some_and(|reference| rows.selection.contains(reference)))
+                .collect::<Vec<_>>(),
+            vec![true, true]
+        );
+        assert!(
+            ContentPane::block_selection_mask(&dialogues, 0, &rows.selection)
+                .into_iter()
+                .all(|marked| marked)
+        );
+    }
+
+    #[test]
+    fn initial_selection_is_empty_until_a_row_is_toggled() {
+        let source = WorkspaceSource::agent(AgentProvider::Codex);
+        let sessions = vec![workspace_test_session("test", source, &["d1", "d2"])];
+        let dialogues = dialogues_for_test(&sessions, 0, &[true]);
+
+        let rows = Rows::default();
+        assert!(
+            rows.selection.anchors().is_empty(),
+            "Rows::default() must start with an empty selection"
+        );
+        assert!(
+            dialogues.iter().all(|dialogue| dialogue
+                .work_ref
+                .as_ref()
+                .is_none_or(|reference| !rows.selection.contains(reference))),
+            "nothing should be selected until a row is toggled"
+        );
+    }
+
+    #[test]
     fn marked_block_copy_with_real_sized_record_keeps_unmarked_blocks_out() {
         // A dialogue-sized record: user, assistant, then a run of three tool
         // pairs (output half). Marking one block must copy only its bodies.
@@ -1564,10 +1631,14 @@ mod tests {
             record: Some(record.clone()),
         };
         let dialogues = [dialogue.clone()];
-        let mut selection = crate::workset::WorkSet::new(".", Vec::new());
-        selection.include_parts(
-            record.clone(),
-            record.parts.iter().skip(2).map(|part| part.seq),
+        let mut selection = sivtr_core::workset::WorkSet::new(".", Vec::new());
+        selection.apply_target(
+            sivtr_core::workset::WorkSelectionAction::Include,
+            sivtr_core::workset::WorkSelectionTarget::Parts {
+                record: record.clone(),
+                parts: record.parts.iter().skip(2).map(|part| part.seq).collect(),
+            },
+            [],
         );
         let picked = workspace_picked_content_for_selected_parts(&selection, &dialogues)
             .expect("selected parts");
@@ -1634,7 +1705,7 @@ mod tests {
         let dialogues = [dialogue.clone()];
         let mut pane = ContentPane::default();
         let area = ratatui::layout::Rect::new(0, 0, 60, 20);
-        let frame = pane.ensure(ContentCtx {
+        let frame = pane.frame(ContentCtx {
             dialogues: &dialogues,
             highlighted_idx: 0,
             mode: ContentViewMode::Reading,
@@ -1657,8 +1728,15 @@ mod tests {
         let hit_id = hit_id.expect("a block is hit in the output half");
         let (_, selected, parts) =
             workspace_block_parts(&dialogues, 0, hit_id).expect("selected block");
-        let mut selection = crate::workset::WorkSet::new(".", Vec::new());
-        selection.include_parts(selected, parts);
+        let mut selection = sivtr_core::workset::WorkSet::new(".", Vec::new());
+        selection.apply_target(
+            sivtr_core::workset::WorkSelectionAction::Include,
+            sivtr_core::workset::WorkSelectionTarget::Parts {
+                record: selected,
+                parts,
+            },
+            [],
+        );
         let picked = workspace_picked_content_for_selected_parts(&selection, &dialogues)
             .expect("selected parts");
         let text = picked_units(&picked)
@@ -1789,8 +1867,15 @@ mod tests {
 
         let (_, selected, parts) =
             workspace_block_parts(&dialogues, 0, 2).expect("selected member");
-        let mut selection = crate::workset::WorkSet::new(".", Vec::new());
-        selection.include_parts(selected, parts);
+        let mut selection = sivtr_core::workset::WorkSet::new(".", Vec::new());
+        selection.apply_target(
+            sivtr_core::workset::WorkSelectionAction::Include,
+            sivtr_core::workset::WorkSelectionTarget::Parts {
+                record: selected,
+                parts,
+            },
+            [],
+        );
         let picked = workspace_picked_content_for_selected_parts(&selection, &dialogues)
             .expect("selected member copy");
         let text = &picked_units(&picked)[0].plain;

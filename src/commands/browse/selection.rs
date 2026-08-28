@@ -8,6 +8,7 @@ use crate::tui::content::block::BlockText;
 use crate::tui::workspace::{
     Rows, WorkspaceDialogue, WorkspaceFocus, WorkspaceSession, WorkspaceSource,
 };
+use sivtr_core::workset::{WorkSelectionAction, WorkSelectionTarget};
 
 use super::load::SessionColumn;
 use crate::pane::Viewport;
@@ -85,23 +86,6 @@ pub(super) fn select_sources(
     }
 }
 
-pub(super) fn source_records(
-    sources: &[WorkspaceSource],
-    sessions: &[WorkspaceSession],
-    session_records: &[Vec<sivtr_core::record::WorkRecord>],
-    source_idx: usize,
-) -> Vec<sivtr_core::record::WorkRecord> {
-    let Some(source) = sources.get(source_idx) else {
-        return Vec::new();
-    };
-    sessions
-        .iter()
-        .enumerate()
-        .filter(|(_, session)| &session.source == source)
-        .flat_map(|(idx, _)| session_records.get(idx).into_iter().flatten().cloned())
-        .collect()
-}
-
 pub(super) fn toggle_row_selection(
     focus: WorkspaceFocus,
     idx: usize,
@@ -111,25 +95,39 @@ pub(super) fn toggle_row_selection(
     session_records: &[Vec<sivtr_core::record::WorkRecord>],
     dialogues: &[WorkspaceDialogue],
 ) {
-    match focus {
-        WorkspaceFocus::Source => {
-            rows.selection
-                .toggle_records(source_records(sources, sessions, session_records, idx))
-        }
-        WorkspaceFocus::Sessions => {
-            if let Some(records) = session_records.get(idx) {
-                rows.selection.toggle_records(records.clone());
-            }
-        }
-        WorkspaceFocus::Dialogues => {
-            if let Some(record) = dialogues
-                .get(idx)
-                .and_then(|dialogue| dialogue.record.clone())
-            {
-                rows.selection.toggle_whole(record);
-            }
-        }
-        WorkspaceFocus::Content => {}
+    let target = match focus {
+        WorkspaceFocus::Source => sources.get(idx).map(|source| source.selection_target(None)),
+        WorkspaceFocus::Sessions => sessions
+            .get(idx)
+            .map(|session| session.source.selection_target(Some(&session.session_id))),
+        WorkspaceFocus::Dialogues => dialogues
+            .get(idx)
+            .and_then(|dialogue| dialogue.record.clone())
+            .map(WorkSelectionTarget::Whole),
+        WorkspaceFocus::Content => None,
+    };
+    if let Some(target) = target {
+        rows.selection.apply_target(
+            WorkSelectionAction::Toggle,
+            target,
+            session_records.iter().flatten().cloned(),
+        );
+    }
+}
+
+pub(super) fn toggle_block_selection(
+    rows: &mut Rows,
+    dialogues: &[WorkspaceDialogue],
+    block_id: usize,
+) {
+    if let Some((_, record, parts)) =
+        super::content::workspace_block_parts(dialogues, rows.dialogues.cursor(), block_id)
+    {
+        rows.selection.apply_target(
+            WorkSelectionAction::Toggle,
+            WorkSelectionTarget::Parts { record, parts },
+            [],
+        );
     }
 }
 
@@ -168,13 +166,7 @@ pub(super) fn apply_selection_action(
         SelectionAction::Toggle => {
             if focus == WorkspaceFocus::Content {
                 if let Some(block) = content_cursor.get() {
-                    if let Some((_, record, parts)) = super::content::workspace_block_parts(
-                        dialogues,
-                        rows.dialogues.cursor(),
-                        block,
-                    ) {
-                        rows.selection.toggle_parts(record, parts);
-                    }
+                    toggle_block_selection(rows, dialogues, block);
                 }
                 return false;
             }
@@ -203,22 +195,45 @@ pub(super) fn apply_selection_action(
                         .get(rows.dialogues.cursor())
                         .and_then(|dialogue| dialogue.record.as_ref())
                     {
-                        rows.selection.toggle_whole(record.clone());
+                        rows.selection.apply_target(
+                            WorkSelectionAction::Toggle,
+                            WorkSelectionTarget::Whole(record.clone()),
+                            [],
+                        );
                     }
                 }
-                WorkspaceFocus::Dialogues => rows.selection.toggle_records(
-                    dialogues
-                        .iter()
-                        .filter_map(|dialogue| dialogue.record.clone())
-                        .collect(),
+                WorkspaceFocus::Dialogues => rows.selection.apply_target(
+                    WorkSelectionAction::Toggle,
+                    WorkSelectionTarget::Many(
+                        dialogues
+                            .iter()
+                            .filter_map(|dialogue| dialogue.record.clone())
+                            .map(WorkSelectionTarget::Whole)
+                            .collect(),
+                    ),
+                    session_records.iter().flatten().cloned(),
                 ),
-                WorkspaceFocus::Sessions => rows
-                    .selection
-                    .toggle_records(session_records.iter().flatten().cloned().collect()),
-                WorkspaceFocus::Source => rows.selection.toggle_records(
-                    (0..sources.len())
-                        .flat_map(|idx| source_records(sources, sessions, session_records, idx))
-                        .collect(),
+                WorkspaceFocus::Sessions => rows.selection.apply_target(
+                    WorkSelectionAction::Toggle,
+                    WorkSelectionTarget::Many(
+                        sessions
+                            .iter()
+                            .map(|session| {
+                                session.source.selection_target(Some(&session.session_id))
+                            })
+                            .collect(),
+                    ),
+                    session_records.iter().flatten().cloned(),
+                ),
+                WorkspaceFocus::Source => rows.selection.apply_target(
+                    WorkSelectionAction::Toggle,
+                    WorkSelectionTarget::Many(
+                        sources
+                            .iter()
+                            .map(|source| source.selection_target(None))
+                            .collect(),
+                    ),
+                    session_records.iter().flatten().cloned(),
                 ),
             }
             if matches!(focus, WorkspaceFocus::Source | WorkspaceFocus::Sessions) {
@@ -260,67 +275,64 @@ pub(super) fn apply_selection_action(
                         }
                     }
                     if let Some(record) = record {
-                        rows.selection.toggle_parts(record, parts);
+                        rows.selection.apply_target(
+                            WorkSelectionAction::Toggle,
+                            WorkSelectionTarget::Parts { record, parts },
+                            [],
+                        );
                     }
                 }
                 WorkspaceFocus::Dialogues => {
                     if let Some(span) = rows.range(focus, rows.dialogues.cursor()) {
-                        rows.selection.toggle_records(
-                            dialogues
-                                .iter()
-                                .enumerate()
-                                .filter(|(idx, _)| span.contains(idx))
-                                .filter_map(|(_, dialogue)| dialogue.record.clone())
-                                .collect(),
+                        rows.selection.apply_target(
+                            WorkSelectionAction::Toggle,
+                            WorkSelectionTarget::Many(
+                                dialogues
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(idx, _)| span.contains(idx))
+                                    .filter_map(|(_, dialogue)| dialogue.record.clone())
+                                    .map(WorkSelectionTarget::Whole)
+                                    .collect(),
+                            ),
+                            session_records.iter().flatten().cloned(),
                         );
                     }
                 }
                 WorkspaceFocus::Sessions => {
                     if let Some(span) = rows.range(focus, rows.sessions.cursor()) {
-                        rows.selection.toggle_records(
-                            session_records
-                                .iter()
-                                .enumerate()
-                                .filter(|(idx, _)| span.contains(idx))
-                                .flat_map(|(_, records)| records.iter().cloned())
-                                .collect(),
+                        let targets: Vec<_> = sessions
+                            .iter()
+                            .enumerate()
+                            .filter(|(idx, _)| span.contains(idx))
+                            .map(|(_, session)| {
+                                session.source.selection_target(Some(&session.session_id))
+                            })
+                            .collect();
+                        rows.selection.apply_target(
+                            WorkSelectionAction::Toggle,
+                            WorkSelectionTarget::Many(targets),
+                            session_records.iter().flatten().cloned(),
                         );
                     }
                 }
                 WorkspaceFocus::Source => {
                     if let Some(span) = rows.range(focus, rows.source.cursor()) {
-                        rows.selection.toggle_records(
-                            (0..sources.len())
-                                .filter(|idx| span.contains(idx))
-                                .flat_map(|idx| {
-                                    source_records(sources, sessions, session_records, idx)
-                                })
-                                .collect(),
+                        let targets: Vec<_> = sources
+                            .iter()
+                            .enumerate()
+                            .filter(|(idx, _)| span.contains(idx))
+                            .map(|(_, source)| source.selection_target(None))
+                            .collect();
+                        rows.selection.apply_target(
+                            WorkSelectionAction::Toggle,
+                            WorkSelectionTarget::Many(targets),
+                            session_records.iter().flatten().cloned(),
                         );
                     }
                 }
             }
             false
-        }
-    }
-}
-
-/// Materialize records covered by marked source/session scopes. Scope masks
-/// drive loading; once bodies arrive, the canonical WorkSet owns the choice.
-pub(super) fn resolve_loaded_scopes(
-    rows: &mut Rows,
-    sources: &[WorkspaceSource],
-    sessions: &[WorkspaceSession],
-    sessions_pane: &SessionColumn,
-) {
-    for (session_idx, session) in sessions.iter().enumerate() {
-        let source_idx = super::load::source_index_for_session(sources, session);
-        let source_marked = source_idx.is_some_and(|idx| rows.source.scope_mask()[idx]);
-        let session_marked = rows.sessions.scope_mask()[session_idx];
-        if source_marked || session_marked {
-            if let Some(records) = sessions_pane.body_for(session) {
-                rows.selection.include_records(records.iter().cloned());
-            }
         }
     }
 }

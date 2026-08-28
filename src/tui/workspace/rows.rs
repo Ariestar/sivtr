@@ -13,7 +13,7 @@ use ratatui::widgets::ListState;
 
 use super::model::{selected_indices, WorkspaceFocus};
 use crate::pane::Selection;
-use crate::workset::WorkSet;
+use sivtr_core::workset::WorkSet;
 
 /// Rows a pane-wide action applies to: every marked row in row order, or the
 /// cursor row alone when nothing is marked. `len` is the row count, so a stale

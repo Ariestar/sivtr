@@ -559,11 +559,8 @@ fn render_source_list(
         .iter()
         .enumerate()
         .map(|(idx, source)| {
-            let selected = pane.scope_mask().get(idx).copied().unwrap_or(false);
-            let load = source_markers
-                .get(idx)
-                .copied()
-                .unwrap_or(SourceLoadMarker::Idle);
+            let selected = pane.scope_mask()[idx];
+            let load = source_markers[idx];
             let marker = load.status_glyph(selected, loading_tick);
             let style = row_highlight(idx, cursor_idx, range_anchor)
                 .unwrap_or_else(|| Style::default().fg(source.color()));
@@ -603,12 +600,9 @@ fn render_source_strip(
         if idx > 0 {
             spans.push(Span::styled("  ", Style::default().fg(theme::dim())));
         }
-        let selected = pane.scope_mask().get(idx).copied().unwrap_or(false);
+        let selected = pane.scope_mask()[idx];
         let focused = idx == current && active;
-        let load = source_markers
-            .get(idx)
-            .copied()
-            .unwrap_or(SourceLoadMarker::Idle);
+        let load = source_markers[idx];
         let marker = load.status_glyph(selected, loading_tick);
         let marker_style = if focused {
             active_item_style()
@@ -660,7 +654,7 @@ fn render_session_list(
         .iter()
         .enumerate()
         .map(|(idx, choice)| {
-            let selected = pane.scope_mask().get(idx).copied().unwrap_or(false);
+            let selected = pane.scope_mask()[idx];
             let base_style = row_highlight(idx, cursor_idx, range_anchor).unwrap_or_default();
             let highlight = search
                 .filter(|search| search.scope == WorkspaceSearchScope::Session)
@@ -712,7 +706,7 @@ fn render_dialogue_list(
         .iter()
         .enumerate()
         .map(|(idx, title)| {
-            let selected = selected_dialogues.get(idx).copied().unwrap_or(false);
+            let selected = selected_dialogues[idx];
             // Selection is shown by the dot alone (● = selected, ○ = not),
             // always visible so it survives pane switches.
             let marker = format!("{} ", selection_dot(selected));

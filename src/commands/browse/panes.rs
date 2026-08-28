@@ -14,8 +14,8 @@ use crate::tui::workspace::{
     active_rows, workspace_content_io_texts, ContentIoFocus, ContentIoFrame, ExpandedBlocks,
     WorkspaceDialogue, WorkspaceSession, WorkspaceSource,
 };
-use crate::workset::WorkSet;
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
+use sivtr_core::workset::WorkSet;
 
 // ── Dialogues ───────────────────────────────────────────────────────────
 
@@ -93,11 +93,12 @@ impl DialoguePane {
         if rows.is_empty() {
             return;
         }
+        assert_eq!(selected.len(), rows.len());
         let focus = focus.min(rows.len() - 1);
         for (i, row) in rows.iter().enumerate() {
             // The cursor dialogue's body is always needed: the content pane
             // shows it even when the selection marks other dialogues.
-            let need_body = i == focus || selected.get(i).copied().unwrap_or(false);
+            let need_body = i == focus || selected[i];
             let item = if need_body {
                 if let Some(body) = row.body.clone() {
                     body
@@ -242,11 +243,11 @@ fn dialogue_from_record(session: &WorkspaceSession, record: &WorkRecord) -> Work
 fn fingerprint<'a>(
     sessions: &[WorkspaceSession],
     session_idx: usize,
-    selected_sessions: &[bool],
+    session_scope: &[bool],
     records: &dyn Fn(&WorkspaceSession) -> Option<&'a [WorkRecord]>,
 ) -> DialogueFingerprint {
     DialogueFingerprint {
-        sessions: active_rows(selected_sessions, session_idx, sessions.len())
+        sessions: active_rows(session_scope, session_idx, sessions.len())
             .into_iter()
             .filter_map(|i| {
                 let s = sessions.get(i)?;
@@ -260,14 +261,14 @@ fn fingerprint<'a>(
 fn meta_prefix<'a>(
     sessions: &[WorkspaceSession],
     session_idx: usize,
-    selected_sessions: &[bool],
+    session_scope: &[bool],
     records: &dyn Fn(&WorkspaceSession) -> Option<&'a [WorkRecord]>,
     budget: usize,
 ) -> (
     Vec<WindowRow<DialogueKey, DialogueMeta, WorkspaceDialogue>>,
     bool,
 ) {
-    let indices = active_rows(selected_sessions, session_idx, sessions.len());
+    let indices = active_rows(session_scope, session_idx, sessions.len());
     if indices.is_empty() {
         return (Vec::new(), true);
     }
@@ -329,11 +330,11 @@ fn meta_prefix<'a>(
 fn body_for_key<'a>(
     sessions: &[WorkspaceSession],
     session_idx: usize,
-    selected_sessions: &[bool],
+    session_scope: &[bool],
     records: &dyn Fn(&WorkspaceSession) -> Option<&'a [WorkRecord]>,
     key: &DialogueKey,
 ) -> Option<WorkspaceDialogue> {
-    for i in active_rows(selected_sessions, session_idx, sessions.len()) {
+    for i in active_rows(session_scope, session_idx, sessions.len()) {
         let Some(session) = sessions.get(i) else {
             continue;
         };
@@ -369,7 +370,7 @@ pub struct ContentCtx<'a> {
 ///
 /// Not a [`crate::pane::Pane`]: its rows are the shown dialogue's rendered
 /// lines, not a window over a growing list, so there is nothing to grow,
-/// keep, or hydrate — `ensure` hands the caller the frame to render.
+/// keep, or hydrate — `frame` hands the caller the rendered layout.
 #[derive(Default)]
 pub struct ContentPane {
     input_lines: usize,
@@ -387,7 +388,7 @@ impl ContentPane {
     /// Build the frame for this context, resizing the block selection mask
     /// of the shown dialogue's block ids. Rebuilds the cached layouts; call
     /// it only when the content actually changed.
-    pub fn ensure(&mut self, ctx: ContentCtx<'_>) -> ContentIoFrame {
+    pub fn frame(&mut self, ctx: ContentCtx<'_>) -> ContentIoFrame {
         let texts = workspace_content_io_texts(
             ctx.dialogues,
             ctx.highlighted_idx,
@@ -404,7 +405,7 @@ impl ContentPane {
     /// WorkSet-derived block highlights for one dialogue. A Whole selection
     /// covers every block; a run highlights only when every part it owns is
     /// selected, while its children remain independently derived.
-    pub fn selection_mask(
+    pub fn block_selection_mask(
         dialogues: &[WorkspaceDialogue],
         dialogue_idx: usize,
         selection: &WorkSet,
@@ -415,8 +416,9 @@ impl ContentPane {
         else {
             return Vec::new();
         };
-        let mut marked = vec![false; crate::tui::content::block::dialogue_block_count(record)];
         let (input, output) = crate::tui::content::block::dialogue_blocks(record);
+        let mut marked =
+            vec![false; crate::tui::content::block::dialogue_block_count(&input, &output)];
         for block in input.iter().chain(&output) {
             mark_selected_blocks(block, record, selection, &mut marked);
         }

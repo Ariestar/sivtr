@@ -218,8 +218,9 @@ fn merge_and_apply(results: Vec<QuerySourceResult>, cwd: &Path, filter: Filter) 
         match result {
             QuerySourceResult::Ok(set) => {
                 any_ok = true;
-                anchors.extend(set.anchors().iter().cloned());
-                for record in set.into_records() {
+                let (set_records, set_anchors) = set.into_parts();
+                anchors.extend(set_anchors);
+                for record in set_records {
                     if seen.insert(record.work_ref.whole()) {
                         records.push(record);
                     }
@@ -237,12 +238,10 @@ fn merge_and_apply(results: Vec<QuerySourceResult>, cwd: &Path, filter: Filter) 
     for error in &errors {
         output::warning(format!("skipped an origin: {error}"));
     }
+    // `from_parts` normalizes the anchors (dedup + Whole canonical form), so
+    // the merged per-source anchors need no pre-dedup here.
     apply_loaded(
-        WorkSet::from_parts(
-            cwd.display().to_string(),
-            records,
-            crate::commands::memory::var::unique_anchors(anchors),
-        ),
+        WorkSet::from_parts(cwd.display().to_string(), records, anchors),
         filter,
     )
 }
@@ -405,12 +404,9 @@ pub fn run_on_share(
     match run_local(source, root, filter.for_remote_peer(), LoadMode::Full) {
         Ok(mut set) => {
             if redact {
-                let records = set
-                    .records()
-                    .iter()
-                    .map(crate::remote::redact::redact_record)
-                    .collect();
-                set.replace_records(records);
+                for record in set.records_mut() {
+                    *record = crate::remote::redact::redact_record(record);
+                }
             }
             Ok(set.into_parts())
         }
@@ -565,6 +561,7 @@ fn read_stdin() -> Result<WorkSet> {
         .context("Failed to read WorkSet from stdin")?;
     let set: WorkSet =
         serde_json::from_str(&input).context("Failed to parse WorkSet from stdin")?;
+    set.validate().context("Invalid WorkSet from stdin")?;
     Ok(set)
 }
 
@@ -576,7 +573,7 @@ pub fn load_context_records(
     let mut sources = Vec::new();
     let mut seen_sources = HashSet::new();
     for anchor in source_anchors {
-        let record = super::record_for_anchor(source_records, anchor)
+        let record = super::find_record([source_records], anchor)
             .with_context(|| format!("No record found for ref `{anchor}`"))?;
         let path = match &record.work_ref.path {
             WorkPath::Terminal { session, .. } => format!("terminal/{session}"),
