@@ -24,7 +24,7 @@ Layout: Source · Sessions · Dialogues · Content. Content splits into **Input*
 | `h` / `l` | Previous / next pane |
 | `j` / `k` | Move down / up |
 | `Space` | Toggle selection (source, session, or dialogue) · mark a content block |
-| `a` | Toggle all items in the focused pane |
+| `a` | 切换当前面板的全部条目 |
 | `g` / `t` | Select agent sources / terminal source (Source) |
 | `R` | Refresh next level under active rows |
 | `v` | Range-select rows · block-range mark a span (Content) |

@@ -161,9 +161,9 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
         },
         WorkspaceHelpEntry {
             key: "a",
-            description: "toggle all",
+            description: "切换全部",
             action: WorkspaceHelpAction::ToggleAll,
-            footer_label: Some("all"),
+            footer_label: Some("全部"),
             footer_panes: &[Source, Sessions, Dialogues, Content],
         },
         WorkspaceHelpEntry {
