@@ -1,16 +1,12 @@
 //! Cursor movement, list clamps, pane resets, and link open.
 
 use anyhow::Result;
-use ratatui::widgets::ListState;
 use std::process::Command;
 
 use crate::tui::content::block::BlockText;
 use crate::tui::workspace::{
-    selected_index, selected_indices, ContentIoFocus, ContentScrolls, WorkspaceFocus,
-    WorkspaceSession, WorkspaceSource,
+    ContentIoFocus, ContentScrolls, ListPane, Rows, WorkspaceFocus, WorkspaceSource,
 };
-
-use super::selection::has_selected_sessions;
 
 pub(super) fn open_link_target(target: &str) -> Result<()> {
     #[cfg(target_os = "windows")]
@@ -74,138 +70,91 @@ impl ContentBlockCursor {
     }
 }
 
-/// Index of the dialogue the content pane shows: the `page`-th selected
-/// dialogue when several are selected, otherwise the focused row. `page`
-/// is clamped to the current selection count.
-pub(super) fn shown_dialogue_idx(
-    selected_dialogues: &[bool],
-    page: usize,
-    dialogue_idx: usize,
-) -> usize {
-    let selected = selected_indices(selected_dialogues);
-    selected
-        .get(page.min(selected.len().saturating_sub(1)))
+/// Index of the dialogue the content pane shows: the `page`-th marked
+/// dialogue when several are marked, otherwise the cursor row — the pane's
+/// own "which rows does this act on" answer, paged. `page` is clamped to
+/// that row count.
+pub(super) fn shown_dialogue_idx(dialogues: &ListPane, page: usize) -> usize {
+    let rows = dialogues.active();
+    rows.get(page.min(rows.len().saturating_sub(1)))
         .copied()
-        .unwrap_or(dialogue_idx)
+        .unwrap_or(0)
 }
 
-pub(super) fn reset_workspace_after_source_change(
-    session_state: &mut ListState,
-    selected_sessions: &mut Vec<bool>,
-    dialogue_state: &mut ListState,
-    selected_dialogues: &mut Vec<bool>,
-    range_anchor: &mut Option<usize>,
-    content_scrolls: &mut ContentScrolls,
-) {
-    session_state.select(None);
-    selected_sessions.clear();
-    dialogue_state.select(None);
-    selected_dialogues.clear();
-    *range_anchor = None;
-    content_scrolls.clear();
-}
-
-pub(super) fn resize_workspace_dialogue_selection(
-    dialogue_count: usize,
-    selected_dialogues: &mut Vec<bool>,
-    range_anchor: &mut Option<usize>,
-) {
-    selected_dialogues.clear();
-    selected_dialogues.resize(dialogue_count, false);
-    *range_anchor = None;
-}
-
-pub(super) fn clamp_list_state(state: &mut ListState, len: usize) {
-    let selected = if len == 0 {
-        None
-    } else {
-        Some(selected_index(state).min(len.saturating_sub(1)))
-    };
-    state.select(selected);
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) fn move_workspace_cursor_up(
+/// Discard whatever the panes right of `focus` derived from its selection,
+/// after that selection changed. `true` when the change reaches back to the
+/// sources, so the caller must reload sessions.
+pub(super) fn invalidate_panes_below(
     focus: WorkspaceFocus,
-    sources: &[WorkspaceSource],
-    sessions: &[WorkspaceSession],
-    dialogue_count: usize,
-    selected_sessions: &[bool],
-    source_state: &mut ListState,
-    session_state: &mut ListState,
-    dialogue_state: &mut ListState,
-    selected_dialogues: &mut Vec<bool>,
+    rows: &mut Rows,
     content_scrolls: &mut ContentScrolls,
-    content_cursor: &mut ContentBlockCursor,
-    content_blocks: (&[BlockText], &[BlockText]),
-) {
+) -> bool {
     match focus {
         WorkspaceFocus::Source => {
-            let next = selected_index(source_state).saturating_sub(1);
-            source_state.select((!sources.is_empty()).then_some(next));
+            rows.sessions.reset(0);
+            rows.dialogues.reset(0);
+            rows.close_ranges();
+            content_scrolls.clear();
+            true
         }
         WorkspaceFocus::Sessions => {
-            let next = selected_index(session_state).saturating_sub(1);
-            if next != selected_index(session_state) {
-                session_state.select((!sessions.is_empty()).then_some(next));
-                if !has_selected_sessions(selected_sessions) {
-                    reset_workspace_dialogue_state(0, dialogue_state, selected_dialogues);
-                }
-                content_scrolls.clear();
-            }
-        }
-        WorkspaceFocus::Dialogues => {
-            let next = selected_index(dialogue_state).saturating_sub(1);
-            dialogue_state.select((dialogue_count > 0).then_some(next));
+            rows.dialogues.reset(0);
             content_scrolls.clear();
+            false
         }
-        WorkspaceFocus::Content => {
-            move_content_cursor(true, content_cursor, content_blocks);
-        }
+        // Dialogues feed the content pane, which rebuilds from the shown
+        // dialogue every redraw; Content has nothing to its right.
+        WorkspaceFocus::Dialogues | WorkspaceFocus::Content => false,
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn move_workspace_cursor_down(
+/// Discard whatever the panes right of `focus` derived from the list row the
+/// cursor just left. Both ways a cursor lands on a new row share this rule: a
+/// j/k step (and the wheel, which steps) and a click's absolute jump.
+///
+/// Distinct from [`invalidate_panes_below`], which answers the same question
+/// after a *selection* change: a selected pane's list spans every marked row,
+/// so moving the cursor inside it changes nothing below.
+pub(super) fn invalidate_after_cursor_move(
     focus: WorkspaceFocus,
-    sources: &[WorkspaceSource],
-    sessions: &[WorkspaceSession],
-    dialogue_count: usize,
-    selected_sessions: &[bool],
-    source_state: &mut ListState,
-    session_state: &mut ListState,
-    dialogue_state: &mut ListState,
-    selected_dialogues: &mut Vec<bool>,
+    rows: &mut Rows,
+    content_scrolls: &mut ContentScrolls,
+) {
+    match focus {
+        WorkspaceFocus::Sessions => {
+            // The dialogue list spans every marked session, so it only
+            // follows the cursor row while nothing is marked.
+            if !rows.sessions.has_marks() {
+                rows.dialogues.reset(0);
+            }
+            content_scrolls.clear();
+        }
+        // A different dialogue is on screen: its content starts at the top.
+        WorkspaceFocus::Dialogues => content_scrolls.clear(),
+        // Source feeds sessions through its selection, not its cursor;
+        // Content has no list row.
+        WorkspaceFocus::Source | WorkspaceFocus::Content => {}
+    }
+}
+
+/// Move the focused pane's cursor one row (`up` or down). Every list pane
+/// follows one rule: clamp to the row count, and a move that does not change
+/// the row does nothing — so bumping the first or last row never resets the
+/// panes below it. Content moves its block cursor instead.
+pub(super) fn move_workspace_cursor(
+    up: bool,
+    focus: WorkspaceFocus,
+    rows: &mut Rows,
     content_scrolls: &mut ContentScrolls,
     content_cursor: &mut ContentBlockCursor,
     content_blocks: (&[BlockText], &[BlockText]),
 ) {
-    match focus {
-        WorkspaceFocus::Source => {
-            let current = selected_index(source_state);
-            let next = (current + 1).min(sources.len().saturating_sub(1));
-            source_state.select((!sources.is_empty()).then_some(next));
-        }
-        WorkspaceFocus::Sessions => {
-            let current = selected_index(session_state);
-            let next = (current + 1).min(sessions.len().saturating_sub(1));
-            if next != current {
-                session_state.select((!sessions.is_empty()).then_some(next));
-                if !has_selected_sessions(selected_sessions) {
-                    reset_workspace_dialogue_state(0, dialogue_state, selected_dialogues);
-                }
-                content_scrolls.clear();
-            }
-        }
-        WorkspaceFocus::Dialogues => {
-            let current = selected_index(dialogue_state);
-            let next = (current + 1).min(dialogue_count.saturating_sub(1));
-            dialogue_state.select((dialogue_count > 0).then_some(next));
-            content_scrolls.clear();
-        }
-        WorkspaceFocus::Content => {
-            move_content_cursor(false, content_cursor, content_blocks);
-        }
+    if focus == WorkspaceFocus::Content {
+        move_content_cursor(up, content_cursor, content_blocks);
+        return;
+    }
+    if rows.pane_mut(focus).is_some_and(|pane| pane.step(up)) {
+        invalidate_after_cursor_move(focus, rows, content_scrolls);
     }
 }
 
@@ -297,20 +246,11 @@ pub(super) fn source_list_index(
     None
 }
 
-pub(super) fn reset_workspace_dialogue_state(
-    dialogue_count: usize,
-    dialogue_state: &mut ListState,
-    selected_dialogues: &mut Vec<bool>,
-) {
-    dialogue_state.select((dialogue_count > 0).then_some(0));
-    selected_dialogues.clear();
-    selected_dialogues.resize(dialogue_count, false);
-}
-
 #[cfg(test)]
 mod tests {
     use super::{move_content_cursor, row_list_index, shown_dialogue_idx, ContentBlockCursor};
     use crate::tui::content::block::BlockText;
+    use crate::tui::workspace::ListPane;
     use ratatui::layout::Rect;
     use sivtr_core::record::WorkPartKind;
 
@@ -338,19 +278,21 @@ mod tests {
     }
 
     #[test]
-    fn shown_dialogue_idx_falls_back_to_focused_row_without_selection() {
-        assert_eq!(shown_dialogue_idx(&[false, false], 0, 1), 1);
+    fn shown_dialogue_idx_falls_back_to_the_cursor_row_without_marks() {
+        let mut pane = ListPane::with_marks(vec![false, false]);
+        pane.select(1);
+        assert_eq!(shown_dialogue_idx(&pane, 0), 1);
     }
 
     #[test]
-    fn shown_dialogue_idx_pages_through_the_selected_dialogues() {
-        let selected = [false, true, false, true, true];
+    fn shown_dialogue_idx_pages_through_the_marked_dialogues() {
+        let pane = ListPane::with_marks(vec![false, true, false, true, true]);
         // Page 0..3 maps onto the 2nd, 4th, and 5th dialogues.
-        assert_eq!(shown_dialogue_idx(&selected, 0, 0), 1);
-        assert_eq!(shown_dialogue_idx(&selected, 1, 0), 3);
-        assert_eq!(shown_dialogue_idx(&selected, 2, 0), 4);
-        // A page past the end clamps to the last selected dialogue.
-        assert_eq!(shown_dialogue_idx(&selected, 9, 0), 4);
+        assert_eq!(shown_dialogue_idx(&pane, 0), 1);
+        assert_eq!(shown_dialogue_idx(&pane, 1), 3);
+        assert_eq!(shown_dialogue_idx(&pane, 2), 4);
+        // A page past the end clamps to the last marked dialogue.
+        assert_eq!(shown_dialogue_idx(&pane, 9), 4);
     }
 
     #[test]

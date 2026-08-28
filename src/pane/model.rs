@@ -24,7 +24,7 @@ pub struct PaneInput<'a> {
 /// every pane uses for `v` and range clicks, and the only place it lives.
 /// The ids need not be contiguous — the content pane's visible blocks skip
 /// the ids a fold is hiding — and out-of-range ids are ignored.
-pub fn toggle_row_ids(mask: &mut [bool], ids: impl Iterator<Item = usize> + Clone) {
+fn toggle_row_ids(mask: &mut [bool], ids: impl Iterator<Item = usize> + Clone) {
     let select = ids
         .clone()
         .any(|id| mask.get(id).is_some_and(|flag| !*flag));
@@ -35,29 +35,35 @@ pub fn toggle_row_ids(mask: &mut [bool], ids: impl Iterator<Item = usize> + Clon
     }
 }
 
-/// Native multi-select: a boolean mask plus a range anchor, with one
-/// toggle / range-toggle / clear API shared by every pane (source, session,
-/// dialogue, and content blocks). Panes own a `Selection` when their rows
-/// are selectable and hand the mask to the keep policy via
-/// [`PaneInput::selected`]; consumers (render, copy) read the mask.
+/// Native multi-select: the row mask of one pane, with the toggle /
+/// range-toggle API shared by every selectable pane. Panes own a `Selection`
+/// when their rows are selectable and hand the mask to the keep policy via
+/// [`PaneInput::selected`]; consumers (render, copy) read the mask. The live
+/// range anchor is not part of it — a pane's anchor belongs with its cursor,
+/// which the mask knows nothing about.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Selection {
     mask: Vec<bool>,
-    anchor: Option<usize>,
+}
+
+impl From<Vec<bool>> for Selection {
+    /// A selection over a mask the caller already built (a pane's preset rows).
+    fn from(mask: Vec<bool>) -> Self {
+        Self { mask }
+    }
 }
 
 impl Selection {
-    pub fn new(len: usize) -> Self {
-        Self {
-            mask: vec![false; len],
-            anchor: None,
-        }
-    }
-
     /// Resize to a new row count, dropping marks that fall out of range.
     pub fn resize(&mut self, len: usize) {
         self.mask.resize(len, false);
-        self.anchor = None;
+    }
+
+    /// Drop every mark and size to `len` — for the row-count changes that
+    /// leave the surviving marks naming different rows than they did.
+    pub fn reset(&mut self, len: usize) {
+        self.mask.clear();
+        self.mask.resize(len, false);
     }
 
     /// Row mask: `mask[i]` is true when row `i` is selected.
@@ -65,36 +71,30 @@ impl Selection {
         &self.mask
     }
 
-    pub fn len(&self) -> usize {
-        self.mask.len()
+    /// Row mask for the policies that set flags in place (source presets).
+    pub fn mask_mut(&mut self) -> &mut [bool] {
+        &mut self.mask
     }
 
-    pub fn is_empty(&self) -> bool {
-        !self.mask.contains(&true)
+    /// Is any row selected?
+    pub fn any(&self) -> bool {
+        self.mask.contains(&true)
     }
 
     pub fn count(&self) -> usize {
         self.mask.iter().filter(|flag| **flag).count()
     }
 
-    pub fn clear(&mut self) {
-        self.mask.fill(false);
-        self.anchor = None;
-    }
-
     /// Toggle one row; out-of-range rows are ignored (the mask is resized
-    /// when the pane's rows change) and never update the anchor.
+    /// when the pane's rows change).
     pub fn toggle(&mut self, idx: usize) {
         if let Some(flag) = self.mask.get_mut(idx) {
             *flag = !*flag;
-            self.anchor = Some(idx);
         }
     }
 
-    /// Range-select the given rows through [`toggle_row_ids`], leaving the
-    /// anchor on the last of them.
+    /// Range-select the given rows through [`toggle_row_ids`].
     pub fn toggle_ids(&mut self, ids: impl Iterator<Item = usize> + Clone) {
-        self.anchor = ids.clone().last();
         toggle_row_ids(&mut self.mask, ids);
     }
 }
@@ -126,8 +126,10 @@ impl<'a> PaneInput<'a> {
 pub trait Pane {
     type Ctx<'a>;
 
-    fn ensure(&mut self, ctx: Self::Ctx<'_>, input: &PaneInput<'_>) -> bool;
+    /// Bring the pane in line with this frame's data and viewport.
+    fn ensure(&mut self, ctx: Self::Ctx<'_>, input: &PaneInput<'_>);
 
+    /// Drain finished async work; `true` when it changed the pane.
     fn poll(&mut self) -> bool {
         false
     }
@@ -141,45 +143,28 @@ pub trait Pane {
 
 #[cfg(test)]
 mod tests {
-    use super::Selection;
+    use super::{toggle_row_ids, Selection};
 
     #[test]
-    fn selection_toggles_and_counts_rows() {
-        let mut selection = Selection::new(3);
-        assert!(selection.is_empty());
-        selection.toggle(1);
-        assert!(!selection.is_empty());
-        assert_eq!(selection.count(), 1);
-        assert_eq!(selection.mask(), &[false, true, false]);
-        // Toggling again clears the row.
-        selection.toggle(1);
-        assert!(selection.is_empty());
-        // Out-of-range toggles are ignored.
-        selection.toggle(9);
-        assert!(selection.is_empty());
-    }
-
-    #[test]
-    fn selection_range_toggles_every_listed_row_to_one_state() {
-        let mut selection = Selection::new(5);
-        selection.toggle(1);
-        selection.toggle_ids(1..=3);
-        assert_eq!(selection.mask(), &[false, true, true, true, false]);
-        // Second range over the same rows clears them.
-        selection.toggle_ids(1..=3);
-        assert_eq!(selection.mask(), &[false, false, false, false, false]);
-        // Gaps are allowed (folded blocks are skipped) and out-of-range ids
-        // are ignored.
-        selection.toggle_ids([0, 3, 9].into_iter());
-        assert_eq!(selection.mask(), &[true, false, false, true, false]);
+    fn row_ids_toggle_to_one_state_over_gaps() {
+        let mut mask = [false, true, false, false, false];
+        // Mixed span selects every listed row; ids need not be contiguous and
+        // out-of-range ids are ignored.
+        toggle_row_ids(&mut mask, [1, 3, 9].into_iter());
+        assert_eq!(mask, [false, true, false, true, false]);
+        // A fully selected span clears instead.
+        toggle_row_ids(&mut mask, [1, 3].into_iter());
+        assert_eq!(mask, [false, false, false, false, false]);
     }
 
     #[test]
     fn selection_resize_drops_marks_out_of_range() {
-        let mut selection = Selection::new(4);
+        let mut selection = Selection::default();
+        selection.resize(4);
         selection.toggle(3);
+        assert_eq!(selection.count(), 1);
         selection.resize(2);
-        assert!(selection.is_empty());
+        assert_eq!(selection.count(), 0);
         selection.toggle(1);
         selection.resize(3);
         assert_eq!(selection.mask(), &[false, true, false]);

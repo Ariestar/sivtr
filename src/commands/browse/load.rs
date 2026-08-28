@@ -570,7 +570,7 @@ impl Pane for SessionColumn {
         self.pump.drain(&mut self.states)
     }
 
-    fn ensure(&mut self, ctx: SessionCtx<'_>, input: &PaneInput<'_>) -> bool {
+    fn ensure(&mut self, ctx: SessionCtx<'_>, input: &PaneInput<'_>) {
         self.pump
             .drop_unselected(ctx.selected_sources, &mut self.states);
         if !ctx.search_active {
@@ -601,7 +601,6 @@ impl Pane for SessionColumn {
         self.pump
             .sync_bodies(&self.sources, &mut self.states, &keep);
         self.merged_len = ctx.sessions.len();
-        true
     }
 
     fn len(&self) -> usize {

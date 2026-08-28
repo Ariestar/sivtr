@@ -25,20 +25,11 @@ use crate::tui::theme;
 use crate::tui::workspace::help::{workspace_footer_hotkeys, workspace_help_entries};
 use crate::tui::workspace::layout::{selected_index, workspace_layout};
 use crate::tui::workspace::model::{
-    selected_count, selected_indices, SourceLoadMarker, WorkspaceDialogue, WorkspaceFocus,
-    WorkspaceFooterView, WorkspaceSearchView, WorkspaceSession, WorkspaceSource, WorkspaceView,
+    selected_indices, SourceLoadMarker, WorkspaceDialogue, WorkspaceFocus, WorkspaceFooterView,
+    WorkspaceSearchView, WorkspaceSession, WorkspaceSource, WorkspaceView,
 };
+use crate::tui::workspace::rows::ListPane;
 use sivtr_core::record::{WorkAt, WorkRef};
-
-/// Range-selection anchor is per-pane: only the focused list honors it so a
-/// left-over anchor from another pane never styles unrelated rows.
-fn active_range(
-    focus: WorkspaceFocus,
-    pane: WorkspaceFocus,
-    range_anchor: Option<usize>,
-) -> Option<usize> {
-    (focus == pane).then_some(range_anchor).flatten()
-}
 
 pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
     let area = frame.area();
@@ -50,11 +41,11 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         .split(area);
     let layout = workspace_layout(area, view.focus, view.fullscreen);
 
-    let dialogue_idx =
-        selected_index(view.dialogue_state).min(view.dialogue_titles.len().saturating_sub(1));
+    let dialogues_pane = &view.rows.dialogues;
+    let dialogue_idx = dialogues_pane.cursor();
     let current_ref = current_content_ref(
         view.dialogues,
-        view.selected_dialogues,
+        dialogues_pane.mask(),
         dialogue_idx,
         view.content_at,
     );
@@ -67,34 +58,31 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         frame,
         layout.source,
         view.sources,
-        view.selected_sources,
         view.source_markers,
         view.loading_tick,
-        view.source_state,
-        active_range(view.focus, WorkspaceFocus::Source, view.range_anchor),
+        &view.rows.source,
+        view.rows.range_start(WorkspaceFocus::Source),
         view.focus == WorkspaceFocus::Source,
     );
     render_session_list(
         frame,
         layout.sessions,
         view.sessions,
-        view.selected_sources,
-        view.selected_sessions,
-        view.session_state,
+        view.rows.source.marked(),
+        &view.rows.sessions,
         &view.body_failures,
         view.search.as_ref(),
         search_regex.as_ref(),
-        active_range(view.focus, WorkspaceFocus::Sessions, view.range_anchor),
+        view.rows.range_start(WorkspaceFocus::Sessions),
         view.focus == WorkspaceFocus::Sessions,
     );
     render_dialogue_list(
         frame,
         layout.dialogues,
         view.dialogue_titles,
-        view.dialogue_state,
-        view.selected_sessions,
-        view.selected_dialogues,
-        active_range(view.focus, WorkspaceFocus::Dialogues, view.range_anchor),
+        dialogues_pane,
+        view.rows.sessions.marked(),
+        view.rows.range_start(WorkspaceFocus::Dialogues),
         view.search.as_ref(),
         search_regex.as_ref(),
         view.focus == WorkspaceFocus::Dialogues,
@@ -109,7 +97,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         .as_ref()
         .filter(|search| search.scope == WorkspaceSearchScope::Content)
         .and(search_regex.as_ref());
-    let title_suffix = content_title_suffix(view.selected_dialogues, current_ref.as_ref());
+    let title_suffix = content_title_suffix(dialogues_pane.marked(), current_ref.as_ref());
     // Multi-select paging: `Input (read) · 2/3 : 3 dialogues selected`.
     let page_label = view
         .content_page
@@ -546,36 +534,33 @@ fn render_source_list(
     frame: &mut Frame,
     area: Rect,
     sources: &[WorkspaceSource],
-    selected_sources: &[bool],
     source_markers: &[SourceLoadMarker],
     loading_tick: u8,
-    state: &ListState,
+    pane: &ListPane,
     range_anchor: Option<usize>,
     active: bool,
 ) {
-    let cursor_idx = selected_index(state).min(sources.len().saturating_sub(1));
-    let panel = Panel::new(WorkspaceFocus::Source.key(), "Source", active);
+    let cursor_idx = pane.cursor();
     // Compact strip when not focused; vertical list (scrollable) when focused.
     if !active || area.height <= 3 {
         render_source_strip(
             frame,
             area,
-            panel,
             sources,
-            selected_sources,
             source_markers,
             loading_tick,
-            state,
+            pane,
             active,
         );
         return;
     }
+    let panel = source_panel(active);
 
     let mut items: Vec<ListItem> = sources
         .iter()
         .enumerate()
         .map(|(idx, source)| {
-            let selected = selected_sources.get(idx).copied().unwrap_or(false);
+            let selected = pane.mask().get(idx).copied().unwrap_or(false);
             let load = source_markers
                 .get(idx)
                 .copied()
@@ -595,29 +580,31 @@ fn render_source_list(
             Style::default().fg(theme::dim()),
         )));
     }
-    render_list_panel(frame, area, panel, items, state);
+    render_list_panel(frame, area, panel, items, pane.state());
     render_list_scrollbar(frame, area, cursor_idx, sources.len(), active);
 }
 
-#[allow(clippy::too_many_arguments)]
+fn source_panel(active: bool) -> Panel {
+    Panel::new(WorkspaceFocus::Source.key(), "Source", active)
+}
+
 fn render_source_strip(
     frame: &mut Frame,
     area: Rect,
-    panel: Panel,
     sources: &[WorkspaceSource],
-    selected_sources: &[bool],
     source_markers: &[SourceLoadMarker],
     loading_tick: u8,
-    state: &ListState,
+    pane: &ListPane,
     active: bool,
 ) {
-    let current = selected_index(state).min(sources.len().saturating_sub(1));
+    let current = pane.cursor();
+    let panel = source_panel(active);
     let mut spans = Vec::new();
     for (idx, source) in sources.iter().enumerate() {
         if idx > 0 {
             spans.push(Span::styled("  ", Style::default().fg(theme::dim())));
         }
-        let selected = selected_sources.get(idx).copied().unwrap_or(false);
+        let selected = pane.mask().get(idx).copied().unwrap_or(false);
         let focused = idx == current && active;
         let load = source_markers
             .get(idx)
@@ -661,21 +648,20 @@ fn render_session_list(
     frame: &mut Frame,
     area: Rect,
     choices: &[WorkspaceSession],
-    selected_sources: &[bool],
-    selected_sessions: &[bool],
-    state: &ListState,
+    marked_sources: usize,
+    pane: &ListPane,
     body_failures: &HashSet<(WorkspaceSource, String)>,
     search: Option<&WorkspaceSearchView<'_>>,
     search_regex: Option<&Regex>,
     range_anchor: Option<usize>,
     active: bool,
 ) {
-    let cursor_idx = selected_index(state);
+    let cursor_idx = pane.cursor();
     let mut items: Vec<ListItem> = choices
         .iter()
         .enumerate()
         .map(|(idx, choice)| {
-            let selected = selected_sessions.get(idx).copied().unwrap_or(false);
+            let selected = pane.mask().get(idx).copied().unwrap_or(false);
             let base_style = row_highlight(idx, cursor_idx, range_anchor).unwrap_or_default();
             let highlight = search
                 .filter(|search| search.scope == WorkspaceSearchScope::Session)
@@ -700,11 +686,11 @@ fn render_session_list(
         area,
         Panel::new(
             WorkspaceFocus::Sessions.key(),
-            selected_parent_title("Sessions", selected_sources, "source", "sources"),
+            selected_parent_title("Sessions", marked_sources, "source", "sources"),
             active,
         ),
         items,
-        state,
+        pane.state(),
     );
     render_list_scrollbar(frame, area, cursor_idx, choices.len(), active);
 }
@@ -714,20 +700,19 @@ fn render_dialogue_list(
     frame: &mut Frame,
     area: Rect,
     titles: &[&str],
-    state: &ListState,
-    selected_sessions: &[bool],
-    selected_dialogues: &[bool],
+    pane: &ListPane,
+    marked_sessions: usize,
     range_anchor: Option<usize>,
     search: Option<&WorkspaceSearchView<'_>>,
     search_regex: Option<&Regex>,
     active: bool,
 ) {
-    let highlighted_idx = selected_index(state);
+    let highlighted_idx = pane.cursor();
     let mut items: Vec<ListItem> = titles
         .iter()
         .enumerate()
         .map(|(idx, title)| {
-            let selected = selected_dialogues.get(idx).copied().unwrap_or(false);
+            let selected = pane.mask().get(idx).copied().unwrap_or(false);
             // Selection is shown by the dot alone (● = selected, ○ = not),
             // always visible so it survives pane switches.
             let marker = format!("{} ", selection_dot(selected));
@@ -758,11 +743,11 @@ fn render_dialogue_list(
         area,
         Panel::new(
             WorkspaceFocus::Dialogues.key(),
-            selected_parent_title("Dialogues", selected_sessions, "session", "sessions"),
+            selected_parent_title("Dialogues", marked_sessions, "session", "sessions"),
             active,
         ),
         items,
-        state,
+        pane.state(),
     );
     render_list_scrollbar(frame, area, highlighted_idx, titles.len(), active);
 }
@@ -820,13 +805,7 @@ fn render_content_panel(
     );
 }
 
-fn selected_parent_title(
-    title: &str,
-    selected_parent_items: &[bool],
-    singular: &str,
-    plural: &str,
-) -> String {
-    let count = selected_count(selected_parent_items);
+fn selected_parent_title(title: &str, count: usize, singular: &str, plural: &str) -> String {
     if count == 0 {
         title.to_string()
     } else if count == 1 {
@@ -836,9 +815,8 @@ fn selected_parent_title(
     }
 }
 
-fn content_title_suffix(selected_dialogues: &[bool], current_ref: Option<&WorkRef>) -> String {
-    let count = selected_count(selected_dialogues);
-    let select = match count {
+fn content_title_suffix(marked: usize, current_ref: Option<&WorkRef>) -> String {
+    let select = match marked {
         0 => String::new(),
         1 => ": 1 dialogue selected".to_string(),
         n => format!(": {n} dialogues selected"),
@@ -854,13 +832,13 @@ fn content_title_suffix(selected_dialogues: &[bool], current_ref: Option<&WorkRe
 #[cfg(test)]
 pub(crate) fn content_title(
     mode: ContentViewMode,
-    selected_dialogues: &[bool],
+    marked: usize,
     current_ref: Option<&WorkRef>,
 ) -> String {
     format!(
         "Content ({}){}",
         mode.label(),
-        content_title_suffix(selected_dialogues, current_ref)
+        content_title_suffix(marked, current_ref)
     )
 }
 
