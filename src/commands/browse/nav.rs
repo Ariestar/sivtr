@@ -356,8 +356,6 @@ mod tests {
         let mut rows = Rows::default();
         let mut scrolls = ContentScrolls::default();
         let mut cursor = ContentBlockCursor::default();
-        let mut rows = Rows::default();
-        let mut scrolls = ContentScrolls::default();
         cursor.set(3);
 
         move_content_cursor(true, &mut rows, &mut scrolls, &mut cursor, (&[], &blocks));
