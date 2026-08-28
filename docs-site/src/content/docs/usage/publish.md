@@ -105,7 +105,9 @@ sivtr publish link 7d_xxxxxxxxxxxxxxxxxxxxxx
 sivtr publish revoke 7d_xxxxxxxxxxxxxxxxxxxxxx --yes
 ```
 
-Management tokens live only in local `publication-state.db`. If that database is lost, v1 cannot recover revoke rights.
+Management tokens live only in local `publication-state.db`. This applies to
+both v1 and v2; if that database is lost, the management token cannot be
+recovered for revoke.
 
 ## `publish` vs `share`
 

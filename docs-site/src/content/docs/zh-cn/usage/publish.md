@@ -232,7 +232,7 @@ sivtr publish link 7d_xxxxxxxxxxxxxxxxxxxxxx
 sivtr publish revoke 7d_xxxxxxxxxxxxxxxxxxxxxx --yes
 ```
 
-撤销会立即让链接不可访问。重复撤销同一条本机已撤销记录可以安全执行。管理凭据只保存在本机的 `publication-state.db` 中；如果这个数据库丢失，v1 没有账号恢复或远程找回管理权的功能。
+撤销会立即让链接不可访问。重复撤销同一条本机已撤销记录可以安全执行。v1 和 v2 的管理凭据都只保存在本机的 `publication-state.db` 中；如果数据库丢失，管理 token 无法恢复，也就无法通过 CLI 撤销链接。
 
 ## `publish` 和 `share` 的区别
 
