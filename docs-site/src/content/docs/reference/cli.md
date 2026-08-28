@@ -502,6 +502,40 @@ sivtr serve logs
 sivtr serve stop
 ```
 
+## publish
+
+`publish` projects a local WorkSet into an immutable, client-encrypted browser snapshot. It is not `share`: `share` is a live workspace mount that needs Sivtr/daemon; `publish` uploads ciphertext only, and viewers need no Sivtr install.
+
+```bash
+sivtr publish preview <SOURCE> [--pick] [--save <NAME>] [--title <TITLE>] [--expires 7d] [--format human|json]
+sivtr publish create <SOURCE> [--title <TITLE>] [--expires 7d] [--yes] [--allow-warnings]
+sivtr publish list [--json]
+sivtr publish link <PUBLICATION_ID>
+sivtr publish revoke <PUBLICATION_ID> [--yes]
+```
+
+Whole-record WorkSets use v1: they accept consecutive local agent records from one provider and session, and publish only User/Assistant text. `preview --pick` opens the interactive picker; `--save <NAME>` stores the selected part anchors from that one session for a v2 snapshot. Without `--pick`, `--save <NAME>` saves the whole-record WorkSet and does not create a v2 selection. v2 supports User, Assistant, Tool, Skill, and Thinking atoms plus non-contiguous parts; ToolCall and ToolResult remain inseparable.
+
+Both versions reject terminal records, remotes/groups, mixed sessions/providers, attachments, and cross-session evidence bundles. Public snapshots omit WorkSets, WorkRefs, `cwd`, session paths, and provider envelopes; whole and part anchors cannot be mixed. Search defaults to newest-first and `--latest 5`; v1 publish sorts by record index before the continuity check. `[publish].endpoint` defaults to `https://share.hnnulwh.cn` and can be changed in `config.toml`. Non-interactive create requires `--yes`. Path/email/internal-URL warnings require `--allow-warnings` in every environment, including a TTY.
+
+Typical flow:
+
+```bash
+sivtr search codex/<session-id> --sort oldest --latest 50 --save share_ready --refs
+sivtr publish preview '@share_ready'
+sivtr publish create '@share_ready' --expires 7d --yes
+```
+
+Atomic selection flow:
+
+```powershell
+sivtr publish preview codex/<session-id> --pick --save share_ready
+sivtr publish preview '@share_ready' --format human
+sivtr publish create '@share_ready' --expires 7d --yes
+```
+
+Quote `'@share_ready'` in PowerShell so `@` is not treated as splatting.
+
 ## share
 
 ```bash
