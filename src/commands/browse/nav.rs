@@ -270,7 +270,7 @@ pub(super) fn source_list_index(
 
 #[cfg(test)]
 mod tests {
-    use super::{move_content_cursor, row_list_index, shown_dialogue_idx, ContentBlockCursor};
+    use super::{move_content_cursor, row_list_index, ContentBlockCursor};
     use crate::tui::content::block::BlockText;
     use crate::tui::workspace::{ContentScrolls, ListPane, Rows};
     use ratatui::layout::Rect;
@@ -286,10 +286,7 @@ mod tests {
     }
 
     fn blocks(ids: &[usize]) -> Vec<BlockText> {
-        ids.iter()
-            .copied()
-            .map(block)
-            .collect()
+        ids.iter().copied().map(block).collect()
     }
 
     /// Two dialogues, one block each: j off the end of the first steps the
@@ -347,34 +344,18 @@ mod tests {
     }
 
     #[test]
-    fn shown_dialogue_idx_falls_back_to_the_cursor_row_without_marks() {
-        let mut pane = ListPane::with_marks(vec![false, false]);
-        pane.select(1);
-        assert_eq!(shown_dialogue_idx(&pane, 0), 1);
-    }
-
-    #[test]
-    fn shown_dialogue_idx_pages_through_the_marked_dialogues() {
-        let pane = ListPane::with_marks(vec![false, true, false, true, true]);
-        // Page 0..3 maps onto the 2nd, 4th, and 5th dialogues.
-        assert_eq!(shown_dialogue_idx(&pane, 0), 1);
-        assert_eq!(shown_dialogue_idx(&pane, 1), 3);
-        assert_eq!(shown_dialogue_idx(&pane, 2), 4);
-        // A page past the end clamps to the last marked dialogue.
-        assert_eq!(shown_dialogue_idx(&pane, 9), 4);
-    }
-
-    #[test]
     fn hidden_cursor_moves_to_the_nearest_visible_block() {
         let blocks = [block(0), block(1), block(4)];
+        let mut rows = Rows::default();
+        let mut scrolls = ContentScrolls::default();
         let mut cursor = ContentBlockCursor::default();
         cursor.set(3);
 
-        move_content_cursor(true, &mut cursor, (&[], &blocks));
+        move_content_cursor(true, &mut rows, &mut scrolls, &mut cursor, (&[], &blocks));
         assert_eq!(cursor.get(), Some(1));
 
         cursor.set(3);
-        move_content_cursor(false, &mut cursor, (&[], &blocks));
+        move_content_cursor(false, &mut rows, &mut scrolls, &mut cursor, (&[], &blocks));
         assert_eq!(cursor.get(), Some(4));
     }
 }
