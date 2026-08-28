@@ -3,7 +3,6 @@
 use anyhow::{Context, Result};
 use crossterm::event::KeyCode;
 
-use crate::commands::select::CommandSelection;
 use crate::tui::content::block::{dialogue_blocks, Block};
 use crate::tui::content::view::{line_count, ContentViewMode};
 use crate::tui::search::{WorkspaceSearchMatch, WorkspaceSearchOutput};
@@ -58,12 +57,7 @@ pub(super) fn workspace_picked_content_for_copy_with_line_filter(
         })
         .collect::<Vec<_>>();
     let units = apply_workspace_line_filter(units, line_filter)?;
-    let selection = CommandSelection::RecentExplicit((1..=units.len()).collect());
-    Ok(WorkspacePickedContent {
-        source,
-        units,
-        selection,
-    })
+    Ok(WorkspacePickedContent { source, units })
 }
 
 #[cfg(test)]
@@ -207,7 +201,6 @@ fn picked_for_texts(
             ansi: plain.clone(),
             plain,
         }],
-        selection: CommandSelection::RecentExplicit(vec![1]),
     })
 }
 

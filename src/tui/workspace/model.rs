@@ -7,7 +7,6 @@ use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
 use std::collections::HashSet;
 use std::time::SystemTime;
 
-use crate::commands::select::CommandSelection;
 use crate::tui::content::block::{dialogue_block_id, fold_label_for_part, BlockText};
 use crate::tui::content::io::{
     ContentIoFocus, ContentIoFrame, ContentIoTexts, ContentScrolls, ExpandedBlocks,
@@ -196,7 +195,6 @@ impl WorkspaceCopyParts {
 pub(crate) struct WorkspacePickedContent {
     pub(crate) source: WorkspaceSource,
     pub(crate) units: Vec<TextPair>,
-    pub(crate) selection: CommandSelection,
 }
 
 #[derive(Clone, Debug)]

@@ -123,14 +123,9 @@ impl WorkSet {
         Ok(())
     }
 
+    /// Persist the anchors a reader would see, so a saved WorkSet keeps them.
     pub fn ensure_anchors(&mut self) {
-        if self.anchors.is_empty() {
-            self.anchors = self
-                .records
-                .iter()
-                .map(|record| record.work_ref.whole())
-                .collect();
-        }
+        self.anchors = self.anchors();
     }
 
     pub fn anchors(&self) -> Vec<WorkRef> {

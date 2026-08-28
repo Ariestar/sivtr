@@ -3,7 +3,6 @@
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 
-use crate::commands::select::CommandSelection;
 use crate::tui::content::io::ContentIoFrame;
 use crate::tui::content::view::{
     clamp_content_position, content_block_at, content_position_in_text_row, content_text_area,
@@ -342,7 +341,6 @@ pub(super) fn workspace_picked_content_for_visual_selection(
             ansi: plain.clone(),
             plain,
         }],
-        selection: CommandSelection::RecentExplicit(vec![1]),
     })
 }
 
