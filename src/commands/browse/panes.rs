@@ -460,10 +460,6 @@ impl ContentPane {
     }
 }
 
-// ── Compatibility helpers used by tests / selection ─────────────────────
-
-// (none — new panes implement `Pane` only)
-
 #[cfg(test)]
 mod tests {
     use super::*;

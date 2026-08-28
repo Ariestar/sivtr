@@ -145,8 +145,8 @@ pub(super) fn apply_workspace_help_action(
         WorkspaceHelpAction::RangeSelect => match *focus {
             WorkspaceFocus::Content => {
                 // The span covers block ids instead of list rows, and only
-                // visible blocks are in it — a folded run is one unit, so
-                // marking its hidden members too would copy them twice.
+                // visible blocks are in it: a folded run is one unit, and its
+                // header already carries every member's body.
                 if let Some(cursor_block) = content_cursor.get() {
                     if let Some(span) = rows.range(*focus, cursor_block) {
                         let shown = shown_dialogue_idx(&rows.dialogues, *content_page);
@@ -236,8 +236,7 @@ pub(super) fn apply_workspace_help_action(
             WorkspaceFocus::Dialogues | WorkspaceFocus::Content => {
                 return Ok(HelpDispatch::Picked(workspace_picked_content(
                     dialogues,
-                    rows.dialogues.mask(),
-                    rows.dialogues.cursor(),
+                    &rows.dialogues.active(),
                     content_at,
                 )?));
             }
@@ -247,8 +246,7 @@ pub(super) fn apply_workspace_help_action(
             return Ok(HelpDispatch::Picked(
                 workspace_picked_content_for_copy_with_line_filter(
                     dialogues,
-                    rows.dialogues.mask(),
-                    rows.dialogues.cursor(),
+                    &rows.dialogues.active(),
                     WorkspaceCopyShortcut::Input,
                     line_filter,
                     None,
@@ -260,8 +258,7 @@ pub(super) fn apply_workspace_help_action(
             return Ok(HelpDispatch::Picked(
                 workspace_picked_content_for_copy_with_line_filter(
                     dialogues,
-                    rows.dialogues.mask(),
-                    rows.dialogues.cursor(),
+                    &rows.dialogues.active(),
                     WorkspaceCopyShortcut::Output,
                     line_filter,
                     None,
@@ -276,12 +273,9 @@ pub(super) fn apply_workspace_help_action(
             // the shown index like the marked paths do, not the focused row.
             let shown = shown_dialogue_idx(&rows.dialogues, *content_page);
             let block_id = content_cursor.get().unwrap_or(0);
-            if let Some(picked) = workspace_picked_content_for_cursor_block(
-                dialogues,
-                rows.dialogues.mask(),
-                shown,
-                block_id,
-            ) {
+            if let Some(picked) =
+                workspace_picked_content_for_cursor_block(dialogues, shown, block_id)
+            {
                 return Ok(HelpDispatch::Picked(picked));
             }
         }
@@ -289,8 +283,7 @@ pub(super) fn apply_workspace_help_action(
             return Ok(HelpDispatch::Picked(
                 workspace_picked_content_for_copy_with_line_filter(
                     dialogues,
-                    rows.dialogues.mask(),
-                    rows.dialogues.cursor(),
+                    &rows.dialogues.active(),
                     WorkspaceCopyShortcut::Command,
                     line_filter,
                     None,
