@@ -60,7 +60,7 @@ pub(crate) fn picked_units(picked: &PickedContent) -> Result<(Vec<TextPair>, Str
                 .iter()
                 .map(|anchor| {
                     let record = set
-                        .records
+                        .records()
                         .iter()
                         .find(|record| record.work_ref.whole() == anchor.whole())
                         .with_context(|| {

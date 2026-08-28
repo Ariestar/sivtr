@@ -305,8 +305,9 @@ impl SourceLoadPump {
                 ) {
                     Ok(mut results) => match results.pop() {
                         Some(QuerySourceResult::Ok(set)) => {
-                            let n = set.records.len();
-                            let mut sessions = sessions_from_records(&source, set.records);
+                            let n = set.records().len();
+                            let mut sessions =
+                                sessions_from_records(&source, set.records().to_vec());
                             for s in &mut sessions {
                                 s.records.clear();
                                 s.body_loaded = false;
@@ -362,7 +363,8 @@ impl SourceLoadPump {
                     Ok(mut results) => match results.pop() {
                         Some(QuerySourceResult::Ok(mut set)) => match set.materialize_parts() {
                             Ok(()) => {
-                                let mut sessions = sessions_from_records(&source, set.records);
+                                let mut sessions =
+                                    sessions_from_records(&source, set.records().to_vec());
                                 for s in &mut sessions {
                                     s.body_loaded = !s.records.is_empty();
                                 }

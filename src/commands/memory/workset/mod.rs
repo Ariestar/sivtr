@@ -21,11 +21,10 @@ fn apply_selection(mut set: WorkSet, selection: WorkSetSelection) -> WorkSet {
 
     let anchors = indices
         .into_iter()
-        .map(|index| set.anchors[index - 1].clone())
+        .map(|index| set.anchors()[index - 1].clone())
         .collect::<Vec<_>>();
-    let records = records_for_anchors(&set.records, &anchors);
-    set.records = records;
-    set.anchors = anchors;
+    let records = records_for_anchors(set.records(), &anchors);
+    set.replace_selection(records, anchors);
     set
 }
 
@@ -53,7 +52,7 @@ impl WorkSet {
         // Group light records by their session file path, then load each
         // session's full records once and patch matching parts back.
         let mut needed: HashMap<String, Vec<usize>> = HashMap::new();
-        for (index, record) in self.records.iter().enumerate() {
+        for (index, record) in self.records().iter().enumerate() {
             if !record.parts.is_empty() {
                 continue;
             }
@@ -65,14 +64,14 @@ impl WorkSet {
 
         for (path, indices) in &needed {
             // Any record in the group gives us the namespace; pick the first.
-            let namespace = session_namespace(&self.records[indices[0]].work_ref.path);
+            let namespace = session_namespace(&self.records()[indices[0]].work_ref.path);
             let Some(namespace) = namespace else {
                 continue;
             };
             let full = load_session_records(namespace, Path::new(path), LoadMode::Full)
                 .with_context(|| format!("Failed to load full session {path} for {namespace}"))?;
             for index in indices {
-                if let Some(record) = self.records.get_mut(*index) {
+                if let Some(record) = self.records_mut().get_mut(*index) {
                     if let Some(full_record) = full
                         .iter()
                         .find(|r| r.work_ref.path.index() == record.work_ref.path.index())
@@ -215,10 +214,10 @@ fn validate_selection(reference: &str, set: &WorkSet, selection: &WorkSetSelecti
         WorkSetSelection::All => Ok(()),
         WorkSetSelection::Indices(indices) => {
             for index in indices {
-                if *index > set.anchors.len() {
+                if *index > set.anchors().len() {
                     bail!(
                         "Invalid WorkSet reference `{reference}`; index {index} exceeds WorkSet length {}",
-                        set.anchors.len()
+                        set.anchors().len()
                     );
                 }
             }
