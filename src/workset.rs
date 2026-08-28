@@ -49,7 +49,7 @@ impl WorkSet {
     /// Whether this selection covers an address. A Whole anchor covers every
     /// Part of the same record.
     pub fn contains(&self, anchor: &WorkRef) -> bool {
-        self.anchors().iter().any(|selected| {
+        self.anchors.iter().any(|selected| {
             selected == anchor
                 || (selected.at == WorkAt::Whole && selected.whole() == anchor.whole())
         })
