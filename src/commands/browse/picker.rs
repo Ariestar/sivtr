@@ -670,8 +670,38 @@ pub(crate) fn run(
                             show_help = false;
                             let selected_dialogues =
                                 selected_dialogues(&dialogue_selection, dialogue_idx);
-                            let session_records =
-                                session_record_snapshot(&sessions, &sessions_pane);
+                            let session_records = if matches!(
+                                action,
+                                WorkspaceHelpAction::ToggleSelection
+                                    | WorkspaceHelpAction::ToggleAll
+                                    | WorkspaceHelpAction::RangeSelect
+                            ) {
+                                session_record_snapshot(&sessions, &sessions_pane)
+                            } else {
+                                Vec::new()
+                            };
+                            // Selection actions must reach every dialogue in
+                            // range; the cached projection only materializes
+                            // bodies for focus ∪ selected rows, so rebuild it
+                            // with all rows before toggling.
+                            let mut full_dialogues = Vec::new();
+                            let dialogue_slice: &[WorkspaceDialogue] = if matches!(
+                                action,
+                                WorkspaceHelpAction::ToggleSelection
+                                    | WorkspaceHelpAction::ToggleAll
+                                    | WorkspaceHelpAction::RangeSelect
+                            ) && focus
+                                == WorkspaceFocus::Dialogues
+                            {
+                                dialogue_pane.materialize_into(
+                                    &vec![true; dialogues.len()],
+                                    dialogue_idx,
+                                    &mut full_dialogues,
+                                );
+                                &full_dialogues
+                            } else {
+                                &dialogues
+                            };
                             match apply_workspace_help_action(
                                 action,
                                 &mut focus,
@@ -693,7 +723,7 @@ pub(crate) fn run(
                                 line_filter_spec(&line_filter),
                                 &sessions,
                                 &session_records,
-                                &dialogues,
+                                dialogue_slice,
                                 &selected_dialogues,
                                 terminal,
                             )? {
@@ -781,7 +811,38 @@ pub(crate) fn run(
                         }
                     }
                     let selected_dialogues = selected_dialogues(&dialogue_selection, dialogue_idx);
-                    let session_records = session_record_snapshot(&sessions, &sessions_pane);
+                    let session_records = if matches!(
+                        action,
+                        WorkspaceHelpAction::ToggleSelection
+                            | WorkspaceHelpAction::ToggleAll
+                            | WorkspaceHelpAction::RangeSelect
+                    ) {
+                        session_record_snapshot(&sessions, &sessions_pane)
+                    } else {
+                        Vec::new()
+                    };
+                    // Selection actions must reach every dialogue in range;
+                    // the cached projection only materializes bodies for
+                    // focus ∪ selected rows, so rebuild it with all rows
+                    // before toggling.
+                    let mut full_dialogues = Vec::new();
+                    let dialogue_slice: &[WorkspaceDialogue] = if matches!(
+                        action,
+                        WorkspaceHelpAction::ToggleSelection
+                            | WorkspaceHelpAction::ToggleAll
+                            | WorkspaceHelpAction::RangeSelect
+                    ) && focus
+                        == WorkspaceFocus::Dialogues
+                    {
+                        dialogue_pane.materialize_into(
+                            &vec![true; dialogues.len()],
+                            dialogue_idx,
+                            &mut full_dialogues,
+                        );
+                        &full_dialogues
+                    } else {
+                        &dialogues
+                    };
                     match apply_workspace_help_action(
                         action,
                         &mut focus,
@@ -803,7 +864,7 @@ pub(crate) fn run(
                         line_filter_spec(&line_filter),
                         &sessions,
                         &session_records,
-                        &dialogues,
+                        dialogue_slice,
                         &selected_dialogues,
                         terminal,
                     )? {
@@ -1247,84 +1308,9 @@ mod tests {
     use std::time::SystemTime;
 
     fn picked_units(picked: &PickedContent) -> Vec<TextPair> {
-        match picked {
-            PickedContent::Text { units, .. } => units.clone(),
-            PickedContent::WorkSet {
-                set, projection, ..
-            } => {
-                let mut units: Vec<_> = set
-                    .anchors()
-                    .into_iter()
-                    .map(|anchor| {
-                        let record = set
-                            .records
-                            .iter()
-                            .find(|record| record.work_ref.whole() == anchor.whole())
-                            .expect("picked record");
-                        let plain = match projection {
-                            super::super::content::WorkspacePickProjection::Whole => {
-                                record
-                                    .copy_text(
-                                        sivtr_core::record::RecordTextMode::Combined,
-                                        true,
-                                        None,
-                                    )
-                                    .plain
-                            }
-                            super::super::content::WorkspacePickProjection::Input => {
-                                record
-                                    .copy_text(
-                                        sivtr_core::record::RecordTextMode::Input,
-                                        true,
-                                        None,
-                                    )
-                                    .plain
-                            }
-                            super::super::content::WorkspacePickProjection::Output => {
-                                record
-                                    .copy_text(
-                                        sivtr_core::record::RecordTextMode::Output,
-                                        false,
-                                        None,
-                                    )
-                                    .plain
-                            }
-                            super::super::content::WorkspacePickProjection::Command => {
-                                record
-                                    .copy_text(
-                                        sivtr_core::record::RecordTextMode::Command,
-                                        false,
-                                        None,
-                                    )
-                                    .plain
-                            }
-                            super::super::content::WorkspacePickProjection::Parts => {
-                                record.content_for_at(anchor.at).expect("picked part")
-                            }
-                        };
-                        TextPair {
-                            ansi: plain.clone(),
-                            plain,
-                        }
-                    })
-                    .collect();
-                if matches!(
-                    projection,
-                    super::super::content::WorkspacePickProjection::Parts
-                ) {
-                    let plain = units
-                        .iter()
-                        .map(|unit| unit.plain.as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n\n");
-                    units = vec![TextPair {
-                        ansi: plain.clone(),
-                        plain,
-                    }];
-                }
-                units
-            }
-        }
+        crate::commands::memory::copy::export::picked_units(picked)
+            .expect("export picked units")
+            .0
     }
 
     #[test]
@@ -1555,7 +1541,11 @@ mod tests {
         );
         let picked = workspace_picked_content_for_selected_parts(&selection, &dialogues)
             .expect("selected parts");
-        let text = &picked_units(&picked)[0].plain;
+        let text = picked_units(&picked)
+            .iter()
+            .map(|unit| unit.plain.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(text.contains("cmd 0") && text.contains("cmd 2"), "{text}");
         assert!(
             !text.contains("the user question"),
@@ -1642,7 +1632,11 @@ mod tests {
         selection.include_parts(selected, parts);
         let picked = workspace_picked_content_for_selected_parts(&selection, &dialogues)
             .expect("selected parts");
-        let text = &picked_units(&picked)[0].plain;
+        let text = picked_units(&picked)
+            .iter()
+            .map(|unit| unit.plain.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(text.contains("cmd 0") && text.contains("cmd 2"), "{text}");
         assert!(
             !text.contains("the user question"),
@@ -1704,7 +1698,11 @@ mod tests {
         let picked = workspace_picked_content_for_cursor_block(&dialogues, 0, 2)
             .unwrap()
             .expect("tool block copy must not be None");
-        let text = &picked_units(&picked)[0].plain;
+        let text = picked_units(&picked)
+            .iter()
+            .map(|unit| unit.plain.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(text.contains("fn main"), "tool call missing: {text}");
         assert!(text.contains("\"matches\""), "tool result missing: {text}");
         assert!(
@@ -1813,8 +1811,13 @@ mod tests {
         let picked = workspace_picked_content_for_cursor_block(&dialogues, 0, 1)
             .unwrap()
             .expect("cursor block copy");
-        assert_eq!(picked_units(&picked).len(), 1);
-        let text = &picked_units(&picked)[0].plain;
+        let units = picked_units(&picked);
+        assert_eq!(units.len(), 2, "call + result bodies");
+        let text = units
+            .iter()
+            .map(|unit| unit.plain.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(text.contains("ls"), "tool call body missing: {text}");
         assert!(
             text.contains("\"stdout\""),

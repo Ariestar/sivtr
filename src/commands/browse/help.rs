@@ -2,7 +2,7 @@
 //!
 //! Key bindings live in `workspace_help_entries()`. This module only runs actions.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::tui::content::block::BlockText;
 use crate::tui::content::view::ContentViewMode;
@@ -298,36 +298,45 @@ pub(super) fn apply_workspace_help_action(
                 set_focus(focus, fullscreen, rows, WorkspaceFocus::Dialogues)
             }
             WorkspaceFocus::Dialogues | WorkspaceFocus::Content => {
-                return Ok(HelpDispatch::Picked(workspace_picked_content_for_copy(
-                    dialogues,
-                    selected_dialogues,
-                    WorkspaceCopyShortcut::Displayed,
-                    line_filter,
-                    content_at,
-                    *content_mode,
-                )?));
+                return Ok(HelpDispatch::Picked(
+                    workspace_picked_content_for_copy(
+                        dialogues,
+                        selected_dialogues,
+                        WorkspaceCopyShortcut::Displayed,
+                        line_filter,
+                        content_at,
+                        *content_mode,
+                    )
+                    .context("Failed to prepare displayed copy")?,
+                ));
             }
             WorkspaceFocus::Sessions => {}
         },
         WorkspaceHelpAction::CopyInput if dialogue_count > 0 => {
-            return Ok(HelpDispatch::Picked(workspace_picked_content_for_copy(
-                dialogues,
-                selected_dialogues,
-                WorkspaceCopyShortcut::Input,
-                line_filter,
-                None,
-                *content_mode,
-            )?));
+            return Ok(HelpDispatch::Picked(
+                workspace_picked_content_for_copy(
+                    dialogues,
+                    selected_dialogues,
+                    WorkspaceCopyShortcut::Input,
+                    line_filter,
+                    None,
+                    *content_mode,
+                )
+                .context("Failed to prepare input copy")?,
+            ));
         }
         WorkspaceHelpAction::CopyOutput if dialogue_count > 0 => {
-            return Ok(HelpDispatch::Picked(workspace_picked_content_for_copy(
-                dialogues,
-                selected_dialogues,
-                WorkspaceCopyShortcut::Output,
-                line_filter,
-                None,
-                *content_mode,
-            )?));
+            return Ok(HelpDispatch::Picked(
+                workspace_picked_content_for_copy(
+                    dialogues,
+                    selected_dialogues,
+                    WorkspaceCopyShortcut::Output,
+                    line_filter,
+                    None,
+                    *content_mode,
+                )
+                .context("Failed to prepare output copy")?,
+            ));
         }
         WorkspaceHelpAction::CopyBlock if dialogue_count > 0 => {
             // y copies the block under the content cursor (call + result
@@ -344,14 +353,17 @@ pub(super) fn apply_workspace_help_action(
             }
         }
         WorkspaceHelpAction::CopyCommand if dialogue_count > 0 => {
-            return Ok(HelpDispatch::Picked(workspace_picked_content_for_copy(
-                dialogues,
-                selected_dialogues,
-                WorkspaceCopyShortcut::Command,
-                line_filter,
-                None,
-                *content_mode,
-            )?));
+            return Ok(HelpDispatch::Picked(
+                workspace_picked_content_for_copy(
+                    dialogues,
+                    selected_dialogues,
+                    WorkspaceCopyShortcut::Command,
+                    line_filter,
+                    None,
+                    *content_mode,
+                )
+                .context("Failed to prepare command copy")?,
+            ));
         }
         WorkspaceHelpAction::ToggleFullscreen => {
             *fullscreen = toggle_fullscreen(*fullscreen, *focus);

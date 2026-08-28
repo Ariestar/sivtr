@@ -37,7 +37,7 @@ pub fn export_picked(
     .context("export picked content")
 }
 
-fn picked_units(picked: &PickedContent) -> Result<(Vec<TextPair>, String)> {
+pub(crate) fn picked_units(picked: &PickedContent) -> Result<(Vec<TextPair>, String)> {
     match picked {
         PickedContent::Text { source, units } => Ok((units.clone(), source.label())),
         PickedContent::WorkSet {
