@@ -12,7 +12,7 @@ mod project;
 pub use export::export_picked;
 pub use plan::{parse_address_dialogues, CopyFilters, CopyPlan, Projection};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use sivtr_core::ai::AgentProvider;
 use sivtr_core::origin::Reach;
 use sivtr_core::record::WorkRecord;
@@ -46,28 +46,6 @@ pub fn execute(plan: CopyPlan) -> Result<()> {
     }
 
     finish_units(&units, &plan.filters, &loaded.label).context("finish copy")
-}
-
-pub(crate) fn handle_picker_result(
-    result: browse::WorkspacePickerResult,
-    print_full: bool,
-    regex: Option<&str>,
-    lines: Option<&str>,
-    ansi: bool,
-) -> Result<()> {
-    match result {
-        browse::WorkspacePickerResult::Picked(picked) => {
-            export_picked(&picked, print_full, regex, lines, ansi)
-        }
-        browse::WorkspacePickerResult::Publish { set, expires } => {
-            if regex.is_some() || lines.is_some() {
-                bail!(
-                    "copy --pick publication cannot use --regex or --lines; select exact atoms instead"
-                );
-            }
-            crate::commands::publish::create_from_picker(set, &expires, None)
-        }
-    }
 }
 
 fn execute_pick(plan: &CopyPlan) -> Result<()> {
@@ -153,22 +131,4 @@ pub fn plan_from_cli(
         pick,
         filters,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::commands::memory::workset::WorkSet;
-
-    #[test]
-    fn rejects_filters_when_picker_switches_to_publication() {
-        let result = browse::WorkspacePickerResult::Publish {
-            set: WorkSet::new(".", Vec::new()),
-            expires: "7d".to_string(),
-        };
-
-        let error = handle_picker_result(result, false, Some("secret"), None, false)
-            .expect_err("publication picker must not silently ignore regex filters");
-        assert!(error.to_string().contains("cannot use --regex or --lines"));
-    }
 }

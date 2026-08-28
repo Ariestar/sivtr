@@ -371,8 +371,6 @@ pub(crate) struct WorkspaceView<'a> {
     /// Dual IO layout + display texts, computed once per redraw by the picker
     /// and shared with the renderer (no per-frame duplicate layout).
     pub(crate) content_frame: &'a ContentIoFrame,
-    pub(crate) publish: Option<WorkspacePublishView<'a>>,
-    pub(crate) publish_error: Option<&'a str>,
 }
 
 pub(crate) struct WorkspaceSearchView<'a> {
@@ -405,6 +403,4 @@ pub(crate) struct WorkspaceFooterView<'a> {
     pub(crate) line_filter_error: Option<&'a str>,
     pub(crate) fullscreen: Option<WorkspaceFocus>,
     pub(crate) content_selection: Option<ContentSelection>,
-    pub(crate) publish: bool,
-    pub(crate) publish_error: Option<&'a str>,
 }

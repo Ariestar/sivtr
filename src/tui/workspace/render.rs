@@ -154,8 +154,6 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
             line_filter_error: view.line_filter_error,
             fullscreen: view.fullscreen,
             content_selection: view.content_selection,
-            publish: view.publish.is_some(),
-            publish_error: view.publish_error,
         },
         view.publish.as_ref(),
         view.publish_error,
@@ -194,8 +192,6 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
             view.line_filter_error,
             view.line_filter_input_open,
         );
-    } else if let Some(publish) = view.publish {
-        render_publish_box(frame, centered_rect(chunks[0], 50, 42), publish);
     } else if view.show_help {
         render_help_panel(frame, chunks[0], view.help_state);
     }
@@ -251,8 +247,6 @@ fn render_footer(
         line_filter_error,
         fullscreen,
         content_selection,
-        publish,
-        publish_error,
     } = footer;
 
     let mut spans = if let Some(publish) = publish {

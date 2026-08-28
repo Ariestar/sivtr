@@ -31,7 +31,6 @@ use sivtr_core::publication::PublicationExpiry;
 use sivtr_core::workset::WorkSet;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use crate::commands::memory::workset::WorkSet;
 use crate::tui::terminal::{
     finish as finish_tui, init as init_tui, panic_payload_message, restore as restore_tui,
     wait_for_enter,
@@ -59,12 +58,6 @@ struct PickerOptions {
     wait_after_panic: bool,
     publish_title: Option<String>,
     publish_expiry: PublicationExpiry,
-}
-
-/// Outcome of the workspace picker: copy the selection, or publish a link.
-pub enum WorkspacePickerResult {
-    Picked(WorkspacePickedContent),
-    Publish { set: WorkSet, expires: String },
 }
 
 /// Run the workspace browser.

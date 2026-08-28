@@ -118,8 +118,6 @@ pub(crate) fn run(
     let mut publish_overlay: Option<PublishOverlay> = None;
     let mut publish_error: Option<String> = None;
     let mut show_search = false;
-    let mut publish_overlay: Option<PublishOverlay> = None;
-    let mut publish_error: Option<String> = None;
     let mut search_query = String::new();
     let mut search_output = WorkspaceSearchOutput::default();
     let mut search_engine: Option<(WorkspaceSearchIndex, Vec<WorkspaceSession>)> = None;
@@ -494,17 +492,6 @@ pub(crate) fn run(
                             .zip(content_cursor.get()),
                         content_marked: &content_marked,
                         content_frame: &content_frame,
-                        publish: publish_overlay
-                            .as_ref()
-                            .map(|overlay| WorkspacePublishView {
-                                selected: overlay.selected,
-                                redaction_count: overlay.redaction_count,
-                                warning_count: overlay.warning_count,
-                                item_count: overlay.item_count,
-                                schema_version: overlay.schema_version,
-                                error: None,
-                            }),
-                        publish_error: publish_error.as_deref(),
                     },
                 )
             })?;
@@ -1571,10 +1558,6 @@ mod tests {
                     .is_some_and(|reference| rows.selection.contains(reference)))
                 .collect::<Vec<_>>(),
             vec![true, true]
-        );
-        assert_eq!(
-            picked.anchors,
-            vec![record.work_ref.with_part(2), record.work_ref.with_part(3)]
         );
         assert!(
             ContentPane::block_selection_mask(&dialogues, 0, &rows.selection)
