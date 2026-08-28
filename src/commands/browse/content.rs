@@ -128,11 +128,7 @@ pub(super) fn workspace_picked_content_for_selected_parts(
     dialogues: &[WorkspaceDialogue],
 ) -> Option<PickedContent> {
     let set = selection.parts_only()?;
-<<<<<<< HEAD
-    let anchor = set.anchors().first()?;
-=======
     let anchor = set.anchors().first()?.clone();
->>>>>>> 9e7825f (refactor(browse): align final workset accessors)
     let source = dialogues.iter().find_map(|dialogue| {
         (dialogue.work_ref.as_ref()?.whole() == anchor.whole()).then(|| dialogue.source.clone())
     })?;
