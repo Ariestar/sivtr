@@ -8,12 +8,13 @@
 //!
 //! Do **not** reimplement viewport growth, keep/evict, or blanking rules.
 
-use crate::pane::{Pane, PaneInput, Selection, SlidingPane, WindowRow};
+use crate::pane::{Pane, PaneInput, SlidingPane, WindowRow};
 use crate::tui::content::view::ContentViewMode;
 use crate::tui::workspace::{
     active_rows, workspace_content_io_texts, ContentIoFocus, ContentIoFrame, ExpandedBlocks,
     WorkspaceDialogue, WorkspaceSession, WorkspaceSource,
 };
+use crate::workset::WorkSet;
 use sivtr_core::ai::AgentSelection;
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
 
@@ -56,6 +57,20 @@ impl DialoguePane {
 
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// WorkSet-derived selection for the dialogue rows currently in view.
+    pub fn selection_mask(&self, selection: &WorkSet) -> Vec<bool> {
+        self.engine
+            .rows()
+            .iter()
+            .map(|row| {
+                row.meta
+                    .work_ref
+                    .as_ref()
+                    .is_some_and(|work_ref| selection.contains(work_ref))
+            })
+            .collect()
     }
 
     /// Index-stable rows for content/copy/vim.
@@ -360,13 +375,7 @@ pub struct ContentCtx<'a> {
     pub expanded: &'a ExpandedBlocks,
 }
 
-/// Tracks layout line counts for Input / Output halves separately and owns
-/// the per-dialogue block multi-select (native pane selection): clicking a
-/// block's dot toggles its id, and content (copy, fold) consumes the mask.
-/// Block ids are dialogue-global (input blocks first, output blocks after),
-/// so one mask per dialogue spans both halves. Marks are keyed by dialogue,
-/// so walking the content cursor into another dialogue keeps the marks left
-/// behind for as long as that dialogue still has a materialized body.
+/// Tracks layout line counts for Input / Output halves separately.
 ///
 /// Not a [`crate::pane::Pane`]: its rows are the shown dialogue's rendered
 /// lines, not a window over a growing list, so there is nothing to grow,
@@ -375,18 +384,6 @@ pub struct ContentCtx<'a> {
 pub struct ContentPane {
     input_lines: usize,
     output_lines: usize,
-    /// Marked block ids per dialogue (dense dialogue-global ids).
-    marked: std::collections::HashMap<usize, Selection>,
-}
-
-/// Block-selection mask length of the shown dialogue: its *complete* block
-/// count, so marks on blocks currently hidden by a fold survive a rebuild.
-/// A dialogue whose record is not loaded has no blocks to mark.
-fn block_mask_len(dialogues: &[WorkspaceDialogue], idx: usize) -> usize {
-    dialogues
-        .get(idx)
-        .and_then(|dialogue| dialogue.record.as_ref())
-        .map_or(0, crate::tui::content::block::dialogue_block_count)
 }
 
 impl ContentPane {
@@ -411,55 +408,46 @@ impl ContentPane {
         let frame = ContentIoFrame::build(ctx.area, texts, ctx.mode, ctx.io_focus);
         self.input_lines = frame.line_count(ContentIoFocus::Input);
         self.output_lines = frame.line_count(ContentIoFocus::Output);
-        self.marked
-            .entry(ctx.highlighted_idx)
-            .or_default()
-            .resize(block_mask_len(ctx.dialogues, ctx.highlighted_idx));
         frame
     }
 
-    /// Marked block mask of one dialogue (`mask[block_id]` = marked);
-    /// an unknown dialogue has no marks.
-    pub fn marked(&self, dialogue_idx: usize) -> &[bool] {
-        match self.marked.get(&dialogue_idx) {
-            Some(selection) => selection.mask(),
-            None => &[],
-        }
-    }
-
-    pub fn toggle_mark(&mut self, dialogue_idx: usize, block: usize) {
-        self.marked.entry(dialogue_idx).or_default().toggle(block);
-    }
-
-    /// Mark a block range: the same one-state rule the list panes use for
-    /// `v`, over the visible block ids the range spans.
-    pub fn toggle_mark_range(
-        &mut self,
+    /// WorkSet-derived block highlights for one dialogue. A Whole selection
+    /// covers every block; a run highlights only when every part it owns is
+    /// selected, while its children remain independently derived.
+    pub fn selection_mask(
+        dialogues: &[WorkspaceDialogue],
         dialogue_idx: usize,
-        blocks: impl Iterator<Item = usize> + Clone,
-    ) {
-        self.marked
-            .entry(dialogue_idx)
-            .or_default()
-            .toggle_ids(blocks);
+        selection: &WorkSet,
+    ) -> Vec<bool> {
+        let Some(record) = dialogues
+            .get(dialogue_idx)
+            .and_then(|dialogue| dialogue.record.as_ref())
+        else {
+            return Vec::new();
+        };
+        let mut marked = vec![false; crate::tui::content::block::dialogue_block_count(record)];
+        let (input, output) = crate::tui::content::block::dialogue_blocks(record);
+        for block in input.iter().chain(&output) {
+            mark_selected_blocks(block, record, selection, &mut marked);
+        }
+        marked
     }
+}
 
-    /// Drop the marks of every dialogue `dialogues` no longer carries a body
-    /// for — the only ones a copy could read. A mark on any other index names
-    /// a dialogue that is gone.
-    pub fn retain_marks(&mut self, dialogues: &[WorkspaceDialogue]) {
-        self.marked.retain(|idx, _| {
-            dialogues
-                .get(*idx)
-                .is_some_and(|dialogue| dialogue.record.is_some())
-        });
+fn mark_selected_blocks(
+    block: &crate::tui::content::block::Block,
+    record: &WorkRecord,
+    selection: &WorkSet,
+    marked: &mut [bool],
+) {
+    if let Some(selected) = marked.get_mut(block.id) {
+        *selected = block
+            .parts
+            .iter()
+            .all(|&idx| selection.contains(&record.work_ref.with_part(record.parts[idx].seq)));
     }
-
-    pub fn marked_count(&self) -> usize {
-        self.marked
-            .values()
-            .map(|selection| selection.count())
-            .sum()
+    for child in &block.children {
+        mark_selected_blocks(child, record, selection, marked);
     }
 }
 

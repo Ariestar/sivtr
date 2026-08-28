@@ -7,26 +7,12 @@ pub(crate) use source::{
 pub(crate) use store::{cleanup_saved, delete_saved, list_saved, load_saved, save_named};
 
 use anyhow::{bail, Context, Result};
-use chrono::{SecondsFormat, Utc};
-use serde::{Deserialize, Serialize};
 use sivtr_core::query::{load_session_records, LoadMode};
 use sivtr_core::record::{WorkPath, WorkRecord, WorkRef};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-pub const WORKSET_SCHEMA_VERSION: u32 = 2;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkSet {
-    pub schema_version: u32,
-    pub created_at: String,
-    pub cwd: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    pub records: Vec<WorkRecord>,
-    #[serde(default)]
-    pub anchors: Vec<WorkRef>,
-}
+pub use crate::workset::{WorkSet, WORKSET_SCHEMA_VERSION};
 
 fn apply_selection(mut set: WorkSet, selection: WorkSetSelection) -> WorkSet {
     set.ensure_anchors();
@@ -60,29 +46,6 @@ fn session_namespace(path: &WorkPath) -> Option<&'static str> {
 }
 
 impl WorkSet {
-    pub fn new(cwd: impl Into<String>, records: Vec<WorkRecord>) -> Self {
-        let anchors = records
-            .iter()
-            .map(|record| record.work_ref.whole())
-            .collect();
-        Self::with_anchors(cwd, records, anchors)
-    }
-
-    pub fn with_anchors(
-        cwd: impl Into<String>,
-        records: Vec<WorkRecord>,
-        anchors: Vec<WorkRef>,
-    ) -> Self {
-        Self {
-            schema_version: WORKSET_SCHEMA_VERSION,
-            created_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
-            cwd: cwd.into(),
-            name: None,
-            records,
-            anchors,
-        }
-    }
-
     /// Fill in `parts` for any light-loaded record (empty `parts`) whose
     /// session file path is known.  Each session file is loaded once (full
     /// view), then matching records are patched in place.  Records without a
@@ -121,22 +84,6 @@ impl WorkSet {
             }
         }
         Ok(())
-    }
-
-    /// Persist the anchors a reader would see, so a saved WorkSet keeps them.
-    pub fn ensure_anchors(&mut self) {
-        self.anchors = self.anchors();
-    }
-
-    pub fn anchors(&self) -> Vec<WorkRef> {
-        if self.anchors.is_empty() {
-            self.records
-                .iter()
-                .map(|record| record.work_ref.whole())
-                .collect()
-        } else {
-            self.anchors.clone()
-        }
     }
 
     pub fn save_as(&mut self, name: &str) -> Result<()> {
@@ -350,6 +297,36 @@ mod tests {
             refs,
             vec!["terminal/session_1/1/p1", "terminal/session_1/2/p1"]
         );
+    }
+
+    #[test]
+    fn whole_anchor_covers_and_replaces_parts() {
+        let first = record(1);
+        let mut set = WorkSet::with_anchors(".", vec![first.clone()], vec![]);
+        set.include_parts(first.clone(), [1]);
+        assert!(set.contains(&first.work_ref.with_part(1)));
+        set.include_whole(first.clone());
+        assert_eq!(set.anchors(), vec![first.work_ref.whole()]);
+        assert!(set.contains(&first.work_ref.with_part(1)));
+    }
+
+    #[test]
+    fn part_anchors_deduplicate_without_collapsing() {
+        let first = record(1);
+        let mut set = WorkSet::new(".", Vec::new());
+        set.include_parts(first.clone(), [1, 1]);
+        assert_eq!(set.anchors(), vec![first.work_ref.with_part(1)]);
+    }
+
+    #[test]
+    fn toggling_whole_replaces_narrow_selection() {
+        let first = record(1);
+        let mut set = WorkSet::new(".", Vec::new());
+        set.include_parts(first.clone(), [1]);
+        set.toggle_whole(first.clone());
+        assert_eq!(set.anchors(), vec![first.work_ref.whole()]);
+        set.toggle_whole(first.clone());
+        assert!(set.anchors().is_empty());
     }
 
     #[test]

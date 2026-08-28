@@ -4,7 +4,7 @@
 //! Address uses the same source/ref language as search/show. Default address is
 //! the current terminal session; default dialogues is `1` (newest).
 
-mod export;
+pub(crate) mod export;
 pub(crate) mod load;
 mod plan;
 mod project;

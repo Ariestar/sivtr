@@ -192,12 +192,6 @@ impl WorkspaceCopyParts {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct WorkspacePickedContent {
-    pub(crate) source: WorkspaceSource,
-    pub(crate) units: Vec<TextPair>,
-}
-
-#[derive(Clone, Debug)]
 pub(crate) struct WorkspaceSession {
     pub(crate) source: WorkspaceSource,
     /// Stable session identity for hydrate / selection (not display title).
@@ -365,6 +359,8 @@ pub(crate) struct WorkspaceView<'a> {
     pub(crate) body_failures: HashSet<(WorkspaceSource, String)>,
     /// Dialogue list titles only (no body materialize on paint).
     pub(crate) dialogue_titles: &'a [&'a str],
+    /// WorkSet-derived dialogue selection for this frame.
+    pub(crate) dialogue_selected: &'a [bool],
     /// Materialized dialogues for content/copy (focus ∪ multi-select bodies).
     pub(crate) dialogues: &'a [WorkspaceDialogue],
     pub(crate) focus: WorkspaceFocus,

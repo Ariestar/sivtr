@@ -4,7 +4,7 @@
 //! [`crate::tui::workspace::active_rows`]). `R` reloads the next hierarchy
 //! level under those rows.
 
-use crate::tui::workspace::{Rows, WorkspaceFocus, WorkspaceSession, WorkspaceSource};
+use crate::tui::workspace::{active_rows, Rows, WorkspaceFocus, WorkspaceSession, WorkspaceSource};
 
 use super::load::SessionColumn;
 use crate::pane::Viewport;
@@ -64,7 +64,6 @@ fn parent_source_mask(
 
 #[derive(Clone, Copy)]
 pub(super) enum WorkspaceSourceSelection {
-    All,
     Agents,
     Terminal,
 }
@@ -80,7 +79,6 @@ pub(super) fn select_sources(
     let overlap = sources.len().min(selected_sources.len());
     for (idx, source) in sources.iter().take(overlap).enumerate() {
         selected_sources[idx] = match selection {
-            WorkspaceSourceSelection::All => true,
             WorkspaceSourceSelection::Agents => source.is_agent(),
             WorkspaceSourceSelection::Terminal => source.is_terminal(),
         };
@@ -88,4 +86,64 @@ pub(super) fn select_sources(
     for flag in &mut selected_sources[overlap..] {
         *flag = false;
     }
+}
+
+/// The dialogue rows currently selected by the canonical WorkSet.
+pub(super) fn selected_dialogues(mask: &[bool], cursor: usize) -> Vec<usize> {
+    active_rows(mask, cursor, mask.len())
+}
+
+pub(super) fn toggle_dialogue(
+    rows: &mut Rows,
+    dialogues: &[crate::tui::workspace::WorkspaceDialogue],
+    idx: usize,
+) {
+    if let Some(record) = dialogues
+        .get(idx)
+        .and_then(|dialogue| dialogue.record.clone())
+    {
+        rows.selection.toggle_whole(record);
+    }
+}
+
+pub(super) fn toggle_session(
+    rows: &mut Rows,
+    session_records: &[Vec<sivtr_core::record::WorkRecord>],
+    idx: usize,
+) {
+    if let Some(records) = session_records.get(idx) {
+        rows.selection.toggle_records(records.clone());
+    }
+}
+
+pub(super) fn source_records(
+    sources: &[WorkspaceSource],
+    sessions: &[WorkspaceSession],
+    session_records: &[Vec<sivtr_core::record::WorkRecord>],
+    source_idx: usize,
+) -> Vec<sivtr_core::record::WorkRecord> {
+    let Some(source) = sources.get(source_idx) else {
+        return Vec::new();
+    };
+    sessions
+        .iter()
+        .enumerate()
+        .filter(|(_, session)| &session.source == source)
+        .flat_map(|(idx, _)| session_records.get(idx).into_iter().flatten().cloned())
+        .collect()
+}
+
+pub(super) fn toggle_source(
+    rows: &mut Rows,
+    sources: &[WorkspaceSource],
+    sessions: &[WorkspaceSession],
+    session_records: &[Vec<sivtr_core::record::WorkRecord>],
+    source_idx: usize,
+) {
+    rows.selection.toggle_records(source_records(
+        sources,
+        sessions,
+        session_records,
+        source_idx,
+    ));
 }

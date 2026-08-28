@@ -566,6 +566,17 @@ fn help_action_for_key_is_focus_scoped() {
         ),
         None
     );
+    for focus in [
+        WorkspaceFocus::Source,
+        WorkspaceFocus::Sessions,
+        WorkspaceFocus::Dialogues,
+        WorkspaceFocus::Content,
+    ] {
+        assert_eq!(
+            help_action_for_key(KeyCode::Char('a'), KeyModifiers::NONE, focus),
+            Some(WorkspaceHelpAction::ToggleAll)
+        );
+    }
 }
 
 #[test]

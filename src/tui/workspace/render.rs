@@ -45,7 +45,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
     let dialogue_idx = dialogues_pane.cursor();
     let current_ref = current_content_ref(
         view.dialogues,
-        dialogues_pane.mask(),
+        view.dialogue_selected,
         dialogue_idx,
         view.content_at,
     );
@@ -80,6 +80,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         frame,
         layout.dialogues,
         view.dialogue_titles,
+        view.dialogue_selected,
         dialogues_pane,
         view.rows.sessions.marked(),
         view.rows.range_start(WorkspaceFocus::Dialogues),
@@ -97,7 +98,13 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         .as_ref()
         .filter(|search| search.scope == WorkspaceSearchScope::Content)
         .and(search_regex.as_ref());
-    let title_suffix = content_title_suffix(dialogues_pane.marked(), current_ref.as_ref());
+    let title_suffix = content_title_suffix(
+        view.dialogue_selected
+            .iter()
+            .filter(|selected| **selected)
+            .count(),
+        current_ref.as_ref(),
+    );
 
     for half in [ContentIoFocus::Input, ContentIoFocus::Output] {
         let area = frame_io.areas.area(half);
@@ -692,6 +699,7 @@ fn render_dialogue_list(
     frame: &mut Frame,
     area: Rect,
     titles: &[&str],
+    selected_dialogues: &[bool],
     pane: &ListPane,
     marked_sessions: usize,
     range_anchor: Option<usize>,
@@ -704,7 +712,7 @@ fn render_dialogue_list(
         .iter()
         .enumerate()
         .map(|(idx, title)| {
-            let selected = pane.mask().get(idx).copied().unwrap_or(false);
+            let selected = selected_dialogues.get(idx).copied().unwrap_or(false);
             // Selection is shown by the dot alone (● = selected, ○ = not),
             // always visible so it survives pane switches.
             let marker = format!("{} ", selection_dot(selected));

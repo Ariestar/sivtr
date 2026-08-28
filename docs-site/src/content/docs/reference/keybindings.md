@@ -18,7 +18,7 @@ This page documents the workspace picker TUI (the default `sivtr` interface). Th
 | `j` / `k` | Move down / up (Content: block cursor, crossing into an adjacent dialogue) |
 | `h` / `l` | Focus previous / next pane |
 | `Space` | Toggle source/session/dialogue, or mark a content block |
-| `a` | Select all sources (Source) or toggle all dialogues (Dialogues) |
+| `a` | 切换当前面板的全部条目 |
 | `g` | Select agent sources (Source) or scroll Content to top |
 | `G` | Scroll Content to bottom |
 | `t` | Select terminal source (Source), or open the Vim-style full view |

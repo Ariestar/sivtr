@@ -16,6 +16,7 @@ use ratatui::widgets::ListState;
 
 use super::model::{selected_indices, WorkspaceFocus};
 use crate::pane::Selection;
+use crate::workset::WorkSet;
 
 /// Rows a pane-wide action applies to: every marked row in row order, or the
 /// cursor row alone when nothing is marked. `len` is the row count, so a stale
@@ -193,6 +194,7 @@ impl ListPane {
     /// `v` over list rows: first press anchors at the cursor, the next marks
     /// the span between anchor and cursor to one state. `true` when this press
     /// completed a span, so the caller can rebuild the panes below it.
+    #[cfg(test)]
     pub(crate) fn range_select(&mut self) -> bool {
         let cursor = self.cursor();
         let Some(span) = range_step(&mut self.anchor, cursor) else {
@@ -213,12 +215,26 @@ impl ListPane {
 /// span in another pane; only one is ever open at a time because moving focus
 /// closes them all. Content marks blocks rather than rows, so its anchor is a
 /// block id and lives here instead of in a pane.
-#[derive(Default)]
 pub(crate) struct Rows {
     pub(crate) source: ListPane,
     pub(crate) sessions: ListPane,
     pub(crate) dialogues: ListPane,
+    /// The only content-selection state. List and block marks are derived
+    /// views; cursor/range state never decides what copy or MCP receives.
+    pub(crate) selection: WorkSet,
     content_anchor: Option<usize>,
+}
+
+impl Default for Rows {
+    fn default() -> Self {
+        Self {
+            source: ListPane::default(),
+            sessions: ListPane::default(),
+            dialogues: ListPane::default(),
+            selection: WorkSet::new(".", Vec::new()),
+            content_anchor: None,
+        }
+    }
 }
 
 impl Rows {
@@ -240,11 +256,6 @@ impl Rows {
             WorkspaceFocus::Dialogues => Some(&mut self.dialogues),
             WorkspaceFocus::Content => None,
         }
-    }
-
-    /// Cursor row of `focus`'s pane (0 for Content, which has no rows).
-    pub(crate) fn cursor(&self, focus: WorkspaceFocus) -> usize {
-        self.pane(focus).map_or(0, ListPane::cursor)
     }
 
     fn anchor_mut(&mut self, focus: WorkspaceFocus) -> &mut Option<usize> {
@@ -286,6 +297,7 @@ impl Rows {
 
     /// [`ListPane::range_select`] for the focused list pane; Content marks
     /// blocks through [`Self::range`] instead.
+    #[cfg(test)]
     pub(crate) fn range_select(&mut self, focus: WorkspaceFocus) -> bool {
         self.pane_mut(focus).is_some_and(ListPane::range_select)
     }
