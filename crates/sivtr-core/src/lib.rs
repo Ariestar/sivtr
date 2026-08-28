@@ -12,8 +12,8 @@ pub mod search;
 pub mod session;
 pub mod session_source;
 pub mod time;
-pub mod workspace;
 pub mod workset;
+pub mod workspace;
 
 pub use agents::claude;
 pub use agents::codex;

@@ -14,8 +14,8 @@ use crate::tui::workspace::{
     active_rows, workspace_content_io_texts, ContentIoFocus, ContentIoFrame, ExpandedBlocks,
     WorkspaceDialogue, WorkspaceSession, WorkspaceSource,
 };
-use sivtr_core::workset::WorkSet;
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
+use sivtr_core::workset::WorkSet;
 
 // ── Dialogues ───────────────────────────────────────────────────────────
 

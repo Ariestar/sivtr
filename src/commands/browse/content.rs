@@ -335,12 +335,12 @@ pub(super) fn dialogue_text_vim_view(text: String) -> VimView {
 mod tests {
     use super::*;
     use crate::tui::workspace::WorkspaceSource;
-    use sivtr_core::workset::{WorkSelectionAction, WorkSelectionTarget, WorkSet};
     use sivtr_core::ai::AgentProvider;
     use sivtr_core::record::{
         WorkChannel, WorkPart, WorkPartData, WorkRecord, WorkRecordKind, WorkRef, WorkSessionRef,
         WorkSource, WorkTime,
     };
+    use sivtr_core::workset::{WorkSelectionAction, WorkSelectionTarget, WorkSet};
 
     fn record(title: &str, tool: &str, command: &str, index: usize) -> WorkRecord {
         let mut record = WorkRecord {
