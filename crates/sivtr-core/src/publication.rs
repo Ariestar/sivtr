@@ -225,6 +225,7 @@ pub fn create_publication_draft(
             let raw = part.text().into_owned();
             let (text, report) = privacy::redact_text_with_report(&raw)?;
             redaction_count += report.redactions;
+            let item_index = (!text.trim().is_empty()).then_some(items.len() + 1);
             for kind in report.warnings {
                 let entry = risk_map
                     .entry(kind.clone())
@@ -234,7 +235,9 @@ pub fn create_publication_draft(
                         item_indices: Vec::new(),
                     });
                 entry.count += 1;
-                entry.item_indices.push(items.len() + 1);
+                if let Some(item_index) = item_index {
+                    entry.item_indices.push(item_index);
+                }
             }
             if !text.trim().is_empty() {
                 items.push(PublicConversationItem {
