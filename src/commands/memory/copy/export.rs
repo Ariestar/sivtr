@@ -22,6 +22,15 @@ pub fn export_picked(
     ansi: bool,
 ) -> Result<()> {
     let (units, label) = picked_units(picked)?;
+    // picked_units already applies the WorkSet's line_filter per unit;
+    // skip the merged-text filter here to avoid double-filtering.
+    let lines = match picked {
+        PickedContent::WorkSet {
+            line_filter: Some(_),
+            ..
+        } => None,
+        _ => lines,
+    };
     finish_units(
         &units,
         &CopyFilters {

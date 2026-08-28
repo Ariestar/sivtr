@@ -218,8 +218,9 @@ fn merge_and_apply(results: Vec<QuerySourceResult>, cwd: &Path, filter: Filter) 
         match result {
             QuerySourceResult::Ok(set) => {
                 any_ok = true;
-                anchors.extend(set.anchors().iter().cloned());
-                for record in set.into_records() {
+                let (set_records, set_anchors) = set.into_parts();
+                anchors.extend(set_anchors);
+                for record in set_records {
                     if seen.insert(record.work_ref.whole()) {
                         records.push(record);
                     }

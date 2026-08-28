@@ -304,10 +304,6 @@ impl WorkSet {
         if parts.is_empty() {
             return;
         }
-        if !record.parts.is_empty() && record.parts.iter().all(|part| parts.contains(&part.seq)) {
-            self.toggle_whole(record);
-            return;
-        }
         if parts
             .iter()
             .all(|seq| self.contains(&record.work_ref.with_part(*seq)))
