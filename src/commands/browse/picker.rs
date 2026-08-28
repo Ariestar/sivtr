@@ -35,9 +35,7 @@ use super::nav::{
     open_link_target, row_list_index, source_list_index, ContentBlockCursor,
 };
 use super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane};
-use super::selection::{
-    refresh_next_level, resolve_loaded_scopes, toggle_block_selection, toggle_row_selection,
-};
+use super::selection::{refresh_next_level, toggle_block_selection, toggle_row_selection};
 use super::visual::{
     apply_workspace_mouse_scroll, handle_content_mouse_select, handle_visual_select_key,
     MouseSelectionStart, VisualContentContext, VisualSelectMode, MOUSE_SCROLL_LINES,
@@ -239,7 +237,6 @@ pub(crate) fn run(
             .with_selected(rows.sessions.scope_mask())
             .with_neighbors(1),
         );
-        resolve_loaded_scopes(&mut rows, &sources, &sessions, &sessions_pane);
         let dialogue_focus_hint = pending_match
             .as_ref()
             .map(|matched| matched.dialogue_index)
@@ -1567,6 +1564,26 @@ mod tests {
             ContentPane::block_selection_mask(&dialogues, 0, &rows.selection)
                 .into_iter()
                 .all(|marked| marked)
+        );
+    }
+
+    #[test]
+    fn initial_selection_is_empty_until_a_row_is_toggled() {
+        let source = WorkspaceSource::agent(AgentProvider::Codex);
+        let sessions = vec![workspace_test_session("test", source, &["d1", "d2"])];
+        let dialogues = dialogues_for_test(&sessions, 0, &[true]);
+
+        let rows = Rows::default();
+        assert!(
+            rows.selection.anchors().is_empty(),
+            "Rows::default() must start with an empty selection"
+        );
+        assert!(
+            dialogues.iter().all(|dialogue| dialogue
+                .work_ref
+                .as_ref()
+                .is_none_or(|reference| !rows.selection.contains(reference))),
+            "nothing should be selected until a row is toggled"
         );
     }
 

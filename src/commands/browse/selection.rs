@@ -336,32 +336,3 @@ pub(super) fn apply_selection_action(
         }
     }
 }
-
-/// Materialize records covered by marked source/session scopes. Scope masks
-/// drive loading; once bodies arrive, the canonical WorkSet owns the choice.
-pub(super) fn resolve_loaded_scopes(
-    rows: &mut Rows,
-    sources: &[WorkspaceSource],
-    sessions: &[WorkspaceSession],
-    sessions_pane: &SessionColumn,
-) {
-    for (session_idx, session) in sessions.iter().enumerate() {
-        let source_idx = super::load::source_index_for_session(sources, session);
-        let source_marked = source_idx.is_some_and(|idx| rows.source.scope_mask()[idx]);
-        let session_marked = rows.sessions.scope_mask()[session_idx];
-        if source_marked || session_marked {
-            if let Some(records) = sessions_pane.body_for(session) {
-                let target = if source_marked {
-                    session.source.selection_target(None)
-                } else {
-                    session.source.selection_target(Some(&session.session_id))
-                };
-                rows.selection.apply_target(
-                    WorkSelectionAction::Include,
-                    target,
-                    records.iter().cloned(),
-                );
-            }
-        }
-    }
-}
