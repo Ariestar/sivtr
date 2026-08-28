@@ -505,10 +505,10 @@ pub struct SessionColumn {
 
 /// One-frame context for session ensure.
 pub struct SessionCtx<'a> {
-    pub selected_sources: &'a [bool],
+    pub source_scope: &'a [bool],
     /// Merged sessions currently shown (for body keep mapping).
     pub sessions: &'a [WorkspaceSession],
-    pub selected_sessions: &'a [bool],
+    pub session_scope: &'a [bool],
     /// When true, skip meta growth (search filter owns the list).
     pub search_active: bool,
 }
@@ -572,19 +572,19 @@ impl Pane for SessionColumn {
 
     fn ensure(&mut self, ctx: SessionCtx<'_>, input: &PaneInput<'_>) {
         self.pump
-            .drop_unselected(ctx.selected_sources, &mut self.states);
+            .drop_unselected(ctx.source_scope, &mut self.states);
         if !ctx.search_active {
             if input.force {
                 self.pump.refresh_selected(
                     &self.sources,
-                    ctx.selected_sources,
+                    ctx.source_scope,
                     &mut self.states,
                     input.viewport,
                 );
             } else {
                 self.pump.kick(
                     &self.sources,
-                    ctx.selected_sources,
+                    ctx.source_scope,
                     &mut self.states,
                     input.viewport,
                     false,
@@ -595,7 +595,7 @@ impl Pane for SessionColumn {
             &self.sources,
             ctx.sessions,
             input.focus,
-            ctx.selected_sessions,
+            ctx.session_scope,
             input.neighbor_radius,
         );
         self.pump
