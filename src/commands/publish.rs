@@ -5,7 +5,7 @@ use aes_gcm::{
     aead::{AeadInPlace, KeyInit},
     Aes256Gcm, Key, Nonce,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Utc};
 use flate2::{write::GzEncoder, Compression};
@@ -119,8 +119,8 @@ fn load_draft(source: &str, title: Option<String>, expiry: &str) -> Result<Publi
         .with_context(|| format!("failed to resolve publication source `{source}`"))?;
     set.materialize_parts()?;
     create_publication_draft(
-        &set.records,
-        &set.anchors(),
+        set.records(),
+        set.anchors(),
         &PublicationPolicy {
             title,
             expires,
@@ -129,14 +129,13 @@ fn load_draft(source: &str, title: Option<String>, expiry: &str) -> Result<Publi
     )
 }
 
-
 fn ensure_local_publication_source(source: &str) -> Result<()> {
     // Resolve named scopes through the origin registry before querying so a
     // remote alias or group cannot start a daemon or dial a peer.
     let Some((scope, _)) = source.split_once(':') else {
         return Ok(());
     };
-    if scope.eq_ignore_ascii_case("local") || (source.len() >= 2 && source.as_bytes()[1] == b':') {
+    if scope.eq_ignore_ascii_case("local") || is_windows_drive_path(source) {
         return Ok(());
     }
     let cwd = std::env::current_dir().context("failed to resolve current directory")?;
@@ -149,6 +148,13 @@ fn ensure_local_publication_source(source: &str) -> Result<()> {
         "publication scope `{scope}` is remote or grouped; only local WorkSets are publishable"
     );
     Ok(())
+}
+
+fn is_windows_drive_path(source: &str) -> bool {
+    source.len() >= 3
+        && source.as_bytes()[0].is_ascii_alphabetic()
+        && source.as_bytes()[1] == b':'
+        && matches!(source.as_bytes()[2], b'/' | b'\\')
 }
 
 fn preview(args: PublishPreviewArgs) -> Result<()> {
@@ -759,6 +765,12 @@ mod tests {
             resolve_endpoint(&config).unwrap(),
             "https://share.hnnulwh.cn"
         );
+    }
+
+    #[test]
+    fn only_drive_paths_bypass_origin_scope_validation() {
+        assert!(is_windows_drive_path("C:\\logs"));
+        assert!(!is_windows_drive_path("r:codex/session/1"));
     }
 
     #[test]
