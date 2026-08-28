@@ -206,8 +206,11 @@ fn resolve_source(source: &str, cwd: &Path) -> Result<Vec<QuerySource>> {
 /// Merge per-source outcomes into one corpus, then apply the filter once
 /// across the merged records. A failed source drops without aborting the
 /// batch; when every source failed, the first error is what the caller sees.
+/// Anchors merge with the records: a source that resolved part anchors keeps
+/// them, and one that carried none contributes its records' whole refs.
 fn merge_and_apply(results: Vec<QuerySourceResult>, cwd: &Path, filter: Filter) -> Result<WorkSet> {
     let mut records: Vec<WorkRecord> = Vec::new();
+    let mut anchors: Vec<WorkRef> = Vec::new();
     let mut seen: HashSet<WorkRef> = HashSet::new();
     let mut errors: Vec<String> = Vec::new();
     let mut any_ok = false;
@@ -215,7 +218,9 @@ fn merge_and_apply(results: Vec<QuerySourceResult>, cwd: &Path, filter: Filter) 
         match result {
             QuerySourceResult::Ok(set) => {
                 any_ok = true;
-                for record in set.records {
+                let (set_records, set_anchors) = set.into_parts();
+                anchors.extend(set_anchors);
+                for record in set_records {
                     if seen.insert(record.work_ref.whole()) {
                         records.push(record);
                     }
@@ -233,7 +238,12 @@ fn merge_and_apply(results: Vec<QuerySourceResult>, cwd: &Path, filter: Filter) 
     for error in &errors {
         output::warning(format!("skipped an origin: {error}"));
     }
-    apply_loaded(WorkSet::new(cwd.display().to_string(), records), filter)
+    // `from_parts` normalizes the anchors (dedup + Whole canonical form), so
+    // the merged per-source anchors need no pre-dedup here.
+    apply_loaded(
+        WorkSet::from_parts(cwd.display().to_string(), records, anchors),
+        filter,
+    )
 }
 
 /// Load many sources in parallel — local, remote, and group share one
@@ -323,7 +333,7 @@ fn normalize_source_result(result: Result<WorkSet>, cwd: &Path) -> QuerySourceRe
         Err(error) => {
             let message = error.to_string();
             if message.starts_with(NO_RECORD_FOR_SELECTOR) {
-                QuerySourceResult::Ok(WorkSet::with_anchors(
+                QuerySourceResult::Ok(WorkSet::from_parts(
                     cwd.display().to_string(),
                     Vec::new(),
                     Vec::new(),
@@ -394,13 +404,11 @@ pub fn run_on_share(
     match run_local(source, root, filter.for_remote_peer(), LoadMode::Full) {
         Ok(mut set) => {
             if redact {
-                set.records = set
-                    .records
-                    .iter()
-                    .map(crate::remote::redact::redact_record)
-                    .collect::<Result<Vec<_>>>()?;
+                for record in set.records_mut() {
+                    *record = crate::remote::redact::redact_record(record)?;
+                }
             }
-            Ok((set.records, set.anchors))
+            Ok(set.into_parts())
         }
         Err(error) if error.to_string().starts_with(NO_RECORD_FOR_SELECTOR) => {
             Ok((Vec::new(), Vec::new()))
@@ -413,13 +421,15 @@ fn run_local(source: &str, root: &Path, filter: Filter, mode: LoadMode) -> Resul
     let result = load_workspace_source(root, source, mode)?;
     warn_skipped(&result.skipped);
     apply_loaded(
-        WorkSet::with_anchors(root.display().to_string(), result.records, result.anchors),
+        WorkSet::from_parts(root.display().to_string(), result.records, result.anchors),
         filter,
     )
 }
 
 fn apply_loaded(set: WorkSet, filter: Filter) -> Result<WorkSet> {
-    filter::apply(PathBuf::from(&set.cwd), set.records, set.anchors, filter)
+    let cwd = PathBuf::from(&set.cwd);
+    let (records, anchors) = set.into_parts();
+    filter::apply(cwd, records, anchors, filter)
 }
 
 fn try_remote_timed(
@@ -445,7 +455,7 @@ fn try_remote_timed(
         },
         read_timeout,
     )? {
-        LocalResponse::Query(response) => Ok(WorkSet::with_anchors(
+        LocalResponse::Query(response) => Ok(WorkSet::from_parts(
             cwd.display().to_string(),
             response.records,
             response.anchors,
@@ -503,7 +513,7 @@ fn group_query(
                     response.skipped.join(", ")
                 ));
             }
-            Ok(WorkSet::with_anchors(
+            Ok(WorkSet::from_parts(
                 cwd.display().to_string(),
                 response.query.records,
                 response.query.anchors,
@@ -549,9 +559,9 @@ fn read_stdin() -> Result<WorkSet> {
     io::stdin()
         .read_to_string(&mut input)
         .context("Failed to read WorkSet from stdin")?;
-    let mut set: WorkSet =
+    let set: WorkSet =
         serde_json::from_str(&input).context("Failed to parse WorkSet from stdin")?;
-    set.ensure_anchors();
+    set.validate().context("Invalid WorkSet from stdin")?;
     Ok(set)
 }
 
@@ -563,7 +573,7 @@ pub fn load_context_records(
     let mut sources = Vec::new();
     let mut seen_sources = HashSet::new();
     for anchor in source_anchors {
-        let record = super::record_for_anchor(source_records, anchor)
+        let record = super::find_record([source_records], anchor)
             .with_context(|| format!("No record found for ref `{anchor}`"))?;
         let path = match &record.work_ref.path {
             WorkPath::Terminal { session, .. } => format!("terminal/{session}"),
@@ -587,7 +597,7 @@ pub fn load_context_records(
         // filter-driven light mode and force a full load.
         let mut set = query(&source, Filter::none(), Some(cwd))?;
         set.materialize_parts()?;
-        for record in set.records {
+        for record in set.into_records() {
             let key = record.work_ref.whole().to_string();
             if seen_records.insert(key) {
                 records.push(record);
@@ -599,7 +609,75 @@ pub fn load_context_records(
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_source, split_group_scope, QueryTransport};
+    use super::{merge_and_apply, resolve_source, split_group_scope, QueryTransport};
+    use crate::commands::memory::workset::{QuerySourceResult, WorkSet};
+    use sivtr_core::record::{
+        WorkChannel, WorkPart, WorkPartData, WorkRecord, WorkRecordKind, WorkSessionRef,
+        WorkSource, WorkTime,
+    };
+    use sivtr_core::search::Filter;
+
+    fn record(index: usize) -> WorkRecord {
+        WorkRecord {
+            schema_version: sivtr_core::record::RECORD_SCHEMA_VERSION,
+            work_ref: format!("terminal/session_1/{index}")
+                .parse()
+                .expect("valid work ref"),
+            kind: WorkRecordKind::TerminalCommand,
+            source: WorkSource {
+                channel: WorkChannel::Terminal,
+                provider: None,
+            },
+            session: WorkSessionRef {
+                id: "session_1".to_string(),
+                canonical_id: Some("session_1".to_string()),
+                path: None,
+            },
+            cwd: None,
+            time: WorkTime::default(),
+            status: None,
+            title: format!("record {index}"),
+            parts: (1..=2)
+                .map(|seq| WorkPart {
+                    seq,
+                    occurred_at: None,
+                    data: WorkPartData::Output {
+                        content: format!("record {index} part {seq}"),
+                        ansi: None,
+                    },
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn merging_sources_keeps_each_ones_anchor_granularity() {
+        let first = record(1);
+        let second = record(2);
+        let part = first.work_ref.with_part(2);
+        let results = vec![
+            QuerySourceResult::Ok(WorkSet::from_parts(
+                "/repo",
+                vec![first],
+                vec![part.clone()],
+            )),
+            QuerySourceResult::Ok(WorkSet::new("/repo", vec![second.clone()])),
+        ];
+
+        let merged = merge_and_apply(results, std::path::Path::new("/repo"), Filter::none())
+            .expect("merge succeeds");
+        let mut refs = merged
+            .anchors()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        refs.sort();
+        assert_eq!(
+            refs,
+            vec![part.to_string(), second.work_ref.whole().to_string()],
+            "a part anchor must survive the merge alongside a record anchor"
+        );
+    }
 
     #[test]
     fn group_scope_splits_team_and_member_forms() {

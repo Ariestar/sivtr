@@ -16,27 +16,26 @@ use crate::tui::search::{
 };
 use crate::tui::terminal::read_interaction;
 use crate::tui::workspace::{
-    help_action_for_key, panel_inner_rows, render_workspace, search_match_half, selected_count,
+    active_rows, help_action_for_key, panel_inner_rows, render_workspace, search_match_half,
     selected_index, workspace_help_entries, workspace_hit_test, workspace_layout, ContentIoFocus,
-    ContentIoFrame, ContentScrolls, ExpandedBlocks, WorkspaceDialogue, WorkspaceFocus,
-    WorkspaceHelpAction, WorkspacePickedContent, WorkspaceSearchView, WorkspaceSession,
-    WorkspaceSource, WorkspaceView,
+    ContentIoFrame, ContentScrolls, ExpandedBlocks, ListPane, Rows, WorkspaceDialogue,
+    WorkspaceFocus, WorkspaceHelpAction, WorkspaceSearchView, WorkspaceSession, WorkspaceSource,
+    WorkspaceView,
 };
 
 use super::content::{
     active_workspace_content_at, handle_line_filter_key, handle_line_filter_paste,
-    line_filter_spec, workspace_picked_content_for_marked_blocks, workspace_search_target_ref,
+    line_filter_spec, workspace_picked_content_for_selected_parts, workspace_search_target_ref,
+    PickedContent,
 };
 use super::help::{apply_workspace_help_action, set_focus, toggle_list_row, HelpDispatch};
 use super::load::{SessionColumn, SessionCtx, SourceLoadState};
 use super::nav::{
-    clamp_list_state, dot_gutter_hit, move_workspace_cursor_down, move_workspace_cursor_up,
-    open_link_target, reset_workspace_after_source_change, reset_workspace_dialogue_state,
-    resize_workspace_dialogue_selection, row_list_index, shown_dialogue_idx, source_list_index,
-    ContentBlockCursor,
+    dot_gutter_hit, invalidate_after_cursor_move, invalidate_panes_below, move_workspace_cursor,
+    open_link_target, row_list_index, source_list_index, ContentBlockCursor,
 };
-use super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane, SourcePane};
-use super::selection::{has_selected_sessions, refresh_next_level};
+use super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane};
+use super::selection::{refresh_next_level, toggle_block_selection, toggle_row_selection};
 use super::visual::{
     apply_workspace_mouse_scroll, handle_content_mouse_select, handle_visual_select_key,
     MouseSelectionStart, VisualContentContext, VisualSelectMode, MOUSE_SCROLL_LINES,
@@ -44,26 +43,40 @@ use super::visual::{
 use super::PICK_CANCELLED_MESSAGE;
 use crate::pane::{Pane, PaneInput, Viewport};
 
+fn session_record_snapshot(
+    sessions: &[WorkspaceSession],
+    sessions_pane: &SessionColumn,
+) -> Vec<Vec<sivtr_core::record::WorkRecord>> {
+    sessions
+        .iter()
+        .map(|session| {
+            sessions_pane
+                .body_for(session)
+                .map_or_else(Vec::new, ToOwned::to_owned)
+        })
+        .collect()
+}
+
 pub(crate) fn run(
     terminal: &mut crate::tui::terminal::Tui,
     sources: Vec<WorkspaceSource>,
     source_states: Vec<SourceLoadState>,
-    selected_sources: Vec<bool>,
+    source_scope: Vec<bool>,
     cwd: PathBuf,
     initial_focus: WorkspaceFocus,
-) -> Result<WorkspacePickedContent> {
-    debug_assert_eq!(sources.len(), selected_sources.len());
+) -> Result<PickedContent> {
+    debug_assert_eq!(sources.len(), source_scope.len());
     debug_assert_eq!(sources.len(), source_states.len());
-    let mut selected_sources = selected_sources;
-    let mut session_state = ListState::default();
-    let mut source_state = ListState::default();
-    let mut dialogue_state = ListState::default();
+    // One cursor + mark set + range anchor per list pane. The source presets
+    // arrive as a mask, so that pane starts from it.
+    let mut rows = Rows::default();
+    rows.source = ListPane::from_scope(source_scope);
     let mut help_state = ListState::default();
     help_state.select(Some(0));
     let mut focus = initial_focus;
-    // Unified Pane stack — each implements crate::pane::Pane.
-    // New panes: construct + poll/ensure with PaneInput; no special picker branches.
-    let mut source_pane = SourcePane::from_catalog(&sources);
+    // Windowed panes implement crate::pane::Pane: construct + poll/ensure
+    // with PaneInput, no special picker branches. The source catalog is the
+    // static `sources` slice; content renders one dialogue, so neither is one.
     let mut sessions_pane = SessionColumn::new(sources.clone(), source_states, cwd.clone());
     let mut dialogue_pane = DialoguePane::default();
     let mut content_pane = ContentPane::default();
@@ -71,17 +84,13 @@ pub(crate) fn run(
         first: 0,
         visible: 24,
     };
-    sessions_pane.kick(&selected_sources, bootstrap, true);
+    sessions_pane.kick(rows.source.scope_mask(), bootstrap, true);
     // Meta-only list — dialogue bodies live in SessionColumn, not here.
-    let mut all_sessions = sessions_pane.collect(&selected_sources);
+    let mut all_sessions = sessions_pane.collect(rows.source.scope_mask());
     let mut sessions = all_sessions.clone();
     let mut sessions_dirty = false;
-    clamp_list_state(&mut source_state, source_pane.len());
-    clamp_list_state(&mut session_state, sessions.len());
-    clamp_list_state(&mut dialogue_state, 0);
-    let mut selected_sessions = vec![false; sessions.len()];
-    let mut selected_dialogues = Vec::new();
-    let mut range_anchor = None;
+    rows.source.fit(sources.len());
+    rows.sessions.fit(sessions.len());
     let mut content_scrolls = ContentScrolls::default();
     let mut content_io_focus = ContentIoFocus::Input;
     let mut content_mode = ContentViewMode::Reading;
@@ -97,13 +106,10 @@ pub(crate) fn run(
     let mut pending_block_toggle: Option<(ContentIoFocus, usize)> = None;
     // Last single click on a block (time + target); a second click on the
     // same block within the window folds it.
-    let mut last_block_click: Option<(std::time::Instant, ContentIoFocus, usize)> = None;
+    let mut last_block_click: Option<(std::time::Instant, usize)> = None;
     // Block cursor (keyboard j/k + click), highlighted like a list row; one
-    // position per half.
+    // position per dialogue, spanning both IO halves.
     let mut content_cursor = ContentBlockCursor::default();
-    // Content block-range anchor for `v` (half + block id); cleared when the
-    // focus, half, or shown dialogue changes.
-    let mut content_range_anchor: Option<(ContentIoFocus, usize)> = None;
     // Mouse-down anchor inside content; promoted to a real selection only by
     // the first drag, so a pure click never shows a selection flash.
     let mut mouse_down_select: Option<MouseSelectionStart> = None;
@@ -129,15 +135,9 @@ pub(crate) fn run(
     // that skip redrawing (idle with no state change).
     let mut dialogues: Vec<WorkspaceDialogue> = Vec::new();
     let mut content_frame = ContentIoFrame::default();
-    // (engine generation, selected mask, focused index) for the projection in
+    // (engine generation, dialogue selection, focused index) for the projection in
     // `dialogues`; unchanged redraws reuse it instead of re-cloning bodies.
     let mut dialogues_key: Option<(u64, Vec<bool>, usize)> = None;
-    // Multi-select paging: which selected dialogue the content pane shows
-    // (J/K flip the page); single selection always shows the focused row.
-    let mut content_page = 0usize;
-    // Last selection mask; marks drop when the selection set itself changes
-    // (they belong to their dialogue and survive page flips).
-    let mut previous_selection_key = None;
 
     loop {
         // ── Unified pane poll/ensure ───────────────────────────────────────
@@ -148,7 +148,7 @@ pub(crate) fn run(
             redraw = true;
         }
         if sessions_dirty {
-            all_sessions = sessions_pane.collect(&selected_sources);
+            all_sessions = sessions_pane.collect(rows.source.scope_mask());
             sessions_dirty = false;
             reproject = true;
         }
@@ -174,7 +174,8 @@ pub(crate) fn run(
                         .map(|s| {
                             let mut full = s.clone();
                             if let Some(recs) = sessions_pane.body_for(s) {
-                                full.records = recs.to_vec();
+                                full.records.clear();
+                                full.records.extend(recs.iter().cloned());
                             }
                             full
                         })
@@ -199,24 +200,21 @@ pub(crate) fn run(
         } else if reproject {
             sessions = all_sessions.clone();
         }
-        if selected_sessions.len() != sessions.len() {
-            selected_sessions.clear();
-            selected_sessions.resize(sessions.len(), false);
-        }
+        // The result set can change shape under the cursor between frames;
+        // `fit` keeps the mask and cursor inside it (and drops a `v` range
+        // anchored into a list that no longer means the same thing).
+        rows.sessions.fit(sessions.len());
         let pending_match = if search_has_query && search_apply_pending {
             search_output.matches.get(search_cursor).cloned()
         } else {
             None
         };
         if let Some(matched) = &pending_match {
-            selected_sessions.fill(false);
-            session_state.select(
-                (!sessions.is_empty())
-                    .then_some(matched.session_index.min(sessions.len().saturating_sub(1))),
-            );
+            // A search jump starts the session list over on the hit row.
+            rows.sessions.reset(sessions.len());
+            rows.sessions.select(matched.session_index);
         }
-        let session_idx = selected_index(&session_state).min(sessions.len().saturating_sub(1));
-        session_state.select((!sessions.is_empty()).then_some(session_idx));
+        let session_idx = rows.sessions.cursor();
 
         let size = terminal.size()?;
         let layout = workspace_layout(
@@ -225,125 +223,103 @@ pub(crate) fn run(
             fullscreen,
         );
 
-        let _ = source_pane.ensure(
-            (),
-            &PaneInput::new(
-                Viewport::from_panel(source_state.offset(), panel_inner_rows(layout.source)),
-                selected_index(&source_state),
-            )
-            .with_selected(&selected_sources)
-            .with_neighbors(1),
-        );
-
-        let _ = sessions_pane.ensure(
+        sessions_pane.ensure(
             SessionCtx {
-                selected_sources: &selected_sources,
+                source_scope: rows.source.scope_mask(),
                 sessions: &sessions,
-                selected_sessions: &selected_sessions,
+                session_scope: rows.sessions.scope_mask(),
                 search_active: search_has_query,
             },
             &PaneInput::new(
-                Viewport::from_panel(session_state.offset(), panel_inner_rows(layout.sessions)),
+                Viewport::from_panel(rows.sessions.offset(), panel_inner_rows(layout.sessions)),
                 session_idx,
             )
-            .with_selected(&selected_sessions)
+            .with_selected(rows.sessions.scope_mask())
             .with_neighbors(1),
         );
-        // Body hydrate is async — list updates when poll sets sessions_dirty.
-        if selected_sessions.len() != sessions.len() {
-            selected_sessions.resize(sessions.len(), false);
-        }
-        let session_idx = selected_index(&session_state).min(sessions.len().saturating_sub(1));
-        session_state.select((!sessions.is_empty()).then_some(session_idx));
-
         let dialogue_focus_hint = pending_match
             .as_ref()
             .map(|matched| matched.dialogue_index)
-            .unwrap_or_else(|| selected_index(&dialogue_state));
-        if selected_dialogues.len() != dialogue_pane.len() {
-            resize_workspace_dialogue_selection(
-                dialogue_pane.len(),
-                &mut selected_dialogues,
-                &mut range_anchor,
-            );
-        }
+            .unwrap_or_else(|| rows.dialogues.cursor());
         // Body always from SessionColumn — list is meta-only in both browse and search.
         let records = |s: &crate::tui::workspace::WorkspaceSession| sessions_pane.body_for(s);
+        let dialogue_viewport =
+            Viewport::from_panel(rows.dialogues.offset(), panel_inner_rows(layout.dialogues));
+        rows.dialogues.fit(dialogue_pane.len());
         dialogue_pane.ensure(
             DialogueCtx {
                 sessions: &sessions,
                 session_idx,
-                selected_sessions: &selected_sessions,
+                session_scope: rows.sessions.scope_mask(),
                 records: &records,
             },
-            &PaneInput::new(
-                Viewport::from_panel(dialogue_state.offset(), panel_inner_rows(layout.dialogues)),
-                dialogue_focus_hint,
-            )
-            .with_selected(&selected_dialogues)
-            .with_neighbors(1),
+            &PaneInput::new(dialogue_viewport, dialogue_focus_hint)
+                .with_selected(&[])
+                .with_neighbors(1),
         );
-        if selected_dialogues.len() != dialogue_pane.len() {
-            resize_workspace_dialogue_selection(
-                dialogue_pane.len(),
-                &mut selected_dialogues,
-                &mut range_anchor,
-            );
+        // Growing the list invalidates both mask and focus hint: refit, then
+        // re-run the keep policy with a focus the grown list can hold.
+        if rows.dialogues.len() != dialogue_pane.len() {
+            rows.dialogues.fit(dialogue_pane.len());
             dialogue_pane.ensure(
                 DialogueCtx {
                     sessions: &sessions,
                     session_idx,
-                    selected_sessions: &selected_sessions,
+                    session_scope: rows.sessions.scope_mask(),
                     records: &records,
                 },
                 &PaneInput::new(
-                    Viewport::from_panel(
-                        dialogue_state.offset(),
-                        panel_inner_rows(layout.dialogues),
-                    ),
+                    dialogue_viewport,
                     dialogue_focus_hint.min(dialogue_pane.len().saturating_sub(1)),
                 )
-                .with_selected(&selected_dialogues)
+                .with_selected(&[])
                 .with_neighbors(1),
             );
         }
 
         let dialogue_count = dialogue_pane.len();
-        let dialogue_idx = dialogue_focus_hint.min(dialogue_count.saturating_sub(1));
-        dialogue_state.select((dialogue_count > 0).then_some(dialogue_idx));
+        rows.dialogues.select(dialogue_focus_hint);
+        let dialogue_idx = rows.dialogues.cursor();
+        let dialogue_selection = dialogue_pane.selection_mask(&rows.selection);
+        dialogue_pane.ensure(
+            DialogueCtx {
+                sessions: &sessions,
+                session_idx,
+                session_scope: rows.sessions.scope_mask(),
+                records: &records,
+            },
+            &PaneInput::new(dialogue_viewport, dialogue_idx)
+                .with_selected(&dialogue_selection)
+                .with_neighbors(1),
+        );
         if pending_match.is_some() {
-            range_anchor = None;
+            rows.close_ranges();
         }
         let active_content_at = active_workspace_content_at(
             search_has_query,
             &search_output,
             search_cursor,
             session_idx,
-            &selected_dialogues,
+            &dialogue_selection,
             dialogue_idx,
         );
 
         // Materialize the dialogue projection only when the engine, the
-        // selected mask, or the focused row changed. Content scrolling and
+        // dialogue selection, or the focused row changed. Content scrolling and
         // other-pane activity reuse the last projection instead of cloning
         // dialogue bodies on every redraw.
         let materialize_key = (
             dialogue_pane.generation(),
-            selected_dialogues.clone(),
+            dialogue_selection.clone(),
             dialogue_idx,
         );
         if dialogues_key.as_ref() != Some(&materialize_key) {
-            dialogue_pane.materialize_into(&selected_dialogues, dialogue_idx, &mut dialogues);
+            dialogue_pane.materialize_into(&dialogue_selection, dialogue_idx, &mut dialogues);
             dialogues_key = Some(materialize_key.clone());
         }
 
         if redraw {
             redraw = false;
-            // Multi-select pages through one selected dialogue at a time
-            // (J/K flips the page); single selection shows the focused row.
-            let selected = selected_count(&selected_dialogues);
-            content_page = content_page.min(selected.saturating_sub(1));
-            let shown_idx = shown_dialogue_idx(&selected_dialogues, content_page, dialogue_idx);
             // List: title borrows. Content/copy: materialize (body only for focus∪select).
             let dialogue_titles: Vec<&str> = dialogue_pane.titles().collect();
 
@@ -362,32 +338,24 @@ pub(crate) fn run(
             if let Some((half, _)) = pending_half {
                 content_io_focus = half;
             }
-            // Expansion indices are per-dialogue; reset when the shown
-            // dialogue's identity, page flip, target, or selection changes.
-            let dialogue_identity = dialogues
-                .get(shown_idx)
-                .map(|dialogue| (dialogue.source.clone(), dialogue.work_ref.clone()));
+            // Fold state is per-dialogue: reset it when another dialogue — or
+            // another targeted part of it — comes on screen.
             let expand_key = (
-                dialogue_identity,
-                shown_idx,
+                dialogues
+                    .get(dialogue_idx)
+                    .map(|dialogue| (dialogue.source.clone(), dialogue.work_ref.clone())),
                 active_content_at,
-                selected_dialogues.clone(),
             );
             if expanded_key.as_ref() != Some(&expand_key) {
-                expanded_blocks.input.clear();
-                expanded_blocks.output.clear();
+                expanded_blocks.clear();
                 pending_block_toggle = None;
                 last_block_click = None;
                 mouse_down_select = None;
                 content_cursor.clear();
-                content_range_anchor = None;
+                // Block ids belong to the shown dialogue: an open block range
+                // means nothing once a different dialogue is on screen.
+                rows.close_range(WorkspaceFocus::Content);
                 expanded_key = Some(expand_key);
-            }
-            // Marks belong to their dialogue (they survive page flips for
-            // cross-page copy); drop them when the selection set changes.
-            if previous_selection_key.as_ref() != Some(&selected_dialogues) {
-                content_pane.clear_marks();
-                previous_selection_key = Some(selected_dialogues.clone());
             }
             // Rebuild the content frame (texts + cached layouts) only when
             // the shown dialogue, mode, focus, target, expansion, or pane
@@ -395,7 +363,6 @@ pub(crate) fn run(
             // input never re-lays-out the text, so it stays responsive.
             let content_key = (
                 materialize_key.clone(),
-                shown_idx,
                 active_content_at,
                 content_mode,
                 content_io_focus,
@@ -403,9 +370,9 @@ pub(crate) fn run(
                 expanded_blocks.clone(),
             );
             if last_content_key.as_ref() != Some(&content_key) {
-                content_frame = content_pane.ensure(ContentCtx {
+                content_frame = content_pane.frame(ContentCtx {
                     dialogues: &dialogues,
-                    highlighted_idx: shown_idx,
+                    highlighted_idx: dialogue_idx,
                     mode: content_mode,
                     target: active_content_at,
                     area: layout.content,
@@ -418,11 +385,17 @@ pub(crate) fn run(
                 );
                 last_content_key = Some(content_key);
             }
+            // A j/k step that walked off this dialogue's blocks moved the
+            // dialogue cursor instead; the blocks it arrived at exist now.
+            content_cursor.land_crossing(content_frame.texts.block_slices());
+            // Cursor block resolved against the frame's displayed segments
+            // once: the follow-scroll and the view highlight share it.
+            let cursor_focus = content_cursor.focused(content_frame.texts.block_slices());
             // Keyboard moves ask the next redraw to keep the cursor block in
             // view; clicks never set `follow`, so they keep the scroll as-is.
             if content_cursor.follow {
                 content_cursor.follow = false;
-                if let Some((half, block)) = content_cursor.focused(content_io_focus) {
+                if let Some((half, block)) = cursor_focus {
                     let area = content_frame.areas.area(half);
                     if let Some(range) = content_block_range(content_frame.layout(half), block) {
                         let visible = area.height.saturating_sub(2) as usize;
@@ -443,6 +416,8 @@ pub(crate) fn run(
             }
 
             let source_markers = sessions_pane.markers();
+            let content_marked =
+                ContentPane::block_selection_mask(&dialogues, dialogue_idx, &rows.selection);
             let body_failures: HashSet<(WorkspaceSource, String)> = sessions
                 .iter()
                 .filter_map(|s| {
@@ -456,19 +431,14 @@ pub(crate) fn run(
                     frame,
                     WorkspaceView {
                         sources: &sources,
-                        selected_sources: &selected_sources,
                         source_markers: &source_markers,
                         loading_tick,
-                        source_state: &source_state,
+                        rows: &rows,
                         sessions: &sessions,
-                        selected_sessions: &selected_sessions,
-                        session_state: &session_state,
                         body_failures,
                         dialogue_titles: &dialogue_titles,
+                        dialogue_selection: &dialogue_selection,
                         dialogues: &dialogues,
-                        dialogue_state: &dialogue_state,
-                        selected_dialogues: &selected_dialogues,
-                        range_anchor,
                         focus,
                         content_scrolls,
                         content_io_focus,
@@ -500,16 +470,11 @@ pub(crate) fn run(
                         fullscreen,
                         content_selection: visual_select_mode
                             .map(|mode: VisualSelectMode| mode.selection),
-                        content_block_cursor: content_cursor.focused(content_io_focus),
-                        content_range: content_range_anchor.and_then(|(half, anchor)| {
-                            content_cursor
-                                .focused(half)
-                                .map(|(_, cursor)| (half, anchor, cursor))
-                        }),
-                        content_marked_input: content_pane.marked(ContentIoFocus::Input, shown_idx),
-                        content_marked_output: content_pane
-                            .marked(ContentIoFocus::Output, shown_idx),
-                        content_page: (selected > 1).then_some((content_page, selected)),
+                        content_block_cursor: cursor_focus,
+                        content_range: rows
+                            .range_start(WorkspaceFocus::Content)
+                            .zip(content_cursor.get()),
+                        content_marked: &content_marked,
                         content_frame: &content_frame,
                     },
                 )
@@ -568,11 +533,7 @@ pub(crate) fn run(
                         &mut search_dirty,
                         &mut search_cursor,
                         &mut search_apply_pending,
-                        &mut session_state,
-                        &mut selected_sessions,
-                        &mut dialogue_state,
-                        &mut selected_dialogues,
-                        &mut range_anchor,
+                        &mut rows,
                         &mut content_scrolls,
                     );
                 } else if line_filter_input_open {
@@ -614,8 +575,7 @@ pub(crate) fn run(
                         content_mode,
                         active.scroll,
                         &dialogues,
-                        &selected_dialogues,
-                        dialogue_idx,
+                        rows.dialogues.cursor(),
                     )? {
                         return Ok(picked);
                     }
@@ -634,48 +594,21 @@ pub(crate) fn run(
                             search_dirty = true;
                             search_apply_pending = false;
                             search_cursor = 0;
-                            reset_workspace_after_source_change(
-                                &mut session_state,
-                                &mut selected_sessions,
-                                &mut dialogue_state,
-                                &mut selected_dialogues,
-                                &mut range_anchor,
+                            invalidate_panes_below(
+                                WorkspaceFocus::Source,
+                                &mut rows,
                                 &mut content_scrolls,
                             );
                         }
                         KeyCode::Enter => {
                             show_search = false;
                         }
-                        KeyCode::Up => {
-                            move_workspace_cursor_up(
+                        KeyCode::Up | KeyCode::Down => {
+                            move_workspace_cursor(
+                                key.code == KeyCode::Up,
                                 focus,
-                                &sources,
-                                &sessions,
-                                dialogue_count,
-                                &selected_sessions,
-                                &mut source_state,
-                                &mut session_state,
-                                &mut dialogue_state,
-                                &mut selected_dialogues,
+                                &mut rows,
                                 &mut content_scrolls,
-                                content_io_focus,
-                                &mut content_cursor,
-                                content_frame.texts.block_slices(),
-                            );
-                        }
-                        KeyCode::Down => {
-                            move_workspace_cursor_down(
-                                focus,
-                                &sources,
-                                &sessions,
-                                dialogue_count,
-                                &selected_sessions,
-                                &mut source_state,
-                                &mut session_state,
-                                &mut dialogue_state,
-                                &mut selected_dialogues,
-                                &mut content_scrolls,
-                                content_io_focus,
                                 &mut content_cursor,
                                 content_frame.texts.block_slices(),
                             );
@@ -688,11 +621,7 @@ pub(crate) fn run(
                             &mut search_dirty,
                             &mut search_cursor,
                             &mut search_apply_pending,
-                            &mut session_state,
-                            &mut selected_sessions,
-                            &mut dialogue_state,
-                            &mut selected_dialogues,
-                            &mut range_anchor,
+                            &mut rows,
                             &mut content_scrolls,
                         ),
                         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -702,11 +631,7 @@ pub(crate) fn run(
                                 &mut search_dirty,
                                 &mut search_cursor,
                                 &mut search_apply_pending,
-                                &mut session_state,
-                                &mut selected_sessions,
-                                &mut dialogue_state,
-                                &mut selected_dialogues,
-                                &mut range_anchor,
+                                &mut rows,
                                 &mut content_scrolls,
                             );
                         }
@@ -716,11 +641,7 @@ pub(crate) fn run(
                             &mut search_dirty,
                             &mut search_cursor,
                             &mut search_apply_pending,
-                            &mut session_state,
-                            &mut selected_sessions,
-                            &mut dialogue_state,
-                            &mut selected_dialogues,
-                            &mut range_anchor,
+                            &mut rows,
                             &mut content_scrolls,
                         ),
                         _ => {}
@@ -747,26 +668,50 @@ pub(crate) fn run(
                                 .min(workspace_help_entries().len().saturating_sub(1));
                             let action = workspace_help_entries()[idx].action;
                             show_help = false;
+                            let selected_dialogues =
+                                active_rows(&dialogue_selection, dialogue_idx, dialogue_count);
+                            let session_records = if matches!(
+                                action,
+                                WorkspaceHelpAction::ToggleSelection
+                                    | WorkspaceHelpAction::ToggleAll
+                                    | WorkspaceHelpAction::RangeSelect
+                            ) {
+                                session_record_snapshot(&sessions, &sessions_pane)
+                            } else {
+                                Vec::new()
+                            };
+                            // Selection actions must reach every dialogue in
+                            // range; the cached projection only materializes
+                            // bodies for focus ∪ selected rows, so rebuild it
+                            // with all rows before toggling.
+                            let mut full_dialogues = Vec::new();
+                            let dialogue_slice: &[WorkspaceDialogue] = if matches!(
+                                action,
+                                WorkspaceHelpAction::ToggleSelection
+                                    | WorkspaceHelpAction::ToggleAll
+                                    | WorkspaceHelpAction::RangeSelect
+                            ) && focus
+                                == WorkspaceFocus::Dialogues
+                            {
+                                dialogue_pane.materialize_into(
+                                    &vec![true; dialogues.len()],
+                                    dialogue_idx,
+                                    &mut full_dialogues,
+                                );
+                                &full_dialogues
+                            } else {
+                                &dialogues
+                            };
                             match apply_workspace_help_action(
                                 action,
                                 &mut focus,
                                 &mut fullscreen,
                                 &sources,
-                                &mut source_state,
-                                &mut selected_sources,
-                                &mut selected_sessions,
-                                &mut session_state,
-                                &mut dialogue_state,
-                                &mut selected_dialogues,
-                                &mut range_anchor,
-                                &mut content_range_anchor,
+                                &mut rows,
                                 &mut content_scrolls,
                                 &mut content_io_focus,
                                 &mut content_mode,
                                 &mut expanded_blocks,
-                                content_pane.line_count(ContentIoFocus::Input),
-                                content_pane.line_count(ContentIoFocus::Output),
-                                &mut content_page,
                                 &mut content_cursor,
                                 &mut content_pane,
                                 content_frame.texts.block_slices(),
@@ -777,10 +722,9 @@ pub(crate) fn run(
                                 active_content_at,
                                 line_filter_spec(&line_filter),
                                 &sessions,
-                                &dialogues,
-                                session_idx,
-                                dialogue_idx,
-                                dialogue_count,
+                                &session_records,
+                                dialogue_slice,
+                                &selected_dialogues,
                                 terminal,
                             )? {
                                 HelpDispatch::Continue => {}
@@ -793,16 +737,13 @@ pub(crate) fn run(
                                         fullscreen,
                                     );
                                     let viewport = Viewport::from_panel(
-                                        session_state.offset(),
+                                        rows.sessions.offset(),
                                         panel_inner_rows(layout.sessions),
                                     );
                                     refresh_next_level(
                                         focus,
-                                        &selected_sources,
-                                        &source_state,
+                                        &rows,
                                         &sessions,
-                                        &selected_sessions,
-                                        &session_state,
                                         &mut sessions_pane,
                                         &mut all_sessions,
                                         &mut search_dirty,
@@ -849,12 +790,9 @@ pub(crate) fn run(
                             search_dirty = true;
                             search_cursor = 0;
                             search_apply_pending = false;
-                            reset_workspace_after_source_change(
-                                &mut session_state,
-                                &mut selected_sessions,
-                                &mut dialogue_state,
-                                &mut selected_dialogues,
-                                &mut range_anchor,
+                            invalidate_panes_below(
+                                WorkspaceFocus::Source,
+                                &mut rows,
                                 &mut content_scrolls,
                             );
                             continue;
@@ -865,38 +803,57 @@ pub(crate) fn run(
 
                 // Table-driven bindings: help registry is the only key declaration.
                 if let Some(action) = help_action_for_key(key.code, key.modifiers, focus) {
-                    // Marked blocks take over the block-copy action: y joins
-                    // every marked block's body instead of copying one block.
-                    if action == WorkspaceHelpAction::CopyBlock && content_pane.marked_count() > 0 {
-                        if let Some(picked) = workspace_picked_content_for_marked_blocks(
-                            &dialogues,
-                            &selected_dialogues,
-                            dialogue_idx,
-                            &content_pane,
-                        ) {
+                    if action == WorkspaceHelpAction::CopyBlock {
+                        if let Some(picked) =
+                            workspace_picked_content_for_selected_parts(&rows.selection, &dialogues)
+                        {
                             return Ok(picked);
                         }
                     }
+                    let selected_dialogues =
+                        active_rows(&dialogue_selection, dialogue_idx, dialogue_count);
+                    let session_records = if matches!(
+                        action,
+                        WorkspaceHelpAction::ToggleSelection
+                            | WorkspaceHelpAction::ToggleAll
+                            | WorkspaceHelpAction::RangeSelect
+                    ) {
+                        session_record_snapshot(&sessions, &sessions_pane)
+                    } else {
+                        Vec::new()
+                    };
+                    // Selection actions must reach every dialogue in range;
+                    // the cached projection only materializes bodies for
+                    // focus ∪ selected rows, so rebuild it with all rows
+                    // before toggling.
+                    let mut full_dialogues = Vec::new();
+                    let dialogue_slice: &[WorkspaceDialogue] = if matches!(
+                        action,
+                        WorkspaceHelpAction::ToggleSelection
+                            | WorkspaceHelpAction::ToggleAll
+                            | WorkspaceHelpAction::RangeSelect
+                    ) && focus
+                        == WorkspaceFocus::Dialogues
+                    {
+                        dialogue_pane.materialize_into(
+                            &vec![true; dialogues.len()],
+                            dialogue_idx,
+                            &mut full_dialogues,
+                        );
+                        &full_dialogues
+                    } else {
+                        &dialogues
+                    };
                     match apply_workspace_help_action(
                         action,
                         &mut focus,
                         &mut fullscreen,
                         &sources,
-                        &mut source_state,
-                        &mut selected_sources,
-                        &mut selected_sessions,
-                        &mut session_state,
-                        &mut dialogue_state,
-                        &mut selected_dialogues,
-                        &mut range_anchor,
-                        &mut content_range_anchor,
+                        &mut rows,
                         &mut content_scrolls,
                         &mut content_io_focus,
                         &mut content_mode,
                         &mut expanded_blocks,
-                        content_pane.line_count(ContentIoFocus::Input),
-                        content_pane.line_count(ContentIoFocus::Output),
-                        &mut content_page,
                         &mut content_cursor,
                         &mut content_pane,
                         content_frame.texts.block_slices(),
@@ -907,10 +864,9 @@ pub(crate) fn run(
                         active_content_at,
                         line_filter_spec(&line_filter),
                         &sessions,
-                        &dialogues,
-                        session_idx,
-                        dialogue_idx,
-                        dialogue_count,
+                        &session_records,
+                        dialogue_slice,
+                        &selected_dialogues,
                         terminal,
                     )? {
                         HelpDispatch::Continue => {}
@@ -923,16 +879,13 @@ pub(crate) fn run(
                                 fullscreen,
                             );
                             let viewport = Viewport::from_panel(
-                                session_state.offset(),
+                                rows.sessions.offset(),
                                 panel_inner_rows(layout.sessions),
                             );
                             refresh_next_level(
                                 focus,
-                                &selected_sources,
-                                &source_state,
+                                &rows,
                                 &sessions,
-                                &selected_sessions,
-                                &session_state,
                                 &mut sessions_pane,
                                 &mut all_sessions,
                                 &mut search_dirty,
@@ -950,13 +903,7 @@ pub(crate) fn run(
                         if let Some(next_focus) =
                             WorkspaceFocus::from_number_key(ch, dialogue_count)
                         {
-                            set_focus(
-                                &mut focus,
-                                &mut fullscreen,
-                                &mut range_anchor,
-                                &mut content_range_anchor,
-                                next_focus,
-                            );
+                            set_focus(&mut focus, &mut fullscreen, &mut rows, next_focus);
                         }
                     }
                 }
@@ -1005,20 +952,11 @@ pub(crate) fn run(
                                 set_focus(
                                     &mut focus,
                                     &mut fullscreen,
-                                    &mut range_anchor,
-                                    &mut content_range_anchor,
+                                    &mut rows,
                                     WorkspaceFocus::Content,
                                 );
-                                content_cursor.set(half, block);
-                                // Dot marks belong to the shown dialogue
-                                // (multi-select pages one dialogue at a
-                                // time, so ids never repeat on screen).
-                                let shown = shown_dialogue_idx(
-                                    &selected_dialogues,
-                                    content_page,
-                                    dialogue_idx,
-                                );
-                                content_pane.toggle_mark(half, shown, block);
+                                content_cursor.set(block);
+                                toggle_block_selection(&mut rows, &dialogues, block);
                                 continue;
                             }
                         }
@@ -1095,8 +1033,7 @@ pub(crate) fn run(
                                 set_focus(
                                     &mut focus,
                                     &mut fullscreen,
-                                    &mut range_anchor,
-                                    &mut content_range_anchor,
+                                    &mut rows,
                                     WorkspaceFocus::Content,
                                 );
                             }
@@ -1104,20 +1041,18 @@ pub(crate) fn run(
                             // block; a second click on the same block within
                             // the window folds it (read mode only).
                             if matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left)) {
-                                if let Some((half, block)) = pending_block_toggle.take() {
-                                    content_cursor.set(half, block);
+                                if let Some((_, block)) = pending_block_toggle.take() {
+                                    content_cursor.set(block);
                                     let now = std::time::Instant::now();
-                                    let double_click = last_block_click.is_some_and(
-                                        |(at, last_half, last_block)| {
-                                            last_half == half
-                                                && last_block == block
+                                    let double_click =
+                                        last_block_click.is_some_and(|(at, last_block)| {
+                                            last_block == block
                                                 && now.duration_since(at)
                                                     < std::time::Duration::from_millis(400)
-                                        },
-                                    );
-                                    last_block_click = Some((now, half, block));
+                                        });
+                                    last_block_click = Some((now, block));
                                     if double_click && content_mode == ContentViewMode::Reading {
-                                        expanded_blocks.toggle(half, block);
+                                        expanded_blocks.toggle(block);
                                     }
                                     redraw = true;
                                 }
@@ -1162,14 +1097,7 @@ pub(crate) fn run(
                             apply_workspace_mouse_scroll(
                                 scroll_focus,
                                 matches!(mouse.kind, MouseEventKind::ScrollUp),
-                                &sources,
-                                &sessions,
-                                dialogue_count,
-                                &selected_sessions,
-                                &mut source_state,
-                                &mut session_state,
-                                &mut dialogue_state,
-                                &mut selected_dialogues,
+                                &mut rows,
                                 &mut content_scrolls,
                                 scroll_half,
                                 &mut content_cursor,
@@ -1183,13 +1111,7 @@ pub(crate) fn run(
                         {
                             // Clicking another pane clears free selection.
                             visual_select_mode = None;
-                            set_focus(
-                                &mut focus,
-                                &mut fullscreen,
-                                &mut range_anchor,
-                                &mut content_range_anchor,
-                                clicked_focus,
-                            );
+                            set_focus(&mut focus, &mut fullscreen, &mut rows, clicked_focus);
                             match clicked_focus {
                                 WorkspaceFocus::Source => {
                                     let vertical = layout.source.height > 3;
@@ -1199,27 +1121,32 @@ pub(crate) fn run(
                                         mouse.row,
                                         &sources,
                                         vertical,
-                                        source_state.offset(),
+                                        rows.source.offset(),
                                     ) {
-                                        source_state.select(Some(idx));
+                                        rows.source.select(idx);
                                         // Dot-gutter click toggles the row's
                                         // mark, exactly like Space.
-                                        if vertical
-                                            && dot_gutter_hit(layout.source, mouse.column)
-                                            && toggle_list_row(
+                                        if vertical && dot_gutter_hit(layout.source, mouse.column) {
+                                            let session_records =
+                                                session_record_snapshot(&sessions, &sessions_pane);
+                                            toggle_row_selection(
                                                 WorkspaceFocus::Source,
                                                 idx,
-                                                &mut selected_sources,
-                                                &mut selected_sessions,
-                                                &mut selected_dialogues,
-                                                &mut range_anchor,
-                                                &mut session_state,
-                                                &mut dialogue_state,
+                                                &mut rows,
+                                                &sources,
+                                                &sessions,
+                                                &session_records,
+                                                &dialogues,
+                                            );
+                                            if toggle_list_row(
+                                                WorkspaceFocus::Source,
+                                                idx,
+                                                &mut rows,
                                                 &mut content_scrolls,
-                                            )
-                                        {
-                                            sessions_dirty = true;
-                                            search_dirty = true;
+                                            ) {
+                                                sessions_dirty = true;
+                                                search_dirty = true;
+                                            }
                                         }
                                     }
                                 }
@@ -1228,30 +1155,33 @@ pub(crate) fn run(
                                         layout.sessions,
                                         mouse.row,
                                         sessions.len(),
-                                        session_state.offset(),
+                                        rows.sessions.offset(),
                                     ) {
-                                        session_state.select(Some(idx));
-                                        if !has_selected_sessions(&selected_sessions) {
-                                            reset_workspace_dialogue_state(
-                                                0,
-                                                &mut dialogue_state,
-                                                &mut selected_dialogues,
-                                            );
-                                        }
+                                        rows.sessions.select(idx);
+                                        invalidate_after_cursor_move(
+                                            WorkspaceFocus::Sessions,
+                                            &mut rows,
+                                            &mut content_scrolls,
+                                        );
                                         if dot_gutter_hit(layout.sessions, mouse.column) {
+                                            let session_records =
+                                                session_record_snapshot(&sessions, &sessions_pane);
+                                            toggle_row_selection(
+                                                WorkspaceFocus::Sessions,
+                                                idx,
+                                                &mut rows,
+                                                &sources,
+                                                &sessions,
+                                                &session_records,
+                                                &dialogues,
+                                            );
                                             toggle_list_row(
                                                 WorkspaceFocus::Sessions,
                                                 idx,
-                                                &mut selected_sources,
-                                                &mut selected_sessions,
-                                                &mut selected_dialogues,
-                                                &mut range_anchor,
-                                                &mut session_state,
-                                                &mut dialogue_state,
+                                                &mut rows,
                                                 &mut content_scrolls,
                                             );
                                         }
-                                        content_scrolls.clear();
                                     }
                                 }
                                 WorkspaceFocus::Dialogues => {
@@ -1259,23 +1189,30 @@ pub(crate) fn run(
                                         layout.dialogues,
                                         mouse.row,
                                         dialogue_count,
-                                        dialogue_state.offset(),
+                                        rows.dialogues.offset(),
                                     ) {
-                                        dialogue_state.select(Some(idx));
+                                        rows.dialogues.select(idx);
+                                        invalidate_after_cursor_move(
+                                            WorkspaceFocus::Dialogues,
+                                            &mut rows,
+                                            &mut content_scrolls,
+                                        );
                                         if dot_gutter_hit(layout.dialogues, mouse.column) {
-                                            toggle_list_row(
+                                            toggle_row_selection(
                                                 WorkspaceFocus::Dialogues,
                                                 idx,
-                                                &mut selected_sources,
-                                                &mut selected_sessions,
-                                                &mut selected_dialogues,
-                                                &mut range_anchor,
-                                                &mut session_state,
-                                                &mut dialogue_state,
+                                                &mut rows,
+                                                &sources,
+                                                &sessions,
+                                                &[],
+                                                &dialogues,
+                                            );
+                                            invalidate_after_cursor_move(
+                                                WorkspaceFocus::Dialogues,
+                                                &mut rows,
                                                 &mut content_scrolls,
                                             );
                                         }
-                                        content_scrolls.clear();
                                     }
                                 }
                                 WorkspaceFocus::Content => {}
@@ -1298,32 +1235,20 @@ fn normalize_search_paste(text: &str) -> String {
 /// query: mark the corpus dirty, restart at the first match, and drop the
 /// previous result's selection so a shrinking match set cannot leave
 /// dangling highlights.
-#[allow(clippy::too_many_arguments)]
 fn search_query_edited(
     edit: impl FnOnce(&mut String),
     search_query: &mut String,
     search_dirty: &mut bool,
     search_cursor: &mut usize,
     search_apply_pending: &mut bool,
-    session_state: &mut ListState,
-    selected_sessions: &mut Vec<bool>,
-    dialogue_state: &mut ListState,
-    selected_dialogues: &mut Vec<bool>,
-    range_anchor: &mut Option<usize>,
+    rows: &mut Rows,
     content_scrolls: &mut ContentScrolls,
 ) {
     edit(search_query);
     *search_dirty = true;
     *search_cursor = 0;
     *search_apply_pending = true;
-    reset_workspace_after_source_change(
-        session_state,
-        selected_sessions,
-        dialogue_state,
-        selected_dialogues,
-        range_anchor,
-        content_scrolls,
-    );
+    invalidate_panes_below(WorkspaceFocus::Source, rows, content_scrolls);
 }
 
 /// Keys that safely auto-repeat when held. Navigation and scrolling repeat
@@ -1369,28 +1294,26 @@ mod tests {
     }
 
     use super::super::content::{
-        handle_line_filter_key, handle_line_filter_paste, workspace_dialogue_vim_view,
-        workspace_picked_content, workspace_picked_content_for_copy,
-        workspace_picked_content_for_copy_with_line_filter,
-        workspace_picked_content_for_cursor_block, workspace_picked_content_for_marked_blocks,
-        workspace_picked_content_with_line_filter, workspace_search_target_ref,
-        WorkspaceCopyShortcut,
+        handle_line_filter_key, handle_line_filter_paste, workspace_block_parts,
+        workspace_dialogue_vim_view, workspace_picked_content_for_copy,
+        workspace_picked_content_for_cursor_block, workspace_picked_content_for_selected_parts,
+        workspace_search_target_ref, PickedContent, WorkspaceCopyShortcut,
     };
-    use super::super::nav::{clamp_list_state, move_workspace_cursor_up};
+    use super::super::nav::move_workspace_cursor;
     use super::super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane};
-    use crate::commands::select::CommandSelection;
+    use crate::commands::browse::selection::toggle_row_selection;
     use crate::pane::{Pane, PaneInput, Viewport};
+    use crate::tui::content::text::workspace_content_text;
     use crate::tui::content::view::ContentViewMode;
     use crate::tui::search::{
         workspace_search_fingerprint, workspace_search_query, workspace_search_regex,
         WorkspaceSearchIndex, WorkspaceSearchMatch, WorkspaceSearchScope,
     };
     use crate::tui::workspace::{
-        ContentIoFocus, ContentScrolls, TextPair, WorkspaceCopyParts, WorkspaceDialogue,
+        ContentIoFocus, ContentScrolls, ListPane, Rows, TextPair, WorkspaceDialogue,
         WorkspaceFocus, WorkspaceSession, WorkspaceSource, WorkspaceSourceKind,
     };
     use crossterm::event::{KeyCode, KeyModifiers};
-    use ratatui::widgets::ListState;
     use sivtr_core::ai::AgentProvider;
     use sivtr_core::record::{WorkAt, WorkRef};
     use sivtr_core::record::{
@@ -1398,6 +1321,12 @@ mod tests {
         WorkSource, WorkTime, RECORD_SCHEMA_VERSION,
     };
     use std::time::SystemTime;
+
+    fn picked_units(picked: &PickedContent) -> Vec<TextPair> {
+        crate::commands::memory::copy::export::picked_units(picked)
+            .expect("export picked units")
+            .0
+    }
 
     #[test]
     fn repeat_safety_allows_navigation_and_text_input_only() {
@@ -1462,7 +1391,7 @@ mod tests {
     fn dialogues_for_test(
         sessions: &[WorkspaceSession],
         session_idx: usize,
-        selected_sessions: &[bool],
+        session_scope: &[bool],
     ) -> Vec<WorkspaceDialogue> {
         let mut pane = DialoguePane::default();
         let records = |s: &WorkspaceSession| {
@@ -1486,7 +1415,7 @@ mod tests {
             DialogueCtx {
                 sessions,
                 session_idx,
-                selected_sessions,
+                session_scope,
                 records: &records,
             },
             &PaneInput::new(vp, 0)
@@ -1499,7 +1428,7 @@ mod tests {
             DialogueCtx {
                 sessions,
                 session_idx,
-                selected_sessions,
+                session_scope,
                 records: &records,
             },
             &PaneInput::new(vp, 0)
@@ -1527,9 +1456,13 @@ mod tests {
             dialogues[0].record.as_ref().map(|r| r.title.as_str()),
             Some("o1")
         );
-        assert!(dialogues[0]
-            .content_text(ContentViewMode::Reading, None)
-            .contains("old:o1"));
+        assert!(workspace_content_text(
+            std::slice::from_ref(&dialogues[0]),
+            0,
+            ContentViewMode::Reading,
+            None,
+        )
+        .contains("old:o1"));
         assert_eq!(
             dialogues[0].work_ref.as_ref().unwrap().to_string(),
             "claude/test/1"
@@ -1561,7 +1494,14 @@ mod tests {
         assert_eq!(titles, [Some("c1"), Some("c2"), Some("a1")]);
         let texts: Vec<_> = dialogues
             .iter()
-            .map(|dialogue| dialogue.content_text(ContentViewMode::Reading, None))
+            .map(|dialogue| {
+                workspace_content_text(
+                    std::slice::from_ref(dialogue),
+                    0,
+                    ContentViewMode::Reading,
+                    None,
+                )
+            })
             .collect();
         assert!(texts[0].contains("codex session:c1"));
         assert!(texts[1].contains("codex session:c2"));
@@ -1576,79 +1516,75 @@ mod tests {
     }
 
     #[test]
-    fn marked_blocks_copy_joins_selected_block_bodies() {
-        let mut record = workspace_test_record(
-            WorkspaceSource::agent(AgentProvider::Codex),
-            "cmd",
-            "user text",
+    fn session_selection_projects_to_every_dialogue_record() {
+        let source = WorkspaceSource::agent(AgentProvider::Codex);
+        let sessions = vec![workspace_test_session("test", source, &["d1", "d2"])];
+        let records: Vec<Vec<_>> = sessions
+            .iter()
+            .map(|session| session.records.clone())
+            .collect();
+        let mut rows = Rows::default();
+        rows.sessions = ListPane::from_scope(vec![false]);
+
+        toggle_row_selection(
+            WorkspaceFocus::Sessions,
             0,
-        );
-        record.parts.push(WorkPart {
-            seq: 2,
-            occurred_at: None,
-            data: WorkPartData::ToolCall {
-                call_id: Some("c1".to_string()),
-                tool: Some("Bash".to_string()),
-                input: serde_json::json!({ "command": "ls" }),
-            },
-        });
-        record.parts.push(WorkPart {
-            seq: 3,
-            occurred_at: None,
-            data: WorkPartData::ToolResult {
-                call_id: Some("c1".to_string()),
-                tool: Some("Bash".to_string()),
-                output: serde_json::json!({ "stdout": "ok" }),
-                start_line: None,
-            },
-        });
-        let dialogue = WorkspaceDialogue {
-            source: WorkspaceSource::agent(AgentProvider::Codex),
-            work_ref: Some(record.work_ref.clone()),
-            record: Some(record.clone()),
-            copy: WorkspaceCopyParts::default(),
-        };
-        let dialogues = [dialogue.clone()];
-        let selected = [true];
-        let mut pane = ContentPane::default();
-        pane.ensure(ContentCtx {
-            dialogues: &dialogues,
-            highlighted_idx: 0,
-            mode: ContentViewMode::Reading,
-            target: None,
-            area: ratatui::layout::Rect::new(0, 0, 60, 20),
-            io_focus: ContentIoFocus::Input,
-            expanded: &crate::tui::content::io::ExpandedBlocks::default(),
-        });
-
-        // Nothing marked: the copy path yields None.
-        assert!(
-            workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane).is_none()
+            &mut rows,
+            &[],
+            &sessions,
+            &records,
+            &[],
         );
 
-        // Mark the tool block (output half): copy joins the call + result bodies.
-        pane.toggle_mark(ContentIoFocus::Output, 0, 0);
-        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
-            .expect("marked copy");
-        assert_eq!(picked.units.len(), 1);
-        let text = &picked.units[0].plain;
-        assert!(text.contains("$ ls"), "tool call body missing: {text}");
-        assert!(
-            text.contains("\"stdout\""),
-            "tool result body missing: {text}"
+        assert_eq!(rows.selection.anchors().len(), 2);
+        assert!(sessions[0]
+            .records
+            .iter()
+            .all(|record| rows.selection.contains(&record.work_ref)));
+        let dialogues: Vec<_> = sessions[0]
+            .records
+            .iter()
+            .map(|record| WorkspaceDialogue {
+                source: sessions[0].source.clone(),
+                work_ref: Some(record.work_ref.clone()),
+                record: Some(record.clone()),
+            })
+            .collect();
+        assert_eq!(
+            dialogues
+                .iter()
+                .map(|dialogue| dialogue
+                    .work_ref
+                    .as_ref()
+                    .is_some_and(|reference| rows.selection.contains(reference)))
+                .collect::<Vec<_>>(),
+            vec![true, true]
         );
         assert!(
-            !text.contains("user text"),
-            "unmarked input block leaked: {text}"
+            ContentPane::block_selection_mask(&dialogues, 0, &rows.selection)
+                .into_iter()
+                .all(|marked| marked)
         );
+    }
 
-        // Mark the user block (input half): both marked blocks are joined.
-        pane.toggle_mark(ContentIoFocus::Input, 0, 0);
-        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
-            .expect("marked copy");
-        let text = &picked.units[0].plain;
-        assert!(text.contains("user text"));
-        assert!(text.contains("$ ls"));
+    #[test]
+    fn initial_selection_is_empty_until_a_row_is_toggled() {
+        let source = WorkspaceSource::agent(AgentProvider::Codex);
+        let sessions = vec![workspace_test_session("test", source, &["d1", "d2"])];
+        let dialogues = dialogues_for_test(&sessions, 0, &[true]);
+
+        let rows = Rows::default();
+        assert!(
+            rows.selection.anchors().is_empty(),
+            "Rows::default() must start with an empty selection"
+        );
+        assert!(
+            dialogues.iter().all(|dialogue| dialogue
+                .work_ref
+                .as_ref()
+                .is_none_or(|reference| !rows.selection.contains(reference))),
+            "nothing should be selected until a row is toggled"
+        );
     }
 
     #[test]
@@ -1693,28 +1629,24 @@ mod tests {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(record.work_ref.clone()),
             record: Some(record.clone()),
-            copy: WorkspaceCopyParts::default(),
         };
         let dialogues = [dialogue.clone()];
-        let selected = [true];
-        let mut pane = ContentPane::default();
-        pane.ensure(ContentCtx {
-            dialogues: &dialogues,
-            highlighted_idx: 0,
-            mode: ContentViewMode::Reading,
-            target: None,
-            area: ratatui::layout::Rect::new(0, 0, 60, 20),
-            io_focus: ContentIoFocus::Output,
-            expanded: &crate::tui::content::io::ExpandedBlocks::default(),
-        });
-
-        // Mark the output run block: the tool run is id 1 (assistant's
-        // reply is id 0 in the output half). Copy joins the run's tool
-        // bodies, never the user or assistant blocks.
-        pane.toggle_mark(ContentIoFocus::Output, 0, 1);
-        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
-            .expect("marked copy");
-        let text = &picked.units[0].plain;
+        let mut selection = sivtr_core::workset::WorkSet::new(".", Vec::new());
+        selection.apply_target(
+            sivtr_core::workset::WorkSelectionAction::Include,
+            sivtr_core::workset::WorkSelectionTarget::Parts {
+                record: record.clone(),
+                parts: record.parts.iter().skip(2).map(|part| part.seq).collect(),
+            },
+            [],
+        );
+        let picked = workspace_picked_content_for_selected_parts(&selection, &dialogues)
+            .expect("selected parts");
+        let text = picked_units(&picked)
+            .iter()
+            .map(|unit| unit.plain.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(text.contains("cmd 0") && text.contains("cmd 2"), "{text}");
         assert!(
             !text.contains("the user question"),
@@ -1727,7 +1659,7 @@ mod tests {
     }
 
     #[test]
-    fn dot_marked_block_survives_ensure_and_matches_half_blocks_ids() {
+    fn dot_marked_block_survives_ensure_and_matches_dialogue_block_ids() {
         // Simulate the real click flow: build the frame, hit a block through
         // the layout (as the dot gutter does), toggle it, then run the copy
         // collection — it must find the block, never return None.
@@ -1769,13 +1701,11 @@ mod tests {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(record.work_ref.clone()),
             record: Some(record.clone()),
-            copy: WorkspaceCopyParts::default(),
         };
         let dialogues = [dialogue.clone()];
-        let selected = [true];
         let mut pane = ContentPane::default();
         let area = ratatui::layout::Rect::new(0, 0, 60, 20);
-        let frame = pane.ensure(ContentCtx {
+        let frame = pane.frame(ContentCtx {
             dialogues: &dialogues,
             highlighted_idx: 0,
             mode: ContentViewMode::Reading,
@@ -1796,11 +1726,24 @@ mod tests {
             }
         }
         let hit_id = hit_id.expect("a block is hit in the output half");
-        pane.toggle_mark(ContentIoFocus::Output, 0, hit_id);
-
-        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
-            .expect("marked copy must not be None after a real dot hit");
-        let text = &picked.units[0].plain;
+        let (_, selected, parts) =
+            workspace_block_parts(&dialogues, 0, hit_id).expect("selected block");
+        let mut selection = sivtr_core::workset::WorkSet::new(".", Vec::new());
+        selection.apply_target(
+            sivtr_core::workset::WorkSelectionAction::Include,
+            sivtr_core::workset::WorkSelectionTarget::Parts {
+                record: selected,
+                parts,
+            },
+            [],
+        );
+        let picked = workspace_picked_content_for_selected_parts(&selection, &dialogues)
+            .expect("selected parts");
+        let text = picked_units(&picked)
+            .iter()
+            .map(|unit| unit.plain.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(text.contains("cmd 0") && text.contains("cmd 2"), "{text}");
         assert!(
             !text.contains("the user question"),
@@ -1853,22 +1796,19 @@ mod tests {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(record.work_ref.clone()),
             record: Some(record.clone()),
-            copy: WorkspaceCopyParts::default(),
         };
         let dialogues = [dialogue.clone()];
-        let selected = [true];
 
-        // Output half: assistant = id 0, grep tool pair = id 1. The cursor
-        // on the tool block copies only it.
-        let picked = workspace_picked_content_for_cursor_block(
-            &dialogues,
-            &selected,
-            0,
-            ContentIoFocus::Output,
-            1,
-        )
-        .expect("tool block copy must not be None");
-        let text = &picked.units[0].plain;
+        // Dialogue-global ids: user = 0, assistant = 1, grep tool pair = 2.
+        // The cursor on the tool block copies only it.
+        let picked = workspace_picked_content_for_cursor_block(&dialogues, 0, 2)
+            .unwrap()
+            .expect("tool block copy must not be None");
+        let text = picked_units(&picked)
+            .iter()
+            .map(|unit| unit.plain.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(text.contains("fn main"), "tool call missing: {text}");
         assert!(text.contains("\"matches\""), "tool result missing: {text}");
         assert!(
@@ -1879,10 +1819,10 @@ mod tests {
 
     #[test]
     fn run_member_block_copies_even_though_nested_under_the_run() {
-        // Two consecutive tool pairs merge into a run (id 0) with members
-        // (id 1, 2). The cursor may sit on a member after expanding the run;
-        // y must copy just that member, not fail because the member is not a
-        // top-level block.
+        // Two consecutive tool pairs merge into a run (id 1, after the input
+        // user block) with members (id 2, 3). The cursor may sit on a member
+        // after expanding the run; y must copy just that member, not fail
+        // because the member is not a top-level block.
         let mut record = workspace_test_record(
             WorkspaceSource::agent(AgentProvider::Codex),
             "cmd",
@@ -1891,7 +1831,7 @@ mod tests {
         );
         for (i, tool) in ["Grep", "Read"].iter().enumerate() {
             record.parts.push(WorkPart {
-                seq: 1 + 2 * i,
+                seq: 2 + 2 * i,
                 occurred_at: None,
                 data: WorkPartData::ToolCall {
                     call_id: Some(format!("c{i}")),
@@ -1900,7 +1840,7 @@ mod tests {
                 },
             });
             record.parts.push(WorkPart {
-                seq: 2 + 2 * i,
+                seq: 3 + 2 * i,
                 occurred_at: None,
                 data: WorkPartData::ToolResult {
                     call_id: Some(format!("c{i}")),
@@ -1914,42 +1854,31 @@ mod tests {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(record.work_ref.clone()),
             record: Some(record.clone()),
-            copy: WorkspaceCopyParts::default(),
         };
         let dialogues = [dialogue.clone()];
-        let selected = [true];
 
-        // Member id 1 = the first tool of the run.
-        let picked = workspace_picked_content_for_cursor_block(
-            &dialogues,
-            &selected,
-            0,
-            ContentIoFocus::Output,
-            1,
-        )
-        .expect("run member copy must not be None");
-        let text = &picked.units[0].plain;
+        // Member id 2 = the first tool of the run.
+        let picked = workspace_picked_content_for_cursor_block(&dialogues, 0, 2)
+            .unwrap()
+            .expect("run member copy must not be None");
+        let text = &picked_units(&picked)[0].plain;
         assert!(text.contains("pat 0"), "first member missing: {text}");
         assert!(!text.contains("pat 1"), "second member leaked: {text}");
 
-        // Marking a member also collects only it — after expanding the run,
-        // so the mask covers the member ids.
-        let mut pane = ContentPane::default();
-        let mut expanded = crate::tui::content::io::ExpandedBlocks::default();
-        expanded.toggle(ContentIoFocus::Output, 0);
-        pane.ensure(ContentCtx {
-            dialogues: &dialogues,
-            highlighted_idx: 0,
-            mode: ContentViewMode::Reading,
-            target: None,
-            area: ratatui::layout::Rect::new(0, 0, 60, 20),
-            io_focus: ContentIoFocus::Output,
-            expanded: &expanded,
-        });
-        pane.toggle_mark(ContentIoFocus::Output, 0, 1);
-        let picked = workspace_picked_content_for_marked_blocks(&dialogues, &selected, 0, &pane)
-            .expect("marked member copy");
-        let text = &picked.units[0].plain;
+        let (_, selected, parts) =
+            workspace_block_parts(&dialogues, 0, 2).expect("selected member");
+        let mut selection = sivtr_core::workset::WorkSet::new(".", Vec::new());
+        selection.apply_target(
+            sivtr_core::workset::WorkSelectionAction::Include,
+            sivtr_core::workset::WorkSelectionTarget::Parts {
+                record: selected,
+                parts,
+            },
+            [],
+        );
+        let picked = workspace_picked_content_for_selected_parts(&selection, &dialogues)
+            .expect("selected member copy");
+        let text = &picked_units(&picked)[0].plain;
         assert!(text.contains("pat 0"), "first member missing: {text}");
         assert!(!text.contains("pat 1"), "second member leaked: {text}");
     }
@@ -1985,23 +1914,22 @@ mod tests {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(record.work_ref.clone()),
             record: Some(record.clone()),
-            copy: WorkspaceCopyParts::default(),
         };
         let dialogues = [dialogue.clone()];
-        let selected = [true];
 
-        // Cursor on the tool block (output half): call + result bodies only.
-        let picked = workspace_picked_content_for_cursor_block(
-            &dialogues,
-            &selected,
-            0,
-            ContentIoFocus::Output,
-            0,
-        )
-        .expect("cursor block copy");
-        assert_eq!(picked.units.len(), 1);
-        let text = &picked.units[0].plain;
-        assert!(text.contains("$ ls"), "tool call body missing: {text}");
+        // Cursor on the tool block (output half, id 1 after the input user
+        // block): call + result bodies only.
+        let picked = workspace_picked_content_for_cursor_block(&dialogues, 0, 1)
+            .unwrap()
+            .expect("cursor block copy");
+        let units = picked_units(&picked);
+        assert_eq!(units.len(), 2, "call + result bodies");
+        let text = units
+            .iter()
+            .map(|unit| unit.plain.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("ls"), "tool call body missing: {text}");
         assert!(
             text.contains("\"stdout\""),
             "tool result body missing: {text}"
@@ -2011,16 +1939,11 @@ mod tests {
             "other input block leaked: {text}"
         );
 
-        // Cursor on the user block (input half): just the user text.
-        let picked = workspace_picked_content_for_cursor_block(
-            &dialogues,
-            &selected,
-            0,
-            ContentIoFocus::Input,
-            0,
-        )
-        .expect("cursor block copy");
-        assert_eq!(picked.units[0].plain, "user text");
+        // Cursor on the user block (input half, id 0): just the user text.
+        let picked = workspace_picked_content_for_cursor_block(&dialogues, 0, 0)
+            .unwrap()
+            .expect("cursor block copy");
+        assert_eq!(picked_units(&picked)[0].plain, "user text");
     }
 
     #[test]
@@ -2381,83 +2304,68 @@ mod tests {
     }
 
     #[test]
-    fn clamp_list_state_clears_stale_selection_for_empty_lists() {
-        let mut state = ListState::default();
-        state.select(Some(0));
-
-        clamp_list_state(&mut state, 0);
-
-        assert_eq!(state.selected(), None);
-    }
-
-    #[test]
-    fn move_workspace_cursor_up_uses_dialogue_count_for_dialogue_focus() {
-        let sessions = vec![workspace_test_session(
-            "session",
-            WorkspaceSource::agent(AgentProvider::Codex),
-            &["dialogue"],
-        )];
-        let mut source_state = ListState::default();
-        source_state.select(Some(0));
-        let mut session_state = ListState::default();
-        session_state.select(Some(0));
-        let mut dialogue_state = ListState::default();
-        dialogue_state.select(Some(0));
-        let mut selected_dialogues = Vec::new();
+    fn move_workspace_cursor_clamps_to_the_row_count_and_skips_no_op_moves() {
+        let mut rows = Rows::default();
         let mut content_scrolls = ContentScrolls::default();
+        let mut content_cursor = super::super::nav::ContentBlockCursor::default();
 
-        move_workspace_cursor_up(
+        // An empty dialogue list has no row to land on.
+        move_workspace_cursor(
+            true,
             WorkspaceFocus::Dialogues,
-            &[WorkspaceSource::agent(AgentProvider::Codex)],
-            &sessions,
-            0,
-            &[false],
-            &mut source_state,
-            &mut session_state,
-            &mut dialogue_state,
-            &mut selected_dialogues,
+            &mut rows,
             &mut content_scrolls,
-            ContentIoFocus::Input,
-            &mut super::super::nav::ContentBlockCursor::default(),
+            &mut content_cursor,
             (&[], &[]),
         );
+        assert_eq!(rows.dialogues.state().selected(), None);
 
-        assert_eq!(dialogue_state.selected(), None);
-    }
-
-    #[test]
-    fn workspace_picked_content_uses_selected_dialogues_only() {
-        let dialogues = vec![
-            workspace_test_dialogue("d1", "text 1"),
-            workspace_test_dialogue("d2", "text 2"),
-            workspace_test_dialogue("d3", "text 3"),
-        ];
-
-        let picked = workspace_picked_content(&dialogues, &[false, true, true], 0, None);
-
-        assert_eq!(picked.units.len(), 2);
-        assert!(picked.units[0].plain.contains("text 2"));
-        assert!(picked.units[1].plain.contains("text 3"));
-        assert!(!picked.units[0].plain.contains("text 1"));
-        assert_eq!(
-            picked.selection,
-            CommandSelection::RecentExplicit(vec![1, 2])
+        // A move that cannot change the row leaves the panes below it alone:
+        // bumping the last dialogue must not reset the content scroll.
+        rows.dialogues.fit(1);
+        content_scrolls.set(ContentIoFocus::Output, 7);
+        move_workspace_cursor(
+            false,
+            WorkspaceFocus::Dialogues,
+            &mut rows,
+            &mut content_scrolls,
+            &mut content_cursor,
+            (&[], &[]),
         );
+        assert_eq!(rows.dialogues.cursor(), 0);
+        assert_eq!(content_scrolls.get(ContentIoFocus::Output), 7);
     }
 
     #[test]
-    fn workspace_picked_content_falls_back_to_highlighted_dialogue() {
+    fn workspace_picked_content_copies_the_picked_rows_in_order() {
         let dialogues = vec![
-            workspace_test_dialogue("d1", "text 1"),
-            workspace_test_dialogue("d2", "text 2"),
+            workspace_test_dialogue("d1", "text 1", 0),
+            workspace_test_dialogue("d2", "text 2", 1),
+            workspace_test_dialogue("d3", "text 3", 2),
         ];
 
-        let picked = workspace_picked_content(&dialogues, &[false, false], 1, None);
+        // Which rows those are is [`ListPane::active`]'s answer, tested there.
+        let picked = workspace_picked_content_for_copy(
+            &dialogues,
+            &[1, 2],
+            WorkspaceCopyShortcut::Displayed,
+            None,
+            None,
+            ContentViewMode::Reading,
+        )
+        .unwrap();
 
-        assert_eq!(picked.units.len(), 1);
-        assert!(picked.units[0].plain.contains("text 2"));
-        assert!(!picked.units[0].plain.contains("text 1"));
-        assert_eq!(picked.selection, CommandSelection::RecentExplicit(vec![1]));
+        let PickedContent::WorkSet {
+            set, projection, ..
+        } = picked
+        else {
+            panic!("dialogue selection must be a WorkSet")
+        };
+        assert_eq!(
+            projection,
+            super::super::content::WorkspacePickProjection::Whole
+        );
+        assert_eq!(set.anchors().len(), 2);
     }
 
     #[test]
@@ -2465,35 +2373,47 @@ mod tests {
         let dialogues = vec![WorkspaceDialogue {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
-            record: None,
-            copy: WorkspaceCopyParts {
-                input: TextPair {
-                    plain: "question".to_string(),
-                    ansi: String::new(),
-                },
-                output: TextPair {
-                    plain: "answer".to_string(),
-                    ansi: String::new(),
-                },
-                command: TextPair::default(),
-            },
+            record: Some(workspace_test_record(
+                WorkspaceSource::agent(AgentProvider::Codex),
+                "question",
+                "question",
+                0,
+            )),
         }];
 
         let input = workspace_picked_content_for_copy(
             &dialogues,
-            &[false],
-            0,
+            &[0],
             WorkspaceCopyShortcut::Input,
-        );
+            None,
+            None,
+            ContentViewMode::Reading,
+        )
+        .unwrap();
         let output = workspace_picked_content_for_copy(
             &dialogues,
-            &[false],
-            0,
+            &[0],
             WorkspaceCopyShortcut::Output,
-        );
+            None,
+            None,
+            ContentViewMode::Reading,
+        )
+        .unwrap();
 
-        assert_eq!(input.units[0].plain, "question");
-        assert_eq!(output.units[0].plain, "answer");
+        assert!(matches!(
+            input,
+            PickedContent::WorkSet {
+                projection: super::super::content::WorkspacePickProjection::Input,
+                ..
+            }
+        ));
+        assert!(matches!(
+            output,
+            PickedContent::WorkSet {
+                projection: super::super::content::WorkspacePickProjection::Output,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -2501,28 +2421,20 @@ mod tests {
         let dialogues = vec![workspace_test_dialogue(
             "question",
             "line 1\nline 2\nline 3",
-        )];
-        // Override structured copy parts for input shortcut filtering.
-        let mut dialogues = dialogues;
-        dialogues[0].copy = WorkspaceCopyParts {
-            input: TextPair {
-                plain: "ask 1\nask 2\nask 3".to_string(),
-                ansi: String::new(),
-            },
-            output: TextPair {
-                plain: "answer 1\nanswer 2\nanswer 3".to_string(),
-                ansi: String::new(),
-            },
-            command: TextPair::default(),
-        };
-
-        let displayed =
-            workspace_picked_content_with_line_filter(&dialogues, &[false], 0, Some("2:3"), None)
-                .unwrap();
-        let input = workspace_picked_content_for_copy_with_line_filter(
-            &dialogues,
-            &[false],
             0,
+        )];
+        let displayed = workspace_picked_content_for_copy(
+            &dialogues,
+            &[0],
+            WorkspaceCopyShortcut::Displayed,
+            Some("2:3"),
+            None,
+            ContentViewMode::Reading,
+        )
+        .unwrap();
+        let input = workspace_picked_content_for_copy(
+            &dialogues,
+            &[0],
             WorkspaceCopyShortcut::Input,
             Some("1,3"),
             None,
@@ -2531,17 +2443,23 @@ mod tests {
         .unwrap();
 
         // Displayed text is Reading-mode render of parts; filter applies to that text.
-        assert!(displayed.units[0].plain.lines().count() >= 1);
-        assert_eq!(input.units[0].plain, "ask 1\nask 3");
+        assert!(picked_units(&displayed)[0].plain.lines().count() >= 1);
+        assert_eq!(picked_units(&input)[0].plain, "line 1\nline 3");
     }
 
     #[test]
     fn workspace_line_filter_rejects_invalid_specs() {
-        let dialogues = vec![workspace_test_dialogue("d1", "alpha\nbeta\ngamma")];
+        let dialogues = vec![workspace_test_dialogue("d1", "alpha\nbeta\ngamma", 0)];
 
-        let err =
-            workspace_picked_content_with_line_filter(&dialogues, &[false], 0, Some("x"), None)
-                .unwrap_err();
+        let err = workspace_picked_content_for_copy(
+            &dialogues,
+            &[0],
+            WorkspaceCopyShortcut::Displayed,
+            Some("x"),
+            None,
+            ContentViewMode::Reading,
+        )
+        .unwrap_err();
 
         assert!(
             err.to_string().contains("Invalid line number"),
@@ -2618,40 +2536,45 @@ mod tests {
         let dialogues = vec![WorkspaceDialogue {
             source: WorkspaceSource::terminal(),
             work_ref: Some(WorkRef::terminal("shell", 1)),
-            record: None,
-            copy: WorkspaceCopyParts {
-                input: TextPair {
-                    plain: "PS C:\\repo> cargo test".to_string(),
-                    ansi: String::new(),
-                },
-                output: TextPair {
-                    plain: "ok".to_string(),
-                    ansi: String::new(),
-                },
-                command: TextPair {
-                    plain: "cargo test".to_string(),
-                    ansi: "cargo test".to_string(),
-                },
-            },
+            record: Some(workspace_test_record(
+                WorkspaceSource::terminal(),
+                "cargo test",
+                "cargo test",
+                0,
+            )),
         }];
 
         let picked = workspace_picked_content_for_copy(
             &dialogues,
-            &[false],
-            0,
+            &[0],
             WorkspaceCopyShortcut::Command,
-        );
+            None,
+            None,
+            ContentViewMode::Reading,
+        )
+        .unwrap();
 
-        assert_eq!(picked.units[0].plain, "cargo test");
+        assert!(matches!(
+            picked,
+            PickedContent::WorkSet {
+                projection: super::super::content::WorkspacePickProjection::Command,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn workspace_dialogue_vim_view_tracks_exact_dialogue_lines() {
-        let dialogue = workspace_test_dialogue("line1", "line1\nline2\nline3\nline4");
+        let dialogue = workspace_test_dialogue("line1", "line1\nline2\nline3\nline4", 0);
 
         let view = workspace_dialogue_vim_view(&dialogue);
         // Reading mode wraps dialogue with headings/markers — count lines from that render.
-        let expected = dialogue.content_text(ContentViewMode::Reading, None);
+        let expected = workspace_content_text(
+            std::slice::from_ref(&dialogue),
+            0,
+            ContentViewMode::Reading,
+            None,
+        );
         assert_eq!(view.raw, expected);
         assert_eq!(view.blocks.len(), 1);
         assert_eq!(view.blocks[0].start, 1);
@@ -2682,18 +2605,20 @@ mod tests {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
             record: Some(record),
-            copy: WorkspaceCopyParts::from_block(TextPair {
-                plain: "visible text".to_string(),
-                ansi: String::new(),
-            }),
         }];
 
-        let picked = workspace_picked_content(&dialogues, &[false], 0, Some(WorkAt::Part(1)));
+        let picked = workspace_picked_content_for_copy(
+            &dialogues,
+            &[0],
+            WorkspaceCopyShortcut::Displayed,
+            None,
+            Some(WorkAt::Part(1)),
+            ContentViewMode::Reading,
+        )
+        .unwrap();
 
-        assert_eq!(picked.units[0].plain.trim(), "<:tool:tool call:>");
-        // Displayed copy uses Reading mode: fold marker only, no payload.
-        assert!(!picked.units[0].plain.contains("hidden cargo test"));
-        assert!(!picked.units[0].plain.contains("codex/"));
+        assert!(picked_units(&picked)[0].plain.contains("hidden cargo test"));
+        assert!(!picked_units(&picked)[0].plain.contains("codex/"));
     }
 
     fn workspace_test_session(
@@ -2767,23 +2692,17 @@ mod tests {
         }
     }
 
-    fn workspace_test_dialogue(title: &str, plain: &str) -> WorkspaceDialogue {
+    fn workspace_test_dialogue(title: &str, plain: &str, index: usize) -> WorkspaceDialogue {
         let record = workspace_test_record(
             WorkspaceSource::agent(AgentProvider::Codex),
             title,
             plain,
-            0,
+            index,
         );
-        let pair = crate::commands::browse::text::record_text_to_pair(record.copy_text(
-            sivtr_core::record::RecordTextMode::Combined,
-            false,
-            None,
-        ));
         WorkspaceDialogue {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(record.work_ref.clone()),
             record: Some(record),
-            copy: WorkspaceCopyParts::from_block(pair),
         }
     }
 }

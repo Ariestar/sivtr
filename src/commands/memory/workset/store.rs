@@ -19,9 +19,10 @@ pub fn load_saved(name: &str) -> Result<WorkSet> {
     let path = set_path(name)?;
     let content = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read WorkSet @{name} from {}", path.display()))?;
-    let mut set: WorkSet = serde_json::from_str(&content)
+    let set: WorkSet = serde_json::from_str(&content)
         .with_context(|| format!("Failed to parse WorkSet @{name} from {}", path.display()))?;
-    set.ensure_anchors();
+    set.validate()
+        .with_context(|| format!("Invalid WorkSet @{name}"))?;
     Ok(set)
 }
 

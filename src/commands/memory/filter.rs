@@ -163,9 +163,9 @@ pub fn execute(args: &FilterArgs) -> Result<()> {
 /// Load, filter, and optionally save a WorkSet without printing.
 pub fn run(args: &FilterArgs) -> Result<WorkSet> {
     let mut set = workset::query(&args.source, from_filter_args(args)?, args.cwd.as_deref())?;
-    set.save_last()?;
+    workset::save_last(&set)?;
     if let Some(name) = args.save.as_deref() {
-        set.save_as(name)?;
+        workset::save_as(&mut set, name)?;
     }
     Ok(set)
 }
@@ -182,7 +182,7 @@ pub(crate) fn apply(
     let hits = searcher.search(&filter, &anchors, &cwd)?;
     let anchors: Vec<WorkRef> = hits.into_iter().map(|hit| hit.anchor).collect();
     let selected_records = workset::records_for_anchors(&records, &anchors);
-    Ok(WorkSet::with_anchors(
+    Ok(WorkSet::from_parts(
         cwd.display().to_string(),
         selected_records,
         anchors,

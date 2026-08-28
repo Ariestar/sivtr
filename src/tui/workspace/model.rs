@@ -3,12 +3,11 @@
 use ratatui::prelude::Color;
 use ratatui::widgets::ListState;
 use sivtr_core::ai::AgentProvider;
-use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
+use sivtr_core::record::{WorkAt, WorkRecord, WorkRef, WorkScope};
 use std::collections::HashSet;
 use std::time::SystemTime;
 
-use crate::commands::select::CommandSelection;
-use crate::tui::content::block::{fold_label_for_part, BlockText};
+use crate::tui::content::block::{dialogue_block_id, fold_label_for_part, BlockText};
 use crate::tui::content::io::{
     ContentIoFocus, ContentIoFrame, ContentIoTexts, ContentScrolls, ExpandedBlocks,
 };
@@ -16,6 +15,8 @@ use crate::tui::content::text::content_io_from_record;
 use crate::tui::content::view::{ContentSelection, ContentViewMode};
 use crate::tui::search::WorkspaceSearchScope;
 use crate::tui::theme;
+use crate::tui::workspace::rows::Rows;
+use sivtr_core::workset::{WorkSelectionKind, WorkSelectionTarget};
 
 /// Indices of true entries in a selection mask, in order.
 pub(crate) fn selected_indices(mask: &[bool]) -> Vec<usize> {
@@ -23,11 +24,6 @@ pub(crate) fn selected_indices(mask: &[bool]) -> Vec<usize> {
         .enumerate()
         .filter_map(|(idx, selected)| selected.then_some(idx))
         .collect()
-}
-
-/// Count of true entries in a selection mask.
-pub(crate) fn selected_count(mask: &[bool]) -> usize {
-    mask.iter().filter(|selected| **selected).count()
 }
 
 /// Kind of memory source (local path body before any `scope:` prefix).
@@ -148,6 +144,19 @@ impl WorkspaceSource {
     pub(crate) fn is_terminal(&self) -> bool {
         self.kind.is_terminal()
     }
+
+    pub(crate) fn selection_target(&self, session: Option<&str>) -> WorkSelectionTarget {
+        WorkSelectionTarget::Scope {
+            scope: self.scope.as_deref().map_or(WorkScope::Local, |scope| {
+                WorkScope::Named(scope.to_string())
+            }),
+            kind: match self.kind {
+                WorkspaceSourceKind::Terminal => WorkSelectionKind::Terminal,
+                WorkspaceSourceKind::Agent(provider) => WorkSelectionKind::Agent(provider),
+            },
+            session: session.map(str::to_string),
+        }
+    }
 }
 
 /// Compact load indicator for the Source pane selection/status column.
@@ -179,30 +188,6 @@ pub(crate) struct TextPair {
     pub(crate) ansi: String,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct WorkspaceCopyParts {
-    pub(crate) input: TextPair,
-    pub(crate) output: TextPair,
-    pub(crate) command: TextPair,
-}
-
-impl WorkspaceCopyParts {
-    pub(crate) fn from_block(block: TextPair) -> Self {
-        Self {
-            input: block.clone(),
-            output: block,
-            command: TextPair::default(),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct WorkspacePickedContent {
-    pub(crate) source: WorkspaceSource,
-    pub(crate) units: Vec<TextPair>,
-    pub(crate) selection: CommandSelection,
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct WorkspaceSession {
     pub(crate) source: WorkspaceSource,
@@ -222,25 +207,9 @@ pub(crate) struct WorkspaceDialogue {
     pub(crate) source: WorkspaceSource,
     pub(crate) work_ref: Option<WorkRef>,
     pub(crate) record: Option<WorkRecord>,
-    pub(crate) copy: WorkspaceCopyParts,
 }
 
 impl WorkspaceDialogue {
-    /// Text used for copy shortcuts / vim on the currently displayed content.
-    /// Always derived from `record.parts` when present — never a stale cache.
-    pub(crate) fn display_unit(&self, mode: ContentViewMode, target: Option<WorkAt>) -> TextPair {
-        let plain = self.content_text(mode, target);
-        TextPair {
-            ansi: plain.clone(),
-            plain,
-        }
-    }
-
-    pub(crate) fn content_text(&self, mode: ContentViewMode, target: Option<WorkAt>) -> String {
-        self.content_io_texts(mode, target, &ExpandedBlocks::default())
-            .join_displayed()
-    }
-
     /// Input / Output bodies for the dual content panes with per-block fold
     /// state (every workpart is a block; structure blocks fold by default in
     /// read mode).
@@ -259,19 +228,13 @@ impl WorkspaceDialogue {
                 return ContentIoTexts::new(Vec::new(), Vec::new());
             };
             let input = part.kind().is_input();
+            let block_id = dialogue_block_id(record, part.seq).expect("target part has a block");
             let shown = match mode {
                 ContentViewMode::Raw => true,
-                ContentViewMode::Reading => {
-                    let focus = if input {
-                        ContentIoFocus::Input
-                    } else {
-                        ContentIoFocus::Output
-                    };
-                    expanded.expanded(focus, 0, part.kind().is_structure())
-                }
+                ContentViewMode::Reading => expanded.expanded(block_id, part.kind().is_structure()),
             };
             let segment = BlockText {
-                id: 0,
+                id: block_id,
                 text: if shown {
                     crate::tui::content::tool::part_body_text(part)
                 } else {
@@ -364,14 +327,12 @@ impl WorkspaceFocus {
 
 pub(crate) struct WorkspaceView<'a> {
     pub(crate) sources: &'a [WorkspaceSource],
-    pub(crate) selected_sources: &'a [bool],
     /// Per-source load marker (idle remote / ready / failed).
     pub(crate) source_markers: &'a [SourceLoadMarker],
     pub(crate) loading_tick: u8,
-    pub(crate) source_state: &'a ListState,
+    /// Cursor, marks, and the live range anchor of all three list panes.
+    pub(crate) rows: &'a Rows,
     pub(crate) sessions: &'a [WorkspaceSession],
-    pub(crate) selected_sessions: &'a [bool],
-    pub(crate) session_state: &'a ListState,
     /// `(source, session id)` pairs whose body hydration failed (spawn or
     /// query error). Rows render an error marker and the loader does not retry
     /// them. Source-qualified so a local session sharing an id with a remote
@@ -379,11 +340,10 @@ pub(crate) struct WorkspaceView<'a> {
     pub(crate) body_failures: HashSet<(WorkspaceSource, String)>,
     /// Dialogue list titles only (no body materialize on paint).
     pub(crate) dialogue_titles: &'a [&'a str],
+    /// WorkSet-derived dialogue selection for this frame.
+    pub(crate) dialogue_selection: &'a [bool],
     /// Materialized dialogues for content/copy (focus ∪ multi-select bodies).
     pub(crate) dialogues: &'a [WorkspaceDialogue],
-    pub(crate) dialogue_state: &'a ListState,
-    pub(crate) selected_dialogues: &'a [bool],
-    pub(crate) range_anchor: Option<usize>,
     pub(crate) focus: WorkspaceFocus,
     pub(crate) content_scrolls: ContentScrolls,
     pub(crate) content_io_focus: ContentIoFocus,
@@ -397,19 +357,15 @@ pub(crate) struct WorkspaceView<'a> {
     pub(crate) line_filter_error: Option<&'a str>,
     pub(crate) fullscreen: Option<WorkspaceFocus>,
     pub(crate) content_selection: Option<ContentSelection>,
-    /// Block under the keyboard/mouse cursor per half; highlighted like a
-    /// list row when its half is focused.
+    /// Block under the keyboard/mouse cursor plus its half (derived from
+    /// the dialogue-global id); highlighted like a list row in that half.
     pub(crate) content_block_cursor: Option<(ContentIoFocus, usize)>,
-    /// Pending `v` block-range span `(half, anchor block, cursor block)`;
+    /// Pending `v` block-range span `(anchor block, cursor block)`;
     /// its lines render with the same amber range style as the list panes.
-    pub(crate) content_range: Option<(ContentIoFocus, usize, usize)>,
-    /// Marked block masks per half (`mask[block_id]` = marked), owned by the
-    /// content pane's native selection; consumed by the dot gutter and copy.
-    pub(crate) content_marked_input: &'a [bool],
-    pub(crate) content_marked_output: &'a [bool],
-    /// Multi-select paging `(current_page, page_count)` when several
-    /// dialogues are selected; the content pane shows one at a time.
-    pub(crate) content_page: Option<(usize, usize)>,
+    pub(crate) content_range: Option<(usize, usize)>,
+    /// WorkSet-derived block mask (`mask[block_id]` = marked, dialogue-global
+    /// ids), consumed by the dot gutter and copy.
+    pub(crate) content_marked: &'a [bool],
     /// Dual IO layout + display texts, computed once per redraw by the picker
     /// and shared with the renderer (no per-frame duplicate layout).
     pub(crate) content_frame: &'a ContentIoFrame,

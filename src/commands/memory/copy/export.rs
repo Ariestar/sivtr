@@ -3,28 +3,36 @@
 use anyhow::{Context, Result};
 use regex::Regex;
 
-use crate::commands::browse::{filter_lines_by_spec, select_lines};
+use crate::commands::browse::{
+    filter_lines_by_spec, select_lines, PickedContent, WorkspacePickProjection,
+};
 use crate::output;
-use crate::tui::workspace::{TextPair, WorkspacePickedContent};
+use crate::tui::workspace::TextPair;
 
-use super::plan::{CopyFilters, DialogueSelect};
-use crate::commands::select::resolve_selector;
+use super::plan::CopyFilters;
 
 /// Export TUI-picked content to the clipboard.
 ///
 /// Product surfaces (bare `sivtr`, hotkey) own the browse call; copy only sinks.
 pub fn export_picked(
-    picked: &WorkspacePickedContent,
+    picked: &PickedContent,
     print_full: bool,
     regex: Option<&str>,
     lines: Option<&str>,
     ansi: bool,
 ) -> Result<()> {
-    let empty = format!("selected {} content is empty", picked.source.label());
-    let success = format!("copied {} content to clipboard", picked.source.label());
+    let (units, label) = picked_units(picked)?;
+    // picked_units already applies the WorkSet's line_filter per unit;
+    // skip the merged-text filter here to avoid double-filtering.
+    let lines = match picked {
+        PickedContent::WorkSet {
+            line_filter: Some(_),
+            ..
+        } => None,
+        _ => lines,
+    };
     finish_units(
-        &picked.units,
-        &picked.selection,
+        &units,
         &CopyFilters {
             print: print_full,
             ansi,
@@ -33,49 +41,84 @@ pub fn export_picked(
             prompt: None,
             cwd: None,
         },
-        &empty,
-        &success,
+        &label,
+    )
+    .context("export picked content")
+}
+
+pub(crate) fn picked_units(picked: &PickedContent) -> Result<(Vec<TextPair>, String)> {
+    match picked {
+        PickedContent::Text { source, units } => Ok((units.clone(), source.label())),
+        PickedContent::WorkSet {
+            source,
+            set,
+            projection,
+            line_filter,
+        } => {
+            let projection = match projection {
+                WorkspacePickProjection::Whole => super::plan::Projection::Both,
+                WorkspacePickProjection::Input => super::plan::Projection::Input,
+                WorkspacePickProjection::Output => super::plan::Projection::Output,
+                WorkspacePickProjection::Command => super::plan::Projection::Command,
+                WorkspacePickProjection::Parts => {
+                    super::plan::Projection::Exact(sivtr_core::record::WorkAt::Whole)
+                }
+            };
+            let anchors = set.anchors();
+            let units = anchors
+                .iter()
+                .map(|anchor| {
+                    let record = set
+                        .records()
+                        .iter()
+                        .find(|record| record.work_ref.whole() == anchor.whole())
+                        .with_context(|| {
+                            format!("picked record `{}` is not materialized", anchor.whole())
+                        })?;
+                    let projection = if matches!(
+                        projection,
+                        super::plan::Projection::Both
+                            | super::plan::Projection::Exact(sivtr_core::record::WorkAt::Whole)
+                    ) && anchor.at != sivtr_core::record::WorkAt::Whole
+                    {
+                        super::plan::Projection::Exact(anchor.at)
+                    } else {
+                        projection
+                    };
+                    let unit = super::project::project_record(record, projection, None)?;
+                    match line_filter.as_deref() {
+                        Some(filter) => filter_lines_by_spec(&unit, filter),
+                        None => Ok(unit),
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok((units, source.label()))
+        }
+    }
+}
+
+/// Join every unit that carries text and sink it, naming `label` in both the
+/// empty warning and the success line. The single path both copy surfaces —
+/// the CLI plan and the TUI pick — end on.
+pub(super) fn finish_units(units: &[TextPair], filters: &CopyFilters, label: &str) -> Result<()> {
+    let kept: Vec<TextPair> = units
+        .iter()
+        .filter(|unit| !unit.plain.trim().is_empty())
+        .cloned()
+        .collect();
+    if kept.is_empty() {
+        output::warning(format!("selected {label} content is empty"));
+        return Ok(());
+    }
+    let count = kept.len();
+    finish_text(
+        join_text_pairs(&kept),
+        filters,
+        &format!("copied {count} item(s) from {label} to clipboard"),
     )
 }
 
-pub(super) fn finish_units(
-    units: &[TextPair],
-    selection: &DialogueSelect,
-    filters: &CopyFilters,
-    empty_message: &str,
-    success_message: &str,
-) -> Result<()> {
-    let indices = resolve_selector(selection, units.len())?;
-    let selected: Vec<TextPair> = indices
-        .iter()
-        .filter_map(|idx| units.get(*idx).cloned())
-        .filter(|unit| !unit.plain.trim().is_empty())
-        .collect();
-    if selected.is_empty() {
-        output::warning(empty_message);
-        return Ok(());
-    }
-    let text = join_text_pairs(&selected, "\n\n");
-    finish_text(text, filters, success_message)
-}
-
-pub(super) fn finish_text_pairs(
-    pairs: &[TextPair],
-    filters: &CopyFilters,
-    success_message: &str,
-) -> Result<()> {
-    if pairs.is_empty() {
-        output::warning("selected content is empty");
-        return Ok(());
-    }
-    finish_text(join_text_pairs(pairs, "\n\n"), filters, success_message)
-}
-
-pub(super) fn finish_text(
-    mut text: TextPair,
-    filters: &CopyFilters,
-    success_message: &str,
-) -> Result<()> {
+fn finish_text(mut text: TextPair, filters: &CopyFilters, success_message: &str) -> Result<()> {
     if let Some(pattern) = filters.regex.as_deref() {
         text = filter_lines_by_regex(&text, pattern)?;
     }
@@ -99,22 +142,30 @@ pub(super) fn finish_text(
     Ok(())
 }
 
-pub(super) fn join_text_pairs(pairs: &[TextPair], separator: &str) -> TextPair {
+fn join_text_pairs(pairs: &[TextPair]) -> TextPair {
     TextPair {
         plain: pairs
             .iter()
             .map(|pair| pair.plain.as_str())
             .collect::<Vec<_>>()
-            .join(separator),
+            .join(
+                "
+
+",
+            ),
         ansi: pairs
             .iter()
             .map(|pair| pair.ansi.as_str())
             .collect::<Vec<_>>()
-            .join(separator),
+            .join(
+                "
+
+",
+            ),
     }
 }
 
-pub(super) fn filter_lines_by_regex(text: &TextPair, pattern: &str) -> Result<TextPair> {
+fn filter_lines_by_regex(text: &TextPair, pattern: &str) -> Result<TextPair> {
     let regex = Regex::new(pattern)
         .with_context(|| format!("Invalid regex `{pattern}`. Check the pattern syntax."))?;
     let indices = text
@@ -129,6 +180,11 @@ pub(super) fn filter_lines_by_regex(text: &TextPair, pattern: &str) -> Result<Te
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::browse::{PickedContent, WorkspacePickProjection};
+    use crate::commands::memory::workset::WorkSet;
+    use crate::tui::workspace::WorkspaceSource;
+    use sivtr_core::session::SessionEntry;
+    use std::path::Path;
 
     #[test]
     fn filters_by_regex() {
@@ -154,5 +210,25 @@ mod tests {
         )
         .unwrap();
         assert_eq!(filtered.ansi, "\x1b[31mwarn: b\x1b[0m");
+    }
+
+    #[test]
+    fn workset_pick_projects_its_records() {
+        let record = sivtr_core::record::WorkRecord::terminal(
+            &SessionEntry::new("PS C:\\repo>", "cargo test", "ok"),
+            Path::new("current"),
+            0,
+        )
+        .expect("test record");
+        let picked = PickedContent::WorkSet {
+            source: WorkspaceSource::terminal(),
+            set: WorkSet::from_parts("current", vec![record.clone()], vec![record.work_ref]),
+            projection: WorkspacePickProjection::Command,
+            line_filter: None,
+        };
+
+        let (units, label) = picked_units(&picked).expect("projects workset");
+        assert_eq!(label, "terminal");
+        assert_eq!(units[0].plain, "cargo test");
     }
 }
