@@ -30,7 +30,9 @@ impl PublicationExpiry {
             "7d" => Ok(Self::SevenDays),
             "30d" => Ok(Self::ThirtyDays),
             "90d" => Ok(Self::NinetyDays),
-            _ => bail!("invalid publication expiry `{value}`; expected 2h, 1d, 3d, 7d, 30d, or 90d"),
+            _ => {
+                bail!("invalid publication expiry `{value}`; expected 2h, 1d, 3d, 7d, 30d, or 90d")
+            }
         }
     }
 
@@ -411,14 +413,22 @@ mod tests {
 
     #[test]
     fn publication_expiry_parses_short_and_legacy_lifetimes() {
-        assert_eq!(PublicationExpiry::parse("2h").unwrap(), PublicationExpiry::TwoHours);
-        assert_eq!(PublicationExpiry::parse("3d").unwrap(), PublicationExpiry::ThreeDays);
+        assert_eq!(
+            PublicationExpiry::parse("2h").unwrap(),
+            PublicationExpiry::TwoHours
+        );
+        assert_eq!(
+            PublicationExpiry::parse("3d").unwrap(),
+            PublicationExpiry::ThreeDays
+        );
         assert_eq!(PublicationExpiry::TwoHours.as_str(), "2h");
         assert_eq!(PublicationExpiry::ThreeDays.as_str(), "3d");
         assert_eq!(PublicationExpiry::TwoHours.duration(), Duration::hours(2));
         assert_eq!(PublicationExpiry::ThreeDays.duration(), Duration::days(3));
         assert!(PublicationExpiry::parse("4h").is_err());
-        assert_eq!(PublicationExpiry::parse("90d").unwrap(), PublicationExpiry::NinetyDays);
+        assert_eq!(
+            PublicationExpiry::parse("90d").unwrap(),
+            PublicationExpiry::NinetyDays
+        );
     }
 }
-

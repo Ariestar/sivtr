@@ -5,7 +5,7 @@ use aes_gcm::{
     aead::{AeadInPlace, KeyInit},
     Aes256Gcm, Key, Nonce,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Utc};
 use flate2::{write::GzEncoder, Compression};
@@ -119,8 +119,8 @@ fn load_draft(source: &str, title: Option<String>, expiry: &str) -> Result<Publi
         .with_context(|| format!("failed to resolve publication source `{source}`"))?;
     set.materialize_parts()?;
     create_publication_draft(
-        &set.records,
-        &set.anchors(),
+        set.records(),
+        set.anchors(),
         &PublicationPolicy {
             title,
             expires,
@@ -128,7 +128,6 @@ fn load_draft(source: &str, title: Option<String>, expiry: &str) -> Result<Publi
         },
     )
 }
-
 
 fn ensure_local_publication_source(source: &str) -> Result<()> {
     // Resolve named scopes through the origin registry before querying so a
