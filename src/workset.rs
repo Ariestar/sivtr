@@ -14,8 +14,10 @@ pub struct WorkSet {
     pub cwd: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    pub records: Vec<WorkRecord>,
-    pub anchors: Vec<WorkRef>,
+    /// Materialized records backing every anchor.
+    records: Vec<WorkRecord>,
+    /// Active selection positions; Whole covers every Part of its record.
+    anchors: Vec<WorkRef>,
 }
 
 impl WorkSet {
@@ -24,10 +26,10 @@ impl WorkSet {
             .iter()
             .map(|record| record.work_ref.whole())
             .collect();
-        Self::with_anchors(cwd, records, anchors)
+        Self::from_parts(cwd, records, anchors)
     }
 
-    pub fn with_anchors(
+    pub fn from_parts(
         cwd: impl Into<String>,
         records: Vec<WorkRecord>,
         anchors: Vec<WorkRef>,
@@ -42,8 +44,33 @@ impl WorkSet {
         }
     }
 
-    pub fn anchors(&self) -> Vec<WorkRef> {
-        self.anchors.clone()
+    pub fn anchors(&self) -> &[WorkRef] {
+        &self.anchors
+    }
+
+    pub fn records(&self) -> &[WorkRecord] {
+        &self.records
+    }
+
+    pub(crate) fn records_mut(&mut self) -> &mut [WorkRecord] {
+        &mut self.records
+    }
+
+    pub fn into_records(self) -> Vec<WorkRecord> {
+        self.records
+    }
+
+    pub fn into_parts(self) -> (Vec<WorkRecord>, Vec<WorkRef>) {
+        (self.records, self.anchors)
+    }
+
+    pub(crate) fn replace_records(&mut self, records: Vec<WorkRecord>) {
+        self.records = records;
+    }
+
+    pub(crate) fn replace_selection(&mut self, records: Vec<WorkRecord>, anchors: Vec<WorkRef>) {
+        self.records = records;
+        self.anchors = anchors;
     }
 
     /// Whether this selection covers an address. A Whole anchor covers every
@@ -88,7 +115,7 @@ impl WorkSet {
             return;
         }
         if self
-            .anchors()
+            .anchors
             .iter()
             .any(|anchor| anchor.at == WorkAt::Whole && anchor.whole() == whole)
         {
@@ -112,7 +139,7 @@ impl WorkSet {
     /// Toggle a complete record selection.
     pub fn toggle_whole(&mut self, record: WorkRecord) {
         if self
-            .anchors()
+            .anchors
             .iter()
             .any(|anchor| anchor.at == WorkAt::Whole && anchor.whole() == record.work_ref.whole())
         {
@@ -154,7 +181,7 @@ impl WorkSet {
             return;
         }
         let all_selected = records.iter().all(|record| {
-            self.anchors().iter().any(|anchor| {
+            self.anchors.iter().any(|anchor| {
                 anchor.at == WorkAt::Whole && anchor.whole() == record.work_ref.whole()
             })
         });
@@ -174,8 +201,9 @@ impl WorkSet {
     pub fn parts_only(&self) -> Option<Self> {
         let anchors: Vec<_> = self
             .anchors()
-            .into_iter()
+            .iter()
             .filter(|anchor| anchor.at != WorkAt::Whole)
+            .cloned()
             .collect();
         if anchors.is_empty() {
             return None;
@@ -190,7 +218,7 @@ impl WorkSet {
             })
             .cloned()
             .collect();
-        Some(Self::with_anchors(self.cwd.clone(), records, anchors))
+        Some(Self::from_parts(self.cwd.clone(), records, anchors))
     }
 
     /// Remove a record and every Part anchor belonging to it.

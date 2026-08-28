@@ -95,7 +95,7 @@ pub(super) fn workspace_picked_content_for_copy(
         filter_lines_by_spec(&crate::tui::workspace::TextPair::default(), spec)?;
     }
     let cwd = std::env::current_dir().context("copy needs a current directory")?;
-    let mut set = WorkSet::with_anchors(cwd.display().to_string(), Vec::new(), Vec::new());
+    let mut set = WorkSet::from_parts(cwd.display().to_string(), Vec::new(), Vec::new());
     for record in records {
         match display_target {
             Some(WorkAt::Part(seq)) => set.include_parts(record, [seq]),
@@ -117,7 +117,7 @@ pub(super) fn workspace_picked_content_for_selected_parts(
     dialogues: &[WorkspaceDialogue],
 ) -> Option<PickedContent> {
     let set = selection.parts_only()?;
-    let anchor = set.anchors.first()?;
+    let anchor = set.anchors().first()?;
     let source = dialogues.iter().find_map(|dialogue| {
         (dialogue.work_ref.as_ref()?.whole() == anchor.whole()).then(|| dialogue.source.clone())
     })?;
@@ -140,7 +140,7 @@ pub(super) fn workspace_picked_content_for_cursor_block(
         return Ok(None);
     };
     let cwd = std::env::current_dir().context("copy needs a current directory")?;
-    let mut set = WorkSet::with_anchors(cwd.display().to_string(), Vec::new(), Vec::new());
+    let mut set = WorkSet::from_parts(cwd.display().to_string(), Vec::new(), Vec::new());
     set.include_parts(record, parts);
     Ok(Some(PickedContent::WorkSet {
         source,

@@ -182,7 +182,7 @@ pub(crate) fn apply(
     let hits = searcher.search(&filter, &anchors, &cwd)?;
     let anchors: Vec<WorkRef> = hits.into_iter().map(|hit| hit.anchor).collect();
     let selected_records = workset::records_for_anchors(&records, &anchors);
-    Ok(WorkSet::with_anchors(
+    Ok(WorkSet::from_parts(
         cwd.display().to_string(),
         selected_records,
         anchors,

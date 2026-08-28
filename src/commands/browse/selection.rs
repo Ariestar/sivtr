@@ -34,9 +34,9 @@ pub(super) fn refresh_next_level(
 ) {
     let sources = sessions_pane.sources();
     let sources_to_reload = match focus {
-        WorkspaceFocus::Source => rows.source.active_mask(),
+        WorkspaceFocus::Source => rows.source.active_scope_mask(),
         WorkspaceFocus::Sessions | WorkspaceFocus::Dialogues => {
-            parent_source_mask(sources, sessions, &rows.sessions.active())
+            parent_source_mask(sources, sessions, &rows.sessions.active_scope_rows())
         }
         WorkspaceFocus::Content => return,
     };
@@ -47,7 +47,7 @@ pub(super) fn refresh_next_level(
 
     sessions_pane.refresh(&sources_to_reload, viewport);
     // Meta list only; search rebuild (with bodies) happens on search_dirty in picker.
-    *all_sessions = sessions_pane.collect(rows.source.mask());
+    *all_sessions = sessions_pane.collect(rows.source.scope_mask());
     *search_dirty = true;
 }
 
@@ -73,21 +73,15 @@ pub(super) enum WorkspaceSourceSelection {
 
 pub(super) fn select_sources(
     sources: &[WorkspaceSource],
-    selected_sources: &mut [bool],
+    source_scope: &mut [bool],
     selection: WorkspaceSourceSelection,
 ) {
-    // The mask is normally built from `sources`, but a length mismatch must
-    // not index out of bounds in release builds (debug_assert! is compiled
-    // out): apply over the overlap and clear any stale flags beyond it.
-    let overlap = sources.len().min(selected_sources.len());
-    for (idx, source) in sources.iter().take(overlap).enumerate() {
-        selected_sources[idx] = match selection {
+    assert_eq!(sources.len(), source_scope.len());
+    for (flag, source) in source_scope.iter_mut().zip(sources) {
+        *flag = match selection {
             WorkspaceSourceSelection::Agents => source.is_agent(),
             WorkspaceSourceSelection::Terminal => source.is_terminal(),
         };
-    }
-    for flag in &mut selected_sources[overlap..] {
-        *flag = false;
     }
 }
 
@@ -184,7 +178,13 @@ pub(super) fn apply_selection_action(
                 }
                 return false;
             }
-            let idx = rows.pane(focus).map_or(0, |pane| pane.cursor());
+            let idx = match focus {
+                WorkspaceFocus::Dialogues => rows.dialogues.cursor(),
+                WorkspaceFocus::Source | WorkspaceFocus::Sessions => {
+                    rows.scope_pane(focus).map_or(0, |pane| pane.cursor())
+                }
+                WorkspaceFocus::Content => 0,
+            };
             toggle_row_selection(
                 focus,
                 idx,
@@ -222,8 +222,8 @@ pub(super) fn apply_selection_action(
                 ),
             }
             if matches!(focus, WorkspaceFocus::Source | WorkspaceFocus::Sessions) {
-                if let Some(list) = rows.pane_mut(focus) {
-                    list.toggle_all();
+                if let Some(list) = rows.scope_pane_mut(focus) {
+                    list.toggle_scope_all();
                     rows.close_ranges();
                     return true;
                 }
@@ -314,17 +314,9 @@ pub(super) fn resolve_loaded_scopes(
     sessions_pane: &SessionColumn,
 ) {
     for (session_idx, session) in sessions.iter().enumerate() {
-        let source_idx = sources.iter().position(|source| source == &session.source);
-        let source_marked = source_idx
-            .and_then(|idx| rows.source.mask().get(idx))
-            .copied()
-            .unwrap_or(false);
-        let session_marked = rows
-            .sessions
-            .mask()
-            .get(session_idx)
-            .copied()
-            .unwrap_or(false);
+        let source_idx = super::load::source_index_for_session(sources, session);
+        let source_marked = source_idx.is_some_and(|idx| rows.source.scope_mask()[idx]);
+        let session_marked = rows.sessions.scope_mask()[session_idx];
         if source_marked || session_marked {
             if let Some(records) = sessions_pane.body_for(session) {
                 rows.selection.include_records(records.iter().cloned());

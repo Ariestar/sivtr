@@ -80,7 +80,7 @@ impl DialoguePane {
     }
 
     /// Rebuild `out` from the engine rows. Callers cache `out` between calls
-    /// and only invoke this when `generation()`, the selected mask, or the
+    /// and only invoke this when `generation()`, the dialogue selection, or the
     /// focused index changed, so scrolling content does not re-clone bodies.
     pub fn materialize_into(
         &self,

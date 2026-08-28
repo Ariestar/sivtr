@@ -21,11 +21,10 @@ fn apply_selection(mut set: WorkSet, selection: WorkSetSelection) -> WorkSet {
 
     let anchors = indices
         .into_iter()
-        .map(|index| set.anchors[index - 1].clone())
+        .map(|index| set.anchors()[index - 1].clone())
         .collect::<Vec<_>>();
-    let records = records_for_anchors(&set.records, &anchors);
-    set.records = records;
-    set.anchors = anchors;
+    let records = records_for_anchors(set.records(), &anchors);
+    set.replace_selection(records, anchors);
     set
 }
 
@@ -53,7 +52,7 @@ impl WorkSet {
         // Group light records by their session file path, then load each
         // session's full records once and patch matching parts back.
         let mut needed: HashMap<String, Vec<usize>> = HashMap::new();
-        for (index, record) in self.records.iter().enumerate() {
+        for (index, record) in self.records().iter().enumerate() {
             if !record.parts.is_empty() {
                 continue;
             }
@@ -65,14 +64,14 @@ impl WorkSet {
 
         for (path, indices) in &needed {
             // Any record in the group gives us the namespace; pick the first.
-            let namespace = session_namespace(&self.records[indices[0]].work_ref.path);
+            let namespace = session_namespace(&self.records()[indices[0]].work_ref.path);
             let Some(namespace) = namespace else {
                 continue;
             };
             let full = load_session_records(namespace, Path::new(path), LoadMode::Full)
                 .with_context(|| format!("Failed to load full session {path} for {namespace}"))?;
             for index in indices {
-                if let Some(record) = self.records.get_mut(*index) {
+                if let Some(record) = self.records_mut().get_mut(*index) {
                     if let Some(full_record) = full
                         .iter()
                         .find(|r| r.work_ref.path.index() == record.work_ref.path.index())
@@ -121,10 +120,26 @@ pub fn record_for_anchor<'a>(
     records: &'a [WorkRecord],
     anchor: &WorkRef,
 ) -> Option<&'a WorkRecord> {
+    find_record([records], anchor)
+}
+
+pub fn find_record<'a, I>(record_sets: I, anchor: &WorkRef) -> Option<&'a WorkRecord>
+where
+    I: IntoIterator<Item = &'a [WorkRecord]>,
+{
     let record_ref = anchor.whole();
-    records
-        .iter()
+    record_sets
+        .into_iter()
+        .flat_map(|records| records.iter())
         .find(|record| record.work_ref.whole() == record_ref)
+}
+
+pub fn require_record<'a, I>(record_sets: I, anchor: &WorkRef) -> Result<&'a WorkRecord>
+where
+    I: IntoIterator<Item = &'a [WorkRecord]>,
+{
+    find_record(record_sets, anchor)
+        .with_context(|| format!("No record found for ref `{}`", anchor.whole()))
 }
 
 pub fn load_reference(reference: &str) -> Result<WorkSet> {
@@ -199,10 +214,10 @@ fn validate_selection(reference: &str, set: &WorkSet, selection: &WorkSetSelecti
         WorkSetSelection::All => Ok(()),
         WorkSetSelection::Indices(indices) => {
             for index in indices {
-                if *index > set.anchors.len() {
+                if *index > set.anchors().len() {
                     bail!(
                         "Invalid WorkSet reference `{reference}`; index {index} exceeds WorkSet length {}",
-                        set.anchors.len()
+                        set.anchors().len()
                     );
                 }
             }
@@ -284,7 +299,7 @@ mod tests {
             records[1].work_ref.with_part(1),
             records[0].work_ref.with_part(1),
         ];
-        let set = WorkSet::with_anchors(".", records, anchors);
+        let set = WorkSet::from_parts(".", records, anchors);
         let selected = apply_selection(set, WorkSetSelection::Indices(vec![2, 1]));
 
         let refs = selected
@@ -301,7 +316,7 @@ mod tests {
     #[test]
     fn whole_anchor_covers_and_replaces_parts() {
         let first = record(1);
-        let mut set = WorkSet::with_anchors(".", vec![first.clone()], vec![]);
+        let mut set = WorkSet::from_parts(".", vec![first.clone()], vec![]);
         set.include_parts(first.clone(), [1]);
         assert!(set.contains(&first.work_ref.with_part(1)));
         set.include_whole(first.clone());

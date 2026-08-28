@@ -28,7 +28,7 @@ use crate::tui::workspace::model::{
     selected_indices, SourceLoadMarker, WorkspaceDialogue, WorkspaceFocus, WorkspaceFooterView,
     WorkspaceSearchView, WorkspaceSession, WorkspaceSource, WorkspaceView,
 };
-use crate::tui::workspace::rows::ListPane;
+use crate::tui::workspace::rows::{ListPane, RowCursor};
 use sivtr_core::record::{WorkAt, WorkRef};
 
 pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
@@ -45,7 +45,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
     let dialogue_idx = dialogues_pane.cursor();
     let current_ref = current_content_ref(
         view.dialogues,
-        view.dialogue_selected,
+        view.dialogue_selection,
         dialogue_idx,
         view.content_at,
     );
@@ -68,7 +68,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         frame,
         layout.sessions,
         view.sessions,
-        view.rows.source.marked(),
+        view.rows.source.scope_count(),
         &view.rows.sessions,
         &view.body_failures,
         view.search.as_ref(),
@@ -80,9 +80,9 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         frame,
         layout.dialogues,
         view.dialogue_titles,
-        view.dialogue_selected,
+        view.dialogue_selection,
         dialogues_pane,
-        view.rows.sessions.marked(),
+        view.rows.sessions.scope_count(),
         view.rows.range_start(WorkspaceFocus::Dialogues),
         view.search.as_ref(),
         search_regex.as_ref(),
@@ -99,7 +99,7 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         .filter(|search| search.scope == WorkspaceSearchScope::Content)
         .and(search_regex.as_ref());
     let title_suffix = content_title_suffix(
-        view.dialogue_selected
+        view.dialogue_selection
             .iter()
             .filter(|selected| **selected)
             .count(),
@@ -559,7 +559,7 @@ fn render_source_list(
         .iter()
         .enumerate()
         .map(|(idx, source)| {
-            let selected = pane.mask().get(idx).copied().unwrap_or(false);
+            let selected = pane.scope_mask().get(idx).copied().unwrap_or(false);
             let load = source_markers
                 .get(idx)
                 .copied()
@@ -603,7 +603,7 @@ fn render_source_strip(
         if idx > 0 {
             spans.push(Span::styled("  ", Style::default().fg(theme::dim())));
         }
-        let selected = pane.mask().get(idx).copied().unwrap_or(false);
+        let selected = pane.scope_mask().get(idx).copied().unwrap_or(false);
         let focused = idx == current && active;
         let load = source_markers
             .get(idx)
@@ -660,7 +660,7 @@ fn render_session_list(
         .iter()
         .enumerate()
         .map(|(idx, choice)| {
-            let selected = pane.mask().get(idx).copied().unwrap_or(false);
+            let selected = pane.scope_mask().get(idx).copied().unwrap_or(false);
             let base_style = row_highlight(idx, cursor_idx, range_anchor).unwrap_or_default();
             let highlight = search
                 .filter(|search| search.scope == WorkspaceSearchScope::Session)
@@ -700,7 +700,7 @@ fn render_dialogue_list(
     area: Rect,
     titles: &[&str],
     selected_dialogues: &[bool],
-    pane: &ListPane,
+    pane: &RowCursor,
     marked_sessions: usize,
     range_anchor: Option<usize>,
     search: Option<&WorkspaceSearchView<'_>>,
