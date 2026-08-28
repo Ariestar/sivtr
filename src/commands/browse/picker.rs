@@ -2220,7 +2220,7 @@ mod tests {
         ];
 
         // Which rows those are is [`ListPane::active`]'s answer, tested there.
-        let picked = workspace_picked_content(&dialogues, &[1, 2], None);
+        let picked = workspace_picked_content(&dialogues, &[1, 2], None).expect("pick succeeds");
 
         assert_eq!(picked.units.len(), 2);
         assert!(picked.units[0].plain.contains("text 2"));
@@ -2445,7 +2445,8 @@ mod tests {
             }),
         }];
 
-        let picked = workspace_picked_content(&dialogues, &[0], Some(WorkAt::Part(1)));
+        let picked = workspace_picked_content(&dialogues, &[0], Some(WorkAt::Part(1)))
+            .expect("pick succeeds");
 
         assert_eq!(picked.units[0].plain.trim(), "<:tool:tool call:>");
         // Displayed copy uses Reading mode: fold marker only, no payload.
