@@ -142,7 +142,7 @@ Core model landed: **Device Daemon + Identity + Share + Grant + Mount** over enc
 - [ ] Peer rename / verify / disconnect helpers.
 - [ ] UDS or named-pipe control plane instead of localhost TCP.
 - [ ] Protocol version negotiation for older servers.
-- [ ] Richer selective disclosure (share specific sessions, not whole workspaces).
+- [x] Richer selective disclosure (`publish` supports consecutive whole turns in v1 and arbitrary atoms/non-contiguous parts from one local agent session in v2).
 
 ## Privacy and lifecycle
 

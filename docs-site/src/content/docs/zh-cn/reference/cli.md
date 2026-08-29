@@ -432,26 +432,36 @@ sivtr show @ctx -f timeline
 `publish` 把本地 WorkSet 投影成不可变、端侧加密的浏览器只读快照。它与 `share` 不同：`share` 是需要 Sivtr/daemon 的实时 workspace mount；`publish` 上传的只有密文，查看者无需登录或安装 Sivtr，分享者设备离线也能查看。
 
 ```bash
-sivtr publish preview <SOURCE> [--title <TITLE>] [--expires 7d] [--format human|json]
-sivtr publish create <SOURCE> [--title <TITLE>] [--expires 7d] [--yes] [--allow-warnings]
+sivtr publish <SOURCE> [--title <TITLE>] [--expires 7d] [--yes] [--allow-warnings]
+sivtr publish preview [<SOURCE>] [--title <TITLE>] [--expires 7d] [--format human|json]
 sivtr publish list [--json]
-sivtr publish link <PUBLICATION_ID>
-sivtr publish revoke <PUBLICATION_ID> [--yes]
+sivtr publish link [<PUBLICATION_ID>]
+sivtr publish revoke [<PUBLICATION_ID>] [--yes]
 ```
 
-v1 只接受同一 provider、同一 session 中连续的本地 Agent record，并只发布 User/Assistant 文本。Terminal、remote/group、part anchor、ToolCall/ToolResult/Thinking/Skill、附件和跨 session 证据包都会被排除或拒绝。公开快照不包含 WorkSet、WorkRef、`cwd`、session path 或本地 provider 原始事件。
+v1 只接受同一 provider、同一 session 中连续的本地 Agent record，并只发布 User/Assistant 文本。`publish preview` 不带 source 时会打开现有 workspace picker，返回 WorkSet 后在本地打印最终快照。v2 支持 User、Assistant、Tool、Skill、Thinking 原子以及不连续片段；ToolCall 与 ToolResult 不可拆开。Terminal、remote/group、附件和跨 session 证据包仍会被拒绝。公开快照不包含 WorkSet、WorkRef、`cwd`、session path 或本地 provider 原始事件。
 
-`preview` 完全离线生成最终快照和风险报告；已识别的 token、私钥、Bearer 和 secret assignment 自动替换为 `[REDACTED]`，绝对路径、邮箱和内网地址只警告。创建前会显示轮次数、大小、脱敏项和期限；非交互环境必须使用 `--yes`，存在未自动处理的风险时还必须使用 `--allow-warnings`。`[publish].endpoint` 默认是 `https://share.hnnulwh.cn`，可在 `config.toml` 里改成自建或其他兼容服务。成功创建时 stdout 只输出完整链接，说明和警告写 stderr，方便复制。
+`preview` 完全离线生成最终快照和风险报告；已识别的 token、私钥、Bearer 和 secret assignment 自动替换为 `[REDACTED]`，绝对路径、邮箱和内网地址只警告。发布前会显示轮次数、大小、脱敏项和期限；非交互环境发布必须使用 `--yes`，存在未自动处理的风险时还必须使用 `--allow-warnings`。`[publish].endpoint` 默认是 `https://share.hnnulwh.cn`，可在 `config.toml` 里改成自建或其他兼容服务。成功创建时 stdout 只输出完整链接，说明和警告写 stderr，方便复制。
 
-密钥只放在 URL fragment（`#k=...`），托管服务只保存 AES-256-GCM 密文、管理 token 哈希、期限和 envelope 版本。链接默认 7 天，可选 `1d/7d/30d/90d`，不提供永久链接；修改内容必须创建新链接。链接持有者均可查看，管理 token 只保存在本机的独立 `publication-state.db` 中。
+密钥只放在 URL fragment（`#k=...`），托管服务只保存 AES-256-GCM 密文、管理 token 哈希、期限和 envelope 版本。链接默认 7 天，可选 `2h/1d/3d/7d/30d`，不提供永久链接；修改内容必须创建新链接。链接持有者均可查看，管理 token 只保存在本机的独立 `publication-state.db` 中。
 
 典型流程：
 
 ```bash
 sivtr search codex/<session-id> --save share_ready --refs
-sivtr publish preview @share_ready
-sivtr publish create @share_ready --expires 7d
+sivtr publish preview share_ready
+sivtr publish share_ready --expires 7d
 ```
+
+交互式预览流程：
+
+```powershell
+sivtr publish preview
+sivtr publish preview share_ready --format human
+sivtr publish share_ready --expires 7d --yes
+```
+
+`publish <SOURCE>` 也接受不带 `@` 的已保存 WorkSet 名称，因此 PowerShell 中不需要为这个发布流程写引号。裸 `terminal`、`agent`、provider 名称以及包含 `/`、`:` 或 `*` 的 source 会按 selector 解析；其他裸标识符只按已保存 WorkSet 名称解析，缺失时直接报错，不会 fallback 到另一种 source。workspace picker 中按 `p` 打开有效期浮板，`Tab` 跳到可选的 WorkSet 名称输入；输入非空名称后会先保存一次，再继续发布或预览。交互式终端中的 `list` 会显示可点击的 active 链接；`link` 和 `revoke` 省略 ID 时会打开选择器。
 
 ## zoom
 

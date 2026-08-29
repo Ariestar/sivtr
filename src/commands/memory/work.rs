@@ -88,10 +88,7 @@ fn execute_sessions(args: &WorkSessionsArgs) -> Result<()> {
 fn execute_records(args: &WorkRecordsArgs) -> Result<()> {
     let cwd = resolve_cwd(args.cwd.as_deref())?;
     let mut set = workset::query(&args.source, filter::Filter::none(), Some(&cwd))?;
-    workset::save_last(&set)?;
-    if let Some(name) = args.save.as_deref() {
-        workset::save_as(&mut set, name)?;
-    }
+    workset::persist(&mut set, args.save.as_deref())?;
     show::print_workset(
         &mut set,
         show::resolve_output_format(args.format, false, args.refs, args.json),
@@ -105,10 +102,7 @@ fn execute_parts(args: &WorkPartsArgs) -> Result<()> {
         filter::from_work_parts_args(args)?,
         Some(&cwd),
     )?;
-    workset::save_last(&set)?;
-    if let Some(name) = args.save.as_deref() {
-        workset::save_as(&mut set, name)?;
-    }
+    workset::persist(&mut set, args.save.as_deref())?;
     show::print_workset(
         &mut set,
         show::resolve_output_format(args.format, false, args.refs, args.json),
