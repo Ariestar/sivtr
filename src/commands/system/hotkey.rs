@@ -65,7 +65,7 @@ pub fn pick_agent(args: &HotkeyPickAgentArgs) -> Result<()> {
         // before show_pick_error_and_wait prompts.
         crate::commands::finish_picker(
             browse::run_without_panic_wait(&providers, args.all, WorkspaceFocus::Sessions)
-                .context("hotkey picker failed")?,
+                .context("热键选择器失败")?,
             false,
             None,
             None,

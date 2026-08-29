@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossterm::event::{
     self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
@@ -623,7 +623,8 @@ pub(crate) fn run(
                                 &mut set,
                                 Some(title),
                                 expires,
-                            )?;
+                            )
+                            .context("rebuild publish draft from selected WorkSet")?;
                             let save_name = (!name.is_empty()).then_some(name);
                             return Ok(PickerResult::Publish {
                                 set,

@@ -90,7 +90,7 @@ sivtr publish preview
 | Dialogues | `Enter` 提交整轮选择；Content 用 `y` 提交当前或已标记块 | 返回预览并生成选择结果 |
 | 任意视图 | `q` / `Esc` 退出选择器 | 取消本次预览，不保存选择 |
 
-不要拖拽只覆盖半个原子的字符范围来“凑”选择。发布选择需要完整 block；只产生文本范围而没有完整 block anchor 时，会明确报 `publication selection is empty`，不会擅自扩大成整轮。
+不要拖拽只覆盖半个原子的字符范围来“凑”选择。发布选择需要完整 block；只产生文本范围而没有完整 block anchor 时，会明确报 `发布选择为空`，不会擅自扩大成整轮。
 
 ### 原子边界和排序
 
@@ -335,7 +335,7 @@ sivtr search codex/<session-id> --sort oldest --latest 50 --save share_ready --r
 
 WorkSet 里的轮次排序后仍有缺口（例如关键词搜索跳过了中间几轮）。改成按 session 取一段连续窗口：`--sort oldest --latest N`，不要混入不相关命中。
 
-### `publication selection is empty`
+### `发布选择为空`
 
 选择器没有收到完整 dialogue 或 block anchor。回到 Dialogues 用 `Space` 选择整轮，或在 Content 用 `Space` / `v` 标记完整块；不要只拖选半个原子的字符。
 

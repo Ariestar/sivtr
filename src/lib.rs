@@ -171,7 +171,7 @@ fn run_workspace(select_remotes: bool) -> Result<()> {
         .collect::<Vec<_>>();
     commands::finish_picker(
         commands::browse::run(&providers, select_remotes, WorkspaceFocus::Sessions)
-            .context("workspace picker failed")?,
+            .context("工作区选择器失败")?,
         false,
         None,
         None,

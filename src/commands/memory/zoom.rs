@@ -38,7 +38,7 @@ pub fn run(args: &ZoomArgs) -> Result<WorkSet> {
     };
 
     let mut set = WorkSet::new(source.cwd, expanded);
-    workset::persist(&mut set, args.save.as_deref()).context("persist zoom WorkSet")?;
+    workset::persist(&mut set, args.save.as_deref()).context("保存 zoom WorkSet")?;
     Ok(set)
 }
 
