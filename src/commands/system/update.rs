@@ -15,6 +15,8 @@ use crate::output;
 const REPO: &str = "Ariestar/sivtr";
 const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_CHECKSUM_BYTES: u64 = 64 * 1024;
+const MAX_RELEASE_ARCHIVE_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Latest published release tag, e.g. `v0.6.0`.
 ///
@@ -63,12 +65,13 @@ pub fn execute() -> Result<()> {
     let checksums = download(
         &agent,
         &format!("https://github.com/{REPO}/releases/download/v{latest}/SHA256SUMS"),
+        MAX_CHECKSUM_BYTES,
     )?;
     let expected = checksum_for(&checksums, &archive_name)
         .with_context(|| format!("no SHA256 entry for {archive_name}"))?;
 
     let url = format!("https://github.com/{REPO}/releases/download/v{latest}/{archive_name}");
-    let archive = download(&agent, &url)?;
+    let archive = download(&agent, &url, MAX_RELEASE_ARCHIVE_BYTES)?;
     verify_sha256(&archive, &expected)?;
 
     let current_bin = std::env::current_exe().context("cannot locate current binary")?;
@@ -92,7 +95,7 @@ fn agent(timeout: Duration) -> ureq::Agent {
         .new_agent()
 }
 
-fn download(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>> {
+fn download(agent: &ureq::Agent, url: &str, limit: u64) -> Result<Vec<u8>> {
     let mut response = agent
         .get(url)
         .header("User-Agent", "sivtr-update")
@@ -100,6 +103,8 @@ fn download(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>> {
         .with_context(|| format!("download failed: {url}"))?;
     let buf = response
         .body_mut()
+        .with_config()
+        .limit(limit)
         .read_to_vec()
         .with_context(|| format!("failed to read {url}"))?;
     Ok(buf)
