@@ -19,7 +19,7 @@
     "@cloudflare/workers-types": "^5.20260825.1",
     "dompurify": "^3.2.6",
     "fflate": "^0.8.2",
-    "marked": "^16.0.0"
+    "marked": "^18.0.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.55.0",
