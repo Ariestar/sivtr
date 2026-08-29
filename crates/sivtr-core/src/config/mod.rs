@@ -18,6 +18,8 @@ pub struct SivtrConfig {
     pub theme: ThemeConfig,
     /// MCP stdio server settings.
     pub mcp: McpConfig,
+    /// Browser publication service settings.
+    pub publish: PublishConfig,
 }
 
 /// Editor configuration.
@@ -88,6 +90,15 @@ pub struct McpConfig {
     pub idle_exit_secs: u64,
 }
 
+/// Endpoint for encrypted browser publications.  The endpoint is deliberately
+/// the only configurable publication integration point in v1; override
+/// `endpoint` in `config.toml` to use a self-hosted or staging service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PublishConfig {
+    pub endpoint: String,
+}
+
 // --- Defaults ---
 
 impl Default for HistoryConfig {
@@ -110,6 +121,14 @@ impl Default for HotkeyConfig {
 impl Default for McpConfig {
     fn default() -> Self {
         Self { idle_exit_secs: 60 }
+    }
+}
+
+impl Default for PublishConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: "https://share.hnnulwh.cn".to_string(),
+        }
     }
 }
 
@@ -182,7 +201,7 @@ mod tests {
             ..SivtrConfig::default()
         };
 
-        let toml = to_toml_string(&config).unwrap();
+        let toml = to_toml_string(&config).expect("serialize hotkey config");
 
         assert!(toml.contains("[hotkey]"));
         assert!(toml.contains("chord = \"alt+y\""));
@@ -197,7 +216,7 @@ mod tests {
             ..SivtrConfig::default()
         };
 
-        let toml = to_toml_string(&config).unwrap();
+        let toml = to_toml_string(&config).expect("serialize Codex config");
 
         assert!(toml.contains("[codex]"));
         assert!(toml.contains("session_dirs = ["));
@@ -211,11 +230,23 @@ mod tests {
             ..SivtrConfig::default()
         };
 
-        let toml = to_toml_string(&config).unwrap();
+        let toml = to_toml_string(&config).expect("serialize MCP config");
 
         assert!(toml.contains("[mcp]"));
         assert!(toml.contains("idle_exit_secs = 60"));
         assert_eq!(SivtrConfig::default().mcp.idle_exit_secs, 60);
+    }
+
+    #[test]
+    fn serializes_publish_endpoint() {
+        let toml = to_toml_string(&SivtrConfig::default()).expect("serialize publish config");
+        assert!(toml.contains("[publish]"));
+        assert!(toml.contains("endpoint = \"https://share.hnnulwh.cn\""));
+
+        assert!(
+            toml::from_str::<SivtrConfig>("[publish]\nendpont = \"https://example.com\"\n")
+                .is_err()
+        );
     }
 
     #[test]
@@ -227,7 +258,7 @@ mod tests {
             ..SivtrConfig::default()
         };
 
-        let toml = to_toml_string(&config).unwrap();
+        let toml = to_toml_string(&config).expect("serialize theme config");
         assert!(toml.contains("[theme]"));
         assert!(toml.contains("mode = \"light\""));
 

@@ -54,6 +54,7 @@ sivtr/
 | `commands/capture/` | run、pipe、copy、init、flush、import、diff、clear、browse |
 | `commands/memory/` | search、filter、var、nav、zoom、show、work、WorkSet store |
 | `commands/remote/` | serve、share、remote（git-remote 风格命名）、peer、workspace list |
+| `commands/publish.rs` | 本地 WorkSet 的隐私投影、AES-GCM envelope、公开链接状态与撤销 |
 | `commands/system/` | config、doctor、history、hotkey、codex export、migrate、version |
 | `remote/` | 设备 daemon、identity、SQLite state、protocol、本地 IPC |
 | `app.rs` | 捕获输出 browser 状态机 |
