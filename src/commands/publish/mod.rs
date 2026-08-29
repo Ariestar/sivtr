@@ -193,7 +193,7 @@ fn preview(args: PublishPreviewArgs) -> Result<()> {
                 save_name,
             } => {
                 save_picker_set(&mut set, save_name.as_deref())?;
-                draft
+                *draft
             }
         }
     };

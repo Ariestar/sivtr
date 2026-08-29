@@ -41,7 +41,7 @@ pub(crate) enum PickerResult {
     Picked(PickedContent),
     Publish {
         set: WorkSet,
-        draft: PublicationDraft,
+        draft: Box<PublicationDraft>,
         expires: PublicationExpiry,
         save_name: Option<String>,
     },
