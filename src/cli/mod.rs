@@ -10,8 +10,10 @@ use std::sync::LazyLock;
 use crate::commands::memory::show::WorkSetOutputFormat;
 
 mod mcp;
+mod publish;
 mod remote;
 pub use mcp::*;
+pub use publish::*;
 pub use remote::*;
 
 pub(crate) const TIME_FILTER_HELP: &str = "Accepts RFC3339 timestamps, Unix seconds/milliseconds, relative durations like 30m, 2h, 7d, or aliases like today, yesterday, tomorrow, this morning, this afternoon, this evening, tonight, and now.";
@@ -920,87 +922,6 @@ pub struct ShowArgs {
 }
 
 #[derive(Parser, Debug)]
-pub struct PublishCommand {
-    #[command(subcommand)]
-    pub action: PublishAction,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum PublishAction {
-    /// Build the final public snapshot locally without contacting the service
-    Preview(PublishPreviewArgs),
-    /// Create an immutable encrypted public snapshot
-    Create(PublishCreateArgs),
-    /// List local publication metadata (never prints full links)
-    List(PublishListArgs),
-    /// Print one complete browser link
-    Link(PublishIdArgs),
-    /// Revoke one publication
-    Revoke(PublishRevokeArgs),
-}
-
-#[derive(Args, Debug, Clone)]
-pub struct PublishPreviewArgs {
-    /// Source ref or WorkSet reference (for example @share_ready or @)
-    pub source: String,
-    /// Optional public title
-    #[arg(long)]
-    pub title: Option<String>,
-    /// Link lifetime: 2h, 1d, 3d, 7d, or 30d
-    #[arg(long, default_value = "7d")]
-    pub expires: String,
-    /// Output format
-    #[arg(long, value_enum, default_value_t = PublishFormat::Human)]
-    pub format: PublishFormat,
-}
-
-#[derive(Args, Debug, Clone)]
-pub struct PublishCreateArgs {
-    /// Source ref or WorkSet reference (for example @share_ready or @)
-    pub source: String,
-    /// Optional public title
-    #[arg(long)]
-    pub title: Option<String>,
-    /// Link lifetime: 2h, 1d, 3d, 7d, or 30d
-    #[arg(long, default_value = "7d")]
-    pub expires: String,
-    /// Confirm without an interactive prompt
-    #[arg(long)]
-    pub yes: bool,
-    /// Allow non-automatic privacy warnings in non-interactive mode
-    #[arg(long)]
-    pub allow_warnings: bool,
-}
-
-#[derive(Args, Debug, Clone)]
-pub struct PublishListArgs {
-    /// Print machine-readable metadata
-    #[arg(long)]
-    pub json: bool,
-}
-
-#[derive(Args, Debug, Clone)]
-pub struct PublishIdArgs {
-    /// Publication id returned by `publish create`
-    pub publication_id: String,
-}
-
-#[derive(Args, Debug, Clone)]
-pub struct PublishRevokeArgs {
-    /// Publication id returned by `publish create`
-    pub publication_id: String,
-    /// Confirm without an interactive prompt
-    #[arg(long)]
-    pub yes: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub enum PublishFormat {
-    Human,
-    Json,
-}
-
-#[derive(Parser, Debug)]
 pub struct WorkCommand {
     #[command(subcommand)]
     pub action: WorkSubcommand,
@@ -1718,7 +1639,7 @@ mod tests {
     }
 
     #[test]
-    fn publish_parses_preview_and_create_flags() {
+    fn publish_parses_preview_and_default_publish_flags() {
         let cli = Cli::try_parse_from([
             "sivtr",
             "publish",
@@ -1732,8 +1653,8 @@ mod tests {
         .unwrap();
         match cli.command {
             Some(Commands::Publish(command)) => match command.action {
-                PublishAction::Preview(args) => {
-                    assert_eq!(args.source, "@share_ready");
+                Some(PublishAction::Preview(args)) => {
+                    assert_eq!(args.source.as_deref(), Some("@share_ready"));
                     assert_eq!(args.expires, "30d");
                     assert_eq!(args.format, PublishFormat::Json);
                 }
@@ -1742,22 +1663,44 @@ mod tests {
             _ => panic!("expected publish command"),
         }
 
-        let cli = Cli::try_parse_from([
-            "sivtr",
-            "publish",
-            "create",
-            "@",
-            "--yes",
-            "--allow-warnings",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["sivtr", "publish", "preview"]).unwrap();
         match cli.command {
             Some(Commands::Publish(command)) => match command.action {
-                PublishAction::Create(args) => {
-                    assert!(args.yes);
-                    assert!(args.allow_warnings);
+                Some(PublishAction::Preview(args)) => {
+                    assert!(args.source.is_none());
+                    assert_eq!(args.expires, "7d");
                 }
-                _ => panic!("expected publish create"),
+                _ => panic!("expected publish preview"),
+            },
+            _ => panic!("expected publish command"),
+        }
+
+        let cli =
+            Cli::try_parse_from(["sivtr", "publish", "@", "--yes", "--allow-warnings"]).unwrap();
+        match cli.command {
+            Some(Commands::Publish(command)) => {
+                assert!(command.action.is_none());
+                assert_eq!(command.source.as_deref(), Some("@"));
+                assert!(command.yes);
+                assert!(command.allow_warnings);
+            }
+            _ => panic!("expected publish command"),
+        }
+
+        let cli = Cli::try_parse_from(["sivtr", "publish", "review"]).unwrap();
+        match cli.command {
+            Some(Commands::Publish(command)) => {
+                assert!(command.action.is_none());
+                assert_eq!(command.source.as_deref(), Some("review"));
+            }
+            _ => panic!("expected publish command"),
+        }
+
+        let cli = Cli::try_parse_from(["sivtr", "publish", "link"]).unwrap();
+        match cli.command {
+            Some(Commands::Publish(command)) => match command.action {
+                Some(PublishAction::Link(args)) => assert!(args.publication_id.is_none()),
+                _ => panic!("expected publish link"),
             },
             _ => panic!("expected publish command"),
         }

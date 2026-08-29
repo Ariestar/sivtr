@@ -357,6 +357,8 @@ pub(crate) struct WorkspaceView<'a> {
     pub(crate) line_filter_error: Option<&'a str>,
     pub(crate) fullscreen: Option<WorkspaceFocus>,
     pub(crate) content_selection: Option<ContentSelection>,
+    pub(crate) publish: Option<WorkspacePublishView<'a>>,
+    pub(crate) publish_error: Option<&'a str>,
     /// Block under the keyboard/mouse cursor plus its half (derived from
     /// the dialogue-global id); highlighted like a list row in that half.
     pub(crate) content_block_cursor: Option<(ContentIoFocus, usize)>,
@@ -379,6 +381,17 @@ pub(crate) struct WorkspaceSearchView<'a> {
     pub(crate) match_count: usize,
     pub(crate) current_target: Option<String>,
     pub(crate) input_open: bool,
+}
+
+pub(crate) struct WorkspacePublishView<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) name_input: bool,
+    pub(crate) preview: bool,
+    pub(crate) selected: usize,
+    pub(crate) redaction_count: usize,
+    pub(crate) warning_count: usize,
+    pub(crate) item_count: usize,
+    pub(crate) schema_version: u32,
 }
 
 pub(crate) struct WorkspaceFooterView<'a> {
