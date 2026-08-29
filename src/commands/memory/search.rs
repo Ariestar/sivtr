@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::cli::SearchArgs;
 use crate::commands::memory::workset::WorkSet;
@@ -19,6 +19,6 @@ pub fn run(args: &SearchArgs) -> Result<WorkSet> {
         filter::from_search_args(args)?,
         args.cwd.as_deref(),
     )?;
-    workset::persist(&mut set, args.save.as_deref())?;
+    workset::persist(&mut set, args.save.as_deref()).context("persist search WorkSet")?;
     Ok(set)
 }

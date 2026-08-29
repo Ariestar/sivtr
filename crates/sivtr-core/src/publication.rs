@@ -228,12 +228,7 @@ impl PublicationDraft {
     pub fn warning_count(&self) -> usize {
         self.risks
             .iter()
-            .filter(|risk| {
-                matches!(
-                    risk.kind.as_str(),
-                    "absolute_path" | "email" | "internal_url"
-                )
-            })
+            .filter(|risk| privacy::is_manual_warning(&risk.kind))
             .map(|risk| risk.count)
             .sum()
     }
@@ -576,12 +571,9 @@ fn create_granular_publication_draft(
             let first_seq = *atom.part_seqs.first().expect("atom has a part");
             let last_seq = *atom.part_seqs.last().expect("atom has a part");
             let gap_before = match previous.as_ref() {
-                Some((
-                    previous_work_index,
-                    previous_position,
-                    previous_last,
-                    previous_selected,
-                )) if *previous_work_index == record.work_ref.index() => {
+                Some((previous_work_index, _, previous_last, _))
+                    if *previous_work_index == record.work_ref.index() =>
+                {
                     record.parts.iter().any(|part| {
                         part.seq > *previous_last
                             && part.seq < first_seq
@@ -614,6 +606,7 @@ fn create_granular_publication_draft(
 
             let mut public_parts = Vec::new();
             let mut atom_warnings = Vec::new();
+            let mut atom_refs = Vec::with_capacity(atom.part_seqs.len());
             let mut previous_seq = None;
             for seq in &atom.part_seqs {
                 let part = record
@@ -635,13 +628,14 @@ fn create_granular_publication_draft(
                         gap_before: part_gap_before,
                     });
                 }
-                source_refs.push(record.work_ref.with_part(*seq).to_string());
+                atom_refs.push(record.work_ref.with_part(*seq).to_string());
                 previous_seq = Some(*seq);
             }
             if public_parts.is_empty() {
                 add_risks(&mut risk_map, atom_warnings, None);
                 continue;
             }
+            source_refs.extend(atom_refs);
             let atom_index = items.len() + 1;
             let first_part = record
                 .part_for_at(crate::record::WorkAt::Part(first_seq))

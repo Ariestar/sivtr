@@ -182,18 +182,19 @@ fn block_id_for_part(block: &Block, part: usize) -> Option<usize> {
 fn build_half_units(record: &WorkRecord, input: bool) -> Vec<Block> {
     // Core owns semantic atoms; the TUI only groups adjacent structure atoms
     // into a presentation run.
+    let index_by_seq = record
+        .parts
+        .iter()
+        .enumerate()
+        .filter(|(_, part)| part.kind().is_input() == input)
+        .map(|(index, part)| (part.seq, index))
+        .collect::<std::collections::HashMap<_, _>>();
     let mut blocks: Vec<Block> = Vec::new();
     for atom in work_atoms(record, input) {
         let parts = atom
             .part_seqs
             .into_iter()
-            .map(|seq| {
-                record
-                    .parts
-                    .iter()
-                    .position(|part| part.kind().is_input() == input && part.seq == seq)
-                    .expect("atom part must exist")
-            })
+            .map(|seq| *index_by_seq.get(&seq).expect("atom part must exist"))
             .collect();
         let unit = Block::leaf(parts, atom.kind);
         let merges =

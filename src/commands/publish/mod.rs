@@ -124,7 +124,7 @@ fn is_windows_drive_path(source: &str) -> bool {
         && matches!(source.as_bytes()[2], b'/' | b'\\')
 }
 
-fn load_draft_from_set(
+pub(crate) fn load_draft_from_set(
     set: &mut workset::WorkSet,
     title: Option<String>,
     expires: PublicationExpiry,
@@ -146,12 +146,9 @@ pub(crate) fn prepare_picker(
     title: Option<&str>,
     expires: PublicationExpiry,
 ) -> Result<(workset::WorkSet, PublicationDraft)> {
-    ensure!(
-        !selection.anchors().is_empty(),
-        "publication selection is empty"
-    );
+    ensure!(!selection.anchors().is_empty(), "发布选择为空");
     let anchors = expand_publication_anchors(selection.records(), selection.anchors())?;
-    ensure!(!anchors.is_empty(), "publication selection is empty");
+    ensure!(!anchors.is_empty(), "发布选择为空");
 
     let mut set = selection.clone();
     set.select_anchors(anchors);
@@ -222,8 +219,8 @@ fn print_snapshot_items(snapshot: &PublicConversationSnapshot) {
                 println!(
                     "[{}]",
                     match item.role {
-                        sivtr_core::publication::PublicRole::User => "User",
-                        sivtr_core::publication::PublicRole::Assistant => "Assistant",
+                        sivtr_core::publication::PublicRole::User => "用户",
+                        sivtr_core::publication::PublicRole::Assistant => "助手",
                     }
                 );
                 println!("{}", item.text);
@@ -241,7 +238,14 @@ fn print_snapshot_items(snapshot: &PublicConversationSnapshot) {
                     .as_deref()
                     .map(|label| format!(" ({label})"))
                     .unwrap_or_default();
-                println!("[{:?}{}]", item.kind, label);
+                let kind = match item.kind {
+                    sivtr_core::publication::PublicAtomKind::User => "用户",
+                    sivtr_core::publication::PublicAtomKind::Assistant => "助手",
+                    sivtr_core::publication::PublicAtomKind::Tool => "工具",
+                    sivtr_core::publication::PublicAtomKind::Skill => "技能",
+                    sivtr_core::publication::PublicAtomKind::Thinking => "思考",
+                };
+                println!("[{kind}{label}]");
                 for part in &item.parts {
                     if part.gap_before {
                         println!("[部分内容未分享]");
@@ -267,6 +271,7 @@ pub(crate) fn create_from_picker(
     save_name: Option<String>,
 ) -> Result<()> {
     save_picker_set(&mut set, save_name.as_deref())?;
+    let title = preview_draft.snapshot.title().to_string();
     let allow_warnings = preview_draft.warning_count() > 0;
     if allow_warnings {
         interactive::require_interactive("publish with privacy warnings")?;
@@ -278,7 +283,7 @@ pub(crate) fn create_from_picker(
             bail!("publication cancelled");
         }
     }
-    let url = mint_publication(&mut set, None, expires, allow_warnings)?;
+    let url = mint_publication(&mut set, Some(title), expires, allow_warnings)?;
     if let Err(error) = sivtr_core::export::clipboard::copy_to_clipboard(&url) {
         println!("{url}");
         bail!("publication created, but clipboard copy failed: {error:#}");
@@ -530,7 +535,7 @@ fn resolve_publication(
 
 fn format_human_preview_meta(draft: &PublicationDraft) -> String {
     let mut out = format!(
-        "标题: {}\nProvider: {}\nSchema: v{}\n轮次数: {}\n消息数: {}\n预计过期: {}\n内容 SHA-256: {}\n自动脱敏: {} 项\n",
+        "标题: {}\n提供方: {}\n快照版本: v{}\n轮次数: {}\n消息数: {}\n预计过期: {}\n内容 SHA-256: {}\n自动脱敏: {} 项\n",
         draft.snapshot.title(),
         draft.snapshot.provider(),
         draft.snapshot.schema_version(),
@@ -647,7 +652,8 @@ mod tests {
             items: vec![],
         };
         let draft = PublicationDraft {
-            canonical_json: serde_json::to_string(&snapshot).unwrap(),
+            canonical_json: serde_json::to_string(&snapshot)
+                .expect("publication snapshot should serialize"),
             snapshot: PublicConversationSnapshot::V1(snapshot),
             content_sha256: "x".into(),
             redaction_count: 0,
@@ -655,13 +661,19 @@ mod tests {
             source_refs: vec![],
         };
         let key = URL_SAFE_NO_PAD.encode([7_u8; 32]);
-        let compressed = compress_snapshot(&draft).unwrap();
-        let envelope = encrypt_snapshot(compressed.clone(), "7d_abc", &key).unwrap();
+        let compressed = compress_snapshot(&draft).expect("publication snapshot should compress");
+        let envelope = encrypt_snapshot(compressed.clone(), "7d_abc", &key)
+            .expect("publication snapshot should encrypt");
         assert_eq!(&envelope[..8], ENVELOPE_MAGIC);
         assert_eq!(envelope[8], 1);
         assert_eq!(envelope[9], 1);
         assert_ne!(
-            encrypt_snapshot(compress_snapshot(&draft).unwrap(), "7d_abc", &key).unwrap(),
+            encrypt_snapshot(
+                compress_snapshot(&draft).expect("publication snapshot should compress"),
+                "7d_abc",
+                &key,
+            )
+            .expect("publication snapshot should encrypt"),
             envelope
         );
         let fixture = encrypt_snapshot_with_nonce(
@@ -670,7 +682,7 @@ mod tests {
             &key,
             [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
         )
-        .unwrap();
+        .expect("publication snapshot should encrypt with a fixed nonce");
         assert_eq!(fixture.len(), 160);
     }
 
@@ -756,6 +768,8 @@ mod tests {
         assert!(resolve_endpoint(&config).is_err());
         config.publish.endpoint = "http://127.0.0.1:8791".into();
         assert_eq!(resolve_endpoint(&config).unwrap(), "http://127.0.0.1:8791");
+        config.publish.endpoint = "https://user:secret@example.com".into();
+        assert!(resolve_endpoint(&config).is_err());
     }
 
     fn chat_turn(session: &str, index: usize, thinking: &str, tool_out: &str) -> WorkRecord {
@@ -932,11 +946,11 @@ mod tests {
         let v1_preview = format_human_preview_meta(&v1);
         let v2_preview = format_human_preview_meta(&v2);
         assert!(
-            v1_preview.contains("Schema: v1"),
+            v1_preview.contains("快照版本: v1"),
             "v1 preview missing schema: {v1_preview}"
         );
         assert!(
-            v2_preview.contains("Schema: v2"),
+            v2_preview.contains("快照版本: v2"),
             "v2 preview missing schema: {v2_preview}"
         );
 

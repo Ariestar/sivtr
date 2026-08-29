@@ -57,9 +57,10 @@ async function load(): Promise<void> {
     if (envelope.byteLength > MAX_ENVELOPE_BYTES) throw new Error("decrypt");
     const snapshot = await decryptEnvelope(envelope, key, id);
     if (snapshot.schema_version !== 1 && snapshot.schema_version !== 2) return showError(t("不支持的快照版本", "This snapshot version is not supported."), false);
+    validateSnapshot(snapshot);
     render(snapshot);
   } catch (error) {
-    if (error instanceof DOMException || (error instanceof Error && error.message === "decrypt")) {
+    if (error instanceof DOMException || (error instanceof Error && ["decrypt", "invalid snapshot"].includes(error.message))) {
       return showError(t("链接密钥错误或快照已损坏", "The key is wrong or the snapshot is corrupted."), false);
     }
     showError(t("网络暂时失败", "The network failed temporarily."), true);
@@ -120,7 +121,7 @@ function renderChrome(snapshot?: Snapshot): HTMLElement {
   const brand = el("div", "brand");
   const logo = el("span", "logo");
   logo.setAttribute("aria-hidden", "true");
-  brand.append(logo, el("span", "brand-name", "sivtr"), el("span", "chip", "readonly"));
+  brand.append(logo, el("span", "brand-name", "sivtr"), el("span", "chip", t("只读", "readonly")));
   header.append(brand);
   if (!snapshot) return header;
   header.append(el("h1", undefined, snapshot.title));
@@ -144,7 +145,7 @@ function renderConversation(snapshot: Snapshot): HTMLElement {
   for (const item of snapshot.items) {
     const article = el("article", `message ${item.role}`);
     const role = el("h2", "role");
-    role.append(el("span", "dot"), document.createTextNode(item.role === "user" ? "User" : "Assistant"));
+    role.append(el("span", "dot"), document.createTextNode(roleLabel(item.role)));
     const body = renderMarkdown(item.text);
     article.append(role, body);
     conversation.append(article);
@@ -219,13 +220,57 @@ function renderMarkdown(text: string): HTMLElement {
   return body;
 }
 
+function validateSnapshot(snapshot: Snapshot): void {
+  if (!Array.isArray(snapshot.items)) throw new Error("invalid snapshot");
+  if (snapshot.schema_version === 1) {
+    for (const item of snapshot.items) {
+      if (!item || typeof item !== "object") throw new Error("invalid snapshot");
+      roleLabel(item.role);
+    }
+    return;
+  }
+  for (const item of snapshot.items) {
+    if (!item || typeof item !== "object" || !Array.isArray(item.parts)) throw new Error("invalid snapshot");
+    atomLabel(item.kind, item.label);
+    for (const part of item.parts) {
+      if (!part || typeof part !== "object") throw new Error("invalid snapshot");
+      partLabel(part.kind);
+    }
+  }
+}
+
+function roleLabel(role: SnapshotV1["items"][number]["role"]): string {
+  switch (role) {
+    case "user": return t("用户", "User");
+    case "assistant": return t("助手", "Assistant");
+    default: throw new Error("invalid snapshot");
+  }
+}
+
 function atomLabel(kind: SnapshotV2["items"][number]["kind"], label?: string): string {
-  if (label) return label;
-  return ({ user: "User", assistant: "Assistant", tool: "Tool", skill: "Skill", thinking: "Thinking" })[kind];
+  const localized = (() => {
+    switch (kind) {
+      case "user": return t("用户", "User");
+      case "assistant": return t("助手", "Assistant");
+      case "tool": return t("工具", "Tool");
+      case "skill": return t("技能", "Skill");
+      case "thinking": return t("思考", "Thinking");
+      default: throw new Error("invalid snapshot");
+    }
+  })();
+  return label || localized;
 }
 
 function partLabel(kind: SnapshotV2["items"][number]["parts"][number]["kind"]): string {
-  return ({ user: "User", assistant: "Assistant", tool_call: "Tool call", tool_result: "Tool result", skill: "Skill", thinking: "Thinking" })[kind];
+  switch (kind) {
+    case "user": return t("用户", "User");
+    case "assistant": return t("助手", "Assistant");
+    case "tool_call": return t("工具调用", "Tool call");
+    case "tool_result": return t("工具结果", "Tool result");
+    case "skill": return t("技能", "Skill");
+    case "thinking": return t("思考", "Thinking");
+    default: throw new Error("invalid snapshot");
+  }
 }
 
 function renderFooter(snapshot: Snapshot): HTMLElement {

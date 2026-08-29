@@ -607,12 +607,27 @@ pub(crate) fn run(
                             publish_error = None;
                         }
                         OverlayKey::Confirm => {
-                            let overlay = publish_overlay.take().expect("publish overlay");
-                            let expires = publish_overlay::selected_expiry(overlay.selected);
-                            let save_name = (!overlay.name.is_empty()).then_some(overlay.name);
+                            let Some(overlay) = publish_overlay.take() else {
+                                continue;
+                            };
+                            let PublishOverlay {
+                                selected,
+                                name,
+                                mut set,
+                                draft: preview_draft,
+                                ..
+                            } = overlay;
+                            let expires = publish_overlay::selected_expiry(selected);
+                            let title = preview_draft.snapshot.title().to_string();
+                            let draft = crate::commands::publish::load_draft_from_set(
+                                &mut set,
+                                Some(title),
+                                expires,
+                            )?;
+                            let save_name = (!name.is_empty()).then_some(name);
                             return Ok(PickerResult::Publish {
-                                set: overlay.set,
-                                draft: Box::new(overlay.draft),
+                                set,
+                                draft: Box::new(draft),
                                 expires,
                                 save_name,
                             });
@@ -624,8 +639,7 @@ pub(crate) fn run(
 
                 if let Some(mode) = visual_select_mode.as_mut() {
                     if key.code == KeyCode::Char('p') && key.modifiers == KeyModifiers::NONE {
-                        publish_error =
-                            Some("publication requires a complete block selection".into());
+                        publish_error = Some("发布需要完整的区块选择".into());
                         continue;
                     }
                     let active = content_frame.active(content_io_focus, &mut content_scrolls);

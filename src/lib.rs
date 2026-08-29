@@ -12,7 +12,7 @@ pub mod pane;
 pub mod remote;
 pub mod tui;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use cli::{
     Commands, CopyCommand, CopyFlagArgs, CopyInvocation, CopySubcommand, DiffArgs,
@@ -170,7 +170,8 @@ fn run_workspace(select_remotes: bool) -> Result<()> {
         .map(|spec| spec.provider)
         .collect::<Vec<_>>();
     commands::finish_picker(
-        commands::browse::run(&providers, select_remotes, WorkspaceFocus::Sessions)?,
+        commands::browse::run(&providers, select_remotes, WorkspaceFocus::Sessions)
+            .context("workspace picker failed")?,
         false,
         None,
         None,

@@ -135,23 +135,17 @@ pub fn redact_json(value: &mut Value) -> Result<()> {
     Ok(())
 }
 
+pub fn is_manual_warning(kind: &str) -> bool {
+    matches!(kind, "absolute_path" | "email" | "internal_url")
+}
+
 /// Count warning-only risks in a public item and attach the item position.
 pub fn warnings_for_item(text: &str, item_index: usize) -> Result<Vec<PrivacyWarning>> {
     let (_, report) = redact_text_with_report(text)?;
     Ok(report
         .warnings
         .into_iter()
-        .filter(|kind| {
-            kind != "github_pat"
-                && kind != "openai_key"
-                && kind != "sivtr_token"
-                && kind != "slack_token"
-                && kind != "aws_id"
-                && kind != "aws_secret"
-                && kind != "assigned_secret"
-                && kind != "bearer"
-                && kind != "pem_key"
-        })
+        .filter(|kind| is_manual_warning(kind))
         .map(|kind| PrivacyWarning { kind, item_index })
         .collect())
 }
@@ -185,5 +179,13 @@ mod tests {
             .warnings
             .iter()
             .any(|item| item == "absolute_path"));
+    }
+
+    #[test]
+    fn manual_warning_kinds_are_explicit() {
+        assert!(is_manual_warning("absolute_path"));
+        assert!(is_manual_warning("email"));
+        assert!(is_manual_warning("internal_url"));
+        assert!(!is_manual_warning("github_pat"));
     }
 }

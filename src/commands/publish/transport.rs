@@ -43,6 +43,9 @@ pub(super) fn resolve_endpoint(config: &SivtrConfig) -> Result<String> {
     if authority.is_empty() {
         bail!("[publish].endpoint is missing a host");
     }
+    if authority.contains('@') {
+        bail!("[publish].endpoint must not include userinfo");
+    }
     let secure = scheme.eq_ignore_ascii_case("https");
     let local_http = scheme.eq_ignore_ascii_case("http") && is_loopback_host(authority);
     if !secure && !local_http {
@@ -54,13 +57,10 @@ pub(super) fn resolve_endpoint(config: &SivtrConfig) -> Result<String> {
 }
 
 fn is_loopback_host(authority: &str) -> bool {
-    let host = authority
-        .rsplit_once('@')
-        .map_or(authority, |(_, host)| host);
-    let host = if let Some(host) = host.strip_prefix('[') {
+    let host = if let Some(host) = authority.strip_prefix('[') {
         host.split_once(']').map_or(host, |(host, _)| host)
     } else {
-        host.split(':').next().unwrap_or_default()
+        authority.split(':').next().unwrap_or_default()
     };
     matches!(host, "localhost" | "127.0.0.1" | "::1")
 }

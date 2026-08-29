@@ -504,7 +504,7 @@ sivtr serve stop
 
 ## publish
 
-`publish` projects a local WorkSet into an immutable, client-encrypted browser snapshot. It is not `share`: `share` is a live workspace mount that needs Sivtr/daemon; `publish` uploads ciphertext only, and viewers need no Sivtr install.
+`publish` projects a local WorkSet into an immutable, client-encrypted browser snapshot. It is not `share`: `share` is a live workspace mount that needs Sivtr/daemon; `publish` uploads the encrypted envelope with the publication ID and `X-Sivtr-Management-Token`/`X-Sivtr-Published-At` request metadata, while the viewer key stays in the URL fragment and viewers need no Sivtr install.
 
 ```bash
 sivtr publish <SOURCE> [--title <TITLE>] [--expires 7d] [--yes] [--allow-warnings]
@@ -516,7 +516,7 @@ sivtr publish revoke [<PUBLICATION_ID>] [--yes]
 
 Whole-record WorkSets use v1: they accept consecutive local agent records from one provider and session, and publish only User/Assistant text. `publish preview` without a source opens the existing workspace picker; it returns a WorkSet and prints the final snapshot locally. v2 supports User, Assistant, Tool, Skill, and Thinking atoms plus non-contiguous parts; ToolCall and ToolResult remain inseparable.
 
-Both versions reject terminal records, remotes/groups, mixed sessions/providers, attachments, and cross-session evidence bundles. Public snapshots omit WorkSets, WorkRefs, `cwd`, session paths, and provider envelopes; whole and part anchors cannot be mixed. Search defaults to newest-first and `--latest 5`; v1 publish sorts by record index before the continuity check. `[publish].endpoint` defaults to `https://share.hnnulwh.cn` and can be changed in `config.toml`. Non-interactive publish requires `--yes`. Path/email/internal-URL warnings require `--allow-warnings` in every environment, including a TTY.
+Both versions reject terminal records, remotes/groups, mixed sessions/providers, attachments, and cross-session evidence bundles. WorkRefs remain valid selection inputs, but public snapshots omit WorkSets, WorkRefs, `cwd`, session paths, and provider envelopes; whole and part anchors cannot be mixed. Search defaults to newest-first and `--latest 5`; v1 publish sorts by record index before the continuity check. `[publish].endpoint` defaults to `https://share.hnnulwh.cn` and can be changed in `config.toml`. Non-interactive publish requires `--yes`. Path/email/internal-URL warnings require `--allow-warnings` in every environment, including a TTY.
 
 Typical flow:
 
