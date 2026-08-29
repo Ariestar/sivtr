@@ -163,7 +163,7 @@ pub fn execute(args: &FilterArgs) -> Result<()> {
 /// Load, filter, and optionally save a WorkSet without printing.
 pub fn run(args: &FilterArgs) -> Result<WorkSet> {
     let mut set = workset::query(&args.source, from_filter_args(args)?, args.cwd.as_deref())?;
-    workset::persist(&mut set, args.save.as_deref())?;
+    workset::persist(&mut set, args.save.as_deref()).context("persist filter WorkSet")?;
     Ok(set)
 }
 

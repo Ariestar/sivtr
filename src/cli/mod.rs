@@ -1650,7 +1650,7 @@ mod tests {
             "--format",
             "json",
         ])
-        .unwrap();
+        .expect("publish preview with a saved WorkSet should parse");
         match cli.command {
             Some(Commands::Publish(command)) => match command.action {
                 Some(PublishAction::Preview(args)) => {
@@ -1663,7 +1663,8 @@ mod tests {
             _ => panic!("expected publish command"),
         }
 
-        let cli = Cli::try_parse_from(["sivtr", "publish", "preview"]).unwrap();
+        let cli = Cli::try_parse_from(["sivtr", "publish", "preview"])
+            .expect("publish preview without a source should parse");
         match cli.command {
             Some(Commands::Publish(command)) => match command.action {
                 Some(PublishAction::Preview(args)) => {
@@ -1675,8 +1676,8 @@ mod tests {
             _ => panic!("expected publish command"),
         }
 
-        let cli =
-            Cli::try_parse_from(["sivtr", "publish", "@", "--yes", "--allow-warnings"]).unwrap();
+        let cli = Cli::try_parse_from(["sivtr", "publish", "@", "--yes", "--allow-warnings"])
+            .expect("default publish flags should parse");
         match cli.command {
             Some(Commands::Publish(command)) => {
                 assert!(command.action.is_none());
@@ -1687,7 +1688,8 @@ mod tests {
             _ => panic!("expected publish command"),
         }
 
-        let cli = Cli::try_parse_from(["sivtr", "publish", "review"]).unwrap();
+        let cli = Cli::try_parse_from(["sivtr", "publish", "review"])
+            .expect("a saved WorkSet name should parse as a publish source");
         match cli.command {
             Some(Commands::Publish(command)) => {
                 assert!(command.action.is_none());
@@ -1696,7 +1698,8 @@ mod tests {
             _ => panic!("expected publish command"),
         }
 
-        let cli = Cli::try_parse_from(["sivtr", "publish", "link"]).unwrap();
+        let cli = Cli::try_parse_from(["sivtr", "publish", "link"])
+            .expect("publish link without an id should parse");
         match cli.command {
             Some(Commands::Publish(command)) => match command.action {
                 Some(PublishAction::Link(args)) => assert!(args.publication_id.is_none()),

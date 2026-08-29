@@ -304,9 +304,9 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
         },
         WorkspaceHelpEntry {
             key: "p",
-            description: "publish selection",
+            description: "发布选择",
             action: WorkspaceHelpAction::Publish,
-            footer_label: Some("publish"),
+            footer_label: Some("发布"),
             footer_panes: NAV,
         },
         WorkspaceHelpEntry {

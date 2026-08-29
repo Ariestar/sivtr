@@ -56,10 +56,11 @@ async function load(): Promise<void> {
     const envelope = new Uint8Array(await response.arrayBuffer());
     if (envelope.byteLength > MAX_ENVELOPE_BYTES) throw new Error("decrypt");
     const snapshot = await decryptEnvelope(envelope, key, id);
+    if (!isRecord(snapshot)) throw new Error("invalid snapshot");
     if (snapshot.schema_version !== 1 && snapshot.schema_version !== 2) return showError(t("不支持的快照版本", "This snapshot version is not supported."), false);
-    render(snapshot);
+    render(validateSnapshot(snapshot));
   } catch (error) {
-    if (error instanceof DOMException || (error instanceof Error && error.message === "decrypt")) {
+    if (error instanceof DOMException || (error instanceof Error && ["decrypt", "invalid snapshot"].includes(error.message))) {
       return showError(t("链接密钥错误或快照已损坏", "The key is wrong or the snapshot is corrupted."), false);
     }
     showError(t("网络暂时失败", "The network failed temporarily."), true);
@@ -71,7 +72,7 @@ function validBase64Key(value: string): boolean {
   try { return base64url(value).byteLength === 32; } catch { return false; }
 }
 
-async function decryptEnvelope(envelope: Uint8Array, encodedKey: string, id: string): Promise<Snapshot> {
+async function decryptEnvelope(envelope: Uint8Array, encodedKey: string, id: string): Promise<unknown> {
   try {
     if (envelope.byteLength < 39 || new TextDecoder().decode(envelope.slice(0, 8)) !== "SIVTPUB1" || envelope[8] !== 1 || envelope[9] !== 1) throw new Error("invalid envelope");
     const nonce = envelope.slice(10, 22);
@@ -79,7 +80,7 @@ async function decryptEnvelope(envelope: Uint8Array, encodedKey: string, id: str
     const key = await crypto.subtle.importKey("raw", base64url(encodedKey), "AES-GCM", false, ["decrypt"]);
     const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce, additionalData: new TextEncoder().encode(`sivtr-publication-v1:${id}`), tagLength: 128 }, key, ciphertext);
     const json = new TextDecoder().decode(gunzipBounded(new Uint8Array(plaintext), MAX_SNAPSHOT_BYTES));
-    return JSON.parse(json) as Snapshot;
+    return JSON.parse(json) as unknown;
   } catch {
     throw new Error("decrypt");
   }
@@ -120,7 +121,7 @@ function renderChrome(snapshot?: Snapshot): HTMLElement {
   const brand = el("div", "brand");
   const logo = el("span", "logo");
   logo.setAttribute("aria-hidden", "true");
-  brand.append(logo, el("span", "brand-name", "sivtr"), el("span", "chip", "readonly"));
+  brand.append(logo, el("span", "brand-name", "sivtr"), el("span", "chip", t("只读", "readonly")));
   header.append(brand);
   if (!snapshot) return header;
   header.append(el("h1", undefined, snapshot.title));
@@ -144,7 +145,7 @@ function renderConversation(snapshot: Snapshot): HTMLElement {
   for (const item of snapshot.items) {
     const article = el("article", `message ${item.role}`);
     const role = el("h2", "role");
-    role.append(el("span", "dot"), document.createTextNode(item.role === "user" ? "User" : "Assistant"));
+    role.append(el("span", "dot"), document.createTextNode(roleLabel(item.role)));
     const body = renderMarkdown(item.text);
     article.append(role, body);
     conversation.append(article);
@@ -219,13 +220,107 @@ function renderMarkdown(text: string): HTMLElement {
   return body;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+function isOptionalBoolean(value: unknown): value is boolean | undefined {
+  return value === undefined || typeof value === "boolean";
+}
+
+function validateSnapshot(value: Record<string, unknown>): Snapshot {
+  if (
+    typeof value.title !== "string" ||
+    typeof value.provider !== "string" ||
+    typeof value.published_at !== "string" ||
+    typeof value.expires_at !== "string" ||
+    !Array.isArray(value.items)
+  ) {
+    throw new Error("invalid snapshot");
+  }
+  if (value.schema_version === 1) {
+    for (const rawItem of value.items) {
+      if (
+        !isRecord(rawItem) ||
+        typeof rawItem.text !== "string" ||
+        !isNullableString(rawItem.occurred_at)
+      ) {
+        throw new Error("invalid snapshot");
+      }
+      roleLabel(rawItem.role as SnapshotV1["items"][number]["role"]);
+    }
+    return value as unknown as SnapshotV1;
+  }
+  if (value.schema_version === 2) {
+    for (const rawItem of value.items) {
+      if (
+        !isRecord(rawItem) ||
+        !Array.isArray(rawItem.parts) ||
+        (rawItem.label !== undefined && typeof rawItem.label !== "string") ||
+        !isOptionalBoolean(rawItem.gap_before) ||
+        !isOptionalBoolean(rawItem.gap_after)
+      ) {
+        throw new Error("invalid snapshot");
+      }
+      atomLabel(
+        rawItem.kind as SnapshotV2["items"][number]["kind"],
+        rawItem.label as string | undefined,
+      );
+      for (const rawPart of rawItem.parts) {
+        if (
+          !isRecord(rawPart) ||
+          typeof rawPart.text !== "string" ||
+          !isNullableString(rawPart.occurred_at) ||
+          !isOptionalBoolean(rawPart.gap_before)
+        ) {
+          throw new Error("invalid snapshot");
+        }
+        partLabel(
+          rawPart.kind as SnapshotV2["items"][number]["parts"][number]["kind"],
+        );
+      }
+    }
+    return value as unknown as SnapshotV2;
+  }
+  throw new Error("invalid snapshot");
+}
+
+function roleLabel(role: SnapshotV1["items"][number]["role"]): string {
+  switch (role) {
+    case "user": return t("用户", "User");
+    case "assistant": return t("助手", "Assistant");
+    default: throw new Error("invalid snapshot");
+  }
+}
+
 function atomLabel(kind: SnapshotV2["items"][number]["kind"], label?: string): string {
-  if (label) return label;
-  return ({ user: "User", assistant: "Assistant", tool: "Tool", skill: "Skill", thinking: "Thinking" })[kind];
+  const localized = (() => {
+    switch (kind) {
+      case "user": return t("用户", "User");
+      case "assistant": return t("助手", "Assistant");
+      case "tool": return t("工具", "Tool");
+      case "skill": return t("技能", "Skill");
+      case "thinking": return t("思考", "Thinking");
+      default: throw new Error("invalid snapshot");
+    }
+  })();
+  return label || localized;
 }
 
 function partLabel(kind: SnapshotV2["items"][number]["parts"][number]["kind"]): string {
-  return ({ user: "User", assistant: "Assistant", tool_call: "Tool call", tool_result: "Tool result", skill: "Skill", thinking: "Thinking" })[kind];
+  switch (kind) {
+    case "user": return t("用户", "User");
+    case "assistant": return t("助手", "Assistant");
+    case "tool_call": return t("工具调用", "Tool call");
+    case "tool_result": return t("工具结果", "Tool result");
+    case "skill": return t("技能", "Skill");
+    case "thinking": return t("思考", "Thinking");
+    default: throw new Error("invalid snapshot");
+  }
 }
 
 function renderFooter(snapshot: Snapshot): HTMLElement {

@@ -221,7 +221,7 @@ fn position_publish_cursor(frame: &mut Frame, area: Rect, name: &str) {
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    let prefix = "> Name (optional): ";
+    let prefix = "> 名称（可选）： ";
     let row = inner
         .y
         .saturating_add(PublicationExpiry::PICKER_CHOICES.len() as u16 + 1)
@@ -251,11 +251,11 @@ fn render_footer(
 
     let mut spans = if let Some(publish) = publish {
         footer_control_spans(if publish.name_input {
-            "type name  Tab expiry  Enter continue  Esc cancel"
+            "输入名称  Tab 有效期  Enter 继续  Esc 取消"
         } else if publish.preview {
-            "j/k move  Tab name  Enter preview  Esc cancel"
+            "j/k 移动  Tab 名称  Enter 预览  Esc 取消"
         } else {
-            "j/k move  Tab name  Enter create  Esc cancel"
+            "j/k 移动  Tab 名称  Enter 创建  Esc 取消"
         })
     } else if search.is_some() {
         let mut spans = if search.map(|search| search.input_open).unwrap_or(false) {
@@ -523,7 +523,7 @@ fn render_publish_box(frame: &mut Frame, area: Rect, publish: &WorkspacePublishV
     let paragraph = Paragraph::new(publish_box_body(publish)).block(panel_block(&Panel::new(
         "",
         format!(
-            "Publish  (v{} · {} items)",
+            "发布（v{} · {} 项）",
             publish.schema_version, publish.item_count
         ),
         true,
@@ -547,18 +547,18 @@ fn publish_box_body(publish: &WorkspacePublishView) -> String {
     } else {
         publish.name
     };
-    lines.push(format!("{name_marker} Name (optional): {name}"));
+    lines.push(format!("{name_marker} 名称（可选）： {name}"));
     lines.push(String::new());
     lines.push(format!(
-        "{} redacted · {} warnings",
+        "已脱敏 {} 项 · {} 个警告",
         publish.redaction_count, publish.warning_count
     ));
     lines.push(if publish.preview {
-        "Enter previews the snapshot. Esc cancels.".to_string()
+        "Enter 预览快照，Esc 取消。".to_string()
     } else if publish.warning_count > 0 {
-        "Enter continues; privacy confirmation follows.".to_string()
+        "Enter 继续，随后确认隐私风险。".to_string()
     } else {
-        "Enter creates the link. Esc cancels.".to_string()
+        "Enter 创建链接，Esc 取消。".to_string()
     });
     lines.join("\n")
 }
@@ -931,13 +931,16 @@ mod tests {
     /// and return the caret position the frame recorded.
     fn cursor_for(text: &str) -> (u16, u16) {
         let backend = TestBackend::new(20, 8);
-        let mut terminal = Terminal::new(backend).unwrap();
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
         terminal
             .draw(|frame| {
                 position_overlay_cursor(frame, Rect::new(2, 1, 14, 4), text);
             })
-            .unwrap();
-        let pos = terminal.backend_mut().get_cursor_position().unwrap();
+            .expect("publish cursor should render");
+        let pos = terminal
+            .backend_mut()
+            .get_cursor_position()
+            .expect("test backend should expose the cursor position");
         (pos.x, pos.y)
     }
 

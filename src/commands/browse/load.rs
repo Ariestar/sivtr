@@ -219,14 +219,14 @@ impl SourceLoadPump {
             if !source_scope[idx] {
                 continue;
             }
-            if states[idx].pinned {
-                continue;
-            }
             // An explicit refresh is a retry: drop recorded body failures so
             // transient errors (remote timeouts, temporary transport issues)
             // get another chance once connectivity recovers.
             self.body_failed
                 .retain(|k, _| !k.starts_with(&format!("{idx}\0")));
+            if states[idx].pinned {
+                continue;
+            }
             if let Some(need) = states[idx].force_catalog_meta(viewport) {
                 self.spawn_meta(idx, source, need.gen, need.budget);
             }
@@ -856,10 +856,15 @@ mod tests {
         };
 
         column.kick(&[true], viewport, true);
+        column
+            .pump
+            .body_failed
+            .insert("0\0s1".into(), "transient".into());
         column.refresh(&[true], viewport);
 
         assert!(!column.states[0].pane.store().list_inflight);
         assert_eq!(column.states[0].body("s1").unwrap().len(), 1);
+        assert!(column.pump.body_failed.is_empty());
     }
 
     #[test]

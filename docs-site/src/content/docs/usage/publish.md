@@ -107,9 +107,9 @@ losing that database means the management token cannot be recovered for revoke.
 | Result | Immutable browser snapshot | Live workspace mount |
 | Viewer | No Sivtr, no login | Usually Sivtr/daemon + grant |
 | Publisher online? | No | Usually yes |
-| Server sees | Ciphertext only | Records over the remote protocol |
+| Server sees | Ciphertext plus publication ID and request metadata (`X-Sivtr-Management-Token`, `X-Sivtr-Published-At`) | Records over the remote protocol |
 
-Both modes reject terminal records, remotes/groups, mixed providers or sessions, WorkRefs, `cwd`, session paths, provider envelopes, and attachments. v1 projects only consecutive User/Assistant turns; v2 can project User, Assistant, Tool, Skill, and Thinking atoms, with ToolCall and ToolResult kept together.
+Both modes reject terminal records, remotes/groups, mixed providers or sessions, and attachments. WorkRefs remain valid selection inputs, but public snapshots omit WorkSets, WorkRefs, `cwd`, session paths, and provider envelopes. v1 projects only consecutive User/Assistant turns; v2 can project User, Assistant, Tool, Skill, and Thinking atoms, with ToolCall and ToolResult kept together.
 
 See also the [CLI reference](/reference/cli/) and [configuration](/usage/configuration/).
 

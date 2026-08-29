@@ -42,7 +42,7 @@ pub(crate) fn save_as(set: &mut WorkSet, name: &str) -> Result<()> {
     set.materialize_parts()?;
     set.validate()?;
     set.name = Some(name.to_string());
-    save_named(name, set)
+    save_named(name, set).with_context(|| format!("save WorkSet @{name}"))
 }
 
 /// Persist the `@last` WorkSet.
@@ -50,7 +50,7 @@ pub(crate) fn save_last(set: &WorkSet) -> Result<()> {
     let mut set = set.clone();
     set.materialize_parts()?;
     set.validate()?;
-    save_named("last", &set)
+    save_named("last", &set).context("save @last WorkSet")
 }
 
 pub(crate) fn persist(set: &mut WorkSet, name: Option<&str>) -> Result<()> {

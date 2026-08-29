@@ -64,7 +64,8 @@ pub fn pick_agent(args: &HotkeyPickAgentArgs) -> Result<()> {
         // so a panic recovered inside the picker must not consume an Enter
         // before show_pick_error_and_wait prompts.
         crate::commands::finish_picker(
-            browse::run_without_panic_wait(&providers, args.all, WorkspaceFocus::Sessions)?,
+            browse::run_without_panic_wait(&providers, args.all, WorkspaceFocus::Sessions)
+                .context("热键选择器失败")?,
             false,
             None,
             None,
