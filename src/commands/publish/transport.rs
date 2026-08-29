@@ -1,7 +1,7 @@
 //! Publication envelope encoding and remote transport.
 
 use aes_gcm::{
-    aead::{AeadInPlace, KeyInit},
+    aead::{AeadInOut, KeyInit},
     Aes256Gcm, Key, Nonce,
 };
 use anyhow::{bail, Context, Result};
@@ -106,19 +106,20 @@ pub(super) fn encrypt_snapshot_with_nonce(
     let key_bytes = URL_SAFE_NO_PAD
         .decode(viewer_key)
         .context("invalid generated viewer key")?;
-    let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
-    let cipher = Aes256Gcm::new(key);
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let key = Key::<Aes256Gcm>::try_from(key_bytes.as_slice())
+        .context("invalid generated viewer key length")?;
+    let cipher = Aes256Gcm::new(&key);
+    let nonce = Nonce::try_from(nonce_bytes.as_slice()).context("invalid publication nonce")?;
     let aad = format!("sivtr-publication-v1:{id}");
     let tag = cipher
-        .encrypt_in_place_detached(nonce, aad.as_bytes(), &mut compressed)
+        .encrypt_inout_detached(&nonce, aad.as_bytes(), compressed.as_mut_slice().into())
         .map_err(|_| anyhow::anyhow!("AES-GCM encryption failed"))?;
     let mut envelope = Vec::with_capacity(8 + 2 + 12 + compressed.len() + tag.len());
     envelope.extend_from_slice(ENVELOPE_MAGIC);
     envelope.extend_from_slice(&[1, 1]); // envelope v1, gzip compression
     envelope.extend_from_slice(&nonce_bytes);
     envelope.extend_from_slice(&compressed);
-    envelope.extend_from_slice(&tag);
+    envelope.extend_from_slice(tag.as_slice());
     if envelope.len() > ENVELOPE_LIMIT {
         bail!("encrypted publication envelope exceeds 5 MiB");
     }
