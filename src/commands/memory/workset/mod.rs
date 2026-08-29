@@ -7,6 +7,8 @@ pub(crate) use source::{
 pub(crate) use store::{cleanup_saved, delete_saved, list_saved, load_saved, save_named};
 
 use anyhow::{bail, Context, Result};
+use sivtr_core::record::WorkRef;
+use std::collections::HashSet;
 
 pub use sivtr_core::workset::{
     find_record, records_for_anchors, require_record, WorkSelectionAction, WorkSelectionKind,
@@ -49,6 +51,22 @@ pub(crate) fn save_last(set: &WorkSet) -> Result<()> {
     set.materialize_parts()?;
     set.validate()?;
     save_named("last", &set)
+}
+
+pub(crate) fn persist(set: &mut WorkSet, name: Option<&str>) -> Result<()> {
+    save_last(set)?;
+    if let Some(name) = name {
+        save_as(set, name)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn unique_anchors(anchors: Vec<WorkRef>) -> Vec<WorkRef> {
+    let mut seen = HashSet::new();
+    anchors
+        .into_iter()
+        .filter(|anchor| seen.insert(anchor.to_string()))
+        .collect()
 }
 
 pub fn load_reference(reference: &str) -> Result<WorkSet> {
@@ -444,7 +462,7 @@ mod tests {
             records[0].work_ref.whole(),
         ];
 
-        let unique = crate::commands::memory::var::unique_anchors(anchors)
+        let unique = unique_anchors(anchors)
             .into_iter()
             .map(|anchor| anchor.to_string())
             .collect::<Vec<_>>();

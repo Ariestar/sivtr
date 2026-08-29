@@ -26,9 +26,10 @@ use crate::tui::workspace::help::{workspace_footer_hotkeys, workspace_help_entri
 use crate::tui::workspace::layout::{selected_index, workspace_layout};
 use crate::tui::workspace::model::{
     selected_indices, SourceLoadMarker, WorkspaceDialogue, WorkspaceFocus, WorkspaceFooterView,
-    WorkspaceSearchView, WorkspaceSession, WorkspaceSource, WorkspaceView,
+    WorkspacePublishView, WorkspaceSearchView, WorkspaceSession, WorkspaceSource, WorkspaceView,
 };
 use crate::tui::workspace::rows::{ListPane, RowCursor};
+use sivtr_core::publication::PublicationExpiry;
 use sivtr_core::record::{WorkAt, WorkRef};
 
 pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
@@ -154,6 +155,8 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
             fullscreen: view.fullscreen,
             content_selection: view.content_selection,
         },
+        view.publish.as_ref(),
+        view.publish_error,
     );
 
     if let Some(selection) = view.content_selection {
@@ -172,10 +175,15 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
     } else if view.line_filter_input_open {
         let area = centered_rect(chunks[0], 60, 14);
         position_overlay_cursor(frame, area, view.line_filter.unwrap_or_default());
+    } else if let Some(publish) = view.publish.as_ref().filter(|publish| publish.name_input) {
+        let area = centered_rect(chunks[0], 50, 70);
+        position_publish_cursor(frame, area, publish.name);
     }
 
     if let Some(search) = view.search.filter(|search| search.input_open) {
         render_search_box(frame, centered_rect(chunks[0], 60, 12), search);
+    } else if let Some(publish) = view.publish.as_ref() {
+        render_publish_box(frame, centered_rect(chunks[0], 50, 70), publish);
     } else if view.line_filter_input_open || view.line_filter_error.is_some() {
         render_line_filter_box(
             frame,
@@ -208,7 +216,28 @@ fn position_overlay_cursor(frame: &mut Frame, area: Rect, text: &str) {
     frame.set_cursor_position(Position::new(inner.x.saturating_add(column), row));
 }
 
-fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>) {
+fn position_publish_cursor(frame: &mut Frame, area: Rect, name: &str) {
+    let inner = area.inner(Margin::new(1, 1));
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let prefix = "> Name (optional): ";
+    let row = inner
+        .y
+        .saturating_add(PublicationExpiry::PICKER_CHOICES.len() as u16 + 1)
+        .min(inner.y.saturating_add(inner.height.saturating_sub(1)));
+    let column = (UnicodeWidthStr::width(prefix) + UnicodeWidthStr::width(name))
+        .min(inner.width as usize) as u16;
+    frame.set_cursor_position(Position::new(inner.x.saturating_add(column), row));
+}
+
+fn render_footer(
+    frame: &mut Frame,
+    area: Rect,
+    footer: WorkspaceFooterView<'_>,
+    publish: Option<&WorkspacePublishView<'_>>,
+    publish_error: Option<&str>,
+) {
     let WorkspaceFooterView {
         focus,
         show_help,
@@ -220,7 +249,15 @@ fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>)
         content_selection,
     } = footer;
 
-    let mut spans = if search.is_some() {
+    let mut spans = if let Some(publish) = publish {
+        footer_control_spans(if publish.name_input {
+            "type name  Tab expiry  Enter continue  Esc cancel"
+        } else if publish.preview {
+            "j/k move  Tab name  Enter preview  Esc cancel"
+        } else {
+            "j/k move  Tab name  Enter create  Esc cancel"
+        })
+    } else if search.is_some() {
         let mut spans = if search.map(|search| search.input_open).unwrap_or(false) {
             footer_control_spans("type search  > session  # dialogue  Enter accept  Esc clear")
         } else {
@@ -250,7 +287,9 @@ fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>)
     if fullscreen.is_some() {
         spans.extend(footer_status_spans("fullscreen"));
     }
-    if let Some(error) = line_filter_error {
+    if let Some(error) = publish_error {
+        spans.extend(footer_status_spans(error));
+    } else if let Some(error) = line_filter_error {
         spans.extend(footer_status_spans(&format!("lines invalid: {error}")));
     } else if line_filter_input_open {
         spans.extend(footer_status_spans(&format!(
@@ -477,6 +516,51 @@ fn render_line_filter_box(
     let prompt = line_filter_prompt_text(line_filter, line_filter_error, input_open);
     let paragraph = Paragraph::new(prompt).block(panel_block(&Panel::new(":", title, true)));
     frame.render_widget(paragraph, area);
+}
+
+fn render_publish_box(frame: &mut Frame, area: Rect, publish: &WorkspacePublishView) {
+    frame.render_widget(Clear, area);
+    let paragraph = Paragraph::new(publish_box_body(publish)).block(panel_block(&Panel::new(
+        "",
+        format!(
+            "Publish  (v{} · {} items)",
+            publish.schema_version, publish.item_count
+        ),
+        true,
+    )));
+    frame.render_widget(paragraph, area);
+}
+
+fn publish_box_body(publish: &WorkspacePublishView) -> String {
+    let mut lines = PublicationExpiry::PICKER_CHOICES
+        .iter()
+        .enumerate()
+        .map(|(index, expiry)| {
+            let marker = if index == publish.selected { ">" } else { " " };
+            format!("{marker} {}", expiry.as_str())
+        })
+        .collect::<Vec<_>>();
+    lines.push(String::new());
+    let name_marker = if publish.name_input { ">" } else { " " };
+    let name = if publish.name.is_empty() && !publish.name_input {
+        "<none>"
+    } else {
+        publish.name
+    };
+    lines.push(format!("{name_marker} Name (optional): {name}"));
+    lines.push(String::new());
+    lines.push(format!(
+        "{} redacted · {} warnings",
+        publish.redaction_count, publish.warning_count
+    ));
+    lines.push(if publish.preview {
+        "Enter previews the snapshot. Esc cancels.".to_string()
+    } else if publish.warning_count > 0 {
+        "Enter continues; privacy confirmation follows.".to_string()
+    } else {
+        "Enter creates the link. Esc cancels.".to_string()
+    });
+    lines.join("\n")
 }
 
 pub(crate) fn line_filter_prompt_text(
@@ -838,7 +922,7 @@ pub(crate) fn content_title(
 
 #[cfg(test)]
 mod tests {
-    use super::position_overlay_cursor;
+    use super::{position_overlay_cursor, position_publish_cursor};
     use ratatui::backend::{Backend, TestBackend};
     use ratatui::layout::Rect;
     use ratatui::prelude::Terminal;
@@ -880,6 +964,19 @@ mod tests {
         assert_eq!(cursor_for("1\n2\n3\n4"), (4, 3));
         // A line wider than the box clamps the column to the right edge.
         assert_eq!(cursor_for("1\n0123456789abcdefghij"), (15, 3));
+    }
+
+    #[test]
+    fn publish_cursor_clamps_to_a_small_overlay() {
+        let backend = TestBackend::new(20, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                position_publish_cursor(frame, Rect::new(2, 1, 14, 4), "");
+            })
+            .unwrap();
+        let pos = terminal.backend_mut().get_cursor_position().unwrap();
+        assert_eq!((pos.x, pos.y), (15, 3));
     }
 
     #[test]

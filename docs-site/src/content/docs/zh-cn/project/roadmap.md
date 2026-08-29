@@ -142,7 +142,7 @@ TUI 应保持快速和键盘优先,但需要从单个输出浏览扩展到多 so
 - [ ] peer rename / verify / disconnect 辅助命令。
 - [ ] 用 UDS 或 named-pipe 替换 localhost TCP 控制面。
 - [ ] 旧服务端协议版本协商。
-- [x] 更细的 selective disclosure（`publish` 按单个本地 session 的连续轮次生成浏览器只读快照；更广泛 evidence bundle 仍未完成）。
+- [x] 更细的 selective disclosure（`publish` 的 v1 支持连续整轮，`--pick` 的 v2 支持单个本地 session 内任意原子和非连续片段；更广泛 evidence bundle 仍未完成）。
 
 ## Privacy and lifecycle
 
@@ -226,3 +226,4 @@ Roadmap 不表示 `sivtr` 会变成:
 - **Provenance matters.** Summary、profile 和 export 应能追溯到源 session 和命令输出。
 - **Privacy is a lifecycle.** 脱敏、保留、过期与 forget 是产品能力,不是事后补丁。
 - **Editor-friendly.** `sivtr` 应交给已有编辑器和工作流,而不是试图拥有整个开发环境。
+

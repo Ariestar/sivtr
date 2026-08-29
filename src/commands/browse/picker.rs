@@ -19,14 +19,13 @@ use crate::tui::workspace::{
     active_rows, help_action_for_key, panel_inner_rows, render_workspace, search_match_half,
     selected_index, workspace_help_entries, workspace_hit_test, workspace_layout, ContentIoFocus,
     ContentIoFrame, ContentScrolls, ExpandedBlocks, ListPane, Rows, WorkspaceDialogue,
-    WorkspaceFocus, WorkspaceHelpAction, WorkspaceSearchView, WorkspaceSession, WorkspaceSource,
-    WorkspaceView,
+    WorkspaceFocus, WorkspaceHelpAction, WorkspacePublishView, WorkspaceSearchView,
+    WorkspaceSession, WorkspaceSource, WorkspaceView,
 };
 
 use super::content::{
     active_workspace_content_at, handle_line_filter_key, handle_line_filter_paste,
     line_filter_spec, workspace_picked_content_for_selected_parts, workspace_search_target_ref,
-    PickedContent,
 };
 use super::help::{apply_workspace_help_action, set_focus, toggle_list_row, HelpDispatch};
 use super::load::{SessionColumn, SessionCtx, SourceLoadState};
@@ -35,12 +34,13 @@ use super::nav::{
     open_link_target, row_list_index, source_list_index, ContentBlockCursor,
 };
 use super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane};
+use super::publish_overlay::{self, OverlayFocus, OverlayKey, PublishOverlay};
 use super::selection::{refresh_next_level, toggle_block_selection, toggle_row_selection};
 use super::visual::{
     apply_workspace_mouse_scroll, handle_content_mouse_select, handle_visual_select_key,
     MouseSelectionStart, VisualContentContext, VisualSelectMode, MOUSE_SCROLL_LINES,
 };
-use super::PICK_CANCELLED_MESSAGE;
+use super::{PickerMode, PickerResult, PICK_CANCELLED_MESSAGE};
 use crate::pane::{Pane, PaneInput, Viewport};
 
 fn session_record_snapshot(
@@ -64,7 +64,8 @@ pub(crate) fn run(
     source_scope: Vec<bool>,
     cwd: PathBuf,
     initial_focus: WorkspaceFocus,
-) -> Result<PickedContent> {
+    options: &super::PickerOptions,
+) -> Result<PickerResult> {
     debug_assert_eq!(sources.len(), source_scope.len());
     debug_assert_eq!(sources.len(), source_states.len());
     // One cursor + mark set + range anchor per list pane. The source presets
@@ -114,6 +115,8 @@ pub(crate) fn run(
     // the first drag, so a pure click never shows a selection flash.
     let mut mouse_down_select: Option<MouseSelectionStart> = None;
     let mut show_help = false;
+    let mut publish_overlay: Option<PublishOverlay> = None;
+    let mut publish_error: Option<String> = None;
     let mut show_search = false;
     let mut search_query = String::new();
     let mut search_output = WorkspaceSearchOutput::default();
@@ -470,6 +473,19 @@ pub(crate) fn run(
                         fullscreen,
                         content_selection: visual_select_mode
                             .map(|mode: VisualSelectMode| mode.selection),
+                        publish: publish_overlay
+                            .as_ref()
+                            .map(|overlay| WorkspacePublishView {
+                                name: &overlay.name,
+                                name_input: overlay.focus == OverlayFocus::Name,
+                                selected: overlay.selected,
+                                redaction_count: overlay.draft.redaction_count,
+                                warning_count: overlay.draft.warning_count(),
+                                item_count: overlay.draft.item_count(),
+                                schema_version: overlay.draft.snapshot.schema_version(),
+                                preview: options.mode == PickerMode::Preview,
+                            }),
+                        publish_error: publish_error.as_deref(),
                         content_block_cursor: cursor_focus,
                         content_range: rows
                             .range_start(WorkspaceFocus::Content)
@@ -484,6 +500,9 @@ pub(crate) fn run(
             // plain click (no drag) never shows it.
             if show_search
                 || line_filter_input_open
+                || publish_overlay
+                    .as_ref()
+                    .is_some_and(|overlay| overlay.focus == OverlayFocus::Name)
                 || visual_select_mode
                     .is_some_and(|mode| mode.selection.anchor != mode.selection.cursor)
             {
@@ -538,6 +557,13 @@ pub(crate) fn run(
                     );
                 } else if line_filter_input_open {
                     handle_line_filter_paste(&text, &mut line_filter, &mut line_filter_error);
+                } else if publish_overlay
+                    .as_ref()
+                    .is_some_and(|overlay| overlay.focus == OverlayFocus::Name)
+                {
+                    if let Some(overlay) = publish_overlay.as_mut() {
+                        overlay.name.push_str(&text);
+                    }
                 }
             }
             Event::Key(key) => {
@@ -552,7 +578,11 @@ pub(crate) fn run(
                     && !is_repeat_safe(
                         key.code,
                         key.modifiers,
-                        show_search || line_filter_input_open,
+                        show_search
+                            || line_filter_input_open
+                            || publish_overlay
+                                .as_ref()
+                                .is_some_and(|overlay| overlay.focus == OverlayFocus::Name),
                     )
                 {
                     continue;
@@ -564,7 +594,40 @@ pub(crate) fn run(
                     anyhow::bail!(PICK_CANCELLED_MESSAGE);
                 }
 
+                if let Some(overlay) = publish_overlay.as_mut() {
+                    let action = publish_overlay::handle_key(
+                        key,
+                        &mut overlay.selected,
+                        &mut overlay.name,
+                        &mut overlay.focus,
+                    );
+                    match action {
+                        OverlayKey::Cancel => {
+                            publish_overlay = None;
+                            publish_error = None;
+                        }
+                        OverlayKey::Confirm => {
+                            let overlay = publish_overlay.take().expect("publish overlay");
+                            let expires = publish_overlay::selected_expiry(overlay.selected);
+                            let save_name = (!overlay.name.is_empty()).then_some(overlay.name);
+                            return Ok(PickerResult::Publish {
+                                set: overlay.set,
+                                draft: overlay.draft,
+                                expires,
+                                save_name,
+                            });
+                        }
+                        OverlayKey::Continue => {}
+                    }
+                    continue;
+                }
+
                 if let Some(mode) = visual_select_mode.as_mut() {
+                    if key.code == KeyCode::Char('p') && key.modifiers == KeyModifiers::NONE {
+                        publish_error =
+                            Some("publication requires a complete block selection".into());
+                        continue;
+                    }
                     let active = content_frame.active(content_io_focus, &mut content_scrolls);
                     if let Some(picked) = handle_visual_select_key(
                         key.code,
@@ -577,7 +640,7 @@ pub(crate) fn run(
                         &dialogues,
                         rows.dialogues.cursor(),
                     )? {
-                        return Ok(picked);
+                        return Ok(PickerResult::Picked(picked));
                     }
                     if matches!(key.code, KeyCode::Esc) {
                         visual_select_mode = None;
@@ -649,165 +712,86 @@ pub(crate) fn run(
                     continue;
                 }
 
-                if show_help {
+                let action = if show_help {
                     match key.code {
-                        KeyCode::Char('?') | KeyCode::Esc => show_help = false,
+                        KeyCode::Char('?') | KeyCode::Esc => {
+                            show_help = false;
+                            continue;
+                        }
                         KeyCode::Char('q') => anyhow::bail!(PICK_CANCELLED_MESSAGE),
                         KeyCode::Up | KeyCode::Char('k') => {
                             let next = selected_index(&help_state).saturating_sub(1);
                             help_state.select(Some(next));
+                            continue;
                         }
                         KeyCode::Down | KeyCode::Char('j') => {
                             let current = selected_index(&help_state);
                             let next =
                                 (current + 1).min(workspace_help_entries().len().saturating_sub(1));
                             help_state.select(Some(next));
+                            continue;
                         }
                         KeyCode::Enter => {
                             let idx = selected_index(&help_state)
                                 .min(workspace_help_entries().len().saturating_sub(1));
-                            let action = workspace_help_entries()[idx].action;
                             show_help = false;
-                            let selected_dialogues =
-                                active_rows(&dialogue_selection, dialogue_idx, dialogue_count);
-                            let session_records = if matches!(
-                                action,
-                                WorkspaceHelpAction::ToggleSelection
-                                    | WorkspaceHelpAction::ToggleAll
-                                    | WorkspaceHelpAction::RangeSelect
-                            ) {
-                                session_record_snapshot(&sessions, &sessions_pane)
-                            } else {
-                                Vec::new()
-                            };
-                            // Selection actions must reach every dialogue in
-                            // range; the cached projection only materializes
-                            // bodies for focus ∪ selected rows, so rebuild it
-                            // with all rows before toggling.
-                            let mut full_dialogues = Vec::new();
-                            let dialogue_slice: &[WorkspaceDialogue] = if matches!(
-                                action,
-                                WorkspaceHelpAction::ToggleSelection
-                                    | WorkspaceHelpAction::ToggleAll
-                                    | WorkspaceHelpAction::RangeSelect
-                            ) && focus
-                                == WorkspaceFocus::Dialogues
-                            {
-                                dialogue_pane.materialize_into(
-                                    &vec![true; dialogues.len()],
-                                    dialogue_idx,
-                                    &mut full_dialogues,
-                                );
-                                &full_dialogues
-                            } else {
-                                &dialogues
-                            };
-                            match apply_workspace_help_action(
-                                action,
-                                &mut focus,
-                                &mut fullscreen,
-                                &sources,
-                                &mut rows,
-                                &mut content_scrolls,
-                                &mut content_io_focus,
-                                &mut content_mode,
-                                &mut expanded_blocks,
-                                &mut content_cursor,
-                                &mut content_pane,
-                                content_frame.texts.block_slices(),
-                                &mut show_help,
-                                &mut show_search,
-                                &mut search_query,
-                                &mut search_dirty,
-                                active_content_at,
-                                line_filter_spec(&line_filter),
-                                &sessions,
-                                &session_records,
-                                dialogue_slice,
-                                &selected_dialogues,
-                                terminal,
-                            )? {
-                                HelpDispatch::Continue => {}
-                                HelpDispatch::Picked(picked) => return Ok(picked),
-                                HelpDispatch::Refresh => {
-                                    let size = terminal.size()?;
-                                    let layout = workspace_layout(
-                                        ratatui::layout::Rect::new(0, 0, size.width, size.height),
-                                        focus,
-                                        fullscreen,
-                                    );
-                                    let viewport = Viewport::from_panel(
-                                        rows.sessions.offset(),
-                                        panel_inner_rows(layout.sessions),
-                                    );
-                                    refresh_next_level(
-                                        focus,
-                                        &rows,
-                                        &sessions,
-                                        &mut sessions_pane,
-                                        &mut all_sessions,
-                                        &mut search_dirty,
-                                        viewport,
-                                    );
-                                    sessions_dirty = true;
-                                }
+                            Some(workspace_help_entries()[idx].action)
+                        }
+                        _ => continue,
+                    }
+                } else {
+                    if handle_line_filter_key(
+                        key.code,
+                        dialogue_count,
+                        &mut line_filter_input_open,
+                        &mut line_filter,
+                        &mut line_filter_error,
+                    ) {
+                        continue;
+                    }
+
+                    // Search-result navigation (not in help table — needs match list state).
+                    if search_has_query && !search_output.matches.is_empty() {
+                        match key.code {
+                            KeyCode::Char('n') => {
+                                search_cursor = (search_cursor + 1) % search_output.matches.len();
+                                content_scrolls.clear();
+                                search_apply_pending = true;
+                                continue;
                             }
+                            KeyCode::Char('N') => {
+                                search_cursor = search_cursor.checked_sub(1).unwrap_or_else(|| {
+                                    search_output.matches.len().saturating_sub(1)
+                                });
+                                content_scrolls.clear();
+                                search_apply_pending = true;
+                                continue;
+                            }
+                            KeyCode::Esc => {
+                                search_query.clear();
+                                search_dirty = true;
+                                search_cursor = 0;
+                                search_apply_pending = false;
+                                invalidate_panes_below(
+                                    WorkspaceFocus::Source,
+                                    &mut rows,
+                                    &mut content_scrolls,
+                                );
+                                continue;
+                            }
+                            _ => {}
                         }
-                        _ => {}
                     }
-                    continue;
-                }
 
-                if handle_line_filter_key(
-                    key.code,
-                    dialogue_count,
-                    &mut line_filter_input_open,
-                    &mut line_filter,
-                    &mut line_filter_error,
-                ) {
-                    continue;
-                }
+                    help_action_for_key(key.code, key.modifiers, focus)
+                };
 
-                // Search-result navigation (not in help table — needs match list state).
-                if search_has_query && !search_output.matches.is_empty() {
-                    match key.code {
-                        KeyCode::Char('n') => {
-                            search_cursor = (search_cursor + 1) % search_output.matches.len();
-                            content_scrolls.clear();
-                            search_apply_pending = true;
-                            continue;
-                        }
-                        KeyCode::Char('N') => {
-                            search_cursor = search_cursor
-                                .checked_sub(1)
-                                .unwrap_or_else(|| search_output.matches.len().saturating_sub(1));
-                            content_scrolls.clear();
-                            search_apply_pending = true;
-                            continue;
-                        }
-                        KeyCode::Esc => {
-                            search_query.clear();
-                            search_dirty = true;
-                            search_cursor = 0;
-                            search_apply_pending = false;
-                            invalidate_panes_below(
-                                WorkspaceFocus::Source,
-                                &mut rows,
-                                &mut content_scrolls,
-                            );
-                            continue;
-                        }
-                        _ => {}
-                    }
-                }
-
-                // Table-driven bindings: help registry is the only key declaration.
-                if let Some(action) = help_action_for_key(key.code, key.modifiers, focus) {
+                if let Some(action) = action {
                     if action == WorkspaceHelpAction::CopyBlock {
                         if let Some(picked) =
                             workspace_picked_content_for_selected_parts(&rows.selection, &dialogues)
                         {
-                            return Ok(picked);
+                            return Ok(PickerResult::Picked(picked));
                         }
                     }
                     let selected_dialogues =
@@ -870,7 +854,25 @@ pub(crate) fn run(
                         terminal,
                     )? {
                         HelpDispatch::Continue => {}
-                        HelpDispatch::Picked(picked) => return Ok(picked),
+                        HelpDispatch::Picked(picked) => return Ok(PickerResult::Picked(picked)),
+                        HelpDispatch::Publish => {
+                            show_search = false;
+                            match crate::commands::publish::prepare_picker(
+                                &rows.selection,
+                                options.publish_title.as_deref(),
+                                options.publish_expiry,
+                            ) {
+                                Ok((set, draft)) => {
+                                    publish_error = None;
+                                    publish_overlay = Some(publish_overlay::new(
+                                        set,
+                                        draft,
+                                        options.publish_expiry,
+                                    ));
+                                }
+                                Err(error) => publish_error = Some(error.to_string()),
+                            }
+                        }
                         HelpDispatch::Refresh => {
                             let size = terminal.size()?;
                             let layout = workspace_layout(
@@ -908,6 +910,7 @@ pub(crate) fn run(
                     }
                 }
             }
+            Event::Mouse(_) if publish_overlay.is_some() => {}
             Event::Mouse(mouse) if show_help && !show_search => match mouse.kind {
                 MouseEventKind::ScrollUp => {
                     for _ in 0..MOUSE_SCROLL_LINES {

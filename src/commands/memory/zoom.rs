@@ -38,10 +38,7 @@ pub fn run(args: &ZoomArgs) -> Result<WorkSet> {
     };
 
     let mut set = WorkSet::new(source.cwd, expanded);
-    workset::save_last(&set)?;
-    if let Some(name) = args.save.as_deref() {
-        workset::save_as(&mut set, name)?;
-    }
+    workset::persist(&mut set, args.save.as_deref())?;
     Ok(set)
 }
 

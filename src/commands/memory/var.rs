@@ -158,17 +158,6 @@ fn rebuild(
     WorkSet::from_parts(cwd, records, anchors)
 }
 
-pub(crate) fn unique_anchors(anchors: Vec<WorkRef>) -> Vec<WorkRef> {
-    let mut seen = HashSet::new();
-    let mut unique = Vec::new();
-    for anchor in anchors {
-        if seen.insert(anchor.to_string()) {
-            unique.push(anchor);
-        }
-    }
-    unique
-}
-
 fn records_by_ref(records: Vec<WorkRecord>) -> HashMap<String, WorkRecord> {
     records
         .into_iter()
