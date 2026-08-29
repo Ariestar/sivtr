@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/Ariestar/sivtr/compare/v0.6.0...v0.7.0) - 2026-08-29
+
+### Added
+
+- *(browse)* 发布选择支持有效期浮板与直链生成 ([#207](https://github.com/Ariestar/sivtr/pull/207))
+- *(publish)* [**breaking**] 重提加密浏览器发布与有效期后端支持 ([#205](https://github.com/Ariestar/sivtr/pull/205))
+- *(browse)* walk cursor across dialogues ([#213](https://github.com/Ariestar/sivtr/pull/213))
+- *(agents)* add ZCode agent provider ([#191](https://github.com/Ariestar/sivtr/pull/191))
+
+### Fixed
+
+- *(publish)* resolve review follow-ups ([#238](https://github.com/Ariestar/sivtr/pull/238))
+- *(deps)* update dependency marked to v18 ([#239](https://github.com/Ariestar/sivtr/pull/239))
+- *(deps)* update rust crate aes-gcm to 0.11 ([#232](https://github.com/Ariestar/sivtr/pull/232))
+- *(deps)* update dependency @astrojs/starlight to v0.41.10 ([#234](https://github.com/Ariestar/sivtr/pull/234))
+- *(deps)* update dependency @astrojs/starlight to v0.41.10 ([#227](https://github.com/Ariestar/sivtr/pull/227))
+- *(deps)* update dependency astro to v7.2.9 ([#225](https://github.com/Ariestar/sivtr/pull/225))
+- *(deps)* update dependency astro to v7.2.8 ([#216](https://github.com/Ariestar/sivtr/pull/216))
+- *(deps)* update dependency astro to v7.2.7 ([#202](https://github.com/Ariestar/sivtr/pull/202))
+- *(deps)* update dependency @astrojs/starlight to v0.41.9 ([#200](https://github.com/Ariestar/sivtr/pull/200))
+- *(deps)* update dependency @astrojs/starlight to v0.41.8 ([#197](https://github.com/Ariestar/sivtr/pull/197))
+- *(update)* fetch latest release via redirect ([#195](https://github.com/Ariestar/sivtr/pull/195))
+- *(deps)* update astro monorepo ([#196](https://github.com/Ariestar/sivtr/pull/196))
+- *(search)* keep metadata-only records in browse queries ([#190](https://github.com/Ariestar/sivtr/pull/190))
+
+### Other
+
+- *(deps)* update dependency vitest to v4 ([#237](https://github.com/Ariestar/sivtr/pull/237))
+- *(deps)* update dependency vite to v8 ([#236](https://github.com/Ariestar/sivtr/pull/236))
+- *(deps)* update dependency typescript to v7 ([#235](https://github.com/Ariestar/sivtr/pull/235))
+- *(deps)* update actions/setup-node action to v7 ([#233](https://github.com/Ariestar/sivtr/pull/233))
+- *(deps)* update dependency wrangler to v4.127.1 ([#229](https://github.com/Ariestar/sivtr/pull/229))
+- *(deps)* update dependency @cloudflare/workers-types to v5.20260829.1 ([#228](https://github.com/Ariestar/sivtr/pull/228))
+- *(workset)* validate selection pipeline ([#224](https://github.com/Ariestar/sivtr/pull/224))
+- *(browse)* finalize pane state ([#223](https://github.com/Ariestar/sivtr/pull/223))
+- *(browse)* unify selection projections ([#222](https://github.com/Ariestar/sivtr/pull/222))
+- *(browse)* integrate workset selection ([#214](https://github.com/Ariestar/sivtr/pull/214))
+- *(workset)* preserve anchor granularity ([#212](https://github.com/Ariestar/sivtr/pull/212))
+- *(copy)* resolve copied dialogues once ([#211](https://github.com/Ariestar/sivtr/pull/211))
+- *(browse)* centralize pane state and navigation ([#210](https://github.com/Ariestar/sivtr/pull/210))
+- *(browse)* unify selection semantics ([#209](https://github.com/Ariestar/sivtr/pull/209))
+- *(browse)* unify content block coordinates ([#208](https://github.com/Ariestar/sivtr/pull/208))
+- *(deps)* update rust crate flate2 to v1.1.10 ([#226](https://github.com/Ariestar/sivtr/pull/226))
+- *(deps)* update rust crate uuid to v1.26.0 ([#218](https://github.com/Ariestar/sivtr/pull/218))
+- *(deps)* update dependency @types/node to v26.4.0 ([#217](https://github.com/Ariestar/sivtr/pull/217))
+- *(deps)* update rust crate iroh to v1.1.0 ([#201](https://github.com/Ariestar/sivtr/pull/201))
+- *(deps)* update dependency @types/node to v26.3.0 ([#198](https://github.com/Ariestar/sivtr/pull/198))
+- *(deps)* update rust crate uuid to v1.25.0 ([#193](https://github.com/Ariestar/sivtr/pull/193))
+- *(search)* unify query routing into a single pipeline ([#189](https://github.com/Ariestar/sivtr/pull/189))
+- document single-track release cadence (PATCH prompt, MINOR batched) ([#188](https://github.com/Ariestar/sivtr/pull/188))
+
 ## [0.6.0](https://github.com/Ariestar/sivtr/compare/v0.5.1...v0.6.0) - 2026-08-20
 
 ### Added
