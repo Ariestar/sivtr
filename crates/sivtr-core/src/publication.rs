@@ -217,7 +217,6 @@ pub struct PublicationDraft {
     pub content_sha256: String,
     pub redaction_count: usize,
     pub risks: Vec<PublicationRisk>,
-    pub source_provider: String,
     pub source_refs: Vec<String>,
 }
 
@@ -493,7 +492,6 @@ fn create_record_publication_draft(
         content_sha256,
         redaction_count,
         risks,
-        source_provider: provider.command_name().to_string(),
         source_refs,
     })
 }
@@ -726,7 +724,6 @@ fn create_granular_publication_draft(
         content_sha256,
         redaction_count,
         risks,
-        source_provider: provider.command_name().to_string(),
         source_refs,
     })
 }
@@ -1028,7 +1025,6 @@ mod tests {
                     item_indices: vec![1],
                 },
             ],
-            source_provider: "codex".into(),
             source_refs: Vec::new(),
         };
         assert_eq!(draft.warning_count(), 2);

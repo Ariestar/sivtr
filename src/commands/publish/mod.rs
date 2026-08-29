@@ -193,7 +193,7 @@ fn preview(args: PublishPreviewArgs) -> Result<()> {
                 save_name,
             } => {
                 save_picker_set(&mut set, save_name.as_deref())?;
-                draft
+                *draft
             }
         }
     };
@@ -652,7 +652,6 @@ mod tests {
             content_sha256: "x".into(),
             redaction_count: 0,
             risks: vec![],
-            source_provider: "codex".into(),
             source_refs: vec![],
         };
         let key = URL_SAFE_NO_PAD.encode([7_u8; 32]);

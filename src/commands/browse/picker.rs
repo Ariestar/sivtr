@@ -612,7 +612,7 @@ pub(crate) fn run(
                             let save_name = (!overlay.name.is_empty()).then_some(overlay.name);
                             return Ok(PickerResult::Publish {
                                 set: overlay.set,
-                                draft: overlay.draft,
+                                draft: Box::new(overlay.draft),
                                 expires,
                                 save_name,
                             });
