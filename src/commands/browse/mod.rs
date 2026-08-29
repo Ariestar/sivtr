@@ -27,7 +27,7 @@ pub(crate) use text::{filter_lines_by_spec, record_text_to_pair, select_lines};
 
 use anyhow::{anyhow, Context, Result};
 use sivtr_core::ai::AgentProvider;
-use sivtr_core::publication::PublicationExpiry;
+use sivtr_core::publication::{PublicationDraft, PublicationExpiry};
 use sivtr_core::workset::WorkSet;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -41,8 +41,8 @@ pub(crate) enum PickerResult {
     Picked(PickedContent),
     Publish {
         set: WorkSet,
+        draft: PublicationDraft,
         expires: PublicationExpiry,
-        warning_count: usize,
         save_name: Option<String>,
     },
 }

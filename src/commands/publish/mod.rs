@@ -8,8 +8,8 @@ use sivtr_core::{
     config::SivtrConfig,
     origin::Reach,
     publication::{
-        create_publication_draft, PublicConversationSnapshot, PublicationDraft, PublicationExpiry,
-        PublicationPolicy,
+        create_publication_draft, expand_publication_anchors, PublicConversationSnapshot,
+        PublicationDraft, PublicationExpiry, PublicationPolicy,
     },
 };
 use std::io::IsTerminal;
@@ -141,6 +141,24 @@ fn load_draft_from_set(
     )
 }
 
+pub(crate) fn prepare_picker(
+    selection: &workset::WorkSet,
+    title: Option<&str>,
+    expires: PublicationExpiry,
+) -> Result<(workset::WorkSet, PublicationDraft)> {
+    ensure!(
+        !selection.anchors().is_empty(),
+        "publication selection is empty"
+    );
+    let anchors = expand_publication_anchors(selection.records(), selection.anchors())?;
+    ensure!(!anchors.is_empty(), "publication selection is empty");
+
+    let mut set = selection.clone();
+    set.select_anchors(anchors);
+    let draft = load_draft_from_set(&mut set, title.map(str::to_owned), expires)?;
+    Ok((set, draft))
+}
+
 fn preview(args: PublishPreviewArgs) -> Result<()> {
     let expires = PublicationExpiry::parse(&args.expires)?;
     let title = args.title.clone();
@@ -170,12 +188,12 @@ fn preview(args: PublishPreviewArgs) -> Result<()> {
             ) => bail!("publication preview requires a WorkSet selection"),
             crate::commands::browse::PickerResult::Publish {
                 mut set,
-                expires,
+                draft,
+                expires: _,
                 save_name,
-                ..
             } => {
                 save_picker_set(&mut set, save_name.as_deref())?;
-                load_draft_from_set(&mut set, title, expires)?
+                draft
             }
         }
     };
@@ -244,13 +262,12 @@ fn print_snapshot_items(snapshot: &PublicConversationSnapshot) {
 /// Create a link from a picker-confirmed WorkSet.
 pub(crate) fn create_from_picker(
     mut set: workset::WorkSet,
+    preview_draft: PublicationDraft,
     expires: PublicationExpiry,
-    warning_count: usize,
     save_name: Option<String>,
-    title: Option<String>,
 ) -> Result<()> {
     save_picker_set(&mut set, save_name.as_deref())?;
-    let allow_warnings = warning_count > 0;
+    let allow_warnings = preview_draft.warning_count() > 0;
     if allow_warnings {
         interactive::require_interactive("publish with privacy warnings")?;
         if !dialoguer::Confirm::new()
@@ -261,7 +278,7 @@ pub(crate) fn create_from_picker(
             bail!("publication cancelled");
         }
     }
-    let url = mint_publication(&mut set, title, expires, allow_warnings)?;
+    let url = mint_publication(&mut set, None, expires, allow_warnings)?;
     if let Err(error) = sivtr_core::export::clipboard::copy_to_clipboard(&url) {
         println!("{url}");
         bail!("publication created, but clipboard copy failed: {error:#}");
@@ -334,19 +351,26 @@ fn mint_publication(
     expires: PublicationExpiry,
     allow_warnings: bool,
 ) -> Result<String> {
-    let draft = load_draft_from_set(set, title, expires)?;
-    let compressed = compress_snapshot(&draft)?;
-    let _ = publication_envelope_size(&compressed)?;
+    let (draft, compressed, _) = prepare_publication(set, title, expires)?;
     require_allow_warnings(draft.warning_count() > 0, allow_warnings)?;
     mint_draft(draft, expires, compressed)
+}
+
+fn prepare_publication(
+    set: &mut workset::WorkSet,
+    title: Option<String>,
+    expires: PublicationExpiry,
+) -> Result<(PublicationDraft, Vec<u8>, usize)> {
+    let draft = load_draft_from_set(set, title, expires)?;
+    let compressed = compress_snapshot(&draft)?;
+    let envelope_size = publication_envelope_size(&compressed)?;
+    Ok((draft, compressed, envelope_size))
 }
 
 fn publish(args: PublishArgs) -> Result<()> {
     let expires = PublicationExpiry::parse(&args.expires)?;
     let mut set = load_publication_set(&args.source)?;
-    let draft = load_draft_from_set(&mut set, args.title.clone(), expires)?;
-    let compressed = compress_snapshot(&draft)?;
-    let envelope_size = publication_envelope_size(&compressed)?;
+    let (draft, _, envelope_size) = prepare_publication(&mut set, args.title.clone(), expires)?;
     let has_warnings = draft.warning_count() > 0;
     for (label, value) in format_create_summary(&draft, expires.as_str(), envelope_size) {
         output::detail(label, value);

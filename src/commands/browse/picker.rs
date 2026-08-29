@@ -479,10 +479,10 @@ pub(crate) fn run(
                                 name: &overlay.name,
                                 name_input: overlay.focus == OverlayFocus::Name,
                                 selected: overlay.selected,
-                                redaction_count: overlay.redaction_count,
-                                warning_count: overlay.warning_count,
-                                item_count: overlay.item_count,
-                                schema_version: overlay.schema_version,
+                                redaction_count: overlay.draft.redaction_count,
+                                warning_count: overlay.draft.warning_count(),
+                                item_count: overlay.draft.item_count(),
+                                schema_version: overlay.draft.snapshot.schema_version(),
                                 preview: options.mode == PickerMode::Preview,
                             }),
                         publish_error: publish_error.as_deref(),
@@ -612,8 +612,8 @@ pub(crate) fn run(
                             let save_name = (!overlay.name.is_empty()).then_some(overlay.name);
                             return Ok(PickerResult::Publish {
                                 set: overlay.set,
+                                draft: overlay.draft,
                                 expires,
-                                warning_count: overlay.warning_count,
                                 save_name,
                             });
                         }
@@ -857,16 +857,20 @@ pub(crate) fn run(
                         HelpDispatch::Picked(picked) => return Ok(PickerResult::Picked(picked)),
                         HelpDispatch::Publish => {
                             show_search = false;
-                            match publish_overlay::try_open(
+                            match crate::commands::publish::prepare_picker(
                                 &rows.selection,
                                 options.publish_title.as_deref(),
                                 options.publish_expiry,
                             ) {
-                                Ok(overlay) => {
+                                Ok((set, draft)) => {
                                     publish_error = None;
-                                    publish_overlay = Some(overlay);
+                                    publish_overlay = Some(publish_overlay::new(
+                                        set,
+                                        draft,
+                                        options.publish_expiry,
+                                    ));
                                 }
-                                Err(error) => publish_error = Some(error),
+                                Err(error) => publish_error = Some(error.to_string()),
                             }
                         }
                         HelpDispatch::Refresh => {

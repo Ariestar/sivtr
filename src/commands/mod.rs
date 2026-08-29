@@ -33,14 +33,14 @@ pub(crate) fn finish_picker(
         }
         browse::PickerResult::Publish {
             set,
+            draft,
             expires,
-            warning_count,
             save_name,
         } => {
             if regex.is_some() || lines.is_some() {
                 bail!("cannot publish a picker selection with copy filters; remove --regex and --lines");
             }
-            publish::create_from_picker(set, expires, warning_count, save_name, None)
+            publish::create_from_picker(set, draft, expires, save_name)
         }
     }
 }

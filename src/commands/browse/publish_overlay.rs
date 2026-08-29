@@ -1,10 +1,7 @@
 //! Publication lifetime picker for the workspace browser.
 
-use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use sivtr_core::publication::{
-    create_publication_draft, expand_publication_anchors, PublicationExpiry, PublicationPolicy,
-};
+use sivtr_core::publication::{PublicationDraft, PublicationExpiry};
 use sivtr_core::workset::WorkSet;
 
 pub(super) struct PublishOverlay {
@@ -12,10 +9,7 @@ pub(super) struct PublishOverlay {
     pub(super) name: String,
     pub(super) focus: OverlayFocus,
     pub(super) set: WorkSet,
-    pub(super) redaction_count: usize,
-    pub(super) warning_count: usize,
-    pub(super) item_count: usize,
-    pub(super) schema_version: u32,
+    pub(super) draft: PublicationDraft,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,46 +78,22 @@ pub(super) fn handle_key(
     }
 }
 
-pub(super) fn try_open(
-    selection: &WorkSet,
-    title: Option<&str>,
+pub(super) fn new(
+    set: WorkSet,
+    draft: PublicationDraft,
     expires: PublicationExpiry,
-) -> Result<PublishOverlay, String> {
-    if selection.anchors().is_empty() {
-        return Err("publication selection is empty".into());
-    }
-    let anchors = expand_publication_anchors(selection.records(), selection.anchors())
-        .map_err(|error| error.to_string())?;
-    if anchors.is_empty() {
-        return Err("publication selection is empty".into());
-    }
-
-    let mut set = selection.clone();
-    set.select_anchors(anchors);
-    let draft = create_publication_draft(
-        set.records(),
-        set.anchors(),
-        &PublicationPolicy {
-            title: title.map(str::to_owned),
-            expires,
-            ..PublicationPolicy::default()
-        },
-    )
-    .map_err(|error| error.to_string())?;
+) -> PublishOverlay {
     let selected = PublicationExpiry::PICKER_CHOICES
         .iter()
         .position(|choice| *choice == expires)
         .expect("publish expiry must be offered in the overlay");
-    Ok(PublishOverlay {
+    PublishOverlay {
         selected,
         name: String::new(),
         focus: OverlayFocus::Expiry,
         set,
-        redaction_count: draft.redaction_count,
-        warning_count: draft.warning_count(),
-        item_count: draft.item_count(),
-        schema_version: draft.snapshot.schema_version(),
-    })
+        draft,
+    }
 }
 
 #[cfg(test)]
@@ -294,23 +264,33 @@ mod tests {
     }
 
     #[test]
-    fn try_open_uses_the_canonical_part_selection() {
+    fn new_uses_the_canonical_part_selection() {
         let record = record();
         let selection = WorkSet::from_parts(
             ".",
             vec![record.clone()],
             vec![record.work_ref.with_part(1)],
         );
-        let overlay =
-            try_open(&selection, None, PublicationExpiry::SevenDays).expect("publication overlay");
-        assert_eq!(overlay.schema_version, 2);
-        assert_eq!(overlay.item_count, 1);
+        let (set, draft) = crate::commands::publish::prepare_picker(
+            &selection,
+            None,
+            PublicationExpiry::SevenDays,
+        )
+        .expect("publication preparation");
+        let overlay = new(set, draft, PublicationExpiry::SevenDays);
+        assert_eq!(overlay.draft.snapshot.schema_version(), 2);
+        assert_eq!(overlay.draft.item_count(), 1);
         assert_eq!(overlay.set.anchors(), &[record.work_ref.with_part(1)]);
         assert_eq!(overlay.focus, OverlayFocus::Expiry);
         assert!(overlay.name.is_empty());
 
-        let overlay = try_open(&selection, Some("title"), PublicationExpiry::ThreeDays)
-            .expect("publication overlay with configured expiry");
+        let (set, draft) = crate::commands::publish::prepare_picker(
+            &selection,
+            Some("title"),
+            PublicationExpiry::ThreeDays,
+        )
+        .expect("publication preparation with configured expiry");
+        let overlay = new(set, draft, PublicationExpiry::ThreeDays);
         assert_eq!(
             selected_expiry(overlay.selected),
             PublicationExpiry::ThreeDays
@@ -318,8 +298,13 @@ mod tests {
     }
 
     #[test]
-    fn try_open_rejects_empty_selection() {
+    fn prepare_picker_rejects_empty_selection() {
         let selection = WorkSet::from_parts(".", Vec::new(), Vec::new());
-        assert!(try_open(&selection, None, PublicationExpiry::SevenDays).is_err());
+        assert!(crate::commands::publish::prepare_picker(
+            &selection,
+            None,
+            PublicationExpiry::SevenDays,
+        )
+        .is_err());
     }
 }
