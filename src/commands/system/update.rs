@@ -15,6 +15,8 @@ use crate::output;
 const REPO: &str = "Ariestar/sivtr";
 const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_CHECKSUM_BYTES: u64 = 64 * 1024;
+const MAX_RELEASE_ARCHIVE_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Latest published release tag, e.g. `v0.6.0`.
 ///
@@ -63,12 +65,13 @@ pub fn execute() -> Result<()> {
     let checksums = download(
         &agent,
         &format!("https://github.com/{REPO}/releases/download/v{latest}/SHA256SUMS"),
+        MAX_CHECKSUM_BYTES,
     )?;
     let expected = checksum_for(&checksums, &archive_name)
         .with_context(|| format!("no SHA256 entry for {archive_name}"))?;
 
     let url = format!("https://github.com/{REPO}/releases/download/v{latest}/{archive_name}");
-    let archive = download(&agent, &url)?;
+    let archive = download(&agent, &url, MAX_RELEASE_ARCHIVE_BYTES)?;
     verify_sha256(&archive, &expected)?;
 
     let current_bin = std::env::current_exe().context("cannot locate current binary")?;
@@ -92,7 +95,7 @@ fn agent(timeout: Duration) -> ureq::Agent {
         .new_agent()
 }
 
-fn download(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>> {
+fn download(agent: &ureq::Agent, url: &str, limit: u64) -> Result<Vec<u8>> {
     let mut response = agent
         .get(url)
         .header("User-Agent", "sivtr-update")
@@ -100,6 +103,8 @@ fn download(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>> {
         .with_context(|| format!("download failed: {url}"))?;
     let buf = response
         .body_mut()
+        .with_config()
+        .limit(limit.saturating_add(1))
         .read_to_vec()
         .with_context(|| format!("failed to read {url}"))?;
     Ok(buf)
@@ -217,6 +222,37 @@ fn parse_version(version: &str) -> Option<(u64, u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+
+    fn serve(body: Vec<u8>) -> (String, std::thread::JoinHandle<()>) {
+        let listener =
+            TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        let handle = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept test request");
+            let mut request = BufReader::new(stream);
+            loop {
+                let mut line = String::new();
+                assert!(
+                    request.read_line(&mut line).expect("read test request") > 0,
+                    "test request ended before headers"
+                );
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            let mut stream = request.into_inner();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .expect("write test response headers");
+            stream.write_all(&body).expect("write test response body");
+        });
+        (format!("http://{address}/"), handle)
+    }
 
     #[test]
     fn parse_version_handles_v_prefix() {
@@ -253,5 +289,23 @@ mod tests {
         );
         assert!(release_tag_from_path("/Ariestar/sivtr/releases/tag/").is_err());
         assert!(release_tag_from_path("/Ariestar/sivtr").is_err());
+    }
+
+    #[test]
+    fn download_allows_limit_but_rejects_larger_responses() {
+        let agent = agent(Duration::from_secs(5));
+        let limit: u64 = 8;
+
+        for (size, succeeds) in [(limit - 1, true), (limit, true), (limit + 1, false)] {
+            let (url, server) = serve(vec![b'x'; size as usize]);
+            let result = download(&agent, &url, limit);
+            server.join().expect("test server thread");
+
+            if succeeds {
+                assert_eq!(result.expect("response within limit").len(), size as usize);
+            } else {
+                assert!(result.is_err(), "response above limit should fail");
+            }
+        }
     }
 }

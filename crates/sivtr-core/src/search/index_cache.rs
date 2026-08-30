@@ -144,6 +144,7 @@ mod tests {
 
     #[test]
     fn cache_round_trips_a_built_index() {
+        let _lock = crate::test_env_lock();
         let records = vec![
             record("s1", 1, "cargo install", "building project"),
             record("s1", 2, "run tests", "tests passed"),
@@ -157,6 +158,7 @@ mod tests {
 
     #[test]
     fn cache_misses_on_different_corpus() {
+        let _lock = crate::test_env_lock();
         let records = vec![record("s1", 1, "a", "one")];
         let built = Bm25Index::build(&records);
         store_index(&records, &built);
