@@ -9,10 +9,10 @@ use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
 
 use crate::commands::memory::filter::Filter;
 use crate::commands::memory::search::{SearchIndex, SearchMatch};
-use crate::commands::memory::workset::{self, QuerySource, QuerySourceResult};
+use crate::commands::memory::workset::{self, QuerySourceResult};
 use crate::tui::workspace::{WorkspaceSession, WorkspaceSource};
 
-use super::load::sessions_from_records;
+use super::load::{query_source, sessions_from_records};
 
 #[derive(Default)]
 pub(super) struct WorkspaceSearchOutput {
@@ -334,16 +334,9 @@ fn load_search_corpus(
         .filter(|(_, selected)| **selected)
         .map(|(source, _)| source.clone())
         .collect();
-    let query_sources: Vec<QuerySource> = selected
+    let query_sources: Vec<_> = selected
         .iter()
-        .map(|source| {
-            let selector = source.selector();
-            if source.is_remote() {
-                QuerySource::remote(selector)
-            } else {
-                QuerySource::local(selector)
-            }
-        })
+        .map(|source| query_source(source, source.selector()))
         .collect();
     let results = workset::query_sources(&query_sources, Filter::none(), Some(cwd))?;
     let mut sessions = Vec::new();
