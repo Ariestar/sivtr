@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1](https://github.com/Ariestar/sivtr/compare/v0.7.0...v0.7.1) - 2026-08-30
+
+### Fixed
+
+- *(update)* allow larger release archives ([#240](https://github.com/Ariestar/sivtr/pull/240))
+
+### Other
+
+- *(deps)* update dependency @cloudflare/workers-types to v5.20260830.1 ([#242](https://github.com/Ariestar/sivtr/pull/242))
+
 ## [0.7.0](https://github.com/Ariestar/sivtr/compare/v0.6.0...v0.7.0) - 2026-08-29
 
 ### Added
