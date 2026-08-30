@@ -516,7 +516,7 @@ pub struct SessionCtx<'a> {
     /// Merged sessions currently shown (for body keep mapping).
     pub sessions: &'a [WorkspaceSession],
     pub session_scope: &'a [bool],
-    /// When true, skip meta growth (search filter owns the list).
+    /// When true, the search result owns the full session corpus and its bodies.
     pub search_active: bool,
 }
 
@@ -583,25 +583,27 @@ impl Pane for SessionColumn {
     }
 
     fn ensure(&mut self, ctx: SessionCtx<'_>, input: &PaneInput<'_>) {
+        if ctx.search_active {
+            self.merged_len = ctx.sessions.len();
+            return;
+        }
         self.pump
             .drop_unselected(ctx.source_scope, &mut self.states);
-        if !ctx.search_active {
-            if input.force {
-                self.pump.refresh_selected(
-                    &self.sources,
-                    ctx.source_scope,
-                    &mut self.states,
-                    input.viewport,
-                );
-            } else {
-                self.pump.kick(
-                    &self.sources,
-                    ctx.source_scope,
-                    &mut self.states,
-                    input.viewport,
-                    false,
-                );
-            }
+        if input.force {
+            self.pump.refresh_selected(
+                &self.sources,
+                ctx.source_scope,
+                &mut self.states,
+                input.viewport,
+            );
+        } else {
+            self.pump.kick(
+                &self.sources,
+                ctx.source_scope,
+                &mut self.states,
+                input.viewport,
+                false,
+            );
         }
         let keep = body_keep_set(
             &self.sources,
@@ -612,7 +614,6 @@ impl Pane for SessionColumn {
         );
         self.pump
             .sync_bodies(&self.sources, &mut self.states, &keep);
-        self.merged_len = ctx.sessions.len();
     }
 
     fn len(&self) -> usize {
