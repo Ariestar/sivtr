@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2](https://github.com/Ariestar/sivtr/compare/v0.7.1...v0.7.2) - 2026-09-05
+
+### Fixed
+
+- *(deps)* update dependency astro to v7.3.1 ([#262](https://github.com/Ariestar/sivtr/pull/262))
+- *(deps)* update dependency @astrojs/starlight to v0.42.0 ([#259](https://github.com/Ariestar/sivtr/pull/259))
+- *(deps)* update dependency @astrojs/starlight to v0.41.11 ([#253](https://github.com/Ariestar/sivtr/pull/253))
+- *(deps)* update dependency astro to v7.2.10 ([#247](https://github.com/Ariestar/sivtr/pull/247))
+
+### Other
+
+- *(deps)* update dependency @cloudflare/workers-types to v5.20260905.1 ([#267](https://github.com/Ariestar/sivtr/pull/267))
+- *(deps)* update dependency @playwright/test to v1.63.0 ([#266](https://github.com/Ariestar/sivtr/pull/266))
+- *(deps)* update dependency @cloudflare/workers-types to v5.20260904.1 ([#265](https://github.com/Ariestar/sivtr/pull/265))
+- *(deps)* update dependency wrangler to v4.129.0 ([#263](https://github.com/Ariestar/sivtr/pull/263))
+- *(deps)* update release-plz/action action to v0.5.132 ([#261](https://github.com/Ariestar/sivtr/pull/261))
+- *(deps)* update dependency @cloudflare/workers-types to v5.20260903.1 ([#260](https://github.com/Ariestar/sivtr/pull/260))
+- *(deps)* update dependency @types/vscode to v1.136.0 ([#258](https://github.com/Ariestar/sivtr/pull/258))
+- *(deps)* update rust crate toml to v1.1.5 ([#257](https://github.com/Ariestar/sivtr/pull/257))
+- *(deps)* update dependency @cloudflare/workers-types to v5.20260902.1 ([#256](https://github.com/Ariestar/sivtr/pull/256))
+- *(deps)* update dependency @types/node to v26.4.1 ([#255](https://github.com/Ariestar/sivtr/pull/255))
+- *(deps)* update dependency wrangler to v4.128.0 ([#254](https://github.com/Ariestar/sivtr/pull/254))
+- *(deps)* update rust crate rmcp to v3.2.0 ([#251](https://github.com/Ariestar/sivtr/pull/251))
+- *(deps)* update dependency @cloudflare/workers-types to v5.20260901.1 ([#250](https://github.com/Ariestar/sivtr/pull/250))
+- *(deps)* update dependency @cloudflare/workers-types to v5.20260831.1 ([#246](https://github.com/Ariestar/sivtr/pull/246))
+
 ## [0.7.1](https://github.com/Ariestar/sivtr/compare/v0.7.0...v0.7.1) - 2026-08-30
 
 ### Fixed
