@@ -1,0 +1,59 @@
+{
+  "_fixture": "Entirely synthetic MCP recovery example. Commands, outputs, decisions, timestamps, and sessions are invented; they do not report real verification or user activity.",
+  "schema_version": 2,
+  "created_at": "2026-01-03T11:00:00Z",
+  "cwd": "synthetic-workspace",
+  "name": "fixture",
+  "records": [
+    {
+      "schema_version": 6,
+      "work_ref": "codex/synthetic-retry-policy-old/1",
+      "session": {"id": "synthetic-retry-policy-old", "canonical_id": "synthetic-retry-policy-old"},
+      "time": {"started_at": "2026-01-01T10:00:00Z"},
+      "status": {"outcome": "failure", "exit_code": 1},
+      "title": "Synthetic retry-policy stale verification",
+      "parts": [{"seq": 1, "kind": "message", "role": "assistant", "content": {"Text": {"content": "SYNTHETIC retry-policy stale verification: timeout test failed; the proposed retry cap was 5."}}}]
+    },
+    {
+      "schema_version": 6,
+      "work_ref": "codex/synthetic-retry-policy/1",
+      "session": {"id": "synthetic-retry-policy", "canonical_id": "synthetic-retry-policy"},
+      "time": {"started_at": "2026-01-02T10:00:00Z"},
+      "title": "Synthetic retry-policy decision",
+      "parts": [{"seq": 1, "kind": "message", "role": "assistant", "content": {"Text": {"content": "SYNTHETIC retry-policy decision: cap retries at 2; keep exponential backoff."}}}]
+    },
+    {
+      "schema_version": 6,
+      "work_ref": "codex/synthetic-retry-policy/2",
+      "session": {"id": "synthetic-retry-policy", "canonical_id": "synthetic-retry-policy"},
+      "time": {"started_at": "2026-01-02T11:00:00Z"},
+      "status": {"outcome": "success", "exit_code": 0},
+      "title": "Synthetic retry-policy verification",
+      "parts": [{"seq": 1, "kind": "action", "id": "synthetic-test", "actor": "agent", "target": "Shell", "input": {"Text": {"content": "cargo test retry_policy --locked"}}, "output": [{"content": {"Text": {"content": "SYNTHETIC fixture output: retry-policy tests passed (3 passed; 0 failed)."}}}], "status": "completed", "exit_code": 0}]
+    },
+    {
+      "schema_version": 6,
+      "work_ref": "codex/synthetic-retry-policy/3",
+      "session": {"id": "synthetic-retry-policy", "canonical_id": "synthetic-retry-policy"},
+      "time": {"started_at": "2026-01-02T12:00:00Z"},
+      "title": "Synthetic retry-policy next step",
+      "parts": [{"seq": 1, "kind": "message", "role": "assistant", "content": {"Text": {"content": "SYNTHETIC retry-policy next step: add a cancellation case before considering this task complete."}}}]
+    },
+    {
+      "schema_version": 6,
+      "work_ref": "codex/synthetic-color-theme/1",
+      "session": {"id": "synthetic-color-theme", "canonical_id": "synthetic-color-theme"},
+      "time": {"started_at": "2026-01-03T10:00:00Z"},
+      "status": {"outcome": "success", "exit_code": 0},
+      "title": "Synthetic color-theme completion",
+      "parts": [{"seq": 1, "kind": "message", "role": "assistant", "content": {"Text": {"content": "SYNTHETIC color-theme task complete: switched the preview background to blue."}}}]
+    }
+  ],
+  "anchors": [
+    "codex/synthetic-retry-policy-old/1",
+    "codex/synthetic-retry-policy/1",
+    "codex/synthetic-retry-policy/2",
+    "codex/synthetic-retry-policy/3",
+    "codex/synthetic-color-theme/1"
+  ]
+}
