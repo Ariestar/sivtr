@@ -99,6 +99,9 @@ fn set_path(name: &str) -> Result<PathBuf> {
 }
 
 fn sets_dir() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("SIVTR_DATA_DIR").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(path).join("sets"));
+    }
     let state_dir = dirs::state_dir()
         .or_else(dirs::data_local_dir)
         .or_else(dirs::config_dir)
