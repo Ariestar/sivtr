@@ -35,5 +35,6 @@ These short recordings show the core loop: capture local work, search it, narrow
 | [Fix the latest terminal error](/playbooks/fix-terminal-error/) | The agent finds the failure, patches the issue, and verifies the fix. |
 | [Build a recent work timeline](/playbooks/recent-work-timeline/) | The agent reconstructs what you worked on from timestamps, commands, and agent dialogues. |
 | [Continue after interruption](/playbooks/continue-after-interruption/) | The agent searches memory to find the most recent work thread. |
+| [MCP cross-session recovery](/playbooks/mcp-cross-session-recovery/) | A repeatable synthetic example searches, saves, and expands exact evidence through MCP across server restarts. |
 | [Agent handoff](/playbooks/agent-handoff/) | The agent prepares a structured handoff with evidence and next steps. |
 | [Remote collaboration memory](/playbooks/remote-collaboration-memory/) | Scenario for searching a teammate's memory after adding a remote. Setup guide: [Remote Access](/usage/remote-access/). |
