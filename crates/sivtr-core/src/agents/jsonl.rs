@@ -309,6 +309,18 @@ fn store_listing_cache(provider: &str, root: &Path, cache: &ListingCache) {
     );
 }
 
+fn jsonl_value_from_line(line: &str) -> std::result::Result<Option<Value>, serde_json::Error> {
+    if line.trim().is_empty() {
+        return Ok(None);
+    }
+    match serde_json::from_str(line) {
+        Ok(value) => Ok(Some(value)),
+        // NUL-padded garbage from a crashed write is never valid JSON.
+        Err(_) if line.contains('\0') => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 pub fn parse_jsonl_session(
     path: &Path,
     provider_name: &str,
@@ -333,18 +345,10 @@ pub fn parse_jsonl_session(
                 path.display()
             )
         })?;
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        let value: Value = match serde_json::from_str(&line) {
-            Ok(value) => value,
+        let value = match jsonl_value_from_line(&line) {
+            Ok(None) => continue,
+            Ok(Some(value)) => value,
             Err(error) if idx > 0 && is_trailing_partial_json_line(&error) => break,
-            Err(_) if line.contains('\0') => {
-                // NUL-padded garbage from a crashed write is never valid
-                // JSON; skip the line and keep the rest of the session.
-                continue;
-            }
             Err(error) => {
                 return Err(error).with_context(|| {
                     format!(
@@ -380,16 +384,18 @@ pub fn parse_jsonl_meta(
                 path.display()
             )
         })?;
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        let value: Value = serde_json::from_str(&line).with_context(|| {
-            format!(
-                "Failed to parse {provider_name} session metadata as JSON: {}",
-                path.display()
-            )
-        })?;
+        let value = match jsonl_value_from_line(&line) {
+            Ok(None) => continue,
+            Ok(Some(value)) => value,
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "Failed to parse {provider_name} session metadata as JSON: {}",
+                        path.display()
+                    )
+                });
+            }
+        };
         update_meta(&mut meta, &value);
     }
 

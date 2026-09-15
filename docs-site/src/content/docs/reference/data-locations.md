@@ -14,12 +14,12 @@ description: Where sivtr stores configuration, the unified archive, session logs
   sets/                      # named WorkSets (@last, @name)
   workspaces/                # terminal session logs
   cache/
-    archive.db               # derived search index; safe to delete
-    bm25-*.bin
+    archive.db               # search index; also holds one-shot pipe/run captures
+    bm25-*.bin               # safe to delete
   daemon.json / daemon.lock / daemon.log
 ```
 
-`sivtr doctor --fix` migrates leftover files from the old platform config/state directories into this home. Do not delete `workspaces/`, `sets/`, or `identity.key`. Deleting `cache/` only forces a rebuild.
+`sivtr doctor --fix` migrates leftover files from the old platform config/state directories into this home. Do not delete `workspaces/`, `sets/`, or `identity.key`. Deleting `bm25-*.bin` only forces a rebuild. `archive.db` also stores one-shot `pipe`/`run` captures that are not in `workspaces/`.
 
 ## Config file
 
@@ -67,7 +67,7 @@ Search, show, copy, picker, TUI, and MCP queries read from a unified local archi
 | --- |
 | `<home>/cache/archive.db` |
 
-It is a SQLite database (WAL mode) written by the sync engine: `sivtr sync` runs a pass explicitly, queries run an automatic freshness pass when the archive is older than `[sync].max_age_secs`, and `pipe`/`run` write one-shot terminal captures directly to it. Native agent session files and shell session logs remain the source of truth: the sync engine reads them, and session-addressed loads self-heal by parsing the native file when the archive copy is missing or stale. The archive is derived cache; deleting `cache/` is safe.
+It is a SQLite database (WAL mode) written by the sync engine: `sivtr sync` runs a pass explicitly, queries run an automatic freshness pass when the archive is older than `[sync].max_age_secs`, and `pipe`/`run` write one-shot terminal captures directly to it. Native agent session files and shell session logs remain the source of truth: the sync engine reads them, and session-addressed loads self-heal by parsing the native file when the archive copy is missing or stale. BM25 files under `cache/` can be deleted and rebuilt. Do not delete `archive.db` if you need one-shot `pipe`/`run` captures.
 ## Generated launchers
 
 Linux shortcut generation writes:

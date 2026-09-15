@@ -467,7 +467,7 @@ mod tests {
     async fn health_serves_json_on_loopback_host() {
         let _guard = env_lock();
         let dir = tempfile::tempdir().expect("create temporary data directory");
-        std::env::set_var("SIVTR_HOME", dir.path());
+        let _home = HomeGuard::set(dir.path());
         let response = test_router()
             .oneshot(
                 Request::builder()
@@ -479,7 +479,27 @@ mod tests {
             .await
             .expect("dispatch health request");
         assert_eq!(response.status(), StatusCode::OK);
-        std::env::remove_var("SIVTR_HOME");
+    }
+
+    struct HomeGuard {
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl HomeGuard {
+        fn set(path: &std::path::Path) -> Self {
+            let previous = std::env::var_os("SIVTR_HOME");
+            std::env::set_var("SIVTR_HOME", path);
+            Self { previous }
+        }
+    }
+
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var("SIVTR_HOME", value),
+                None => std::env::remove_var("SIVTR_HOME"),
+            }
+        }
     }
 
     #[tokio::test]

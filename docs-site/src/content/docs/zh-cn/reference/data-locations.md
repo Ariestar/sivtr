@@ -14,12 +14,12 @@ description: sivtr 存放配置、统一 archive、session log 和 provider 数�
   sets/                      # 命名 WorkSet（@last、@name）
   workspaces/                # 终端 session log
   cache/
-    archive.db               # 派生搜索索引；可删
-    bm25-*.bin
+    archive.db               # 搜索索引；也保存一次性 pipe/run capture
+    bm25-*.bin               # 可删
   daemon.json / daemon.lock / daemon.log
 ```
 
-`sivtr doctor --fix` 会把旧平台 config/state 目录里残留的文件迁进这个 home。不要删 `workspaces/`、`sets/` 或 `identity.key`。删 `cache/` 只会触发重建。
+`sivtr doctor --fix` 会把旧平台 config/state 目录里残留的文件迁进这个 home。不要删 `workspaces/`、`sets/` 或 `identity.key`。删 `bm25-*.bin` 只会触发重建。`archive.db` 里还有不在 `workspaces/` 的一次性 `pipe`/`run` capture。
 
 ## 配置文件
 
@@ -67,7 +67,7 @@ search、show、copy、picker、TUI 和 MCP 查询都从统一的本地 archive 
 | --- |
 | `<home>/cache/archive.db` |
 
-它是一个 SQLite 数据库（WAL 模式），由 sync 引擎写入：`sivtr sync` 显式执行一次同步，查询在 archive 比 `[sync].max_age_secs` 更旧时也会自动执行新鲜度同步，`pipe`/`run` 也会直接写入一次性 terminal capture。原生 Agent session 文件和 shell session log 仍是 source of truth，sync 引擎读取它们；当 session 在 archive 中缺失或过期时，按 session 寻址的加载会通过解析原生文件自愈。archive 是派生缓存；删除 `cache/` 是安全的。
+它是一个 SQLite 数据库（WAL 模式），由 sync 引擎写入：`sivtr sync` 显式执行一次同步，查询在 archive 比 `[sync].max_age_secs` 更旧时也会自动执行新鲜度同步，`pipe`/`run` 也会直接写入一次性 terminal capture。原生 Agent session 文件和 shell session log 仍是 source of truth，sync 引擎读取它们；当 session 在 archive 中缺失或过期时，按 session 寻址的加载会通过解析原生文件自愈。`cache/` 下的 BM25 文件可删后重建。若还需要一次性 `pipe`/`run` capture，不要删 `archive.db`。
 ## 生成的启动器
 
 Linux shortcut generation 会写入：
