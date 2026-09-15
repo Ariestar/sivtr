@@ -5,13 +5,11 @@ description: TOML configuration reference.
 
 ## Location
 
-`sivtr` uses the platform config directory:
+`sivtr` stores config under the single home (`SIVTR_HOME` override, else `~/.sivtr`):
 
 | Platform | Current path |
 | --- | --- |
-| Windows | `%APPDATA%\sivtr\config.toml` |
-| macOS | `~/Library/Application Support/sivtr/config.toml` |
-| Linux | `~/.config/sivtr/config.toml` |
+| All | `~/.sivtr/config.toml` |
 
 ## Full example
 

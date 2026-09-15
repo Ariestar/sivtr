@@ -577,14 +577,7 @@ fn shell_specs() -> Vec<ShellSpecRef<'static>> {
 }
 
 fn session_log_dir() -> PathBuf {
-    dirs::state_dir()
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_default()
-                .join(".local")
-                .join("state")
-        })
-        .join("sivtr")
+    sivtr_core::workspace::home_dir().join("workspaces")
 }
 
 fn remove_hook_block(content: &str, spec: &HookSpec) -> Option<String> {

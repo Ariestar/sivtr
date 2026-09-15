@@ -597,10 +597,10 @@ mod tests {
 
         let previous_codex_home = env::var_os("CODEX_HOME");
         let previous_thread_id = env::var_os("CODEX_THREAD_ID");
-        let previous_data_dir = env::var_os("SIVTR_DATA_DIR");
+        let previous_data_dir = env::var_os("SIVTR_HOME");
         env::set_var("CODEX_HOME", &codex_home);
         env::set_var("CODEX_THREAD_ID", "thread-session");
-        env::set_var("SIVTR_DATA_DIR", temp.path().join("data"));
+        env::set_var("SIVTR_HOME", temp.path().join("data"));
 
         let resolved = CodexProvider.find_current_session(&cwd_match).unwrap();
 
@@ -613,8 +613,8 @@ mod tests {
             None => env::remove_var("CODEX_THREAD_ID"),
         }
         match previous_data_dir {
-            Some(value) => env::set_var("SIVTR_DATA_DIR", value),
-            None => env::remove_var("SIVTR_DATA_DIR"),
+            Some(value) => env::set_var("SIVTR_HOME", value),
+            None => env::remove_var("SIVTR_HOME"),
         }
 
         assert_eq!(resolved, Some(thread_session));

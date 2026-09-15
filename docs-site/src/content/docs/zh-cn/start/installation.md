@@ -203,9 +203,7 @@ sivtr init uninstall
 
 Hook 会写入按进程区分的 session log：
 
-- Windows PowerShell 和 PowerShell 7 使用 `%APPDATA%\sivtr\session_<pid>.log`。
-- Bash 和 Zsh 使用 `$XDG_STATE_HOME/sivtr/session_<pid>.log` 或 `~/.local/state/sivtr/session_<pid>.log`。
-- Nushell 使用自己的 config/state 区域中的 `sivtr` session 文件。
+- Session log 写到 `<home>/workspaces/<workspace-key>/terminals/session_<pid>.jsonl`（`SIVTR_HOME` 或 `~/.sivtr`）。
 
 ## 配置文件
 

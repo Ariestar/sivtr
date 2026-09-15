@@ -467,7 +467,7 @@ mod tests {
     async fn health_serves_json_on_loopback_host() {
         let _guard = env_lock();
         let dir = tempfile::tempdir().expect("create temporary data directory");
-        std::env::set_var("SIVTR_DATA_DIR", dir.path());
+        std::env::set_var("SIVTR_HOME", dir.path());
         let response = test_router()
             .oneshot(
                 Request::builder()
@@ -479,7 +479,7 @@ mod tests {
             .await
             .expect("dispatch health request");
         assert_eq!(response.status(), StatusCode::OK);
-        std::env::remove_var("SIVTR_DATA_DIR");
+        std::env::remove_var("SIVTR_HOME");
     }
 
     #[tokio::test]

@@ -59,13 +59,175 @@ pub fn ensure_workspace_for_dir(cwd: &Path) -> Result<Option<WorkspacePaths>> {
     Ok(Some(paths))
 }
 
-pub fn data_dir() -> PathBuf {
-    if let Some(path) = std::env::var_os("SIVTR_DATA_DIR").filter(|value| !value.is_empty()) {
+/// Root for every path sivtr generates: config, workspaces, sets, cache,
+/// and remote daemon state.
+///
+/// `SIVTR_HOME` relocates the whole tree. Default is `~/.sivtr`.
+pub fn home_dir() -> PathBuf {
+    if let Some(path) = std::env::var_os("SIVTR_HOME").filter(|value| !value.is_empty()) {
         return PathBuf::from(path);
     }
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("sivtr")
+    dirs::home_dir()
+        .map(|home| home.join(".sivtr"))
+        .unwrap_or_else(|| PathBuf::from(".sivtr"))
+}
+
+/// One leftover location from before the single-home layout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyPath {
+    pub source: PathBuf,
+    pub target: PathBuf,
+    pub label: &'static str,
+}
+
+/// Platform paths sivtr used before `~/.sivtr`, for `doctor --fix`.
+/// Entries whose source and target are the same place are omitted.
+pub fn legacy_home_paths() -> Vec<LegacyPath> {
+    let home = home_dir();
+    let mut paths = Vec::new();
+
+    if let Some(config) = dirs::config_dir() {
+        push_legacy(&mut paths, config.join("sivtr"), home.clone(), "data root");
+    }
+
+    if let Some(sets) = dirs::state_dir()
+        .or_else(dirs::data_local_dir)
+        .or_else(dirs::config_dir)
+        .map(|dir| dir.join("sivtr").join("sets"))
+    {
+        push_legacy(&mut paths, sets, home.join("sets"), "workset store");
+    }
+
+    // After a whole-root move, the derived archive still sits at the home
+    // root; shift it into cache/ so it can be wiped independently.
+    for name in ["archive.db", "archive.db-wal", "archive.db-shm"] {
+        push_legacy(
+            &mut paths,
+            home.join(name),
+            home.join("cache").join(name),
+            "archive cache",
+        );
+    }
+
+    paths
+}
+
+fn push_legacy(paths: &mut Vec<LegacyPath>, source: PathBuf, target: PathBuf, label: &'static str) {
+    if overlapping(&source, &target) {
+        return;
+    }
+    paths.push(LegacyPath {
+        source,
+        target,
+        label,
+    });
+}
+
+fn overlapping(source: &Path, target: &Path) -> bool {
+    let source = normalize_path(source);
+    let target = normalize_path(target);
+    source == target || target.starts_with(&source) || source.starts_with(&target)
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Move `source` into `target`, merging directory contents entry by entry so a
+/// rename never clobbers an existing destination. Falls back to copy+delete
+/// across volumes. Returns paths skipped because the destination already
+/// exists.
+pub fn move_path(source: &Path, target: &Path) -> Result<Vec<PathBuf>> {
+    if overlapping(source, target) {
+        anyhow::bail!(
+            "Refusing to migrate overlapping paths {} -> {}",
+            source.display(),
+            target.display()
+        );
+    }
+    let mut conflicts = Vec::new();
+    move_path_inner(source, target, &mut conflicts)?;
+    Ok(conflicts)
+}
+
+fn move_path_inner(source: &Path, target: &Path, conflicts: &mut Vec<PathBuf>) -> Result<()> {
+    let metadata = fs::symlink_metadata(source).with_context(|| {
+        format!(
+            "Failed to read metadata for {} while migrating to {}",
+            source.display(),
+            target.display()
+        )
+    })?;
+
+    if metadata.is_dir() {
+        for entry in fs::read_dir(source)
+            .with_context(|| format!("Failed to enumerate {} while migrating", source.display()))?
+        {
+            let entry = entry.with_context(|| {
+                format!("Failed to enumerate {} while migrating", source.display())
+            })?;
+            move_path_inner(&entry.path(), &target.join(entry.file_name()), conflicts)?;
+        }
+        let _ = fs::remove_dir(source);
+        return Ok(());
+    }
+
+    if target.exists() {
+        conflicts.push(target.to_path_buf());
+        return Ok(());
+    }
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create {}", parent.display()))?;
+    }
+    if fs::rename(source, target).is_ok() {
+        return Ok(());
+    }
+    if metadata.file_type().is_symlink() {
+        recreate_symlink(source, target)?;
+    } else {
+        fs::copy(source, target).with_context(|| {
+            format!(
+                "Failed to copy {} to {}",
+                source.display(),
+                target.display()
+            )
+        })?;
+    }
+    fs::remove_file(source)
+        .with_context(|| format!("Failed to remove {} after copy", source.display()))?;
+    Ok(())
+}
+
+fn recreate_symlink(source: &Path, target: &Path) -> Result<()> {
+    let dest = fs::read_link(source)
+        .with_context(|| format!("Failed to read symlink {}", source.display()))?;
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&dest, target).with_context(|| {
+            format!(
+                "Failed to recreate symlink {} -> {}",
+                target.display(),
+                dest.display()
+            )
+        })?;
+    }
+    #[cfg(windows)]
+    {
+        let result = if dest.is_dir() {
+            std::os::windows::fs::symlink_dir(&dest, target)
+        } else {
+            std::os::windows::fs::symlink_file(&dest, target)
+        };
+        result.with_context(|| {
+            format!(
+                "Failed to recreate symlink {} -> {}",
+                target.display(),
+                dest.display()
+            )
+        })?;
+    }
+    Ok(())
 }
 
 pub fn terminal_id() -> String {
@@ -126,11 +288,11 @@ pub fn terminal_log_paths_for_workspace(cwd: &Path) -> Result<Vec<PathBuf>> {
     Ok(logs)
 }
 
-/// All known workspaces, parsed from `<data_dir>/workspaces/<key>/workspace.json`,
+/// All known workspaces, parsed from `<home>/workspaces/<key>/workspace.json`,
 /// most-recently-seen first. An empty result means sivtr has not recorded any
 /// workspace yet (e.g. `sivtr init` was never run in a git repo).
 pub fn list_workspaces() -> Result<Vec<WorkspaceMetadata>> {
-    let dir = data_dir().join(WORKSPACES_DIR);
+    let dir = home_dir().join(WORKSPACES_DIR);
     if !dir.exists() {
         return Ok(Vec::new());
     }
@@ -166,7 +328,7 @@ fn paths_for_root(root: PathBuf) -> Result<WorkspacePaths> {
     // (so a relative `--cwd` still keys stably) without either side effect.
     let root = absolutize(&root);
     let (key, display_root) = workspace_identity(&root);
-    let dir = data_dir().join(WORKSPACES_DIR).join(&key);
+    let dir = home_dir().join(WORKSPACES_DIR).join(&key);
     Ok(WorkspacePaths {
         key,
         root: display_root,
@@ -325,7 +487,7 @@ pub fn rename_workspace(root: &str, new_alias: &str) -> Result<WorkspaceMetadata
         .find(|meta| meta.root == root)
         .with_context(|| format!("no workspace with root `{root}`"))?;
     updated.alias = Some(new_alias.to_string());
-    let meta_path = data_dir()
+    let meta_path = home_dir()
         .join(WORKSPACES_DIR)
         .join(&updated.key)
         .join("workspace.json");
@@ -371,7 +533,7 @@ pub fn migrate_workspace_keys() -> Result<WorkspaceMigration> {
 }
 
 fn scan_workspace_keys(apply: bool) -> Result<WorkspaceMigration> {
-    let base = data_dir().join(WORKSPACES_DIR);
+    let base = home_dir().join(WORKSPACES_DIR);
     let mut report = WorkspaceMigration::default();
     if !base.exists() {
         return Ok(report);
@@ -529,9 +691,10 @@ fn modified_time(path: &Path) -> std::time::SystemTime {
 #[cfg(test)]
 mod tests {
     use super::{
-        git_root, inspect_workspace_keys, migrate_workspace_keys, paths_for_root, real_path,
-        rename_workspace, repo_identity, terminal_session_id_from_path, workspace_alias,
-        workspace_identity, workspace_key, WorkspaceMetadata,
+        git_root, home_dir, inspect_workspace_keys, legacy_home_paths, migrate_workspace_keys,
+        move_path, paths_for_root, real_path, rename_workspace, repo_identity,
+        terminal_session_id_from_path, workspace_alias, workspace_identity, workspace_key,
+        WorkspaceMetadata,
     };
     use crate::test_fixtures::{make_repo, make_worktree};
     use std::path::{Path, PathBuf};
@@ -663,8 +826,8 @@ mod tests {
     fn migrate_rekeys_root_based_keys_and_merges_worktree_logs() {
         let _lock = crate::test_env_lock();
         let data = unique_test_dir("workspace-migrate");
-        let old_data = std::env::var_os("SIVTR_DATA_DIR");
-        std::env::set_var("SIVTR_DATA_DIR", &data);
+        let old_data = std::env::var_os("SIVTR_HOME");
+        std::env::set_var("SIVTR_HOME", &data);
 
         let main = unique_test_dir("repo-main");
         let worktree = unique_test_dir("repo-worktree");
@@ -722,8 +885,8 @@ mod tests {
         assert_eq!(second.current, 1);
 
         match old_data {
-            Some(value) => std::env::set_var("SIVTR_DATA_DIR", value),
-            None => std::env::remove_var("SIVTR_DATA_DIR"),
+            Some(value) => std::env::set_var("SIVTR_HOME", value),
+            None => std::env::remove_var("SIVTR_HOME"),
         }
         let _ = std::fs::remove_dir_all(main);
         let _ = std::fs::remove_dir_all(worktree);
@@ -734,8 +897,8 @@ mod tests {
     fn migrate_heals_stale_metadata_after_failed_rename_write() {
         let _lock = crate::test_env_lock();
         let data = unique_test_dir("workspace-heal");
-        let old_data = std::env::var_os("SIVTR_DATA_DIR");
-        std::env::set_var("SIVTR_DATA_DIR", &data);
+        let old_data = std::env::var_os("SIVTR_HOME");
+        std::env::set_var("SIVTR_HOME", &data);
 
         let main = unique_test_dir("repo-main");
         make_repo(&main);
@@ -772,8 +935,8 @@ mod tests {
         assert_eq!(healed.root, real_path(&main).to_string_lossy().to_string());
 
         match old_data {
-            Some(value) => std::env::set_var("SIVTR_DATA_DIR", value),
-            None => std::env::remove_var("SIVTR_DATA_DIR"),
+            Some(value) => std::env::set_var("SIVTR_HOME", value),
+            None => std::env::remove_var("SIVTR_HOME"),
         }
         let _ = std::fs::remove_dir_all(main);
         let _ = std::fs::remove_dir_all(data);
@@ -824,9 +987,9 @@ mod tests {
     fn rename_workspace_persists_alias() {
         let _guard = crate::test_env_lock();
         let data = unique_test_dir("rename-data");
-        let previous = std::env::var_os("SIVTR_DATA_DIR");
+        let previous = std::env::var_os("SIVTR_HOME");
         // SAFETY: test-only env mutation, guarded by the shared test lock.
-        unsafe { std::env::set_var("SIVTR_DATA_DIR", &data) };
+        unsafe { std::env::set_var("SIVTR_HOME", &data) };
 
         let repo = unique_test_dir("rename-ws").join("sivtr");
         make_repo(&repo);
@@ -856,10 +1019,146 @@ mod tests {
         assert_eq!(persisted.alias.as_deref(), Some("core"));
 
         match previous {
-            Some(value) => unsafe { std::env::set_var("SIVTR_DATA_DIR", value) },
-            None => unsafe { std::env::remove_var("SIVTR_DATA_DIR") },
+            Some(value) => unsafe { std::env::set_var("SIVTR_HOME", value) },
+            None => unsafe { std::env::remove_var("SIVTR_HOME") },
         }
         let _ = std::fs::remove_dir_all(data);
         let _ = std::fs::remove_dir_all(&paths.dir);
+    }
+
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &Path) -> Self {
+            let _lock = crate::test_env_lock();
+            let previous = std::env::var_os(key);
+            // SAFETY: test-only env mutation, restored in Drop, guarded by the lock.
+            unsafe { std::env::set_var(key, value) };
+            Self {
+                key,
+                previous,
+                _lock,
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => unsafe { std::env::set_var(self.key, value) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
+
+    #[test]
+    fn home_dir_prefers_sivtr_home() {
+        let home = unique_test_dir("home-env");
+        {
+            let _guard = EnvGuard::set("SIVTR_HOME", &home);
+            assert_eq!(home_dir(), home);
+        }
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn legacy_home_paths_never_target_their_source() {
+        let home = unique_test_dir("legacy-home");
+        let _guard = EnvGuard::set("SIVTR_HOME", &home);
+        for path in legacy_home_paths() {
+            assert_ne!(path.source, path.target, "{}", path.label);
+        }
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn move_path_merges_directories_and_reports_conflicts() {
+        let source = unique_test_dir("move-src");
+        let target = unique_test_dir("move-dst");
+        std::fs::create_dir_all(source.join("workspaces")).expect("workspaces");
+        std::fs::write(source.join("workspaces/a.jsonl"), "a").expect("a");
+        std::fs::write(source.join("config.toml"), "c").expect("config");
+        std::fs::create_dir_all(target.join("workspaces")).expect("target workspaces");
+        std::fs::write(target.join("workspaces/a.jsonl"), "existing").expect("existing");
+
+        let conflicts = move_path(&source, &target).expect("move");
+
+        assert_eq!(conflicts, vec![target.join("workspaces").join("a.jsonl")]);
+        assert_eq!(
+            std::fs::read_to_string(target.join("workspaces/a.jsonl")).expect("read"),
+            "existing"
+        );
+        assert!(
+            target.join("config.toml").exists(),
+            "moved entries land in target"
+        );
+        assert!(
+            source.join("workspaces/a.jsonl").exists(),
+            "conflicting entry stays in source"
+        );
+        assert!(
+            !source.join("config.toml").exists(),
+            "moved entries leave source"
+        );
+
+        let _ = std::fs::remove_dir_all(source);
+        let _ = std::fs::remove_dir_all(target);
+    }
+
+    #[test]
+    fn move_path_rejects_overlapping_paths() {
+        let root = unique_test_dir("move-overlap");
+        let nested = root.join("nested");
+        std::fs::create_dir_all(&nested).expect("nested");
+        let error = move_path(&root, &nested).expect_err("overlap");
+        assert!(
+            error.to_string().contains("overlapping"),
+            "error should name the overlap: {error}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn move_path_treats_directory_symlink_as_a_leaf() {
+        let root = unique_test_dir("move-symlink");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&outside).expect("outside");
+        std::fs::write(outside.join("keep.txt"), "keep").expect("keep");
+        let source_dir = root.join("source");
+        std::fs::create_dir_all(&source_dir).expect("source");
+        let link = source_dir.join("linked");
+        let linked = symlink_dir(&outside, &link);
+        if !linked {
+            let _ = std::fs::remove_dir_all(root);
+            return;
+        }
+
+        let target = root.join("target");
+        move_path(&source_dir, &target).expect("move symlink leaf");
+        assert!(
+            target.join("linked").exists(),
+            "symlink should move as a leaf"
+        );
+        assert!(
+            outside.join("keep.txt").exists(),
+            "symlink target must not be traversed"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn symlink_dir(original: &Path, link: &Path) -> bool {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(original, link).expect("symlink dir");
+            true
+        }
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_dir(original, link).is_ok()
+        }
     }
 }

@@ -442,8 +442,8 @@ mod tests {
     fn includes_sessions_with_later_matching_cwd_metadata() {
         let _guard = env_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var_os("SIVTR_DATA_DIR");
-        std::env::set_var("SIVTR_DATA_DIR", dir.path().join("data"));
+        let previous = std::env::var_os("SIVTR_HOME");
+        std::env::set_var("SIVTR_HOME", dir.path().join("data"));
         let sessions = dir.path().join("sessions");
         let target = dir.path().join("sivtr");
         let candidate = dir.path().join("sivtr-worktree");
@@ -491,8 +491,8 @@ mod tests {
         );
 
         match previous {
-            Some(value) => std::env::set_var("SIVTR_DATA_DIR", value),
-            None => std::env::remove_var("SIVTR_DATA_DIR"),
+            Some(value) => std::env::set_var("SIVTR_HOME", value),
+            None => std::env::remove_var("SIVTR_HOME"),
         }
     }
 
@@ -500,8 +500,8 @@ mod tests {
     fn keeps_sessions_without_cwd_when_filtering_by_cwd() {
         let _guard = env_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var_os("SIVTR_DATA_DIR");
-        std::env::set_var("SIVTR_DATA_DIR", dir.path().join("data"));
+        let previous = std::env::var_os("SIVTR_HOME");
+        std::env::set_var("SIVTR_HOME", dir.path().join("data"));
         let sessions = dir.path().join("sessions");
         let target = dir.path().join("repo");
         fs::create_dir_all(&sessions).unwrap();
@@ -559,8 +559,8 @@ mod tests {
         assert!(!ids.iter().any(|id| id == "wrong"));
 
         match previous {
-            Some(value) => std::env::set_var("SIVTR_DATA_DIR", value),
-            None => std::env::remove_var("SIVTR_DATA_DIR"),
+            Some(value) => std::env::set_var("SIVTR_HOME", value),
+            None => std::env::remove_var("SIVTR_HOME"),
         }
     }
 
@@ -568,8 +568,8 @@ mod tests {
     fn listing_cache_reuses_meta_for_unchanged_files() {
         let _guard = env_lock();
         let temp = tempfile::tempdir().unwrap();
-        let previous = std::env::var_os("SIVTR_DATA_DIR");
-        std::env::set_var("SIVTR_DATA_DIR", temp.path());
+        let previous = std::env::var_os("SIVTR_HOME");
+        std::env::set_var("SIVTR_HOME", temp.path());
 
         let sessions = temp.path().join("sessions");
         fs::create_dir_all(&sessions).unwrap();
@@ -610,8 +610,8 @@ mod tests {
         );
 
         match previous {
-            Some(value) => std::env::set_var("SIVTR_DATA_DIR", value),
-            None => std::env::remove_var("SIVTR_DATA_DIR"),
+            Some(value) => std::env::set_var("SIVTR_HOME", value),
+            None => std::env::remove_var("SIVTR_HOME"),
         }
     }
 
@@ -619,8 +619,8 @@ mod tests {
     fn listing_cache_reparses_changed_files_only() {
         let _guard = env_lock();
         let temp = tempfile::tempdir().unwrap();
-        let previous = std::env::var_os("SIVTR_DATA_DIR");
-        std::env::set_var("SIVTR_DATA_DIR", temp.path());
+        let previous = std::env::var_os("SIVTR_HOME");
+        std::env::set_var("SIVTR_HOME", temp.path());
 
         let sessions = temp.path().join("sessions");
         fs::create_dir_all(&sessions).unwrap();
@@ -668,8 +668,8 @@ mod tests {
         assert!(ids.iter().any(|id| id == "stable"));
 
         match previous {
-            Some(value) => std::env::set_var("SIVTR_DATA_DIR", value),
-            None => std::env::remove_var("SIVTR_DATA_DIR"),
+            Some(value) => std::env::set_var("SIVTR_HOME", value),
+            None => std::env::remove_var("SIVTR_HOME"),
         }
     }
 
@@ -677,8 +677,8 @@ mod tests {
     fn listing_cache_discovers_new_files_via_dir_stamp() {
         let _guard = env_lock();
         let temp = tempfile::tempdir().unwrap();
-        let previous = std::env::var_os("SIVTR_DATA_DIR");
-        std::env::set_var("SIVTR_DATA_DIR", temp.path());
+        let previous = std::env::var_os("SIVTR_HOME");
+        std::env::set_var("SIVTR_HOME", temp.path());
 
         let sessions = temp.path().join("sessions");
         fs::create_dir_all(&sessions).unwrap();
@@ -726,8 +726,8 @@ mod tests {
         assert!(ids.iter().any(|id| id == "s3"));
 
         match previous {
-            Some(value) => std::env::set_var("SIVTR_DATA_DIR", value),
-            None => std::env::remove_var("SIVTR_DATA_DIR"),
+            Some(value) => std::env::set_var("SIVTR_HOME", value),
+            None => std::env::remove_var("SIVTR_HOME"),
         }
     }
 }

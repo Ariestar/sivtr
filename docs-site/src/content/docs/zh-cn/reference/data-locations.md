@@ -3,25 +3,37 @@ title: 数据位置
 description: sivtr 存放配置、统一 archive、session log 和 provider 数据的位置。
 ---
 
-`sivtr` 是 local-first。它使用的大多数数据已经在你的机器上；它生成的数据默认写在平台配置或状态目录下，除非你显式导出到其他位置。
+`sivtr` 是 local-first。它使用的大多数数据已经在你的机器上。生成的数据在一个 home 下：设置了 `SIVTR_HOME` 时用它，否则每个平台都是 `~/.sivtr`。
+
+```text
+<SIVTR_HOME 或 ~/.sivtr>/
+  config.toml
+  identity.key
+  remote-state.db
+  publication-state.db
+  sets/                      # 命名 WorkSet（@last、@name）
+  workspaces/                # 终端 session log
+  cache/
+    archive.db               # 派生搜索索引；可删
+    bm25-*.bin
+  daemon.json / daemon.lock / daemon.log
+```
+
+`sivtr doctor --fix` 会把旧平台 config/state 目录里残留的文件迁进这个 home。不要删 `workspaces/`、`sets/` 或 `identity.key`。删 `cache/` 只会触发重建。
 
 ## 配置文件
 
 | 平台 | 路径 |
 | --- | --- |
-| Windows | `%APPDATA%\sivtr\config.toml` |
-| macOS | `~/Library/Application Support/sivtr/config.toml` |
-| Linux | `~/.config/sivtr/config.toml` |
+| 所有平台 | `~/.sivtr/config.toml`（可用 `SIVTR_HOME` 覆盖） |
 
 ## Shell session log
 
-Shell 集成会写入按进程区分的结构化 session log。
+Shell 集成把按进程区分的结构化 session log 写到 home 下：
 
-| Shell/平台 | 常见路径 |
-| --- | --- |
-| Windows PowerShell / PowerShell 7 | `%APPDATA%\sivtr\session_<pid>.log` |
-| Bash / Zsh | `$XDG_STATE_HOME/sivtr/session_<pid>.log` 或 `~/.local/state/sivtr/session_<pid>.log` |
-| Nushell | Nushell config/state 区域中的 `sivtr` session 文件 |
+| 常见路径 |
+| --- |
+| `<home>/workspaces/<workspace-key>/terminals/session_<pid>.jsonl` |
 
 这些 log 支撑：
 
@@ -51,13 +63,11 @@ Shell 集成会写入按进程区分的结构化 session log。
 
 search、show、copy、picker、TUI 和 MCP 查询都从统一的本地 archive 读取，而不是每次解析原生 session 文件。
 
-| 平台 | 路径 |
-| --- | --- |
-| Windows | `%APPDATA%\sivtr\archive.db` |
-| macOS | `~/Library/Application Support/sivtr/archive.db` |
-| Linux | `~/.config/sivtr/archive.db` |
+| 路径 |
+| --- |
+| `<home>/cache/archive.db` |
 
-它是一个 SQLite 数据库（WAL 模式），由 sync 引擎写入：`sivtr sync` 显式执行一次同步，查询在 archive 比 `[sync].max_age_secs` 更旧时也会自动执行新鲜度同步，`pipe`/`run` 也会直接写入一次性 terminal capture。原生 Agent session 文件和 shell session log 仍是 source of truth，sync 引擎读取它们；当 session 在 archive 中缺失或过期时，按 session 寻址的加载会通过解析原生文件自愈。可用 `SIVTR_DATA_DIR` 覆盖根目录。
+它是一个 SQLite 数据库（WAL 模式），由 sync 引擎写入：`sivtr sync` 显式执行一次同步，查询在 archive 比 `[sync].max_age_secs` 更旧时也会自动执行新鲜度同步，`pipe`/`run` 也会直接写入一次性 terminal capture。原生 Agent session 文件和 shell session log 仍是 source of truth，sync 引擎读取它们；当 session 在 archive 中缺失或过期时，按 session 寻址的加载会通过解析原生文件自愈。archive 是派生缓存；删除 `cache/` 是安全的。
 ## 生成的启动器
 
 Linux shortcut generation 会写入：
@@ -79,7 +89,7 @@ sivtr hotkey stop
 
 ## Remote daemon 状态
 
-跨设备远程记忆使用设备级 daemon。可用 `SIVTR_DATA_DIR` 覆盖根目录；否则是平台 config 目录下的 `sivtr`（与 `data_dir()` 相同）。
+跨设备远程记忆使用设备级 daemon。文件在统一 home 下（`SIVTR_HOME` / `~/.sivtr`）。
 
 | 文件 | 用途 |
 | --- | --- |

@@ -66,7 +66,7 @@ pub(super) struct PublicationDb {
 
 impl PublicationDb {
     pub(super) fn open() -> Result<Self> {
-        let dir = workspace::data_dir();
+        let dir = workspace::home_dir();
         std::fs::create_dir_all(&dir).context("failed to create publication data directory")?;
         restrict_directory(&dir).context("failed to restrict publication data directory")?;
         let path = dir.join("publication-state.db");
