@@ -47,7 +47,7 @@ pub fn execute(clear_all: bool) -> Result<()> {
 }
 
 fn clear_all_sessions() -> Result<usize> {
-    let workspaces_dir = workspace::data_dir().join("workspaces");
+    let workspaces_dir = workspace::home_dir().join("workspaces");
     if workspaces_dir.exists() {
         fs::remove_dir_all(&workspaces_dir).context("Failed to clear workspace session files")?;
         return Ok(1);

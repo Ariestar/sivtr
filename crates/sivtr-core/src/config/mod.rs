@@ -188,14 +188,9 @@ impl SivtrConfig {
         Ok(path)
     }
 
-    /// Get the config file path.
-    /// Windows: %APPDATA%/sivtr/config.toml
-    /// macOS:   ~/Library/Application Support/sivtr/config.toml
-    /// Linux:   ~/.config/sivtr/config.toml
+    /// Config file under the single home (`SIVTR_HOME` / `~/.sivtr`).
     pub fn config_path() -> Result<PathBuf> {
-        let config_dir = dirs::config_dir()
-            .ok_or_else(|| anyhow::anyhow!("Cannot determine config directory"))?;
-        Ok(config_dir.join("sivtr").join("config.toml"))
+        Ok(crate::workspace::home_dir().join("config.toml"))
     }
 }
 

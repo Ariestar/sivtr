@@ -10,9 +10,11 @@ use rusqlite::Connection;
 /// on the next sync (the archive is derived state, so a rebuild is safe).
 pub const SCHEMA_VERSION: i64 = 7;
 
-/// Path of the archive database (`<data_dir>/archive.db`).
+/// Path of the archive database (`<home>/cache/archive.db`).
 pub fn db_path() -> PathBuf {
-    crate::workspace::data_dir().join("archive.db")
+    crate::workspace::home_dir()
+        .join("cache")
+        .join("archive.db")
 }
 
 /// Open (creating if needed) the archive database with WAL, foreign keys,
@@ -235,7 +237,7 @@ mod tests {
     fn open_creates_schema_and_is_reopenable() {
         let _guard = crate::test_env_lock();
         let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("SIVTR_DATA_DIR", dir.path());
+        std::env::set_var("SIVTR_HOME", dir.path());
         {
             let conn = open().expect("open creates the archive");
             let count: i64 = conn
@@ -255,15 +257,18 @@ mod tests {
             )
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION);
-        std::env::remove_var("SIVTR_DATA_DIR");
+        std::env::remove_var("SIVTR_HOME");
     }
 
     #[test]
     fn replaces_the_previous_multi_generation_embedding_index() {
         let _guard = crate::test_env_lock();
         let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("SIVTR_DATA_DIR", dir.path());
+        std::env::set_var("SIVTR_HOME", dir.path());
         let path = db_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create archive cache dir");
+        }
         let old = Connection::open(&path).unwrap();
         old.execute_batch(
             "CREATE TABLE archive_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -300,6 +305,6 @@ mod tests {
             .unwrap();
         assert_eq!(has_generation_id, 0);
         assert_eq!(has_embedding_state, 1);
-        std::env::remove_var("SIVTR_DATA_DIR");
+        std::env::remove_var("SIVTR_HOME");
     }
 }

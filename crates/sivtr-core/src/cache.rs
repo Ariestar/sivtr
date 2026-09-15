@@ -14,9 +14,10 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-/// Cache root under the platform data dir (`SIVTR_DATA_DIR` override).
+/// Cache root under the single home (`SIVTR_HOME` / `~/.sivtr/cache`).
+/// Safe to delete; search rebuilds BM25 and the archive from native sources.
 pub fn cache_dir() -> PathBuf {
-    crate::workspace::data_dir().join("cache")
+    crate::workspace::home_dir().join("cache")
 }
 
 /// `(mtime secs, mtime nanos, size)` fingerprint of a file; `None` when the

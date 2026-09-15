@@ -203,9 +203,7 @@ Restart the terminal after installation or removal.
 
 The hook writes a per-process session log:
 
-- Windows PowerShell and PowerShell 7 use `%APPDATA%\sivtr\session_<pid>.log`.
-- Bash and Zsh use `$XDG_STATE_HOME/sivtr/session_<pid>.log` or `~/.local/state/sivtr/session_<pid>.log`.
-- Nushell uses its config directory with a `sivtr` session file.
+- Session logs go to `<home>/workspaces/<workspace-key>/terminals/session_<pid>.jsonl` (`SIVTR_HOME` or `~/.sivtr`).
 
 ## Configuration file
 

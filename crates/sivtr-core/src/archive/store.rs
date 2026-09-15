@@ -950,7 +950,7 @@ mod tests {
     fn upsert_then_load_round_trips_records() {
         let _guard = crate::test_env_lock();
         let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("SIVTR_DATA_DIR", dir.path());
+        std::env::set_var("SIVTR_HOME", dir.path());
         let conn = crate::archive::open().unwrap();
         let records = vec![
             terminal_record("session_1", 1, "first"),
@@ -980,14 +980,14 @@ mod tests {
         .row_id;
         let light = load_records_by_row(&conn, session_row, BlobMode::Light).unwrap();
         assert!(light[0].parts.is_empty());
-        std::env::remove_var("SIVTR_DATA_DIR");
+        std::env::remove_var("SIVTR_HOME");
     }
 
     #[test]
     fn upsert_adopts_new_session_id_and_handles_path_moves() {
         let _guard = crate::test_env_lock();
         let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("SIVTR_DATA_DIR", dir.path());
+        std::env::set_var("SIVTR_HOME", dir.path());
         let conn = crate::archive::open().unwrap();
         let records = vec![terminal_record("session_1", 1, "one")];
 
@@ -1028,14 +1028,14 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 1, "no duplicate rows");
-        std::env::remove_var("SIVTR_DATA_DIR");
+        std::env::remove_var("SIVTR_HOME");
     }
 
     #[test]
     fn terminal_capture_stays_in_archive_across_terminal_sync_cleanup() {
         let _guard = crate::test_env_lock();
         let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("SIVTR_DATA_DIR", dir.path());
+        std::env::set_var("SIVTR_HOME", dir.path());
         let cwd = dir.path().join("repo");
         std::fs::create_dir(&cwd).unwrap();
 
@@ -1056,14 +1056,14 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
-        std::env::remove_var("SIVTR_DATA_DIR");
+        std::env::remove_var("SIVTR_HOME");
     }
 
     #[test]
     fn failed_session_upsert_rolls_back_metadata_and_records() {
         let _guard = crate::test_env_lock();
         let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("SIVTR_DATA_DIR", dir.path());
+        std::env::set_var("SIVTR_HOME", dir.path());
         let conn = crate::archive::open().unwrap();
         let records = vec![terminal_record("session_1", 1, "original")];
         let up = sample_upsert(&records);
@@ -1100,14 +1100,14 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(rows[0].parts[0].text(), "original");
-        std::env::remove_var("SIVTR_DATA_DIR");
+        std::env::remove_var("SIVTR_HOME");
     }
 
     #[test]
     fn list_filters_by_workspace_and_exact_cwd() {
         let _guard = crate::test_env_lock();
         let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("SIVTR_DATA_DIR", dir.path());
+        std::env::set_var("SIVTR_HOME", dir.path());
         let conn = crate::archive::open().unwrap();
         let empty: Vec<WorkRecord> = Vec::new();
 
@@ -1144,14 +1144,14 @@ mod tests {
         assert_eq!(by(Some(Path::new("/repo-b"))), 1, "only unbound");
         assert_eq!(by(Some(Path::new("/scratch"))), 2, "exact match + unbound");
         assert_eq!(by(None), 3, "no cwd filter lists all");
-        std::env::remove_var("SIVTR_DATA_DIR");
+        std::env::remove_var("SIVTR_HOME");
     }
 
     #[test]
     fn usage_events_round_trip_with_provider_and_session_filters() {
         let _guard = crate::test_env_lock();
         let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("SIVTR_DATA_DIR", dir.path());
+        std::env::set_var("SIVTR_HOME", dir.path());
         let conn = crate::archive::open().unwrap();
         let records: Vec<WorkRecord> = Vec::new();
         let mut up = sample_upsert(&records);
@@ -1198,6 +1198,6 @@ mod tests {
                 .len(),
             1
         );
-        std::env::remove_var("SIVTR_DATA_DIR");
+        std::env::remove_var("SIVTR_HOME");
     }
 }

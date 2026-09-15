@@ -3,25 +3,37 @@ title: Data Locations
 description: Where sivtr stores configuration, the unified archive, session logs, and provider data.
 ---
 
-`sivtr` is local-first. Most data it uses is already on your machine, and generated data is written under platform config or state directories unless you explicitly export it elsewhere.
+`sivtr` is local-first. Most data it uses is already on your machine. Generated data lives under one home: `SIVTR_HOME` if set, else `~/.sivtr` on every platform.
+
+```text
+<SIVTR_HOME or ~/.sivtr>/
+  config.toml
+  identity.key
+  remote-state.db
+  publication-state.db
+  sets/                      # named WorkSets (@last, @name)
+  workspaces/                # terminal session logs
+  cache/
+    archive.db               # search index; also holds one-shot pipe/run captures
+    bm25-*.bin               # safe to delete
+  daemon.json / daemon.lock / daemon.log
+```
+
+`sivtr doctor --fix` migrates leftover files from the old platform config/state directories into this home. Do not delete `workspaces/`, `sets/`, or `identity.key`. Deleting `bm25-*.bin` only forces a rebuild. `archive.db` also stores one-shot `pipe`/`run` captures that are not in `workspaces/`.
 
 ## Config file
 
 | Platform | Path |
 | --- | --- |
-| Windows | `%APPDATA%\sivtr\config.toml` |
-| macOS | `~/Library/Application Support/sivtr/config.toml` |
-| Linux | `~/.config/sivtr/config.toml` |
+| All | `~/.sivtr/config.toml` (`SIVTR_HOME` override) |
 
 ## Shell session logs
 
-Shell integration writes per-process structured session logs.
+Shell integration writes per-process structured session logs under the home:
 
-| Shell/platform | Typical path |
-| --- | --- |
-| Windows PowerShell / PowerShell 7 | `%APPDATA%\sivtr\session_<pid>.log` |
-| Bash / Zsh | `$XDG_STATE_HOME/sivtr/session_<pid>.log` or `~/.local/state/sivtr/session_<pid>.log` |
-| Nushell | Nushell config/state area with a `sivtr` session file |
+| Typical path |
+| --- |
+| `<home>/workspaces/<workspace-key>/terminals/session_<pid>.jsonl` |
 
 These logs power:
 
@@ -51,13 +63,11 @@ Provider formats differ; `sivtr` normalizes them into sessions and dialogue unit
 
 Search, show, copy, picker, TUI, and MCP queries read from a unified local archive instead of parsing native session files on every query.
 
-| Platform | Path |
-| --- | --- |
-| Windows | `%APPDATA%\sivtr\archive.db` |
-| macOS | `~/Library/Application Support/sivtr/archive.db` |
-| Linux | `~/.config/sivtr/archive.db` |
+| Path |
+| --- |
+| `<home>/cache/archive.db` |
 
-It is a SQLite database (WAL mode) written by the sync engine: `sivtr sync` runs a pass explicitly, queries run an automatic freshness pass when the archive is older than `[sync].max_age_secs`, and `pipe`/`run` write one-shot terminal captures directly to it. Native agent session files and shell session logs remain the source of truth: the sync engine reads them, and session-addressed loads self-heal by parsing the native file when the archive copy is missing or stale. Override the root with `SIVTR_DATA_DIR`.
+It is a SQLite database (WAL mode) written by the sync engine: `sivtr sync` runs a pass explicitly, queries run an automatic freshness pass when the archive is older than `[sync].max_age_secs`, and `pipe`/`run` write one-shot terminal captures directly to it. Native agent session files and shell session logs remain the source of truth: the sync engine reads them, and session-addressed loads self-heal by parsing the native file when the archive copy is missing or stale. BM25 files under `cache/` can be deleted and rebuilt. Do not delete `archive.db` if you need one-shot `pipe`/`run` captures.
 ## Generated launchers
 
 Linux shortcut generation writes:
@@ -79,7 +89,7 @@ sivtr hotkey stop
 
 ## Remote daemon state
 
-Cross-device remote memory uses a device-scoped daemon. Override the root with `SIVTR_DATA_DIR`; otherwise it is the platform config directory under `sivtr` (same root as `data_dir()`).
+Cross-device remote memory uses a device-scoped daemon. Files live under the single home (`SIVTR_HOME` / `~/.sivtr`).
 
 | File | Purpose |
 | --- | --- |

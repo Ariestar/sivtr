@@ -5,13 +5,11 @@ description: TOML 配置参考。
 
 ## 位置
 
-`sivtr` 使用平台配置目录：
+`sivtr` 把配置放在统一 home 下（`SIVTR_HOME` 覆盖，否则 `~/.sivtr`）：
 
 | 平台 | 当前路径 |
 | --- | --- |
-| Windows | `%APPDATA%\sivtr\config.toml` |
-| macOS | `~/Library/Application Support/sivtr/config.toml` |
-| Linux | `~/.config/sivtr/config.toml` |
+| 所有平台 | `~/.sivtr/config.toml` |
 
 ## 完整示例
 
