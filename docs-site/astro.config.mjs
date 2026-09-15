@@ -88,6 +88,7 @@ export default defineConfig({
             'playbooks/fix-terminal-error',
             'playbooks/recent-work-timeline',
             'playbooks/continue-after-interruption',
+            'playbooks/mcp-cross-session-recovery',
             'playbooks/agent-handoff',
             'playbooks/remote-collaboration-memory',
           ],

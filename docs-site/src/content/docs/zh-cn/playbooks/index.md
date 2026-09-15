@@ -35,5 +35,6 @@ description: 组合 sivtr 记忆、skill 和 Agent 的社区玩法。
 | [修复最近的终端报错](/zh-cn/playbooks/fix-terminal-error/) | Agent 找到失败原因、修复问题，并验证结果。 |
 | [生成最近工作时间线](/zh-cn/playbooks/recent-work-timeline/) | Agent 从时间戳、命令和对话记录中重建你的工作轨迹。 |
 | [中断后继续](/zh-cn/playbooks/continue-after-interruption/) | Agent 在猜测"继续"之前先搜索记忆。 |
+| [MCP 跨会话任务恢复](/zh-cn/playbooks/mcp-cross-session-recovery/) | Agent 用 MCP 搜索记忆、保存命名 WorkSet，并在新会话中展开带引用的证据。 |
 | [Agent 交接](/zh-cn/playbooks/agent-handoff/) | Agent 准备带证据和下一步的结构化交接文档。 |
 | [远程协作记忆](/zh-cn/playbooks/remote-collaboration-memory/) | 添加 remote 后搜索队友记忆的场景。功能指南见 [远程访问](/zh-cn/usage/remote-access/)。 |
