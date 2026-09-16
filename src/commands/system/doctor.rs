@@ -94,6 +94,7 @@ impl Report {
         self.check_config(fix);
         self.check_session_dir();
         self.check_shell_hooks(fix);
+        self.check_terminal_capture(fix);
         self.check_workspace_keys(fix);
         self.check_agent_hosts();
         self.check_mcp_registration(fix);
@@ -385,6 +386,55 @@ impl Report {
                 ),
             });
         }
+    }
+
+    /// Terminal capture is opt-in, so an off state is information rather than a
+    /// fault — but it is the first thing to check when no output is recorded.
+    fn check_terminal_capture(&mut self, fix: bool) {
+        if SivtrConfig::load().unwrap_or_default().pty_proxy.enabled {
+            self.add(Check {
+                name: "terminal_capture",
+                label: "terminal capture",
+                status: Status::Pass,
+                detail: "commands run inside the shell proxy".to_string(),
+                hint: None,
+            });
+            return;
+        }
+
+        if fix {
+            let shell = detect_current_shell();
+            match crate::commands::terminal::pty_proxy::enable(&shell) {
+                Ok(()) => {
+                    self.add(Check {
+                        name: "terminal_capture",
+                        label: "terminal capture",
+                        status: Status::Fixed,
+                        detail: format!("enabled for {shell}"),
+                        hint: Some("restart your shell to start capturing".to_string()),
+                    });
+                    return;
+                }
+                Err(e) => {
+                    self.add(Check {
+                        name: "terminal_capture",
+                        label: "terminal capture",
+                        status: Status::Manual,
+                        detail: format!("enable failed: {e}"),
+                        hint: Some("run `sivtr pty-proxy enable`".to_string()),
+                    });
+                    return;
+                }
+            }
+        }
+
+        self.add(Check {
+            name: "terminal_capture",
+            label: "terminal capture",
+            status: Status::Manual,
+            detail: "disabled (opt-in)".to_string(),
+            hint: Some("run `sivtr pty-proxy enable` to record command output".to_string()),
+        });
     }
 
     /// Workspaces whose stored roots predate the commondir key scheme become

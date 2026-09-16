@@ -106,16 +106,19 @@ Upgrade:
 sivtr update    # download the latest release, verify SHA256, replace in place
 ```
 
-First-time setup (hooks + MCP hosts):
+First-time setup (capture + MCP hosts):
 
 ```bash
-sivtr setup             # hooks + MCP hosts + sivtr-memory skill (if missing)
+sivtr setup                  # capture + MCP hosts + sivtr-memory skill (if missing)
 # or step by step:
-sivtr init powershell   # or bash, zsh, nushell
-sivtr mcp install       # detect installed hosts; or -p claude,cursor,codex,opencode,openclaw,grok,hermes,pi,qoder,qodercn,gemini,qwen,goose
+sivtr pty-proxy enable all   # or a single shell: bash, zsh, nushell, powershell
+sivtr mcp install            # detect installed hosts; or -p claude,cursor,codex,opencode,openclaw,grok,hermes,pi,qoder,qodercn,gemini,qwen,goose
 npx skills add Ariestar/sivtr --skill sivtr-memory -g -y
 sivtr doctor
 ```
+
+> [!NOTE]
+> Capture is opt-in. `sivtr pty-proxy enable` wraps the shell in the pty proxy, so interactive programs such as `vim`, `htop`, and `ssh` behave unchanged. Turn it off with `sivtr pty-proxy disable`.
 
 Sync and inspect the archive:
 

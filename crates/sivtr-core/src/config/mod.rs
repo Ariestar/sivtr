@@ -20,6 +20,8 @@ pub struct SivtrConfig {
     pub publish: PublishConfig,
     /// OpenAI-compatible embedding service for semantic search.
     pub embedding: EmbeddingConfig,
+    /// Terminal capture proxy settings.
+    pub pty_proxy: PtyProxyConfig,
 }
 
 /// Editor configuration.
@@ -111,6 +113,17 @@ pub struct EmbeddingConfig {
     pub api_key_env: String,
     /// Maximum inputs per request.
     pub batch_size: usize,
+}
+
+/// Terminal capture settings.
+///
+/// Capture is opt-in: no command output is recorded until
+/// `sivtr pty-proxy enable` installs the shell block *and* this flag is on.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PtyProxyConfig {
+    /// Whether the shell runs inside the capture proxy.
+    pub enabled: bool,
 }
 
 // --- Defaults ---
@@ -246,6 +259,29 @@ mod tests {
         assert!(toml.contains("[embedding]"));
         assert!(toml.contains("127.0.0.1:9000"));
         assert!(SivtrConfig::default().embedding.endpoint.is_empty());
+    }
+
+    #[test]
+    fn terminal_capture_is_off_by_default_and_round_trips() {
+        let default = to_toml_string(&SivtrConfig::default()).expect("serialize");
+        assert!(default.contains("[pty_proxy]"));
+        assert!(default.contains("enabled = false"));
+        assert!(!SivtrConfig::default().pty_proxy.enabled);
+
+        let on = SivtrConfig {
+            pty_proxy: PtyProxyConfig { enabled: true },
+            ..SivtrConfig::default()
+        };
+        let toml = to_toml_string(&on).expect("serialize");
+        assert!(
+            toml::from_str::<SivtrConfig>(&toml)
+                .expect("parse")
+                .pty_proxy
+                .enabled
+        );
+
+        // A typo must fail loudly instead of silently leaving capture off.
+        assert!(toml::from_str::<SivtrConfig>("[pty_proxy]\nenabld = true\n").is_err());
     }
 
     #[test]

@@ -239,33 +239,25 @@ pub fn terminal_id() -> String {
 
 pub fn current_terminal_log_path() -> Result<Option<PathBuf>> {
     let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
-    terminal_log_path_for_dir(&cwd)
+    terminal_log_path_for(Some(&cwd), &terminal_id())
 }
 
-pub fn terminal_log_path_for_command_cwd() -> Result<Option<PathBuf>> {
-    let cwd = std::env::var("SIVTR_COMMAND_CWD")
-        .ok()
-        .filter(|cwd| !cwd.trim().is_empty())
-        .map(PathBuf::from)
-        .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
-    terminal_log_path_for_dir(&cwd)
-}
-
-pub fn terminal_log_path_for_dir(cwd: &Path) -> Result<Option<PathBuf>> {
-    let Some(paths) = ensure_workspace_for_dir(cwd)? else {
+/// Session log path for `cwd` under an explicit terminal id.
+///
+/// The pty proxy owns the terminal id for its whole session (nested shells
+/// included) and cannot read it back out of its own environment, so it passes
+/// the id in rather than relying on [`terminal_id`].
+pub fn terminal_log_path_for(cwd: Option<&Path>, terminal_id: &str) -> Result<Option<PathBuf>> {
+    let cwd = match cwd {
+        Some(cwd) => cwd.to_path_buf(),
+        None => std::env::current_dir().context("Failed to resolve current directory")?,
+    };
+    let Some(paths) = ensure_workspace_for_dir(&cwd)? else {
         return Ok(None);
     };
     Ok(Some(
-        paths.terminals_dir.join(format!("{}.jsonl", terminal_id())),
+        paths.terminals_dir.join(format!("{terminal_id}.jsonl")),
     ))
-}
-
-pub fn current_terminal_state_path() -> Result<Option<PathBuf>> {
-    Ok(current_terminal_log_path()?.map(|path| path.with_extension("state")))
-}
-
-pub fn current_terminal_capture_path() -> Result<Option<PathBuf>> {
-    Ok(current_terminal_log_path()?.map(|path| path.with_extension("capture")))
 }
 
 pub fn terminal_log_paths_for_workspace(cwd: &Path) -> Result<Vec<PathBuf>> {

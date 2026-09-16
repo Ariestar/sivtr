@@ -178,13 +178,27 @@ cargo install --path . --force
 
 Shell integration records recent command blocks so `sivtr copy` and command-block navigation have structured data to work with.
 
-Install the hook for your shell:
+Capture is opt-in. Enable it for every supported shell with:
+
+```bash
+sivtr pty-proxy enable all
+```
+
+Or pass a single shell name (`bash`, `zsh`, `nushell`, or `powershell`) to enable just that one. Enabling wraps the shell in the pty proxy, which holds a pty, so interactive programs such as `vim`, `htop`, and `ssh` behave unchanged.
+
+Install only the hook for your shell, without capture:
 
 ```bash
 sivtr init powershell
 sivtr init bash
 sivtr init zsh
 sivtr init nushell
+```
+
+The block stays inert until capture is enabled. Turn capture off again with:
+
+```bash
+sivtr pty-proxy disable
 ```
 
 Check which hooks are installed:
@@ -203,7 +217,7 @@ Restart the terminal after installation or removal.
 
 The hook writes a per-process session log:
 
-- Session logs go to `<home>/workspaces/<workspace-key>/terminals/session_<pid>.jsonl` (`SIVTR_HOME` or `~/.sivtr`).
+- Session logs go to `<home>/workspaces/<workspace-key>/terminals/<terminal_id>.jsonl` (`SIVTR_HOME` or `~/.sivtr`).
 
 ## Configuration file
 

@@ -21,11 +21,13 @@ pub fn execute() -> Result<()> {
         Ok(format!("created {}", path.display()))
     })?;
 
+    // One step installs the shell block *and* turns capture on: the block only
+    // does anything while the proxy is enabled, so the two always go together.
     run_step(
-        &format!("installing hooks for {}", shells.join(", ")),
+        &format!("enabling terminal capture for {}", shells.join(", ")),
         || {
             for shell in &shells {
-                crate::commands::terminal::init::execute(shell)?;
+                crate::commands::terminal::pty_proxy::enable(shell)?;
             }
             Ok(format!("installed for {}", shells.join(", ")))
         },

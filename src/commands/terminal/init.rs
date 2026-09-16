@@ -16,7 +16,7 @@ struct HookSpec {
 const POWERSHELL_MARKER_START: &str = "# >>> sivtr shell integration >>>";
 const POWERSHELL_MARKER_END: &str = "# <<< sivtr shell integration <<<";
 const POWERSHELL_HOOK: &str = r#"# >>> sivtr shell integration >>>
-$env:SIVTR_TERMINAL_ID = "$PID"
+if (-not $env:SIVTR_TERMINAL_ID) { $env:SIVTR_TERMINAL_ID = "$PID" }
 if (-not $Global:_sivtr_prompt_wrapped) {
     $Global:_sivtr_orig_prompt = $function:prompt
     function Global:prompt {
@@ -25,35 +25,24 @@ if (-not $Global:_sivtr_prompt_wrapped) {
         } else {
             "PS $($executionContext.SessionState.Path.CurrentLocation)> "
         }
-        try {
+        if ($env:SIVTR_PTY_PROXY) {
             $last = Get-History -Count 1 -ErrorAction SilentlyContinue
-            if ($Global:_sivtr_next_command_cwd) {
-                $env:SIVTR_COMMAND_CWD = [string]$Global:_sivtr_next_command_cwd
-            } else {
-                Remove-Item Env:SIVTR_COMMAND_CWD -ErrorAction SilentlyContinue
-            }
             if ($last) {
-                $env:SIVTR_LAST_COMMAND = [string]$last.CommandLine
-                $env:SIVTR_LAST_COMMAND_ID = [string]$last.Id
-                $env:SIVTR_COMMAND_ENDED_AT = $last.EndExecutionTime.ToUniversalTime().ToString("o")
-                if ($last.Duration) {
-                    $env:SIVTR_COMMAND_DURATION_MS = [string][int64]$last.Duration.TotalMilliseconds
-                } else {
-                    Remove-Item Env:SIVTR_COMMAND_DURATION_MS -ErrorAction SilentlyContinue
-                }
+                $code = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+                sivtr pty-proxy report --command-id "$($last.Id)" --command "$($last.CommandLine)" --prompt "$rendered" --cwd "$($PWD.Path)" --exit $code
             }
-            if ($null -ne $LASTEXITCODE) {
-                $env:SIVTR_LAST_EXIT_CODE = [string]$LASTEXITCODE
-            } else {
-                Remove-Item Env:SIVTR_LAST_EXIT_CODE -ErrorAction SilentlyContinue
-            }
-            $env:SIVTR_LAST_PROMPT = [string]$rendered
-            sivtr flush
-            $Global:_sivtr_next_command_cwd = [string](Get-Location)
-        } catch {}
+            # PowerShell has no pre-exec hook, so the output block opens here and
+            # carries the echoed command line; the proxy drops that echo.
+            [Console]::Write([char]27 + "]133;C" + [char]27 + "\")
+        }
         $rendered
     }
     $Global:_sivtr_prompt_wrapped = $true
+}
+if (-not $env:SIVTR_PTY_PROXIED -and -not $env:SIVTR_NO_PTY_PROXY -and (Get-Command sivtr -ErrorAction SilentlyContinue)) {
+    $sivtrExe = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell' }
+    sivtr pty-proxy run $sivtrExe
+    exit $LASTEXITCODE
 }
 # <<< sivtr shell integration <<<
 "#;
@@ -61,26 +50,18 @@ if (-not $Global:_sivtr_prompt_wrapped) {
 const BASH_MARKER_START: &str = "# >>> sivtr shell integration >>>";
 const BASH_MARKER_END: &str = "# <<< sivtr shell integration <<<";
 const BASH_HOOK: &str = r#"# >>> sivtr shell integration >>>
-export SIVTR_TERMINAL_ID="$$"
+export SIVTR_TERMINAL_ID="${SIVTR_TERMINAL_ID:-$$}"
 __sivtr_precmd() {
   local exit_status=$?
-  local hist_entry
-  hist_entry="$(HISTTIMEFORMAT= history 1)"
-  if [[ $hist_entry =~ ^[[:space:]]*([0-9]+)[[:space:]]+(.*)$ ]]; then
-    export SIVTR_LAST_COMMAND_ID="${BASH_REMATCH[1]}"
-    export SIVTR_LAST_COMMAND="${BASH_REMATCH[2]}"
+  if [[ -n "${SIVTR_PTY_PROXY:-}" ]]; then
+    local hist_entry command_id="" command=""
+    hist_entry="$(HISTTIMEFORMAT= history 1)"
+    if [[ $hist_entry =~ ^[[:space:]]*([0-9]+)[[:space:]]+(.*)$ ]]; then
+      command_id="${BASH_REMATCH[1]}"
+      command="${BASH_REMATCH[2]}"
+    fi
+    sivtr pty-proxy report --command-id "$command_id" --command "$command" --prompt "${PS1@P}" --cwd "$PWD" --exit "$exit_status"
   fi
-  if [[ -n "${SIVTR_NEXT_COMMAND_CWD:-}" ]]; then
-    export SIVTR_COMMAND_CWD="$SIVTR_NEXT_COMMAND_CWD"
-  else
-    unset SIVTR_COMMAND_CWD
-  fi
-  export SIVTR_LAST_EXIT_CODE="$exit_status"
-  export SIVTR_COMMAND_ENDED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
-  unset SIVTR_COMMAND_DURATION_MS
-  export SIVTR_LAST_PROMPT="${PS1@P}"
-  sivtr flush >/dev/null 2>&1 || true
-  export SIVTR_NEXT_COMMAND_CWD="$PWD"
   return $exit_status
 }
 if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then
@@ -95,32 +76,47 @@ elif [[ -n "${PROMPT_COMMAND:-}" ]]; then
 else
   PROMPT_COMMAND="__sivtr_precmd"
 fi
+# Mark where a command's output starts. Only inside the proxy: with no consumer
+# the marker is noise, and the `report` call above is what closes the block.
+if [[ -n "${SIVTR_PTY_PROXY:-}" ]]; then
+  case "${PS0:-}" in
+    *$'\e]133;C'*) ;;
+    *) PS0=$'\e]133;C\e\\'"${PS0:-}" ;;
+  esac
+fi
+# Hand the terminal to the capture proxy; the profile is sourced again inside
+# it and installs the hooks above. Everything below the guard is skipped there.
+if [[ -z "${SIVTR_PTY_PROXIED:-}" ]] && [[ $- == *i* ]] && [[ -z "${SIVTR_NO_PTY_PROXY:-}" ]] && command -v sivtr >/dev/null 2>&1; then
+  exec sivtr pty-proxy run bash
+fi
 # <<< sivtr shell integration <<<
 "#;
 
 const ZSH_MARKER_START: &str = "# >>> sivtr shell integration >>>";
 const ZSH_MARKER_END: &str = "# <<< sivtr shell integration <<<";
 const ZSH_HOOK: &str = r#"# >>> sivtr shell integration >>>
-export SIVTR_TERMINAL_ID="$$"
+export SIVTR_TERMINAL_ID="${SIVTR_TERMINAL_ID:-$$}"
+_sivtr_preexec() {
+  printf '\033]133;C\033\\'
+}
 _sivtr_precmd() {
   local exit_status=$?
-  export SIVTR_LAST_COMMAND="$(fc -ln -1)"
-  export SIVTR_LAST_COMMAND_ID="$HISTCMD"
-  if [[ -n "${SIVTR_NEXT_COMMAND_CWD:-}" ]]; then
-    export SIVTR_COMMAND_CWD="$SIVTR_NEXT_COMMAND_CWD"
-  else
-    unset SIVTR_COMMAND_CWD
+  if [[ -n "${SIVTR_PTY_PROXY:-}" ]]; then
+    sivtr pty-proxy report --command-id "$HISTCMD" --command "$(fc -ln -1)" --prompt "$(print -P "$PROMPT")" --cwd "$PWD" --exit "$exit_status"
   fi
-  export SIVTR_LAST_EXIT_CODE="$exit_status"
-  export SIVTR_COMMAND_ENDED_AT="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)"
-  unset SIVTR_COMMAND_DURATION_MS
-  export SIVTR_LAST_PROMPT="$(print -P "$PROMPT")"
-  sivtr flush >/dev/null 2>&1 || true
-  export SIVTR_NEXT_COMMAND_CWD="$PWD"
   return $exit_status
 }
-if [[ " ${precmd_functions[*]:-} " != *" _sivtr_precmd "* ]]; then
-  precmd_functions=(_sivtr_precmd $precmd_functions)
+if [[ -n "${SIVTR_PTY_PROXY:-}" ]]; then
+  typeset -ga preexec_functions precmd_functions
+  if [[ " ${preexec_functions[*]:-} " != *" _sivtr_preexec "* ]]; then
+    preexec_functions=(_sivtr_preexec $preexec_functions)
+  fi
+  if [[ " ${precmd_functions[*]:-} " != *" _sivtr_precmd "* ]]; then
+    precmd_functions=(_sivtr_precmd $precmd_functions)
+  fi
+fi
+if [[ -z "${SIVTR_PTY_PROXIED:-}" ]] && [[ $- == *i* ]] && [[ -z "${SIVTR_NO_PTY_PROXY:-}" ]] && (( $+commands[sivtr] )); then
+  exec sivtr pty-proxy run zsh
 fi
 # <<< sivtr shell integration <<<
 "#;
@@ -128,35 +124,27 @@ fi
 const NUSHELL_MARKER_START: &str = "# >>> sivtr shell integration >>>";
 const NUSHELL_MARKER_END: &str = "# <<< sivtr shell integration <<<";
 const NUSHELL_HOOK: &str = r#"# >>> sivtr shell integration >>>
-$env.SIVTR_TERMINAL_ID = $"($nu.pid)"
-if (($env.SIVTR_PROMPT_WRAPPED? | default false) != true) {
-    let _sivtr_orig_prompt_command = ($env.PROMPT_COMMAND? | default {|| "" })
-    $env.SIVTR_PROMPT_CACHE = ($nu.temp-dir | path join $"sivtr_prompt_($nu.pid).txt")
-    def _sivtr_render_prompt [] {
-        do --ignore-errors $_sivtr_orig_prompt_command | default ""
+$env.SIVTR_TERMINAL_ID = ($env.SIVTR_TERMINAL_ID? | default $"($nu.pid)")
+if (($env.SIVTR_PTY_PROXY? | default "") != "") {
+    # The proxy's markers are the capture boundary, so nushell's own OSC 133
+    # would only add a second, unrelated set.
+    $env.config.shell_integration.osc133 = false
+    # `commandline` is only meaningful before the command runs, and `history` is
+    # not written yet when the prompt comes back, so the command is stashed here
+    # and reported below — which also keeps the metadata ahead of the `D`.
+    def --env _sivtr_pre_execution [] {
+        $env.SIVTR_COMMAND = (commandline)
+        print -n "\e]133;C\e\\"
     }
-    $env.PROMPT_COMMAND = {||
-        let rendered = (_sivtr_render_prompt | into string)
-        do --ignore-errors { $rendered | save --force $env.SIVTR_PROMPT_CACHE }
-        $rendered
+    def --env _sivtr_pre_prompt [] {
+        let code = (($env.LAST_EXIT_CODE? | default 0) | into int)
+        ^sivtr pty-proxy report --command-id (random uuid) --command ($env.SIVTR_COMMAND? | default "") --prompt "" --cwd $"(pwd)" --exit $code
     }
-
-    def --env _sivtr_precmd [] {
-        let last = (history | last 1 | get 0?)
-        $env.SIVTR_COMMAND_CWD = ($env.SIVTR_NEXT_COMMAND_CWD? | default "")
-        if $last != null {
-            $env.SIVTR_LAST_COMMAND = ($last.command? | default "")
-            $env.SIVTR_LAST_COMMAND_ID = (($last.start_timestamp? | default (date now)) | into string)
-            $env.SIVTR_COMMAND_DURATION_MS = (($last.duration? | default "") | into string)
-        }
-        $env.SIVTR_COMMAND_ENDED_AT = (date now | into string)
-        $env.SIVTR_LAST_EXIT_CODE = ($env.LAST_EXIT_CODE? | default "" | into string)
-        $env.SIVTR_LAST_PROMPT = (do --ignore-errors { open --raw $env.SIVTR_PROMPT_CACHE } | default "")
-        try { ^sivtr flush } catch {}
-        $env.SIVTR_NEXT_COMMAND_CWD = (pwd)
-    }
-    $env.config.hooks.pre_prompt = ($env.config.hooks.pre_prompt? | default [] | append {|| _sivtr_precmd })
-    $env.SIVTR_PROMPT_WRAPPED = true
+    $env.config.hooks.pre_execution = (($env.config.hooks.pre_execution? | default []) | append {|| _sivtr_pre_execution })
+    $env.config.hooks.pre_prompt = (($env.config.hooks.pre_prompt? | default []) | append {|| _sivtr_pre_prompt })
+}
+if (($env.SIVTR_PTY_PROXIED? | default "") == "") and (($env.SIVTR_NO_PTY_PROXY? | default "") == "") and (which sivtr | is-not-empty) {
+    exec sivtr pty-proxy run nu
 }
 # <<< sivtr shell integration <<<
 "#;
@@ -894,9 +882,23 @@ mod tests {
     }
 
     #[test]
-    fn current_powershell_hook_does_not_redirect_flush_output_handle() {
-        assert!(POWERSHELL_HOOK.contains("sivtr flush"));
-        assert!(!POWERSHELL_HOOK.contains("*>$null"));
+    fn every_hook_proxies_the_terminal_and_gates_capture() {
+        for hook in [POWERSHELL_HOOK, BASH_HOOK, ZSH_HOOK, NUSHELL_HOOK] {
+            // One re-exec entry, and it must be guarded or the shell loops.
+            assert!(hook.contains("sivtr pty-proxy run"), "{hook}");
+            assert!(hook.contains("SIVTR_PTY_PROXIED"), "{hook}");
+            // Capture is only announced when a proxy is actually listening.
+            assert!(hook.contains("SIVTR_PTY_PROXY"), "{hook}");
+            assert!(hook.contains("pty-proxy report"), "{hook}");
+            assert!(!hook.contains("sivtr flush"), "{hook}");
+            // The removed tee/trap approach must not come back.
+            assert!(!hook.contains("tee \"$SIVTR_CAPTURE_FILE\""), "{hook}");
+        }
+
+        // Every hook opens the block itself and lets `report` close it.
+        for hook in [POWERSHELL_HOOK, BASH_HOOK, ZSH_HOOK, NUSHELL_HOOK] {
+            assert!(hook.contains("133;C"), "{hook}");
+        }
     }
 
     #[test]
@@ -909,13 +911,12 @@ mod tests {
     }
 
     #[test]
-    fn nushell_hook_reuses_rendered_prompt_for_flush() {
-        assert!(NUSHELL_HOOK.contains("SIVTR_PROMPT_CACHE"));
-        assert!(NUSHELL_HOOK.contains("save --force $env.SIVTR_PROMPT_CACHE"));
-        assert!(NUSHELL_HOOK.contains("open --raw $env.SIVTR_PROMPT_CACHE"));
-        assert!(NUSHELL_HOOK.contains("def --env _sivtr_precmd"));
-        assert!(!NUSHELL_HOOK.contains("SIVTR_RENDERED_PROMPT"));
-        assert!(!NUSHELL_HOOK.contains("SIVTR_LAST_PROMPT = (_sivtr_render_prompt"));
+    fn nushell_hook_disables_native_markers() {
+        // Nushell ships its own OSC 133 integration; ours is the capture
+        // boundary, so the native one must be turned off to avoid a second set.
+        assert!(NUSHELL_HOOK.contains("shell_integration.osc133 = false"));
+        assert!(NUSHELL_HOOK.contains("hooks.pre_execution"));
+        assert!(NUSHELL_HOOK.contains("hooks.pre_prompt"));
     }
 
     #[test]
@@ -928,10 +929,16 @@ mod tests {
     }
 
     #[test]
-    fn bash_hook_keeps_capture_path_without_tty_redirection() {
-        assert!(BASH_HOOK.contains("export SIVTR_TERMINAL_ID="));
+    fn bash_hook_preserves_the_session_id_and_a_user_ps0() {
+        // The proxy sets SIVTR_TERMINAL_ID for the whole session; overwriting it
+        // here would split one terminal across two session logs.
+        assert!(BASH_HOOK.contains(r#"export SIVTR_TERMINAL_ID="${SIVTR_TERMINAL_ID:-$$}""#));
+        // A pre-existing PS0 is kept, and re-sourcing the profile must not stack
+        // markers onto it.
+        assert!(BASH_HOOK.contains(r#"PS0=$'\e]133;C\e\\'"${PS0:-}""#));
+        assert!(BASH_HOOK.contains(r"*$'\e]133;C'*"));
+        // The DEBUG trap is what bash-preexec needs; PS0 avoids it entirely.
         assert!(!BASH_HOOK.contains("trap '__sivtr_preexec' DEBUG"));
-        assert!(!BASH_HOOK.contains("exec > >(tee \"$SIVTR_CAPTURE_FILE\""));
     }
 
     #[test]
@@ -944,10 +951,10 @@ mod tests {
     }
 
     #[test]
-    fn zsh_hook_keeps_capture_path_without_tty_redirection() {
-        assert!(ZSH_HOOK.contains("export SIVTR_TERMINAL_ID="));
-        assert!(!ZSH_HOOK.contains("preexec_functions=(_sivtr_preexec"));
-        assert!(!ZSH_HOOK.contains("exec > >(tee \"$SIVTR_CAPTURE_FILE\""));
+    fn zsh_hook_preserves_the_session_id() {
+        assert!(ZSH_HOOK.contains(r#"export SIVTR_TERMINAL_ID="${SIVTR_TERMINAL_ID:-$$}""#));
+        assert!(ZSH_HOOK.contains("preexec_functions=(_sivtr_preexec"));
+        assert!(ZSH_HOOK.contains("precmd_functions=(_sivtr_precmd"));
     }
 
     #[test]

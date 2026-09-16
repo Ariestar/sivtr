@@ -83,9 +83,21 @@ Always confirm before starting work:
 pwd && git branch
 ```
 
-## Shell Hook System
+## Shell Integration and Terminal Capture
 
-`sivtr init {shell}` injects precmd hooks using marker blocks (`# >>> sivtr shell integration >>>`). Session logs go to `<home>/workspaces/<workspace-key>/terminals/session_<pid>.jsonl` (`SIVTR_HOME` or `~/.sivtr`). Internal `sivtr flush` called by hooks on each prompt.
+`sivtr init {shell}` injects a marker-delimited block (`# >>> sivtr shell integration >>>`) that
+installs the prompt hooks and, at its end, re-execs the shell under `sivtr pty-proxy run <shell>`.
+
+Capture is opt-in: `sivtr pty-proxy enable [shell|all]` sets `[pty_proxy] enabled = true` and
+installs the block (`sivtr setup` does both in one step). The block is inert while the flag is
+off, and the proxy falls back to a plain shell if it cannot start, so a stale block never costs
+the user their terminal.
+
+The proxy owns the pty, so the child keeps a real `isatty`. The hooks emit `OSC 133;C` before a
+command runs and call `sivtr pty-proxy report` after it; `report` writes the command metadata and
+prints `OSC 133;D`. The proxy slices the bytes between the two markers and appends one
+`SessionEntry` to `<home>/workspaces/<workspace-key>/terminals/<terminal_id>.jsonl`
+(`SIVTR_HOME` or `~/.sivtr`). The archive picks those logs up through the normal sync pass.
 
 ## Search Pipeline
 

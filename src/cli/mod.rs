@@ -10,9 +10,11 @@ use std::sync::LazyLock;
 use crate::commands::memory::show::WorkSetOutputFormat;
 
 mod mcp;
+mod pty;
 mod publish;
 mod remote;
 pub use mcp::*;
+pub use pty::*;
 pub use publish::*;
 pub use remote::*;
 
@@ -453,9 +455,8 @@ pub enum Commands {
     /// Clear session logs
     Clear(ClearArgs),
 
-    /// Internal: flush console buffer to session log (called by shell hook)
-    #[command(hide = true)]
-    Flush,
+    /// Capture terminal output through a shell proxy
+    PtyProxy(PtyProxyCommand),
 
     /// Internal: run the Windows hotkey daemon loop
     #[command(hide = true)]

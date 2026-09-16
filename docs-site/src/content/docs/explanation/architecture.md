@@ -51,7 +51,7 @@ sivtr/
 | Area | Responsibility |
 | --- | --- |
 | `cli/` | clap command definitions and help text (`mod.rs` + `remote.rs`) |
-| `commands/capture/` | run, pipe, copy, init, flush, import, diff, clear, browse |
+| `commands/capture/` | run, pipe, copy, init, import, diff, clear, browse |
 | `commands/memory/` | search, filter, var, nav, zoom, show, work, WorkSet store |
 | `commands/remote/` | serve, share, remote (git-remote style names), peer, workspace list |
 | `commands/system/` | config, doctor, hotkey, migrate, sync, version |
@@ -70,7 +70,7 @@ This layer can depend on terminal UI libraries, platform APIs, process spawning,
 | `agents` | `AgentProvider` registry plus per-provider discovery/parsing (Codex, Claude, Cursor, OpenCode, OpenClaw, Hermes, Grok, Pi, …) |
 | `record` | `WorkRecord`, `WorkPart`, `WorkRef` as `WorkScope` + `WorkPath` + `WorkAt` (`[scope:]path[/at]`) |
 | `query` | load workspace records and local-shaped sources for CLI and daemon |
-| `capture` | stdin, subprocess, and scrollback/session capture helpers |
+| `capture` | pipe and subprocess capture helpers |
 | `parse` | ANSI stripping, Unicode display width, and line parsing |
 | `buffer` | line, cursor, and viewport models |
 | `selection` | visual, line, and block selection extraction |
@@ -119,6 +119,8 @@ Workspace picker/search:
 ```text
 terminal context + provider sessions -> WorkspaceSession list -> search/pick/show -> clipboard/stdout/json
 ```
+
+Live shell capture is handled by an optional pty proxy (`sivtr pty-proxy`): it owns the pty, forwards bytes, and slices each command's output using the shell's `OSC 133;C` / `OSC 133;D` markers, then writes the terminals JSONL that sync ingests into the archive.
 
 ## Unified archive
 

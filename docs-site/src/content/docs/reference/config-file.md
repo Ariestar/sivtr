@@ -34,6 +34,9 @@ endpoint = "https://api.openai.com/v1/embeddings"
 model = "text-embedding-3-small"
 api_key_env = "OPENAI_API_KEY"
 batch_size = 64
+
+[pty_proxy]
+enabled = false
 ```
 
 ## editor
@@ -115,3 +118,16 @@ idle_exit_secs = 60
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `idle_exit_secs` | integer | `60` | Seconds without tool calls before the stdio MCP server exits; `0` keeps it alive until the host closes stdin. The `sivtr mcp serve --idle-exit` flag overrides this. |
+
+## pty_proxy
+
+```toml
+[pty_proxy]
+enabled = false
+```
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `enabled` | boolean | `false` | Run the shell inside the capture proxy and record command output. |
+
+Capture is off by default. `sivtr pty-proxy enable <shell|all>` turns it on and installs the shell block in one step. `sivtr pty-proxy disable` only flips the switch back; a leftover shell block stays inert and costs nothing more than one short-lived process per shell.

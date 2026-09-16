@@ -51,7 +51,7 @@ sivtr/
 | 区域 | 责任 |
 | --- | --- |
 | `cli/` | clap 命令定义和 help text（`mod.rs` + `remote.rs`） |
-| `commands/capture/` | run、pipe、copy、init、flush、import、diff、clear、browse |
+| `commands/capture/` | run、pipe、copy、init、import、diff、clear、browse |
 | `commands/memory/` | search、filter、var、nav、zoom、show、work、WorkSet store |
 | `commands/remote/` | serve、share、remote（git-remote 风格命名）、peer、workspace list |
 | `commands/publish/` | 本地 WorkSet 的隐私投影、AES-GCM envelope、公开链接状态与撤销 |
@@ -71,7 +71,7 @@ sivtr/
 | `agents` | `AgentProvider` registry 以及各 provider 发现/解析（Codex、Claude、Cursor、OpenCode、OpenClaw、Hermes、Grok、Pi…） |
 | `record` | `WorkRecord`、`WorkPart`、`WorkRef` = `WorkScope` + `WorkPath` + `WorkAt`（`[scope:]path[/at]`） |
 | `query` | 为 CLI 和 daemon 加载 workspace records 与 local-shaped sources |
-| `capture` | stdin、subprocess、scrollback/session capture helpers |
+| `capture` | pipe、subprocess capture helpers |
 | `parse` | ANSI 剥离、Unicode display width、行解析 |
 | `buffer` | line、cursor、viewport 模型 |
 | `selection` | visual / line / block selection 提取 |
@@ -120,6 +120,8 @@ Workspace picker/search：
 ```text
 terminal context + provider sessions -> WorkspaceSession list -> search/pick/show -> clipboard/stdout/json
 ```
+
+活动 shell 的采集由一个可选的 pty 代理（`sivtr pty-proxy`）负责：它持有 pty、转发字节，并用 shell 发出的 `OSC 133;C` / `OSC 133;D` 标记切出每条命令的输出，随后照常写入 terminals JSONL 并由 sync 摄入 archive。
 
 ## 统一 archive
 
