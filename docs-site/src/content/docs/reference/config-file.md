@@ -103,7 +103,7 @@ mode = "auto"
 | --- | --- | --- | --- |
 | `mode` | string | `"auto"` | TUI color scheme: `auto`, `dark`, or `light` |
 
-`auto` follows the system appearance (macOS/Linux XDG/Windows registry) and picks the truecolor vs ANSI palette from terminal capability. `dark` and `light` force a palette. The key rejects unknown values and typos (e.g. `mode = "ligth"` is a hard error).
+`auto` follows the terminal background (`COLORFGBG`, then the Windows console color table, then desktop appearance on macOS/Linux) and picks the truecolor vs ANSI palette from terminal capability. `dark` and `light` force a palette. The key rejects unknown values and typos (e.g. `mode = "ligth"` is a hard error).
 
 ## mcp
 

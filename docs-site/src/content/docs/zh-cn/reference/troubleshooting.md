@@ -95,6 +95,19 @@ sivtr hotkey start --chord ctrl+shift+y
 
 如果注册失败，可能是其他应用已经占用了这个快捷键。
 
+## PowerShell 里选中列被白光盖住
+
+PowerShell 里裸跑 `sivtr` 就是同一套 workspace 浏览器，不是另一套 GUI。Windows 系统是浅色、Windows Terminal / PowerShell 实际是深色时，旧的 `auto` 会跟着系统外观选用浅色调色板，把近白的 `focus_bg` 画在光标行上。
+
+现在 `auto` 会先读终端背景。若选中列仍然发白，强制深色：
+
+```toml
+[theme]
+mode = "dark"
+```
+
+然后重新打开浏览器（`sivtr`）。`sivtr config edit` 会打开配置文件。
+
 ## Linux 没有全局热键
 
 这是预期行为。Linux 当前没有内置桌面级 `sivtr` daemon，因为 Wayland 和各桌面环境没有给普通 CLI 应用提供统一快捷键 API。

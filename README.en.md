@@ -73,7 +73,7 @@ With `sivtr`, you can:
 - **Stats, quality, and portable import/export**: `stats`, secret findings, starred sessions, Claude.ai/ChatGPT JSON/ZIP import, and JSON/JSONL/Markdown/HTML export.
 - **Local Web UI**: `sivtr web` serves a loopback dashboard and JSON API over the same unified archive.
 - **Cross-device access**: share a workspace read-only and browse another device with a `desk:...` ref; multiple devices can form a `group` that syncs membership and lets members read each other's memory.
-- **Configurable theme**: `[theme] mode = auto|dark|light`, follows the system appearance and detects truecolor.
+- **Configurable theme**: `[theme] mode = auto|dark|light`, follows the terminal background and detects truecolor.
 - **One-command setup**: `sivtr setup` for hooks + MCP host install; `sivtr doctor --fix` to repair.
 - **CLI still there when you want it**: search, show, filter, nav, and a TUI browser for humans — useful, not the main product story.
 

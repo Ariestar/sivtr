@@ -95,6 +95,19 @@ sivtr hotkey start --chord ctrl+shift+y
 
 If registration fails, another app may already own the shortcut.
 
+## PowerShell selected column is a white bar
+
+Bare `sivtr` in PowerShell is the same workspace browser as in other terminals — not a different GUI. A dark Windows Terminal / PowerShell host plus Windows in light mode used to pick the light TUI palette, so the cursor row was painted with a near-white `focus_bg`.
+
+`auto` now reads the terminal background first. If a selected column is still washed out, force the dark palette:
+
+```toml
+[theme]
+mode = "dark"
+```
+
+Then reopen the browser (`sivtr`). `sivtr config edit` opens the file.
+
 ## Linux global hotkey is missing
 
 This is expected. Linux does not currently ship a built-in desktop-wide `sivtr` daemon because Wayland and desktop environments do not provide one universal shortcut API for ordinary CLI apps.
