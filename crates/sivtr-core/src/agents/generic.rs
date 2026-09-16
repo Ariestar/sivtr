@@ -150,7 +150,6 @@ fn root_env(provider: AgentProvider) -> Option<&'static str> {
         AgentProvider::Aider => "AIDER_DIR",
         AgentProvider::Antigravity => "ANTIGRAVITY_DIR",
         AgentProvider::AntigravityCli => "ANTIGRAVITY_CLI_DIR",
-        AgentProvider::CommandCode => "COMMANDCODE_PROJECTS_DIR",
         AgentProvider::Copilot => "COPILOT_DIR",
         AgentProvider::DeepSeekTui => "DEEPSEEK_TUI_SESSIONS_DIR",
         AgentProvider::Forge => "FORGE_DIR",
@@ -182,7 +181,6 @@ fn default_roots(provider: AgentProvider) -> &'static [&'static str] {
     match provider {
         AgentProvider::Amp => &[".local/share/amp/threads"],
         AgentProvider::Antigravity | AgentProvider::AntigravityCli => &[".gemini/antigravity"],
-        AgentProvider::CommandCode => &[".commandcode/projects"],
         AgentProvider::Copilot => &[".copilot"],
         AgentProvider::DeepSeekTui => &[".codewhale/sessions", ".deepseek/sessions"],
         AgentProvider::Forge => &[".forge"],
