@@ -109,6 +109,38 @@ fn is_session_header(value: &Value) -> bool {
     value.get("type").and_then(Value::as_str) == Some("session")
 }
 
+/// Position in a transcript.
+///
+/// Only the opening entry may establish the header, so a file that begins with
+/// anything else is a foreign artifact rather than a transcript with a
+/// misplaced header: `Foreign` keeps the rest of the file from being read as
+/// dialogue, and the parser rejects it once the shared line loop is done (that
+/// loop cannot fail mid-stream).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum Head {
+    #[default]
+    Expected,
+    Body,
+    Foreign,
+}
+
+/// Advance the transcript position for one entry, reporting whether the entry
+/// is the opening `session` header. Shared by both parsers so the
+/// first-entry-must-be-the-header rule lives in one place.
+fn advance_head(head: &mut Head, value: &Value) -> bool {
+    match head {
+        Head::Expected if is_session_header(value) => {
+            *head = Head::Body;
+            true
+        }
+        Head::Expected => {
+            *head = Head::Foreign;
+            false
+        }
+        Head::Body | Head::Foreign => false,
+    }
+}
+
 /// Error for a file that does not open with a `session` header: empty, or a
 /// different JSONL artifact. Shared by both parsers so the contract stays in
 /// one place.
@@ -172,27 +204,22 @@ fn sidecar_title(path: &Path) -> Option<String> {
 /// title. The header is the first line; a file that does not start with one is
 /// not a transcript and is rejected so the shared listing layer skips it.
 fn parse_session_meta(path: &Path) -> Result<AgentSessionMeta> {
-    let mut header_seen = false;
+    let mut head = Head::default();
     let mut first_user = None;
     let mut meta = parse_jsonl_meta(path, PROVIDER_NAME, META_MAX_LINES, |meta, value| {
-        if !header_seen {
-            header_seen = is_session_header(value);
-            if header_seen {
-                if meta.id.is_none() {
-                    meta.id = value.get("id").and_then(Value::as_str).map(str::to_string);
-                }
-                if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
-                    meta.add_cwd(cwd);
-                }
+        if advance_head(&mut head, value) {
+            if meta.id.is_none() {
+                meta.id = value.get("id").and_then(Value::as_str).map(str::to_string);
             }
-            return;
-        }
-        if first_user.is_none() {
+            if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
+                meta.add_cwd(cwd);
+            }
+        } else if head == Head::Body && first_user.is_none() {
             first_user = user_text(value);
         }
     })?;
 
-    if !header_seen {
+    if head != Head::Body {
         return Err(missing_session_header(path));
     }
     meta.title = session_title(path, first_user.as_deref());
@@ -201,22 +228,19 @@ fn parse_session_meta(path: &Path) -> Result<AgentSessionMeta> {
 
 /// Full parse of one transcript into blocks.
 fn parse_transcript(path: &Path) -> Result<AgentSession> {
-    let mut header_seen = false;
+    let mut head = Head::default();
     let mut tool_names: HashMap<String, String> = HashMap::new();
     let mut first_user = None;
     let mut session = parse_jsonl_session(path, PROVIDER_NAME, |session, value| {
-        if !header_seen {
-            header_seen = is_session_header(value);
-            if header_seen {
-                session.id = value.get("id").and_then(Value::as_str).map(str::to_string);
-                session.cwd = value.get("cwd").and_then(Value::as_str).map(str::to_string);
-            }
-            return;
+        if advance_head(&mut head, value) {
+            session.id = value.get("id").and_then(Value::as_str).map(str::to_string);
+            session.cwd = value.get("cwd").and_then(Value::as_str).map(str::to_string);
+        } else if head == Head::Body {
+            apply_entry(session, &mut tool_names, &mut first_user, value);
         }
-        apply_entry(session, &mut tool_names, &mut first_user, value);
     })?;
 
-    if !header_seen {
+    if head != Head::Body {
         return Err(missing_session_header(path));
     }
     session.title = session_title(path, first_user.as_deref());
@@ -476,6 +500,33 @@ mod tests {
             ] {
                 assert!(format!("{error:#}").contains("missing session header"));
             }
+        }
+    }
+
+    #[test]
+    fn refuses_a_header_that_does_not_open_the_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("late-header.jsonl");
+        // A leading message followed by a session entry is not a transcript.
+        // Only the opening entry may establish the header, so this must be
+        // rejected rather than dropping the message and adopting the session
+        // entry that follows it.
+        fs::write(
+            &path,
+            concat!(
+                r#"{"type":"message","timestamp":"2026-09-16T02:58:10.867Z","message":{"role":"user","content":[{"type":"text","text":"leading prompt"}]}}"#,
+                "\n",
+                r#"{"type":"session","version":3,"id":"7f3c1a2e-0d5b-4a91-9c88-2b6f4d1e5a30","cwd":"C:\\repo"}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+
+        for error in [
+            CmdcProvider.parse_session_file(&path).unwrap_err(),
+            parse_session_meta(&path).unwrap_err(),
+        ] {
+            assert!(format!("{error:#}").contains("missing session header"));
         }
     }
 
