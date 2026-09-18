@@ -47,12 +47,16 @@ src/                       ← CLI binary
   main.rs                  ← Command routing
   cli/
     mod.rs                 ← Top-level Clap definitions (copy agents via registry external subcommand)
+    pty.rs                 ← `pty-proxy` subcommands
     remote.rs              ← serve/share/peer/remote/group/workspace Clap types
   commands/
-    capture/               ← copy, pipe, run, init, flush, diff, clear, browse
+    browse/                ← Product TUI (bare `sivtr`, hotkey, pick)
     memory/                ← search, filter, var, nav, zoom, show, work, workset
+    publish/               ← Privacy-projected shared publications
     remote/                ← serve, share, mounts, peer, group, workspace
     system/                ← config, doctor, export, hotkey, import, quality, session, stats, sync, usage, version
+    terminal/              ← run, pipe, init, pty-proxy, clear
+  pty/                     ← Capture proxy: owns the pty, records OSC 133 blocks
   remote/                  ← Device daemon, identity, state, protocol, ipc
   tui/                     ← Terminal UI framework
 ```

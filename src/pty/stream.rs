@@ -10,6 +10,11 @@
 /// ponytail: keep the first 8 MiB; spill to a file per command if that bites.
 const MAX_BLOCK_BYTES: usize = 8 * 1024 * 1024;
 
+/// Cap on a single OSC payload. Only `133` parameters and window titles travel
+/// this way, so anything larger is a child spewing an unterminated sequence —
+/// it must not be allowed to grow the parser's heap either.
+const MAX_OSC_PAYLOAD: usize = 4096;
+
 const ESC: u8 = 0x1b;
 const BEL: u8 = 0x07;
 
@@ -84,8 +89,13 @@ impl Stream {
                         self.finish(&mut events);
                     } else if byte == ESC {
                         self.state = State::OscEsc;
-                    } else {
+                    } else if self.payload.len() < MAX_OSC_PAYLOAD {
                         self.payload.push(byte);
+                    } else {
+                        // Unterminated sequence: give up on it and let the rest
+                        // stream through as ordinary output.
+                        self.payload.clear();
+                        self.state = State::Ground;
                     }
                 }
                 State::OscEsc => {
@@ -161,7 +171,7 @@ fn classify(payload: &[u8]) -> Option<Marker> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Event, Stream};
+    use super::{Event, Stream, MAX_OSC_PAYLOAD};
 
     fn run(chunks: &[&[u8]]) -> (Vec<Event>, Vec<u8>) {
         let mut stream = Stream::default();
@@ -266,5 +276,27 @@ mod tests {
     fn ignores_other_osc_codes() {
         let (events, _) = run(&[b"\x1b]1338;C\x1b\\\x1b]133;C\x1b\\\x1b]133;D\x1b\\"]);
         assert_eq!(events, vec![Event::CommandStart, Event::CommandEnd(None)]);
+    }
+
+    #[test]
+    fn abandoned_osc_payload_does_not_grow_without_bound() {
+        let mut stream = Stream::default();
+        // An unterminated OSC that keeps feeding bytes must not buffer forever.
+        stream.push(b"\x1b]0;");
+        for _ in 0..64 {
+            stream.push(&[b'x'; 1024]);
+        }
+        assert!(
+            stream.payload.len() <= MAX_OSC_PAYLOAD,
+            "payload grew to {}",
+            stream.payload.len()
+        );
+
+        // The parser recovers, so a later real marker still lands.
+        let events = stream.push(b"\x1b]133;C\x1b\\\x1b]133;D;0\x1b\\");
+        assert_eq!(
+            events,
+            vec![Event::CommandStart, Event::CommandEnd(Some(0))]
+        );
     }
 }

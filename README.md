@@ -109,7 +109,7 @@ sivtr doctor
 ```
 
 > [!NOTE]
-> 终端采集是可选开启的：`sivtr pty-proxy enable` 会把 shell 包进 pty 代理，`vim`、`htop`、`ssh` 等交互程序行为不变。关闭用 `sivtr pty-proxy disable`。
+> 终端采集是可选开启的：`sivtr pty-proxy enable` 会把 shell 包进 pty 代理，`vim`、`htop`、`ssh` 等交互程序行为不变。开启后需要**新开一个 shell** 才会生效（代理在下一个 shell 启动，当前这个不会），关闭用 `sivtr pty-proxy disable`。
 
 同步并查看 archive：
 

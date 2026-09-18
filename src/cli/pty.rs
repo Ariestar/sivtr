@@ -36,6 +36,10 @@ pub enum PtyProxyAction {
         /// Exit status of the command
         #[arg(long, default_value_t = 0)]
         exit: i32,
+        /// The block opens with the echoed input line (PowerShell, whose block
+        /// can only start at the end of its prompt)
+        #[arg(long)]
+        drop_first_line: bool,
     },
 
     /// Turn terminal capture on and install the shell integration

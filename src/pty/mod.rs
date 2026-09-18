@@ -40,14 +40,18 @@ pub const PROXY_ENV: &str = "SIVTR_PTY_PROXY";
 ///
 /// Written by `sivtr pty-proxy report`, read by the proxy. `report` finishes the
 /// write before it prints `D`, and `D` only reaches the proxy after that, so the
-/// proxy never reads a partial file.
-#[derive(Debug, Default, Serialize, Deserialize)]
-#[serde(default)]
+/// proxy never reads a partial file — and a fresh session id per run means it
+/// never reads a stale one either.
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Pending {
     pub command_id: Option<String>,
     pub prompt: String,
     pub command: String,
     pub cwd: Option<String>,
+    /// The shell's block opens with the echoed input line, because it can only
+    /// emit `C` at the end of its prompt. Declared by PowerShell; the proxy then
+    /// drops exactly that line instead of guessing where the output starts.
+    pub drop_first_line: bool,
 }
 
 /// Where `report` leaves metadata for `terminal_id`.
@@ -60,7 +64,7 @@ pub fn pending_path(terminal_id: &str) -> PathBuf {
 /// Run `program` inside a pty until it exits, returning its exit code.
 pub fn run(program: &str, args: &[String]) -> Result<i32> {
     // Inherited by the child, so everything in the session agrees on one log.
-    let id = format!("pty_{}", std::process::id());
+    let id = workspace::new_terminal_id();
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
     // Take the terminal before spawning anything: failing here must not leave a
     // shell running in a pty that nobody drains.
@@ -229,12 +233,14 @@ impl Recorder {
             return;
         }
 
-        let output = strip_command_echo(output, &metadata.command);
-        let output = trim_trailing_prompt_artifact(
-            String::from_utf8_lossy(output).into_owned(),
-            &metadata.prompt,
-        );
-        match self.append(&output, exit_code, duration_ms, &metadata) {
+        let output = String::from_utf8_lossy(output);
+        let output = if metadata.drop_first_line {
+            drop_first_line(&output)
+        } else {
+            output.as_ref()
+        };
+        let output = trim_trailing_mark(output, &metadata.prompt);
+        match self.append(output, exit_code, duration_ms, &metadata) {
             Ok(()) => {
                 self.state.last_command_id = metadata.command_id;
                 self.state.last_command = Some(metadata.command);
@@ -286,85 +292,44 @@ fn should_record(state: &SessionState, command_id: Option<&str>, command: &str) 
     }
 }
 
-/// PowerShell has no pre-exec hook, so it emits `C` at the end of the prompt and
-/// its block opens with the echo of the typed line. Drop that first line — but
-/// only when it really is the echo, so shells that emit `C` right before running
-/// the command (and therefore have clean blocks) never match.
-fn strip_command_echo<'a>(output: &'a [u8], command: &str) -> &'a [u8] {
-    let command = command.trim();
-    if command.is_empty() {
-        return output;
+/// Drop the echoed input line that opens a PowerShell block.
+///
+/// The shell declares this (`drop_first_line`), so nothing is guessed: the
+/// bytes after `C` are exactly what the user typed, and the output begins after
+/// that line's newline.
+fn drop_first_line(output: &str) -> &str {
+    match output.find('\n') {
+        Some(newline) => &output[newline + 1..],
+        None => "",
     }
-    let window = &output[..output.len().min(4096)];
-    let Some(newline) = window.iter().position(|byte| *byte == b'\n') else {
-        return output;
-    };
-    let first_line = String::from_utf8_lossy(&window[..newline]);
-    if plain_line(&first_line).trim_end().ends_with(command) {
-        return &output[newline + 1..];
-    }
-    output
 }
 
-/// `line` with CSI/OSC escape sequences removed, so a syntax-highlighted echo
-/// can be compared against the plain command text.
-fn plain_line(line: &str) -> String {
-    let mut plain = String::with_capacity(line.len());
-    let mut chars = line.chars();
-    while let Some(ch) = chars.next() {
-        if ch != '\x1b' {
-            plain.push(ch);
-            continue;
-        }
-        match chars.next() {
-            // CSI: parameters and intermediates, then a final byte 0x40..=0x7e.
-            Some('[') => {
-                chars.by_ref().any(|next| ('\x40'..='\x7e').contains(&next));
-            }
-            // OSC: everything up to BEL or ST.
-            Some(']') => {
-                let mut previous = '\0';
-                for next in chars.by_ref() {
-                    if next == '\x07' || (previous == '\x1b' && next == '\\') {
-                        break;
-                    }
-                    previous = next;
-                }
-            }
-            _ => {}
-        }
+/// zsh draws its partial-line mark *before* it runs `precmd`, so the mark lands
+/// inside the block. Strip it only when it is provably decoration: the trailing
+/// fragment carries escape sequences and what is left of it is the tail of the
+/// prompt. A line of real output never qualifies.
+fn trim_trailing_mark<'a>(output: &'a str, prompt: &str) -> &'a str {
+    let head = output.rfind('\n').map_or(0, |at| at + 1);
+    let fragment = &output[head..];
+    if !fragment.contains('\x1b') {
+        return output;
     }
-    plain
-}
-
-/// zsh prints `PROMPT_EOL_MARK` *before* it runs its `precmd` hook, so that mark
-/// lands inside the block. Drop a trailing line that is really the prompt: an
-/// empty line, or one matching the tail of the prompt we recorded.
-fn trim_trailing_prompt_artifact(output: String, prompt: &str) -> String {
-    let prompt_last_line = SessionEntry::new(prompt, "", "")
+    let plain = SessionEntry::new("", "", fragment).output;
+    let plain = plain.trim_end_matches([' ', '\r', '\t']);
+    if plain.is_empty() {
+        return output;
+    }
+    if !SessionEntry::new(prompt, "", "")
         .prompt
-        .lines()
-        .last()
-        .unwrap_or_default()
         .trim_end()
-        .to_string();
-    if prompt_last_line.is_empty() {
+        .ends_with(plain)
+    {
         return output;
     }
-
-    let mut lines: Vec<&str> = output.lines().collect();
-    let Some(last_raw_line) = lines.last().copied() else {
-        return output;
-    };
-    let last_plain_line = SessionEntry::new("", "", last_raw_line)
-        .output
-        .trim()
-        .to_string();
-    if last_plain_line.is_empty() || prompt_last_line.ends_with(&last_plain_line) {
-        lines.pop();
-        return lines.join("\n");
+    match head {
+        0 => "",
+        head => &output[..head - 1],
     }
-    output
 }
 
 /// A pty reports "the child hung up" as `EIO` on Unix and a broken pipe on
@@ -402,8 +367,7 @@ impl Drop for RawMode {
 #[cfg(test)]
 mod tests {
     use super::{
-        now_timestamp, pending_path, plain_line, should_record, strip_command_echo,
-        trim_trailing_prompt_artifact, Pending,
+        drop_first_line, now_timestamp, pending_path, should_record, trim_trailing_mark, Pending,
     };
     use sivtr_core::session::SessionState;
 
@@ -437,17 +401,27 @@ mod tests {
             prompt: "repo on main\n❯  ".into(),
             command: "echo '中文' && true".into(),
             cwd: Some("/home/user/repo".into()),
+            drop_first_line: true,
         };
         let text = serde_json::to_string(&pending).expect("encode");
         let decoded: Pending = serde_json::from_str(&text).expect("decode");
         assert_eq!(decoded.command, "echo '中文' && true");
         assert_eq!(decoded.cwd.as_deref(), Some("/home/user/repo"));
+        assert!(decoded.drop_first_line);
     }
 
     #[test]
     fn pending_path_is_scoped_per_terminal() {
         let path = pending_path("pty_123");
         assert!(path.to_string_lossy().ends_with("pty_123.pending"));
+    }
+
+    #[test]
+    fn terminal_ids_do_not_repeat() {
+        let first = sivtr_core::workspace::new_terminal_id();
+        let second = sivtr_core::workspace::new_terminal_id();
+        assert!(first.starts_with("pty_"), "{first}");
+        assert_ne!(first, second);
     }
 
     #[test]
@@ -458,71 +432,51 @@ mod tests {
     }
 
     #[test]
-    fn strips_the_echoed_command_line() {
-        let block = b"echo hi\r\nhi\r\n";
-        assert_eq!(strip_command_echo(block, "echo hi"), b"hi\r\n");
+    fn drops_the_declared_echo_line() {
+        assert_eq!(drop_first_line("echo hi\r\nhi\r\n"), "hi\r\n");
+        // A highlighted echo drops just the same.
+        assert_eq!(
+            drop_first_line("\x1b[32mecho\x1b[0m hi\r\nhi\r\n"),
+            "hi\r\n"
+        );
+        // Nothing follows the echo: no output, not a stray fragment.
+        assert_eq!(drop_first_line("echo hi\r\n"), "");
+        assert_eq!(drop_first_line("echo hi"), "");
     }
 
     #[test]
     fn strips_the_zsh_prompt_end_mark() {
-        // zsh writes PROMPT_EOL_MARK before precmd, so the block ends with the
-        // prompt's last character (ANSI-wrapped) plus the padding it clears.
+        // zsh draws its mark before precmd, so the block ends with the mark
+        // (ANSI-wrapped) plus the padding it clears with.
         let prompt = "MS-Challenger-B760M-F-WIFI% ";
         let output = "from-zsh\n\u{1b}[1m\u{1b}[7m%\u{1b}[27m\u{1b}[1m\u{1b}[0m \r \r";
-        assert_eq!(
-            trim_trailing_prompt_artifact(output.to_string(), prompt),
-            "from-zsh"
-        );
+        assert_eq!(trim_trailing_mark(output, prompt), "from-zsh");
     }
 
     #[test]
-    fn keeps_a_trailing_line_that_is_real_output() {
+    fn strips_a_block_that_is_only_the_mark() {
         let prompt = "repo% ";
-        let output = "one\ntwo";
-        assert_eq!(
-            trim_trailing_prompt_artifact(output.to_string(), prompt),
-            "one\ntwo"
-        );
+        assert_eq!(trim_trailing_mark("\u{1b}[7m%\u{1b}[0m \r", prompt), "");
+    }
+
+    #[test]
+    fn keeps_plain_output_that_looks_like_the_prompt() {
+        // The reviewer's case: a real `%` line carries no escapes, so it is
+        // output, not decoration.
+        let prompt = "repo% ";
+        assert_eq!(trim_trailing_mark("weird\n%", prompt), "weird\n%");
+    }
+
+    #[test]
+    fn keeps_coloured_output_that_is_not_the_prompt() {
+        let prompt = "repo% ";
+        let output = "\u{1b}[31mfailed\u{1b}[0m";
+        assert_eq!(trim_trailing_mark(output, prompt), output);
     }
 
     #[test]
     fn keeps_everything_when_no_prompt_was_recorded() {
-        let output = "one\ntwo\n".to_string();
-        assert_eq!(trim_trailing_prompt_artifact(output.clone(), ""), output);
-    }
-
-    #[test]
-    fn plain_line_drops_escapes_and_keeps_text() {
-        assert_eq!(plain_line("\x1b[32mecho\x1b[0m hi"), "echo hi");
-        assert_eq!(plain_line("\x1b]0;title\x07text"), "text");
-        assert_eq!(plain_line("plain"), "plain");
-        // A truncated escape must not swallow the rest of the line.
-        assert_eq!(plain_line("kept\x1b[32"), "kept");
-    }
-
-    #[test]
-    fn strips_echo_with_colour_around_it() {
-        let block = b"\x1b[32mecho\x1b[0m hi\r\nhi\r\n";
-        assert_eq!(strip_command_echo(block, "echo hi"), b"hi\r\n");
-    }
-
-    #[test]
-    fn keeps_clean_blocks_that_only_look_similar() {
-        // The command appears in the output, but not on the first line: this is
-        // a normal block from a shell with a real pre-exec hook.
-        let block = b"first line\necho hi\n";
-        assert_eq!(strip_command_echo(block, "echo hi"), block);
-    }
-
-    #[test]
-    fn keeps_output_when_the_command_never_appears() {
-        let block = b"just output\n";
-        assert_eq!(strip_command_echo(block, "ls -la"), block);
-    }
-
-    #[test]
-    fn ignores_an_empty_command() {
-        let block = b"output\n";
-        assert_eq!(strip_command_echo(block, "  "), block);
+        let output = "one\n\u{1b}[7m%\u{1b}[0m";
+        assert_eq!(trim_trailing_mark(output, ""), output);
     }
 }

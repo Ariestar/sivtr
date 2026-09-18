@@ -94,7 +94,7 @@ impl Report {
         self.check_config(fix);
         self.check_session_dir();
         self.check_shell_hooks(fix);
-        self.check_terminal_capture(fix);
+        self.check_terminal_capture();
         self.check_workspace_keys(fix);
         self.check_agent_hosts();
         self.check_mcp_registration(fix);
@@ -388,9 +388,10 @@ impl Report {
         }
     }
 
-    /// Terminal capture is opt-in, so an off state is information rather than a
-    /// fault — but it is the first thing to check when no output is recorded.
-    fn check_terminal_capture(&mut self, fix: bool) {
+    /// Terminal capture is opt-in, so an off state is an observation rather than
+    /// a fault — and a diagnostic never turns it on: enabling rewrites shell
+    /// profiles, which is `sivtr pty-proxy enable`'s job.
+    fn check_terminal_capture(&mut self) {
         if SivtrConfig::load().unwrap_or_default().pty_proxy.enabled {
             self.add(Check {
                 name: "terminal_capture",
@@ -400,32 +401,6 @@ impl Report {
                 hint: None,
             });
             return;
-        }
-
-        if fix {
-            let shell = detect_current_shell();
-            match crate::commands::terminal::pty_proxy::enable(&shell) {
-                Ok(()) => {
-                    self.add(Check {
-                        name: "terminal_capture",
-                        label: "terminal capture",
-                        status: Status::Fixed,
-                        detail: format!("enabled for {shell}"),
-                        hint: Some("restart your shell to start capturing".to_string()),
-                    });
-                    return;
-                }
-                Err(e) => {
-                    self.add(Check {
-                        name: "terminal_capture",
-                        label: "terminal capture",
-                        status: Status::Manual,
-                        detail: format!("enable failed: {e}"),
-                        hint: Some("run `sivtr pty-proxy enable`".to_string()),
-                    });
-                    return;
-                }
-            }
         }
 
         self.add(Check {

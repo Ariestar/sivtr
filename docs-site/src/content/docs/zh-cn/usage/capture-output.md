@@ -88,7 +88,7 @@ sivtr init nushell
 sivtr pty-proxy disable
 ```
 
-安装后重启 shell。
+关闭采集后需要重启 shell。
 
 ## 搜索捕获输出
 

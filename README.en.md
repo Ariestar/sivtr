@@ -118,7 +118,7 @@ sivtr doctor
 ```
 
 > [!NOTE]
-> Capture is opt-in. `sivtr pty-proxy enable` wraps the shell in the pty proxy, so interactive programs such as `vim`, `htop`, and `ssh` behave unchanged. Turn it off with `sivtr pty-proxy disable`.
+> Capture is opt-in. `sivtr pty-proxy enable` wraps the shell in the pty proxy, so interactive programs such as `vim`, `htop`, and `ssh` behave unchanged. Open a new shell after enabling it — the proxy starts on the next shell, not the current one — and turn it off with `sivtr pty-proxy disable`.
 
 Sync and inspect the archive:
 

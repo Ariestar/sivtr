@@ -29,10 +29,10 @@ if (-not $Global:_sivtr_prompt_wrapped) {
             $last = Get-History -Count 1 -ErrorAction SilentlyContinue
             if ($last) {
                 $code = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
-                sivtr pty-proxy report --command-id "$($last.Id)" --command "$($last.CommandLine)" --prompt "$rendered" --cwd "$($PWD.Path)" --exit $code
+                sivtr pty-proxy report --command-id "$($last.Id)" --command "$($last.CommandLine)" --prompt "$rendered" --cwd "$($PWD.Path)" --exit $code --drop-first-line
             }
-            # PowerShell has no pre-exec hook, so the output block opens here and
-            # carries the echoed command line; the proxy drops that echo.
+            # PowerShell has no pre-exec hook, so the block can only open here;
+            # `--drop-first-line` tells the proxy the echoed line comes first.
             [Console]::Write([char]27 + "]133;C" + [char]27 + "\")
         }
         $rendered
@@ -60,7 +60,13 @@ __sivtr_precmd() {
       command_id="${BASH_REMATCH[1]}"
       command="${BASH_REMATCH[2]}"
     fi
-    sivtr pty-proxy report --command-id "$command_id" --command "$command" --prompt "${PS1@P}" --cwd "$PWD" --exit "$exit_status"
+    # `${PS1@P}` needs bash 4.4; older bash reports a bad substitution on every
+    # prompt, so it falls back to the unexpanded prompt instead.
+    local prompt="$PS1"
+    if ((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4))); then
+      prompt="${PS1@P}"
+    fi
+    sivtr pty-proxy report --command-id "$command_id" --command "$command" --prompt "$prompt" --cwd "$PWD" --exit "$exit_status"
   fi
   return $exit_status
 }
@@ -137,8 +143,13 @@ if (($env.SIVTR_PTY_PROXY? | default "") != "") {
         print -n "\e]133;C\e\\"
     }
     def --env _sivtr_pre_prompt [] {
+        # Read and clear in one step: the stash belongs to the command that just
+        # ran, and an empty one means nothing was executed.
+        let command = ($env.SIVTR_COMMAND? | default "")
+        $env.SIVTR_COMMAND = ""
+        if ($command | is-empty) { return }
         let code = (($env.LAST_EXIT_CODE? | default 0) | into int)
-        ^sivtr pty-proxy report --command-id (random uuid) --command ($env.SIVTR_COMMAND? | default "") --prompt "" --cwd $"(pwd)" --exit $code
+        ^sivtr pty-proxy report --command-id (random uuid) --command $command --prompt "" --cwd $"(pwd)" --exit $code
     }
     $env.config.hooks.pre_execution = (($env.config.hooks.pre_execution? | default []) | append {|| _sivtr_pre_execution })
     $env.config.hooks.pre_prompt = (($env.config.hooks.pre_prompt? | default []) | append {|| _sivtr_pre_prompt })

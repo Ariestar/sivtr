@@ -16,7 +16,8 @@ pub fn execute(action: &PtyProxyAction) -> Result<()> {
             prompt,
             cwd,
             exit,
-        } => report(command_id, command, prompt, cwd, *exit),
+            drop_first_line,
+        } => report(command_id, command, prompt, cwd, *exit, *drop_first_line),
         PtyProxyAction::Enable { shell } => enable(shell),
         PtyProxyAction::Disable => disable(),
     }
@@ -62,7 +63,14 @@ fn spawn_shell(program: &str, args: &[String]) -> Result<()> {
 /// The metadata must be on disk *before* the `D` marker reaches the pty: the
 /// marker is the proxy's cue to read it, so writing first removes any race
 /// between the two processes.
-fn report(command_id: &str, command: &str, prompt: &str, cwd: &str, exit: i32) -> Result<()> {
+fn report(
+    command_id: &str,
+    command: &str,
+    prompt: &str,
+    cwd: &str,
+    exit: i32,
+    drop_first_line: bool,
+) -> Result<()> {
     let Some(terminal_id) = std::env::var("SIVTR_TERMINAL_ID")
         .ok()
         .filter(|id| !id.trim().is_empty())
@@ -75,6 +83,7 @@ fn report(command_id: &str, command: &str, prompt: &str, cwd: &str, exit: i32) -
         prompt: prompt.to_string(),
         command: command.to_string(),
         cwd: non_empty(cwd),
+        drop_first_line,
     };
     let path = crate::pty::pending_path(&terminal_id);
     if let Some(parent) = path.parent() {

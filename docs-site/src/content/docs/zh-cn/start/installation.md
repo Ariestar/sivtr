@@ -54,7 +54,7 @@ npx skills add Ariestar/sivtr --skill sivtr-memory -g
 sivtr doctor
 ```
 
-预期：所有检查通过。若 `shell hooks` 显示 "not installed"，运行对应的 `sivtr init` 命令。若 `session log directory` 显示 "missing"，用户需在 `sivtr init` 后重启终端。
+预期：必需检查通过。若 `shell hooks` 显示 "not installed"，运行对应的 `sivtr init` 命令。若 `session log directory` 显示 "missing"，用户需在 `sivtr init` 后重启终端。`terminal capture` 是可选检查：`[pty_proxy] enabled` 为 false 时它会显示 `Manual`，用 `sivtr pty-proxy enable` 开启。
 
 ### 查看当前状态
 
@@ -201,6 +201,8 @@ sivtr init nushell
 sivtr pty-proxy disable
 ```
 
+开启后需要重启 shell 才会开始采集，关闭后同样需要重启才会停止。
+
 查看已安装的 hook：
 
 ```bash
@@ -215,7 +217,7 @@ sivtr init uninstall
 
 安装或卸载后重启终端。
 
-Hook 会写入按进程区分的 session log：
+代理会写入按终端区分的 session log：
 
 - Session log 写到 `<home>/workspaces/<workspace-key>/terminals/<terminal_id>.jsonl`（`SIVTR_HOME` 或 `~/.sivtr`）。
 

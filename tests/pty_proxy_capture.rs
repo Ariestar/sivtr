@@ -187,13 +187,32 @@ fn drive(command: CommandBuilder, input: &str) -> String {
     writer.flush().expect("flush");
     drop(writer);
 
-    let (exited, wait) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = exited.send(child.wait());
-    });
-    wait.recv_timeout(DEADLINE).ok();
+    // Poll rather than hand the only child handle to a wait thread: on a
+    // timeout the shell must still be killable, or it keeps the pty open and
+    // the drain reader below never returns.
+    let deadline = Instant::now() + DEADLINE;
+    let mut timed_out = true;
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                timed_out = false;
+                break;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(_) => {
+                timed_out = false;
+                break;
+            }
+        }
+    }
+    if timed_out {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 
-    String::from_utf8_lossy(&drain.join().unwrap_or_default()).into_owned()
+    let output = String::from_utf8_lossy(&drain.join().unwrap_or_default()).into_owned();
+    assert!(!timed_out, "the shell did not exit within {DEADLINE:?}");
+    output
 }
 
 #[test]

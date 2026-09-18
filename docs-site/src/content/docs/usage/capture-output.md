@@ -88,7 +88,7 @@ The block stays inert until capture is enabled. Turn capture off again with:
 sivtr pty-proxy disable
 ```
 
-Restart the shell after installation.
+Restart the shell after disabling capture.
 
 ## Search captured output
 

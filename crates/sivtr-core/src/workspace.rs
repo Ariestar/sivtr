@@ -237,6 +237,14 @@ pub fn terminal_id() -> String {
         .unwrap_or_else(|| format!("session_{}", std::process::id()))
 }
 
+/// A fresh id for a newly started terminal session.
+///
+/// Unique across runs, unlike a process id, so a recycled pid can never append
+/// to an earlier session's log.
+pub fn new_terminal_id() -> String {
+    format!("pty_{}", uuid::Uuid::new_v4())
+}
+
 pub fn current_terminal_log_path() -> Result<Option<PathBuf>> {
     let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
     terminal_log_path_for(Some(&cwd), &terminal_id())
