@@ -11,6 +11,7 @@ use crate::session_source::SessionSource;
 use anyhow::{Context, Result};
 
 pub mod claude;
+pub mod cmdc;
 pub mod codex;
 pub mod cursor;
 pub mod dsh;
@@ -226,10 +227,10 @@ const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
     AgentProviderSpec {
         provider: AgentProvider::CommandCode,
         name: "Command Code",
-        command_name: "commandcode",
+        command_name: "cmdc",
         current_transcript_env: None,
         current_session_id_env: None,
-        factory: commandcode_provider,
+        factory: cmdc_provider,
     },
     AgentProviderSpec {
         provider: AgentProvider::Copilot,
@@ -425,6 +426,10 @@ fn claude_provider() -> Box<dyn AgentSessionProvider> {
     Box::new(crate::agents::claude::ClaudeProvider)
 }
 
+fn cmdc_provider() -> Box<dyn AgentSessionProvider> {
+    Box::new(crate::agents::cmdc::CmdcProvider)
+}
+
 fn cursor_provider() -> Box<dyn AgentSessionProvider> {
     Box::new(crate::agents::cursor::CursorProvider)
 }
@@ -491,7 +496,6 @@ generic_factory!(amp_provider, Amp);
 generic_factory!(aider_provider, Aider);
 generic_factory!(antigravity_provider, Antigravity);
 generic_factory!(antigravity_cli_provider, AntigravityCli);
-generic_factory!(commandcode_provider, CommandCode);
 generic_factory!(copilot_provider, Copilot);
 generic_factory!(deepseek_tui_provider, DeepSeekTui);
 generic_factory!(forge_provider, Forge);

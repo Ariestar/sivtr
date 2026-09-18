@@ -181,6 +181,16 @@ const MCP_HOSTS: &[McpHostSpec] = &[
         config_path: |_loc| goose_config_path(),
         host_present: goose_host_present,
     },
+    McpHostSpec {
+        provider: AgentProvider::CommandCode,
+        location: McpLocationSupport::GlobalOnly,
+        kind: McpConfigKind::Json {
+            key: "mcpServers",
+            entry: cmdc_entry,
+        },
+        config_path: |_loc| cmdc_config_path(),
+        host_present: cmdc_host_present,
+    },
 ];
 
 /// Look up the managed MCP host entry for a provider, or explain why there is
@@ -707,6 +717,17 @@ fn openclaw_entry() -> Value {
     })
 }
 
+/// Command Code's stdio server shape (`transport` + `enabled`), which differs
+/// from the Claude/Cursor `type` form.
+fn cmdc_entry() -> Value {
+    json!({
+        "transport": "stdio",
+        "enabled": true,
+        "command": "sivtr",
+        "args": SERVER_ARGS,
+    })
+}
+
 fn toml_mcp_snippet() -> String {
     format!("{TOML_MCP_MARKER}\ncommand = \"sivtr\"\nargs = [\"mcp\", \"serve\"]\n")
 }
@@ -1026,6 +1047,18 @@ fn grok_host_present() -> bool {
     grok_config_path().exists() || sivtr_core::agents::grok::grok_home().exists()
 }
 
+/// Command Code reads user-scope servers from `mcp.json` in its home. Its
+/// project scope is a `.mcp.json` at the project root, which is the same file
+/// (and the same `mcpServers.sivtr` key) Claude Code's local install writes in
+/// a different shape, so only the global file is managed here.
+fn cmdc_config_path() -> PathBuf {
+    sivtr_core::agents::cmdc::cmdc_home().join("mcp.json")
+}
+
+fn cmdc_host_present() -> bool {
+    cmdc_config_path().exists() || sivtr_core::agents::cmdc::cmdc_home().exists()
+}
+
 fn read_json_object(path: &Path) -> Result<Map<String, Value>> {
     if !path.exists() {
         return Ok(Map::new());
@@ -1164,6 +1197,22 @@ mod tests {
         let out = serde_yaml::to_string(&root).unwrap();
         assert!(out.contains("mcp_servers:"));
         assert!(!out.contains("sivtr"));
+    }
+
+    #[test]
+    fn configures_command_code_stdio_servers_in_its_own_json() {
+        assert_eq!(
+            resolve_targets(&["cmdc".into()]).unwrap(),
+            vec![AgentProvider::CommandCode]
+        );
+
+        let entry = cmdc_entry();
+        assert_eq!(entry["transport"], "stdio");
+        assert_eq!(entry["enabled"], true);
+        assert_eq!(entry["command"], "sivtr");
+        assert_eq!(entry["args"], json!(["mcp", "serve"]));
+        // Command Code takes `transport`, not the Claude/Cursor `type`.
+        assert!(entry.get("type").is_none());
     }
 
     #[test]
