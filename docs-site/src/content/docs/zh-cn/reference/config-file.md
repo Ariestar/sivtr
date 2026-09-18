@@ -34,6 +34,9 @@ endpoint = "https://api.openai.com/v1/embeddings"
 model = "text-embedding-3-small"
 api_key_env = "OPENAI_API_KEY"
 batch_size = 64
+
+[pty_proxy]
+enabled = false
 ```
 
 ## editor
@@ -114,3 +117,16 @@ idle_exit_secs = 60
 | Key | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
 | `idle_exit_secs` | integer | `60` | 无工具调用多少秒后 stdio MCP server 退出；`0` 表示保持到宿主关闭 stdin。`sivtr mcp serve --idle-exit` flag 覆盖此值。 |
+
+## pty_proxy
+
+```toml
+[pty_proxy]
+enabled = false
+```
+
+| Key | 类型 | 默认值 | 含义 |
+| --- | --- | --- | --- |
+| `enabled` | boolean | `false` | 让 shell 运行在采集代理内并记录命令输出。 |
+
+采集默认关闭。`sivtr pty-proxy enable <shell|all>` 会同时打开它并安装 shell 块；`sivtr pty-proxy disable` 只关开关，残留的 shell 块是惰性的，只会让每个 shell 多一个短命进程。

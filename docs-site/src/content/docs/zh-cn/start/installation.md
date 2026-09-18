@@ -54,7 +54,7 @@ npx skills add Ariestar/sivtr --skill sivtr-memory -g
 sivtr doctor
 ```
 
-预期：所有检查通过。若 `shell hooks` 显示 "not installed"，运行对应的 `sivtr init` 命令。若 `session log directory` 显示 "missing"，用户需在 `sivtr init` 后重启终端。
+预期：必需检查通过。若 `shell hooks` 显示 "not installed"，运行对应的 `sivtr init` 命令。若 `session log directory` 显示 "missing"，用户需在 `sivtr init` 后重启终端。`terminal capture` 是可选检查：`[pty_proxy] enabled` 为 false 时它会显示 `Manual`，用 `sivtr pty-proxy enable` 开启。
 
 ### 查看当前状态
 
@@ -178,7 +178,15 @@ cargo install --path . --force
 
 Shell 集成会记录最近的命令块，让 `sivtr copy` 和命令块导航有结构化数据可用。
 
-为你的 shell 安装 hook：
+采集是可选开启的。用下面的命令为所有受支持的 shell 打开：
+
+```bash
+sivtr pty-proxy enable all
+```
+
+也可以只传入单个 shell 名（`bash`、`zsh`、`nushell` 或 `powershell`）只为该 shell 打开。开启后 shell 会被包进 pty 代理，代理持有一个 pty，因此 `vim`、`htop`、`ssh` 等交互程序行为不变。
+
+只安装 hook、不开启采集：
 
 ```bash
 sivtr init powershell
@@ -186,6 +194,14 @@ sivtr init bash
 sivtr init zsh
 sivtr init nushell
 ```
+
+这个块在采集开启之前是惰性的。关闭采集用：
+
+```bash
+sivtr pty-proxy disable
+```
+
+开启后需要重启 shell 才会开始采集，关闭后同样需要重启才会停止。
 
 查看已安装的 hook：
 
@@ -201,9 +217,9 @@ sivtr init uninstall
 
 安装或卸载后重启终端。
 
-Hook 会写入按进程区分的 session log：
+代理会写入按终端区分的 session log：
 
-- Session log 写到 `<home>/workspaces/<workspace-key>/terminals/session_<pid>.jsonl`（`SIVTR_HOME` 或 `~/.sivtr`）。
+- Session log 写到 `<home>/workspaces/<workspace-key>/terminals/<terminal_id>.jsonl`（`SIVTR_HOME` 或 `~/.sivtr`）。
 
 ## 配置文件
 

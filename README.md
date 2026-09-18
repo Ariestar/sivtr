@@ -97,16 +97,19 @@ irm https://raw.githubusercontent.com/Ariestar/sivtr/main/install.ps1 | iex
 sivtr update    # 下载最新 release，SHA256 校验后原地替换
 ```
 
-首次安装（hooks + MCP 宿主）：
+首次安装（采集 + MCP 宿主）：
 
 ```bash
-sivtr setup             # hooks + MCP 宿主 + sivtr-memory skill（缺失时安装）
+sivtr setup                  # 采集 + MCP 宿主 + sivtr-memory skill（缺失时安装）
 # 或分步：
-sivtr init powershell   # 或 bash、zsh、nushell
-sivtr mcp install       # 检测已装宿主；或 -p claude,cursor,codex,opencode,openclaw,grok,hermes,pi,qoder,qodercn,gemini,qwen,goose
+sivtr pty-proxy enable all   # 或单个 shell：bash、zsh、nushell、powershell
+sivtr mcp install            # 检测已装宿主；或 -p claude,cursor,codex,opencode,openclaw,grok,hermes,pi,qoder,qodercn,gemini,qwen,goose
 npx skills add Ariestar/sivtr --skill sivtr-memory -g -y
 sivtr doctor
 ```
+
+> [!NOTE]
+> 终端采集是可选开启的：`sivtr pty-proxy enable` 会把 shell 包进 pty 代理，`vim`、`htop`、`ssh` 等交互程序行为不变。开启后需要**新开一个 shell** 才会生效（代理在下一个 shell 启动，当前这个不会），关闭用 `sivtr pty-proxy disable`。
 
 同步并查看 archive：
 

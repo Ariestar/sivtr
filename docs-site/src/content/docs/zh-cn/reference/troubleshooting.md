@@ -28,13 +28,14 @@ sivtr --version
 
 ## `sivtr copy out` 找不到命令块
 
-命令块复制需要 shell 集成，并且需要重启 shell。
+采集是可选开启的，命令块只有在 shell 带着代理重启后才会出现。
 
-检查：
+开启采集并检查环境：
 
 ```bash
-sivtr init powershell
-# 或：sivtr init bash / zsh / nushell
+sivtr pty-proxy enable all
+# 或：sivtr pty-proxy enable bash / zsh / nushell / powershell
+sivtr doctor
 ```
 
 然后重启终端，运行一个命令，再尝试：

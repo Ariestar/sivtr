@@ -28,13 +28,14 @@ sivtr --version
 
 ## `sivtr copy out` finds no command blocks
 
-Command-block copy requires shell integration and a restarted shell.
+Capture is opt-in, and command blocks only appear after the shell is restarted with the proxy in place.
 
-Check:
+Enable capture and check the environment:
 
 ```bash
-sivtr init powershell
-# or: sivtr init bash / zsh / nushell
+sivtr pty-proxy enable all
+# or: sivtr pty-proxy enable bash / zsh / nushell / powershell
+sivtr doctor
 ```
 
 Then restart the terminal, run a command, and try:
