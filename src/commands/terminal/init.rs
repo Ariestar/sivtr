@@ -70,6 +70,17 @@ __sivtr_precmd() {
   fi
   return $exit_status
 }
+# Marks where a command's output starts. `PS0` would do this directly but only
+# exists from bash 4.4, and macOS still ships 3.2, so the DEBUG trap does it:
+# it fires before every simple command, armed once the prompt has finished and
+# cleared by the first command it sees, which is the user's own line.
+__sivtr_preexec() {
+  [[ -n "${COMP_LINE:-}" ]] && return
+  [[ "${__sivtr_armed:-0}" == 1 ]] || return
+  __sivtr_armed=0
+  printf '\033]133;C\033\\'
+}
+__sivtr_prompt_ready() { __sivtr_armed=1; }
 if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then
   if [[ " ${PROMPT_COMMAND[*]} " != *" __sivtr_precmd "* ]]; then
     PROMPT_COMMAND=(__sivtr_precmd "${PROMPT_COMMAND[@]}")
@@ -82,13 +93,16 @@ elif [[ -n "${PROMPT_COMMAND:-}" ]]; then
 else
   PROMPT_COMMAND="__sivtr_precmd"
 fi
-# Mark where a command's output starts. Only inside the proxy: with no consumer
-# the marker is noise, and the `report` call above is what closes the block.
+# Arm the trap from the last thing the prompt runs, so the first command it
+# sees is the user's own. Only inside the proxy: with no consumer the marker is
+# noise, and the `report` call above is what closes the block.
 if [[ -n "${SIVTR_PTY_PROXY:-}" ]]; then
-  case "${PS0:-}" in
-    *$'\e]133;C'*) ;;
-    *) PS0=$'\e]133;C\e\\'"${PS0:-}" ;;
-  esac
+  if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then
+    PROMPT_COMMAND+=("__sivtr_prompt_ready")
+  else
+    PROMPT_COMMAND="${PROMPT_COMMAND};__sivtr_prompt_ready"
+  fi
+  trap '__sivtr_preexec' DEBUG
 fi
 # Hand the terminal to the capture proxy; the profile is sourced again inside
 # it and installs the hooks above. Everything below the guard is skipped there.
@@ -940,16 +954,19 @@ mod tests {
     }
 
     #[test]
-    fn bash_hook_preserves_the_session_id_and_a_user_ps0() {
+    fn bash_hook_marks_the_command_start_without_ps0() {
         // The proxy sets SIVTR_TERMINAL_ID for the whole session; overwriting it
         // here would split one terminal across two session logs.
         assert!(BASH_HOOK.contains(r#"export SIVTR_TERMINAL_ID="${SIVTR_TERMINAL_ID:-$$}""#));
-        // A pre-existing PS0 is kept, and re-sourcing the profile must not stack
-        // markers onto it.
-        assert!(BASH_HOOK.contains(r#"PS0=$'\e]133;C\e\\'"${PS0:-}""#));
-        assert!(BASH_HOOK.contains(r"*$'\e]133;C'*"));
-        // The DEBUG trap is what bash-preexec needs; PS0 avoids it entirely.
-        assert!(!BASH_HOOK.contains("trap '__sivtr_preexec' DEBUG"));
+        // PS0 only exists from bash 4.4 and macOS ships 3.2, so the marker comes
+        // from an armed DEBUG trap instead.
+        assert!(!BASH_HOOK.contains("PS0="));
+        assert!(BASH_HOOK.contains("trap '__sivtr_preexec' DEBUG"));
+        assert!(BASH_HOOK.contains("printf '\\033]133;C\\033\\\\'"));
+        // Armed by the prompt's last step, so only the user's line is marked.
+        assert!(BASH_HOOK.contains("__sivtr_prompt_ready"));
+        // `${PS1@P}` is gated on the same version that added PS0.
+        assert!(BASH_HOOK.contains("BASH_VERSINFO[0] > 4"));
     }
 
     #[test]
