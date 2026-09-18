@@ -16,8 +16,8 @@ pub fn execute(action: &PtyProxyAction) -> Result<()> {
             prompt,
             cwd,
             exit,
-            drop_first_line,
-        } => report(command_id, command, prompt, cwd, *exit, *drop_first_line),
+            echoed_input,
+        } => report(command_id, command, prompt, cwd, *exit, *echoed_input),
         PtyProxyAction::Enable { shell } => enable(shell),
         PtyProxyAction::Disable => disable(),
     }
@@ -69,7 +69,7 @@ fn report(
     prompt: &str,
     cwd: &str,
     exit: i32,
-    drop_first_line: bool,
+    echoed_input: bool,
 ) -> Result<()> {
     let Some(terminal_id) = std::env::var("SIVTR_TERMINAL_ID")
         .ok()
@@ -83,7 +83,7 @@ fn report(
         prompt: prompt.to_string(),
         command: command.to_string(),
         cwd: non_empty(cwd),
-        drop_first_line,
+        echoed_input,
     };
     let path = crate::pty::pending_path(&terminal_id);
     if let Some(parent) = path.parent() {

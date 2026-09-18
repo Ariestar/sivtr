@@ -48,10 +48,11 @@ pub struct Pending {
     pub prompt: String,
     pub command: String,
     pub cwd: Option<String>,
-    /// The shell's block opens with the echoed input line, because it can only
-    /// emit `C` at the end of its prompt. Declared by PowerShell; the proxy then
-    /// drops exactly that line instead of guessing where the output starts.
-    pub drop_first_line: bool,
+    /// The shell's block opens with the echoed input, because it can only emit
+    /// `C` at the end of its prompt. Declared by PowerShell; the proxy then drops
+    /// exactly that echo — continuation lines included — instead of guessing
+    /// where the output starts.
+    pub echoed_input: bool,
 }
 
 /// Where `report` leaves metadata for `terminal_id`.
@@ -234,8 +235,8 @@ impl Recorder {
         }
 
         let output = String::from_utf8_lossy(output);
-        let output = if metadata.drop_first_line {
-            drop_first_line(&output)
+        let output = if metadata.echoed_input {
+            drop_echo(&output, &metadata.command)
         } else {
             output.as_ref()
         };
@@ -292,37 +293,46 @@ fn should_record(state: &SessionState, command_id: Option<&str>, command: &str) 
     }
 }
 
-/// Drop the echoed input line that opens a PowerShell block.
+/// Drop the echoed input that opens a PowerShell block.
 ///
-/// The shell declares this (`drop_first_line`), so nothing is guessed: the
-/// bytes after `C` are exactly what the user typed, and the output begins after
-/// that line's newline.
-fn drop_first_line(output: &str) -> &str {
-    match output.find('\n') {
-        Some(newline) => &output[newline + 1..],
-        None => "",
+/// The shell declares this (`echoed_input`), so nothing is guessed: the bytes
+/// after `C` are exactly what the user typed, echoed back — as many lines as the
+/// command has, continuation lines included — and the output starts after the
+/// last of them.
+fn drop_echo<'a>(output: &'a str, command: &str) -> &'a str {
+    let mut rest = output;
+    for _ in 0..command.lines().count().max(1) {
+        match rest.find('\n') {
+            Some(newline) => rest = &rest[newline + 1..],
+            None => return "",
+        }
     }
+    rest
 }
 
 /// zsh draws its partial-line mark *before* it runs `precmd`, so the mark lands
-/// inside the block. Strip it only when it is provably decoration: the trailing
-/// fragment carries escape sequences and what is left of it is the tail of the
-/// prompt. A line of real output never qualifies.
+/// inside the block, followed by the spaces and carriage returns zsh clears the
+/// line with. Strip that tail only when it has exactly that shape: it carries
+/// escape sequences, it ends with the clearing carriage return zsh always emits,
+/// and what is left once the escapes are gone is the tail of the prompt.
+///
+/// The trailing carriage return is what separates the mark from a coloured
+/// output line that happens to end in the prompt's last character.
 fn trim_trailing_mark<'a>(output: &'a str, prompt: &str) -> &'a str {
     let head = output.rfind('\n').map_or(0, |at| at + 1);
     let fragment = &output[head..];
-    if !fragment.contains('\x1b') {
+    if !fragment.contains('\x1b') || !fragment.ends_with('\r') {
         return output;
     }
-    let plain = SessionEntry::new("", "", fragment).output;
-    let plain = plain.trim_end_matches([' ', '\r', '\t']);
+    let marked = fragment.trim_end_matches([' ', '\r', '\t']);
+    let plain = SessionEntry::new("", "", marked).output;
     if plain.is_empty() {
         return output;
     }
     if !SessionEntry::new(prompt, "", "")
         .prompt
         .trim_end()
-        .ends_with(plain)
+        .ends_with(&plain)
     {
         return output;
     }
@@ -367,7 +377,7 @@ impl Drop for RawMode {
 #[cfg(test)]
 mod tests {
     use super::{
-        drop_first_line, now_timestamp, pending_path, should_record, trim_trailing_mark, Pending,
+        drop_echo, now_timestamp, pending_path, should_record, trim_trailing_mark, Pending,
     };
     use sivtr_core::session::SessionState;
 
@@ -401,13 +411,13 @@ mod tests {
             prompt: "repo on main\n❯  ".into(),
             command: "echo '中文' && true".into(),
             cwd: Some("/home/user/repo".into()),
-            drop_first_line: true,
+            echoed_input: true,
         };
         let text = serde_json::to_string(&pending).expect("encode");
         let decoded: Pending = serde_json::from_str(&text).expect("decode");
         assert_eq!(decoded.command, "echo '中文' && true");
         assert_eq!(decoded.cwd.as_deref(), Some("/home/user/repo"));
-        assert!(decoded.drop_first_line);
+        assert!(decoded.echoed_input);
     }
 
     #[test]
@@ -432,16 +442,30 @@ mod tests {
     }
 
     #[test]
-    fn drops_the_declared_echo_line() {
-        assert_eq!(drop_first_line("echo hi\r\nhi\r\n"), "hi\r\n");
+    fn drops_the_declared_echo() {
+        assert_eq!(drop_echo("echo hi\r\nhi\r\n", "echo hi"), "hi\r\n");
         // A highlighted echo drops just the same.
         assert_eq!(
-            drop_first_line("\x1b[32mecho\x1b[0m hi\r\nhi\r\n"),
+            drop_echo("\x1b[32mecho\x1b[0m hi\r\nhi\r\n", "echo hi"),
             "hi\r\n"
         );
         // Nothing follows the echo: no output, not a stray fragment.
-        assert_eq!(drop_first_line("echo hi\r\n"), "");
-        assert_eq!(drop_first_line("echo hi"), "");
+        assert_eq!(drop_echo("echo hi\r\n", "echo hi"), "");
+        assert_eq!(drop_echo("echo hi", "echo hi"), "");
+    }
+
+    #[test]
+    fn drops_every_line_of_a_multiline_echo() {
+        // PSReadLine echoes continuation lines too, so the whole input goes.
+        let command = "foreach ($i in 1..2) {\n  $i\n}";
+        let block = "foreach ($i in 1..2) {\r\n  $i\r\n}\r\n1\r\n2\r\n";
+        assert_eq!(drop_echo(block, command), "1\r\n2\r\n");
+    }
+
+    #[test]
+    fn keeps_output_when_the_echo_is_shorter_than_the_command() {
+        // A shell that did not echo every line must not lose output.
+        assert_eq!(drop_echo("one\r\n", "a\nb\nc"), "");
     }
 
     #[test]
@@ -471,6 +495,15 @@ mod tests {
     fn keeps_coloured_output_that_is_not_the_prompt() {
         let prompt = "repo% ";
         let output = "\u{1b}[31mfailed\u{1b}[0m";
+        assert_eq!(trim_trailing_mark(output, prompt), output);
+    }
+
+    #[test]
+    fn keeps_coloured_output_that_ends_in_the_prompt_character() {
+        // No mark to clear the line means no carriage return, which is what
+        // separates decoration from a coloured line ending in `%`.
+        let prompt = "repo% ";
+        let output = "\u{1b}[31m%\u{1b}[0m";
         assert_eq!(trim_trailing_mark(output, prompt), output);
     }
 

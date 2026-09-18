@@ -191,27 +191,26 @@ fn drive(command: CommandBuilder, input: &str) -> String {
     // timeout the shell must still be killable, or it keeps the pty open and
     // the drain reader below never returns.
     let deadline = Instant::now() + DEADLINE;
-    let mut timed_out = true;
+    let mut reaped = false;
     while Instant::now() < deadline {
         match child.try_wait() {
             Ok(Some(_)) => {
-                timed_out = false;
+                reaped = true;
                 break;
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-            Err(_) => {
-                timed_out = false;
-                break;
-            }
+            // Polling itself failed: the child's state is unknown, so fall
+            // through to the kill below rather than assuming it exited.
+            Err(_) => break,
         }
     }
-    if timed_out {
+    if !reaped {
         let _ = child.kill();
         let _ = child.wait();
     }
 
     let output = String::from_utf8_lossy(&drain.join().unwrap_or_default()).into_owned();
-    assert!(!timed_out, "the shell did not exit within {DEADLINE:?}");
+    assert!(reaped, "the shell did not exit within {DEADLINE:?}");
     output
 }
 
@@ -299,5 +298,35 @@ fn disabling_capture_leaves_the_shell_usable() {
             .recorded("echo still-alive", Duration::from_secs(2))
             .is_none(),
         "capture is off, so nothing may be recorded"
+    );
+}
+
+/// A pre-exec handler installed before the block must keep running: bash-preexec
+/// and the tools built on it install a `DEBUG` trap, so ours has to chain to
+/// theirs rather than replace it.
+#[test]
+fn keeps_an_existing_debug_trap_running() {
+    let sandbox = Sandbox::new("debug-trap");
+    sandbox.enable_capture();
+
+    let profile = sandbox.home().join(".bashrc");
+    let installed = std::fs::read_to_string(&profile).expect("read profile");
+    let marker = sandbox.root.join("user-debug-ran");
+    std::fs::write(
+        &profile,
+        format!("trap 'printf x >> {}' DEBUG\n{installed}", marker.display()),
+    )
+    .expect("prepend the user's trap");
+
+    let command = sandbox.builder("bash");
+    drive(command, "echo chained\nexit\n");
+
+    let entry = sandbox
+        .recorded("echo chained", DEADLINE)
+        .expect("capture must work with a user DEBUG trap installed");
+    assert_eq!(entry.output, "chained");
+    assert!(
+        marker.exists(),
+        "the user's own DEBUG handler must still run"
     );
 }

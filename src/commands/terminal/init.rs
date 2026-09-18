@@ -29,10 +29,10 @@ if (-not $Global:_sivtr_prompt_wrapped) {
             $last = Get-History -Count 1 -ErrorAction SilentlyContinue
             if ($last) {
                 $code = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
-                sivtr pty-proxy report --command-id "$($last.Id)" --command "$($last.CommandLine)" --prompt "$rendered" --cwd "$($PWD.Path)" --exit $code --drop-first-line
+                sivtr pty-proxy report --command-id "$($last.Id)" --command "$($last.CommandLine)" --prompt "$rendered" --cwd "$($PWD.Path)" --exit $code --echoed-input
             }
             # PowerShell has no pre-exec hook, so the block can only open here;
-            # `--drop-first-line` tells the proxy the echoed line comes first.
+            # `--echoed-input` tells the proxy the echoed input comes first.
             [Console]::Write([char]27 + "]133;C" + [char]27 + "\")
         }
         $rendered
@@ -79,6 +79,9 @@ __sivtr_preexec() {
   [[ "${__sivtr_armed:-0}" == 1 ]] || return
   __sivtr_armed=0
   printf '\033]133;C\033\\'
+  # Whatever pre-exec handler was already installed still runs.
+  [[ -n "${__sivtr_previous_debug_action:-}" ]] && eval "$__sivtr_previous_debug_action"
+  return 0
 }
 __sivtr_prompt_ready() { __sivtr_armed=1; }
 if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then
@@ -101,6 +104,16 @@ if [[ -n "${SIVTR_PTY_PROXY:-}" ]]; then
     PROMPT_COMMAND+=("__sivtr_prompt_ready")
   else
     PROMPT_COMMAND="${PROMPT_COMMAND};__sivtr_prompt_ready"
+  fi
+  # Keep whatever pre-exec handler is already installed — bash-preexec and the
+  # tools built on it install one — so ours runs alongside it, not instead.
+  # `trap -p` quotes its action; eval reads it back as the text it was, which is
+  # what the chained call needs.
+  __sivtr_previous_debug="$(trap -p DEBUG)"
+  if [[ -n "$__sivtr_previous_debug" ]]; then
+    __sivtr_previous_debug="${__sivtr_previous_debug#trap -- }"
+    __sivtr_previous_debug="${__sivtr_previous_debug% DEBUG}"
+    eval "__sivtr_previous_debug_action=${__sivtr_previous_debug}"
   fi
   trap '__sivtr_preexec' DEBUG
 fi
@@ -963,6 +976,9 @@ mod tests {
         assert!(!BASH_HOOK.contains("PS0="));
         assert!(BASH_HOOK.contains("trap '__sivtr_preexec' DEBUG"));
         assert!(BASH_HOOK.contains("printf '\\033]133;C\\033\\\\'"));
+        // An already-installed pre-exec handler is chained, not replaced.
+        assert!(BASH_HOOK.contains("trap -p DEBUG"));
+        assert!(BASH_HOOK.contains(r#"eval "$__sivtr_previous_debug_action""#));
         // Armed by the prompt's last step, so only the user's line is marked.
         assert!(BASH_HOOK.contains("__sivtr_prompt_ready"));
         // `${PS1@P}` is gated on the same version that added PS0.
