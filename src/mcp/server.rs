@@ -155,8 +155,8 @@ impl SivtrMcp {
 
 #[tool_handler]
 impl ServerHandler for SivtrMcp {
-    fn get_info(&self) -> ServerInfo {
-        let mut info = ServerInfo::default();
+    fn get_info(&self) -> InitializeResult {
+        let mut info = InitializeResult::default();
         info.instructions = Some(
             "sivtr is local workspace memory for terminal output and AI sessions. \
 Search narrowly, expand with show/zoom, and treat results as evidence—verify current files and tests before claiming present state. \
