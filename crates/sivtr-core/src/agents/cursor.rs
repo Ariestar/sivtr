@@ -127,7 +127,7 @@ fn apply_event(session: &mut AgentSession, value: &Value) {
         }
         Some("assistant") | Some("ai") => push_assistant(session, timestamp, payload),
         Some("tool") | Some("tool_result") | Some("toolResult") => {
-            push_text(session, AgentBlockKind::ToolOutput, timestamp, value)
+            push_text(session, AgentBlockKind::ToolOutput, timestamp, payload)
         }
         Some("tool_call") | Some("toolCall") => {
             let label = value
@@ -263,10 +263,8 @@ mod tests {
 
     #[test]
     fn current_session_and_scoped_listing_require_workspace_membership() {
-        let _guard = crate::test_env_lock();
+        let _guard = crate::test_fixtures::EnvGuard::capture(&["CURSOR_HOME", "SIVTR_HOME"]);
         let dir = tempfile::tempdir().unwrap();
-        let previous_home = std::env::var_os("CURSOR_HOME");
-        let previous_data = std::env::var_os("SIVTR_HOME");
         std::env::set_var("CURSOR_HOME", dir.path());
         std::env::set_var("SIVTR_HOME", dir.path().join("data"));
         let projects = dir.path().join("projects");
@@ -297,15 +295,6 @@ mod tests {
             .unwrap();
         assert_eq!(CursorProvider.list_recent_sessions(None).unwrap().len(), 2);
 
-        for (name, previous) in [
-            ("CURSOR_HOME", previous_home),
-            ("SIVTR_HOME", previous_data),
-        ] {
-            match previous {
-                Some(value) => std::env::set_var(name, value),
-                None => std::env::remove_var(name),
-            }
-        }
         assert_eq!(missing, None);
         assert_eq!(matching, Some(projects.join("other.jsonl")));
     }
@@ -377,5 +366,22 @@ mod tests {
         assert!(session.blocks[1].text.contains("Jina"));
         assert_eq!(session.blocks[2].kind, AgentBlockKind::ToolCall);
         assert_eq!(session.blocks[2].label.as_deref(), Some("Read"));
+
+        for role in ["tool", "tool_result", "toolResult"] {
+            for enveloped in [false, true] {
+                let content = json!({"content": [{"type": "text", "text": "tool output"}]});
+                let mut event = if enveloped {
+                    json!({"message": content})
+                } else {
+                    content
+                };
+                event["role"] = json!(role);
+                session.blocks.clear();
+                apply_event(&mut session, &event);
+                assert_eq!(session.blocks.len(), 1);
+                assert_eq!(session.blocks[0].kind, AgentBlockKind::ToolOutput);
+                assert_eq!(session.blocks[0].text, "tool output");
+            }
+        }
     }
 }

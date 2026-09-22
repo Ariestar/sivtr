@@ -530,10 +530,8 @@ mod tests {
 
     #[test]
     fn cursor_parser_refresh_rebuilds_unchanged_sources_without_losing_captures() {
-        let _guard = crate::test_env_lock();
+        let _guard = crate::test_fixtures::EnvGuard::capture(&["SIVTR_HOME", "CURSOR_HOME"]);
         let dir = tempfile::tempdir().unwrap();
-        let previous_home = std::env::var_os("SIVTR_HOME");
-        let previous_cursor = std::env::var_os("CURSOR_HOME");
         std::env::set_var("SIVTR_HOME", dir.path().join("data"));
         std::env::set_var("CURSOR_HOME", dir.path().join("cursor"));
         let projects = dir.path().join("cursor/projects");
@@ -625,15 +623,6 @@ mod tests {
         let second = sync_sources(&conn, false, &[AgentProvider::Cursor], false).unwrap();
         assert_eq!(second.sources[0].counts.unchanged, 1);
         assert_eq!(crate::cache::file_stamp(&source), Some(stamp));
-        for (name, previous) in [
-            ("SIVTR_HOME", previous_home),
-            ("CURSOR_HOME", previous_cursor),
-        ] {
-            match previous {
-                Some(value) => std::env::set_var(name, value),
-                None => std::env::remove_var(name),
-            }
-        }
     }
 
     #[test]
