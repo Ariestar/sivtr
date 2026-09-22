@@ -39,7 +39,17 @@ if (-not $Global:_sivtr_prompt_wrapped) {
     }
     $Global:_sivtr_prompt_wrapped = $true
 }
-if (-not $env:SIVTR_PTY_PROXIED -and -not $env:SIVTR_NO_PTY_PROXY -and (Get-Command sivtr -ErrorAction SilentlyContinue)) {
+# Profiles also run before scripts and commands. Do not replace that invocation
+# with a fresh REPL; recognize PowerShell's case-insensitive option prefixes.
+$sivtrNonInteractive = [Environment]::GetCommandLineArgs() | Where-Object {
+    $option = $_ -replace '^[-/]', ''
+    $_ -match '^[-/](c|f|e|noni)' -and (
+        'Command' -like "$option*" -or 'CommandWithArgs' -like "$option*" -or
+        'File' -like "$option*" -or 'EncodedCommand' -like "$option*" -or
+        'NonInteractive' -like "$option*" -or $option -in 'ec', 'cwa'
+    )
+}
+if (-not $sivtrNonInteractive -and -not $env:SIVTR_PTY_PROXIED -and -not $env:SIVTR_NO_PTY_PROXY -and (Get-Command sivtr -ErrorAction SilentlyContinue)) {
     $sivtrExe = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell' }
     sivtr pty-proxy run $sivtrExe
     exit $LASTEXITCODE
@@ -181,7 +191,7 @@ if (($env.SIVTR_PTY_PROXY? | default "") != "") {
     $env.config.hooks.pre_execution = (($env.config.hooks.pre_execution? | default []) | append {|| _sivtr_pre_execution })
     $env.config.hooks.pre_prompt = (($env.config.hooks.pre_prompt? | default []) | append {|| _sivtr_pre_prompt })
 }
-if (($env.SIVTR_PTY_PROXIED? | default "") == "") and (($env.SIVTR_NO_PTY_PROXY? | default "") == "") and (which sivtr | is-not-empty) {
+if $nu.is-interactive and (($env.SIVTR_PTY_PROXIED? | default "") == "") and (($env.SIVTR_NO_PTY_PROXY? | default "") == "") and (which sivtr | is-not-empty) {
     exec sivtr pty-proxy run nu
 }
 # <<< sivtr shell integration <<<
@@ -917,6 +927,93 @@ mod tests {
             .expect("current hook should be detected");
 
         assert_eq!(updated, profile);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_handoff_preserves_non_repl_invocations() {
+        use base64::Engine;
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        let dir = tempfile::tempdir().unwrap();
+        let profile = dir.path().join("profile.ps1");
+        std::fs::write(
+            &profile,
+            format!(
+                "function sivtr {{ [Console]::WriteLine('PROXY_HANDOFF'); $global:LASTEXITCODE = 0 }}\n{POWERSHELL_HOOK}\n[Console]::WriteLine('ORIGINAL_COMMAND')\n"
+            ),
+        )
+        .unwrap();
+        let source = format!(". '{}'", profile.display().to_string().replace('\'', "''"));
+        let encoded_source = base64::engine::general_purpose::STANDARD.encode(
+            source
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<_>>(),
+        );
+
+        for shell in ["powershell", "pwsh"] {
+            for flag in [
+                "-File",
+                "-f",
+                "-FiL",
+                "-Command",
+                "-c",
+                "-Com",
+                "-NonInteractive",
+                "-noni",
+                "-EncodedCommand",
+                "-ec",
+                "",
+            ] {
+                let mut command = Command::new(shell);
+                command
+                    .args(["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass"])
+                    .env_remove("SIVTR_PTY_PROXY")
+                    .env_remove("SIVTR_PTY_PROXIED")
+                    .env_remove("SIVTR_NO_PTY_PROXY")
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
+                match flag {
+                    "-File" | "-f" | "-FiL" => {
+                        command.arg(flag).arg(&profile);
+                    }
+                    "-Command" | "-c" | "-Com" => {
+                        command.args([flag, &source]);
+                    }
+                    "-EncodedCommand" | "-ec" => {
+                        command.args([flag, &encoded_source]);
+                    }
+                    "" => {}
+                    _ => {
+                        command.arg(flag);
+                    }
+                }
+                let mut child = command.spawn().expect("start PowerShell");
+                if matches!(flag, "-NonInteractive" | "-noni" | "") {
+                    writeln!(child.stdin.take().unwrap(), "{source}\nexit").unwrap();
+                }
+                let output = child.wait_with_output().unwrap();
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                assert!(
+                    output.status.success(),
+                    "{shell} {flag}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert_eq!(
+                    stdout.contains("PROXY_HANDOFF"),
+                    flag.is_empty(),
+                    "{shell} {flag}: {stdout}"
+                );
+                assert_eq!(
+                    stdout.contains("ORIGINAL_COMMAND"),
+                    !flag.is_empty(),
+                    "{shell} {flag}: {stdout}"
+                );
+            }
+        }
     }
 
     #[test]
