@@ -20,6 +20,8 @@ pub struct SivtrConfig {
     pub publish: PublishConfig,
     /// OpenAI-compatible embedding service for semantic search.
     pub embedding: EmbeddingConfig,
+    /// Terminal capture proxy settings.
+    pub pty_proxy: PtyProxyConfig,
 }
 
 /// Editor configuration.
@@ -113,6 +115,23 @@ pub struct EmbeddingConfig {
     pub batch_size: usize,
 }
 
+/// Terminal capture settings.
+///
+/// Installing shell integration with `init` or `setup` enables capture by
+/// default. An explicit `enabled = false` keeps it off across hook upgrades.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PtyProxyConfig {
+    /// Whether the shell runs inside the capture proxy.
+    pub enabled: bool,
+}
+
+impl Default for PtyProxyConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
 // --- Defaults ---
 
 impl Default for HotkeyConfig {
@@ -188,14 +207,9 @@ impl SivtrConfig {
         Ok(path)
     }
 
-    /// Get the config file path.
-    /// Windows: %APPDATA%/sivtr/config.toml
-    /// macOS:   ~/Library/Application Support/sivtr/config.toml
-    /// Linux:   ~/.config/sivtr/config.toml
+    /// Config file under the single home (`SIVTR_HOME` / `~/.sivtr`).
     pub fn config_path() -> Result<PathBuf> {
-        let config_dir = dirs::config_dir()
-            .ok_or_else(|| anyhow::anyhow!("Cannot determine config directory"))?;
-        Ok(config_dir.join("sivtr").join("config.toml"))
+        Ok(crate::workspace::home_dir().join("config.toml"))
     }
 }
 
@@ -251,6 +265,39 @@ mod tests {
         assert!(toml.contains("[embedding]"));
         assert!(toml.contains("127.0.0.1:9000"));
         assert!(SivtrConfig::default().embedding.endpoint.is_empty());
+    }
+
+    #[test]
+    fn terminal_capture_defaults_on_and_preserves_explicit_opt_out() {
+        let default = to_toml_string(&SivtrConfig::default()).expect("serialize");
+        assert!(default.contains("[pty_proxy]"));
+        assert!(default.contains("enabled = true"));
+        assert!(SivtrConfig::default().pty_proxy.enabled);
+        // Existing configurations without this section use the new capture
+        // implementation as soon as their shell hook is upgraded.
+        for legacy in ["", "[editor]\ncommand = 'vim'\n", "[pty_proxy]\n"] {
+            assert!(
+                toml::from_str::<SivtrConfig>(legacy)
+                    .unwrap()
+                    .pty_proxy
+                    .enabled
+            );
+        }
+
+        let off = SivtrConfig {
+            pty_proxy: PtyProxyConfig { enabled: false },
+            ..SivtrConfig::default()
+        };
+        let toml = to_toml_string(&off).expect("serialize");
+        assert!(
+            !toml::from_str::<SivtrConfig>(&toml)
+                .expect("parse")
+                .pty_proxy
+                .enabled
+        );
+
+        // A typo must fail loudly instead of silently leaving capture off.
+        assert!(toml::from_str::<SivtrConfig>("[pty_proxy]\nenabld = true\n").is_err());
     }
 
     #[test]

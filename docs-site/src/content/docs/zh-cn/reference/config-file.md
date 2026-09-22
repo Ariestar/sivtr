@@ -5,13 +5,11 @@ description: TOML 配置参考。
 
 ## 位置
 
-`sivtr` 使用平台配置目录：
+`sivtr` 把配置放在统一 home 下（`SIVTR_HOME` 覆盖，否则 `~/.sivtr`）：
 
 | 平台 | 当前路径 |
 | --- | --- |
-| Windows | `%APPDATA%\sivtr\config.toml` |
-| macOS | `~/Library/Application Support/sivtr/config.toml` |
-| Linux | `~/.config/sivtr/config.toml` |
+| 所有平台 | `~/.sivtr/config.toml` |
 
 ## 完整示例
 
@@ -36,6 +34,9 @@ endpoint = "https://api.openai.com/v1/embeddings"
 model = "text-embedding-3-small"
 api_key_env = "OPENAI_API_KEY"
 batch_size = 64
+
+[pty_proxy]
+enabled = true
 ```
 
 ## editor
@@ -116,3 +117,16 @@ idle_exit_secs = 60
 | Key | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
 | `idle_exit_secs` | integer | `60` | 无工具调用多少秒后 stdio MCP server 退出；`0` 表示保持到宿主关闭 stdin。`sivtr mcp serve --idle-exit` flag 覆盖此值。 |
+
+## pty_proxy
+
+```toml
+[pty_proxy]
+enabled = true
+```
+
+| Key | 类型 | 默认值 | 含义 |
+| --- | --- | --- | --- |
+| `enabled` | boolean | `true` | 让 shell 运行在采集代理内并记录命令输出。 |
+
+安装 `sivtr init <shell|all>` 或执行 `sivtr setup` 后，重启 shell 即开始捕获。旧配置缺少此字段时默认使用 `true`。要暂停捕获，通过 `sivtr config edit` 将其设为 `false`；安装、升级 hook 和重新运行 setup 都会保留显式关闭设置。切换开关后需要重启 shell。

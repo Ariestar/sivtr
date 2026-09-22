@@ -532,8 +532,8 @@ mod tests {
     fn ensure_fresh_never_hard_fails_on_empty_environments() {
         let _guard = crate::test_env_lock();
         let dir = tempfile::tempdir().expect("create temporary data directory");
-        let previous = std::env::var_os("SIVTR_DATA_DIR");
-        std::env::set_var("SIVTR_DATA_DIR", dir.path());
+        let previous = std::env::var_os("SIVTR_HOME");
+        std::env::set_var("SIVTR_HOME", dir.path());
         // With no real agent homes and no workspaces, sync succeeds with
         // empty listings or per-provider errors — never a hard failure.
         // Providers whose homes are missing error their listing, so every
@@ -542,8 +542,8 @@ mod tests {
         let skipped = ensure_fresh().expect("sync tolerates empty environments");
         assert!(skipped.iter().all(|entry| !entry.error.is_empty()));
         match previous {
-            Some(value) => std::env::set_var("SIVTR_DATA_DIR", value),
-            None => std::env::remove_var("SIVTR_DATA_DIR"),
+            Some(value) => std::env::set_var("SIVTR_HOME", value),
+            None => std::env::remove_var("SIVTR_HOME"),
         }
     }
 
@@ -551,8 +551,8 @@ mod tests {
     fn a_failed_source_holds_the_freshness_stamp() {
         let _guard = crate::test_env_lock();
         let dir = tempfile::tempdir().expect("create temporary data directory");
-        let previous_data_dir = std::env::var_os("SIVTR_DATA_DIR");
-        std::env::set_var("SIVTR_DATA_DIR", dir.path());
+        let previous_data_dir = std::env::var_os("SIVTR_HOME");
+        std::env::set_var("SIVTR_HOME", dir.path());
         // A codex session that lists fine (valid session_meta line) but
         // fails to parse during sync (a broken second line) puts a failure
         // in the codex source's sync report.
@@ -587,8 +587,8 @@ mod tests {
             None => std::env::remove_var("CODEX_HOME"),
         }
         match previous_data_dir {
-            Some(value) => std::env::set_var("SIVTR_DATA_DIR", value),
-            None => std::env::remove_var("SIVTR_DATA_DIR"),
+            Some(value) => std::env::set_var("SIVTR_HOME", value),
+            None => std::env::remove_var("SIVTR_HOME"),
         }
     }
 
@@ -596,16 +596,16 @@ mod tests {
     fn sync_stamps_an_empty_source_set() {
         let _guard = crate::test_env_lock();
         let dir = tempfile::tempdir().expect("create temporary data directory");
-        let previous = std::env::var_os("SIVTR_DATA_DIR");
-        std::env::set_var("SIVTR_DATA_DIR", dir.path());
+        let previous = std::env::var_os("SIVTR_HOME");
+        std::env::set_var("SIVTR_HOME", dir.path());
         let conn = schema::open().expect("open the test archive");
         let report = sync_sources(&conn, false, &[], false).expect("sync an empty source set");
         assert!(report.sources.is_empty());
         let last = store::meta_get(&conn, "last_sync_at").expect("read last_sync_at");
         assert!(last.is_some(), "sync stamps last_sync_at");
         match previous {
-            Some(value) => std::env::set_var("SIVTR_DATA_DIR", value),
-            None => std::env::remove_var("SIVTR_DATA_DIR"),
+            Some(value) => std::env::set_var("SIVTR_HOME", value),
+            None => std::env::remove_var("SIVTR_HOME"),
         }
     }
 
@@ -616,15 +616,15 @@ mod tests {
         let _guard = crate::test_env_lock();
         let held = FRESH_GATE.try_lock().expect("gate free in test");
         let dir = tempfile::tempdir().expect("create temporary data directory");
-        let previous = std::env::var_os("SIVTR_DATA_DIR");
-        std::env::set_var("SIVTR_DATA_DIR", dir.path());
+        let previous = std::env::var_os("SIVTR_HOME");
+        std::env::set_var("SIVTR_HOME", dir.path());
         let conn = schema::open().expect("open the test archive");
         let skipped = ensure_fresh_with_conn(&conn).expect("fail-open read succeeds");
         assert!(skipped.is_empty(), "blocked reader reads as-is");
         drop(held);
         match previous {
-            Some(value) => std::env::set_var("SIVTR_DATA_DIR", value),
-            None => std::env::remove_var("SIVTR_DATA_DIR"),
+            Some(value) => std::env::set_var("SIVTR_HOME", value),
+            None => std::env::remove_var("SIVTR_HOME"),
         }
     }
 

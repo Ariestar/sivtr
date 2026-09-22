@@ -3,7 +3,7 @@ title: Configuration
 description: Create, inspect, edit, and understand sivtr configuration.
 ---
 
-`sivtr` uses a TOML config file in the platform config directory. Configuration controls editor handoff, archive sync freshness, TUI theme, MCP idle exit, and the Windows hotkey chord.
+`sivtr` uses a TOML config file under the single home (`~/.sivtr` by default, `SIVTR_HOME` override). Configuration controls editor handoff, archive sync freshness, TUI theme, MCP idle exit, and the Windows hotkey chord.
 
 ## Commands
 

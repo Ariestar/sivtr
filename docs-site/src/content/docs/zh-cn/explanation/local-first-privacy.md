@@ -12,13 +12,13 @@ description: sivtr 如何让 Agent memory、终端输出和 transcript 保持在
 - shell 集成产生的 shell session log；
 - 统一 session archive（`archive.db`），包括一次性 terminal capture；
 - provider 自己的 Agent transcript 文件或数据库；
-- 平台配置目录下的本地配置。
+- 统一 home（`~/.sivtr`）下的本地配置。
 
 默认不提供托管 transcript 服务。
 
 ## 本地 archive
 
-终端捕获和 Agent session 位于一个本地 SQLite archive（`archive.db`），位于 sivtr 的 data 目录下。这个过程中没有任何数据离开本机：原生 session 文件仍是 source of truth，sync 引擎读取它们；当 session 在 archive 中缺失或过期时，按 session 寻址的加载会通过解析原生文件自愈。
+终端捕获和 Agent session 位于一个本地 SQLite archive（`cache/archive.db`），位于 sivtr 的 home 目录下。这个过程中没有任何数据离开本机：原生 session 文件仍是 source of truth，sync 引擎读取它们；当 session 在 archive 中缺失或过期时，按 session 寻址的加载会通过解析原生文件自愈。
 ## 显式远程分享
 
 跨设备记忆访问同样是 opt-in。只有你创建 share（`sivtr share` / `share add`）、签发 invite（`share invite`），并且 peer 兑换之后，数据才会离开本机：

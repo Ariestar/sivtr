@@ -96,16 +96,19 @@ irm https://raw.githubusercontent.com/Ariestar/sivtr/main/install.ps1 | iex
 sivtr update    # 下载最新 release，SHA256 校验后原地替换
 ```
 
-首次安装（hooks + MCP 宿主）：
+首次安装（采集 + MCP 宿主）：
 
 ```bash
-sivtr setup             # hooks + MCP 宿主 + sivtr-memory skill（缺失时安装）
+sivtr setup                  # 采集 + MCP 宿主 + sivtr-memory skill（缺失时安装）
 # 或分步：
-sivtr init powershell   # 或 bash、zsh、nushell
-sivtr mcp install       # 检测已装宿主；或 -p claude,cursor,codex,opencode,openclaw,grok,hermes,pi,qoder,qodercn,gemini,qwen,goose
+sivtr init all              # 或单个 shell：bash、zsh、nushell、powershell
+sivtr mcp install            # 检测已装宿主；或 -p claude,cursor,codex,opencode,openclaw,grok,hermes,pi,qoder,qodercn,gemini,qwen,goose
 npx skills add Ariestar/sivtr --skill sivtr-memory -g -y
 sivtr doctor
 ```
+
+> [!NOTE]
+> `sivtr setup` 或 `sivtr init` 安装 shell 集成后，**新开一个 shell** 即可捕获命令输出，无需额外启用。升级后重新运行 `init` 会原位更新旧 hook。要暂停捕获，用 `sivtr config edit` 设置 `[pty_proxy] enabled = false` 并重启 shell；安装和升级都会保留这个显式关闭设置。
 
 同步并查看 archive：
 

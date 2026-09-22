@@ -10,9 +10,11 @@ use std::sync::LazyLock;
 use crate::commands::memory::show::WorkSetOutputFormat;
 
 mod mcp;
+mod pty;
 mod publish;
 mod remote;
 pub use mcp::*;
+pub use pty::*;
 pub use publish::*;
 pub use remote::*;
 
@@ -394,7 +396,7 @@ pub enum Commands {
     /// One-command setup: detect environment, install hooks/config/MCP, smoke test
     Setup,
 
-    /// Generate shell integration or desktop shortcut helpers
+    /// Install or upgrade shell capture integration or desktop shortcuts
     Init {
         /// Integration target: powershell, bash, zsh, nushell, all, tmux, linux-shortcut, macos-shortcut, show, uninstall
         #[arg(value_name = "TARGET", allow_hyphen_values = true)]
@@ -450,9 +452,9 @@ pub enum Commands {
     /// Clear session logs
     Clear(ClearArgs),
 
-    /// Internal: flush console buffer to session log (called by shell hook)
+    /// Internal: capture terminal output through a shell proxy
     #[command(hide = true)]
-    Flush,
+    PtyProxy(PtyProxyCommand),
 
     /// Internal: run the Windows hotkey daemon loop
     #[command(hide = true)]
@@ -2574,6 +2576,16 @@ mod tests {
         match cli.command {
             Some(Commands::Init { target }) => assert_eq!(target, "all"),
             _ => panic!("expected init command"),
+        }
+    }
+
+    #[test]
+    fn pty_proxy_is_internal_without_capture_toggle_commands() {
+        let help = Cli::command().render_help().to_string();
+        assert!(!help.contains("pty-proxy"));
+        assert!(Cli::try_parse_from(["sivtr", "pty-proxy", "run", "bash"]).is_ok());
+        for removed in ["enable", "disable"] {
+            assert!(Cli::try_parse_from(["sivtr", "pty-proxy", removed]).is_err());
         }
     }
 

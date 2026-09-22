@@ -5,6 +5,8 @@ description: 以只读方式分享 workspace，并用 remote 名挂接另一台�
 
 跨设备记忆让两台运行 `sivtr` 的机器像读本地 source 一样读取彼此的 workspace session。分享是显式的、只读的，并且默认脱敏。
 
+共享只返回记录目录或仓库标识明确匹配该 workspace 的会话。归属不明的会话不会返回，即使对方指定了精确引用；它们仍保留在所有者本机不限定 workspace 的会话列表中。脱敏在 workspace 过滤后执行，不会扩大可访问的会话范围。
+
 如果想先看协作场景，见 [远程协作记忆](/zh-cn/playbooks/remote-collaboration-memory/)。本页是功能指南。
 
 ## 先决定用 `publish` 还是 `share`
@@ -141,7 +143,7 @@ sivtr serve logs
 sivtr serve stop
 ```
 
-状态在 `data_dir()`（`SIVTR_DATA_DIR` 覆盖，否则平台 config 下的 `sivtr`）：
+状态在统一 home 下（`SIVTR_HOME` 覆盖，否则 `~/.sivtr`）：
 
 | 文件 | 用途 |
 | --- | --- |

@@ -424,10 +424,10 @@ pub struct ListedSession {
 /// List archived sessions for the given namespaces, workspace-filtered.
 ///
 /// The filter mirrors the shared [`crate::agents::filter_sessions_by_workspace`]
-/// policy: unbound sessions (no cwd) stay visible everywhere, an exact cwd
-/// match always matches, and a session inside a git checkout matches any
-/// browsing directory of the same repository (workspace key from the shared
-/// git dir, precomputed at sync time so the query stays an index scan).
+/// policy: scoped listings require an exact cwd match or a matching repository.
+/// Unbound sessions appear only in unfiltered listings. A session inside a git
+/// checkout matches any browsing directory of the same repository (workspace key
+/// from the shared git dir, precomputed at sync time so the query stays an index scan).
 ///
 /// `recent_per_namespace` truncates each namespace to its most recently
 /// modified sessions, matching the live listing order.
@@ -452,7 +452,6 @@ pub fn list_workspace_sessions(
             "SELECT id, source_path FROM sessions
              WHERE provider = ?1
                AND (?4 = 1
-                    OR cwd IS NULL
                     OR cwd_norm = ?2
                     OR (?3 != '' AND workspace_key = ?3))
              ORDER BY mtime_secs DESC, mtime_nanos DESC, id DESC
@@ -903,7 +902,7 @@ mod tests {
     fn upsert_then_load_round_trips_records() {
         let _guard = crate::test_env_lock();
         let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("SIVTR_DATA_DIR", dir.path());
+        std::env::set_var("SIVTR_HOME", dir.path());
         let conn = crate::archive::open().unwrap();
         let records = vec![
             terminal_record("session_1", 1, "first"),
@@ -933,14 +932,14 @@ mod tests {
         .row_id;
         let light = load_records_by_row(&conn, session_row, BlobMode::Light).unwrap();
         assert!(light[0].parts.is_empty());
-        std::env::remove_var("SIVTR_DATA_DIR");
+        std::env::remove_var("SIVTR_HOME");
     }
 
     #[test]
     fn upsert_adopts_new_session_id_and_handles_path_moves() {
         let _guard = crate::test_env_lock();
         let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("SIVTR_DATA_DIR", dir.path());
+        std::env::set_var("SIVTR_HOME", dir.path());
         let conn = crate::archive::open().unwrap();
         let records = vec![terminal_record("session_1", 1, "one")];
 
@@ -981,14 +980,14 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 1, "no duplicate rows");
-        std::env::remove_var("SIVTR_DATA_DIR");
+        std::env::remove_var("SIVTR_HOME");
     }
 
     #[test]
     fn terminal_capture_stays_in_archive_across_terminal_sync_cleanup() {
         let _guard = crate::test_env_lock();
         let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("SIVTR_DATA_DIR", dir.path());
+        std::env::set_var("SIVTR_HOME", dir.path());
         let cwd = dir.path().join("repo");
         std::fs::create_dir(&cwd).unwrap();
 
@@ -1009,14 +1008,14 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
-        std::env::remove_var("SIVTR_DATA_DIR");
+        std::env::remove_var("SIVTR_HOME");
     }
 
     #[test]
     fn failed_session_upsert_rolls_back_metadata_and_records() {
         let _guard = crate::test_env_lock();
         let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("SIVTR_DATA_DIR", dir.path());
+        std::env::set_var("SIVTR_HOME", dir.path());
         let conn = crate::archive::open().unwrap();
         let records = vec![terminal_record("session_1", 1, "original")];
         let up = sample_upsert(&records);
@@ -1053,14 +1052,14 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(rows[0].parts[0].text(), "original");
-        std::env::remove_var("SIVTR_DATA_DIR");
+        std::env::remove_var("SIVTR_HOME");
     }
 
     #[test]
     fn list_filters_by_workspace_and_exact_cwd() {
         let _guard = crate::test_env_lock();
         let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("SIVTR_DATA_DIR", dir.path());
+        std::env::set_var("SIVTR_HOME", dir.path());
         let conn = crate::archive::open().unwrap();
         let empty: Vec<WorkRecord> = Vec::new();
 
@@ -1073,7 +1072,7 @@ mod tests {
         a.cwd = Some("/repo-a");
         a.workspace_key = "repo-a-key";
         upsert_session(&conn, &a).unwrap();
-        // Unbound session (no cwd) — visible everywhere.
+        // Unbound session (no cwd) — visible only without a workspace filter.
         let mut unbound = sample_upsert(&empty);
         unbound.session_id = "unbound";
         unbound.source_path = Path::new("/elsewhere/terminals/unbound.jsonl");
@@ -1093,18 +1092,47 @@ mod tests {
                 .unwrap()
                 .len()
         };
-        assert_eq!(by(Some(Path::new("/repo-a"))), 2, "repo match + unbound");
-        assert_eq!(by(Some(Path::new("/repo-b"))), 1, "only unbound");
-        assert_eq!(by(Some(Path::new("/scratch"))), 2, "exact match + unbound");
+        assert_eq!(by(Some(Path::new("/repo-a"))), 1, "exact cwd match");
+        assert_eq!(
+            by(Some(Path::new("/repo-b"))),
+            0,
+            "unrelated and unbound excluded"
+        );
+        assert_eq!(
+            by(Some(Path::new("/scratch"))),
+            1,
+            "exact non-repo cwd match"
+        );
         assert_eq!(by(None), 3, "no cwd filter lists all");
-        std::env::remove_var("SIVTR_DATA_DIR");
+
+        // A recorded repository identity is sufficient even without cwd, and
+        // linked worktrees share that identity rather than their directory name.
+        let repo = dir.path().join("repo");
+        let worktree = dir.path().join("worktree");
+        crate::test_fixtures::make_repo(&repo);
+        crate::test_fixtures::make_worktree(&repo, &worktree, "worktree");
+        let key = crate::workspace::repo_identity(&repo).unwrap();
+        let mut keyed = sample_upsert(&empty);
+        keyed.session_id = "keyed";
+        keyed.source_path = Path::new("/elsewhere/keyed.jsonl");
+        keyed.cwd = None;
+        keyed.workspace_key = &key;
+        upsert_session(&conn, &keyed).unwrap();
+        assert_eq!(by(Some(&repo)), 1, "repository identity proves membership");
+        assert_eq!(by(Some(&worktree)), 1, "same repository through a worktree");
+        assert_eq!(
+            by(Some(Path::new("/repo-b"))),
+            0,
+            "foreign identity stays excluded"
+        );
+        std::env::remove_var("SIVTR_HOME");
     }
 
     #[test]
     fn usage_events_round_trip_with_provider_and_session_filters() {
         let _guard = crate::test_env_lock();
         let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("SIVTR_DATA_DIR", dir.path());
+        std::env::set_var("SIVTR_HOME", dir.path());
         let conn = crate::archive::open().unwrap();
         let records: Vec<WorkRecord> = Vec::new();
         let mut up = sample_upsert(&records);
@@ -1151,6 +1179,6 @@ mod tests {
                 .len(),
             1
         );
-        std::env::remove_var("SIVTR_DATA_DIR");
+        std::env::remove_var("SIVTR_HOME");
     }
 }

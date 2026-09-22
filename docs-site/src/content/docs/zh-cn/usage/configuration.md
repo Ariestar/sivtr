@@ -3,7 +3,7 @@ title: 配置
 description: 创建、查看、编辑并理解 sivtr 配置。
 ---
 
-`sivtr` 使用平台配置目录中的 TOML 配置文件。配置控制编辑器交接、archive 同步新鲜度、TUI 主题、MCP idle 退出和 Windows 热键按键。
+`sivtr` 使用统一 home 下的 TOML 配置文件（默认 `~/.sivtr`，可用 `SIVTR_HOME` 覆盖）。配置控制编辑器交接、archive 同步新鲜度、TUI 主题、MCP idle 退出和 Windows 热键按键。
 
 ## 命令
 

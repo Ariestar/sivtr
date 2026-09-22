@@ -25,7 +25,7 @@ Reliable CLI
 | Agent support | 核心已落地 | 面向 AI Agent 对话记录的 provider-neutral 解析和浏览。 |
 | Retrieval quality | 核心已落地 | 结构化、精确、可排序的检索,决定证据范式是否真正好用。 |
 | Skills and playbooks | 进行中 | 把 `sivtr` 作为统一记忆入口的可复用 Agent 流程。 |
-| Agent interfaces | 核心已落地 | CLI、MCP 和本地 Web API,让其他 Agent 把 `sivtr` 当工作记忆基础设施。 |
+| Agent interfaces | 核心已落地 | CLI 和 MCP,让其他 Agent 把 `sivtr` 当工作记忆基础设施。 |
 | TUI workspace | 规划中 | 面向多 session、多 provider、长对话的高密度键盘优先界面。 |
 | Source expansion | 核心已落地 | 在不削弱共享模型的前提下,扩展到更多捕获面。 |
 | Remote collaboration | 核心已落地 | 通过 Share / Grant / Mount 有权限地只读访问队友 workspace 记忆。 |
@@ -41,6 +41,7 @@ Reliable CLI
 
 - [x] 从 pipe mode 捕获命令输出。
 - [x] 用 `sivtr run` 捕获子进程输出。
+- [x] 通过 pty 代理（`sivtr pty-proxy`）捕获活动 shell 中的每条命令。
 - [x] 导入 shell session log。
 - [x] 按 selector 复制最近命令输入、输出和命令块。
 - [x] 在统一 archive 中搜索捕获输出。
@@ -117,7 +118,7 @@ TUI 应保持快速和键盘优先,但需要从单个输出浏览扩展到多 so
 更多平台应扩大捕获面,而不是切碎模型。新 source 必须映射进共享的 WorkRecord / WorkPart / WorkRef 抽象。
 
 - [x] 在共享 provider 接口后接入更多 coding agent 和 IDE transcript。
-- [ ] 在现有 hook 模型不够用时,支持更多 shell 与终端捕获路径。
+- [x] 在现有 hook 模型不够用时,支持更多 shell 与终端捕获路径;pty 代理用一条采集路径取代了按平台各写一套的做法。
 - [x] 仅在存在可持久本地 export 时接入网页 AI 对话 importer（Claude.ai、ChatGPT JSON/ZIP）。
 - [x] 优先 offline-first import 与本地索引,而不是去 scrape 脆弱的远程 UI。
 - [x] 保持 provider adapter 很薄;search、privacy、ranking、export 继续共享。
