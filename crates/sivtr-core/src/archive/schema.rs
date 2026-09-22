@@ -110,6 +110,33 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         }
         Some(_) => {}
     }
+
+    // Older Cursor parses could stamp a transcript without its wrapped messages.
+    // Invalidate only those source stamps once; keep records, stars, and terminal
+    // captures intact until native Cursor transcripts can be re-parsed.
+    let refresh_cursor: bool = conn.query_row(
+        "SELECT NOT EXISTS(SELECT 1 FROM archive_meta WHERE key = 'cursor_message_envelopes_v1')",
+        [],
+        |row| row.get(0),
+    ).context("Failed to read the Cursor parser migration state")?;
+    if refresh_cursor {
+        let tx = conn
+            .unchecked_transaction()
+            .context("Failed to begin Cursor parser migration")?;
+        // Claim inside the transaction too: another process may have migrated
+        // between the read above and acquiring the write lock.
+        if tx.execute(
+            "INSERT OR IGNORE INTO archive_meta (key, value) VALUES ('cursor_message_envelopes_v1', '1')",
+            [],
+        )? != 0 {
+            tx.execute_batch(
+                "UPDATE sessions SET size = 0 WHERE provider = 'cursor';
+                 DELETE FROM archive_meta WHERE key = 'last_sync_at';"
+            ).context("Failed to invalidate old Cursor parse stamps")?;
+        }
+        tx.commit()
+            .context("Failed to commit Cursor parser migration")?;
+    }
     Ok(())
 }
 
