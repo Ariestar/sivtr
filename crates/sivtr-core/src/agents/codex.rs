@@ -118,11 +118,7 @@ impl AgentSessionProvider for CodexProvider {
             return Ok(Some(path));
         }
 
-        if let Some(session) = list_recent_local_sessions(Some(cwd))?.into_iter().next() {
-            return Ok(Some(session.path));
-        }
-
-        Ok(list_recent_local_sessions(None)?
+        Ok(list_recent_local_sessions(Some(cwd))?
             .into_iter()
             .next()
             .map(|session| session.path))
@@ -603,6 +599,11 @@ mod tests {
         env::set_var("SIVTR_HOME", temp.path().join("data"));
 
         let resolved = CodexProvider.find_current_session(&cwd_match).unwrap();
+        env::remove_var("CODEX_THREAD_ID");
+        let inferred = CodexProvider.find_current_session(&cwd_match).unwrap();
+        let missing = CodexProvider
+            .find_current_session(&temp.path().join("unrelated"))
+            .unwrap();
 
         match previous_codex_home {
             Some(value) => env::set_var("CODEX_HOME", value),
@@ -618,6 +619,8 @@ mod tests {
         }
 
         assert_eq!(resolved, Some(thread_session));
+        assert_eq!(inferred, Some(cwd_session));
+        assert_eq!(missing, None);
     }
 
     #[test]

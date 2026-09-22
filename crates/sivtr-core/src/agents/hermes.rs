@@ -643,7 +643,7 @@ mod tests {
     }
 
     #[test]
-    fn lists_sqlite_sessions_and_keeps_missing_cwd_under_cwd_filter() {
+    fn lists_sqlite_sessions_with_missing_cwd_only_when_unfiltered() {
         let home = tempfile::tempdir().unwrap();
         let db = write_state_db(home.path());
         let conn = Connection::open(db).unwrap();
@@ -669,10 +669,12 @@ mod tests {
             .iter()
             .filter_map(|session| session.id.clone())
             .collect();
-        assert!(ids.contains(&"s_no_cwd".to_string()));
-        assert!(ids.contains(&"s_match".to_string()));
-        assert!(!ids.contains(&"s_other".to_string()));
-        assert!(!ids.contains(&"s_arch".to_string()));
+        assert_eq!(ids, vec!["s_match"]);
+        let all = HermesProvider.list_recent_sessions(None).expect("list all");
+        assert_eq!(all.len(), 3);
+        assert!(all
+            .iter()
+            .any(|session| session.id.as_deref() == Some("s_no_cwd")));
     }
 
     #[test]

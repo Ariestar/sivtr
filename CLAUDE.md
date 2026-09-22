@@ -79,7 +79,7 @@ src/                       ← CLI binary
 - **clippy strict** — `-D warnings` on CI
 - **Rust 2021 edition, MSRV 1.95** — see `Cargo.toml` `rust-version` (toolchain channel is `stable`)
 - **Agent lists** — any CLI help / error that names providers must use `AgentProvider::command_names()` / `command_names_csv()`, not a hand-written list
-- **Workspace filter** — session cwd filtering uses `filter_sessions_by_workspace` (unbound keep + path/remote match); do not reimplement per provider
+- **Workspace filter** — scoped session lists require an exact cwd or shared git-directory identity match; unbound sessions stay in unfiltered listings only. Reuse `filter_sessions_by_workspace` / the JSONL listing helper; never bypass an empty filtered result with an unfiltered fallback.
 ## Working Directory
 
 Always confirm before starting work:
