@@ -23,7 +23,7 @@ sivtr --all              # 裸 TTY 打开时也选中 remote mount
 sivtr run <COMMAND> [ARGS...]
 ```
 
-运行命令，捕获合并后的 stdout/stderr，报告退出状态，把捕获内容保存到统一 archive，并打开捕获输出。
+运行命令，捕获合并后的 stdout/stderr，报告退出状态，把捕获内容保存到统一 archive，并在外部编辑器中打开捕获输出。
 
 ```bash
 sivtr run cargo test
@@ -942,7 +942,7 @@ sivtr export sessions [--source <PROVIDER/SESSION>] [--format json|jsonl|markdow
 sivtr export sessions --jsonl --output sessions.jsonl
 ```
 
-导出单个 session 或整个 archive。HTML 会对 transcript 文本做转义。
+导出单个 session 或整个 archive，不会添加本地已存记录之外的 secret 值。HTML 会对 transcript 文本做转义。
 
 ## quality
 

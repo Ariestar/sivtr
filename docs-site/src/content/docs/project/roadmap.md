@@ -25,7 +25,7 @@ Reliable CLI
 | Agent support | Landed (core) | Provider-neutral parsing and browsing for AI-agent conversation records. |
 | Retrieval quality | Landed (core) | Structured, precise, rankable search that makes the evidence paradigm trustworthy at scale. |
 | Skills and playbooks | In progress | Reusable agent procedures that use `sivtr` as the unified memory entry point. |
-| Agent interfaces | Landed (core) | CLI and MCP surfaces so other agents can treat `sivtr` as work-memory infrastructure. |
+| Agent interfaces | Landed (core) | CLI, MCP, and the local Rust API (`sivtr-core`) so other agents can treat `sivtr` as work-memory infrastructure. |
 | TUI workspace | Planned | A dense keyboard-first interface for many sessions, many providers, and long conversations. |
 | Source expansion | Landed (core) | More capture surfaces beyond current shells and coding agents, without weakening the shared model. |
 | Remote collaboration | Landed (core) | Permissioned, read-only access to teammate workspace memory via Share / Grant / Mount. |
