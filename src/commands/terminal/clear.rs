@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use sivtr_core::capture::scrollback;
+use sivtr_core::session;
 use sivtr_core::workspace;
 use std::fs;
 
@@ -17,23 +17,20 @@ pub fn execute(clear_all: bool) -> Result<()> {
         return Ok(());
     }
 
-    let Some(log) = scrollback::session_log_path()? else {
+    let Some(log) = session::current_log_path()? else {
         output::info("no current terminal session to clear");
         return Ok(());
     };
     let state = log.with_extension("state");
-    let capture = log.with_extension("capture");
 
-    let mut cleared = false;
-
-    if log.exists() {
+    let cleared = if log.exists() {
         fs::remove_file(&log)?;
-        cleared = true;
-    }
-    for f in [&state, &capture] {
-        if f.exists() {
-            let _ = fs::remove_file(f);
-        }
+        true
+    } else {
+        false
+    };
+    if state.exists() {
+        let _ = fs::remove_file(&state);
     }
 
     if cleared {

@@ -47,12 +47,16 @@ src/                       ← CLI binary
   main.rs                  ← Command routing
   cli/
     mod.rs                 ← Top-level Clap definitions (copy agents via registry external subcommand)
+    pty.rs                 ← `pty-proxy` subcommands
     remote.rs              ← serve/share/peer/remote/group/workspace Clap types
   commands/
-    capture/               ← copy, pipe, run, init, flush, diff, clear, browse
+    browse/                ← Product TUI (bare `sivtr`, hotkey, pick)
     memory/                ← search, filter, var, nav, zoom, show, work, workset
+    publish/               ← Privacy-projected shared publications
     remote/                ← serve, share, mounts, peer, group, workspace
     system/                ← config, doctor, export, hotkey, import, quality, session, stats, sync, usage, version
+    terminal/              ← run, pipe, init, pty-proxy, clear
+  pty/                     ← Capture proxy: owns the pty, records OSC 133 blocks
   remote/                  ← Device daemon, identity, state, protocol, ipc
   tui/                     ← Terminal UI framework
 ```
@@ -83,9 +87,22 @@ Always confirm before starting work:
 pwd && git branch
 ```
 
-## Shell Hook System
+## Shell Integration and Terminal Capture
 
-`sivtr init {shell}` injects precmd hooks using marker blocks (`# >>> sivtr shell integration >>>`). Session logs go to `<home>/workspaces/<workspace-key>/terminals/session_<pid>.jsonl` (`SIVTR_HOME` or `~/.sivtr`). Internal `sivtr flush` called by hooks on each prompt.
+`sivtr init {shell}` injects a marker-delimited block (`# >>> sivtr shell integration >>>`) that
+installs the prompt hooks and, at its end, re-execs the shell under `sivtr pty-proxy run <shell>`.
+
+Capture is part of shell integration: `sivtr init {shell|all}` installs or replaces the block
+in place, and `sivtr setup` uses that same installer. `[pty_proxy] enabled` defaults to `true`;
+an explicit `false` survives installation and upgrades. Restart the shell after installing or
+changing this setting. `pty-proxy run/report` are internal commands. With capture disabled or
+the proxy unavailable, the user still gets a plain shell; configuration failures are reported.
+
+The proxy owns the pty, so the child keeps a real `isatty`. The hooks emit `OSC 133;C` before a
+command runs and call `sivtr pty-proxy report` after it; `report` writes the command metadata and
+prints `OSC 133;D`. The proxy slices the bytes between the two markers and appends one
+`SessionEntry` to `<home>/workspaces/<workspace-key>/terminals/<terminal_id>.jsonl`
+(`SIVTR_HOME` or `~/.sivtr`). The archive picks those logs up through the normal sync pass.
 
 ## Search Pipeline
 

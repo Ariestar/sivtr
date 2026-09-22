@@ -29,11 +29,13 @@ description: sivtr 存放配置、统一 archive、session log 和 provider 数�
 
 ## Shell session log
 
-Shell 集成把按进程区分的结构化 session log 写到 home 下：
+通过 `sivtr init` 或 `sivtr setup` 安装 shell 集成并重启后，shell 默认运行在 `sivtr pty-proxy run` 之内，每条执行完的命令会向按终端区分的日志追加一条结构化记录：
 
 | 常见路径 |
 | --- |
-| `<home>/workspaces/<workspace-key>/terminals/session_<pid>.jsonl` |
+| `<home>/workspaces/<workspace-key>/terminals/<terminal_id>.jsonl` |
+
+`<workspace-key>` 标识 git 仓库 —— 同一仓库的所有 worktree 共用同一个 key；`<terminal_id>` 标识 shell 会话，因此不同终端不会互相混淆。不在 git 仓库内时不会记录任何内容。
 
 这些 log 支撑：
 
@@ -41,6 +43,8 @@ Shell 集成把按进程区分的结构化 session log 写到 home 下：
 - `sivtr copy` 命令块工作流；
 - `sivtr diff`；
 - browser 中的命令块导航。
+
+`sivtr clear` 删除当前终端的日志；`sivtr clear --all` 删除全部 workspace 会话树。
 
 ## Agent provider 数据
 

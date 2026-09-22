@@ -111,6 +111,7 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 flate2 = "1.1.9"
 tar = { version = "0.4.46", default-features = false }
 notify = "8.2"
+portable-pty = "0.9"
 axum = "0.8.9"
 mime_guess = "2"
 rust-embed = "8.12.0"

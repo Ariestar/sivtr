@@ -11,6 +11,7 @@ description: 使用 pipe mode、run mode 和 shell session integration。
 | --- | --- | --- |
 | 查看已有命令管道的输出 | `command 2>&1 \| sivtr` | 否 |
 | 让 `sivtr` 执行一次命令 | `sivtr run command` | 部分保留本次运行信息 |
+| 在活动 shell 中记录每条命令 | `sivtr init <shell>` | 是，含退出码与目录 |
 | 浏览当前 workspace 记录的工作 | `sivtr` | 是，需要 shell 集成 |
 | 复制最近命令块 | `sivtr copy out` | 是，需要 shell 集成 |
 | 搜索捕获的终端和 AI 工作 | `sivtr search "query"` | 是，来自统一 archive |
@@ -64,16 +65,16 @@ sivtr
 
 当你已经正常工作了一段时间，之后想浏览累积的终端工作时，这很有用。
 
-安装 shell 集成：
+安装或升级 shell 集成即可使用终端捕获：
 
 ```bash
-sivtr init powershell
-sivtr init bash
-sivtr init zsh
-sivtr init nushell
+sivtr init all
+# 或只安装一个 shell：sivtr init bash / zsh / nushell / powershell
 ```
 
-安装后重启 shell。
+`sivtr setup` 会执行同样的安装步骤。安装后重启 shell，后续命令会自动通过 PTY 捕获，无需额外启用。升级后重新运行 `sivtr init <shell>` 会原位替换旧的 sivtr hook，保留周围的用户配置，不会叠加另一套捕获代码。
+
+要暂停捕获，运行 `sivtr config edit`，将 `[pty_proxy]` 下的 `enabled` 设为 `false`，然后重启 shell。`setup` 和 `init` 都会保留这个显式关闭设置。重新开启时将它改回 `true` 并重启 shell。
 
 ## 搜索捕获输出
 

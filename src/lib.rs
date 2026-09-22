@@ -9,6 +9,7 @@ pub mod mcp;
 pub mod origins;
 pub mod output;
 pub mod pane;
+pub mod pty;
 pub mod remote;
 pub mod server;
 pub mod tui;
@@ -160,8 +161,8 @@ fn run() -> Result<()> {
         Some(Commands::Clear(args)) => {
             commands::terminal::clear::execute(args.all)?;
         }
-        Some(Commands::Flush) => {
-            commands::terminal::flush::execute()?;
+        Some(Commands::PtyProxy(command)) => {
+            commands::terminal::pty_proxy::execute(&command.action)?;
         }
         Some(Commands::HotkeyServe(args)) => {
             run_hotkey_serve(&args)?;
