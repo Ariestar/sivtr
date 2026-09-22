@@ -254,9 +254,10 @@ pub struct Bm25Index {
     refs: Vec<WorkRef>,
 }
 
-/// Bump when the BM25 index layout or scoring changes, to invalidate cached
-/// indexes built by older code.
-pub const INDEX_CACHE_VERSION: u32 = 1;
+/// Bump when index layout, scoring, or parsing semantics change: reparsed
+/// records can gain searchable content while retaining the same work refs.
+/// Version 2 rebuilds indexes after Cursor message-envelope recovery.
+pub const INDEX_CACHE_VERSION: u32 = 2;
 
 impl Bm25Index {
     pub fn build(records: &[WorkRecord]) -> Self {

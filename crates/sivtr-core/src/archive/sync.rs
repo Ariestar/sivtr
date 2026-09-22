@@ -529,6 +529,103 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cursor_parser_refresh_rebuilds_unchanged_sources_without_losing_captures() {
+        let _guard = crate::test_fixtures::EnvGuard::capture(&["SIVTR_HOME", "CURSOR_HOME"]);
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("SIVTR_HOME", dir.path().join("data"));
+        std::env::set_var("CURSOR_HOME", dir.path().join("cursor"));
+        let projects = dir.path().join("cursor/projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        let source = projects.join("cursor-old.jsonl");
+        std::fs::write(
+            &source,
+            serde_json::json!({
+                "sessionId": "cursor-old",
+                "role": "user",
+                "cwd": dir.path(),
+                "message": {"content": [{"type": "text", "text": "restored envelope"}]}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let stamp = crate::cache::file_stamp(&source).unwrap();
+        let conn = schema::open().unwrap();
+        // The old parser could save an empty result with a current file stamp.
+        for provider in ["cursor", "claude"] {
+            store::upsert_session(
+                &conn,
+                &SessionUpsert {
+                    provider,
+                    session_id: "cursor-old",
+                    source_path: &source,
+                    cwd: None,
+                    workspace_key: "",
+                    title: None,
+                    stamp,
+                    records: &[],
+                    usage_events: &[],
+                },
+            )
+            .unwrap();
+        }
+        let capture = store::insert_terminal_capture(
+            Some("echo keep-capture"),
+            "keep-capture",
+            dir.path(),
+            Some(0),
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE sessions SET starred = 1 WHERE provider = 'cursor'",
+            [],
+        )
+        .unwrap();
+        // Simulate an archive created before the one-time parser migration.
+        conn.execute("DELETE FROM archive_meta WHERE key != 'schema_version'", [])
+            .unwrap();
+        store::meta_set(&conn, "last_sync_at", &Utc::now().to_rfc3339()).unwrap();
+        schema::init_schema(&conn).unwrap();
+        assert!(store::meta_get(&conn, "last_sync_at").unwrap().is_none());
+        assert_eq!(
+            store::provider_stamps(&conn, "claude").unwrap()[source.to_str().unwrap()],
+            stamp
+        );
+
+        let report = sync_sources(&conn, false, &[AgentProvider::Cursor], false).unwrap();
+        assert_eq!(report.sources[0].counts.updated, 1);
+        let records =
+            store::load_records_by_key(&conn, "cursor", "cursor-old", store::BlobMode::Full)
+                .unwrap()
+                .unwrap();
+        assert_eq!(records.len(), 1);
+        assert!(records[0]
+            .parts
+            .iter()
+            .any(|part| part.text().contains("restored envelope")));
+        assert!(
+            store::session_meta_by_key(&conn, "cursor", "cursor-old")
+                .unwrap()
+                .unwrap()
+                .starred
+        );
+        let captured =
+            store::load_records_by_key(&conn, "terminal", &capture, store::BlobMode::Full)
+                .unwrap()
+                .unwrap();
+        assert_eq!(captured.len(), 1);
+        assert!(captured[0]
+            .parts
+            .iter()
+            .any(|part| part.text().contains("keep-capture")));
+
+        // Reopening must not invalidate the repaired Cursor records again.
+        schema::init_schema(&conn).unwrap();
+        let second = sync_sources(&conn, false, &[AgentProvider::Cursor], false).unwrap();
+        assert_eq!(second.sources[0].counts.unchanged, 1);
+        assert_eq!(crate::cache::file_stamp(&source), Some(stamp));
+    }
+
+    #[test]
     fn ensure_fresh_never_hard_fails_on_empty_environments() {
         let _guard = crate::test_env_lock();
         let dir = tempfile::tempdir().expect("create temporary data directory");

@@ -240,13 +240,10 @@ pub trait AgentSessionProvider {
         Ok(None)
     }
 
+    /// Inferring a current session must not widen an empty workspace search.
     fn find_current_session(&self, cwd: &Path) -> Result<Option<PathBuf>> {
-        if let Some(session) = self.list_recent_sessions(Some(cwd))?.into_iter().next() {
-            return Ok(Some(session.path));
-        }
-
         Ok(self
-            .list_recent_sessions(None)?
+            .list_recent_sessions(Some(cwd))?
             .into_iter()
             .next()
             .map(|session| session.path))
@@ -495,7 +492,7 @@ pub fn normalize_path_for_match(path: &Path) -> String {
 ///
 /// Policy (all providers):
 /// - `cwd == None` → keep every session
-/// - session has no cwd metadata → **keep** (unbound / weixin / cron / missing)
+/// - session has no cwd metadata → exclude from scoped listings
 /// - session has cwd → keep only when it resolves to the same repository
 ///   (commondir identity) as the target, or exactly matches the target path
 ///   when neither side is inside a git checkout
@@ -509,27 +506,13 @@ pub fn filter_sessions_by_workspace(
     let wanted = WorkspaceMatchTarget::new(cwd);
     sessions
         .into_iter()
-        .filter(|session| match session.cwd.as_deref() {
-            None => true,
-            Some(candidate) => wanted.matches(Path::new(candidate)),
+        .filter(|session| {
+            session
+                .cwd
+                .as_deref()
+                .is_some_and(|candidate| wanted.matches(Path::new(candidate)))
         })
         .collect()
-}
-
-/// Whether any cwd candidate matches the workspace target.
-/// Empty candidate list means "no metadata" → keep (same policy as unbound sessions).
-pub(crate) fn workspace_matches_candidates(
-    wanted: &WorkspaceMatchTarget,
-    mut candidates: impl Iterator<Item = impl AsRef<Path>>,
-) -> bool {
-    let mut any = false;
-    for candidate in candidates.by_ref() {
-        any = true;
-        if wanted.matches(candidate.as_ref()) {
-            return true;
-        }
-    }
-    !any
 }
 
 pub(crate) struct WorkspaceMatchTarget {
@@ -699,7 +682,7 @@ mod tests {
     }
 
     #[test]
-    fn filter_sessions_keeps_unbound_and_matching_cwd() {
+    fn scoped_filter_requires_cwd_but_unfiltered_listing_keeps_unbound() {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("repo");
         make_repo(&repo);
@@ -731,12 +714,16 @@ mod tests {
             },
         ];
 
+        assert_eq!(
+            filter_sessions_by_workspace(sessions.clone(), None).len(),
+            3
+        );
         let filtered = filter_sessions_by_workspace(sessions, Some(&repo));
         let ids: Vec<_> = filtered
             .iter()
             .filter_map(|session| session.id.as_deref())
             .collect();
-        assert_eq!(ids, vec!["u", "m"]);
+        assert_eq!(ids, vec!["m"]);
     }
 
     #[test]

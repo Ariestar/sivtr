@@ -8,8 +8,8 @@
 //! ```
 //! The project-id is a hash of the working directory; the CLI keeps the
 //! id→path mapping in `projects.json`, which is not always present, so
-//! sessions without a mapping are listed as unbound (kept for every
-//! workspace, same as sessions that carry no cwd metadata).
+//! sessions without a mapping are unbound and appear only in unfiltered
+//! listings, like other sessions without cwd metadata.
 //!
 //! JSONL records: the first line is a header `{sessionId, projectHash,
 //! startTime, lastUpdated, summary?}`; message lines are `{id, type:
