@@ -5,13 +5,11 @@ description: TOML 配置参考。
 
 ## 位置
 
-`sivtr` 使用平台配置目录：
+`sivtr` 把配置放在统一 home 下（`SIVTR_HOME` 覆盖，否则 `~/.sivtr`）：
 
 | 平台 | 当前路径 |
 | --- | --- |
-| Windows | `%APPDATA%\sivtr\config.toml` |
-| macOS | `~/Library/Application Support/sivtr/config.toml` |
-| Linux | `~/.config/sivtr/config.toml` |
+| 所有平台 | `~/.sivtr/config.toml` |
 
 ## 完整示例
 
@@ -19,12 +17,8 @@ description: TOML 配置参考。
 [editor]
 command = "nvim"
 
-[history]
-auto_save = true
-max_entries = 0
-
-[codex]
-session_dirs = ["/srv/sivtr/root-codex/sessions"]
+[sync]
+max_age_secs = 15
 
 [hotkey]
 chord = "alt+y"
@@ -34,6 +28,15 @@ mode = "auto"
 
 [mcp]
 idle_exit_secs = 60
+
+[embedding]
+endpoint = "https://api.openai.com/v1/embeddings"
+model = "text-embedding-3-small"
+api_key_env = "OPENAI_API_KEY"
+batch_size = 64
+
+[pty_proxy]
+enabled = true
 ```
 
 ## editor
@@ -56,33 +59,29 @@ command = "vim"
 command = "code --wait"
 ```
 
-## history
+## sync
 
 ```toml
-[history]
-auto_save = true
-max_entries = 0
+[sync]
+max_age_secs = 15
 ```
 
 | Key | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
-| `auto_save` | boolean | `true` | 保存捕获输出到 history |
-| `max_entries` | integer | `0` | 最大保留条目数。`0` 表示无限制。 |
+| `max_age_secs` | integer | `15` | archive 距上次同步多少秒后，查询会触发一次增量重同步。`0` 表示每次查询都重新列目录。 |
 
-## codex
+## embedding
 
 ```toml
-[codex]
-session_dirs = []
+[embedding]
+endpoint = "https://api.openai.com/v1/embeddings"
+model = "text-embedding-3-small"
+api_key_env = "OPENAI_API_KEY"
+batch_size = 64
 ```
 
-| Key | 类型 | 默认值 | 含义 |
-| --- | --- | --- | --- |
-| `session_dirs` | string array | `[]` | 额外导出的 Codex `sessions` 目录，可通过 `copy codex --pick` 浏览 |
-
-在 macOS 上，典型共享路径是 `/Users/Shared/sivtr/root-codex/sessions`。
-
-目前只有 Codex mirror 在这里配置。其他已注册 provider（Claude、Cursor、OpenCode、OpenClaw、Hermes、Grok、Pi、Dsh、Gemini、Goose、Qoder/Qoder-CN、Qwen…）使用各自本地位置和环境信号。
+semantic 和 hybrid 搜索必须显式配置 OpenAI-compatible embedding endpoint。
+endpoint 必须使用 HTTPS；本地开发允许 loopback HTTP。`api_key_env` 为空时不发送认证 header。
 
 ## hotkey
 
@@ -118,3 +117,16 @@ idle_exit_secs = 60
 | Key | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
 | `idle_exit_secs` | integer | `60` | 无工具调用多少秒后 stdio MCP server 退出；`0` 表示保持到宿主关闭 stdin。`sivtr mcp serve --idle-exit` flag 覆盖此值。 |
+
+## pty_proxy
+
+```toml
+[pty_proxy]
+enabled = true
+```
+
+| Key | 类型 | 默认值 | 含义 |
+| --- | --- | --- | --- |
+| `enabled` | boolean | `true` | 让 shell 运行在采集代理内并记录命令输出。 |
+
+安装 `sivtr init <shell|all>` 或执行 `sivtr setup` 后，重启 shell 即开始捕获。旧配置缺少此字段时默认使用 `true`。要暂停捕获，通过 `sivtr config edit` 将其设为 `false`；安装、升级 hook 和重新运行 setup 都会保留显式关闭设置。切换开关后需要重启 shell。

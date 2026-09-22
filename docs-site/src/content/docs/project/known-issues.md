@@ -49,7 +49,7 @@ Adding a new structure channel: extend enum methods first, then CLI kind aliases
 
 ## Workspace filter
 
-Shared policy lives in `filter_sessions_by_workspace` (unbound keep + path / git-remote match). All agent list paths use it (JSONL helper, Hermes, OpenClaw, OpenCode, Codex configured dirs). Reimplementing cwd filtering per provider is a regression.
+Scoped queries require an exact cwd match or the same repository identity (shared git directory). Sessions with no workspace evidence remain available in unfiltered local listings but are excluded from workspace and remote-share queries. Agent discovery uses `filter_sessions_by_workspace` or the JSONL listing helper; archive queries apply the same contract before limiting results. Do not add per-provider exceptions or fall back to an unfiltered list when a scoped query is empty.
 
 ## Doctor: agent hosts vs MCP
 

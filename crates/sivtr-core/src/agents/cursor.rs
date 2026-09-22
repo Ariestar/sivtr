@@ -1,13 +1,11 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::Value;
-use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
 
 use crate::agents::{
-    extract_content_text, jsonl_files, list_recent_jsonl_sessions, parse_jsonl_meta,
-    parse_jsonl_session, pretty_json_value, push_block, AgentBlockKind, AgentProvider,
-    AgentSession, AgentSessionMeta, AgentSessionProvider, SessionInfo,
+    extract_content_text, list_recent_jsonl_sessions, parse_jsonl_meta, parse_jsonl_session,
+    pretty_json_value, push_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionMeta,
+    AgentSessionProvider, SessionInfo,
 };
 
 const PROVIDER_NAME: &str = "Cursor";
@@ -27,49 +25,16 @@ impl AgentSessionProvider for CursorProvider {
     }
 
     fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        let root = cursor_transcripts_root();
-        if !root.exists() {
-            return Ok(Vec::new());
-        }
-
-        // Prefer structured jsonl listing with metadata when available.
-        let mut sessions =
-            list_recent_jsonl_sessions(PROVIDER_NAME, &root, cwd, parse_cursor_meta)?;
-        if !sessions.is_empty() {
-            return Ok(sessions);
-        }
-
-        // Fallback: path-only discovery when transcripts have no parseable meta.
-        for path in jsonl_files(&root)? {
-            let modified = fs::metadata(&path)
-                .and_then(|meta| meta.modified())
-                .unwrap_or(UNIX_EPOCH);
-            let id = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .map(str::to_string);
-            sessions.push(SessionInfo {
-                path,
-                id,
-                cwd: None,
-                title: None,
-                modified,
-            });
-        }
-        sessions.sort_by_key(|session| session.modified);
-        sessions.reverse();
-        Ok(sessions)
+        list_recent_jsonl_sessions(
+            PROVIDER_NAME,
+            &cursor_transcripts_root(),
+            cwd,
+            parse_cursor_meta,
+        )
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        // Try shared JSONL pipeline first.
-        let session = parse_jsonl_session(path, PROVIDER_NAME, apply_event)?;
-        if !session.blocks.is_empty() {
-            return Ok(session);
-        }
-
-        // Fallback for less structured rows.
-        parse_cursor_jsonl_fallback(path)
+        parse_jsonl_session(path, PROVIDER_NAME, apply_event)
     }
 }
 
@@ -148,7 +113,10 @@ fn apply_event(session: &mut AgentSession, value: &Value) {
 
     // Common Cursor/Claude-like shapes.
     // Cursor agent transcripts wrap payloads as `{role, message:{content:[...]}}`.
-    let payload = cursor_payload(value);
+    let payload = value
+        .get("message")
+        .filter(|message| message.is_object())
+        .unwrap_or(value);
     match value
         .get("type")
         .and_then(Value::as_str)
@@ -203,14 +171,6 @@ fn apply_event(session: &mut AgentSession, value: &Value) {
                 }
             }
         }
-    }
-}
-
-/// Cursor composer rows put the Anthropic-style payload under `message`.
-fn cursor_payload(value: &Value) -> &Value {
-    match value.get("message") {
-        Some(message) if message.is_object() => message,
-        _ => value,
     }
 }
 
@@ -288,30 +248,6 @@ fn push_text(
     }
 }
 
-fn parse_cursor_jsonl_fallback(path: &Path) -> Result<AgentSession> {
-    let text = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read Cursor transcript {}", path.display()))?;
-    let mut session = AgentSession {
-        path: path.to_path_buf(),
-        id: path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .map(str::to_string),
-        cwd: None,
-        title: None,
-        blocks: Vec::new(),
-    };
-    for line in text.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        if let Ok(value) = serde_json::from_str::<Value>(line) {
-            apply_event(&mut session, &value);
-        }
-    }
-    Ok(session)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{apply_event, CursorProvider};
@@ -323,6 +259,55 @@ mod tests {
     fn provider_name_is_cursor() {
         assert_eq!(AgentProvider::Cursor.name(), "Cursor");
         assert_eq!(CursorProvider.provider(), AgentProvider::Cursor);
+    }
+
+    #[test]
+    fn current_session_and_scoped_listing_require_workspace_membership() {
+        let _guard = crate::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let previous_home = std::env::var_os("CURSOR_HOME");
+        let previous_data = std::env::var_os("SIVTR_HOME");
+        std::env::set_var("CURSOR_HOME", dir.path());
+        std::env::set_var("SIVTR_HOME", dir.path().join("data"));
+        let projects = dir.path().join("projects");
+        std::fs::create_dir(&projects).unwrap();
+        std::fs::write(
+            projects.join("other.jsonl"),
+            format!(
+                "{}\n",
+                json!({"sessionId": "other", "cwd": dir.path().join("other")})
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            projects.join("unbound.jsonl"),
+            "{\"type\":\"user\",\"text\":\"private\"}\n",
+        )
+        .unwrap();
+
+        assert!(CursorProvider
+            .list_recent_sessions(Some(&dir.path().join("shared")))
+            .unwrap()
+            .is_empty());
+        let missing = CursorProvider
+            .find_current_session(&dir.path().join("shared"))
+            .unwrap();
+        let matching = CursorProvider
+            .find_current_session(&dir.path().join("other"))
+            .unwrap();
+        assert_eq!(CursorProvider.list_recent_sessions(None).unwrap().len(), 2);
+
+        for (name, previous) in [
+            ("CURSOR_HOME", previous_home),
+            ("SIVTR_HOME", previous_data),
+        ] {
+            match previous {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+        assert_eq!(missing, None);
+        assert_eq!(matching, Some(projects.join("other.jsonl")));
     }
 
     #[test]

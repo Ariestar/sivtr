@@ -28,14 +28,17 @@ sivtr --version
 
 ## `sivtr copy out` 找不到命令块
 
-命令块复制需要 shell 集成，并且需要重启 shell。
+安装或升级 shell 集成后，需要重启 shell 才会开始记录命令块。
 
-检查：
+开启采集并检查环境：
 
 ```bash
-sivtr init powershell
-# 或：sivtr init bash / zsh / nushell
+sivtr init all
+# 或：sivtr init bash / zsh / nushell / powershell
+sivtr doctor
 ```
+
+若曾显式设置 `[pty_proxy] enabled = false`，先用 `sivtr config edit` 将其改回 `true`。
 
 然后重启终端，运行一个命令，再尝试：
 
@@ -44,16 +47,6 @@ sivtr copy out --print
 ```
 
 如果 pipe mode 正常但 `copy` 不工作，问题通常在 session logging，而不是 browser。
-
-## `sivtr import` 没打开有用内容
-
-`import` 读取当前结构化 shell session log。它在 shell 集成已经在当前 shell 进程记录过多个命令后最有用。
-
-尝试：
-
-1. `sivtr init <shell>` 后重启 shell。
-2. 运行一个可见命令，例如 `echo hello`。
-3. 运行 `sivtr import`。
 
 ## Agent provider picker 为空
 
@@ -74,23 +67,6 @@ sivtr copy pi --pick
 
 ```bash
 sivtr search agent --match "panic" --cwd /path/to/project --format timeline
-```
-
-## `sivtr copy codex` 选中了错误账号的 session
-
-隐式当前 session 查找默认保持本地。来自 `[codex].session_dirs` 的共享 Codex mirror 只参与显式 picker 浏览。
-
-使用：
-
-```bash
-sivtr copy codex --pick
-```
-
-如果需要共享树，显式配置：
-
-```toml
-[codex]
-session_dirs = ["/srv/sivtr/root-codex/sessions"]
 ```
 
 ## Linux 剪贴板复制失败

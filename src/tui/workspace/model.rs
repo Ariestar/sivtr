@@ -2,12 +2,12 @@
 
 use ratatui::prelude::Color;
 use ratatui::widgets::ListState;
-use sivtr_core::ai::AgentProvider;
-use sivtr_core::record::{WorkAt, WorkRecord, WorkRef, WorkScope};
+use sivtr_core::agents::AgentProvider;
+use sivtr_core::record::{ProjectionSlice, WorkAt, WorkRecord, WorkRef, WorkScope};
 use std::collections::HashSet;
 use std::time::SystemTime;
 
-use crate::tui::content::block::{dialogue_block_id, fold_label_for_part, BlockText};
+use crate::tui::content::block::{dialogue_block_id, fold_label_for_part, BlockRole, BlockText};
 use crate::tui::content::io::{
     ContentIoFocus, ContentIoFrame, ContentIoTexts, ContentScrolls, ExpandedBlocks,
 };
@@ -16,7 +16,7 @@ use crate::tui::content::view::{ContentSelection, ContentViewMode};
 use crate::tui::search::WorkspaceSearchScope;
 use crate::tui::theme;
 use crate::tui::workspace::rows::Rows;
-use sivtr_core::workset::{WorkSelectionKind, WorkSelectionTarget};
+use sivtr_core::workset::WorkSelectionTarget;
 
 /// Indices of true entries in a selection mask, in order.
 pub(crate) fn selected_indices(mask: &[bool]) -> Vec<usize> {
@@ -26,55 +26,55 @@ pub(crate) fn selected_indices(mask: &[bool]) -> Vec<usize> {
         .collect()
 }
 
-/// Kind of memory source (local path body before any `scope:` prefix).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum WorkspaceSourceKind {
-    Terminal,
-    Agent(AgentProvider),
+/// Kind of memory source: `None` = terminal, `Some` = the agent provider —
+/// the same discriminator as `WorkPath::provider()`.
+pub(crate) type WorkspaceSourceKind = Option<AgentProvider>;
+
+/// Rendering metadata for the stream discriminator (badges, colors).
+pub(crate) trait SourceKindDisplay: Copy {
+    fn path(self) -> &'static str;
+    fn badge(self) -> String;
+    fn color(self) -> Color;
 }
 
-impl WorkspaceSourceKind {
-    pub(crate) fn path(self) -> &'static str {
+impl SourceKindDisplay for WorkspaceSourceKind {
+    fn path(self) -> &'static str {
+        sivtr_core::record::WorkPath::namespace_for(self)
+    }
+
+    fn badge(self) -> String {
+        const BADGES: &[(AgentProvider, &str)] = &[
+            (AgentProvider::Codex, "cdx"),
+            (AgentProvider::Claude, "cld"),
+            (AgentProvider::Cursor, "cur"),
+            (AgentProvider::Dsh, "dsh"),
+            (AgentProvider::OpenCode, "opc"),
+            (AgentProvider::OpenClaw, "ocw"),
+            (AgentProvider::Hermes, "hrm"),
+            (AgentProvider::Grok, "grk"),
+            (AgentProvider::Pi, "pi"),
+            (AgentProvider::Qoder, "qdr"),
+            (AgentProvider::QoderCn, "qcn"),
+            (AgentProvider::Gemini, "gmi"),
+            (AgentProvider::Goose, "gse"),
+            (AgentProvider::Qwen, "qwn"),
+            (AgentProvider::Zcode, "zcd"),
+        ];
         match self {
-            Self::Terminal => "terminal",
-            Self::Agent(provider) => provider.command_name(),
+            None => "term".to_string(),
+            Some(provider) => BADGES
+                .iter()
+                .find(|(known, _)| *known == provider)
+                .map(|(_, badge)| badge.to_string())
+                .unwrap_or_else(|| provider.command_name().chars().take(3).collect()),
         }
     }
 
-    pub(crate) fn badge(self) -> &'static str {
+    fn color(self) -> Color {
         match self {
-            Self::Terminal => "term",
-            Self::Agent(AgentProvider::Codex) => "cdx",
-            Self::Agent(AgentProvider::Claude) => "cld",
-            Self::Agent(AgentProvider::Cursor) => "cur",
-            Self::Agent(AgentProvider::Dsh) => "dsh",
-            Self::Agent(AgentProvider::OpenCode) => "opc",
-            Self::Agent(AgentProvider::OpenClaw) => "ocw",
-            Self::Agent(AgentProvider::Hermes) => "hrm",
-            Self::Agent(AgentProvider::Grok) => "grk",
-            Self::Agent(AgentProvider::Pi) => "pi",
-            Self::Agent(AgentProvider::Qoder) => "qdr",
-            Self::Agent(AgentProvider::QoderCn) => "qcn",
-            Self::Agent(AgentProvider::Gemini) => "gmi",
-            Self::Agent(AgentProvider::Goose) => "gse",
-            Self::Agent(AgentProvider::Qwen) => "qwn",
-            Self::Agent(AgentProvider::Zcode) => "zcd",
+            None => theme::terminal_color(),
+            Some(provider) => theme::provider_color(provider),
         }
-    }
-
-    pub(crate) fn color(self) -> Color {
-        match self {
-            Self::Terminal => theme::terminal_color(),
-            Self::Agent(provider) => theme::provider_color(provider),
-        }
-    }
-
-    pub(crate) fn is_agent(self) -> bool {
-        matches!(self, Self::Agent(_))
-    }
-
-    pub(crate) fn is_terminal(self) -> bool {
-        matches!(self, Self::Terminal)
     }
 }
 
@@ -93,11 +93,11 @@ impl WorkspaceSource {
     }
 
     pub(crate) fn terminal() -> Self {
-        Self::local(WorkspaceSourceKind::Terminal)
+        Self::local(None)
     }
 
     pub(crate) fn agent(provider: AgentProvider) -> Self {
-        Self::local(WorkspaceSourceKind::Agent(provider))
+        Self::local(Some(provider))
     }
 
     /// A source on another device, addressed by its mount alias.
@@ -124,7 +124,7 @@ impl WorkspaceSource {
         }
     }
 
-    pub(crate) fn badge(&self) -> &'static str {
+    pub(crate) fn badge(&self) -> String {
         self.kind.badge()
     }
 
@@ -138,11 +138,11 @@ impl WorkspaceSource {
     }
 
     pub(crate) fn is_agent(&self) -> bool {
-        self.kind.is_agent()
+        self.kind.is_some()
     }
 
     pub(crate) fn is_terminal(&self) -> bool {
-        self.kind.is_terminal()
+        self.kind.is_none()
     }
 
     pub(crate) fn selection_target(&self, session: Option<&str>) -> WorkSelectionTarget {
@@ -150,10 +150,7 @@ impl WorkspaceSource {
             scope: self.scope.as_deref().map_or(WorkScope::Local, |scope| {
                 WorkScope::Named(scope.to_string())
             }),
-            kind: match self.kind {
-                WorkspaceSourceKind::Terminal => WorkSelectionKind::Terminal,
-                WorkspaceSourceKind::Agent(provider) => WorkSelectionKind::Agent(provider),
-            },
+            kind: self.kind,
             session: session.map(str::to_string),
         }
     }
@@ -227,21 +224,21 @@ impl WorkspaceDialogue {
             let Some(part) = record.part_for_at(target) else {
                 return ContentIoTexts::new(Vec::new(), Vec::new());
             };
-            let input = part.kind().is_input();
+            let input = part.is_input();
             let block_id = dialogue_block_id(record, part.seq).expect("target part has a block");
             let shown = match mode {
                 ContentViewMode::Raw => true,
-                ContentViewMode::Reading => expanded.expanded(block_id, part.kind().is_structure()),
+                ContentViewMode::Reading => expanded.expanded(block_id, part.is_structure()),
             };
             let segment = BlockText {
                 id: block_id,
                 text: if shown {
-                    crate::tui::content::tool::part_body_text(part)
+                    crate::tui::content::tool::part_body_text(part, ProjectionSlice::Whole)
                 } else {
                     fold_label_for_part(part)
                 },
                 tight: false,
-                kind: part.kind(),
+                role: BlockRole::of(part),
             };
             return if input {
                 ContentIoTexts::new(vec![segment], Vec::new())
@@ -351,6 +348,8 @@ pub(crate) struct WorkspaceView<'a> {
     pub(crate) content_at: Option<WorkAt>,
     pub(crate) show_help: bool,
     pub(crate) help_state: &'a ListState,
+    /// `!` diagnostics overlay (Option = closed), newest-last log snapshot.
+    pub(crate) diagnostics: Option<(&'a ListState, &'a [String])>,
     pub(crate) search: Option<WorkspaceSearchView<'a>>,
     pub(crate) line_filter_input_open: bool,
     pub(crate) line_filter: Option<&'a str>,

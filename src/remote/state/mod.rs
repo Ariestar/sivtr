@@ -174,7 +174,8 @@ pub struct JoinerInfo<'a> {
 
 impl StateStore {
     pub fn open_default() -> Result<Self> {
-        Self::open(workspace::data_dir().join("remote-state.db"))
+        Self::open(workspace::home_dir().join("remote-state.db"))
+            .context("Failed to open default remote state store")
     }
 
     pub fn open(path: PathBuf) -> Result<Self> {

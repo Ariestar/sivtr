@@ -28,14 +28,17 @@ sivtr --version
 
 ## `sivtr copy out` finds no command blocks
 
-Command-block copy requires shell integration and a restarted shell.
+Command blocks appear after installing or upgrading shell integration and restarting the shell.
 
-Check:
+Enable capture and check the environment:
 
 ```bash
-sivtr init powershell
-# or: sivtr init bash / zsh / nushell
+sivtr init all
+# or: sivtr init bash / zsh / nushell / powershell
+sivtr doctor
 ```
+
+If `[pty_proxy] enabled` was explicitly set to `false`, use `sivtr config edit` to set it back to `true`.
 
 Then restart the terminal, run a command, and try:
 
@@ -44,16 +47,6 @@ sivtr copy out --print
 ```
 
 If pipe mode works but `copy` does not, the issue is usually session logging, not the browser.
-
-## `sivtr import` opens nothing useful
-
-`import` reads the current structured shell session log. It is most useful after shell integration has recorded several commands in the current shell process.
-
-Try:
-
-1. Restart the shell after `sivtr init <shell>`.
-2. Run a visible command such as `echo hello`.
-3. Run `sivtr import`.
 
 ## Agent provider picker is empty
 
@@ -74,23 +67,6 @@ Use `--cwd` with search/show flows when running from another directory:
 
 ```bash
 sivtr search agent --match "panic" --cwd /path/to/project --format timeline
-```
-
-## `sivtr copy codex` selects the wrong account's session
-
-Implicit current-session lookup stays local by design. Shared Codex mirrors from `[codex].session_dirs` only participate in explicit picker browsing.
-
-Use:
-
-```bash
-sivtr copy codex --pick
-```
-
-If you need a shared tree, configure it explicitly:
-
-```toml
-[codex]
-session_dirs = ["/srv/sivtr/root-codex/sessions"]
 ```
 
 ## Clipboard copy fails on Linux

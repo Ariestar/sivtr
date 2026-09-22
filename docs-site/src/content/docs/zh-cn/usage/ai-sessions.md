@@ -1,11 +1,11 @@
 ---
 title: Agent 会话
-description: 把已注册 Agent provider（Codex、Claude、Cursor、Hermes、OpenCode、OpenClaw、Grok、Pi、Dsh、Gemini、Goose、Qoder、Qwen…）变成可复用的 Agent 记忆。
+description: 把已注册 Agent provider 变成可复用的 Agent 记忆。
 ---
 
 `sivtr` 把 Agent transcript 当成本地 workspace memory source。你可以复制最新的有用 turn，在 picker 中浏览旧 session，跨 provider 搜索，并通过精确 ref 展示内容，而不必手动打开原始 transcript 文件。过去的 Agent 工作会成为人和后续 Agent 都能复用的记忆。
 
-Skill 是让后续 Agent 学会使用这份记忆的方式。`sivtr` memory skill 可以要求 Agent 先搜索本地终端和 Agent 历史，只展开最小相关结果，并在信任历史讨论前验证当前代码。见 [Skill 与可复用流程](/zh-cn/usage/skills/)。
+Skill 是让后续 Agent 学会使用这份记忆的方式。`sivtr` memory skill 可以要求 Agent 先搜索本地终端记录和 Agent 对话，只展开最小相关结果，并在信任之前的讨论前验证当前代码。见 [Skill 与可复用流程](/zh-cn/usage/skills/)。
 
 ## 支持的 provider
 
@@ -26,6 +26,10 @@ Provider 来自 `AgentProvider` registry。copy 使用同一组名字：
 | Pi | `sivtr copy pi ...` | Pi agent 目录下的 session JSONL |
 | Qoder / Qoder-CN | `sivtr copy qoder ...` | Qoder 与 Qoder-CN sessions |
 | Qwen | `sivtr copy qwen ...` | Qwen Code sessions |
+| Amp、Aider、iFlow、Kimi、Kimi Work | `sivtr copy <provider> ...` | provider 专属 JSON、Markdown 或 wire transcript |
+| Trae、TraeX、Copilot、VSCode Copilot、Windsurf | `sivtr copy <provider> ...` | CLI rollout 与 VS Code/Windsurf chat store |
+| OpenHands、RooCode、Kiro、Zed、Kilo、gptme、Vibe、Poolside | `sivtr copy <provider> ...` | 目录、SQLite、JSONL 或 NDJSON session |
+| Claude.ai、ChatGPT | `sivtr copy <provider> ...` | 通过 `sivtr import sessions` 导入的 session |
 
 在 search 命令中，用 `agent` target 表示所有已注册 provider：
 
@@ -151,30 +155,8 @@ sivtr show pi/<session>/<dialogue>/<line>
 sivtr show terminal/current/<block>
 ```
 
-## Codex session mirror
+## 统一 archive
 
-Codex 支持把本地 rollout JSONL 文件导出为共享的只读树：
+所有已注册 provider 的 session 会和终端捕获一起同步进一个本地 SQLite archive（`archive.db`）。查询会自动执行新鲜度同步，新 session 无需手动操作就会出现；`sivtr sync` 可按需强制执行一次同步。
 
-```bash
-sivtr codex export --dest /srv/sivtr/root-codex --watch
-```
-
-然后在另一个账号的配置中加入导出的 `sessions` 目录：
-
-```toml
-[codex]
-session_dirs = ["/srv/sivtr/root-codex/sessions"]
-```
-
-共享/镜像 session tree 只参与显式 picker 浏览。隐式当前 session 查找仍保持本地优先，避免另一个账号导出的历史覆盖你的当前工作流。
-
-在 macOS 上，`/Users/Shared/sivtr/root-codex` 适合作为本机多账号共享位置：
-
-```bash
-sivtr codex export --dest /Users/Shared/sivtr/root-codex --watch
-```
-
-```toml
-[codex]
-session_dirs = ["/Users/Shared/sivtr/root-codex/sessions"]
-```
+跨设备共享是 opt-in 的，由远程访问（`sivtr share` / `sivtr group`）处理，而不是导出 session 树。见[远程访问](/zh-cn/usage/remote-access/)。

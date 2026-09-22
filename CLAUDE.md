@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **sivtr** is a terminal output workspace that captures, browses, searches, and reuses terminal command output and AI coding assistant sessions. Agent providers are registry-driven (Codex, Claude Code, Cursor, OpenCode, OpenClaw, Grok, Hermes, Pi, …) and four shells (Bash, Zsh, PowerShell, Nushell). Cross-device remote memory uses a local daemon with Share/Grant/Mount over encrypted iroh transport.
 
-Architecture: CLI binary (`src/`) wrapping a core library (`crates/sivtr-core/`). Clap-based subcommands for copy, search, show, work, filter, var, nav, zoom, init, diff, hotkey, doctor, serve, share, group, remote, peer, and workspace. TUI mode for browse/search views.
+Architecture: CLI binary (`src/`) wrapping a core library (`crates/sivtr-core/`). Native sources sync into one local archive; provider adapters only discover and parse, while CLI, TUI, MCP, Web API, and exports share the archive-backed record model. Clap-based subcommands cover capture, search, usage, stats, import/export, quality, sync, session labels, remote access, and diagnostics.
 
 ## Development Commands
 
@@ -29,28 +29,34 @@ crates/sivtr-core/src/     ← Core library (no CLI deps)
   agents/                  ← AgentProvider registry + per-provider parsers
     mod.rs / model.rs / jsonl.rs / sqlite.rs
     claude.rs / codex.rs / cursor.rs / grok.rs / hermes.rs / openclaw.rs / opencode.rs / pi.rs
+    generic.rs              ← shared adapters for the expanded provider catalog
+  archive/                 ← unified SQLite archive, sync, stats, embeddings
+  usage/                   ← token extraction, exact microdollar pricing
   record/
     model.rs               ← WorkRecord, WorkPart, WorkTime (canonical model)
     refs.rs                ← WorkRef parsing (local body + origin:body remote form)
     index.rs               ← Record indexing and lookup
   query/                   ← Workspace record/source loading
   search/                  ← Filter/Searcher pipeline, BM25 ranking (types.rs, filter.rs, bm25.rs, eval.rs)
-  workspace.rs             ← Workspace resolution (git root → sessions), data_dir()
+  workspace.rs             ← Workspace resolution (git root → sessions), home_dir()
   workset.rs               ← WorkSet / WorkSelection* canonical selection model
   config/                  ← SivtrConfig, serde TOML
-  history/                 ← SQLite command history
   session.rs               ← Session log reading
   time.rs                  ← Timestamp normalization
 src/                       ← CLI binary
   main.rs                  ← Command routing
   cli/
     mod.rs                 ← Top-level Clap definitions (copy agents via registry external subcommand)
+    pty.rs                 ← `pty-proxy` subcommands
     remote.rs              ← serve/share/peer/remote/group/workspace Clap types
   commands/
-    capture/               ← copy, pipe, run, init, flush, import, diff, clear, browse
+    browse/                ← Product TUI (bare `sivtr`, hotkey, pick)
     memory/                ← search, filter, var, nav, zoom, show, work, workset
+    publish/               ← Privacy-projected shared publications
     remote/                ← serve, share, mounts, peer, group, workspace
-    system/                ← config, doctor, history, hotkey, codex, migrate, version
+    system/                ← config, doctor, export, hotkey, import, quality, session, stats, sync, usage, version
+    terminal/              ← run, pipe, init, pty-proxy, clear
+  pty/                     ← Capture proxy: owns the pty, records OSC 133 blocks
   remote/                  ← Device daemon, identity, state, protocol, ipc
   tui/                     ← Terminal UI framework
 ```
@@ -73,7 +79,7 @@ src/                       ← CLI binary
 - **clippy strict** — `-D warnings` on CI
 - **Rust 2021 edition, MSRV 1.95** — see `Cargo.toml` `rust-version` (toolchain channel is `stable`)
 - **Agent lists** — any CLI help / error that names providers must use `AgentProvider::command_names()` / `command_names_csv()`, not a hand-written list
-- **Workspace filter** — session cwd filtering uses `filter_sessions_by_workspace` (unbound keep + path/remote match); do not reimplement per provider
+- **Workspace filter** — scoped session lists require an exact cwd or shared git-directory identity match; unbound sessions stay in unfiltered listings only. Reuse `filter_sessions_by_workspace` / the JSONL listing helper; never bypass an empty filtered result with an unfiltered fallback.
 ## Working Directory
 
 Always confirm before starting work:
@@ -81,9 +87,22 @@ Always confirm before starting work:
 pwd && git branch
 ```
 
-## Shell Hook System
+## Shell Integration and Terminal Capture
 
-`sivtr init {shell}` injects precmd hooks using marker blocks (`# >>> sivtr shell integration >>>`). Session logs go to `$XDG_STATE_HOME/sivtr/session_<pid>.log`. Internal `sivtr flush` called by hooks on each prompt.
+`sivtr init {shell}` injects a marker-delimited block (`# >>> sivtr shell integration >>>`) that
+installs the prompt hooks and, at its end, re-execs the shell under `sivtr pty-proxy run <shell>`.
+
+Capture is part of shell integration: `sivtr init {shell|all}` installs or replaces the block
+in place, and `sivtr setup` uses that same installer. `[pty_proxy] enabled` defaults to `true`;
+an explicit `false` survives installation and upgrades. Restart the shell after installing or
+changing this setting. `pty-proxy run/report` are internal commands. With capture disabled or
+the proxy unavailable, the user still gets a plain shell; configuration failures are reported.
+
+The proxy owns the pty, so the child keeps a real `isatty`. The hooks emit `OSC 133;C` before a
+command runs and call `sivtr pty-proxy report` after it; `report` writes the command metadata and
+prints `OSC 133;D`. The proxy slices the bytes between the two markers and appends one
+`SessionEntry` to `<home>/workspaces/<workspace-key>/terminals/<terminal_id>.jsonl`
+(`SIVTR_HOME` or `~/.sivtr`). The archive picks those logs up through the normal sync pass.
 
 ## Search Pipeline
 
@@ -126,7 +145,7 @@ sivtr s team/alice:terminal "q" # one member (group/member scope form)
 ```
 Group membership is a roster overlay on share/grant/mount: join = one multi-use invite with the owner, mirror roster locally, grant every member read on your group share. Owner is the roster source of truth; members pull-sync on a 5-min TTL (`GroupSync`), kicked devices drop the group on the next sync. `team:` refs are qualified per member (`team/alice:...`) so `show`/`zoom`/`nav` round-trip.
 
-State lives under `data_dir()` (`SIVTR_DATA_DIR` override, else platform config dir `/sivtr`): `identity.key`, `remote-state.db`, `daemon.json`, `daemon.lock`, `daemon.log`.
+State lives under the single home (`SIVTR_HOME` override, else `~/.sivtr` on every platform): `config.toml`, `sets/`, `workspaces/`, `cache/archive.db`, `identity.key`, `remote-state.db`, `daemon.json`, `daemon.lock`, `daemon.log`. Legacy platform config/state paths are migrated by `sivtr doctor --fix`.
 
 ## Diagnostics
 

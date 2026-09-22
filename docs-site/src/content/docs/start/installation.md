@@ -54,7 +54,7 @@ npx skills add Ariestar/sivtr --skill sivtr-memory -g
 sivtr doctor
 ```
 
-Expected output: all checks passing. If `shell hooks` shows "not installed", run the appropriate `sivtr init` command. If `session log directory` shows "missing", the user needs to restart their terminal after `sivtr init`.
+Expected output: the required checks pass. If `shell hooks` shows "not installed", run the appropriate `sivtr init` command. If `session log directory` shows "missing", the user needs to restart their terminal after `sivtr init`. `terminal capture` reports `Manual` when explicitly disabled with `[pty_proxy] enabled = false`; to resume, set it to `true` with `sivtr config edit` and restart the shell.
 
 ### Check Current Status
 
@@ -176,16 +176,18 @@ cargo install --path . --force
 
 ## Shell integration
 
-Shell integration records recent command blocks so `sivtr copy`, `sivtr import`, and command-block navigation have structured data to work with.
+Shell integration records recent command blocks so `sivtr copy` and command-block navigation have structured data to work with.
 
-Install the hook for your shell:
+Install or upgrade shell integration to capture terminal output:
 
 ```bash
-sivtr init powershell
-sivtr init bash
-sivtr init zsh
-sivtr init nushell
+sivtr init all
+# or one shell: sivtr init bash / zsh / nushell / powershell
 ```
+
+`sivtr setup` runs the same installation step. Restart the shell after installation; subsequent commands use PTY capture without a separate enable command. After upgrading, rerun `sivtr init <shell>` to replace the existing sivtr hook in place, preserving surrounding user configuration without adding a second capture block.
+
+To pause capture, run `sivtr config edit`, set `enabled = false` under `[pty_proxy]`, and restart the shell. Both `setup` and `init` preserve this explicit opt-out. To resume, set it back to `true` and restart the shell.
 
 Check which hooks are installed:
 
@@ -201,11 +203,9 @@ sivtr init uninstall
 
 Restart the terminal after installation or removal.
 
-The hook writes a per-process session log:
+The proxy writes a per-terminal session log:
 
-- Windows PowerShell and PowerShell 7 use `%APPDATA%\sivtr\session_<pid>.log`.
-- Bash and Zsh use `$XDG_STATE_HOME/sivtr/session_<pid>.log` or `~/.local/state/sivtr/session_<pid>.log`.
-- Nushell uses its config directory with a `sivtr` session file.
+- Session logs go to `<home>/workspaces/<workspace-key>/terminals/<terminal_id>.jsonl` (`SIVTR_HOME` or `~/.sivtr`).
 
 ## Configuration file
 

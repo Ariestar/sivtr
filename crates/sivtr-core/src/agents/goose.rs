@@ -63,6 +63,7 @@ impl AgentSessionProvider for GooseProvider {
             sessions.push(SessionInfo {
                 modified: system_time_from_unix_secs(updated_secs as f64),
                 path: goose_session_path(&id),
+                physical_path: Some(db_path.clone()),
                 id: Some(id),
                 cwd: Some(working_dir).filter(|value| !value.trim().is_empty()),
                 title: Some(name).filter(|name| !name.trim().is_empty()),
@@ -219,10 +220,9 @@ fn apply_message_rows(
         let content = match serde_json::from_str::<Value>(&content_json) {
             Ok(content) => content,
             Err(error) => {
-                eprintln!(
-                    "warning: failed to parse Goose message content for session {}: {error}",
-                    session_id
-                );
+                crate::diagnostics::warn(format!(
+                    "failed to parse Goose message content for session {session_id}: {error}"
+                ));
                 continue;
             }
         };

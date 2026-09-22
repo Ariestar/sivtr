@@ -1,15 +1,13 @@
 use anyhow::Result;
 use serde_json::Value;
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::agents::{
-    extract_content_text, jsonl_files, list_recent_jsonl_sessions, normalize_path_for_match,
-    parse_jsonl_meta, parse_jsonl_session, pretty_json_string, pretty_json_value, push_block,
-    push_tool_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionMeta,
-    AgentSessionProvider, SessionInfo,
+    extract_content_text, jsonl_files, list_recent_jsonl_sessions, parse_jsonl_meta,
+    parse_jsonl_session, pretty_json_string, pretty_json_value, push_block, push_tool_block,
+    AgentBlockKind, AgentProvider, AgentSession, AgentSessionMeta, AgentSessionProvider,
+    SessionInfo,
 };
-use crate::config::SivtrConfig;
 
 const PROVIDER_NAME: &str = "Codex";
 
@@ -24,16 +22,16 @@ impl AgentSessionProvider for CodexProvider {
     fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
         let mut sessions = Vec::new();
 
-        for root in configured_codex_session_dirs() {
+        for root in [local_codex_sessions_dir()] {
             // Shared JSONL discovery (stamp-validated listing cache, workspace
             // filter) is applied per root; the merge below re-sorts globally.
             match list_recent_jsonl_sessions(PROVIDER_NAME, &root, cwd, parse_session_meta) {
                 Ok(mut root_sessions) => sessions.append(&mut root_sessions),
                 Err(error) => {
-                    eprintln!(
-                        "sivtr: warning: failed to read Codex session dir {}: {error:#}",
+                    crate::diagnostics::warn(format!(
+                        "failed to read Codex session dir {}: {error:#}",
                         root.display()
-                    );
+                    ));
                 }
             }
         }
@@ -120,11 +118,7 @@ impl AgentSessionProvider for CodexProvider {
             return Ok(Some(path));
         }
 
-        if let Some(session) = list_recent_local_sessions(Some(cwd))?.into_iter().next() {
-            return Ok(Some(session.path));
-        }
-
-        Ok(list_recent_local_sessions(None)?
+        Ok(list_recent_local_sessions(Some(cwd))?
             .into_iter()
             .next()
             .map(|session| session.path))
@@ -143,27 +137,6 @@ pub fn codex_home() -> PathBuf {
 
 pub fn local_codex_sessions_dir() -> PathBuf {
     codex_home().join("sessions")
-}
-
-pub fn configured_codex_session_dirs() -> Vec<PathBuf> {
-    let mut dirs = vec![local_codex_sessions_dir()];
-
-    if let Ok(config) = SivtrConfig::load() {
-        dirs.extend(config.codex.session_dirs);
-    }
-
-    if let Ok(extra) = std::env::var("SIVTR_CODEX_SESSION_DIRS") {
-        let separator = if cfg!(windows) { ';' } else { ':' };
-        dirs.extend(
-            extra
-                .split(separator)
-                .map(str::trim)
-                .filter(|entry| !entry.is_empty())
-                .map(PathBuf::from),
-        );
-    }
-
-    dedup_paths(dirs)
 }
 
 fn parse_session_meta(path: &Path) -> Result<AgentSessionMeta> {
@@ -351,45 +324,17 @@ fn find_current_thread_session() -> Result<Option<PathBuf>> {
     CodexProvider.find_session_by_id(thread_id)
 }
 
-fn dedup_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
-    let mut seen = HashSet::new();
-    let mut deduped = Vec::new();
-    for path in paths {
-        if !seen.insert(normalize_path_for_match(&path)) {
-            continue;
-        }
-        deduped.push(path);
-    }
-    deduped
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{configured_codex_session_dirs, CodexProvider};
+    use super::CodexProvider;
     use crate::agents::{
-        normalize_path_for_match, select_blocks, AgentBlockKind, AgentSelection,
-        AgentSessionProvider,
+        select_blocks, AgentBlockKind, AgentProvider, AgentSelection, AgentSessionProvider,
     };
-    use crate::config::SivtrConfig;
     use serde_json::json;
-    use std::path::Path;
-    use std::{env, fs, path::PathBuf, time::Duration};
+    use std::{env, time::Duration};
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         crate::test_env_lock()
-    }
-
-    fn contains_path(dirs: &[PathBuf], expected: &str) -> bool {
-        let expected = normalize_path_for_match(Path::new(expected));
-        dirs.iter()
-            .any(|path| normalize_path_for_match(path) == expected)
-    }
-
-    fn count_path(dirs: &[PathBuf], expected: &str) -> usize {
-        let expected = normalize_path_for_match(Path::new(expected));
-        dirs.iter()
-            .filter(|path| normalize_path_for_match(path) == expected)
-            .count()
     }
 
     #[test]
@@ -443,6 +388,71 @@ mod tests {
         assert_eq!(session.blocks[2].kind, AgentBlockKind::ToolOutput);
         assert_eq!(session.blocks[2].call_id.as_deref(), Some("call_1"));
         assert_eq!(session.blocks[2].text, "Patch applied");
+    }
+
+    #[test]
+    fn filters_injected_user_envelopes_and_keeps_skill_wrapper() {
+        let dir = tempfile::tempdir().expect("test tempdir");
+        let path = dir.path().join("rollout.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"timestamp":"2026-04-27T00:00:00Z","type":"session_meta","payload":{"id":"abc","cwd":"C:\\repo"}}
+{"timestamp":"2026-04-27T00:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<codex_internal_context source=\"goal\">\n<objective>ship it</objective>\n</codex_internal_context>"}]}}
+{"timestamp":"2026-04-27T00:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<turn_aborted/>"}]}}
+{"timestamp":"2026-04-27T00:00:03Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<image>"}]}}
+{"timestamp":"2026-04-27T00:00:04Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<image name=\"[Image #1]\">"}]}}
+{"timestamp":"2026-04-27T00:00:05Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<subagent_notification>\n<task-id>1</task-id>\n</subagent_notification>"}]}}
+{"timestamp":"2026-04-27T00:00:06Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<user_action>scrolled</user_action>"}]}}
+{"timestamp":"2026-04-27T00:00:07Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<skill>\n<name>skill-installer</name>\n<path>C:\\skills\\SKILL.md</path>\n---\nbody text\n</skill>"}]}}
+{"timestamp":"2026-04-27T00:00:08Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"real question"}]}}
+{"timestamp":"2026-04-27T00:00:09Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}}
+"#,
+        )
+        .expect("write test session log");
+
+        let session = CodexProvider
+            .parse_session_file(&path)
+            .expect("parse test session");
+
+        // Injected envelopes never become dialogue; the bare `<skill>` wrapper
+        // becomes a labeled skill block.
+        assert_eq!(session.blocks.len(), 3);
+        assert_eq!(session.blocks[0].kind, AgentBlockKind::Skill);
+        assert_eq!(session.blocks[0].label.as_deref(), Some("skill-installer"));
+        assert!(session.blocks[0].text.starts_with("---\nbody text"));
+        assert!(!session.blocks[0].text.contains("SKILL.md"));
+        assert_eq!(session.blocks[1].text, "real question");
+        assert_eq!(session.blocks[2].text, "answer");
+
+        let records = crate::record::WorkRecord::chat_turns(AgentProvider::Codex, &session);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].input_text().as_deref(), Some("real question"));
+    }
+
+    #[test]
+    fn unclosed_skill_wrapper_stays_user_dialogue() {
+        let dir = tempfile::tempdir().expect("test tempdir");
+        let path = dir.path().join("rollout.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                r#"{"timestamp":"2026-04-27T00:00:00Z","type":"session_meta","payload":{"id":"abc","cwd":"C:\\repo"}}"#,
+                "\n",
+                r#"{"timestamp":"2026-04-27T00:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<skill>\n<name>half</name>\nstarted reading the skill doc but never"}]}}"#,
+                "\n",
+            ),
+        )
+        .expect("write test session log");
+
+        let session = CodexProvider
+            .parse_session_file(&path)
+            .expect("parse test session");
+
+        // A truncated wrapper is user text, not a Codex skill expansion:
+        // reclassifying it would swallow real dialogue into a Skill block.
+        assert_eq!(session.blocks.len(), 1);
+        assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
+        assert!(session.blocks[0].text.starts_with("<skill>"));
     }
 
     #[test]
@@ -583,12 +593,17 @@ mod tests {
 
         let previous_codex_home = env::var_os("CODEX_HOME");
         let previous_thread_id = env::var_os("CODEX_THREAD_ID");
-        let previous_data_dir = env::var_os("SIVTR_DATA_DIR");
+        let previous_data_dir = env::var_os("SIVTR_HOME");
         env::set_var("CODEX_HOME", &codex_home);
         env::set_var("CODEX_THREAD_ID", "thread-session");
-        env::set_var("SIVTR_DATA_DIR", temp.path().join("data"));
+        env::set_var("SIVTR_HOME", temp.path().join("data"));
 
         let resolved = CodexProvider.find_current_session(&cwd_match).unwrap();
+        env::remove_var("CODEX_THREAD_ID");
+        let inferred = CodexProvider.find_current_session(&cwd_match).unwrap();
+        let missing = CodexProvider
+            .find_current_session(&temp.path().join("unrelated"))
+            .unwrap();
 
         match previous_codex_home {
             Some(value) => env::set_var("CODEX_HOME", value),
@@ -599,178 +614,13 @@ mod tests {
             None => env::remove_var("CODEX_THREAD_ID"),
         }
         match previous_data_dir {
-            Some(value) => env::set_var("SIVTR_DATA_DIR", value),
-            None => env::remove_var("SIVTR_DATA_DIR"),
+            Some(value) => env::set_var("SIVTR_HOME", value),
+            None => env::remove_var("SIVTR_HOME"),
         }
 
         assert_eq!(resolved, Some(thread_session));
-    }
-
-    #[test]
-    fn configured_codex_session_dirs_reads_env_override_once() {
-        let _guard = env_lock();
-        let previous = env::var_os("SIVTR_CODEX_SESSION_DIRS");
-        let separator = if cfg!(windows) { ";" } else { ":" };
-        env::set_var(
-            "SIVTR_CODEX_SESSION_DIRS",
-            format!("/tmp/a{separator}/tmp/b{separator}/tmp/a"),
-        );
-
-        let dirs = configured_codex_session_dirs();
-
-        match previous {
-            Some(value) => env::set_var("SIVTR_CODEX_SESSION_DIRS", value),
-            None => env::remove_var("SIVTR_CODEX_SESSION_DIRS"),
-        }
-
-        assert!(contains_path(&dirs, "/tmp/a"));
-        assert!(contains_path(&dirs, "/tmp/b"));
-        assert_eq!(count_path(&dirs, "/tmp/a"), 1);
-    }
-
-    #[test]
-    fn configured_codex_session_dirs_combines_env_and_config_entries() {
-        let _guard = env_lock();
-        let temp = tempfile::tempdir().unwrap();
-        let config_home = temp.path().join("config-home");
-
-        let previous_xdg_config_home = env::var_os("XDG_CONFIG_HOME");
-        let previous_appdata = env::var_os("APPDATA");
-        let previous_extra_dirs = env::var_os("SIVTR_CODEX_SESSION_DIRS");
-        let separator = if cfg!(windows) { ";" } else { ":" };
-        env::set_var("XDG_CONFIG_HOME", &config_home);
-        if cfg!(windows) {
-            env::set_var("APPDATA", &config_home);
-        }
-        let config_path = SivtrConfig::config_path().unwrap();
-        let previous_config_bytes = fs::read(&config_path).ok();
-        if let Some(parent) = config_path.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        fs::write(
-            &config_path,
-            "[codex]\nsession_dirs = [\"/tmp/from-config\", \"/tmp/shared\"]\n",
-        )
-        .unwrap();
-        env::set_var(
-            "SIVTR_CODEX_SESSION_DIRS",
-            format!("/tmp/from-env{separator}/tmp/shared"),
-        );
-
-        let dirs = configured_codex_session_dirs();
-
-        if let Some(bytes) = previous_config_bytes {
-            fs::write(&config_path, bytes).unwrap();
-        } else {
-            let _ = fs::remove_file(&config_path);
-        }
-
-        match previous_xdg_config_home {
-            Some(value) => env::set_var("XDG_CONFIG_HOME", value),
-            None => env::remove_var("XDG_CONFIG_HOME"),
-        }
-        match previous_appdata {
-            Some(value) => env::set_var("APPDATA", value),
-            None => env::remove_var("APPDATA"),
-        }
-        match previous_extra_dirs {
-            Some(value) => env::set_var("SIVTR_CODEX_SESSION_DIRS", value),
-            None => env::remove_var("SIVTR_CODEX_SESSION_DIRS"),
-        }
-
-        assert!(contains_path(&dirs, "/tmp/from-config"));
-        assert!(contains_path(&dirs, "/tmp/from-env"));
-        assert_eq!(count_path(&dirs, "/tmp/shared"), 1);
-    }
-
-    #[test]
-    fn list_recent_sessions_includes_exported_session_dirs() {
-        let _guard = env_lock();
-        let temp = tempfile::tempdir().unwrap();
-        let codex_home = temp.path().join("codex-home");
-        let local_sessions = codex_home
-            .join("sessions")
-            .join("2026")
-            .join("05")
-            .join("07");
-        let exported_root = temp.path().join("shared-export");
-        let exported_sessions = exported_root
-            .join("sessions")
-            .join("2026")
-            .join("05")
-            .join("06");
-        std::fs::create_dir_all(&local_sessions).unwrap();
-        std::fs::create_dir_all(&exported_sessions).unwrap();
-
-        let local_path = local_sessions.join("rollout-local.jsonl");
-        std::fs::write(
-            &local_path,
-            serde_json::to_string(&json!({
-                "type": "session_meta",
-                "payload": { "id": "local-session", "cwd": "/tmp/local" }
-            }))
-            .unwrap()
-                + "\n",
-        )
-        .unwrap();
-
-        std::thread::sleep(Duration::from_millis(5));
-
-        let exported_path = exported_sessions.join("rollout-exported.jsonl");
-        std::fs::write(
-            &exported_path,
-            serde_json::to_string(&json!({
-                "type": "session_meta",
-                "payload": { "id": "exported-session", "cwd": "/tmp/exported" }
-            }))
-            .unwrap()
-                + "\n",
-        )
-        .unwrap();
-
-        let previous_codex_home = env::var_os("CODEX_HOME");
-        let previous_dirs = env::var_os("SIVTR_CODEX_SESSION_DIRS");
-        let previous_xdg_config_home = env::var_os("XDG_CONFIG_HOME");
-        let previous_appdata = env::var_os("APPDATA");
-        let previous_data_dir = env::var_os("SIVTR_DATA_DIR");
-        let config_home = temp.path().join("config-home");
-        std::fs::create_dir_all(&config_home).unwrap();
-        env::set_var("CODEX_HOME", &codex_home);
-        env::set_var("SIVTR_CODEX_SESSION_DIRS", exported_root.join("sessions"));
-        env::set_var("XDG_CONFIG_HOME", &config_home);
-        env::set_var("SIVTR_DATA_DIR", temp.path().join("data"));
-        if cfg!(windows) {
-            env::set_var("APPDATA", &config_home);
-        }
-
-        let sessions = CodexProvider.list_recent_sessions(None).unwrap();
-
-        match previous_codex_home {
-            Some(value) => env::set_var("CODEX_HOME", value),
-            None => env::remove_var("CODEX_HOME"),
-        }
-        match previous_dirs {
-            Some(value) => env::set_var("SIVTR_CODEX_SESSION_DIRS", value),
-            None => env::remove_var("SIVTR_CODEX_SESSION_DIRS"),
-        }
-        match previous_xdg_config_home {
-            Some(value) => env::set_var("XDG_CONFIG_HOME", value),
-            None => env::remove_var("XDG_CONFIG_HOME"),
-        }
-        match previous_appdata {
-            Some(value) => env::set_var("APPDATA", value),
-            None => env::remove_var("APPDATA"),
-        }
-        match previous_data_dir {
-            Some(value) => env::set_var("SIVTR_DATA_DIR", value),
-            None => env::remove_var("SIVTR_DATA_DIR"),
-        }
-
-        assert_eq!(sessions.len(), 2);
-        assert_eq!(sessions[0].id.as_deref(), Some("exported-session"));
-        assert_eq!(sessions[1].id.as_deref(), Some("local-session"));
-        assert_eq!(sessions[0].path, exported_path);
-        assert_eq!(sessions[1].path, local_path);
+        assert_eq!(inferred, Some(cwd_session));
+        assert_eq!(missing, None);
     }
 
     #[test]

@@ -5,23 +5,55 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AgentProvider {
+    Amp,
+    Aider,
+    Antigravity,
+    AntigravityCli,
+    ChatGpt,
     Claude,
+    ClaudeAi,
     Codex,
+    CommandCode,
+    Copilot,
     Cursor,
     Dsh,
+    DeepSeekTui,
+    Forge,
     Gemini,
+    GeminiApps,
     Goose,
+    Gptme,
     Grok,
     Hermes,
+    Iflow,
+    Kilo,
+    Kimi,
+    KimiWork,
+    Kiro,
     OpenClaw,
     OpenCode,
+    OpenHands,
     Pi,
+    Poolside,
+    PositAssistant,
     Qoder,
     QoderCn,
     Qwen,
+    QwenPaw,
+    Reasonix,
+    RooCode,
+    Shelley,
+    Trae,
+    TraeX,
+    Vibe,
+    VSCodeCopilot,
+    Windsurf,
     Zcode,
+    Zed,
+    Zencoder,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,13 +240,10 @@ pub trait AgentSessionProvider {
         Ok(None)
     }
 
+    /// Inferring a current session must not widen an empty workspace search.
     fn find_current_session(&self, cwd: &Path) -> Result<Option<PathBuf>> {
-        if let Some(session) = self.list_recent_sessions(Some(cwd))?.into_iter().next() {
-            return Ok(Some(session.path));
-        }
-
         Ok(self
-            .list_recent_sessions(None)?
+            .list_recent_sessions(Some(cwd))?
             .into_iter()
             .next()
             .map(|session| session.path))
@@ -228,17 +257,96 @@ pub fn push_block(
     label: Option<String>,
     text: impl Into<String>,
 ) {
-    let text = text.into().trim().to_string();
-    if !text.is_empty() {
-        session.blocks.push(AgentBlock {
-            kind,
-            timestamp,
-            label,
-            call_id: None,
-            start_line: None,
-            text,
-        });
+    let mut text = text.into().trim().to_string();
+    if text.is_empty() {
+        return;
     }
+    let mut kind = kind;
+    let mut label = label;
+    if kind == AgentBlockKind::User {
+        // Machine-injected user-role text is never dialogue. Bare `<skill>`
+        // wrappers (Codex skill expansion) still carry the skill body.
+        if let Some((name, body)) = bare_skill_wrapper(&text) {
+            kind = AgentBlockKind::Skill;
+            label = Some(name);
+            text = body;
+        } else if is_scaffolding_user_text(&text) {
+            return;
+        }
+    }
+    session.blocks.push(AgentBlock {
+        kind,
+        timestamp,
+        label,
+        call_id: None,
+        start_line: None,
+        text,
+    });
+}
+
+/// User-role text injected by the agent runtime rather than typed by a human:
+/// reminders, context snapshots, goal continuations, machine notifications,
+/// command transcripts. One predicate at the shared block funnel keeps every
+/// provider's parser from leaking scaffolding into dialogue.
+fn is_scaffolding_user_text(text: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        // Claude Code runtime injections and slash-command/bash transcripts.
+        "<system-reminder",
+        "<system_reminder",
+        "<local-command-caveat",
+        "<local-command-stdout",
+        "<command-message",
+        "<command-name",
+        "<command-args",
+        "<ide_opened_file",
+        "<ide_selection",
+        "<bash-input",
+        "<bash-stdout",
+        "<task-notification",
+        "[Request interrupted by user",
+        "# AGENTS.md instructions for",
+        // Codex injected context and machine notifications. Tag prefixes omit
+        // the closing `>`: injected envelopes also arrive self-closing or with
+        // attributes (`<turn_aborted/>`, `<codex_internal_context source=…>`).
+        "<environment_context",
+        "<turn_aborted",
+        "<codex_internal_context",
+        "<subagent_notification",
+        "<user_action",
+        "<user_info",
+        "<image",
+    ];
+    PREFIXES.iter().any(|prefix| text.starts_with(prefix))
+}
+
+/// Codex wraps expanded skill documents as `<skill>\n<name>x</name>…</skill>`
+/// (no `name=` attribute). Returns the skill name and inner body so the block
+/// renders as a labeled skill.
+fn bare_skill_wrapper(text: &str) -> Option<(String, String)> {
+    const OPEN: &str = "<skill>";
+    const CLOSE: &str = "</skill>";
+    if !text.starts_with(OPEN) {
+        return None;
+    }
+    let body = text.strip_prefix(OPEN)?;
+    // An unclosed wrapper is not a Codex skill expansion — treating it as
+    // one would swallow user text into a Skill block, so keep it dialogue.
+    let body = body.strip_suffix(CLOSE)?;
+    let name_start = body.find("<name>")? + "<name>".len();
+    let name_end = body[name_start..].find("</name>")? + name_start;
+    let name = body[name_start..name_end].trim();
+    if name.is_empty() {
+        return None;
+    }
+    // Drop the `<name>`/`<path>` envelope lines from the displayed body.
+    let mut body = body[name_end + "</name>".len()..].trim();
+    for (open, close) in [("<name>", "</name>"), ("<path>", "</path>")] {
+        if body.starts_with(open) {
+            let Some(end) = body.find(close) else { break };
+            body = body[end + close.len()..].trim();
+        }
+    }
+    Some((name.to_string(), body.to_string()))
 }
 
 pub fn push_tool_block(
@@ -338,25 +446,23 @@ fn part_id(item: &Value, nested: &Value) -> Option<String> {
 pub fn extract_content_text(content: &Value) -> String {
     match content {
         Value::String(text) => text.clone(),
-        Value::Object(object) => {
-            if let Some(text) = object
-                .get("text")
-                .and_then(Value::as_str)
-                .or_else(|| object.get("input_text").and_then(Value::as_str))
-                .or_else(|| object.get("output_text").and_then(Value::as_str))
-                .or_else(|| object.get("content").and_then(Value::as_str))
-            {
-                text.to_string()
-            } else if let Some(nested) = object.get("content").or_else(|| object.get("message")) {
-                extract_content_text(nested)
-            } else {
-                String::new()
-            }
-        }
+        Value::Object(object) => object
+            .get("text")
+            .and_then(Value::as_str)
+            .or_else(|| object.get("input_text").and_then(Value::as_str))
+            .or_else(|| object.get("output_text").and_then(Value::as_str))
+            .or_else(|| object.get("content").and_then(Value::as_str))
+            .unwrap_or_default()
+            .to_string(),
         Value::Array(items) => items
             .iter()
-            .map(extract_content_text)
-            .filter(|text| !text.trim().is_empty())
+            .filter_map(|item| {
+                item.get("text")
+                    .and_then(Value::as_str)
+                    .or_else(|| item.get("input_text").and_then(Value::as_str))
+                    .or_else(|| item.get("output_text").and_then(Value::as_str))
+                    .or_else(|| item.as_str())
+            })
             .collect::<Vec<_>>()
             .join("\n\n"),
         _ => String::new(),
@@ -386,7 +492,7 @@ pub fn normalize_path_for_match(path: &Path) -> String {
 ///
 /// Policy (all providers):
 /// - `cwd == None` → keep every session
-/// - session has no cwd metadata → **keep** (unbound / weixin / cron / missing)
+/// - session has no cwd metadata → exclude from scoped listings
 /// - session has cwd → keep only when it resolves to the same repository
 ///   (commondir identity) as the target, or exactly matches the target path
 ///   when neither side is inside a git checkout
@@ -400,27 +506,13 @@ pub fn filter_sessions_by_workspace(
     let wanted = WorkspaceMatchTarget::new(cwd);
     sessions
         .into_iter()
-        .filter(|session| match session.cwd.as_deref() {
-            None => true,
-            Some(candidate) => wanted.matches(Path::new(candidate)),
+        .filter(|session| {
+            session
+                .cwd
+                .as_deref()
+                .is_some_and(|candidate| wanted.matches(Path::new(candidate)))
         })
         .collect()
-}
-
-/// Whether any cwd candidate matches the workspace target.
-/// Empty candidate list means "no metadata" → keep (same policy as unbound sessions).
-pub(crate) fn workspace_matches_candidates(
-    wanted: &WorkspaceMatchTarget,
-    mut candidates: impl Iterator<Item = impl AsRef<Path>>,
-) -> bool {
-    let mut any = false;
-    for candidate in candidates.by_ref() {
-        any = true;
-        if wanted.matches(candidate.as_ref()) {
-            return true;
-        }
-    }
-    !any
 }
 
 pub(crate) struct WorkspaceMatchTarget {
@@ -527,14 +619,6 @@ mod tests {
     use std::time::SystemTime;
 
     #[test]
-    fn extract_content_text_unwraps_nested_message_content_arrays() {
-        let value = serde_json::json!({
-            "content": [{"type": "text", "text": "hello nested"}]
-        });
-        assert_eq!(extract_content_text(&value), "hello nested");
-    }
-
-    #[test]
     fn cwd_candidates_do_not_duplicate_the_primary_cwd() {
         let mut tracked = AgentSessionMeta::default();
         tracked.add_cwd("/repo");
@@ -598,7 +682,7 @@ mod tests {
     }
 
     #[test]
-    fn filter_sessions_keeps_unbound_and_matching_cwd() {
+    fn scoped_filter_requires_cwd_but_unfiltered_listing_keeps_unbound() {
         let dir = tempfile::tempdir().unwrap();
         let repo = dir.path().join("repo");
         make_repo(&repo);
@@ -606,6 +690,7 @@ mod tests {
         let sessions = vec![
             SessionInfo {
                 path: PathBuf::from("unbound"),
+                physical_path: None,
                 id: Some("u".into()),
                 cwd: None,
                 title: None,
@@ -613,6 +698,7 @@ mod tests {
             },
             SessionInfo {
                 path: PathBuf::from("match"),
+                physical_path: None,
                 id: Some("m".into()),
                 cwd: Some(repo.to_string_lossy().into_owned()),
                 title: None,
@@ -620,6 +706,7 @@ mod tests {
             },
             SessionInfo {
                 path: PathBuf::from("other"),
+                physical_path: None,
                 id: Some("o".into()),
                 cwd: Some(dir.path().join("other").to_string_lossy().into_owned()),
                 title: None,
@@ -627,12 +714,16 @@ mod tests {
             },
         ];
 
+        assert_eq!(
+            filter_sessions_by_workspace(sessions.clone(), None).len(),
+            3
+        );
         let filtered = filter_sessions_by_workspace(sessions, Some(&repo));
         let ids: Vec<_> = filtered
             .iter()
             .filter_map(|session| session.id.as_deref())
             .collect();
-        assert_eq!(ids, vec!["u", "m"]);
+        assert_eq!(ids, vec!["m"]);
     }
 
     #[test]
@@ -647,6 +738,7 @@ mod tests {
         // worktree, and one recorded in the worktree shows up from the main.
         let main_session = vec![SessionInfo {
             path: PathBuf::from("main-session"),
+            physical_path: None,
             id: Some("m".into()),
             cwd: Some(main.to_string_lossy().into_owned()),
             title: None,
@@ -659,6 +751,7 @@ mod tests {
 
         let worktree_session = vec![SessionInfo {
             path: PathBuf::from("wt-session"),
+            physical_path: None,
             id: Some("w".into()),
             cwd: Some(worktree.to_string_lossy().into_owned()),
             title: None,

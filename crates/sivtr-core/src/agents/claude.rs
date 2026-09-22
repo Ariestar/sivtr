@@ -631,6 +631,32 @@ mod tests {
     }
 
     #[test]
+    fn skips_injected_user_envelopes_without_meta_flag() {
+        // Background-task notifications arrive as plain user messages with no
+        // isMeta flag; only the text identifies them as machine injections.
+        let dir = tempfile::tempdir().expect("test tempdir");
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"type":"user","message":{"role":"user","content":"<task-notification>\n<task-id>aa05</task-id>\n<output-file>C:\\tmp\\out</output-file>\n</task-notification>"}}
+{"type":"user","message":{"role":"user","content":"<bash-input>cargo test</bash-input>\n<bash-stdout>ok</bash-stdout>"}}
+{"type":"user","message":{"role":"user","content":"<command-name>/review</command-name>\n<command-message>review</command-message>"}}
+{"type":"user","message":{"role":"user","content":"real follow-up"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}
+"#,
+        )
+        .expect("write test session log");
+
+        let session = ClaudeProvider
+            .parse_session_file(&path)
+            .expect("parse test session");
+
+        assert_eq!(session.blocks.len(), 2);
+        assert_eq!(session.blocks[0].text, "real follow-up");
+        assert_eq!(session.blocks[1].text, "done");
+    }
+
+    #[test]
     fn selects_last_claude_turn() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.jsonl");
@@ -657,9 +683,9 @@ mod tests {
         let _guard = env_lock();
         let dir = tempfile::tempdir().unwrap();
         let original_claude_home = env::var_os("CLAUDE_HOME");
-        let original_data_dir = env::var_os("SIVTR_DATA_DIR");
+        let original_data_dir = env::var_os("SIVTR_HOME");
         env::set_var("CLAUDE_HOME", dir.path());
-        env::set_var("SIVTR_DATA_DIR", dir.path().join("data"));
+        env::set_var("SIVTR_HOME", dir.path().join("data"));
 
         let projects = dir.path().join("projects").join("workspace");
         std::fs::create_dir_all(&projects).unwrap();
@@ -689,8 +715,8 @@ mod tests {
             None => env::remove_var("CLAUDE_HOME"),
         }
         match original_data_dir {
-            Some(value) => env::set_var("SIVTR_DATA_DIR", value),
-            None => env::remove_var("SIVTR_DATA_DIR"),
+            Some(value) => env::set_var("SIVTR_HOME", value),
+            None => env::remove_var("SIVTR_HOME"),
         }
 
         assert_eq!(sessions.len(), 1);

@@ -1,6 +1,6 @@
 use clap::{ArgGroup, Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use sivtr_core::ai::AgentProvider;
+use sivtr_core::agents::AgentProvider;
 use sivtr_core::record::WorkOutcome;
 use sivtr_core::search::{Field, PartKind, Sort};
 use std::path::PathBuf;
@@ -10,9 +10,11 @@ use std::sync::LazyLock;
 use crate::commands::memory::show::WorkSetOutputFormat;
 
 mod mcp;
+mod pty;
 mod publish;
 mod remote;
 pub use mcp::*;
+pub use pty::*;
 pub use publish::*;
 pub use remote::*;
 
@@ -248,6 +250,21 @@ Behavior:
   terminal window for picking from current AI sessions.
 ";
 
+const USAGE_AFTER_HELP: &str = "\
+Usage is read from the unified archive after its normal freshness pass.
+
+Commands:
+  daily       Show usage grouped by UTC day (and model with --breakdown)
+  statusline  Print one compact line for a shell/editor status bar
+  session     Show usage for one provider/session address
+
+Examples:
+  sivtr usage daily
+  sivtr usage daily --provider codex --since 2026-08-01 --breakdown
+  sivtr usage statusline
+  sivtr usage session codex/abc123 --json
+";
+
 /// sivtr - Terminal output workspace.
 /// Capture, browse, search, select, and export terminal output.
 #[derive(Parser, Debug)]
@@ -308,11 +325,8 @@ pub enum Commands {
     /// Read from stdin pipe (e.g., `cmd | sivtr`)
     Pipe,
 
-    /// Open the current session log
-    Import,
-
-    /// Manage output history
-    History(HistoryCommand),
+    /// Import a Claude.ai or ChatGPT conversation export
+    Import(ImportCommand),
 
     /// Search captured terminal and AI workspace sessions
     #[command(visible_alias = "s")]
@@ -382,7 +396,7 @@ pub enum Commands {
     /// One-command setup: detect environment, install hooks/config/MCP, smoke test
     Setup,
 
-    /// Generate shell integration or desktop shortcut helpers
+    /// Install or upgrade shell capture integration or desktop shortcuts
     Init {
         /// Integration target: powershell, bash, zsh, nushell, all, tmux, linux-shortcut, macos-shortcut, show, uninstall
         #[arg(value_name = "TARGET", allow_hyphen_values = true)]
@@ -413,8 +427,27 @@ pub enum Commands {
     #[command(after_help = HOTKEY_AFTER_HELP)]
     Hotkey(HotkeyCommand),
 
-    /// Export local Codex session files into a shared read-only tree
-    Codex(CodexCommand),
+    /// Serve the local web UI and JSON API over the unified archive
+    Web(WebArgs),
+
+    /// Sync terminal and agent sessions into the unified archive
+    Sync(SyncArgs),
+
+    /// Show token usage and estimated model costs
+    #[command(after_help = USAGE_AFTER_HELP)]
+    Usage(UsageCommand),
+
+    /// Show archive activity and usage analytics
+    Stats(StatsArgs),
+
+    /// Manage archived session labels and listings
+    Session(SessionCommand),
+
+    /// Export archived sessions as portable documents
+    Export(ExportCommand),
+
+    /// Inspect archive quality findings
+    Quality(QualityCommand),
 
     /// Show version and build diagnostics
     Version(VersionArgs),
@@ -422,9 +455,9 @@ pub enum Commands {
     /// Clear session logs
     Clear(ClearArgs),
 
-    /// Internal: flush console buffer to session log (called by shell hook)
+    /// Internal: capture terminal output through a shell proxy
     #[command(hide = true)]
-    Flush,
+    PtyProxy(PtyProxyCommand),
 
     /// Internal: run the Windows hotkey daemon loop
     #[command(hide = true)]
@@ -574,6 +607,14 @@ pub struct SearchArgs {
     #[arg(value_name = "QUERY")]
     pub query: Option<String>,
 
+    /// Rank results with configured embeddings instead of BM25
+    #[arg(long, conflicts_with = "hybrid")]
+    pub semantic: bool,
+
+    /// Fuse BM25 and embedding ranks with reciprocal rank fusion
+    #[arg(long, conflicts_with = "semantic")]
+    pub hybrid: bool,
+
     /// Case-insensitive regex content filter (optional refinement; bounds
     /// the set before relevance ranking)
     #[arg(short = 'm', long = "match", value_name = "REGEX")]
@@ -657,6 +698,24 @@ pub struct SearchArgs {
     pub save: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum EvalMethod {
+    #[value(name = "bm25")]
+    Bm25,
+    Semantic,
+    Hybrid,
+}
+
+impl std::fmt::Display for EvalMethod {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Bm25 => "bm25",
+            Self::Semantic => "semantic",
+            Self::Hybrid => "hybrid",
+        })
+    }
+}
+
 #[derive(Args, Debug, Clone)]
 pub struct EvalArgs {
     /// Evaluation depth for recall, precision, and NDCG
@@ -666,6 +725,10 @@ pub struct EvalArgs {
     /// Sort strategy to benchmark against golden queries
     #[arg(long, default_value_t = Sort::default(), value_name = "SORT")]
     pub sort: Sort,
+
+    /// Ranking method to evaluate
+    #[arg(long, value_enum, default_value_t = EvalMethod::Bm25)]
+    pub method: EvalMethod,
 
     /// Frozen eval snapshot file (queries + corpus JSON)
     #[arg(long, value_name = "PATH")]
@@ -1165,39 +1228,217 @@ impl<'de> Deserialize<'de> for HotkeyProviderSelection {
     }
 }
 
+#[derive(Args, Debug)]
+pub struct WebArgs {
+    /// TCP port to bind
+    #[arg(long, value_name = "PORT", default_value_t = 8080)]
+    pub port: u16,
+
+    /// Loopback bind address. Non-loopback values are rejected so the
+    /// unauthenticated archive UI cannot be exposed on the network.
+    #[arg(long, value_name = "HOST", default_value = "127.0.0.1")]
+    pub host: String,
+}
+
+#[derive(Args, Debug)]
+pub struct SyncArgs {
+    /// Re-parse every session, ignoring cached fingerprints
+    #[arg(long, default_value_t = false)]
+    pub full: bool,
+
+    /// Output structured JSON for agent/skill consumption
+    #[arg(long)]
+    pub json: bool,
+}
+
 #[derive(Parser, Debug)]
-pub struct CodexCommand {
+pub struct UsageCommand {
     #[command(subcommand)]
-    pub action: CodexAction,
+    pub action: UsageAction,
 }
 
 #[derive(Subcommand, Debug)]
-pub enum CodexAction {
-    /// Export local Codex rollout JSONL files into a target directory
-    Export(CodexExportArgs),
+pub enum UsageAction {
+    /// Show usage grouped by UTC day
+    Daily(UsageDailyArgs),
+
+    /// Print one compact usage line for a status bar
+    Statusline(UsageStatuslineArgs),
+
+    /// Show usage for one provider/session address
+    Session(UsageSessionArgs),
 }
 
-#[derive(Args, Debug, Clone)]
-pub struct CodexExportArgs {
-    /// Destination directory that will receive a sessions/ tree copy
-    #[arg(long, value_name = "PATH")]
-    pub dest: PathBuf,
+#[derive(Args, Debug, Clone, Default)]
+pub struct UsageWindowArgs {
+    /// Limit usage to one provider namespace
+    #[arg(long, value_name = "PROVIDER")]
+    pub provider: Option<String>,
 
-    /// Keep only the newest N session files; `0` means export all
-    #[arg(long, value_name = "N", default_value_t = 0)]
-    pub limit: usize,
+    /// First UTC day, inclusive (`YYYY-MM-DD`)
+    #[arg(long, value_name = "DATE")]
+    pub since: Option<String>,
 
-    /// Continue mirroring local sessions into the destination tree
-    #[arg(long, default_value_t = false)]
-    pub watch: bool,
+    /// Last UTC day, inclusive (`YYYY-MM-DD`)
+    #[arg(long, value_name = "DATE")]
+    pub until: Option<String>,
+}
 
-    /// Maximum seconds between periodic reconciliation passes when `--watch` is enabled
-    #[arg(long, value_name = "SECONDS", default_value_t = 1, requires = "watch")]
-    pub interval: u64,
+#[derive(Args, Debug)]
+pub struct UsageDailyArgs {
+    #[command(flatten)]
+    pub window: UsageWindowArgs,
 
-    /// Maximum milliseconds between periodic reconciliation passes (overrides `--interval`)
-    #[arg(long, value_name = "MILLISECONDS", requires = "watch")]
-    pub interval_ms: Option<u64>,
+    /// Show provider/model groups instead of daily totals only
+    #[arg(long)]
+    pub breakdown: bool,
+
+    /// Emit the complete machine-readable summary
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct UsageStatuslineArgs {
+    #[command(flatten)]
+    pub window: UsageWindowArgs,
+}
+
+#[derive(Args, Debug)]
+pub struct UsageSessionArgs {
+    /// Provider/session address, for example `codex/abc123`
+    #[arg(value_name = "PROVIDER/SESSION")]
+    pub source: String,
+
+    /// Emit the complete machine-readable summary
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct StatsArgs {
+    #[command(flatten)]
+    pub window: UsageWindowArgs,
+
+    /// Emit the complete machine-readable report
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct ImportCommand {
+    #[command(subcommand)]
+    pub action: ImportAction,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ImportAction {
+    /// Import a Claude.ai or ChatGPT export into archive.db
+    Sessions(ImportSessionsArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct ImportSessionsArgs {
+    /// Export format
+    #[arg(long, value_enum)]
+    pub provider: ImportProvider,
+
+    /// JSON file or ZIP export
+    #[arg(value_name = "PATH")]
+    pub path: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum ImportProvider {
+    #[value(name = "claude-ai")]
+    ClaudeAi,
+    #[value(name = "chatgpt")]
+    ChatGpt,
+}
+
+#[derive(Parser, Debug)]
+pub struct SessionCommand {
+    #[command(subcommand)]
+    pub action: SessionAction,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SessionAction {
+    /// Mark one archived session as starred
+    Star { source: String },
+
+    /// Remove the starred label from one archived session
+    Unstar { source: String },
+
+    /// List archived sessions
+    List {
+        /// Restrict the list to starred sessions
+        #[arg(long)]
+        starred: bool,
+
+        /// Emit JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Parser, Debug)]
+pub struct ExportCommand {
+    #[command(subcommand)]
+    pub action: ExportAction,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ExportAction {
+    /// Export one session or the whole archive
+    Sessions(ExportSessionsArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct ExportSessionsArgs {
+    /// Provider/session address; omit to export all archived sessions
+    #[arg(long, value_name = "PROVIDER/SESSION")]
+    pub source: Option<String>,
+
+    /// Export format
+    #[arg(long, value_enum)]
+    pub format: Option<ExportFormat>,
+
+    /// Alias for `--format jsonl`
+    #[arg(long, conflicts_with = "format")]
+    pub jsonl: bool,
+
+    /// Write to a file instead of stdout
+    #[arg(short, long, value_name = "PATH")]
+    pub output: Option<PathBuf>,
+
+    /// Export only starred sessions
+    #[arg(long)]
+    pub starred: bool,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum ExportFormat {
+    Json,
+    Jsonl,
+    Markdown,
+    Html,
+}
+
+#[derive(Parser, Debug)]
+pub struct QualityCommand {
+    #[command(subcommand)]
+    pub action: QualityAction,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum QualityAction {
+    /// List detected high-risk secret patterns without revealing values
+    Secrets {
+        /// Emit JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[cfg(test)]
@@ -2268,59 +2509,15 @@ mod tests {
     }
 
     #[test]
-    fn codex_export_accepts_destination_and_watch_flags() {
-        let cli = Cli::try_parse_from([
-            "sivtr",
-            "codex",
-            "export",
-            "--dest",
-            "/tmp/shared-codex",
-            "--limit",
-            "5",
-            "--watch",
-            "--interval",
-            "3",
-        ])
-        .unwrap();
+    fn sync_accepts_full_and_json_flags() {
+        let cli = Cli::try_parse_from(["sivtr", "sync", "--full", "--json"]).unwrap();
 
         match cli.command {
-            Some(Commands::Codex(cmd)) => match cmd.action {
-                CodexAction::Export(args) => {
-                    assert_eq!(args.dest, PathBuf::from("/tmp/shared-codex"));
-                    assert_eq!(args.limit, 5);
-                    assert!(args.watch);
-                    assert_eq!(args.interval, 3);
-                    assert_eq!(args.interval_ms, None);
-                }
-            },
-            _ => panic!("expected codex export command"),
-        }
-    }
-
-    #[test]
-    fn codex_export_accepts_millisecond_interval() {
-        let cli = Cli::try_parse_from([
-            "sivtr",
-            "codex",
-            "export",
-            "--dest",
-            "/tmp/shared-codex",
-            "--watch",
-            "--interval-ms",
-            "250",
-        ])
-        .unwrap();
-
-        match cli.command {
-            Some(Commands::Codex(cmd)) => match cmd.action {
-                CodexAction::Export(args) => {
-                    assert_eq!(args.dest, PathBuf::from("/tmp/shared-codex"));
-                    assert!(args.watch);
-                    assert_eq!(args.interval, 1);
-                    assert_eq!(args.interval_ms, Some(250));
-                }
-            },
-            _ => panic!("expected codex export command"),
+            Some(Commands::Sync(args)) => {
+                assert!(args.full);
+                assert!(args.json);
+            }
+            _ => panic!("expected sync command"),
         }
     }
 
@@ -2398,6 +2595,16 @@ mod tests {
     }
 
     #[test]
+    fn pty_proxy_is_internal_without_capture_toggle_commands() {
+        let help = Cli::command().render_help().to_string();
+        assert!(!help.contains("pty-proxy"));
+        assert!(Cli::try_parse_from(["sivtr", "pty-proxy", "run", "bash"]).is_ok());
+        for removed in ["enable", "disable"] {
+            assert!(Cli::try_parse_from(["sivtr", "pty-proxy", removed]).is_err());
+        }
+    }
+
+    #[test]
     fn init_accepts_dash_all_target() {
         let cli = Cli::try_parse_from(["sivtr", "init", "-all"]).unwrap();
 
@@ -2426,6 +2633,95 @@ mod tests {
             _ => panic!("expected init command"),
         }
     }
+
+    #[test]
+    fn usage_daily_parses_window_and_breakdown() {
+        let cli = Cli::try_parse_from([
+            "sivtr",
+            "usage",
+            "daily",
+            "--provider",
+            "codex",
+            "--since",
+            "2026-08-01",
+            "--until",
+            "2026-08-31",
+            "--breakdown",
+            "--json",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Usage(command)) => match command.action {
+                UsageAction::Daily(args) => {
+                    assert_eq!(args.window.provider.as_deref(), Some("codex"));
+                    assert_eq!(args.window.since.as_deref(), Some("2026-08-01"));
+                    assert!(args.breakdown);
+                    assert!(args.json);
+                }
+                _ => panic!("expected usage daily"),
+            },
+            _ => panic!("expected usage command"),
+        }
+    }
+
+    #[test]
+    fn usage_session_parses_address() {
+        let cli = Cli::try_parse_from(["sivtr", "usage", "session", "claude/session-1"]).unwrap();
+        match cli.command {
+            Some(Commands::Usage(command)) => match command.action {
+                UsageAction::Session(args) => assert_eq!(args.source, "claude/session-1"),
+                _ => panic!("expected usage session"),
+            },
+            _ => panic!("expected usage command"),
+        }
+    }
+
+    #[test]
+    fn search_parses_semantic_method_flags() {
+        let cli = Cli::try_parse_from(["sivtr", "search", "agent", "meaning", "--hybrid"]).unwrap();
+        match cli.command {
+            Some(Commands::Search(args)) => {
+                assert!(args.hybrid);
+                assert!(!args.semantic);
+            }
+            _ => panic!("expected search command"),
+        }
+    }
+
+    #[test]
+    fn import_export_stats_and_quality_commands_parse() {
+        assert!(matches!(
+            Cli::try_parse_from([
+                "sivtr",
+                "import",
+                "sessions",
+                "--provider",
+                "chatgpt",
+                "conversations.json"
+            ])
+            .unwrap()
+            .command,
+            Some(Commands::Import(_))
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["sivtr", "export", "sessions", "--jsonl"])
+                .unwrap()
+                .command,
+            Some(Commands::Export(_))
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["sivtr", "stats", "--json"])
+                .unwrap()
+                .command,
+            Some(Commands::Stats(_))
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["sivtr", "quality", "secrets"])
+                .unwrap()
+                .command,
+            Some(Commands::Quality(_))
+        ));
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -2442,33 +2738,4 @@ pub enum ConfigAction {
     Init,
     /// Open config file in editor
     Edit,
-}
-
-#[derive(Parser, Debug)]
-pub struct HistoryCommand {
-    #[command(subcommand)]
-    pub action: Option<HistoryAction>,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum HistoryAction {
-    /// Search history by keyword
-    Search {
-        /// Search keyword
-        keyword: String,
-        /// Maximum number of results
-        #[arg(short, long, default_value = "20")]
-        limit: usize,
-    },
-    /// Show a specific history entry
-    Show {
-        /// History entry ID
-        id: i64,
-    },
-    /// List recent history entries
-    List {
-        /// Maximum number of entries to show
-        #[arg(short, long, default_value = "20")]
-        limit: usize,
-    },
 }

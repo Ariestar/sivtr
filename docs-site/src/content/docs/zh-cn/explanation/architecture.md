@@ -8,7 +8,7 @@ description: sivtr memory workspace 如何拆分为 CLI、TUI、命令处理器�
 - `sivtr`：位于 `src/` 的二进制 crate；
 - `sivtr-core`：位于 `crates/sivtr-core/` 的库 crate。
 
-二进制层负责用户交互：CLI 解析、命令分发、TUI 状态、workspace picker、平台相关 launcher/hotkey，以及 remote-memory daemon。Core crate 负责可复用的 memory 逻辑：capture、解析、buffer、selection、search primitives、history、export、config、workspace 解析和 Agent provider session 解析。
+二进制层负责用户交互：CLI 解析、命令分发、TUI 状态、workspace picker、平台相关 launcher/hotkey，以及 remote-memory daemon。Core crate 负责可复用的 memory 逻辑：capture、解析、buffer、selection、search primitives、archive、export、config、workspace 解析和 Agent provider session 解析。
 
 ## Workspace 布局
 
@@ -31,12 +31,12 @@ sivtr/
 `- crates/
    `- sivtr-core/
       `- src/
+         |- archive/         # unified SQLite archive (archive.db) + sync engine
          |- agents/          # AgentProvider registry + per-provider parsers
          |- buffer/
          |- capture/
          |- config/
          |- export/
-         |- history/
          |- parse/
          |- query/
          |- record/          # WorkRecord / WorkRef (scope + path + at)
@@ -51,11 +51,11 @@ sivtr/
 | 区域 | 责任 |
 | --- | --- |
 | `cli/` | clap 命令定义和 help text（`mod.rs` + `remote.rs`） |
-| `commands/capture/` | run、pipe、copy、init、flush、import、diff、clear、browse |
+| `commands/capture/` | run、pipe、copy、init、import、diff、clear、browse |
 | `commands/memory/` | search、filter、var、nav、zoom、show、work、WorkSet store |
 | `commands/remote/` | serve、share、remote（git-remote 风格命名）、peer、workspace list |
 | `commands/publish/` | 本地 WorkSet 的隐私投影、AES-GCM envelope、公开链接状态与撤销 |
-| `commands/system/` | config、doctor、history、hotkey、codex export、migrate、version |
+| `commands/system/` | config、doctor、hotkey、migrate、sync、version |
 | `remote/` | 设备 daemon、identity、SQLite state、protocol、本地 IPC |
 | `app.rs` | 捕获输出 browser 状态机 |
 | `tui/` | 终端设置、事件处理、browser 渲染、workspace 渲染 |
@@ -67,19 +67,19 @@ sivtr/
 
 | 模块 | 责任 |
 | --- | --- |
+| `archive` | 统一 SQLite archive（`archive.db`）、schema，以及填充它的 sync 引擎 |
 | `agents` | `AgentProvider` registry 以及各 provider 发现/解析（Codex、Claude、Cursor、OpenCode、OpenClaw、Hermes、Grok、Pi…） |
 | `record` | `WorkRecord`、`WorkPart`、`WorkRef` = `WorkScope` + `WorkPath` + `WorkAt`（`[scope:]path[/at]`） |
 | `query` | 为 CLI 和 daemon 加载 workspace records 与 local-shaped sources |
-| `capture` | stdin、subprocess、scrollback/session capture helpers |
+| `capture` | pipe、subprocess capture helpers |
 | `parse` | ANSI 剥离、Unicode display width、行解析 |
 | `buffer` | line、cursor、viewport 模型 |
 | `selection` | visual / line / block selection 提取 |
 | `search` | 文本匹配和导航状态 |
-| `history` | SQLite 存储、schema、搜索 |
 | `export` | clipboard、file、editor export helpers |
 | `config` | TOML config 模型、默认值和路径解析 |
 | `session` | 结构化 shell session entries 和渲染 |
-| `workspace` | git-root workspace 解析、registry、`data_dir()` |
+| `workspace` | git-root workspace 解析、registry、`home_dir()` |
 
 这种拆分让计算和数据处理可以独立于终端 UI 测试。
 
@@ -88,13 +88,13 @@ sivtr/
 Pipe mode：
 
 ```text
-stdin -> capture::pipe -> parse::parse_lines -> Buffer -> App -> TUI/editor
+stdin -> capture::pipe -> archive::store -> editor
 ```
 
 Run mode：
 
 ```text
-subprocess -> combined output -> parse::parse_lines -> Buffer -> App -> TUI/editor
+subprocess -> combined output -> archive::store -> editor
 ```
 
 Session import：
@@ -119,6 +119,15 @@ Workspace picker/search：
 
 ```text
 terminal context + provider sessions -> WorkspaceSession list -> search/pick/show -> clipboard/stdout/json
+```
+
+活动 shell 的采集由 shell 集成内置的 pty 代理（`sivtr pty-proxy`）负责：它持有 pty、转发字节，并用 shell 发出的 `OSC 133;C` / `OSC 133;D` 标记切出每条命令的输出，随后照常写入 terminals JSONL 并由 sync 摄入 archive。
+
+## 统一 archive
+
+查询（search、show、copy、TUI、MCP）从统一的本地 SQLite archive（`archive.db`）读取，而不是每次运行都解析原生文件。sync 引擎——`sivtr sync`，加上查询时自动的新鲜度同步——把每个 Agent provider 和每个 workspace 的终端日志写入 archive；`pipe` 和 `run` 直接插入一次性 terminal capture。原生 session 文件仍是 source of truth，sync 引擎读取它们；当 session 在 archive 中缺失或过期时，按 session 寻址的加载会通过解析原生文件自愈。
+```text
+终端 log + provider session -> sync（stat stamp 比对）-> archive.db -> 查询路径
 ```
 
 ## Remote memory 流程

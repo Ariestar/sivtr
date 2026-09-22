@@ -4,9 +4,9 @@
 
 use crate::pane::{Pane, PaneInput, Viewport};
 use crate::tui::workspace::{WorkspaceDialogue, WorkspaceSession, WorkspaceSource};
-use sivtr_core::ai::AgentProvider;
+use sivtr_core::agents::AgentProvider;
 use sivtr_core::record::{
-    WorkChannel, WorkPart, WorkRecord, WorkRecordKind, WorkRef, WorkSessionRef, WorkSource,
+    MessageRole, WorkContent, WorkPart, WorkPartBody, WorkRecord, WorkRef, WorkSessionRef,
     WorkTime, RECORD_SCHEMA_VERSION,
 };
 use std::cell::RefCell;
@@ -19,11 +19,6 @@ fn fat_record(session: &str, index: usize, title: &str) -> WorkRecord {
     WorkRecord {
         schema_version: RECORD_SCHEMA_VERSION,
         work_ref: WorkRef::agent(AgentProvider::Codex, session, index),
-        kind: WorkRecordKind::ChatTurn,
-        source: WorkSource {
-            channel: WorkChannel::Chat,
-            provider: Some("codex".to_string()),
-        },
         session: WorkSessionRef {
             id: session.to_string(),
             canonical_id: Some(session.to_string()),
@@ -36,7 +31,14 @@ fn fat_record(session: &str, index: usize, title: &str) -> WorkRecord {
         parts: vec![WorkPart {
             seq: 0,
             occurred_at: None,
-            data: sivtr_core::record::WorkPartData::Assistant { content: blob },
+            body: WorkPartBody::Message {
+                role: MessageRole::Assistant,
+                label: None,
+                content: WorkContent::Text {
+                    content: blob,
+                    ansi: None,
+                },
+            },
         }],
     }
 }
@@ -271,8 +273,7 @@ pub struct FatLayout {
 
 impl FatLayout {
     pub fn new(n_blocks: usize, lines_per: usize) -> Self {
-        use crate::tui::content::block::BlockText;
-        use sivtr_core::record::WorkPartKind;
+        use crate::tui::content::block::{BlockRole, BlockText};
 
         let blocks: Vec<BlockText> = (0..n_blocks)
             .map(|i| {
@@ -286,7 +287,7 @@ impl FatLayout {
                     id: i,
                     text,
                     tight: false,
-                    kind: WorkPartKind::Assistant,
+                    role: BlockRole::Assistant,
                 }
             })
             .collect();

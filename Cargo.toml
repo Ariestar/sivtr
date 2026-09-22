@@ -94,7 +94,7 @@ iroh = "1.0"
 base64 = "0.23"
 anyhow = "1"
 arboard = "3"
-dirs = "6"
+dirs = "7"
 regex = "1"
 similar = "3"
 serde = { version = "1", features = ["derive"] }
@@ -111,6 +111,10 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 flate2 = "1.1.9"
 tar = { version = "0.4.46", default-features = false }
 notify = "8.2"
+portable-pty = "0.9"
+axum = "0.8.9"
+mime_guess = "2"
+rust-embed = "8.12.0"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -121,6 +125,7 @@ winapi = { version = "0.3", features = ["consoleapi", "fileapi", "handleapi", "n
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
 dhat = "0.3"
+tower = { version = "0.5", features = ["util"] }
 
 [features]
 # Benches only: `cargo bench -p sivtr --features perf-benches`

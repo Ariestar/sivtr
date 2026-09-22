@@ -4,14 +4,12 @@ use std::path::PathBuf;
 
 /// Top-level configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct SivtrConfig {
     /// Editor settings.
     pub editor: EditorConfig,
-    /// History settings.
-    pub history: HistoryConfig,
-    /// Codex session settings.
-    pub codex: CodexConfig,
+    /// Unified archive sync settings.
+    pub sync: SyncConfig,
     /// Global hotkey settings.
     pub hotkey: HotkeyConfig,
     /// TUI theme settings.
@@ -20,6 +18,10 @@ pub struct SivtrConfig {
     pub mcp: McpConfig,
     /// Browser publication service settings.
     pub publish: PublishConfig,
+    /// OpenAI-compatible embedding service for semantic search.
+    pub embedding: EmbeddingConfig,
+    /// Terminal capture proxy settings.
+    pub pty_proxy: PtyProxyConfig,
 }
 
 /// Editor configuration.
@@ -31,22 +33,20 @@ pub struct EditorConfig {
     pub command: String,
 }
 
-/// History storage settings.
+/// Unified archive sync settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct HistoryConfig {
-    /// Whether to automatically save captured output to history.
-    pub auto_save: bool,
-    /// Maximum number of history entries to keep (0 = unlimited).
-    pub max_entries: usize,
+pub struct SyncConfig {
+    /// How stale the archive may be (seconds since the last sync pass)
+    /// before a query triggers an incremental re-sync. `0` re-lists on
+    /// every query; raise it to trade freshness for latency.
+    pub max_age_secs: u64,
 }
 
-/// Codex session configuration.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct CodexConfig {
-    /// Additional directories that contain exported Codex session JSONL trees.
-    pub session_dirs: Vec<PathBuf>,
+impl Default for SyncConfig {
+    fn default() -> Self {
+        Self { max_age_secs: 15 }
+    }
 }
 
 /// Global hotkey configuration.
@@ -99,16 +99,40 @@ pub struct PublishConfig {
     pub endpoint: String,
 }
 
-// --- Defaults ---
+/// Semantic-search embedding service. An empty endpoint deliberately disables
+/// semantic modes; callers must configure a concrete local or remote service.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct EmbeddingConfig {
+    /// Full OpenAI-compatible `/embeddings` endpoint.
+    pub endpoint: String,
+    /// Model name sent in each request.
+    pub model: String,
+    /// Environment variable containing the bearer token; set empty for a
+    /// local endpoint that does not require authentication.
+    pub api_key_env: String,
+    /// Maximum inputs per request.
+    pub batch_size: usize,
+}
 
-impl Default for HistoryConfig {
+/// Terminal capture settings.
+///
+/// Installing shell integration with `init` or `setup` enables capture by
+/// default. An explicit `enabled = false` keeps it off across hook upgrades.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PtyProxyConfig {
+    /// Whether the shell runs inside the capture proxy.
+    pub enabled: bool,
+}
+
+impl Default for PtyProxyConfig {
     fn default() -> Self {
-        Self {
-            auto_save: true,
-            max_entries: 0, // unlimited
-        }
+        Self { enabled: true }
     }
 }
+
+// --- Defaults ---
 
 impl Default for HotkeyConfig {
     fn default() -> Self {
@@ -128,6 +152,17 @@ impl Default for PublishConfig {
     fn default() -> Self {
         Self {
             endpoint: "https://share.hnnulwh.cn".to_string(),
+        }
+    }
+}
+
+impl Default for EmbeddingConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: String::new(),
+            model: "text-embedding-3-small".to_string(),
+            api_key_env: "OPENAI_API_KEY".to_string(),
+            batch_size: 64,
         }
     }
 }
@@ -172,14 +207,9 @@ impl SivtrConfig {
         Ok(path)
     }
 
-    /// Get the config file path.
-    /// Windows: %APPDATA%/sivtr/config.toml
-    /// macOS:   ~/Library/Application Support/sivtr/config.toml
-    /// Linux:   ~/.config/sivtr/config.toml
+    /// Config file under the single home (`SIVTR_HOME` / `~/.sivtr`).
     pub fn config_path() -> Result<PathBuf> {
-        let config_dir = dirs::config_dir()
-            .ok_or_else(|| anyhow::anyhow!("Cannot determine config directory"))?;
-        Ok(config_dir.join("sivtr").join("config.toml"))
+        Ok(crate::workspace::home_dir().join("config.toml"))
     }
 }
 
@@ -208,19 +238,66 @@ mod tests {
     }
 
     #[test]
-    fn serializes_codex_config() {
+    fn serializes_sync_config() {
         let config = SivtrConfig {
-            codex: CodexConfig {
-                session_dirs: vec![PathBuf::from("/srv/sivtr/root-codex/sessions")],
-            },
+            sync: SyncConfig { max_age_secs: 120 },
             ..SivtrConfig::default()
         };
 
-        let toml = to_toml_string(&config).expect("serialize Codex config");
+        let toml = to_toml_string(&config).expect("serialize sync config");
 
-        assert!(toml.contains("[codex]"));
-        assert!(toml.contains("session_dirs = ["));
-        assert!(toml.contains("/srv/sivtr/root-codex/sessions"));
+        assert!(toml.contains("[sync]"));
+        assert!(toml.contains("max_age_secs = 120"));
+        assert_eq!(SivtrConfig::default().sync.max_age_secs, 15);
+    }
+
+    #[test]
+    fn serializes_embedding_config_without_inventing_an_endpoint() {
+        let config = SivtrConfig {
+            embedding: EmbeddingConfig {
+                endpoint: "http://127.0.0.1:9000/v1/embeddings".to_string(),
+                api_key_env: String::new(),
+                ..EmbeddingConfig::default()
+            },
+            ..SivtrConfig::default()
+        };
+        let toml = to_toml_string(&config).expect("serialize embedding config");
+        assert!(toml.contains("[embedding]"));
+        assert!(toml.contains("127.0.0.1:9000"));
+        assert!(SivtrConfig::default().embedding.endpoint.is_empty());
+    }
+
+    #[test]
+    fn terminal_capture_defaults_on_and_preserves_explicit_opt_out() {
+        let default = to_toml_string(&SivtrConfig::default()).expect("serialize");
+        assert!(default.contains("[pty_proxy]"));
+        assert!(default.contains("enabled = true"));
+        assert!(SivtrConfig::default().pty_proxy.enabled);
+        // Existing configurations without this section use the new capture
+        // implementation as soon as their shell hook is upgraded.
+        for legacy in ["", "[editor]\ncommand = 'vim'\n", "[pty_proxy]\n"] {
+            assert!(
+                toml::from_str::<SivtrConfig>(legacy)
+                    .unwrap()
+                    .pty_proxy
+                    .enabled
+            );
+        }
+
+        let off = SivtrConfig {
+            pty_proxy: PtyProxyConfig { enabled: false },
+            ..SivtrConfig::default()
+        };
+        let toml = to_toml_string(&off).expect("serialize");
+        assert!(
+            !toml::from_str::<SivtrConfig>(&toml)
+                .expect("parse")
+                .pty_proxy
+                .enabled
+        );
+
+        // A typo must fail loudly instead of silently leaving capture off.
+        assert!(toml::from_str::<SivtrConfig>("[pty_proxy]\nenabld = true\n").is_err());
     }
 
     #[test]
@@ -270,5 +347,13 @@ mod tests {
         // A misspelled key (`mod` instead of `mode`) is rejected too; serde
         // would otherwise ignore the unknown field and keep `mode` at auto.
         assert!(toml::from_str::<SivtrConfig>("[theme]\nmod = \"light\"\n").is_err());
+    }
+
+    #[test]
+    fn rejects_removed_history_config() {
+        assert!(
+            toml::from_str::<SivtrConfig>("[history]\nauto_save = true\nmax_entries = 0\n")
+                .is_err()
+        );
     }
 }

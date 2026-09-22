@@ -62,11 +62,16 @@ With `sivtr`, you can:
 
 ## Features
 
-- **MCP-first agent memory**: install once with `sivtr mcp install`, then agents call `sivtr_search` / `sivtr_show` / `sivtr_zoom` / `sivtr_filter` / `sivtr_status` instead of asking you to paste logs.
-- **Shell history that keeps the output**: capture commands from Bash, Zsh, PowerShell, and Nushell, including stdout, stderr, exit code, cwd, and timing.
-- **One search surface for local work**: terminal output plus all registered agent providers (Codex, Claude Code, Cursor, Dsh, Gemini, Goose, Hermes, OpenCode, OpenClaw, Grok, Pi, Qoder, Qoder-CN, Qwen, …) — via MCP or CLI.
+- **MCP-first agent memory**: install once with `sivtr mcp install`, then agents call search/show/zoom/filter/status/usage/stats tools instead of asking you to paste logs.
+- **Terminal capture that keeps the output**: capture commands from Bash, Zsh, PowerShell, and Nushell, including stdout, stderr, exit code, cwd, and timing; `pipe` and `run` write directly to the same archive.
+- **One local archive**: terminal and agent sessions sync into one `archive.db`; providers only discover and parse, while search, filters, exports, the TUI, MCP, and the Web API share the same record model.
+- **40+ agent providers**: Codex, Claude Code, Cursor, Dsh, Gemini, Goose, Hermes, OpenCode, OpenClaw, Grok, Pi, Qoder, Qoder-CN, Qwen, plus JSONL, SQLite, directory, and container formats through one registry and query surface.
 - **Exact evidence, not summaries**: every hit resolves to a stable ref you can show, zoom, filter, or hand to the next agent.
 - **Named memory variables**: save result sets as `@failures`, reuse `@last`, pipe with `@`, and slice with `@failures[1,3..5]`.
+- **Usage and costs**: extract transcript token usage and calculate costs with exact integer microdollars and an embedded pricing snapshot; unknown prices stay explicitly unpriced.
+- **Optional semantic / hybrid search**: configure an OpenAI-compatible embedding endpoint for vector ranking or RRF fusion with BM25; structured search remains complete without it.
+- **Stats, quality, and portable import/export**: `stats`, secret findings, starred sessions, Claude.ai/ChatGPT JSON/ZIP import, and JSON/JSONL/Markdown/HTML export.
+- **Local Web UI**: `sivtr web` serves a loopback dashboard and JSON API over the same unified archive.
 - **Cross-device access**: share a workspace read-only and browse another device with a `desk:...` ref; multiple devices can form a `group` that syncs membership and lets members read each other's memory.
 - **Configurable theme**: `[theme] mode = auto|dark|light`, follows the system appearance and detects truecolor.
 - **One-command setup**: `sivtr setup` for hooks + MCP host install; `sivtr doctor --fix` to repair.
@@ -101,15 +106,27 @@ Upgrade:
 sivtr update    # download the latest release, verify SHA256, replace in place
 ```
 
-First-time setup (hooks + MCP hosts):
+First-time setup (capture + MCP hosts):
 
 ```bash
-sivtr setup             # hooks + MCP hosts + sivtr-memory skill (if missing)
+sivtr setup                  # capture + MCP hosts + sivtr-memory skill (if missing)
 # or step by step:
-sivtr init powershell   # or bash, zsh, nushell
-sivtr mcp install       # detect installed hosts; or -p claude,cursor,codex,opencode,openclaw,grok,hermes,pi,qoder,qodercn,gemini,qwen,goose
+sivtr init all              # or a single shell: bash, zsh, nushell, powershell
+sivtr mcp install            # detect installed hosts; or -p claude,cursor,codex,opencode,openclaw,grok,hermes,pi,qoder,qodercn,gemini,qwen,goose
 npx skills add Ariestar/sivtr --skill sivtr-memory -g -y
 sivtr doctor
+```
+
+> [!NOTE]
+> After `sivtr setup` or `sivtr init`, **open a new shell** to capture command output; no separate enable step is needed. Rerun `init` after upgrading to update the existing hook in place. To pause capture, use `sivtr config edit` to set `[pty_proxy] enabled = false` and restart the shell; installation and upgrades preserve this explicit opt-out.
+
+Sync and inspect the archive:
+
+```bash
+sivtr sync
+sivtr usage daily
+sivtr stats
+sivtr web
 ```
 
 > [!NOTE]
@@ -126,6 +143,8 @@ This is the main path. After `sivtr mcp install`, agents get structured tools ov
 | `sivtr_zoom` | Expand surrounding context |
 | `sivtr_filter` | Narrow a result set |
 | `sivtr_status` | Workspace / remote / origin health |
+| `sivtr_usage` | Token usage and model costs |
+| `sivtr_stats` | Archive activity, quality, and usage statistics |
 
 Optional skill (teaches the agent when to call those tools):
 
@@ -206,6 +225,10 @@ sivtr copy out 2..4                      # output of blocks 2..4
 sivtr copy in --pick --regex panic       # interactively pick the input block matching "panic"
 sivtr copy cmd --pick                    # interactively pick a command itself
 sivtr copy 3 --print                     # print block 3 to stdout
+sivtr usage daily --breakdown             # token and cost by day/provider/model
+sivtr usage session codex/<session-id>    # usage for one session
+sivtr export sessions --format markdown   # export archived sessions
+sivtr import sessions --provider chatgpt conversations.json
 ```
 
 **Remote & collaboration**
@@ -294,6 +317,8 @@ The owner manages the group: `rename` to rename, `remove <group> <peer>` to kick
 | Pi | Local Pi agent session logs. |
 | Qoder / Qoder-CN | Local Qoder and Qoder-CN agent sessions. |
 | Qwen | Local Qwen Code sessions. |
+| More providers | Amp, Aider, Antigravity, Copilot, Forge, gptme, iFlow, Kimi, Kiro, OpenHands, Poolside, RooCode, Trae, Vibe, VSCode Copilot, Windsurf, Zed, Zencoder, and more. |
+| Web imports | Claude.ai and ChatGPT JSON/ZIP exports via `sivtr import sessions`, stored in the archive. |
 
 ## Documentation
 
@@ -324,7 +349,7 @@ bun run build
 Repository layout:
 
 ```text
-crates/sivtr-core/  core model, provider parsers, search, history, config
+crates/sivtr-core/  core model, provider parsers, archive, usage, search, config
 src/                CLI commands, TUI, shell hooks, hotkey integration
 docs-site/          Astro/Starlight documentation site
 editors/vscode/     VS Code bridge for the AI session picker

@@ -5,13 +5,11 @@ description: TOML configuration reference.
 
 ## Location
 
-`sivtr` uses the platform config directory:
+`sivtr` stores config under the single home (`SIVTR_HOME` override, else `~/.sivtr`):
 
 | Platform | Current path |
 | --- | --- |
-| Windows | `%APPDATA%\sivtr\config.toml` |
-| macOS | `~/Library/Application Support/sivtr/config.toml` |
-| Linux | `~/.config/sivtr/config.toml` |
+| All | `~/.sivtr/config.toml` |
 
 ## Full example
 
@@ -19,12 +17,8 @@ description: TOML configuration reference.
 [editor]
 command = "nvim"
 
-[history]
-auto_save = true
-max_entries = 0
-
-[codex]
-session_dirs = ["/srv/sivtr/root-codex/sessions"]
+[sync]
+max_age_secs = 15
 
 [hotkey]
 chord = "alt+y"
@@ -34,6 +28,15 @@ mode = "auto"
 
 [mcp]
 idle_exit_secs = 60
+
+[embedding]
+endpoint = "https://api.openai.com/v1/embeddings"
+model = "text-embedding-3-small"
+api_key_env = "OPENAI_API_KEY"
+batch_size = 64
+
+[pty_proxy]
+enabled = true
 ```
 
 ## editor
@@ -56,33 +59,30 @@ command = "vim"
 command = "code --wait"
 ```
 
-## history
+## sync
 
 ```toml
-[history]
-auto_save = true
-max_entries = 0
+[sync]
+max_age_secs = 15
 ```
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `auto_save` | boolean | `true` | Save captured output to history |
-| `max_entries` | integer | `0` | Maximum entries to retain. `0` means unlimited. |
+| `max_age_secs` | integer | `15` | How stale the archive may be (seconds since the last sync) before a query triggers an incremental re-sync. `0` re-lists on every query. |
 
-## codex
+## embedding
 
 ```toml
-[codex]
-session_dirs = []
+[embedding]
+endpoint = "https://api.openai.com/v1/embeddings"
+model = "text-embedding-3-small"
+api_key_env = "OPENAI_API_KEY"
+batch_size = 64
 ```
 
-| Key | Type | Default | Meaning |
-| --- | --- | --- | --- |
-| `session_dirs` | string array | `[]` | Extra exported Codex `sessions` directories to browse with `copy codex --pick` |
-
-On macOS, a typical shared path is `/Users/Shared/sivtr/root-codex/sessions`.
-
-Only Codex mirrors are currently configured here. Other registered providers (Claude, Cursor, OpenCode, OpenClaw, Hermes, Grok, Pi, Dsh, Gemini, Goose, Qoder/Qoder-CN, Qwen, …) use their own local locations and environment signals.
+Semantic and hybrid search require an explicit OpenAI-compatible embeddings
+endpoint. The endpoint must use HTTPS, except for loopback HTTP during local
+development. If `api_key_env` is empty, no authorization header is sent.
 
 ## hotkey
 
@@ -118,3 +118,16 @@ idle_exit_secs = 60
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `idle_exit_secs` | integer | `60` | Seconds without tool calls before the stdio MCP server exits; `0` keeps it alive until the host closes stdin. The `sivtr mcp serve --idle-exit` flag overrides this. |
+
+## pty_proxy
+
+```toml
+[pty_proxy]
+enabled = true
+```
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `enabled` | boolean | `true` | Run the shell inside the capture proxy and record command output. |
+
+After `sivtr init <shell|all>` or `sivtr setup`, restart the shell to begin capturing. Older configurations without this field use `true`. To pause capture, set it to `false` with `sivtr config edit`; hook installation, upgrades, and repeated setup preserve an explicit opt-out. Restart the shell after changing the setting.

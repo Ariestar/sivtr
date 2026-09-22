@@ -6,10 +6,9 @@ use regex::Regex;
 use std::rc::Rc;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::tui::content::block::BlockText;
+use crate::tui::content::block::{BlockRole, BlockText};
 use crate::tui::content::markdown::{render_markdown_lines, MarkdownLineKind};
 use crate::tui::pane::{panel_block, render_panel_scrollbar, Panel, PanelScroll};
-use sivtr_core::record::WorkPartKind;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ContentViewMode {
@@ -96,7 +95,7 @@ pub(crate) struct ContentLayout {
     /// Dot color per line, parallel to [`Self::ownership`]: block ids are
     /// dialogue-global, so an id-keyed table would have to be padded across
     /// the other half's range and would report a foreign id as a real kind.
-    pub(crate) kinds: Vec<Option<WorkPartKind>>,
+    pub(crate) kinds: Vec<Option<BlockRole>>,
 }
 
 /// Lay one half out once from its blocks. Empty halves use `text` (`<empty>`).
@@ -123,7 +122,7 @@ pub(crate) fn layout_content(
     for (idx, segment) in blocks.iter().enumerate() {
         let block_lines = all_content_lines(&segment.text, width, mode);
         ownership.extend(std::iter::repeat_n(Some(segment.id), block_lines.len()));
-        kinds.extend(std::iter::repeat_n(Some(segment.kind), block_lines.len()));
+        kinds.extend(std::iter::repeat_n(Some(segment.role), block_lines.len()));
         lines.extend(block_lines);
         if idx + 1 < blocks.len() && !segment.tight {
             ownership.push(None);
@@ -1178,20 +1177,20 @@ fn block_dot_lines(
     Text::from(lines)
 }
 
-/// Dot color by block kind: the same palette the pane uses for roles, so a
-/// conversation's dots read like chat bubbles (user, tool, thinking, ...).
-fn block_dot_color(kind: Option<WorkPartKind>) -> Color {
-    use WorkPartKind::{
-        Assistant, Command, Error, Output, Prompt, Skill, Thinking, ToolCall, ToolResult, User,
-    };
-    match kind {
-        Some(User) => crate::tui::theme::user(),
-        Some(Output) => crate::tui::theme::output(),
-        Some(Error) => crate::tui::theme::failure(),
-        Some(ToolCall | Prompt | Command) => crate::tui::theme::structure_color(false),
-        Some(ToolResult) => crate::tui::theme::structure_color(true),
-        Some(Thinking | Skill) | None => crate::tui::theme::muted(),
-        Some(Assistant) => Color::Reset,
+/// Dot color by part kind: dialogue parts (user/assistant) carry the default
+/// text color; structure parts (thinking/system/shell/tool/agent) share one
+/// muted light color; failure is status, not decoration.
+fn block_dot_color(role: Option<BlockRole>) -> Color {
+    match role {
+        Some(BlockRole::Failed) => crate::tui::theme::failure(),
+        Some(
+            BlockRole::Reasoning
+            | BlockRole::System
+            | BlockRole::Shell
+            | BlockRole::Tool
+            | BlockRole::Agent,
+        ) => crate::tui::theme::muted(),
+        Some(BlockRole::User | BlockRole::Assistant) | None => Color::Reset,
     }
 }
 
@@ -1377,7 +1376,7 @@ mod tests {
         selected_content_text, visible_content_lines, ContentPosition, ContentSelection,
         ContentSelectionKind, ContentView, ContentViewMode,
     };
-    use crate::tui::content::block::BlockText;
+    use crate::tui::content::block::{BlockRole, BlockText};
     use crate::tui::pane::Panel;
     use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
@@ -1385,7 +1384,6 @@ mod tests {
     use ratatui::text::Text;
     use ratatui::Terminal;
     use regex::Regex;
-    use sivtr_core::record::WorkPartKind;
     use unicode_width::UnicodeWidthStr;
 
     /// Displayed line index of the first layout line containing `needle`.
@@ -1419,7 +1417,7 @@ mod tests {
             id,
             text: text.to_string(),
             tight: false,
-            kind: WorkPartKind::ToolCall,
+            role: BlockRole::Tool,
         }
     }
 
@@ -1483,10 +1481,9 @@ mod tests {
         assert_eq!(rendered.lines.len(), 2);
         assert_eq!(rendered.lines[0].spans[0].content.as_ref(), "## ");
         assert_eq!(rendered.lines[0].spans[1].content.as_ref(), "User");
-        assert_eq!(
-            rendered.lines[0].spans[1].style.fg,
-            Some(crate::tui::theme::user())
-        );
+        // Heading color depends on the level alone, not the text: an h2
+        // renders in the default foreground.
+        assert_eq!(rendered.lines[0].spans[1].style.fg, None);
         assert!(rendered.lines[1].spans[0]
             .style
             .add_modifier

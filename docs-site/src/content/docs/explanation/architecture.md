@@ -8,7 +8,7 @@ description: How the sivtr memory workspace is split between CLI, TUI, command h
 - `sivtr`, the binary crate in `src/`;
 - `sivtr-core`, the library crate in `crates/sivtr-core/`.
 
-The binary owns user interaction: CLI parsing, command dispatch, TUI state, workspace pickers, platform-specific launcher/hotkey behavior, and the remote-memory daemon. The core crate owns reusable memory logic: capture, parsing, buffers, selection, search primitives, history, export, config, workspace resolution, and agent-provider session parsing.
+The binary owns user interaction: CLI parsing, command dispatch, TUI state, workspace pickers, platform-specific launcher/hotkey behavior, and the remote-memory daemon. The core crate owns reusable memory logic: capture, parsing, buffers, selection, search primitives, archive, export, config, workspace resolution, and agent-provider session parsing.
 
 ## Workspace layout
 
@@ -31,12 +31,12 @@ sivtr/
 `- crates/
    `- sivtr-core/
       `- src/
+         |- archive/         # unified SQLite archive (archive.db) + sync engine
          |- agents/          # AgentProvider registry + per-provider parsers
          |- buffer/
          |- capture/
          |- config/
          |- export/
-         |- history/
          |- parse/
          |- query/
          |- record/          # WorkRecord / WorkRef (scope + path + at)
@@ -51,10 +51,10 @@ sivtr/
 | Area | Responsibility |
 | --- | --- |
 | `cli/` | clap command definitions and help text (`mod.rs` + `remote.rs`) |
-| `commands/capture/` | run, pipe, copy, init, flush, import, diff, clear, browse |
+| `commands/capture/` | run, pipe, copy, init, import, diff, clear, browse |
 | `commands/memory/` | search, filter, var, nav, zoom, show, work, WorkSet store |
 | `commands/remote/` | serve, share, remote (git-remote style names), peer, workspace list |
-| `commands/system/` | config, doctor, history, hotkey, codex export, migrate, version |
+| `commands/system/` | config, doctor, hotkey, migrate, sync, version |
 | `remote/` | device daemon, identity, SQLite state, protocol, local IPC |
 | `app.rs` | captured-output browser state machine |
 | `tui/` | terminal setup, event handling, browser rendering, workspace rendering |
@@ -66,19 +66,19 @@ This layer can depend on terminal UI libraries, platform APIs, process spawning,
 
 | Module | Responsibility |
 | --- | --- |
+| `archive` | Unified SQLite archive (`archive.db`), schema, and the sync engine that fills it |
 | `agents` | `AgentProvider` registry plus per-provider discovery/parsing (Codex, Claude, Cursor, OpenCode, OpenClaw, Hermes, Grok, Pi, …) |
 | `record` | `WorkRecord`, `WorkPart`, `WorkRef` as `WorkScope` + `WorkPath` + `WorkAt` (`[scope:]path[/at]`) |
 | `query` | load workspace records and local-shaped sources for CLI and daemon |
-| `capture` | stdin, subprocess, and scrollback/session capture helpers |
+| `capture` | pipe and subprocess capture helpers |
 | `parse` | ANSI stripping, Unicode display width, and line parsing |
 | `buffer` | line, cursor, and viewport models |
 | `selection` | visual, line, and block selection extraction |
 | `search` | text matching and navigation state |
-| `history` | SQLite storage, schema, and search |
 | `export` | clipboard, file, and editor export helpers |
 | `config` | TOML config model, defaults, and path resolution |
 | `session` | structured shell session entries and rendering |
-| `workspace` | git-root workspace resolution, registry, `data_dir()` |
+| `workspace` | git-root workspace resolution, registry, `home_dir()` |
 
 This split keeps computation and data handling testable independently from the terminal UI.
 
@@ -87,13 +87,13 @@ This split keeps computation and data handling testable independently from the t
 Pipe mode:
 
 ```text
-stdin -> capture::pipe -> parse::parse_lines -> Buffer -> App -> TUI/editor
+stdin -> capture::pipe -> archive::store -> editor
 ```
 
 Run mode:
 
 ```text
-subprocess -> combined output -> parse::parse_lines -> Buffer -> App -> TUI/editor
+subprocess -> combined output -> archive::store -> editor
 ```
 
 Session import:
@@ -118,6 +118,15 @@ Workspace picker/search:
 
 ```text
 terminal context + provider sessions -> WorkspaceSession list -> search/pick/show -> clipboard/stdout/json
+```
+
+Live shell capture is handled by the pty proxy installed through shell integration (`sivtr pty-proxy`): it owns the pty, forwards bytes, and slices each command's output using the shell's `OSC 133;C` / `OSC 133;D` markers, then writes the terminals JSONL that sync ingests into the archive.
+
+## Unified archive
+
+Queries (search, show, copy, TUI, MCP) read from one local SQLite archive (`archive.db`) instead of parsing native files on every run. The sync engine — `sivtr sync`, plus an automatic freshness pass on query — fills the archive from every agent provider and every workspace's terminal logs. `pipe` and `run` insert one-shot terminal captures directly. Native session files remain the source of truth: the sync engine reads them, and session-addressed loads self-heal by parsing the native file when the archive copy is missing or stale.
+```text
+terminal logs + provider sessions -> sync (stat-stamp compare) -> archive.db -> query paths
 ```
 
 ## Remote memory flow

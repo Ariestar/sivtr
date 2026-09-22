@@ -612,10 +612,7 @@ pub fn load_context_records(
 mod tests {
     use super::{merge_and_apply, resolve_source, split_group_scope, QueryTransport};
     use crate::commands::memory::workset::{QuerySourceResult, WorkSet};
-    use sivtr_core::record::{
-        WorkChannel, WorkPart, WorkPartData, WorkRecord, WorkRecordKind, WorkSessionRef,
-        WorkSource, WorkTime,
-    };
+    use sivtr_core::record::{MessageRole, WorkRecord, WorkSessionRef, WorkTime};
     use sivtr_core::search::Filter;
 
     fn record(index: usize) -> WorkRecord {
@@ -624,11 +621,6 @@ mod tests {
             work_ref: format!("terminal/session_1/{index}")
                 .parse()
                 .expect("valid work ref"),
-            kind: WorkRecordKind::TerminalCommand,
-            source: WorkSource {
-                channel: WorkChannel::Terminal,
-                provider: None,
-            },
             session: WorkSessionRef {
                 id: "session_1".to_string(),
                 canonical_id: Some("session_1".to_string()),
@@ -639,13 +631,12 @@ mod tests {
             status: None,
             title: format!("record {index}"),
             parts: (1..=2)
-                .map(|seq| WorkPart {
-                    seq,
-                    occurred_at: None,
-                    data: WorkPartData::Output {
-                        content: format!("record {index} part {seq}"),
-                        ansi: None,
-                    },
+                .map(|seq| {
+                    crate::test_fixtures::message_part(
+                        seq,
+                        MessageRole::Assistant,
+                        &format!("record {index} part {seq}"),
+                    )
                 })
                 .collect(),
         }
@@ -731,5 +722,117 @@ mod tests {
         let cwd = std::path::Path::new("/repo");
         assert!(resolve_source("desk:", cwd).is_err());
         assert!(resolve_source("desk:/absolute", cwd).is_err());
+    }
+
+    #[test]
+    fn shared_queries_require_workspace_membership() {
+        use super::run_on_share;
+        use sivtr_core::agents::AgentProvider;
+        use sivtr_core::archive::{self, store};
+        use sivtr_core::config::SivtrConfig;
+        use sivtr_core::session_source::SessionSource;
+
+        // Keep process-global configuration isolated from parallel library tests.
+        const CHILD: &str = "SIVTR_SHARE_SCOPE_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["commands::memory::workset::source::tests::shared_queries_require_workspace_membership", "--exact", "--nocapture"])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        // The child only reads this synthetic archive.
+        std::env::set_var("SIVTR_HOME", dir.path().join("sivtr"));
+        let mut config = SivtrConfig::default();
+        config.sync.max_age_secs = 3600;
+        config.save().unwrap();
+        let conn = archive::open().unwrap();
+        let shared = dir.path().join("shared");
+        let private = dir.path().join("private");
+        std::fs::create_dir_all(shared.join(".git")).unwrap();
+        std::fs::create_dir_all(private.join(".git")).unwrap();
+
+        let mut private_refs = Vec::new();
+        for (index, (id, cwd)) in [
+            ("shared-root", Some(&shared)),
+            ("private", Some(&private)),
+            ("unbound", None),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let path = dir.path().join(format!("{id}.jsonl"));
+            std::fs::write(
+                &path,
+                format!(
+                    "{}\n",
+                    serde_json::json!({"type": "user", "sessionId": id, "cwd": cwd, "text": id})
+                ),
+            )
+            .unwrap();
+            let records = AgentProvider::Cursor.parse_file(&path).unwrap();
+            assert_eq!(records.len(), 1);
+            if matches!(id, "private" | "unbound") {
+                private_refs.push(records[0].work_ref.to_string());
+            }
+            let cwd_text = cwd.map(|path| path.to_string_lossy().into_owned());
+            store::upsert_session(
+                &conn,
+                &store::SessionUpsert {
+                    provider: "cursor",
+                    session_id: id,
+                    source_path: &path,
+                    cwd: cwd_text.as_deref(),
+                    workspace_key: "",
+                    title: None,
+                    stamp: (index as u64, 0, 1),
+                    records: &records,
+                    usage_events: &[],
+                },
+            )
+            .unwrap();
+        }
+        // Keep query freshness checks from discovering any host provider directories.
+        store::meta_set(&conn, "last_sync_at", &chrono::Utc::now().to_rfc3339()).unwrap();
+
+        for source in ["cursor", "agent"] {
+            for redact in [false, true] {
+                let (records, anchors) =
+                    run_on_share(&shared, source, Filter::none(), redact).unwrap();
+                assert_eq!(records.len(), 1, "only sessions in the shared workspace");
+                assert_eq!(anchors.len(), 1);
+                assert_eq!(
+                    records[0].session.canonical_id.as_deref(),
+                    Some("shared-root")
+                );
+            }
+        }
+        for source in ["cursor/private", "cursor/unbound"] {
+            let (records, anchors) = run_on_share(&shared, source, Filter::none(), false).unwrap();
+            assert!(records.is_empty() && anchors.is_empty());
+        }
+        for reference in private_refs {
+            assert!(run_on_share(&shared, &reference, Filter::none(), false).is_err());
+        }
+        // Scope is applied before LIMIT, so a newer unbound session cannot crowd out
+        // the shared records. Global listings still retain every archived session.
+        let limited =
+            store::list_workspace_sessions(&conn, &["cursor"], Some(&shared), Some(1)).unwrap();
+        assert_eq!(limited.len(), 1);
+        assert!(limited[0].source_path.ends_with("shared-root.jsonl"));
+        assert_eq!(
+            store::list_workspace_sessions(&conn, &["cursor"], None, None)
+                .unwrap()
+                .len(),
+            3
+        );
     }
 }

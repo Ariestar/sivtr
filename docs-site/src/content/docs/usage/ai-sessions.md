@@ -1,11 +1,11 @@
 ---
 title: Agent Sessions
-description: Turn registered agent providers (Codex, Claude, Cursor, Hermes, OpenCode, OpenClaw, Grok, Pi, Dsh, Gemini, Goose, Qoder, Qwen, …) into reusable agent memory.
+description: Turn registered agent providers into reusable agent memory.
 ---
 
 `sivtr` treats agent transcripts as local workspace memory sources. You can copy the latest useful turn, browse older sessions in a picker, search across providers, and show exact refs without opening raw transcript files. Prior agent work becomes memory for both humans and later agents.
 
-Skills are how later agents learn to use this memory. A `sivtr` memory skill can instruct an agent to search local terminal and agent history, expand only the smallest relevant result, and verify current code before trusting prior discussion. See [Skills and Reusable Procedures](/usage/skills/).
+Skills are how later agents learn to use this memory. A `sivtr` memory skill can instruct an agent to search local terminal records and agent conversations, expand only the smallest relevant result, and verify current code before trusting prior discussion. See [Skills and Reusable Procedures](/usage/skills/).
 
 ## Supported providers
 
@@ -26,6 +26,10 @@ Providers come from the `AgentProvider` registry. Copy uses the same names:
 | Pi | `sivtr copy pi ...` | Pi session JSONL under the Pi agent directory |
 | Qoder / Qoder-CN | `sivtr copy qoder ...` | Qoder and Qoder-CN sessions |
 | Qwen | `sivtr copy qwen ...` | Qwen Code sessions |
+| Amp, Aider, iFlow, Kimi, Kimi Work | `sivtr copy <provider> ...` | Provider-specific JSON, Markdown, or wire transcripts |
+| Trae, TraeX, Copilot, VSCode Copilot, Windsurf | `sivtr copy <provider> ...` | CLI rollouts and VS Code/Windsurf chat stores |
+| OpenHands, RooCode, Kiro, Zed, Kilo, gptme, Vibe, Poolside | `sivtr copy <provider> ...` | Directory, SQLite, JSONL, or NDJSON sessions |
+| Claude.ai, ChatGPT | `sivtr copy <provider> ...` | Sessions imported with `sivtr import sessions` |
 
 Use `agent` in search commands when you want all registered providers:
 
@@ -150,30 +154,8 @@ sivtr show claude/<session>/<dialogue>
 sivtr show pi/<session>/<dialogue>/<line>
 ```
 
-## Codex session mirrors
+## The unified archive
 
-Codex supports exporting local rollout JSONL files into a shared read-only tree:
+Sessions from every registered provider are synced into one local SQLite archive (`archive.db`) alongside terminal captures. Queries run an automatic freshness pass, so new sessions show up without manual steps; `sivtr sync` forces a pass on demand.
 
-```bash
-sivtr codex export --dest /srv/sivtr/root-codex --watch
-```
-
-Then add the exported `sessions` directory to another account's config:
-
-```toml
-[codex]
-session_dirs = ["/srv/sivtr/root-codex/sessions"]
-```
-
-Shared/mirrored session trees only participate in explicit picker browsing. Implicit current-session lookup stays local so another account's exported history does not override your active workflow.
-
-On macOS, `/Users/Shared/sivtr/root-codex` is a good shared location between local accounts:
-
-```bash
-sivtr codex export --dest /Users/Shared/sivtr/root-codex --watch
-```
-
-```toml
-[codex]
-session_dirs = ["/Users/Shared/sivtr/root-codex/sessions"]
-```
+Cross-device sharing is opt-in and handled by Remote Access (`sivtr share` / `sivtr group`), not by exporting session trees. See [Remote Access](/usage/remote-access/).

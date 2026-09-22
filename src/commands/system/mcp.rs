@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Map, Value};
-use sivtr_core::ai::AgentProvider;
+use sivtr_core::agents::AgentProvider;
 use sivtr_core::config::SivtrConfig;
 
 use crate::cli::{McpAction, McpCommand, McpInstallArgs, McpLocation};
@@ -181,6 +181,16 @@ const MCP_HOSTS: &[McpHostSpec] = &[
         config_path: |_loc| goose_config_path(),
         host_present: goose_host_present,
     },
+    McpHostSpec {
+        provider: AgentProvider::CommandCode,
+        location: McpLocationSupport::GlobalOnly,
+        kind: McpConfigKind::Json {
+            key: "mcpServers",
+            entry: cmdc_entry,
+        },
+        config_path: |_loc| cmdc_config_path(),
+        host_present: cmdc_host_present,
+    },
 ];
 
 /// Look up the managed MCP host entry for a provider, or explain why there is
@@ -206,7 +216,7 @@ pub fn execute(command: McpCommand) -> Result<()> {
             // CLI `--idle-exit` wins over `[mcp] idle_exit_secs`. 0 = never.
             let idle_secs = resolve_idle_exit_secs(
                 args.idle_exit,
-                SivtrConfig::load().ok().map(|c| c.mcp.idle_exit_secs),
+                Some(SivtrConfig::load()?.mcp.idle_exit_secs),
             );
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -343,13 +353,7 @@ fn resolve_targets(providers: &[String]) -> Result<Vec<AgentProvider>> {
                 );
             }
             if part == "all" {
-                // Only hosts with a managed MCP config file; `-p all` must not
-                // try to install into hosts whose config sivtr cannot manage.
-                return Ok(AgentProvider::all()
-                    .iter()
-                    .map(|spec| spec.provider)
-                    .filter(|provider| MCP_HOSTS.iter().any(|host| host.provider == *provider))
-                    .collect());
+                return Ok(managed_targets().collect());
             }
             out.push(parse_target(&part)?);
         }
@@ -370,7 +374,10 @@ fn parse_target(value: &str) -> Result<AgentProvider> {
 }
 
 fn valid_target_list() -> String {
-    AgentProvider::command_names_csv()
+    managed_targets()
+        .map(|provider| provider.command_name())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Agent hosts that appear installed (config dir / config file present).
@@ -390,6 +397,11 @@ pub fn detect_targets() -> Vec<AgentProvider> {
         targets.push(AgentProvider::Claude);
     }
     targets
+}
+
+/// Providers with a host configuration that sivtr can manage.
+pub fn managed_targets() -> impl Iterator<Item = AgentProvider> {
+    MCP_HOSTS.iter().map(|host| host.provider)
 }
 
 /// Hosts where sivtr MCP is actually present in config (not merely "host installed").
@@ -435,16 +447,13 @@ fn print_config(target: AgentProvider) -> Result<()> {
             if let Some(Value::Object(servers)) = root.get_mut(key) {
                 servers.insert(SERVER_NAME.to_string(), entry());
             }
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&Value::Object(root)).unwrap_or_default()
-            );
+            println!("{}", serde_json::to_string_pretty(&Value::Object(root))?);
         }
         McpConfigKind::Toml => {
             println!("{}", toml_mcp_snippet());
         }
         McpConfigKind::Yaml { key, entry } => {
-            println!("{}", yaml_config_snippet(key, entry()));
+            println!("{}", yaml_config_snippet(key, entry())?);
         }
         McpConfigKind::JsonNested {
             outer,
@@ -459,15 +468,14 @@ fn print_config(target: AgentProvider) -> Result<()> {
                             SERVER_NAME: entry(),
                         }
                     }
-                }))
-                .unwrap_or_default()
+                }))?
             );
         }
     }
     Ok(())
 }
 
-fn yaml_config_snippet(key: &str, entry: serde_yaml::Value) -> String {
+fn yaml_config_snippet(key: &str, entry: serde_yaml::Value) -> Result<String> {
     let mut root = serde_yaml::Mapping::new();
     let mut servers = serde_yaml::Mapping::new();
     servers.insert(serde_yaml::Value::String(SERVER_NAME.to_string()), entry);
@@ -475,7 +483,7 @@ fn yaml_config_snippet(key: &str, entry: serde_yaml::Value) -> String {
         serde_yaml::Value::String(key.to_string()),
         serde_yaml::Value::Mapping(servers),
     );
-    serde_yaml::to_string(&root).unwrap_or_default()
+    serde_yaml::to_string(&root).context("failed to serialize MCP YAML snippet")
 }
 
 fn install_json(path: PathBuf, key: &str, entry: Value, provider: AgentProvider) -> Result<()> {
@@ -704,6 +712,17 @@ fn pi_entry() -> Value {
 
 fn openclaw_entry() -> Value {
     json!({
+        "command": "sivtr",
+        "args": SERVER_ARGS,
+    })
+}
+
+/// Command Code's stdio server shape (`transport` + `enabled`), which differs
+/// from the Claude/Cursor `type` form.
+fn cmdc_entry() -> Value {
+    json!({
+        "transport": "stdio",
+        "enabled": true,
         "command": "sivtr",
         "args": SERVER_ARGS,
     })
@@ -1028,6 +1047,18 @@ fn grok_host_present() -> bool {
     grok_config_path().exists() || sivtr_core::agents::grok::grok_home().exists()
 }
 
+/// Command Code reads user-scope servers from `mcp.json` in its home. Its
+/// project scope is a `.mcp.json` at the project root, which is the same file
+/// (and the same `mcpServers.sivtr` key) Claude Code's local install writes in
+/// a different shape, so only the global file is managed here.
+fn cmdc_config_path() -> PathBuf {
+    sivtr_core::agents::cmdc::cmdc_home().join("mcp.json")
+}
+
+fn cmdc_host_present() -> bool {
+    cmdc_config_path().exists() || sivtr_core::agents::cmdc::cmdc_home().exists()
+}
+
 fn read_json_object(path: &Path) -> Result<Map<String, Value>> {
     if !path.exists() {
         return Ok(Map::new());
@@ -1121,23 +1152,18 @@ mod tests {
 
     #[test]
     fn mcp_host_registry_covers_every_managed_provider() {
-        // dsh configures MCP clients as plugin rows in the harness profile's
-        // `cordis.patch.yml`, not a standalone file, so it has no managed
-        // host entry here; it must fail loudly, never panic. ZCode has no
-        // managed MCP config surface yet, so it is unmanaged for now too.
-        let unmanaged: &[AgentProvider] = &[AgentProvider::Dsh, AgentProvider::Zcode];
-        let managed: Vec<AgentProvider> = AgentProvider::all()
+        let registered: std::collections::HashSet<_> = AgentProvider::all()
             .iter()
             .map(|spec| spec.provider)
-            .filter(|provider| !unmanaged.contains(provider))
             .collect();
-        assert_eq!(MCP_HOSTS.len(), managed.len());
+        let mut managed = std::collections::HashSet::new();
+        for host in MCP_HOSTS {
+            assert!(registered.contains(&host.provider));
+            assert!(managed.insert(host.provider), "duplicate MCP host");
+        }
         for provider in managed {
             let host = mcp_host(provider).expect("managed host resolves");
             assert_eq!(host.provider, provider);
-        }
-        for provider in unmanaged {
-            assert!(mcp_host(*provider).is_err());
         }
     }
 
@@ -1174,14 +1200,30 @@ mod tests {
     }
 
     #[test]
+    fn configures_command_code_stdio_servers_in_its_own_json() {
+        assert_eq!(
+            resolve_targets(&["cmdc".into()]).unwrap(),
+            vec![AgentProvider::CommandCode]
+        );
+
+        let entry = cmdc_entry();
+        assert_eq!(entry["transport"], "stdio");
+        assert_eq!(entry["enabled"], true);
+        assert_eq!(entry["command"], "sivtr");
+        assert_eq!(entry["args"], json!(["mcp", "serve"]));
+        // Command Code takes `transport`, not the Claude/Cursor `type`.
+        assert!(entry.get("type").is_none());
+    }
+
+    #[test]
     fn prints_provider_specific_yaml_config() {
-        let goose = yaml_config_snippet("extensions", goose_entry());
+        let goose = yaml_config_snippet("extensions", goose_entry()).expect("serialize YAML");
         assert!(goose.contains("enabled: true"));
         assert!(goose.contains("type: stdio"));
         assert!(goose.contains("cmd: sivtr"));
         assert!(!goose.contains("command: sivtr"));
 
-        let hermes = yaml_config_snippet("mcp_servers", hermes_entry());
+        let hermes = yaml_config_snippet("mcp_servers", hermes_entry()).expect("serialize YAML");
         assert!(hermes.contains("command: sivtr"));
     }
 

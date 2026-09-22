@@ -3,29 +3,22 @@ title: Local-first and Privacy
 description: How sivtr keeps agent memory, terminal output, and transcripts under local user control.
 ---
 
-`sivtr` is designed around local agent memory. Terminal output, shell session logs, history, and agent transcripts can contain secrets, private code, credentials, internal URLs, and unfinished reasoning. The default posture is to keep that data on the machine that already produced it.
+`sivtr` is designed around local agent memory. Terminal output, shell session logs, and agent transcripts can contain secrets, private code, credentials, internal URLs, and unfinished reasoning. The default posture is to keep that data on the machine that already produced it.
 
 ## Local by default
 
 `sivtr` reads and writes local files and databases:
 
 - shell session logs from shell integration;
-- local SQLite history for captured terminal output;
+- the unified session archive (`archive.db`), including one-shot terminal captures;
 - provider-owned agent transcript files or databases;
-- local config under the platform config directory.
+- local config under the single home (`~/.sivtr`).
 
 It does not provide a hosted transcript service by default.
 
-## Explicit export
+## The local archive
 
-Export is an explicit user action. For example, Codex mirrors require a destination path:
-
-```bash
-sivtr codex export --dest /srv/sivtr/root-codex
-```
-
-After export, normal file-system permissions and your sharing setup control who can read the exported tree.
-
+Terminal captures and agent sessions live in one local SQLite archive (`cache/archive.db`) under sivtr's home directory. Nothing leaves the machine in the process. Native session files remain the source of truth: the sync engine reads them locally, and session-addressed loads self-heal by parsing the native file when the archive copy is missing or stale.
 ## Explicit remote share
 
 Cross-device memory access is also opt-in. Nothing leaves the machine until you create a share (`sivtr share` / `share add`), issue an invite (`share invite`), and a peer redeems it:
@@ -44,17 +37,6 @@ Full guide: [Remote Access](/usage/remote-access/).
 
 Guide: [Publish conversation links](/usage/publish/).
 
-## Shared mirrors should be read-only
-
-When sharing exported sessions across local accounts, prefer read-only access for consumers:
-
-```toml
-[codex]
-session_dirs = ["/srv/sivtr/root-codex/sessions"]
-```
-
-Shared/mirrored Codex trees only participate in explicit picker browsing. They do not override implicit current-session lookup.
-
 ## Clipboard is an output boundary
 
 Copy commands place selected text on the system clipboard:
@@ -66,24 +48,11 @@ sivtr copy claude out
 
 Treat clipboard contents as shared with your desktop environment and clipboard managers. Use `--print` to inspect text before copying sensitive content in risky contexts.
 
-## History retention is configurable
-
-Captured terminal output is saved to history when enabled:
-
-```toml
-[history]
-auto_save = true
-max_entries = 0
-```
-
-Set `auto_save = false` if captures should not be written automatically. Set `max_entries` to a positive number to bound retained history.
-
 ## Good operational habits
 
-- Avoid exporting directories that include secrets unless access is controlled.
+- Treat the archive like the source transcripts: it holds the same sensitive text, so protect its location and access.
 - Review copied text before pasting it into public chats, issues, hosted agents, or external AI tools.
 - Use line and regex filters to copy only the necessary evidence.
-- Keep shared Codex mirrors separate from the source account's live config.
 - Prefer `--format json` / `--refs` search output for tooling, but remember JSON content can still include sensitive text.
 - Prefer short-lived invites and revoke grants (`sivtr share revoke`) when collaboration ends.
 

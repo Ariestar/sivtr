@@ -1,55 +1,55 @@
 ---
 title: Data Locations
-description: Where sivtr stores configuration, history, session logs, and provider data.
+description: Where sivtr stores configuration, the unified archive, session logs, and provider data.
 ---
 
-`sivtr` is local-first. Most data it uses is already on your machine, and generated data is written under platform config or state directories unless you explicitly export it elsewhere.
+`sivtr` is local-first. Most data it uses is already on your machine. Generated data lives under one home: `SIVTR_HOME` if set, else `~/.sivtr` on every platform.
+
+```text
+<SIVTR_HOME or ~/.sivtr>/
+  config.toml
+  identity.key
+  remote-state.db
+  publication-state.db
+  sets/                      # named WorkSets (@last, @name)
+  workspaces/                # terminal session logs
+  cache/
+    archive.db               # search index; also holds one-shot pipe/run captures
+    bm25-*.bin               # safe to delete
+  daemon.json / daemon.lock / daemon.log
+```
+
+`sivtr doctor --fix` migrates leftover files from the old platform config/state directories into this home. Do not delete `workspaces/`, `sets/`, or `identity.key`. Deleting `bm25-*.bin` only forces a rebuild. `archive.db` also stores one-shot `pipe`/`run` captures that are not in `workspaces/`.
 
 ## Config file
 
 | Platform | Path |
 | --- | --- |
-| Windows | `%APPDATA%\sivtr\config.toml` |
-| macOS | `~/Library/Application Support/sivtr/config.toml` |
-| Linux | `~/.config/sivtr/config.toml` |
+| All | `~/.sivtr/config.toml` (`SIVTR_HOME` override) |
 
 ## Shell session logs
 
-Shell integration writes per-process structured session logs.
+After installing shell integration with `sivtr init` or `sivtr setup` and restarting, the shell runs inside
+`sivtr pty-proxy run` and every finished command appends one structured entry to a
+per-terminal log:
 
-| Shell/platform | Typical path |
-| --- | --- |
-| Windows PowerShell / PowerShell 7 | `%APPDATA%\sivtr\session_<pid>.log` |
-| Bash / Zsh | `$XDG_STATE_HOME/sivtr/session_<pid>.log` or `~/.local/state/sivtr/session_<pid>.log` |
-| Nushell | Nushell config/state area with a `sivtr` session file |
+| Typical path |
+| --- |
+| `<home>/workspaces/<workspace-key>/terminals/<terminal_id>.jsonl` |
+
+`<workspace-key>` identifies the git repository — every worktree of one repository shares it —
+and `<terminal_id>` identifies the shell session, so terminals never mix. Nothing is recorded
+outside a git repository.
 
 These logs power:
 
-- `sivtr import`;
+- the `sivtr` workspace browser;
 - `sivtr copy` command-block workflows;
 - `sivtr diff`;
 - command-block navigation in the browser.
 
-## History database
-
-Captured terminal output is stored in a local SQLite history database when `[history].auto_save = true`.
-
-Use CLI commands instead of editing the database directly:
-
-```bash
-sivtr history list
-sivtr history search "panic"
-sivtr history show 42
-```
-
-Retention is controlled by:
-
-```toml
-[history]
-max_entries = 0
-```
-
-`0` means unlimited.
+`sivtr clear` removes the current terminal's log; `sivtr clear --all` removes every workspace
+session tree.
 
 ## Agent provider data
 
@@ -68,23 +68,15 @@ max_entries = 0
 
 Provider formats differ; `sivtr` normalizes them into sessions and dialogue units for copy, picker, search, and show workflows.
 
-## Codex exported mirrors
+## Unified archive
 
-`codex export` writes a copy of local Codex session files into a destination you choose:
+Search, show, copy, picker, TUI, and MCP queries read from a unified local archive instead of parsing native session files on every query.
 
-```bash
-sivtr codex export --dest /srv/sivtr/root-codex
-```
+| Path |
+| --- |
+| `<home>/cache/archive.db` |
 
-The destination receives a `sessions/` tree. Another account can read it by adding:
-
-```toml
-[codex]
-session_dirs = ["/srv/sivtr/root-codex/sessions"]
-```
-
-Use read-only permissions for shared mirrors when possible.
-
+It is a SQLite database (WAL mode) written by the sync engine: `sivtr sync` runs a pass explicitly, queries run an automatic freshness pass when the archive is older than `[sync].max_age_secs`, and `pipe`/`run` write one-shot terminal captures directly to it. Native agent session files and shell session logs remain the source of truth: the sync engine reads them, and session-addressed loads self-heal by parsing the native file when the archive copy is missing or stale. BM25 files under `cache/` can be deleted and rebuilt. Do not delete `archive.db` if you need one-shot `pipe`/`run` captures.
 ## Generated launchers
 
 Linux shortcut generation writes:
@@ -106,7 +98,7 @@ sivtr hotkey stop
 
 ## Remote daemon state
 
-Cross-device remote memory uses a device-scoped daemon. Override the root with `SIVTR_DATA_DIR`; otherwise it is the platform config directory under `sivtr` (same root as `data_dir()`).
+Cross-device remote memory uses a device-scoped daemon. Files live under the single home (`SIVTR_HOME` / `~/.sivtr`).
 
 | File | Purpose |
 | --- | --- |

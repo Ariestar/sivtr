@@ -45,20 +45,20 @@ pub fn load_index(records: &[crate::record::WorkRecord]) -> Option<Bm25Index> {
     let bytes = match std::fs::read(&path) {
         Ok(bytes) => bytes,
         Err(error) => {
-            eprintln!(
-                "sivtr: failed to read cached BM25 index {}: {error}",
+            crate::diagnostics::warn(format!(
+                "failed to read cached BM25 index {}: {error}",
                 path.display()
-            );
+            ));
             return None;
         }
     };
     let cached: CachedIndex = match rmp_serde::from_slice(&bytes) {
         Ok(cached) => cached,
         Err(error) => {
-            eprintln!(
-                "sivtr: cached BM25 index {} is corrupt: {error}",
+            crate::diagnostics::warn(format!(
+                "cached BM25 index {} is corrupt: {error}",
                 path.display()
-            );
+            ));
             return None;
         }
     };
@@ -80,13 +80,16 @@ pub fn store_index(records: &[crate::record::WorkRecord], index: &Bm25Index) {
     let bytes = match rmp_serde::to_vec(&cached) {
         Ok(bytes) => bytes,
         Err(error) => {
-            eprintln!("sivtr: failed to serialize BM25 index cache: {error}");
+            crate::diagnostics::warn(format!("failed to serialize BM25 index cache: {error}"));
             return;
         }
     };
     let path = index_cache_path(cached.fingerprint);
     if !write_cache_atomic(&path, &bytes) {
-        eprintln!("sivtr: failed to write BM25 index cache {}", path.display());
+        crate::diagnostics::warn(format!(
+            "failed to write BM25 index cache {}",
+            path.display()
+        ));
     }
 }
 
@@ -104,42 +107,14 @@ pub fn build_or_load(records: &[crate::record::WorkRecord]) -> Bm25Index {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::record::{
-        WorkChannel, WorkOutcome, WorkPart, WorkPartData, WorkRecord, WorkRecordKind,
-        WorkSessionRef, WorkSource, WorkStatus, WorkTime, RECORD_SCHEMA_VERSION,
-    };
+    use crate::record::{MessageRole, WorkRecord};
     use crate::search::bm25::Bm25Index;
+    use crate::test_fixtures::{message_part, terminal_record};
 
     fn record(session: &str, index: usize, title: &str, text: &str) -> WorkRecord {
-        WorkRecord {
-            schema_version: RECORD_SCHEMA_VERSION,
-            work_ref: WorkRef::terminal(session, index),
-            kind: WorkRecordKind::TerminalCommand,
-            source: WorkSource {
-                channel: WorkChannel::Terminal,
-                provider: None,
-            },
-            session: WorkSessionRef {
-                id: session.to_string(),
-                canonical_id: None,
-                path: None,
-            },
-            cwd: None,
-            time: WorkTime::default(),
-            status: Some(WorkStatus {
-                outcome: WorkOutcome::Success,
-                exit_code: Some(0),
-            }),
-            title: title.to_string(),
-            parts: vec![WorkPart {
-                seq: 1,
-                occurred_at: None,
-                data: WorkPartData::Output {
-                    content: text.to_string(),
-                    ansi: None,
-                },
-            }],
-        }
+        let mut record = terminal_record(session, index, title, "");
+        record.parts = vec![message_part(1, MessageRole::Assistant, text)];
+        record
     }
 
     #[test]

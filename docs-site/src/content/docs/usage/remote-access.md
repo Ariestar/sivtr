@@ -5,6 +5,8 @@ description: Share a workspace read-only and add another device's memory as a na
 
 Cross-device memory lets two machines running `sivtr` read each other's workspace sessions like local sources. Sharing is explicit, read-only, and redacted by default.
 
+A share returns only sessions whose recorded directory or repository identity matches the shared workspace. Sessions with unknown workspace membership are excluded, including when requested by an exact reference; they remain in the owner's unfiltered local session listings. Redaction applies after workspace filtering and does not grant access to unrelated sessions.
+
 If you want the teammate scenario first, see [Remote collaboration memory](/playbooks/remote-collaboration-memory/). This page is the feature guide.
 
 ## Model
@@ -130,7 +132,7 @@ sivtr serve logs
 sivtr serve stop
 ```
 
-State lives under `data_dir()` (`SIVTR_DATA_DIR` override, else the platform config dir under `sivtr`):
+State lives under the single home (`SIVTR_HOME` override, else `~/.sivtr`):
 
 | File | Purpose |
 | --- | --- |

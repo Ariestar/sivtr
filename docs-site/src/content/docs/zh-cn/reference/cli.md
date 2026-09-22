@@ -15,7 +15,7 @@ sivtr --all              # 裸 TTY 打开时也选中 remote mount
 不提供命令时：
 
 - **TTY** → 多源 workspace 浏览器（Source / Sessions / Dialogues / Content）。
-- **管道 stdin** → 等价 `sivtr pipe`：写入历史后用外部编辑器打开。
+- **管道 stdin** → 等价 `sivtr pipe`：写入统一 archive 后用外部编辑器打开。
 
 ## run
 
@@ -23,7 +23,7 @@ sivtr --all              # 裸 TTY 打开时也选中 remote mount
 sivtr run <COMMAND> [ARGS...]
 ```
 
-运行命令，捕获合并后的 stdout/stderr，报告退出状态，在启用时保存 history，并打开捕获输出。
+运行命令，捕获合并后的 stdout/stderr，报告退出状态，把捕获内容保存到统一 archive，并打开捕获输出。
 
 ```bash
 sivtr run cargo test
@@ -45,10 +45,12 @@ cargo build 2>&1 | sivtr
 ## import
 
 ```bash
-sivtr import
+sivtr import sessions --provider claude-ai <PATH>
+sivtr import sessions --provider chatgpt <PATH>
 ```
 
-打开当前结构化 shell session log。需要 shell 集成。
+`sessions` 子命令会把 Claude.ai 或 ChatGPT 的 JSON/ZIP 导出导入统一
+archive。
 
 ## init
 
@@ -224,6 +226,8 @@ Targets：
 | --- | --- |
 | `QUERY` | plain-text 搜索查询；BM25 按这些词给 source 排序（非正则）。默认排序变为 `relevance` |
 | `--match <REGEX>`、`-m <REGEX>` | 大小写不敏感正则，在相关性排序前圈定集合 |
+| `--semantic` | 使用配置的 embedding 服务进行语义排序 |
+| `--hybrid` | 使用 reciprocal rank fusion 融合 BM25 与 embedding 排序 |
 | `--exclude <REGEX>`、`-v <REGEX>` | 大小写不敏感排除过滤，在找到匹配后应用 |
 | `--in <FIELD>`、`-i <FIELD>` | `content`、`title`、`session`、`input`、`output`、`command` 或 `all`；默认是 `content` |
 | `--kind <KIND>` | part kind filter：`prompt`、`command`、`user`、`assistant`、`tool`、`tool_call`、`tool_result`、`skill`、`thinking`、`output` 或 `error` |
@@ -231,7 +235,7 @@ Targets：
 | `--exit-code <CODE>` | 精确终端进程退出码 |
 | `--min-duration <DURATION>` | 最小命令持续时间，例如 `500ms`、`2s`、`1m` |
 | `--max-duration <DURATION>` | 最大命令持续时间 |
-| `--sort <SORT>` | `newest`（默认）、`relevance`（有 `QUERY` 或 `--match` 时默认）、`oldest`、`duration`、`duration-asc`、`exit-code` 或 `exit-code-asc` |
+| `--sort <SORT>` | `newest`（默认）、`relevance`（有 `QUERY` 时默认）、`oldest`、`duration`、`duration-asc`、`exit-code` 或 `exit-code-asc` |
 | `--cwd <PATH>` | 用于解析记录的 workspace 目录 |
 | `--since <TIME>` | 只包含此时间之后或等于此时间的记录 |
 | `--until <TIME>` | 只包含此时间之前或等于此时间的记录 |
@@ -272,6 +276,7 @@ sivtr eval [OPTIONS]
 | --- | --- |
 | `--k <K>` | 评估深度（默认 `5`） |
 | `--sort <SORT>` | 要基准测试的排序策略（默认 `newest`） |
+| `--method <METHOD>` | `bm25`、`semantic` 或 `hybrid`（默认 `bm25`；semantic 需要 `[embedding]`） |
 | `--snapshot <PATH>` | 冻结的 eval snapshot 文件（queries + corpus JSON） |
 | `--create-snapshot <PATH>` | 把当前 workspace records 导出为新 snapshot（queries 为空） |
 | `--export <DIR>` | 往该目录写 `qrels.txt` 和 `results.txt`（trec_eval 格式） |
@@ -708,6 +713,8 @@ sivtr mcp serve --idle-exit 60
 | `sivtr_zoom` | 邻近 record 上下文 |
 | `sivtr_filter` | 缩小 `@last` / `@name` / source |
 | `sivtr_status` | 版本、hooks、providers、daemon、`ws` 本机 origin、remotes、vars |
+| `sivtr_usage` | Token 用量、模型计价和未定价事件告警 |
+| `sivtr_stats` | Archive 活跃度、项目、结果、隐私和 usage 统计 |
 
 ### install / uninstall
 
@@ -830,22 +837,6 @@ sivtr setup
 sivtr setup
 ```
 
-## history
-
-```bash
-sivtr history [COMMAND]
-```
-
-子命令：
-
-| 命令 | 含义 |
-| --- | --- |
-| `list [-l, --limit <N>]` | 列出最近条目 |
-| `search <KEYWORD> [-l, --limit <N>]` | 搜索保存的捕获 history |
-| `show <ID>` | 展示指定 history 条目 |
-
-不提供 history 子命令时，默认使用 `list`。
-
 ## config
 
 ```bash
@@ -888,35 +879,97 @@ sivtr hotkey status
 sivtr hotkey stop
 ```
 
-## codex export
+## web
 
 ```bash
-sivtr codex export --dest <PATH> [OPTIONS]
+sivtr web [--port <PORT>] [--host <HOST>]
 ```
 
-把本地 Codex rollout JSONL 文件导出到一个包含 `sessions/` 树的目标目录。
+在统一 archive 之上提供本地 web UI 和只读 JSON API：session 浏览器（按 provider 过滤、打开 session、复制 refs）和按 BM25 相关性排序的全文搜索。
+
+| 选项 | 含义 |
+| --- | --- |
+| `--port <PORT>` | 要绑定的 TCP 端口（默认 `8080`） |
+| `--host <HOST>` | 仅 loopback 绑定地址（默认 `127.0.0.1`）。非 loopback 值会被拒绝。 |
+
+server 只绑定 loopback，并校验浏览器 `Host` header 以防范 DNS rebinding。HTTP API 是只读的；启动时可能通过 `ensure_fresh()` 刷新本地 archive。在 loopback 绑定下数据也不会离开本机。详见 [Web UI](/zh-cn/usage/web-ui/)。
+
+```bash
+sivtr web
+sivtr web --port 8081
+```
+
+## sync
+
+```bash
+sivtr sync [--full] [--json]
+```
+
+把所有 Agent provider 的 session 和每个 workspace 的终端日志同步进统一的本地 archive（`archive.db`）。查询（search、show、copy、TUI、MCP）从这个 archive 读取；当 archive 比 `[sync].max_age_secs`（默认 `15` 秒）更旧时，查询会先触发一次增量同步。
 
 选项：
 
 | 选项 | 含义 |
 | --- | --- |
-| `--dest <PATH>` | 接收 `sessions/` 树的目标目录 |
-| `--limit <N>` | 只保留最新 N 个 session 文件；`0` 表示全部导出 |
-| `--watch` | 通过原生文件事件唤醒与周期 reconcile 持续 mirror 本地 session |
-| `--interval <SECONDS>` | 两次周期 reconcile 的最大秒数；默认 `1` |
-| `--interval-ms <MILLISECONDS>` | 两次周期 reconcile 的最大毫秒数；覆盖 `--interval` |
+| `--full` | 重新解析所有 session，忽略缓存的 stat stamp |
+| `--json` | 输出机器可读报告，包含每个 source 的计数（added / updated / removed / unchanged / failed） |
 
-原生文件事件可以提前触发同步。原生 watcher 不可用或断开时，export 会回退到周期轮询。
-稳定文件不会重新发布；经过验证的追加增长只写入新增后缀。进程重启或文件系统迁移后，
-export 会先验证文件内容，再恢复增量写入。
+默认增量同步：用 stat stamp 把每个源文件与 archive 比对，只重新解析有变化的文件。失败按 source 单独上报，一个 provider 出错不会掩盖其余结果。
 
 示例：
 
 ```bash
-sivtr codex export --dest /srv/sivtr/root-codex
-sivtr codex export --dest /srv/sivtr/root-codex --watch
-sivtr codex export --dest /srv/sivtr/root-codex --limit 100
+sivtr sync
+sivtr sync --full
+sivtr sync --json
 ```
+
+## usage
+
+```bash
+sivtr usage daily [--provider <PROVIDER>] [--since <DATE>] [--until <DATE>] [--breakdown] [--json]
+sivtr usage statusline [--provider <PROVIDER>] [--since <DATE>] [--until <DATE>]
+sivtr usage session <PROVIDER/SESSION> [--json]
+```
+
+从 archive 报告原始 token 用量和按 catalog 计算的成本。金额使用整数微美元；
+未知模型或价格字段不完整时显示 `unpriced`，不会估算。
+
+## stats
+
+```bash
+sivtr stats [--provider <PROVIDER>] [--since <DATE>] [--until <DATE>] [--json]
+```
+
+报告 session/record 数量、活跃日期与小时、项目、结果状态、secret finding、
+星标 session 和 usage 总量。
+
+## session
+
+```bash
+sivtr session star <PROVIDER/SESSION>
+sivtr session unstar <PROVIDER/SESSION>
+sivtr session list [--starred] [--json]
+```
+
+星标保存在 archive 中，后续同步不会覆盖。
+
+## export
+
+```bash
+sivtr export sessions [--source <PROVIDER/SESSION>] [--format json|jsonl|markdown|html] [--output <PATH>]
+sivtr export sessions --jsonl --output sessions.jsonl
+```
+
+导出单个 session 或整个 archive。HTML 会对 transcript 文本做转义。
+
+## quality
+
+```bash
+sivtr quality secrets [--json]
+```
+
+列出同步期间记录的 secret 模式 finding，不保存或打印匹配到的实际值。
 
 ## clear
 

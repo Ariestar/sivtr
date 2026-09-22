@@ -1,7 +1,8 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::Serialize;
 use sivtr_core::config::SivtrConfig;
 use sivtr_core::workspace;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::cli::DoctorArgs;
@@ -89,9 +90,11 @@ pub struct Check {
 impl Report {
     fn run_checks(&mut self, fix: bool) {
         self.check_binary();
+        self.check_home_migration(fix);
         self.check_config(fix);
         self.check_session_dir();
         self.check_shell_hooks(fix);
+        self.check_terminal_capture();
         self.check_workspace_keys(fix);
         self.check_agent_hosts();
         self.check_mcp_registration(fix);
@@ -112,6 +115,131 @@ impl Report {
             status: Status::Pass,
             detail: format!("sivtr {}", env!("CARGO_PKG_VERSION")),
             hint: None,
+        });
+    }
+
+    /// Detect data left in pre-single-home locations and migrate it into
+    /// `SIVTR_HOME` / `~/.sivtr` with `--fix`.
+    fn check_home_migration(&mut self, fix: bool) {
+        let home = workspace::home_dir();
+        let mut pending = Vec::new();
+        let mut unread = Vec::new();
+        for path in workspace::legacy_home_paths() {
+            match path_has_content(&path.source) {
+                Ok(true) => pending.push(path),
+                Ok(false) => {}
+                Err(error) => unread.push(format!("{}: {error}", path.label)),
+            }
+        }
+
+        if pending.is_empty() && unread.is_empty() {
+            self.add(Check {
+                name: "home_layout",
+                label: "single home layout",
+                status: Status::Pass,
+                detail: home.display().to_string(),
+                hint: None,
+            });
+            return;
+        }
+
+        if !unread.is_empty() && pending.is_empty() {
+            self.add(Check {
+                name: "home_layout",
+                label: "single home layout",
+                status: Status::Manual,
+                detail: unread.join("; "),
+                hint: Some(
+                    "fix permissions on leftover sivtr directories, then re-run `sivtr doctor`"
+                        .to_string(),
+                ),
+            });
+            return;
+        }
+
+        if !fix {
+            let mut detail = pending
+                .iter()
+                .map(|path| format!("{} -> {}", path.source.display(), path.target.display()))
+                .collect::<Vec<_>>()
+                .join("; ");
+            if !unread.is_empty() {
+                detail.push_str("; ");
+                detail.push_str(&unread.join("; "));
+            }
+            self.add(Check {
+                name: "home_layout",
+                label: "single home layout",
+                status: Status::Fail,
+                detail,
+                hint: Some(
+                    "run `sivtr doctor --fix` to migrate leftover paths into the single home"
+                        .to_string(),
+                ),
+            });
+            return;
+        }
+
+        let mut conflicts = Vec::new();
+        let mut errors = Vec::new();
+        for path in &pending {
+            match workspace::move_path(&path.source, &path.target) {
+                Ok(skipped) => conflicts.extend(skipped),
+                Err(error) => errors.push(format!("{}: {error}", path.label)),
+            }
+        }
+
+        let remaining = workspace::legacy_home_paths()
+            .into_iter()
+            .filter_map(|path| match path_has_content(&path.source) {
+                Ok(true) => Some(path.label.to_string()),
+                Ok(false) => None,
+                Err(error) => {
+                    errors.push(format!("{}: {error}", path.label));
+                    None
+                }
+            })
+            .count();
+
+        if errors.is_empty() && remaining == 0 && unread.is_empty() {
+            self.add(Check {
+                name: "home_layout",
+                label: "single home layout",
+                status: Status::Fixed,
+                detail: format!(
+                    "migrated {} location(s) into {}",
+                    pending.len(),
+                    home.display()
+                ),
+                hint: None,
+            });
+            return;
+        }
+
+        let mut detail = format!("{} item(s) left to migrate", remaining + errors.len());
+        if !conflicts.is_empty() {
+            detail.push_str(&format!(
+                "; {} destination(s) already exist",
+                conflicts.len()
+            ));
+        }
+        if !errors.is_empty() {
+            detail.push_str("; ");
+            detail.push_str(&errors.join("; "));
+        }
+        if !unread.is_empty() {
+            detail.push_str("; ");
+            detail.push_str(&unread.join("; "));
+        }
+        self.add(Check {
+            name: "home_layout",
+            label: "single home layout",
+            status: Status::Manual,
+            detail,
+            hint: Some(
+                "resolve destination conflicts or permissions, then re-run `sivtr doctor --fix`"
+                    .to_string(),
+            ),
         });
     }
 
@@ -154,9 +282,8 @@ impl Report {
     }
 
     fn check_session_dir(&mut self) {
-        // Terminal sessions live under data_dir()/workspaces/*/terminals/*.jsonl,
-        // not under dirs::state_dir(). The latter is a false missing path on Windows.
-        let base = workspace::data_dir().join("workspaces");
+        // Terminal sessions live under home_dir()/workspaces/*/terminals/*.jsonl.
+        let base = workspace::home_dir().join("workspaces");
         if !base.exists() {
             self.add(Check {
                 name: "session_dir",
@@ -259,6 +386,45 @@ impl Report {
                 ),
             });
         }
+    }
+
+    /// An explicit capture opt-out is not a fault and must survive `--fix`.
+    fn check_terminal_capture(&mut self) {
+        let config = match SivtrConfig::load() {
+            Ok(config) => config,
+            Err(error) => {
+                self.add(Check {
+                    name: "terminal_capture",
+                    label: "terminal capture",
+                    status: Status::Fail,
+                    detail: format!("cannot read capture settings: {error:#}"),
+                    hint: Some("run `sivtr config edit` to fix the configuration".to_string()),
+                });
+                return;
+            }
+        };
+        if config.pty_proxy.enabled {
+            self.add(Check {
+                name: "terminal_capture",
+                label: "terminal capture",
+                status: Status::Pass,
+                detail: "enabled for shells with sivtr integration (restart after init)"
+                    .to_string(),
+                hint: None,
+            });
+            return;
+        }
+
+        self.add(Check {
+            name: "terminal_capture",
+            label: "terminal capture",
+            status: Status::Manual,
+            detail: "disabled in config".to_string(),
+            hint: Some(
+                "set [pty_proxy] enabled = true with `sivtr config edit`, then restart your shell"
+                    .to_string(),
+            ),
+        });
     }
 
     /// Workspaces whose stored roots predate the commondir key scheme become
@@ -419,38 +585,41 @@ impl Report {
     }
 
     fn check_providers(&mut self) {
-        let mut detail = String::new();
-        let mut errors = 0usize;
-        for spec in sivtr_core::ai::AgentProvider::all() {
-            let provider = spec.provider.session_provider();
-            match provider.list_recent_sessions(None) {
-                Ok(s) if s.is_empty() => {
-                    detail.push_str(&format!("{}: 0  ", spec.provider.name()));
-                }
-                Ok(s) => {
-                    detail.push_str(&format!("{}: {}  ", spec.provider.name(), s.len()));
-                }
-                Err(_) => {
-                    errors += 1;
-                    detail.push_str(&format!("{}: error  ", spec.provider.name()));
-                }
+        match sivtr_core::archive::sync::provider_status() {
+            Ok(statuses) => {
+                let errors = statuses
+                    .iter()
+                    .filter(|status| status.error.is_some())
+                    .count();
+                let detail = statuses
+                    .iter()
+                    .map(|status| match &status.error {
+                        Some(error) => format!("{}: error ({error})", status.name),
+                        None => format!("{}: {}", status.name, status.sessions),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("  ");
+                self.add(Check {
+                    name: "providers",
+                    label: "provider sessions",
+                    status: if errors == 0 {
+                        Status::Pass
+                    } else {
+                        Status::Manual
+                    },
+                    detail,
+                    hint: (errors > 0)
+                        .then(|| "one or more providers failed during archive sync".to_string()),
+                });
             }
+            Err(error) => self.add(Check {
+                name: "providers",
+                label: "provider sessions",
+                status: Status::Manual,
+                detail: format!("archive status failed: {error:#}"),
+                hint: Some("run `sivtr sync --full` and inspect the report".to_string()),
+            }),
         }
-        self.add(Check {
-            name: "providers",
-            label: "provider sessions",
-            status: if errors == 0 {
-                Status::Pass
-            } else {
-                Status::Manual
-            },
-            detail: detail.trim().to_string(),
-            hint: if errors == 0 {
-                None
-            } else {
-                Some("one or more providers failed to list sessions".to_string())
-            },
-        });
     }
 
     fn check_clipboard(&mut self) {
@@ -633,12 +802,24 @@ fn print_json(report: &Report) {
 }
 
 fn config_path() -> PathBuf {
-    SivtrConfig::config_path().unwrap_or_else(|_| {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("sivtr")
-            .join("config.toml")
-    })
+    SivtrConfig::config_path().unwrap_or_else(|_| workspace::home_dir().join("config.toml"))
+}
+
+fn path_has_content(path: &Path) -> Result<bool> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(error).with_context(|| format!("Failed to inspect {}", path.display()))
+        }
+    };
+    if metadata.is_dir() {
+        let mut entries = fs::read_dir(path)
+            .with_context(|| format!("Failed to read leftover directory {}", path.display()))?;
+        Ok(entries.next().is_some())
+    } else {
+        Ok(true)
+    }
 }
 
 pub fn detect_installed_shells() -> Vec<String> {
