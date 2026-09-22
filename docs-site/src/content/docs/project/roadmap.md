@@ -41,6 +41,7 @@ The near-term priority is to make the command-line surface complete, predictable
 
 - [x] Capture command output from pipe mode.
 - [x] Capture subprocess output with `sivtr run`.
+- [x] Capture every command in a live shell through the pty proxy (`sivtr pty-proxy`).
 - [x] Import shell session logs.
 - [x] Copy recent command input, output, and command blocks by selector.
 - [x] Search captured output in the unified archive.
@@ -117,7 +118,7 @@ The TUI should remain fast and keyboard-first, but it needs to scale from single
 More platforms should widen capture, not fragment the model. New sources must map into the shared WorkRecord / WorkPart / WorkRef abstractions.
 
 - [x] Add more coding-agent and IDE transcript providers behind the shared provider interface.
-- [ ] Support additional shells and terminal capture paths where the existing hook model is insufficient.
+- [x] Support additional shells and terminal capture paths where the existing hook model is insufficient; the pty proxy replaces per-platform capture code with a single capture path.
 - [x] Import web AI conversations when durable local exports exist (Claude.ai and ChatGPT JSON/ZIP).
 - [x] Prefer offline-first import and local indexes over scraping fragile remote UIs.
 - [x] Keep provider adapters thin; search, privacy, ranking, and export stay shared.

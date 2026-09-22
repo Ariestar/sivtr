@@ -94,6 +94,7 @@ impl Report {
         self.check_config(fix);
         self.check_session_dir();
         self.check_shell_hooks(fix);
+        self.check_terminal_capture();
         self.check_workspace_keys(fix);
         self.check_agent_hosts();
         self.check_mcp_registration(fix);
@@ -385,6 +386,45 @@ impl Report {
                 ),
             });
         }
+    }
+
+    /// An explicit capture opt-out is not a fault and must survive `--fix`.
+    fn check_terminal_capture(&mut self) {
+        let config = match SivtrConfig::load() {
+            Ok(config) => config,
+            Err(error) => {
+                self.add(Check {
+                    name: "terminal_capture",
+                    label: "terminal capture",
+                    status: Status::Fail,
+                    detail: format!("cannot read capture settings: {error:#}"),
+                    hint: Some("run `sivtr config edit` to fix the configuration".to_string()),
+                });
+                return;
+            }
+        };
+        if config.pty_proxy.enabled {
+            self.add(Check {
+                name: "terminal_capture",
+                label: "terminal capture",
+                status: Status::Pass,
+                detail: "enabled for shells with sivtr integration (restart after init)"
+                    .to_string(),
+                hint: None,
+            });
+            return;
+        }
+
+        self.add(Check {
+            name: "terminal_capture",
+            label: "terminal capture",
+            status: Status::Manual,
+            detail: "disabled in config".to_string(),
+            hint: Some(
+                "set [pty_proxy] enabled = true with `sivtr config edit`, then restart your shell"
+                    .to_string(),
+            ),
+        });
     }
 
     /// Workspaces whose stored roots predate the commondir key scheme become

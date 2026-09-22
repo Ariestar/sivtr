@@ -29,11 +29,17 @@ description: Where sivtr stores configuration, the unified archive, session logs
 
 ## Shell session logs
 
-Shell integration writes per-process structured session logs under the home:
+After installing shell integration with `sivtr init` or `sivtr setup` and restarting, the shell runs inside
+`sivtr pty-proxy run` and every finished command appends one structured entry to a
+per-terminal log:
 
 | Typical path |
 | --- |
-| `<home>/workspaces/<workspace-key>/terminals/session_<pid>.jsonl` |
+| `<home>/workspaces/<workspace-key>/terminals/<terminal_id>.jsonl` |
+
+`<workspace-key>` identifies the git repository — every worktree of one repository shares it —
+and `<terminal_id>` identifies the shell session, so terminals never mix. Nothing is recorded
+outside a git repository.
 
 These logs power:
 
@@ -41,6 +47,9 @@ These logs power:
 - `sivtr copy` command-block workflows;
 - `sivtr diff`;
 - command-block navigation in the browser.
+
+`sivtr clear` removes the current terminal's log; `sivtr clear --all` removes every workspace
+session tree.
 
 ## Agent provider data
 

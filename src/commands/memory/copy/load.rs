@@ -4,8 +4,8 @@
 //! `terminal/<session_id>`, same read path as `sivtr s terminal/...`.
 
 use anyhow::{Context, Result};
-use sivtr_core::capture::scrollback;
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
+use sivtr_core::session;
 use sivtr_core::workspace::terminal_session_id_from_path;
 
 use crate::commands::memory::filter::Filter;
@@ -46,7 +46,7 @@ pub(super) fn load_for_plan(plan: &CopyPlan) -> Result<Option<LoadedCopy>> {
 
 /// Current shell session as a workset source: `terminal/<session_id>`.
 pub(crate) fn current_terminal_source() -> Result<Option<String>> {
-    let Some(log_path) = scrollback::session_log_path()? else {
+    let Some(log_path) = session::current_log_path()? else {
         return Ok(None);
     };
     if !log_path.exists() {

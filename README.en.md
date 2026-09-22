@@ -106,16 +106,19 @@ Upgrade:
 sivtr update    # download the latest release, verify SHA256, replace in place
 ```
 
-First-time setup (hooks + MCP hosts):
+First-time setup (capture + MCP hosts):
 
 ```bash
-sivtr setup             # hooks + MCP hosts + sivtr-memory skill (if missing)
+sivtr setup                  # capture + MCP hosts + sivtr-memory skill (if missing)
 # or step by step:
-sivtr init powershell   # or bash, zsh, nushell
-sivtr mcp install       # detect installed hosts; or -p claude,cursor,codex,opencode,openclaw,grok,hermes,pi,qoder,qodercn,gemini,qwen,goose
+sivtr init all              # or a single shell: bash, zsh, nushell, powershell
+sivtr mcp install            # detect installed hosts; or -p claude,cursor,codex,opencode,openclaw,grok,hermes,pi,qoder,qodercn,gemini,qwen,goose
 npx skills add Ariestar/sivtr --skill sivtr-memory -g -y
 sivtr doctor
 ```
+
+> [!NOTE]
+> After `sivtr setup` or `sivtr init`, **open a new shell** to capture command output; no separate enable step is needed. Rerun `init` after upgrading to update the existing hook in place. To pause capture, use `sivtr config edit` to set `[pty_proxy] enabled = false` and restart the shell; installation and upgrades preserve this explicit opt-out.
 
 Sync and inspect the archive:
 

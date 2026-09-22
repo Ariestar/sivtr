@@ -22,7 +22,7 @@ pub fn execute() -> Result<()> {
     })?;
 
     run_step(
-        &format!("installing hooks for {}", shells.join(", ")),
+        &format!("installing shell integration for {}", shells.join(", ")),
         || {
             for shell in &shells {
                 crate::commands::terminal::init::execute(shell)?;
