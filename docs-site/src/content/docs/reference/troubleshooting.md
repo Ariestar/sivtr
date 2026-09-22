@@ -28,15 +28,17 @@ sivtr --version
 
 ## `sivtr copy out` finds no command blocks
 
-Capture is opt-in, and command blocks only appear after the shell is restarted with the proxy in place.
+Command blocks appear after installing or upgrading shell integration and restarting the shell.
 
 Enable capture and check the environment:
 
 ```bash
-sivtr pty-proxy enable all
-# or: sivtr pty-proxy enable bash / zsh / nushell / powershell
+sivtr init all
+# or: sivtr init bash / zsh / nushell / powershell
 sivtr doctor
 ```
+
+If `[pty_proxy] enabled` was explicitly set to `false`, use `sivtr config edit` to set it back to `true`.
 
 Then restart the terminal, run a command, and try:
 

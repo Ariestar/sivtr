@@ -54,7 +54,7 @@ npx skills add Ariestar/sivtr --skill sivtr-memory -g
 sivtr doctor
 ```
 
-预期：必需检查通过。若 `shell hooks` 显示 "not installed"，运行对应的 `sivtr init` 命令。若 `session log directory` 显示 "missing"，用户需在 `sivtr init` 后重启终端。`terminal capture` 是可选检查：`[pty_proxy] enabled` 为 false 时它会显示 `Manual`，用 `sivtr pty-proxy enable` 开启。
+预期：必需检查通过。若 `shell hooks` 显示 "not installed"，运行对应的 `sivtr init` 命令。若 `session log directory` 显示 "missing"，用户需在 `sivtr init` 后重启终端。`terminal capture` 在显式配置 `[pty_proxy] enabled = false` 时显示 `Manual`；如需恢复，在 `sivtr config edit` 中改回 `true` 并重启 shell。
 
 ### 查看当前状态
 
@@ -178,30 +178,16 @@ cargo install --path . --force
 
 Shell 集成会记录最近的命令块，让 `sivtr copy` 和命令块导航有结构化数据可用。
 
-采集是可选开启的。用下面的命令为所有受支持的 shell 打开：
+安装或升级 shell 集成即可使用终端捕获：
 
 ```bash
-sivtr pty-proxy enable all
+sivtr init all
+# 或只安装一个 shell：sivtr init bash / zsh / nushell / powershell
 ```
 
-也可以只传入单个 shell 名（`bash`、`zsh`、`nushell` 或 `powershell`）只为该 shell 打开。开启后 shell 会被包进 pty 代理，代理持有一个 pty，因此 `vim`、`htop`、`ssh` 等交互程序行为不变。
+`sivtr setup` 会执行同样的安装步骤。安装后重启 shell，后续命令会自动通过 PTY 捕获，无需额外启用。升级后重新运行 `sivtr init <shell>` 会原位替换旧的 sivtr hook，保留周围的用户配置，不会叠加另一套捕获代码。
 
-只安装 hook、不开启采集：
-
-```bash
-sivtr init powershell
-sivtr init bash
-sivtr init zsh
-sivtr init nushell
-```
-
-这个块在采集开启之前是惰性的。关闭采集用：
-
-```bash
-sivtr pty-proxy disable
-```
-
-开启后需要重启 shell 才会开始采集，关闭后同样需要重启才会停止。
+要暂停捕获，运行 `sivtr config edit`，将 `[pty_proxy]` 下的 `enabled` 设为 `false`，然后重启 shell。`setup` 和 `init` 都会保留这个显式关闭设置。重新开启时将它改回 `true` 并重启 shell。
 
 查看已安装的 hook：
 

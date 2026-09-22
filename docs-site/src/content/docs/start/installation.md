@@ -54,7 +54,7 @@ npx skills add Ariestar/sivtr --skill sivtr-memory -g
 sivtr doctor
 ```
 
-Expected output: the required checks pass. If `shell hooks` shows "not installed", run the appropriate `sivtr init` command. If `session log directory` shows "missing", the user needs to restart their terminal after `sivtr init`. `terminal capture` is optional: it reports `Manual` while `[pty_proxy] enabled` is false, and `sivtr pty-proxy enable` turns it on.
+Expected output: the required checks pass. If `shell hooks` shows "not installed", run the appropriate `sivtr init` command. If `session log directory` shows "missing", the user needs to restart their terminal after `sivtr init`. `terminal capture` reports `Manual` when explicitly disabled with `[pty_proxy] enabled = false`; to resume, set it to `true` with `sivtr config edit` and restart the shell.
 
 ### Check Current Status
 
@@ -178,30 +178,16 @@ cargo install --path . --force
 
 Shell integration records recent command blocks so `sivtr copy` and command-block navigation have structured data to work with.
 
-Capture is opt-in. Enable it for every supported shell with:
+Install or upgrade shell integration to capture terminal output:
 
 ```bash
-sivtr pty-proxy enable all
+sivtr init all
+# or one shell: sivtr init bash / zsh / nushell / powershell
 ```
 
-Or pass a single shell name (`bash`, `zsh`, `nushell`, or `powershell`) to enable just that one. Enabling wraps the shell in the pty proxy, which holds a pty, so interactive programs such as `vim`, `htop`, and `ssh` behave unchanged.
+`sivtr setup` runs the same installation step. Restart the shell after installation; subsequent commands use PTY capture without a separate enable command. After upgrading, rerun `sivtr init <shell>` to replace the existing sivtr hook in place, preserving surrounding user configuration without adding a second capture block.
 
-Install only the hook for your shell, without capture:
-
-```bash
-sivtr init powershell
-sivtr init bash
-sivtr init zsh
-sivtr init nushell
-```
-
-The block stays inert until capture is enabled. Turn capture off again with:
-
-```bash
-sivtr pty-proxy disable
-```
-
-Restart the shell to start capturing after enabling it, and to stop after disabling it.
+To pause capture, run `sivtr config edit`, set `enabled = false` under `[pty_proxy]`, and restart the shell. Both `setup` and `init` preserve this explicit opt-out. To resume, set it back to `true` and restart the shell.
 
 Check which hooks are installed:
 

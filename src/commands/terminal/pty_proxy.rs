@@ -3,7 +3,6 @@ use sivtr_core::config::SivtrConfig;
 use std::io::Write;
 
 use crate::cli::PtyProxyAction;
-use crate::commands::terminal::init;
 use crate::output;
 use crate::pty::{Pending, PROXIED_ENV, PROXY_ENV};
 
@@ -18,8 +17,6 @@ pub fn execute(action: &PtyProxyAction) -> Result<()> {
             exit,
             echoed_input,
         } => report(command_id, command, prompt, cwd, *exit, *echoed_input),
-        PtyProxyAction::Enable { shell } => enable(shell),
-        PtyProxyAction::Disable => disable(),
     }
 }
 
@@ -28,7 +25,17 @@ pub fn execute(action: &PtyProxyAction) -> Result<()> {
 /// Any failure falls back to an ordinary shell, so a broken proxy can never
 /// cost the user their terminal — just their capture.
 fn run(program: &str, args: &[String]) -> Result<()> {
-    if !SivtrConfig::load().unwrap_or_default().pty_proxy.enabled {
+    let enabled = match SivtrConfig::load() {
+        Ok(config) => config.pty_proxy.enabled,
+        Err(error) => {
+            output::warning(format!("cannot read capture settings: {error:#}"));
+            output::hint(
+                "starting the shell without capture; fix settings with `sivtr config edit`",
+            );
+            return spawn_shell(program, args);
+        }
+    };
+    if !enabled {
         // Capture is off: the rc block is either stale or deliberately kept.
         // Hand the terminal straight to the shell.
         return spawn_shell(program, args);
@@ -96,27 +103,6 @@ fn report(
     let mut stdout = std::io::stdout();
     write!(stdout, "\x1b]133;D;{exit}\x1b\\")?;
     stdout.flush()?;
-    Ok(())
-}
-
-pub(crate) fn enable(shell: &str) -> Result<()> {
-    let mut config = SivtrConfig::load().unwrap_or_default();
-    config.pty_proxy.enabled = true;
-    config.save()?;
-
-    // The capture block lives in the same marked section as the rest of the
-    // shell integration, so reusing `init` keeps one installer and one
-    // upgrade path for both.
-    init::execute(shell)
-}
-
-fn disable() -> Result<()> {
-    let mut config = SivtrConfig::load().unwrap_or_default();
-    config.pty_proxy.enabled = false;
-    config.save()?;
-
-    output::success("terminal capture disabled");
-    output::hint("shell blocks left in place are inert; `sivtr init uninstall` removes them");
     Ok(())
 }
 

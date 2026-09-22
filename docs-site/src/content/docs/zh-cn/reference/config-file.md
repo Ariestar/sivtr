@@ -36,7 +36,7 @@ api_key_env = "OPENAI_API_KEY"
 batch_size = 64
 
 [pty_proxy]
-enabled = false
+enabled = true
 ```
 
 ## editor
@@ -122,11 +122,11 @@ idle_exit_secs = 60
 
 ```toml
 [pty_proxy]
-enabled = false
+enabled = true
 ```
 
 | Key | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
-| `enabled` | boolean | `false` | 让 shell 运行在采集代理内并记录命令输出。 |
+| `enabled` | boolean | `true` | 让 shell 运行在采集代理内并记录命令输出。 |
 
-采集默认关闭。`sivtr pty-proxy enable <shell|all>` 会同时打开它并安装 shell 块；`sivtr pty-proxy disable` 只关开关，残留的 shell 块是惰性的，只会让每个 shell 多一个短命进程。
+安装 `sivtr init <shell|all>` 或执行 `sivtr setup` 后，重启 shell 即开始捕获。旧配置缺少此字段时默认使用 `true`。要暂停捕获，通过 `sivtr config edit` 将其设为 `false`；安装、升级 hook 和重新运行 setup 都会保留显式关闭设置。切换开关后需要重启 shell。

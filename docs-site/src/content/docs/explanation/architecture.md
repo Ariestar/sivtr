@@ -120,7 +120,7 @@ Workspace picker/search:
 terminal context + provider sessions -> WorkspaceSession list -> search/pick/show -> clipboard/stdout/json
 ```
 
-Live shell capture is handled by an optional pty proxy (`sivtr pty-proxy`): it owns the pty, forwards bytes, and slices each command's output using the shell's `OSC 133;C` / `OSC 133;D` markers, then writes the terminals JSONL that sync ingests into the archive.
+Live shell capture is handled by the pty proxy installed through shell integration (`sivtr pty-proxy`): it owns the pty, forwards bytes, and slices each command's output using the shell's `OSC 133;C` / `OSC 133;D` markers, then writes the terminals JSONL that sync ingests into the archive.
 
 ## Unified archive
 

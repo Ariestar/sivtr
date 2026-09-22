@@ -92,10 +92,11 @@ pwd && git branch
 `sivtr init {shell}` injects a marker-delimited block (`# >>> sivtr shell integration >>>`) that
 installs the prompt hooks and, at its end, re-execs the shell under `sivtr pty-proxy run <shell>`.
 
-Capture is opt-in: `sivtr pty-proxy enable [shell|all]` sets `[pty_proxy] enabled = true` and
-installs the block (`sivtr setup` does both in one step). The block is inert while the flag is
-off, and the proxy falls back to a plain shell if it cannot start, so a stale block never costs
-the user their terminal.
+Capture is part of shell integration: `sivtr init {shell|all}` installs or replaces the block
+in place, and `sivtr setup` uses that same installer. `[pty_proxy] enabled` defaults to `true`;
+an explicit `false` survives installation and upgrades. Restart the shell after installing or
+changing this setting. `pty-proxy run/report` are internal commands. With capture disabled or
+the proxy unavailable, the user still gets a plain shell; configuration failures are reported.
 
 The proxy owns the pty, so the child keeps a real `isatty`. The hooks emit `OSC 133;C` before a
 command runs and call `sivtr pty-proxy report` after it; `report` writes the command metadata and

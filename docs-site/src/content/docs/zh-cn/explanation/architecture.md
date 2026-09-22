@@ -121,7 +121,7 @@ Workspace picker/search：
 terminal context + provider sessions -> WorkspaceSession list -> search/pick/show -> clipboard/stdout/json
 ```
 
-活动 shell 的采集由一个可选的 pty 代理（`sivtr pty-proxy`）负责：它持有 pty、转发字节，并用 shell 发出的 `OSC 133;C` / `OSC 133;D` 标记切出每条命令的输出，随后照常写入 terminals JSONL 并由 sync 摄入 archive。
+活动 shell 的采集由 shell 集成内置的 pty 代理（`sivtr pty-proxy`）负责：它持有 pty、转发字节，并用 shell 发出的 `OSC 133;C` / `OSC 133;D` 标记切出每条命令的输出，随后照常写入 terminals JSONL 并由 sync 摄入 archive。
 
 ## 统一 archive
 

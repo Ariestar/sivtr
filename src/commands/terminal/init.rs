@@ -247,7 +247,8 @@ enum InstallStatus {
     Unchanged,
 }
 
-/// Install shell hook, show status, or uninstall hooks.
+/// Install or upgrade shell capture, show status, or uninstall hooks.
+/// Capture settings are read by the proxy; installing never resets an opt-out.
 pub fn execute(shell: &str) -> Result<()> {
     let target = shell.to_lowercase();
     match target.as_str() {
@@ -927,6 +928,36 @@ mod tests {
             .expect("current hook should be detected");
 
         assert_eq!(updated, profile);
+    }
+
+    #[test]
+    fn upgrades_legacy_capture_hooks_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        for (index, spec) in [&POWERSHELL_SPEC, &BASH_SPEC, &ZSH_SPEC, &NUSHELL_SPEC]
+            .into_iter()
+            .enumerate()
+        {
+            let path = dir.path().join(format!("profile-{index}"));
+            std::fs::write(
+                &path,
+                format!(
+                    "before\n{}\nsivtr flush\n{}\nafter\n",
+                    spec.marker_start, spec.marker_end
+                ),
+            )
+            .unwrap();
+            assert!(matches!(
+                super::install_into_profile(&path, spec).unwrap(),
+                super::InstallStatus::Updated
+            ));
+            let expected = format!("before\n{}\nafter\n", spec.hook);
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
+            assert!(matches!(
+                super::install_into_profile(&path, spec).unwrap(),
+                super::InstallStatus::Unchanged
+            ));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
+        }
     }
 
     #[cfg(windows)]

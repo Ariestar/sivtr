@@ -29,7 +29,7 @@ description: sivtr 存放配置、统一 archive、session log 和 provider 数�
 
 ## Shell session log
 
-终端采集是可选开启的。执行 `sivtr pty-proxy enable` 后，shell 会运行在 `sivtr pty-proxy run` 之内，每条执行完的命令会向按终端区分的日志追加一条结构化记录：
+通过 `sivtr init` 或 `sivtr setup` 安装 shell 集成并重启后，shell 默认运行在 `sivtr pty-proxy run` 之内，每条执行完的命令会向按终端区分的日志追加一条结构化记录：
 
 | 常见路径 |
 | --- |

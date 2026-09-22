@@ -111,14 +111,14 @@ First-time setup (capture + MCP hosts):
 ```bash
 sivtr setup                  # capture + MCP hosts + sivtr-memory skill (if missing)
 # or step by step:
-sivtr pty-proxy enable all   # or a single shell: bash, zsh, nushell, powershell
+sivtr init all              # or a single shell: bash, zsh, nushell, powershell
 sivtr mcp install            # detect installed hosts; or -p claude,cursor,codex,opencode,openclaw,grok,hermes,pi,qoder,qodercn,gemini,qwen,goose
 npx skills add Ariestar/sivtr --skill sivtr-memory -g -y
 sivtr doctor
 ```
 
 > [!NOTE]
-> Capture is opt-in. `sivtr pty-proxy enable` wraps the shell in the pty proxy, so interactive programs such as `vim`, `htop`, and `ssh` behave unchanged. Open a new shell after enabling it — the proxy starts on the next shell, not the current one — and turn it off with `sivtr pty-proxy disable`.
+> After `sivtr setup` or `sivtr init`, **open a new shell** to capture command output; no separate enable step is needed. Rerun `init` after upgrading to update the existing hook in place. To pause capture, use `sivtr config edit` to set `[pty_proxy] enabled = false` and restart the shell; installation and upgrades preserve this explicit opt-out.
 
 Sync and inspect the archive:
 

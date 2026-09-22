@@ -36,7 +36,7 @@ api_key_env = "OPENAI_API_KEY"
 batch_size = 64
 
 [pty_proxy]
-enabled = false
+enabled = true
 ```
 
 ## editor
@@ -123,11 +123,11 @@ idle_exit_secs = 60
 
 ```toml
 [pty_proxy]
-enabled = false
+enabled = true
 ```
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `enabled` | boolean | `false` | Run the shell inside the capture proxy and record command output. |
+| `enabled` | boolean | `true` | Run the shell inside the capture proxy and record command output. |
 
-Capture is off by default. `sivtr pty-proxy enable <shell|all>` turns it on and installs the shell block in one step. `sivtr pty-proxy disable` only flips the switch back; a leftover shell block stays inert and costs nothing more than one short-lived process per shell.
+After `sivtr init <shell|all>` or `sivtr setup`, restart the shell to begin capturing. Older configurations without this field use `true`. To pause capture, set it to `false` with `sivtr config edit`; hook installation, upgrades, and repeated setup preserve an explicit opt-out. Restart the shell after changing the setting.

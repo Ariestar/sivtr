@@ -388,16 +388,28 @@ impl Report {
         }
     }
 
-    /// Terminal capture is opt-in, so an off state is an observation rather than
-    /// a fault — and a diagnostic never turns it on: enabling rewrites shell
-    /// profiles, which is `sivtr pty-proxy enable`'s job.
+    /// An explicit capture opt-out is not a fault and must survive `--fix`.
     fn check_terminal_capture(&mut self) {
-        if SivtrConfig::load().unwrap_or_default().pty_proxy.enabled {
+        let config = match SivtrConfig::load() {
+            Ok(config) => config,
+            Err(error) => {
+                self.add(Check {
+                    name: "terminal_capture",
+                    label: "terminal capture",
+                    status: Status::Fail,
+                    detail: format!("cannot read capture settings: {error:#}"),
+                    hint: Some("run `sivtr config edit` to fix the configuration".to_string()),
+                });
+                return;
+            }
+        };
+        if config.pty_proxy.enabled {
             self.add(Check {
                 name: "terminal_capture",
                 label: "terminal capture",
                 status: Status::Pass,
-                detail: "commands run inside the shell proxy".to_string(),
+                detail: "enabled for shells with sivtr integration (restart after init)"
+                    .to_string(),
                 hint: None,
             });
             return;
@@ -407,8 +419,11 @@ impl Report {
             name: "terminal_capture",
             label: "terminal capture",
             status: Status::Manual,
-            detail: "disabled (opt-in)".to_string(),
-            hint: Some("run `sivtr pty-proxy enable` to record command output".to_string()),
+            detail: "disabled in config".to_string(),
+            hint: Some(
+                "set [pty_proxy] enabled = true with `sivtr config edit`, then restart your shell"
+                    .to_string(),
+            ),
         });
     }
 

@@ -41,14 +41,4 @@ pub enum PtyProxyAction {
         #[arg(long)]
         echoed_input: bool,
     },
-
-    /// Turn terminal capture on and install the shell integration
-    Enable {
-        /// Target shell: bash, zsh, nushell, powershell, or all (default)
-        #[arg(default_value = "all")]
-        shell: String,
-    },
-
-    /// Turn terminal capture off
-    Disable,
 }

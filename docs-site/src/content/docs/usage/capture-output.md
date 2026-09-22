@@ -11,7 +11,7 @@ Capture is the first step in turning terminal output into reusable text. Use the
 | --- | --- | --- |
 | Inspect one existing command pipeline | `command 2>&1 \| sivtr` | No |
 | Let `sivtr` run one command | `sivtr run command` | Partially, for the captured run |
-| Record every command in a live shell | `sivtr pty-proxy enable` | Yes, with exit code and directory |
+| Record every command in a live shell | `sivtr init <shell>` | Yes, with exit code and directory |
 | Browse the current workspace's recorded work | `sivtr` | Yes, after shell integration |
 | Copy one recent command block | `sivtr copy out` | Yes, after shell integration |
 | Search captured terminal and AI work | `sivtr search "query"` | Yes, from the unified archive |
@@ -65,30 +65,16 @@ sivtr
 
 This is useful when you have been working normally and later want to browse the accumulated terminal work.
 
-Capture is opt-in. Enable it for every supported shell with:
+Install or upgrade shell integration to capture terminal output:
 
 ```bash
-sivtr pty-proxy enable all
+sivtr init all
+# or one shell: sivtr init bash / zsh / nushell / powershell
 ```
 
-You can also pass a single shell name (`bash`, `zsh`, `nushell`, or `powershell`) to enable just that one. Enabling wraps the shell in the pty proxy, which holds a pty and forwards bytes, so interactive programs such as `vim`, `htop`, and `ssh` behave exactly as before.
+`sivtr setup` runs the same installation step. Restart the shell after installation; subsequent commands use PTY capture without a separate enable command. After upgrading, rerun `sivtr init <shell>` to replace the existing sivtr hook in place, preserving surrounding user configuration without adding a second capture block.
 
-If you want the prompt hook without capture, install the shell block on its own:
-
-```bash
-sivtr init powershell
-sivtr init bash
-sivtr init zsh
-sivtr init nushell
-```
-
-The block stays inert until capture is enabled. Turn capture off again with:
-
-```bash
-sivtr pty-proxy disable
-```
-
-Restart the shell after disabling capture.
+To pause capture, run `sivtr config edit`, set `enabled = false` under `[pty_proxy]`, and restart the shell. Both `setup` and `init` preserve this explicit opt-out. To resume, set it back to `true` and restart the shell.
 
 ## Search captured output
 

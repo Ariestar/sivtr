@@ -29,7 +29,7 @@ description: Where sivtr stores configuration, the unified archive, session logs
 
 ## Shell session logs
 
-Terminal capture is opt-in. After `sivtr pty-proxy enable`, the shell runs inside
+After installing shell integration with `sivtr init` or `sivtr setup` and restarting, the shell runs inside
 `sivtr pty-proxy run` and every finished command appends one structured entry to a
 per-terminal log:
 

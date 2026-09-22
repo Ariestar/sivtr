@@ -117,13 +117,19 @@ pub struct EmbeddingConfig {
 
 /// Terminal capture settings.
 ///
-/// Capture is opt-in: no command output is recorded until
-/// `sivtr pty-proxy enable` installs the shell block *and* this flag is on.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Installing shell integration with `init` or `setup` enables capture by
+/// default. An explicit `enabled = false` keeps it off across hook upgrades.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PtyProxyConfig {
     /// Whether the shell runs inside the capture proxy.
     pub enabled: bool,
+}
+
+impl Default for PtyProxyConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 // --- Defaults ---
@@ -262,19 +268,29 @@ mod tests {
     }
 
     #[test]
-    fn terminal_capture_is_off_by_default_and_round_trips() {
+    fn terminal_capture_defaults_on_and_preserves_explicit_opt_out() {
         let default = to_toml_string(&SivtrConfig::default()).expect("serialize");
         assert!(default.contains("[pty_proxy]"));
-        assert!(default.contains("enabled = false"));
-        assert!(!SivtrConfig::default().pty_proxy.enabled);
+        assert!(default.contains("enabled = true"));
+        assert!(SivtrConfig::default().pty_proxy.enabled);
+        // Existing configurations without this section use the new capture
+        // implementation as soon as their shell hook is upgraded.
+        for legacy in ["", "[editor]\ncommand = 'vim'\n", "[pty_proxy]\n"] {
+            assert!(
+                toml::from_str::<SivtrConfig>(legacy)
+                    .unwrap()
+                    .pty_proxy
+                    .enabled
+            );
+        }
 
-        let on = SivtrConfig {
-            pty_proxy: PtyProxyConfig { enabled: true },
+        let off = SivtrConfig {
+            pty_proxy: PtyProxyConfig { enabled: false },
             ..SivtrConfig::default()
         };
-        let toml = to_toml_string(&on).expect("serialize");
+        let toml = to_toml_string(&off).expect("serialize");
         assert!(
-            toml::from_str::<SivtrConfig>(&toml)
+            !toml::from_str::<SivtrConfig>(&toml)
                 .expect("parse")
                 .pty_proxy
                 .enabled

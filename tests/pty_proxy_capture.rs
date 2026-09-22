@@ -71,15 +71,15 @@ impl Sandbox {
         self.root.join("repo")
     }
 
-    /// Install the shell block and turn capture on, as `sivtr setup` would.
-    fn enable_capture(&self) {
+    /// Install the shell block with default capture, as `sivtr setup` would.
+    fn install_shell_integration(&self) {
         let status = Command::new(sivtr())
-            .args(["pty-proxy", "enable", "bash"])
+            .args(["init", "bash"])
             .env("HOME", self.home())
             .env("SIVTR_HOME", self.sivtr_home())
             .status()
-            .expect("run pty-proxy enable");
-        assert!(status.success(), "`pty-proxy enable bash` failed");
+            .expect("run init bash");
+        assert!(status.success(), "`init bash` failed");
     }
 
     /// Environment every shell in the sandbox must run with.
@@ -217,7 +217,7 @@ fn drive(command: CommandBuilder, input: &str) -> String {
 #[test]
 fn records_a_command_run_in_a_proxied_shell() {
     let sandbox = Sandbox::new("direct");
-    sandbox.enable_capture();
+    sandbox.install_shell_integration();
 
     let mut command = sandbox.builder(sivtr());
     command.args(["pty-proxy", "run", "bash"]);
@@ -243,7 +243,7 @@ fn records_a_command_run_in_a_proxied_shell() {
 #[test]
 fn records_a_failing_command() {
     let sandbox = Sandbox::new("failing");
-    sandbox.enable_capture();
+    sandbox.install_shell_integration();
 
     let mut command = sandbox.builder(sivtr());
     command.args(["pty-proxy", "run", "bash"]);
@@ -262,7 +262,7 @@ fn records_a_failing_command() {
 #[test]
 fn the_profile_block_proxies_the_shell_itself() {
     let sandbox = Sandbox::new("block");
-    sandbox.enable_capture();
+    sandbox.install_shell_integration();
 
     let command = sandbox.builder("bash");
     drive(command, "echo through-the-block\nexit\n");
@@ -278,15 +278,16 @@ fn the_profile_block_proxies_the_shell_itself() {
 #[test]
 fn disabling_capture_leaves_the_shell_usable() {
     let sandbox = Sandbox::new("disabled");
-    sandbox.enable_capture();
+    sandbox.install_shell_integration();
 
-    let status = Command::new(sivtr())
-        .args(["pty-proxy", "disable"])
-        .env("HOME", sandbox.home())
-        .env("SIVTR_HOME", sandbox.sivtr_home())
-        .status()
-        .expect("run pty-proxy disable");
-    assert!(status.success());
+    let config = "[pty_proxy]\nenabled = false\n";
+    std::fs::write(sandbox.sivtr_home().join("config.toml"), config).unwrap();
+    // Reinstalling/upgrading the hook must not reset an explicit opt-out.
+    sandbox.install_shell_integration();
+    assert_eq!(
+        std::fs::read_to_string(sandbox.sivtr_home().join("config.toml")).unwrap(),
+        config
+    );
 
     let command = sandbox.builder("bash");
     let output = drive(command, "echo still-alive\nexit\n");
@@ -307,7 +308,7 @@ fn disabling_capture_leaves_the_shell_usable() {
 #[test]
 fn keeps_an_existing_debug_trap_running() {
     let sandbox = Sandbox::new("debug-trap");
-    sandbox.enable_capture();
+    sandbox.install_shell_integration();
 
     let profile = sandbox.home().join(".bashrc");
     let installed = std::fs::read_to_string(&profile).expect("read profile");
