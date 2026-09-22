@@ -11,6 +11,7 @@ Capture is the first step in turning terminal output into reusable text. Use the
 | --- | --- | --- |
 | Inspect one existing command pipeline | `command 2>&1 \| sivtr` | No |
 | Let `sivtr` run one command | `sivtr run command` | Partially, for the captured run |
+| Record every command in a live shell | `sivtr init <shell>` | Yes, with exit code and directory |
 | Browse the current workspace's recorded work | `sivtr` | Yes, after shell integration |
 | Copy one recent command block | `sivtr copy out` | Yes, after shell integration |
 | Search captured terminal and AI work | `sivtr search "query"` | Yes, from the unified archive |
@@ -64,16 +65,16 @@ sivtr
 
 This is useful when you have been working normally and later want to browse the accumulated terminal work.
 
-Install shell integration with:
+Install or upgrade shell integration to capture terminal output:
 
 ```bash
-sivtr init powershell
-sivtr init bash
-sivtr init zsh
-sivtr init nushell
+sivtr init all
+# or one shell: sivtr init bash / zsh / nushell / powershell
 ```
 
-Restart the shell after installation.
+`sivtr setup` runs the same installation step. Restart the shell after installation; subsequent commands use PTY capture without a separate enable command. After upgrading, rerun `sivtr init <shell>` to replace the existing sivtr hook in place, preserving surrounding user configuration without adding a second capture block.
+
+To pause capture, run `sivtr config edit`, set `enabled = false` under `[pty_proxy]`, and restart the shell. Both `setup` and `init` preserve this explicit opt-out. To resume, set it back to `true` and restart the shell.
 
 ## Search captured output
 

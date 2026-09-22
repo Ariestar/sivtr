@@ -18,7 +18,7 @@ src/
 ├── commands/
 │   ├── terminal/              ← Write terminal memory
 │   │   ├── init.rs            ← Shell hook injection + show/uninstall
-│   │   ├── flush.rs           ← Hook callback: write session log
+│   │   ├── pty_proxy.rs       ← 采集代理 CLI：run / report / enable / disable
 │   │   ├── clear.rs           ← Clear session logs
 │   │   ├── run.rs / pipe.rs / import.rs  ← One-shot ingest → history + editor
 │   │   └── history.rs         ← Optional history auto-save helper
@@ -54,7 +54,7 @@ crates/sivtr-core/src/
 ├── session.rs / session/      ← Session log types
 ├── history/                   ← SQLite history store
 ├── export/                    ← Clipboard, editor, file export
-├── capture/                   ← Low-level terminal capture (scrollback, pipe, subprocess)
+├── capture/                   ← Low-level one-shot capture (pipe, subprocess)
 ├── buffer/ / selection/ / parse/  ← Text primitives (shared)
 └── time.rs
 ```
