@@ -240,13 +240,10 @@ pub trait AgentSessionProvider {
         Ok(None)
     }
 
+    /// Inferring a current session must not widen an empty workspace search.
     fn find_current_session(&self, cwd: &Path) -> Result<Option<PathBuf>> {
-        if let Some(session) = self.list_recent_sessions(Some(cwd))?.into_iter().next() {
-            return Ok(Some(session.path));
-        }
-
         Ok(self
-            .list_recent_sessions(None)?
+            .list_recent_sessions(Some(cwd))?
             .into_iter()
             .next()
             .map(|session| session.path))

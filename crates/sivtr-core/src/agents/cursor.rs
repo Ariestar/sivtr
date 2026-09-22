@@ -287,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_scoped_listing_does_not_fall_back_to_all_transcripts() {
+    fn current_session_and_scoped_listing_require_workspace_membership() {
         let _guard = crate::test_env_lock();
         let dir = tempfile::tempdir().unwrap();
         let previous_home = std::env::var_os("CURSOR_HOME");
@@ -314,6 +314,12 @@ mod tests {
             .list_recent_sessions(Some(&dir.path().join("shared")))
             .unwrap()
             .is_empty());
+        let missing = CursorProvider
+            .find_current_session(&dir.path().join("shared"))
+            .unwrap();
+        let matching = CursorProvider
+            .find_current_session(&dir.path().join("other"))
+            .unwrap();
         assert_eq!(CursorProvider.list_recent_sessions(None).unwrap().len(), 2);
 
         for (name, previous) in [
@@ -325,6 +331,8 @@ mod tests {
                 None => std::env::remove_var(name),
             }
         }
+        assert_eq!(missing, None);
+        assert_eq!(matching, Some(projects.join("other.jsonl")));
     }
 
     #[test]
