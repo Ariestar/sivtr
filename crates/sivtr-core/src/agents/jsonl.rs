@@ -7,9 +7,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use super::model::{
-    workspace_matches_candidates, AgentSession, AgentSessionMeta, SessionInfo, WorkspaceMatchTarget,
-};
+use super::model::{AgentSession, AgentSessionMeta, SessionInfo, WorkspaceMatchTarget};
 
 /// Bump when the listing cache layout or meta parsing changes.
 const LISTING_CACHE_VERSION: u32 = 3;
@@ -268,9 +266,12 @@ fn push_session(
     meta: AgentSessionMeta,
     wanted: Option<&WorkspaceMatchTarget>,
 ) {
-    // Shared policy: no cwd metadata → keep; otherwise path or git-remote match.
+    // Scoped listings require a matching path or repository identity.
     if let Some(wanted) = wanted {
-        if !workspace_matches_candidates(wanted, meta.cwd_candidates().map(Path::new)) {
+        if !meta
+            .cwd_candidates()
+            .any(|cwd| wanted.matches(Path::new(cwd)))
+        {
             return;
         }
     }
@@ -503,7 +504,7 @@ mod tests {
     }
 
     #[test]
-    fn keeps_sessions_without_cwd_when_filtering_by_cwd() {
+    fn lists_sessions_without_cwd_only_when_unfiltered() {
         let _guard = env_lock();
         let dir = tempfile::tempdir().unwrap();
         let previous = std::env::var_os("SIVTR_HOME");
@@ -537,7 +538,12 @@ mod tests {
         )
         .unwrap();
 
-        let listed = list_recent_jsonl_sessions("Hermes", &sessions, Some(&target), |path| {
+        fs::write(
+            sessions.join("matching.jsonl"),
+            session_line("matching", &target),
+        )
+        .unwrap();
+        let parse_meta = |path: &Path| {
             parse_jsonl_meta(path, "Hermes", 5, |meta, value| {
                 if meta.id.is_none() {
                     meta.id = value
@@ -554,15 +560,20 @@ mod tests {
                     meta.add_cwd(cwd);
                 }
             })
-        })
-        .unwrap();
+        };
+        let listed =
+            list_recent_jsonl_sessions("Hermes", &sessions, Some(&target), parse_meta).unwrap();
 
         let ids: Vec<_> = listed
             .iter()
             .filter_map(|session| session.id.clone())
             .collect();
-        assert!(ids.iter().any(|id| id == "no-cwd"));
-        assert!(!ids.iter().any(|id| id == "wrong"));
+        assert_eq!(ids, vec!["matching"]);
+        let all = list_recent_jsonl_sessions("Hermes", &sessions, None, parse_meta).unwrap();
+        assert_eq!(all.len(), 3);
+        assert!(all
+            .iter()
+            .any(|session| session.id.as_deref() == Some("no-cwd")));
 
         match previous {
             Some(value) => std::env::set_var("SIVTR_HOME", value),
