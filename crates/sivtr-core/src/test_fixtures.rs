@@ -10,6 +10,37 @@ use crate::record::{
     RECORD_SCHEMA_VERSION,
 };
 
+/// Restore selected environment variables before releasing the test lock,
+/// including when an assertion panics.
+pub(crate) struct EnvGuard {
+    previous: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl EnvGuard {
+    pub(crate) fn capture(keys: &[&'static str]) -> Self {
+        let lock = crate::test_env_lock();
+        Self {
+            previous: keys
+                .iter()
+                .map(|&key| (key, std::env::var_os(key)))
+                .collect(),
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        for (key, previous) in &self.previous {
+            match previous {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
+}
+
 /// Create a normal repo (`root/.git` dir).
 pub(crate) fn make_repo(root: &Path) {
     fs::create_dir_all(root.join(".git")).unwrap();

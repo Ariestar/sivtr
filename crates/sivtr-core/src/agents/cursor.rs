@@ -1,6 +1,5 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::Value;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::agents::{
@@ -35,14 +34,7 @@ impl AgentSessionProvider for CursorProvider {
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        // Try shared JSONL pipeline first.
-        let session = parse_jsonl_session(path, PROVIDER_NAME, apply_event)?;
-        if !session.blocks.is_empty() {
-            return Ok(session);
-        }
-
-        // Fallback for less structured rows.
-        parse_cursor_jsonl_fallback(path)
+        parse_jsonl_session(path, PROVIDER_NAME, apply_event)
     }
 }
 
@@ -120,15 +112,22 @@ fn apply_event(session: &mut AgentSession, value: &Value) {
         });
 
     // Common Cursor/Claude-like shapes.
+    // Cursor agent transcripts wrap payloads as `{role, message:{content:[...]}}`.
+    let payload = value
+        .get("message")
+        .filter(|message| message.is_object())
+        .unwrap_or(value);
     match value
         .get("type")
         .and_then(Value::as_str)
         .or_else(|| value.get("role").and_then(Value::as_str))
     {
-        Some("user") | Some("human") => push_text(session, AgentBlockKind::User, timestamp, value),
-        Some("assistant") | Some("ai") => push_assistant(session, timestamp, value),
+        Some("user") | Some("human") => {
+            push_text(session, AgentBlockKind::User, timestamp, payload)
+        }
+        Some("assistant") | Some("ai") => push_assistant(session, timestamp, payload),
         Some("tool") | Some("tool_result") | Some("toolResult") => {
-            push_text(session, AgentBlockKind::ToolOutput, timestamp, value)
+            push_text(session, AgentBlockKind::ToolOutput, timestamp, payload)
         }
         Some("tool_call") | Some("toolCall") => {
             let label = value
@@ -249,30 +248,6 @@ fn push_text(
     }
 }
 
-fn parse_cursor_jsonl_fallback(path: &Path) -> Result<AgentSession> {
-    let text = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read Cursor transcript {}", path.display()))?;
-    let mut session = AgentSession {
-        path: path.to_path_buf(),
-        id: path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .map(str::to_string),
-        cwd: None,
-        title: None,
-        blocks: Vec::new(),
-    };
-    for line in text.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        if let Ok(value) = serde_json::from_str::<Value>(line) {
-            apply_event(&mut session, &value);
-        }
-    }
-    Ok(session)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{apply_event, CursorProvider};
@@ -288,10 +263,8 @@ mod tests {
 
     #[test]
     fn current_session_and_scoped_listing_require_workspace_membership() {
-        let _guard = crate::test_env_lock();
+        let _guard = crate::test_fixtures::EnvGuard::capture(&["CURSOR_HOME", "SIVTR_HOME"]);
         let dir = tempfile::tempdir().unwrap();
-        let previous_home = std::env::var_os("CURSOR_HOME");
-        let previous_data = std::env::var_os("SIVTR_HOME");
         std::env::set_var("CURSOR_HOME", dir.path());
         std::env::set_var("SIVTR_HOME", dir.path().join("data"));
         let projects = dir.path().join("projects");
@@ -322,15 +295,6 @@ mod tests {
             .unwrap();
         assert_eq!(CursorProvider.list_recent_sessions(None).unwrap().len(), 2);
 
-        for (name, previous) in [
-            ("CURSOR_HOME", previous_home),
-            ("SIVTR_HOME", previous_data),
-        ] {
-            match previous {
-                Some(value) => std::env::set_var(name, value),
-                None => std::env::remove_var(name),
-            }
-        }
         assert_eq!(missing, None);
         assert_eq!(matching, Some(projects.join("other.jsonl")));
     }
@@ -363,5 +327,61 @@ mod tests {
         assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
         assert_eq!(session.blocks[1].kind, AgentBlockKind::Assistant);
         assert_eq!(session.blocks[2].kind, AgentBlockKind::ToolCall);
+    }
+
+    #[test]
+    fn maps_composer_role_message_envelope() {
+        let mut session = AgentSession {
+            path: PathBuf::from("t.jsonl"),
+            id: None,
+            cwd: None,
+            title: None,
+            blocks: Vec::new(),
+        };
+        apply_event(
+            &mut session,
+            &json!({
+                "role": "user",
+                "message": {
+                    "content": [{"type": "text", "text": "是否可以考虑把jina模型换成kimi 3"}]
+                }
+            }),
+        );
+        apply_event(
+            &mut session,
+            &json!({
+                "role": "assistant",
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "先看 Jina 怎么接。"},
+                        {"type": "tool_use", "name": "Read", "input": {"path": "config.py"}}
+                    ]
+                }
+            }),
+        );
+        assert_eq!(session.blocks.len(), 3);
+        assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
+        assert!(session.blocks[0].text.contains("kimi 3"));
+        assert_eq!(session.blocks[1].kind, AgentBlockKind::Assistant);
+        assert!(session.blocks[1].text.contains("Jina"));
+        assert_eq!(session.blocks[2].kind, AgentBlockKind::ToolCall);
+        assert_eq!(session.blocks[2].label.as_deref(), Some("Read"));
+
+        for role in ["tool", "tool_result", "toolResult"] {
+            for enveloped in [false, true] {
+                let content = json!({"content": [{"type": "text", "text": "tool output"}]});
+                let mut event = if enveloped {
+                    json!({"message": content})
+                } else {
+                    content
+                };
+                event["role"] = json!(role);
+                session.blocks.clear();
+                apply_event(&mut session, &event);
+                assert_eq!(session.blocks.len(), 1);
+                assert_eq!(session.blocks[0].kind, AgentBlockKind::ToolOutput);
+                assert_eq!(session.blocks[0].text, "tool output");
+            }
+        }
     }
 }
