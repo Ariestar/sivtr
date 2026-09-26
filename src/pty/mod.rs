@@ -180,11 +180,10 @@ fn pump(
 
 /// Feed the real terminal's input to the pty.
 ///
-/// Unix delivers keystrokes as bytes, and the pty line discipline turns
-/// Ctrl-C into a signal. Windows `ReadFile` does not: arrow keys never show
-/// up, and Backspace arrives as `0x08`, which ConPTY reports to the shell as
-/// Ctrl+Backspace (delete the word). Read console key events instead and
-/// hand ConPTY the win32-input-mode sequence it asked for.
+/// Unix already delivers keystrokes as bytes. Windows `ReadFile` does not:
+/// arrow keys never appear, and Backspace arrives as `0x08`, which ConPTY
+/// reports as Ctrl+Backspace. Read the console key events and write ordinary
+/// VT, which line editors and raw-mode TUIs (Node, cmdc) both understand.
 fn spawn_input(writer: Arc<Mutex<Box<dyn Write + Send>>>) {
     std::thread::spawn(move || {
         let _ = forward_input(&writer);
@@ -206,12 +205,86 @@ fn forward_input(writer: &Mutex<Box<dyn Write + Send>>) -> std::io::Result<()> {
     }
 }
 
-#[cfg(windows)]
-fn encode_win32_key(vk: u16, scan: u16, ch: u16, down: bool, mods: u32, repeat: u16) -> String {
-    format!(
-        "\u{1b}[{vk};{scan};{ch};{};{mods};{repeat}_",
-        u8::from(down)
-    )
+/// Virtual-key codes this encoder cares about. Numeric so the tests run everywhere.
+const VK_BACK: u16 = 0x08;
+const VK_TAB: u16 = 0x09;
+const VK_RETURN: u16 = 0x0D;
+const VK_ESCAPE: u16 = 0x1B;
+const VK_PRIOR: u16 = 0x21;
+const VK_NEXT: u16 = 0x22;
+const VK_END: u16 = 0x23;
+const VK_HOME: u16 = 0x24;
+const VK_LEFT: u16 = 0x25;
+const VK_UP: u16 = 0x26;
+const VK_RIGHT: u16 = 0x27;
+const VK_DOWN: u16 = 0x28;
+const VK_INSERT: u16 = 0x2D;
+const VK_DELETE: u16 = 0x2E;
+
+/// Bytes to write into the pty for one key press.
+///
+/// Backspace must be `0x7f`. ConPTY treats `0x08` as Ctrl+Backspace, which
+/// deletes a word. Arrow keys and Ctrl+C are the plain VT sequences raw-mode
+/// programs parse; win32-input-mode (`ESC [ ... _`) is not among them, so a
+/// TUI such as cmdc never sees a key.
+fn encode_console_key(vk: u16, ch: u16, down: bool, ctrl: bool, alt: bool, shift: bool) -> Vec<u8> {
+    if !down {
+        return Vec::new();
+    }
+    if ctrl && !alt && !shift && (0x41..=0x5A).contains(&vk) {
+        return vec![(vk - 0x40) as u8];
+    }
+    // Modifier lives inside the sequence. Prefixing ESC as well would make
+    // Alt+Left two sequences, which a raw-mode reader treats as Escape then Left.
+    match vk {
+        VK_TAB if shift => return csi("", b'Z', false, alt, false),
+        VK_LEFT => return csi("", b'D', ctrl, alt, shift),
+        VK_UP => return csi("", b'A', ctrl, alt, shift),
+        VK_RIGHT => return csi("", b'C', ctrl, alt, shift),
+        VK_DOWN => return csi("", b'B', ctrl, alt, shift),
+        VK_HOME => return csi("", b'H', ctrl, alt, shift),
+        VK_END => return csi("", b'F', ctrl, alt, shift),
+        VK_INSERT => return csi("2", b'~', ctrl, alt, shift),
+        VK_DELETE => return csi("3", b'~', ctrl, alt, shift),
+        VK_PRIOR => return csi("5", b'~', ctrl, alt, shift),
+        VK_NEXT => return csi("6", b'~', ctrl, alt, shift),
+        _ => {}
+    }
+    let bytes = match vk {
+        VK_BACK => vec![if ctrl { 0x08 } else { 0x7f }],
+        VK_TAB => vec![b'\t'],
+        VK_RETURN => vec![b'\r'],
+        VK_ESCAPE => vec![0x1b],
+        _ if (0x20..0xD800).contains(&ch) => {
+            let mut encoded = [0u8; 4];
+            let Some(ch) = char::from_u32(u32::from(ch)) else {
+                return Vec::new();
+            };
+            ch.encode_utf8(&mut encoded).as_bytes().to_vec()
+        }
+        _ => return Vec::new(),
+    };
+    if alt {
+        let mut with_meta = vec![0x1b];
+        with_meta.extend(bytes);
+        return with_meta;
+    }
+    bytes
+}
+
+fn csi(param: &str, final_byte: u8, ctrl: bool, alt: bool, shift: bool) -> Vec<u8> {
+    let modifier = 1 + usize::from(shift) + 2 * usize::from(alt) + 4 * usize::from(ctrl);
+    let body = if modifier == 1 {
+        param.to_string()
+    } else if param.is_empty() {
+        format!("1;{modifier}")
+    } else {
+        format!("{param};{modifier}")
+    };
+    let mut seq = vec![0x1b, b'['];
+    seq.extend(body.bytes());
+    seq.push(final_byte);
+    seq
 }
 
 #[cfg(windows)]
@@ -220,7 +293,10 @@ fn forward_input(writer: &Mutex<Box<dyn Write + Send>>) -> std::io::Result<()> {
     use winapi::um::consoleapi::ReadConsoleInputW;
     use winapi::um::processenv::GetStdHandle;
     use winapi::um::winbase::STD_INPUT_HANDLE;
-    use winapi::um::wincontypes::{INPUT_RECORD, KEY_EVENT, LEFT_CTRL_PRESSED, RIGHT_CTRL_PRESSED};
+    use winapi::um::wincontypes::{
+        INPUT_RECORD, KEY_EVENT, LEFT_ALT_PRESSED, LEFT_CTRL_PRESSED, RIGHT_ALT_PRESSED,
+        RIGHT_CTRL_PRESSED, SHIFT_PRESSED,
+    };
 
     let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
     let mut records: [MaybeUninit<INPUT_RECORD>; 128] =
@@ -248,24 +324,18 @@ fn forward_input(writer: &Mutex<Box<dyn Write + Send>>) -> std::io::Result<()> {
                 continue;
             }
             let key = unsafe { record.Event.KeyEvent() };
-            let down = key.bKeyDown != 0;
-            let ch = unsafe { *key.uChar.UnicodeChar() };
-            out.extend(
-                encode_win32_key(
-                    key.wVirtualKeyCode,
-                    key.wVirtualScanCode,
-                    ch,
-                    down,
-                    key.dwControlKeyState,
-                    key.wRepeatCount,
-                )
-                .bytes(),
+            let mods = key.dwControlKeyState;
+            let times = key.wRepeatCount.max(1);
+            let bytes = encode_console_key(
+                key.wVirtualKeyCode,
+                unsafe { *key.uChar.UnicodeChar() },
+                key.bKeyDown != 0,
+                mods & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED) != 0,
+                mods & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED) != 0,
+                mods & SHIFT_PRESSED != 0,
             );
-            let ctrl = key.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED) != 0;
-            // ETX is what ConPTY turns into a console break. The win32 key
-            // event alone does not stop a running command.
-            if down && ctrl && key.wVirtualKeyCode == 0x43 {
-                out.push(0x03);
+            for _ in 0..times {
+                out.extend(&bytes);
             }
         }
         if out.is_empty() {
@@ -735,14 +805,27 @@ mod tests {
         assert_eq!(trim_trailing_mark(output, ""), output);
     }
 
-    #[cfg(windows)]
     #[test]
-    fn win32_backspace_is_the_sequence_conpty_treats_as_one_character() {
-        // Probed against pwsh ReadKey: this sequence is Backspace with no
-        // modifier. The raw byte 0x08 is Backspace+Control, which deletes a word.
+    fn console_keys_are_plain_vt() {
+        // 0x08 is Ctrl+Backspace inside ConPTY. 0x7f is a single-character delete.
         assert_eq!(
-            super::encode_win32_key(0x08, 0x0e, 0x08, true, 0, 1),
-            "\u{1b}[8;14;8;1;0;1_"
+            super::encode_console_key(super::VK_BACK, 0x08, true, false, false, false),
+            b"\x7f"
+        );
+        assert_eq!(
+            super::encode_console_key(super::VK_BACK, 0x08, true, true, false, false),
+            b"\x08"
+        );
+        assert_eq!(
+            super::encode_console_key(super::VK_LEFT, 0, true, false, false, false),
+            b"\x1b[D"
+        );
+        assert_eq!(
+            super::encode_console_key(0x43, 3, true, true, false, false),
+            b"\x03"
+        );
+        assert!(
+            super::encode_console_key(super::VK_LEFT, 0, false, false, false, false).is_empty()
         );
     }
 
