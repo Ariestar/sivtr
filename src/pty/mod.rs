@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use sivtr_core::session::{self, SessionEntry, SessionState};
@@ -93,7 +93,7 @@ pub fn run(program: &str, args: &[String]) -> Result<i32> {
         .with_context(|| format!("failed to start {program} in a pty"))?;
 
     let mut reader = pair.master.try_clone_reader().context("pty reader")?;
-    let writer = pair.master.take_writer().context("pty writer")?;
+    let writer = Arc::new(Mutex::new(pair.master.take_writer().context("pty writer")?));
     // Closing our copy of the slave is what lets the reader see EOF once the
     // child exits; holding it open would hang the reader thread forever.
     drop(pair.slave);
@@ -101,17 +101,19 @@ pub fn run(program: &str, args: &[String]) -> Result<i32> {
     let stop = Arc::new(AtomicBool::new(false));
     let resizer = spawn_resizer(Arc::clone(&stop), pair.master);
 
-    // Input and resize stay detached: both can block forever, and the process
-    // exits once the child is reaped and the reader has drained.
+    let output_writer = Arc::clone(&writer);
+    let output = std::thread::spawn(move || pump(&mut reader, id, output_writer, rows, cols));
     spawn_input(writer);
-    let output = std::thread::spawn(move || pump(&mut reader, id));
 
     let status = child.wait().context("failed to wait for the shell")?;
     let exit_code = status.exit_code() as i32;
 
-    let outcome = output.join().unwrap_or_else(|_| Ok(()));
+    // The reader reaches EOF only after the master is dropped. Close it before
+    // joining that thread; the same order is what lets the proxy exit on every
+    // platform once the shell is gone.
     stop.store(true, Ordering::Relaxed);
     let _ = resizer.join();
+    let outcome = output.join().unwrap_or_else(|_| Ok(()));
     drop(restore);
 
     if let Err(error) = outcome {
@@ -121,9 +123,16 @@ pub fn run(program: &str, args: &[String]) -> Result<i32> {
 }
 
 /// Forward everything the shell prints to the real terminal, recording blocks.
-fn pump(reader: &mut Box<dyn Read + Send>, terminal_id: String) -> Result<()> {
+fn pump(
+    reader: &mut Box<dyn Read + Send>,
+    terminal_id: String,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    rows: u16,
+    cols: u16,
+) -> Result<()> {
     let mut stdout = std::io::stdout();
     let mut stream = Stream::default();
+    let mut screen = Screen::new(rows, cols);
     let mut recorder = Recorder {
         terminal_id,
         ..Recorder::default()
@@ -138,10 +147,19 @@ fn pump(reader: &mut Box<dyn Read + Send>, terminal_id: String) -> Result<()> {
             Err(error) => return Err(error).context("failed to read from the pty"),
         };
 
-        stdout.write_all(&chunk[..read])?;
-        stdout.flush()?;
+        let (forward, replies) = screen.push(&chunk[..read]);
+        if !replies.is_empty() {
+            if let Ok(mut input) = writer.lock() {
+                let _ = input.write_all(&replies);
+                let _ = input.flush();
+            }
+        }
+        if !forward.is_empty() {
+            stdout.write_all(&forward)?;
+            stdout.flush()?;
+        }
 
-        for event in stream.push(&chunk[..read]) {
+        for event in stream.push(&forward) {
             match event {
                 Event::CommandStart => recorder.started = Some(Instant::now()),
                 Event::CommandEnd(exit_code) => {
@@ -151,6 +169,12 @@ fn pump(reader: &mut Box<dyn Read + Send>, terminal_id: String) -> Result<()> {
             }
         }
     }
+
+    let tail = screen.finish();
+    if !tail.is_empty() {
+        stdout.write_all(&tail)?;
+        stdout.flush()?;
+    }
     Ok(())
 }
 
@@ -158,17 +182,22 @@ fn pump(reader: &mut Box<dyn Read + Send>, terminal_id: String) -> Result<()> {
 ///
 /// Ctrl-C and Ctrl-Z travel as ordinary bytes, and the pty's line discipline
 /// turns them into signals for the child — no signal forwarding needed.
-fn spawn_input(mut writer: Box<dyn Write + Send>) {
+fn spawn_input(writer: Arc<Mutex<Box<dyn Write + Send>>>) {
     std::thread::spawn(move || {
         let mut stdin = std::io::stdin();
         let mut chunk = [0u8; 8192];
         while let Ok(read) = stdin.read(&mut chunk) {
-            if read == 0 || writer.write_all(&chunk[..read]).is_err() {
+            if read == 0 {
+                break;
+            }
+            let Ok(mut writer) = writer.lock() else {
+                break;
+            };
+            if writer.write_all(&chunk[..read]).is_err() {
                 break;
             }
             let _ = writer.flush();
         }
-        let _ = writer.flush();
     });
 }
 
@@ -374,10 +403,127 @@ impl Drop for RawMode {
     }
 }
 
+/// Cursor position inside the pty, plus a filter for CSI 6n.
+///
+/// A pty master answers `CSI 6n` itself. The cursor the child asked about is
+/// the one in this pty, so the query is not forwarded to the outer terminal.
+///
+/// ponytail: columns ignore East-Asian width; use `unicode-width` if a CJK
+/// prompt reports a short cursor and redraws on top of itself.
+struct Screen {
+    row: u16,
+    col: u16,
+    rows: u16,
+    cols: u16,
+    /// Partial `ESC [ 6 n`, held so a query split across reads is still one query.
+    pending: Vec<u8>,
+    skip: Skip,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Skip {
+    Ground,
+    Esc,
+    Csi,
+    Osc,
+    OscEsc,
+}
+
+impl Screen {
+    fn new(rows: u16, cols: u16) -> Self {
+        Self {
+            row: 1,
+            col: 1,
+            rows: rows.max(1),
+            cols: cols.max(1),
+            pending: Vec::new(),
+            skip: Skip::Ground,
+        }
+    }
+
+    /// Bytes to show, and the cursor-position replies to write back to the pty.
+    fn push(&mut self, bytes: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut replies = Vec::new();
+        for &byte in bytes {
+            self.pending.push(byte);
+            if b"\x1b[6n".starts_with(&self.pending) {
+                if self.pending.len() == 4 {
+                    self.pending.clear();
+                    let _ = write!(replies, "\x1b[{};{}R", self.row, self.col);
+                }
+                continue;
+            }
+            for byte in std::mem::take(&mut self.pending) {
+                self.emit(byte, &mut out);
+            }
+        }
+        (out, replies)
+    }
+
+    /// Flush a query fragment that never completed.
+    fn finish(&mut self) -> Vec<u8> {
+        let mut out = Vec::new();
+        for byte in std::mem::take(&mut self.pending) {
+            self.emit(byte, &mut out);
+        }
+        out
+    }
+
+    fn emit(&mut self, byte: u8, out: &mut Vec<u8>) {
+        out.push(byte);
+        match self.skip {
+            Skip::Ground => match byte {
+                0x1b => self.skip = Skip::Esc,
+                b'\n' => {
+                    self.row = (self.row + 1).min(self.rows);
+                    self.col = 1;
+                }
+                b'\r' => self.col = 1,
+                0x08 => self.col = self.col.saturating_sub(1).max(1),
+                other if other < 0x20 || other & 0b1100_0000 == 0b1000_0000 => {}
+                _ => {
+                    if self.col < self.cols {
+                        self.col += 1;
+                    }
+                }
+            },
+            Skip::Esc => {
+                self.skip = match byte {
+                    b'[' => Skip::Csi,
+                    b']' => Skip::Osc,
+                    _ => Skip::Ground,
+                };
+            }
+            Skip::Csi => {
+                if (0x40..=0x7e).contains(&byte) {
+                    self.skip = Skip::Ground;
+                }
+            }
+            Skip::Osc => {
+                self.skip = if byte == 0x07 {
+                    Skip::Ground
+                } else if byte == 0x1b {
+                    Skip::OscEsc
+                } else {
+                    Skip::Osc
+                };
+            }
+            Skip::OscEsc => {
+                self.skip = if byte == b'\\' {
+                    Skip::Ground
+                } else {
+                    Skip::Osc
+                };
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        drop_echo, now_timestamp, pending_path, should_record, trim_trailing_mark, Pending,
+        drop_echo, now_timestamp, pending_path, should_record, trim_trailing_mark, Pending, Screen,
     };
     use sivtr_core::session::SessionState;
 
@@ -511,5 +657,57 @@ mod tests {
     fn keeps_everything_when_no_prompt_was_recorded() {
         let output = "one\n\u{1b}[7m%\u{1b}[0m";
         assert_eq!(trim_trailing_mark(output, ""), output);
+    }
+
+    #[test]
+    fn answers_cursor_query_and_hides_it() {
+        let mut screen = Screen::new(24, 80);
+        let (out, replies) = screen.push(b"\x1b[6n");
+        assert!(out.is_empty());
+        assert_eq!(replies, b"\x1b[1;1R");
+    }
+
+    #[test]
+    fn answers_a_cursor_query_split_across_reads() {
+        let mut screen = Screen::new(24, 80);
+        let (out, replies) = screen.push(b"\x1b[6");
+        assert!(out.is_empty());
+        assert!(replies.is_empty());
+        let (out, replies) = screen.push(b"n");
+        assert!(out.is_empty());
+        assert_eq!(replies, b"\x1b[1;1R");
+    }
+
+    #[test]
+    fn cursor_query_reports_the_column_after_text() {
+        let mut screen = Screen::new(24, 80);
+        let (out, replies) = screen.push("hi\x1b[6n".as_bytes());
+        assert_eq!(out, b"hi");
+        assert_eq!(replies, b"\x1b[1;3R");
+    }
+
+    #[test]
+    fn newline_puts_the_cursor_back_at_column_one() {
+        let mut screen = Screen::new(24, 80);
+        let (out, replies) = screen.push("ab\n\x1b[6n".as_bytes());
+        assert_eq!(out, b"ab\n");
+        assert_eq!(replies, b"\x1b[2;1R");
+    }
+
+    #[test]
+    fn color_and_osc_do_not_move_the_cursor() {
+        let mut screen = Screen::new(24, 80);
+        let (out, replies) = screen.push("\x1b[31mX\x1b[0m\x1b]133;A\x1b\\Y\x1b[6n".as_bytes());
+        assert_eq!(out, "\x1b[31mX\x1b[0m\x1b]133;A\x1b\\Y".as_bytes());
+        assert_eq!(replies, b"\x1b[1;3R");
+    }
+
+    #[test]
+    fn a_lookalike_csi_is_forwarded() {
+        let mut screen = Screen::new(24, 80);
+        let (out, replies) = screen.push(b"\x1b[6m");
+        assert_eq!(out, b"\x1b[6m");
+        assert!(replies.is_empty());
+        assert!(screen.finish().is_empty());
     }
 }
