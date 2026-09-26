@@ -180,25 +180,101 @@ fn pump(
 
 /// Feed the real terminal's input to the pty.
 ///
-/// Ctrl-C and Ctrl-Z travel as ordinary bytes, and the pty's line discipline
-/// turns them into signals for the child — no signal forwarding needed.
+/// Unix delivers keystrokes as bytes, and the pty line discipline turns
+/// Ctrl-C into a signal. Windows `ReadFile` does not: arrow keys never show
+/// up, and Backspace arrives as `0x08`, which ConPTY reports to the shell as
+/// Ctrl+Backspace (delete the word). Read console key events instead and
+/// hand ConPTY the win32-input-mode sequence it asked for.
 fn spawn_input(writer: Arc<Mutex<Box<dyn Write + Send>>>) {
     std::thread::spawn(move || {
-        let mut stdin = std::io::stdin();
-        let mut chunk = [0u8; 8192];
-        while let Ok(read) = stdin.read(&mut chunk) {
-            if read == 0 {
-                break;
-            }
-            let Ok(mut writer) = writer.lock() else {
-                break;
-            };
-            if writer.write_all(&chunk[..read]).is_err() {
-                break;
-            }
-            let _ = writer.flush();
-        }
+        let _ = forward_input(&writer);
     });
+}
+
+#[cfg(not(windows))]
+fn forward_input(writer: &Mutex<Box<dyn Write + Send>>) -> std::io::Result<()> {
+    let mut stdin = std::io::stdin();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let read = stdin.read(&mut chunk)?;
+        if read == 0 {
+            return Ok(());
+        }
+        let mut input = writer.lock().unwrap_or_else(|poison| poison.into_inner());
+        input.write_all(&chunk[..read])?;
+        input.flush()?;
+    }
+}
+
+#[cfg(windows)]
+fn encode_win32_key(vk: u16, scan: u16, ch: u16, down: bool, mods: u32, repeat: u16) -> String {
+    format!(
+        "\u{1b}[{vk};{scan};{ch};{};{mods};{repeat}_",
+        u8::from(down)
+    )
+}
+
+#[cfg(windows)]
+fn forward_input(writer: &Mutex<Box<dyn Write + Send>>) -> std::io::Result<()> {
+    use std::mem::MaybeUninit;
+    use winapi::um::consoleapi::ReadConsoleInputW;
+    use winapi::um::processenv::GetStdHandle;
+    use winapi::um::winbase::STD_INPUT_HANDLE;
+    use winapi::um::wincontypes::{INPUT_RECORD, KEY_EVENT, LEFT_CTRL_PRESSED, RIGHT_CTRL_PRESSED};
+
+    let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+    let mut records: [MaybeUninit<INPUT_RECORD>; 128] =
+        std::array::from_fn(|_| MaybeUninit::uninit());
+    loop {
+        let mut read = 0u32;
+        let ok = unsafe {
+            ReadConsoleInputW(
+                handle,
+                records.as_mut_ptr().cast(),
+                records.len() as u32,
+                &mut read,
+            )
+        };
+        if ok == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if read == 0 {
+            return Ok(());
+        }
+        let mut out = Vec::new();
+        for record in records.iter().take(read as usize) {
+            let record = unsafe { record.assume_init_ref() };
+            if record.EventType != KEY_EVENT {
+                continue;
+            }
+            let key = unsafe { record.Event.KeyEvent() };
+            let down = key.bKeyDown != 0;
+            let ch = unsafe { *key.uChar.UnicodeChar() };
+            out.extend(
+                encode_win32_key(
+                    key.wVirtualKeyCode,
+                    key.wVirtualScanCode,
+                    ch,
+                    down,
+                    key.dwControlKeyState,
+                    key.wRepeatCount,
+                )
+                .bytes(),
+            );
+            let ctrl = key.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED) != 0;
+            // ETX is what ConPTY turns into a console break. The win32 key
+            // event alone does not stop a running command.
+            if down && ctrl && key.wVirtualKeyCode == 0x43 {
+                out.push(0x03);
+            }
+        }
+        if out.is_empty() {
+            continue;
+        }
+        let mut input = writer.lock().unwrap_or_else(|poison| poison.into_inner());
+        input.write_all(&out)?;
+        input.flush()?;
+    }
 }
 
 /// Keep the pty sized to the real terminal.
@@ -657,6 +733,17 @@ mod tests {
     fn keeps_everything_when_no_prompt_was_recorded() {
         let output = "one\n\u{1b}[7m%\u{1b}[0m";
         assert_eq!(trim_trailing_mark(output, ""), output);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn win32_backspace_is_the_sequence_conpty_treats_as_one_character() {
+        // Probed against pwsh ReadKey: this sequence is Backspace with no
+        // modifier. The raw byte 0x08 is Backspace+Control, which deletes a word.
+        assert_eq!(
+            super::encode_win32_key(0x08, 0x0e, 0x08, true, 0, 1),
+            "\u{1b}[8;14;8;1;0;1_"
+        );
     }
 
     #[test]
