@@ -102,7 +102,7 @@ pub fn run(program: &str, args: &[String]) -> Result<i32> {
     let resizer = spawn_resizer(Arc::clone(&stop), pair.master);
 
     let output_writer = Arc::clone(&writer);
-    let output = std::thread::spawn(move || pump(&mut reader, id, output_writer, rows, cols));
+    let output = std::thread::spawn(move || pump(&mut reader, id, output_writer));
     spawn_input(writer);
 
     let status = child.wait().context("failed to wait for the shell")?;
@@ -127,12 +127,12 @@ fn pump(
     reader: &mut Box<dyn Read + Send>,
     terminal_id: String,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
-    rows: u16,
-    cols: u16,
 ) -> Result<()> {
     let mut stdout = std::io::stdout();
     let mut stream = Stream::default();
-    let mut screen = Screen::new(rows, cols);
+    let mut screen = CursorQuery {
+        pending: Vec::new(),
+    };
     let mut recorder = Recorder {
         terminal_id,
         ..Recorder::default()
@@ -178,19 +178,17 @@ fn pump(
     Ok(())
 }
 
-/// Feed the real terminal's input to the pty.
+/// Copy keystrokes to the pty unchanged.
 ///
-/// Unix already delivers keystrokes as bytes. Windows `ReadFile` does not:
-/// arrow keys never appear, and Backspace arrives as `0x08`, which ConPTY
-/// reports as Ctrl+Backspace. Read the console key events and write ordinary
-/// VT, which line editors and raw-mode TUIs (Node, cmdc) both understand.
+/// The outer terminal already encoded the keys. Re-encoding them is what made
+/// raw-mode programs (cmdc) see nothing. On Windows the console is put in VT
+/// input mode first, so `ReadFile` yields the same byte stream Unix stdin has.
 fn spawn_input(writer: Arc<Mutex<Box<dyn Write + Send>>>) {
     std::thread::spawn(move || {
         let _ = forward_input(&writer);
     });
 }
 
-#[cfg(not(windows))]
 fn forward_input(writer: &Mutex<Box<dyn Write + Send>>) -> std::io::Result<()> {
     let mut stdin = std::io::stdin();
     let mut chunk = [0u8; 8192];
@@ -201,148 +199,6 @@ fn forward_input(writer: &Mutex<Box<dyn Write + Send>>) -> std::io::Result<()> {
         }
         let mut input = writer.lock().unwrap_or_else(|poison| poison.into_inner());
         input.write_all(&chunk[..read])?;
-        input.flush()?;
-    }
-}
-
-/// Virtual-key codes this encoder cares about. Numeric so the tests run everywhere.
-const VK_BACK: u16 = 0x08;
-const VK_TAB: u16 = 0x09;
-const VK_RETURN: u16 = 0x0D;
-const VK_ESCAPE: u16 = 0x1B;
-const VK_PRIOR: u16 = 0x21;
-const VK_NEXT: u16 = 0x22;
-const VK_END: u16 = 0x23;
-const VK_HOME: u16 = 0x24;
-const VK_LEFT: u16 = 0x25;
-const VK_UP: u16 = 0x26;
-const VK_RIGHT: u16 = 0x27;
-const VK_DOWN: u16 = 0x28;
-const VK_INSERT: u16 = 0x2D;
-const VK_DELETE: u16 = 0x2E;
-
-/// Bytes to write into the pty for one key press.
-///
-/// Backspace must be `0x7f`. ConPTY treats `0x08` as Ctrl+Backspace, which
-/// deletes a word. Arrow keys and Ctrl+C are the plain VT sequences raw-mode
-/// programs parse; win32-input-mode (`ESC [ ... _`) is not among them, so a
-/// TUI such as cmdc never sees a key.
-fn encode_console_key(vk: u16, ch: u16, down: bool, ctrl: bool, alt: bool, shift: bool) -> Vec<u8> {
-    if !down {
-        return Vec::new();
-    }
-    if ctrl && !alt && !shift && (0x41..=0x5A).contains(&vk) {
-        return vec![(vk - 0x40) as u8];
-    }
-    // Modifier lives inside the sequence. Prefixing ESC as well would make
-    // Alt+Left two sequences, which a raw-mode reader treats as Escape then Left.
-    match vk {
-        VK_TAB if shift => return csi("", b'Z', false, alt, false),
-        VK_LEFT => return csi("", b'D', ctrl, alt, shift),
-        VK_UP => return csi("", b'A', ctrl, alt, shift),
-        VK_RIGHT => return csi("", b'C', ctrl, alt, shift),
-        VK_DOWN => return csi("", b'B', ctrl, alt, shift),
-        VK_HOME => return csi("", b'H', ctrl, alt, shift),
-        VK_END => return csi("", b'F', ctrl, alt, shift),
-        VK_INSERT => return csi("2", b'~', ctrl, alt, shift),
-        VK_DELETE => return csi("3", b'~', ctrl, alt, shift),
-        VK_PRIOR => return csi("5", b'~', ctrl, alt, shift),
-        VK_NEXT => return csi("6", b'~', ctrl, alt, shift),
-        _ => {}
-    }
-    let bytes = match vk {
-        VK_BACK => vec![if ctrl { 0x08 } else { 0x7f }],
-        VK_TAB => vec![b'\t'],
-        VK_RETURN => vec![b'\r'],
-        VK_ESCAPE => vec![0x1b],
-        _ if (0x20..0xD800).contains(&ch) => {
-            let mut encoded = [0u8; 4];
-            let Some(ch) = char::from_u32(u32::from(ch)) else {
-                return Vec::new();
-            };
-            ch.encode_utf8(&mut encoded).as_bytes().to_vec()
-        }
-        _ => return Vec::new(),
-    };
-    if alt {
-        let mut with_meta = vec![0x1b];
-        with_meta.extend(bytes);
-        return with_meta;
-    }
-    bytes
-}
-
-fn csi(param: &str, final_byte: u8, ctrl: bool, alt: bool, shift: bool) -> Vec<u8> {
-    let modifier = 1 + usize::from(shift) + 2 * usize::from(alt) + 4 * usize::from(ctrl);
-    let body = if modifier == 1 {
-        param.to_string()
-    } else if param.is_empty() {
-        format!("1;{modifier}")
-    } else {
-        format!("{param};{modifier}")
-    };
-    let mut seq = vec![0x1b, b'['];
-    seq.extend(body.bytes());
-    seq.push(final_byte);
-    seq
-}
-
-#[cfg(windows)]
-fn forward_input(writer: &Mutex<Box<dyn Write + Send>>) -> std::io::Result<()> {
-    use std::mem::MaybeUninit;
-    use winapi::um::consoleapi::ReadConsoleInputW;
-    use winapi::um::processenv::GetStdHandle;
-    use winapi::um::winbase::STD_INPUT_HANDLE;
-    use winapi::um::wincontypes::{
-        INPUT_RECORD, KEY_EVENT, LEFT_ALT_PRESSED, LEFT_CTRL_PRESSED, RIGHT_ALT_PRESSED,
-        RIGHT_CTRL_PRESSED, SHIFT_PRESSED,
-    };
-
-    let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
-    let mut records: [MaybeUninit<INPUT_RECORD>; 128] =
-        std::array::from_fn(|_| MaybeUninit::uninit());
-    loop {
-        let mut read = 0u32;
-        let ok = unsafe {
-            ReadConsoleInputW(
-                handle,
-                records.as_mut_ptr().cast(),
-                records.len() as u32,
-                &mut read,
-            )
-        };
-        if ok == 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        if read == 0 {
-            return Ok(());
-        }
-        let mut out = Vec::new();
-        for record in records.iter().take(read as usize) {
-            let record = unsafe { record.assume_init_ref() };
-            if record.EventType != KEY_EVENT {
-                continue;
-            }
-            let key = unsafe { record.Event.KeyEvent() };
-            let mods = key.dwControlKeyState;
-            let times = key.wRepeatCount.max(1);
-            let bytes = encode_console_key(
-                key.wVirtualKeyCode,
-                unsafe { *key.uChar.UnicodeChar() },
-                key.bKeyDown != 0,
-                mods & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED) != 0,
-                mods & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED) != 0,
-                mods & SHIFT_PRESSED != 0,
-            );
-            for _ in 0..times {
-                out.extend(&bytes);
-            }
-        }
-        if out.is_empty() {
-            continue;
-        }
-        let mut input = writer.lock().unwrap_or_else(|poison| poison.into_inner());
-        input.write_all(&out)?;
         input.flush()?;
     }
 }
@@ -539,6 +395,8 @@ impl RawMode {
             anyhow::bail!("stdin is not a terminal");
         }
         crossterm::terminal::enable_raw_mode()?;
+        #[cfg(windows)]
+        Self::enable_vt_input()?;
         Ok(Self)
     }
 }
@@ -549,127 +407,62 @@ impl Drop for RawMode {
     }
 }
 
-/// Cursor position inside the pty, plus a filter for CSI 6n.
-///
-/// A pty master answers `CSI 6n` itself. The cursor the child asked about is
-/// the one in this pty, so the query is not forwarded to the outer terminal.
-///
-/// ponytail: columns ignore East-Asian width; use `unicode-width` if a CJK
-/// prompt reports a short cursor and redraws on top of itself.
-struct Screen {
-    row: u16,
-    col: u16,
-    rows: u16,
-    cols: u16,
-    /// Partial `ESC [ 6 n`, held so a query split across reads is still one query.
-    pending: Vec<u8>,
-    skip: Skip,
-}
+impl RawMode {
+    #[cfg(windows)]
+    fn enable_vt_input() -> Result<()> {
+        use winapi::um::consoleapi::{GetConsoleMode, SetConsoleMode};
+        use winapi::um::processenv::GetStdHandle;
+        use winapi::um::winbase::STD_INPUT_HANDLE;
+        use winapi::um::wincon::ENABLE_VIRTUAL_TERMINAL_INPUT;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Skip {
-    Ground,
-    Esc,
-    Csi,
-    Osc,
-    OscEsc,
-}
-
-impl Screen {
-    fn new(rows: u16, cols: u16) -> Self {
-        Self {
-            row: 1,
-            col: 1,
-            rows: rows.max(1),
-            cols: cols.max(1),
-            pending: Vec::new(),
-            skip: Skip::Ground,
+        let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+        let mut mode = 0u32;
+        if unsafe { GetConsoleMode(handle, &mut mode) } == 0 {
+            anyhow::bail!("failed to read console input mode");
         }
+        if unsafe { SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_INPUT) } == 0 {
+            anyhow::bail!("failed to enable virtual terminal input");
+        }
+        Ok(())
     }
+}
 
-    /// Bytes to show, and the cursor-position replies to write back to the pty.
+/// Holds a split `CSI 6n` and answers it.
+///
+/// ConPTY will not start the child until the pty master replies. The reply is
+/// fixed at 1;1: the outer terminal's cursor belongs to a different device.
+struct CursorQuery {
+    pending: Vec<u8>,
+}
+
+impl CursorQuery {
     fn push(&mut self, bytes: &[u8]) -> (Vec<u8>, Vec<u8>) {
-        let mut out = Vec::with_capacity(bytes.len());
+        let mut out = Vec::new();
         let mut replies = Vec::new();
         for &byte in bytes {
             self.pending.push(byte);
             if b"\x1b[6n".starts_with(&self.pending) {
                 if self.pending.len() == 4 {
                     self.pending.clear();
-                    let _ = write!(replies, "\x1b[{};{}R", self.row, self.col);
+                    replies.extend_from_slice(b"\x1b[1;1R");
                 }
                 continue;
             }
-            for byte in std::mem::take(&mut self.pending) {
-                self.emit(byte, &mut out);
-            }
+            out.extend(std::mem::take(&mut self.pending));
         }
         (out, replies)
     }
 
-    /// Flush a query fragment that never completed.
     fn finish(&mut self) -> Vec<u8> {
-        let mut out = Vec::new();
-        for byte in std::mem::take(&mut self.pending) {
-            self.emit(byte, &mut out);
-        }
-        out
-    }
-
-    fn emit(&mut self, byte: u8, out: &mut Vec<u8>) {
-        out.push(byte);
-        match self.skip {
-            Skip::Ground => match byte {
-                0x1b => self.skip = Skip::Esc,
-                b'\n' => {
-                    self.row = (self.row + 1).min(self.rows);
-                    self.col = 1;
-                }
-                b'\r' => self.col = 1,
-                0x08 => self.col = self.col.saturating_sub(1).max(1),
-                other if other < 0x20 || other & 0b1100_0000 == 0b1000_0000 => {}
-                _ => {
-                    if self.col < self.cols {
-                        self.col += 1;
-                    }
-                }
-            },
-            Skip::Esc => {
-                self.skip = match byte {
-                    b'[' => Skip::Csi,
-                    b']' => Skip::Osc,
-                    _ => Skip::Ground,
-                };
-            }
-            Skip::Csi => {
-                if (0x40..=0x7e).contains(&byte) {
-                    self.skip = Skip::Ground;
-                }
-            }
-            Skip::Osc => {
-                self.skip = if byte == 0x07 {
-                    Skip::Ground
-                } else if byte == 0x1b {
-                    Skip::OscEsc
-                } else {
-                    Skip::Osc
-                };
-            }
-            Skip::OscEsc => {
-                self.skip = if byte == b'\\' {
-                    Skip::Ground
-                } else {
-                    Skip::Osc
-                };
-            }
-        }
+        std::mem::take(&mut self.pending)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        drop_echo, now_timestamp, pending_path, should_record, trim_trailing_mark, Pending, Screen,
+        drop_echo, now_timestamp, pending_path, should_record, trim_trailing_mark, CursorQuery,
+        Pending,
     };
     use sivtr_core::session::SessionState;
 
@@ -806,32 +599,10 @@ mod tests {
     }
 
     #[test]
-    fn console_keys_are_plain_vt() {
-        // 0x08 is Ctrl+Backspace inside ConPTY. 0x7f is a single-character delete.
-        assert_eq!(
-            super::encode_console_key(super::VK_BACK, 0x08, true, false, false, false),
-            b"\x7f"
-        );
-        assert_eq!(
-            super::encode_console_key(super::VK_BACK, 0x08, true, true, false, false),
-            b"\x08"
-        );
-        assert_eq!(
-            super::encode_console_key(super::VK_LEFT, 0, true, false, false, false),
-            b"\x1b[D"
-        );
-        assert_eq!(
-            super::encode_console_key(0x43, 3, true, true, false, false),
-            b"\x03"
-        );
-        assert!(
-            super::encode_console_key(super::VK_LEFT, 0, false, false, false, false).is_empty()
-        );
-    }
-
-    #[test]
     fn answers_cursor_query_and_hides_it() {
-        let mut screen = Screen::new(24, 80);
+        let mut screen = CursorQuery {
+            pending: Vec::new(),
+        };
         let (out, replies) = screen.push(b"\x1b[6n");
         assert!(out.is_empty());
         assert_eq!(replies, b"\x1b[1;1R");
@@ -839,7 +610,9 @@ mod tests {
 
     #[test]
     fn answers_a_cursor_query_split_across_reads() {
-        let mut screen = Screen::new(24, 80);
+        let mut screen = CursorQuery {
+            pending: Vec::new(),
+        };
         let (out, replies) = screen.push(b"\x1b[6");
         assert!(out.is_empty());
         assert!(replies.is_empty());
@@ -849,32 +622,10 @@ mod tests {
     }
 
     #[test]
-    fn cursor_query_reports_the_column_after_text() {
-        let mut screen = Screen::new(24, 80);
-        let (out, replies) = screen.push("hi\x1b[6n".as_bytes());
-        assert_eq!(out, b"hi");
-        assert_eq!(replies, b"\x1b[1;3R");
-    }
-
-    #[test]
-    fn newline_puts_the_cursor_back_at_column_one() {
-        let mut screen = Screen::new(24, 80);
-        let (out, replies) = screen.push("ab\n\x1b[6n".as_bytes());
-        assert_eq!(out, b"ab\n");
-        assert_eq!(replies, b"\x1b[2;1R");
-    }
-
-    #[test]
-    fn color_and_osc_do_not_move_the_cursor() {
-        let mut screen = Screen::new(24, 80);
-        let (out, replies) = screen.push("\x1b[31mX\x1b[0m\x1b]133;A\x1b\\Y\x1b[6n".as_bytes());
-        assert_eq!(out, "\x1b[31mX\x1b[0m\x1b]133;A\x1b\\Y".as_bytes());
-        assert_eq!(replies, b"\x1b[1;3R");
-    }
-
-    #[test]
     fn a_lookalike_csi_is_forwarded() {
-        let mut screen = Screen::new(24, 80);
+        let mut screen = CursorQuery {
+            pending: Vec::new(),
+        };
         let (out, replies) = screen.push(b"\x1b[6m");
         assert_eq!(out, b"\x1b[6m");
         assert!(replies.is_empty());
