@@ -111,10 +111,10 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 flate2 = "1.1.9"
 tar = { version = "0.4.46", default-features = false }
 notify = "8.2"
-portable-pty = "0.9"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+portable-pty = "0.9"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["consoleapi", "fileapi", "handleapi", "namedpipeapi", "processenv", "processthreadsapi", "synchapi", "winbase", "wincon", "winerror", "winnt", "winuser", "windef", "minwindef"] }

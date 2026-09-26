@@ -1,14 +1,18 @@
 //! PTY proxy: owns the terminal, runs the shell inside a pty, and records one
 //! session entry per command.
 //!
-//! The child gets a real pty, so `isatty` is true and interactive programs
-//! behave exactly as they do without the proxy. The proxy only forwards bytes
-//! and acts on the OSC 133 markers the shell integration emits.
+//! Both sides speak VT. Unix uses a kernel pty. Windows opens a pseudoconsole
+//! with no extra flags, so it is the same kind of byte pipe. The proxy copies
+//! those bytes and slices commands on the OSC 133 markers the shell emits.
 
 pub mod stream;
 
+#[cfg(windows)]
+mod conpty;
+
 use anyhow::{Context, Result};
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+#[cfg(unix)]
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
 use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
@@ -62,6 +66,17 @@ pub fn pending_path(terminal_id: &str) -> PathBuf {
         .join(format!("{terminal_id}.pending"))
 }
 
+struct Opened {
+    reader: Box<dyn Read + Send>,
+    writer: Box<dyn Write + Send>,
+    resize: Box<dyn FnMut(u16, u16) + Send>,
+    wait: Box<dyn FnOnce() -> Result<i32> + Send>,
+    /// Last owner of the Windows pseudoconsole. Dropped after the child has
+    /// exited so the output pipe reaches EOF. Unix closes the pty by dropping
+    /// the master inside `resize`.
+    close: Option<Box<dyn Send>>,
+}
+
 /// Run `program` inside a pty until it exits, returning its exit code.
 pub fn run(program: &str, args: &[String]) -> Result<i32> {
     // Inherited by the child, so everything in the session agrees on one log.
@@ -70,50 +85,21 @@ pub fn run(program: &str, args: &[String]) -> Result<i32> {
     // Take the terminal before spawning anything: failing here must not leave a
     // shell running in a pty that nobody drains.
     let restore = RawMode::enable().context("failed to put the terminal in raw mode")?;
-    let pair = native_pty_system()
-        .openpty(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .context("failed to open a pty")?;
-
-    let mut command = CommandBuilder::new(program);
-    command.args(args);
-    // portable-pty falls back to `$HOME` when no cwd is given, which would drop
-    // the shell into the wrong directory and resolve the wrong workspace.
-    command.cwd(std::env::current_dir().context("failed to resolve the current directory")?);
-    command.env(PROXIED_ENV, "1");
-    command.env(PROXY_ENV, "1");
-    command.env("SIVTR_TERMINAL_ID", &id);
-    let mut child = pair
-        .slave
-        .spawn_command(command)
-        .with_context(|| format!("failed to start {program} in a pty"))?;
-
-    let mut reader = pair.master.try_clone_reader().context("pty reader")?;
-    let writer = Arc::new(Mutex::new(pair.master.take_writer().context("pty writer")?));
-    // Closing our copy of the slave is what lets the reader see EOF once the
-    // child exits; holding it open would hang the reader thread forever.
-    drop(pair.slave);
-
+    let opened = open_pty(program, args, cols, rows, &id)?;
+    let writer = Arc::new(Mutex::new(opened.writer));
     let stop = Arc::new(AtomicBool::new(false));
-    let resizer = spawn_resizer(Arc::clone(&stop), pair.master);
-
-    let output_writer = Arc::clone(&writer);
-    let output = std::thread::spawn(move || pump(&mut reader, id, output_writer));
+    let resizer = spawn_resizer(Arc::clone(&stop), opened.resize);
+    let output = std::thread::spawn(move || pump(opened.reader, id));
     spawn_input(writer);
 
-    let status = child.wait().context("failed to wait for the shell")?;
-    let exit_code = status.exit_code() as i32;
-
-    // The reader reaches EOF only after the master is dropped. Close it before
-    // joining that thread; the same order is what lets the proxy exit on every
-    // platform once the shell is gone.
+    let exit_code = (opened.wait)();
+    // Stop resizing, then close the pty, then drain the last output. Closing
+    // is what makes the reader see EOF.
     stop.store(true, Ordering::Relaxed);
     let _ = resizer.join();
+    drop(opened.close);
     let outcome = output.join().unwrap_or_else(|_| Ok(()));
+    let exit_code = exit_code.context("failed to wait for the shell")?;
     drop(restore);
 
     if let Err(error) = outcome {
@@ -122,17 +108,69 @@ pub fn run(program: &str, args: &[String]) -> Result<i32> {
     Ok(exit_code)
 }
 
+#[cfg(unix)]
+fn open_pty(program: &str, args: &[String], cols: u16, rows: u16, id: &str) -> Result<Opened> {
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .context("failed to open a pty")?;
+    let mut command = CommandBuilder::new(program);
+    command.args(args);
+    // portable-pty falls back to `$HOME` when no cwd is given, which would drop
+    // the shell into the wrong directory and resolve the wrong workspace.
+    command.cwd(std::env::current_dir().context("failed to resolve the current directory")?);
+    command.env(PROXIED_ENV, "1");
+    command.env(PROXY_ENV, "1");
+    command.env("SIVTR_TERMINAL_ID", id);
+    let mut child = pair
+        .slave
+        .spawn_command(command)
+        .with_context(|| format!("failed to start {program} in a pty"))?;
+    let reader = pair.master.try_clone_reader().context("pty reader")?;
+    let writer = pair.master.take_writer().context("pty writer")?;
+    // Closing our copy of the slave is what lets the reader see EOF once the
+    // child exits; holding it open would hang the reader thread forever.
+    drop(pair.slave);
+    let mut master = pair.master;
+    Ok(Opened {
+        reader,
+        writer,
+        resize: Box::new(move |cols, rows| {
+            let _ = master.resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
+        }),
+        wait: Box::new(move || Ok(child.wait()?.exit_code() as i32)),
+        close: None,
+    })
+}
+
+#[cfg(windows)]
+fn open_pty(program: &str, args: &[String], cols: u16, rows: u16, id: &str) -> Result<Opened> {
+    let pty = conpty::ConPty::spawn(program, args, cols, rows, id)?;
+    let waited = std::sync::Arc::clone(&pty.session);
+    let resized = std::sync::Arc::clone(&pty.session);
+    let closed = std::sync::Arc::clone(&pty.session);
+    Ok(Opened {
+        reader: Box::new(pty.output),
+        writer: Box::new(pty.input),
+        resize: Box::new(move |cols, rows| resized.resize(cols, rows)),
+        wait: Box::new(move || waited.wait()),
+        close: Some(Box::new(closed)),
+    })
+}
+
 /// Forward everything the shell prints to the real terminal, recording blocks.
-fn pump(
-    reader: &mut Box<dyn Read + Send>,
-    terminal_id: String,
-    writer: Arc<Mutex<Box<dyn Write + Send>>>,
-) -> Result<()> {
+fn pump(mut reader: Box<dyn Read + Send>, terminal_id: String) -> Result<()> {
     let mut stdout = std::io::stdout();
     let mut stream = Stream::default();
-    let mut screen = CursorQuery {
-        pending: Vec::new(),
-    };
     let mut recorder = Recorder {
         terminal_id,
         ..Recorder::default()
@@ -146,20 +184,9 @@ fn pump(
             Err(error) if is_hangup(&error) => break,
             Err(error) => return Err(error).context("failed to read from the pty"),
         };
-
-        let (forward, replies) = screen.push(&chunk[..read]);
-        if !replies.is_empty() {
-            if let Ok(mut input) = writer.lock() {
-                let _ = input.write_all(&replies);
-                let _ = input.flush();
-            }
-        }
-        if !forward.is_empty() {
-            stdout.write_all(&forward)?;
-            stdout.flush()?;
-        }
-
-        for event in stream.push(&forward) {
+        stdout.write_all(&chunk[..read])?;
+        stdout.flush()?;
+        for event in stream.push(&chunk[..read]) {
             match event {
                 Event::CommandStart => recorder.started = Some(Instant::now()),
                 Event::CommandEnd(exit_code) => {
@@ -168,12 +195,6 @@ fn pump(
                 }
             }
         }
-    }
-
-    let tail = screen.finish();
-    if !tail.is_empty() {
-        stdout.write_all(&tail)?;
-        stdout.flush()?;
     }
     Ok(())
 }
@@ -206,7 +227,7 @@ fn forward_input(writer: &Mutex<Box<dyn Write + Send>>) -> std::io::Result<()> {
 /// Keep the pty sized to the real terminal.
 fn spawn_resizer(
     stop: Arc<AtomicBool>,
-    master: Box<dyn MasterPty + Send>,
+    mut resize: Box<dyn FnMut(u16, u16) + Send>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let mut current = crossterm::terminal::size().unwrap_or((80, 24));
@@ -219,12 +240,7 @@ fn spawn_resizer(
                 continue;
             }
             current = size;
-            let _ = master.resize(PtySize {
-                rows: size.1,
-                cols: size.0,
-                pixel_width: 0,
-                pixel_height: 0,
-            });
+            resize(size.0, size.1);
         }
     })
 }
@@ -427,42 +443,10 @@ impl RawMode {
     }
 }
 
-/// Holds a split `CSI 6n` and answers it.
-///
-/// ConPTY will not start the child until the pty master replies. The reply is
-/// fixed at 1;1: the outer terminal's cursor belongs to a different device.
-struct CursorQuery {
-    pending: Vec<u8>,
-}
-
-impl CursorQuery {
-    fn push(&mut self, bytes: &[u8]) -> (Vec<u8>, Vec<u8>) {
-        let mut out = Vec::new();
-        let mut replies = Vec::new();
-        for &byte in bytes {
-            self.pending.push(byte);
-            if b"\x1b[6n".starts_with(&self.pending) {
-                if self.pending.len() == 4 {
-                    self.pending.clear();
-                    replies.extend_from_slice(b"\x1b[1;1R");
-                }
-                continue;
-            }
-            out.extend(std::mem::take(&mut self.pending));
-        }
-        (out, replies)
-    }
-
-    fn finish(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.pending)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        drop_echo, now_timestamp, pending_path, should_record, trim_trailing_mark, CursorQuery,
-        Pending,
+        drop_echo, now_timestamp, pending_path, should_record, trim_trailing_mark, Pending,
     };
     use sivtr_core::session::SessionState;
 
@@ -596,39 +580,5 @@ mod tests {
     fn keeps_everything_when_no_prompt_was_recorded() {
         let output = "one\n\u{1b}[7m%\u{1b}[0m";
         assert_eq!(trim_trailing_mark(output, ""), output);
-    }
-
-    #[test]
-    fn answers_cursor_query_and_hides_it() {
-        let mut screen = CursorQuery {
-            pending: Vec::new(),
-        };
-        let (out, replies) = screen.push(b"\x1b[6n");
-        assert!(out.is_empty());
-        assert_eq!(replies, b"\x1b[1;1R");
-    }
-
-    #[test]
-    fn answers_a_cursor_query_split_across_reads() {
-        let mut screen = CursorQuery {
-            pending: Vec::new(),
-        };
-        let (out, replies) = screen.push(b"\x1b[6");
-        assert!(out.is_empty());
-        assert!(replies.is_empty());
-        let (out, replies) = screen.push(b"n");
-        assert!(out.is_empty());
-        assert_eq!(replies, b"\x1b[1;1R");
-    }
-
-    #[test]
-    fn a_lookalike_csi_is_forwarded() {
-        let mut screen = CursorQuery {
-            pending: Vec::new(),
-        };
-        let (out, replies) = screen.push(b"\x1b[6m");
-        assert_eq!(out, b"\x1b[6m");
-        assert!(replies.is_empty());
-        assert!(screen.finish().is_empty());
     }
 }
