@@ -135,7 +135,7 @@ fn open_pty(program: &str, args: &[String], cols: u16, rows: u16, id: &str) -> R
     // Closing our copy of the slave is what lets the reader see EOF once the
     // child exits; holding it open would hang the reader thread forever.
     drop(pair.slave);
-    let mut master = pair.master;
+    let master = pair.master;
     Ok(Opened {
         reader,
         writer,
@@ -176,6 +176,9 @@ fn pump(mut reader: Box<dyn Read + Send>, terminal_id: String) -> Result<()> {
         ..Recorder::default()
     };
     let mut chunk = [0u8; 8192];
+    // A failed terminal write must not stop this read. Before Windows 11
+    // 24H2, ClosePseudoConsole waits until the output pipe is drained.
+    let mut forward_error = None;
 
     loop {
         let read = match reader.read(&mut chunk) {
@@ -184,8 +187,15 @@ fn pump(mut reader: Box<dyn Read + Send>, terminal_id: String) -> Result<()> {
             Err(error) if is_hangup(&error) => break,
             Err(error) => return Err(error).context("failed to read from the pty"),
         };
-        stdout.write_all(&chunk[..read])?;
-        stdout.flush()?;
+        if forward_error.is_none() {
+            if let Err(error) = stdout
+                .write_all(&chunk[..read])
+                .and_then(|_| stdout.flush())
+                .context("failed to write pty output")
+            {
+                forward_error = Some(error);
+            }
+        }
         for event in stream.push(&chunk[..read]) {
             match event {
                 Event::CommandStart => recorder.started = Some(Instant::now()),
@@ -196,7 +206,10 @@ fn pump(mut reader: Box<dyn Read + Send>, terminal_id: String) -> Result<()> {
             }
         }
     }
-    Ok(())
+    match forward_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 /// Copy keystrokes to the pty unchanged.
@@ -412,7 +425,10 @@ impl RawMode {
         }
         crossterm::terminal::enable_raw_mode()?;
         #[cfg(windows)]
-        Self::enable_vt_input()?;
+        if let Err(error) = Self::enable_vt_input() {
+            let _ = crossterm::terminal::disable_raw_mode();
+            return Err(error);
+        }
         Ok(Self)
     }
 }
