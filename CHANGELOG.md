@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1](https://github.com/Ariestar/sivtr/compare/v0.8.0...v0.8.1) - 2026-09-26
+
+### Fixed
+
+- *(capture)* answer cursor queries in the pty proxy ([#370](https://github.com/Ariestar/sivtr/pull/370))
+- *(deps)* update dependency astro to v7.3.5 ([#362](https://github.com/Ariestar/sivtr/pull/362))
+- *(deps)* update dependency @astrojs/starlight to v0.42.4 ([#361](https://github.com/Ariestar/sivtr/pull/361))
+- *(deps)* update astro monorepo ([#354](https://github.com/Ariestar/sivtr/pull/354))
+
+### Other
+
+- *(deps)* update dependency wrangler to v4.141.0 ([#369](https://github.com/Ariestar/sivtr/pull/369))
+- *(deps)* update dependency @types/node to v24.19.0 ([#367](https://github.com/Ariestar/sivtr/pull/367))
+- *(deps)* update dependency @cloudflare/workers-types to v5.20260926.1 ([#368](https://github.com/Ariestar/sivtr/pull/368))
+- *(deps)* update dependency @types/node to v26.6.3 ([#366](https://github.com/Ariestar/sivtr/pull/366))
+- *(deps)* update dependency @cloudflare/workers-types to v5.20260925.2 ([#364](https://github.com/Ariestar/sivtr/pull/364))
+- *(deps)* update dependency vitest to v5.0.2 ([#365](https://github.com/Ariestar/sivtr/pull/365))
+- *(deps)* update dependency @cloudflare/workers-types to v5.20260925.1 ([#363](https://github.com/Ariestar/sivtr/pull/363))
+- *(deps)* update dependency vite to v8.3.1 ([#360](https://github.com/Ariestar/sivtr/pull/360))
+- *(deps)* update dependency @cloudflare/workers-types to v5.20260924.1 ([#359](https://github.com/Ariestar/sivtr/pull/359))
+- *(deps)* update dependency wrangler to v4.137.0 ([#358](https://github.com/Ariestar/sivtr/pull/358))
+- *(deps)* update rust crate rmcp to v3.4.1 ([#357](https://github.com/Ariestar/sivtr/pull/357))
+- *(deps)* update dependency @cloudflare/workers-types to v5.20260923.1 ([#355](https://github.com/Ariestar/sivtr/pull/355))
+- *(deps)* update dependency dompurify to v3.4.16 ([#356](https://github.com/Ariestar/sivtr/pull/356))
+
 ## [0.8.0](https://github.com/Ariestar/sivtr/compare/v0.7.1...v0.8.0) - 2026-09-22
 
 ### Added
