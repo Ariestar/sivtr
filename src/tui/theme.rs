@@ -2,15 +2,16 @@
 //!
 //! The active palette lives in a thread-local so existing accessor call
 //! sites (`accent()`, `focus_row()`, …) stay unchanged while the palette is
-//! chosen at TUI startup and swapped at runtime when the system appearance
+//! chosen at TUI startup and swapped at runtime when the terminal background
 //! changes.
 //!
-//! Light/dark follows the desktop session's appearance (macOS, Linux XDG
-//! portal, Windows registry) via `dark-light`; RGB vs ANSI rendering is
-//! decided by the terminal's truecolor advertisement. Agent label colors
-//! live in a single table, [`provider_colors`]: one row per agent holding
-//! all four palette variants.
+//! Light/dark follows the terminal the TUI paints on (`COLORFGBG`, then the
+//! Windows console color table, then desktop appearance on macOS/Linux). RGB
+//! vs ANSI rendering is decided by the terminal's truecolor advertisement.
+//! Agent label colors live in a single table, [`provider_colors`]: one row
+//! per agent holding all four palette variants.
 
+#[cfg(not(windows))]
 use dark_light::Mode;
 use ratatui::prelude::{Color, Modifier, Style};
 use sivtr_core::agents::AgentProvider;
@@ -18,7 +19,7 @@ use sivtr_core::config::ThemeMode;
 use std::cell::Cell;
 use std::time::Duration;
 
-/// How often the event loop re-checks the system appearance in auto mode.
+/// How often the event loop re-checks the terminal background in auto mode.
 pub(crate) const AUTO_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Which of the four color schemes is active. Chrome colors and agent label
@@ -283,14 +284,14 @@ thread_local! {
 }
 
 /// Pick the palette for this process. The preference decides light vs dark —
-/// auto follows the system appearance via desktop APIs — and the terminal's
-/// truecolor support decides RGB vs ANSI, so a forced light/dark mode still
-/// falls back to the ANSI palette when `COLORTERM` is absent, instead of
-/// emitting RGB sequences a non-truecolor terminal cannot render.
+/// auto follows the terminal background — and the terminal's truecolor
+/// support decides RGB vs ANSI, so a forced light/dark mode still falls back
+/// to the ANSI palette when `COLORTERM` is absent, instead of emitting RGB
+/// sequences a non-truecolor terminal cannot render.
 pub(crate) fn apply(preference: ThemeMode) {
     PREFERENCE.set(preference);
     let light = match preference {
-        ThemeMode::Auto => light_from_system(),
+        ThemeMode::Auto => light_from_environment(),
         ThemeMode::Dark => false,
         ThemeMode::Light => true,
     };
@@ -322,11 +323,177 @@ fn supports_truecolor() -> bool {
         .is_ok_and(|term| term.ends_with("-direct"))
 }
 
-/// Light when the desktop session reports a light appearance. Cross-platform
-/// (macOS / Linux XDG portal / Windows registry) via `dark-light`; anything
-/// else — dark, unspecified, or a detection error — stays dark.
-fn light_from_system() -> bool {
-    matches!(dark_light::detect(), Ok(Mode::Light))
+/// Light when the terminal the TUI paints on is light.
+///
+/// Windows Terminal / PowerShell is commonly dark while Windows itself stays
+/// in light mode. Following `AppsUseLightTheme` then paints the light
+/// palette's near-white `focus_bg` over the selected column. Prefer signals
+/// from the terminal, and skip the Windows registry fallback entirely.
+fn light_from_environment() -> bool {
+    if let Some(light) = colorfgbg_is_light() {
+        return light;
+    }
+    if let Some(light) = windows_console_is_light() {
+        return light;
+    }
+    light_from_desktop_appearance()
+}
+
+fn colorfgbg_is_light() -> Option<bool> {
+    parse_colorfgbg(&std::env::var("COLORFGBG").ok()?)
+}
+
+/// Whether a `COLORFGBG` value (`fg;bg`) denotes a light background.
+///
+/// `7` / `15` are the 16-color whites. Indexes `8..=14` are bright *foreground*
+/// colors (including bright black) and are not treated as a light paper
+/// color. 256-color backgrounds use relative luminance. Unset / `default` /
+/// unparsable values are unknown so a later detector can run.
+fn parse_colorfgbg(value: &str) -> Option<bool> {
+    let background = value.rsplit(';').next()?;
+    if background.eq_ignore_ascii_case("default") {
+        return None;
+    }
+    let index = background.parse::<u16>().ok()?;
+    Some(ansi_background_is_light(index))
+}
+
+fn ansi_background_is_light(index: u16) -> bool {
+    match index {
+        7 | 15 => true,
+        0..=15 => false,
+        16..=231 => {
+            let cube = (index - 16) as u8;
+            const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+            rgb_is_light(
+                LEVELS[(cube / 36) as usize],
+                LEVELS[((cube % 36) / 6) as usize],
+                LEVELS[(cube % 6) as usize],
+            )
+        }
+        232..=255 => {
+            let gray = 8 + (index as u8 - 232) * 10;
+            rgb_is_light(gray, gray, gray)
+        }
+        _ => false,
+    }
+}
+
+fn rgb_is_light(r: u8, g: u8, b: u8) -> bool {
+    rgb_relative_luminance(r, g, b) > 0.5
+}
+
+fn rgb_relative_luminance(r: u8, g: u8, b: u8) -> f64 {
+    let linear = |channel: u8| {
+        let value = f64::from(channel) / 255.0;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+}
+
+#[cfg(windows)]
+fn windows_console_is_light() -> Option<bool> {
+    windows_console_background().map(|(r, g, b)| rgb_is_light(r, g, b))
+}
+
+#[cfg(not(windows))]
+fn windows_console_is_light() -> Option<bool> {
+    None
+}
+
+/// Read the default background from the active console, not redirected stdout.
+///
+/// PowerShell and ConPTY often make a child STDOUT a pipe; `CONOUT$` is the
+/// screen the user is looking at. Prefer the 16-color table RGB so a light
+/// Windows Terminal scheme that still uses index 0 is classified correctly.
+#[cfg(windows)]
+fn windows_console_background() -> Option<(u8, u8, u8)> {
+    use std::ffi::OsStr;
+    use std::iter;
+    use std::mem::{size_of, zeroed};
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr;
+    use winapi::um::fileapi::{CreateFileW, OPEN_EXISTING};
+    use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
+    use winapi::um::processenv::GetStdHandle;
+    use winapi::um::winbase::STD_OUTPUT_HANDLE;
+    use winapi::um::wincon::{
+        GetConsoleScreenBufferInfo, GetConsoleScreenBufferInfoEx, CONSOLE_SCREEN_BUFFER_INFO,
+        CONSOLE_SCREEN_BUFFER_INFOEX,
+    };
+    use winapi::um::winnt::{FILE_SHARE_READ, FILE_SHARE_WRITE, GENERIC_READ, GENERIC_WRITE};
+
+    unsafe {
+        let name: Vec<u16> = OsStr::new("CONOUT$")
+            .encode_wide()
+            .chain(iter::once(0))
+            .collect();
+        let conout = CreateFileW(
+            name.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            ptr::null_mut(),
+            OPEN_EXISTING,
+            0,
+            ptr::null_mut(),
+        );
+        let (handle, should_close) = if !conout.is_null() && conout != INVALID_HANDLE_VALUE {
+            (conout, true)
+        } else {
+            (GetStdHandle(STD_OUTPUT_HANDLE), false)
+        };
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+            return None;
+        }
+
+        let mut info_ex: CONSOLE_SCREEN_BUFFER_INFOEX = zeroed();
+        info_ex.cbSize = size_of::<CONSOLE_SCREEN_BUFFER_INFOEX>() as u32;
+        let rgb = if GetConsoleScreenBufferInfoEx(handle, &mut info_ex) != 0 {
+            let index = ((info_ex.wAttributes >> 4) & 0x0F) as usize;
+            Some(colorref_rgb(info_ex.ColorTable[index]))
+        } else {
+            let mut info: CONSOLE_SCREEN_BUFFER_INFO = zeroed();
+            (GetConsoleScreenBufferInfo(handle, &mut info) != 0).then(|| {
+                let index = (info.wAttributes >> 4) & 0x0F;
+                if matches!(index, 7 | 15) {
+                    (255, 255, 255)
+                } else {
+                    (0, 0, 0)
+                }
+            })
+        };
+
+        if should_close {
+            CloseHandle(handle);
+        }
+        rgb
+    }
+}
+
+#[cfg(any(windows, test))]
+fn colorref_rgb(color: u32) -> (u8, u8, u8) {
+    (
+        (color & 0xFF) as u8,
+        ((color >> 8) & 0xFF) as u8,
+        ((color >> 16) & 0xFF) as u8,
+    )
+}
+
+/// Desktop appearance via `dark-light`. Skipped on Windows: the registry
+/// light/dark bit is not the PowerShell / Windows Terminal background.
+fn light_from_desktop_appearance() -> bool {
+    #[cfg(windows)]
+    {
+        false
+    }
+    #[cfg(not(windows))]
+    {
+        matches!(dark_light::detect(), Ok(Mode::Light))
+    }
 }
 
 /// Poll interval for appearance changes while the theme is in auto mode.
@@ -336,7 +503,7 @@ pub(crate) fn auto_interval() -> Option<Duration> {
     (PREFERENCE.get() == ThemeMode::Auto).then_some(AUTO_POLL_INTERVAL)
 }
 
-/// Re-check the system appearance and swap the palette when it changed.
+/// Re-check the terminal background and swap the palette when it changed.
 /// Returns true when the next frame must be redrawn. No-op outside auto mode.
 pub(crate) fn refresh_if_changed() -> bool {
     if PREFERENCE.get() != ThemeMode::Auto {
@@ -616,5 +783,52 @@ mod tests {
         assert!(!refresh_if_changed());
         apply(ThemeMode::Light);
         assert!(!refresh_if_changed());
+    }
+
+    #[test]
+    fn colorfgbg_treats_paper_whites_as_light() {
+        assert_eq!(parse_colorfgbg("0;15"), Some(true), "bright white");
+        assert_eq!(parse_colorfgbg("0;7"), Some(true), "white");
+        assert_eq!(parse_colorfgbg("15;0"), Some(false), "black");
+        assert_eq!(
+            parse_colorfgbg("15;8"),
+            Some(false),
+            "bright black is a dark background"
+        );
+        assert_eq!(parse_colorfgbg("15;16"), Some(false), "256-color black");
+        assert_eq!(
+            parse_colorfgbg("15;232"),
+            Some(false),
+            "256-color near-black"
+        );
+        assert_eq!(
+            parse_colorfgbg("15;231"),
+            Some(true),
+            "256-color cube white"
+        );
+        assert_eq!(parse_colorfgbg("15;default"), None);
+        assert_eq!(parse_colorfgbg("garbage"), None);
+    }
+
+    #[test]
+    fn windows_terminal_dark_backgrounds_are_not_light() {
+        // Windows Terminal Campbell / default PowerShell: near-black cell.
+        assert!(
+            !rgb_is_light(12, 12, 12),
+            "WT default background must keep the dark palette"
+        );
+        // Classic PowerShell conhost blue.
+        assert!(!rgb_is_light(1, 36, 86));
+        // Light-palette focus_bg (slate-100) — the white bar in #221.
+        assert!(
+            rgb_is_light(241, 245, 249),
+            "light focus veil must classify as light so it is not used on a dark terminal"
+        );
+    }
+
+    #[test]
+    fn colorref_unpacks_win32_bgr() {
+        assert_eq!(colorref_rgb(0x000C0C0C), (12, 12, 12));
+        assert_eq!(colorref_rgb(0x00562401), (1, 36, 86));
     }
 }
