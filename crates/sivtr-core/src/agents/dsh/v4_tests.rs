@@ -62,6 +62,48 @@ fn v4_metadata_uses_only_append_origin_human_prompts() {
 }
 
 #[test]
+fn skips_native_producer_context_without_losing_v4_dialogue_or_title() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.v4.jsonl");
+    let log = FIXTURE.replace(
+        "\"kind\":\"agent-instructions\"",
+        "\"kind\":\"example-context\"",
+    );
+    fs::write(&path, log).unwrap();
+
+    let meta = parse_session_meta(&path).unwrap();
+    assert_eq!(meta.title.as_deref(), Some("Run diagnostics."));
+    let session = DshProvider.parse_session_file(&path).unwrap();
+    assert_eq!(session.title.as_deref(), Some("Run diagnostics."));
+    assert_eq!(session.blocks.len(), 8);
+    assert_eq!(session.blocks[0].text, "Run diagnostics.");
+    assert!(!session
+        .blocks
+        .iter()
+        .any(|block| block.text.contains("Injected workspace instructions")));
+}
+
+#[test]
+fn rejects_retired_plugin_user_sources_in_v4_metadata_and_dialogue() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.v4.jsonl");
+    let log = FIXTURE.replace(
+        "\"source\":{\"kind\":\"agent-instructions\"}",
+        "\"source\":{\"kind\":\"plugin\",\"plugin\":\"@example/context\",\"form\":\"snapshot\"}",
+    );
+    fs::write(&path, log).unwrap();
+
+    for error in [
+        parse_session_meta(&path).unwrap_err(),
+        DshProvider.parse_session_file(&path).unwrap_err(),
+    ] {
+        let error = format!("{error:#}");
+        assert!(error.contains("native source attribution"), "{error}");
+        assert!(error.contains("line 2"), "{error}");
+    }
+}
+
+#[test]
 fn rejects_v4_messages_without_native_source_and_tool_identity() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("session.v4.jsonl");

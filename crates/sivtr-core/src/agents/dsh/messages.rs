@@ -32,6 +32,8 @@ pub(super) fn validate_v4_event(value: &Value) -> Result<()> {
         bail!("Dsh v4 {role} message is missing its payload");
     };
     let kind = message.pointer("/source/kind").and_then(Value::as_str);
+    // Native v4 rejects the retired plugin wrapper even for user context.
+    // Producer-owned kinds remain valid and are filtered from dialogue below.
     if !kind.is_some_and(|kind| !kind.is_empty() && kind != "plugin")
         || (role == "assistant" && kind != Some("model"))
         || (role == "tool" && kind != Some("tool"))
@@ -222,8 +224,8 @@ pub(super) fn event_title(value: &Value) -> Option<String> {
 /// runtime-context snapshots (`plugin`), workspace-instruction and
 /// skill-catalog injections (`agent-instructions`, `skill-catalog`), cron
 /// notices, and goal continuations. Only direct human prompts
-/// (`source.kind == "user"`, or a missing source) belong in the dialogue —
-/// the rest is runtime context that would pollute search.
+/// (`source.kind == "user"`) belong in the dialogue; v0 also accepts a missing
+/// source. Native v4 context uses producer-owned kinds, not the plugin wrapper.
 pub(super) fn is_user_message(value: &Value, version: u64) -> bool {
     match value.pointer("/data/source/kind").and_then(Value::as_str) {
         Some("user") => true,

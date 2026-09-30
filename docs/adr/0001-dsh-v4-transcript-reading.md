@@ -17,6 +17,9 @@ not restore a runnable Harness session or reconstruct model input.
 - Validate the transcript fields consumed by the adapter. Skip known context/trace
   events; refuse unknown required events and skip unknown `ignorable: true` events.
   Keep the v4 event vocabulary aligned with the official catalog when extending it.
+- Native v4 rejects the retired `source.kind: "plugin"` wrapper, including user
+  context. Accept nonempty producer-owned context kinds and omit them from dialogue
+  and fallback titles. Preserve the legacy plugin-context behavior only in v0.
 - Use a new Dsh listing-cache namespace because unchanged directory stamps cannot
   reveal files omitted by the old discovery predicate. No shared cache change is needed.
 
@@ -30,3 +33,4 @@ References:
 - [V4 persistence contract](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/persistence-changes/2026-09-16-session-format-v4.zh.md)
 - [Append-origin transcript semantics](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/core/session/src/surface.ts)
 - [Known event vocabulary](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/core/session/src/known-event-types.ts)
+- [Native v4 source admission](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/session/session-format-v3-to-v4/src/message-sources.ts)
