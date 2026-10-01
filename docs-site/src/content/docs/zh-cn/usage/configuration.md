@@ -80,7 +80,7 @@ sivtr hotkey start --provider claude
 mode = "auto"
 ```
 
-`auto` 跟随系统外观，并根据终端能力选择 truecolor 或 ANSI 调色板。用 `dark` 或 `light` 强制配色：
+`auto` 跟随**终端背景**（`COLORFGBG`，然后是 Windows 控制台调色板；macOS/Linux 再回退到系统外观），并根据终端能力选择 truecolor 或 ANSI 调色板。用 `dark` 或 `light` 强制配色：
 
 ```toml
 [theme]

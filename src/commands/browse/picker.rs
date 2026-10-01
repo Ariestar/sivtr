@@ -524,7 +524,7 @@ pub(crate) fn run(
 
         // Wait for input. While a load is in flight, keep a short poll so the
         // spinner animates and results repaint without a keypress. In auto
-        // theme mode, poll periodically so a system appearance change swaps
+        // theme mode, poll periodically so a terminal-background change swaps
         // the palette while the TUI stays up. When nothing is loading and the
         // theme is fixed, block until an event arrives instead of redrawing
         // the whole frame at a fixed rate.
@@ -539,7 +539,7 @@ pub(crate) fn run(
                 redraw = true;
             } else if crate::tui::theme::refresh_if_changed() {
                 // Idle polls already honor `auto_interval`; a loading poll is
-                // too fast to re-probe the desktop portal on every tick.
+                // too fast to re-probe the terminal background on every tick.
                 redraw = true;
             }
             continue;

@@ -72,7 +72,7 @@ With `sivtr`, you can:
 - **Optional semantic / hybrid search**: configure an OpenAI-compatible embedding endpoint for vector ranking or RRF fusion with BM25; structured search remains complete without it.
 - **Stats, quality, and portable import/export**: `stats`, secret findings, starred sessions, Claude.ai/ChatGPT JSON/ZIP import, and JSON/JSONL/Markdown/HTML export.
 - **Cross-device access**: share a workspace read-only and browse another device with a `desk:...` ref; multiple devices can form a `group` that syncs membership and lets members read each other's memory.
-- **Configurable theme**: `[theme] mode = auto|dark|light`, follows the system appearance and detects truecolor.
+- **Configurable theme**: `[theme] mode = auto|dark|light`, follows the terminal background and detects truecolor.
 - **One-command setup**: `sivtr setup` for hooks + MCP host install; `sivtr doctor --fix` to repair.
 - **CLI still there when you want it**: search, show, filter, nav, and a TUI browser for humans — useful, not the main product story.
 
