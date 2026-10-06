@@ -6,12 +6,26 @@
 //! fingerprint ([`crate::cache::records_fingerprint`]) plus an index-version
 //! tag; a fingerprint change (new/changed records) or a layout/scoring change
 //! naturally misses and rebuilds.
+//!
+//! Every distinct corpus gets its own file, and a corpus changes whenever a
+//! record is added, so superseded files pile up. Storing an index therefore
+//! prunes the directory down to the [`MAX_CACHED_INDEXES`] most recently used
+//! files; a cache hit refreshes the file's mtime so "recently used" means
+//! read or written.
+
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-use crate::cache::{index_cache_path, records_fingerprint, write_cache_atomic};
+use crate::cache::{cache_dir, index_cache_path, records_fingerprint, write_cache_atomic};
 use crate::record::WorkRef;
 use crate::search::bm25::{Bm25Index, INDEX_CACHE_VERSION};
+
+/// Index files kept on disk. Several corpora are live at once (one per
+/// source/workspace/filter combination in use), so this is a small LRU rather
+/// than a single slot; evicting a live index only costs one rebuild.
+pub const MAX_CACHED_INDEXES: usize = 8;
 
 fn fingerprint(records: &[crate::record::WorkRecord]) -> u64 {
     let refs: Vec<WorkRef> = records
@@ -65,7 +79,52 @@ pub fn load_index(records: &[crate::record::WorkRecord]) -> Option<Bm25Index> {
     if cached.version != INDEX_CACHE_VERSION || cached.fingerprint != fingerprint {
         return None;
     }
+    touch(&path);
     Some(cached.index)
+}
+
+/// Mark an index file as just used so pruning keeps it. Best-effort: a missed
+/// touch only makes the file an earlier eviction candidate.
+fn touch(path: &Path) {
+    if let Ok(file) = std::fs::File::options().write(true).open(path) {
+        let _ = file.set_modified(SystemTime::now());
+    }
+}
+
+fn is_index_cache_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("bm25-") && name.ends_with(".bin"))
+}
+
+/// Remove all but the [`MAX_CACHED_INDEXES`] most recently used index files,
+/// always keeping `keep` (the one just written). Best-effort: a file another
+/// process removed first is not an error, and any other failure only leaves
+/// the file for the next prune.
+fn prune_stale_indexes(keep: &Path) {
+    let Ok(entries) = std::fs::read_dir(cache_dir()) else {
+        return;
+    };
+    let mut indexes: Vec<(SystemTime, PathBuf)> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path != keep && is_index_cache_file(path))
+        .filter_map(|path| {
+            let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
+            Some((modified, path))
+        })
+        .collect();
+    indexes.sort_by(|left, right| right.cmp(left));
+    for (_, path) in indexes.into_iter().skip(MAX_CACHED_INDEXES - 1) {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => crate::diagnostics::warn(format!(
+                "failed to remove stale BM25 index cache {}: {error}",
+                path.display()
+            )),
+        }
+    }
 }
 
 /// Best-effort write of a built index; failures only cost a rebuild next run.
@@ -90,7 +149,9 @@ pub fn store_index(records: &[crate::record::WorkRecord], index: &Bm25Index) {
             "failed to write BM25 index cache {}",
             path.display()
         ));
+        return;
     }
+    prune_stale_indexes(&path);
 }
 
 /// Build or load the index for a corpus: reuse the cached index when it
@@ -109,7 +170,8 @@ mod tests {
     use super::*;
     use crate::record::{MessageRole, WorkRecord};
     use crate::search::bm25::Bm25Index;
-    use crate::test_fixtures::{message_part, terminal_record};
+    use crate::test_fixtures::{message_part, terminal_record, EnvGuard};
+    use std::time::Duration;
 
     fn record(session: &str, index: usize, title: &str, text: &str) -> WorkRecord {
         let mut record = terminal_record(session, index, title, "");
@@ -117,9 +179,18 @@ mod tests {
         record
     }
 
+    /// Point the cache at a throwaway home: storing an index prunes the cache
+    /// directory, which must never be the developer's real one.
+    fn temp_home() -> (EnvGuard, tempfile::TempDir) {
+        let env = EnvGuard::capture(&["SIVTR_HOME"]);
+        let home = tempfile::tempdir().expect("temp home");
+        std::env::set_var("SIVTR_HOME", home.path());
+        (env, home)
+    }
+
     #[test]
     fn cache_round_trips_a_built_index() {
-        let _lock = crate::test_env_lock();
+        let (_env, _home) = temp_home();
         let records = vec![
             record("s1", 1, "cargo install", "building project"),
             record("s1", 2, "run tests", "tests passed"),
@@ -128,17 +199,69 @@ mod tests {
         store_index(&records, &built);
         let loaded = load_index(&records).expect("cache hit");
         assert_eq!(loaded, built);
-        let _ = std::fs::remove_file(index_cache_path(fingerprint(&records)));
     }
 
     #[test]
     fn cache_misses_on_different_corpus() {
-        let _lock = crate::test_env_lock();
+        let (_env, _home) = temp_home();
         let records = vec![record("s1", 1, "a", "one")];
         let built = Bm25Index::build(&records);
         store_index(&records, &built);
         let other = vec![record("s9", 9, "b", "two")];
         assert!(load_index(&other).is_none());
-        let _ = std::fs::remove_file(index_cache_path(fingerprint(&records)));
+    }
+
+    fn set_age(path: &Path, seconds_ago: u64) {
+        let file = std::fs::File::options()
+            .write(true)
+            .open(path)
+            .expect("open cache file");
+        file.set_modified(SystemTime::now() - Duration::from_secs(seconds_ago))
+            .expect("set mtime");
+    }
+
+    fn index_file_count() -> usize {
+        std::fs::read_dir(cache_dir())
+            .expect("read cache dir")
+            .flatten()
+            .filter(|entry| is_index_cache_file(&entry.path()))
+            .count()
+    }
+
+    #[test]
+    fn storing_prunes_least_recently_used_indexes() {
+        let (_env, _home) = temp_home();
+
+        let corpora: Vec<Vec<WorkRecord>> = (0..MAX_CACHED_INDEXES + 3)
+            .map(|n| vec![record(&format!("s{n}"), 1, "title", "body")])
+            .collect();
+        let paths: Vec<PathBuf> = corpora
+            .iter()
+            .map(|records| index_cache_path(fingerprint(records)))
+            .collect();
+        // Oldest first; each store happens "now", so back-date it afterwards.
+        for (n, records) in corpora.iter().enumerate() {
+            store_index(records, &Bm25Index::build(records));
+            set_age(&paths[n], 1000 - n as u64);
+        }
+        assert_eq!(index_file_count(), MAX_CACHED_INDEXES);
+        for path in &paths[..3] {
+            assert!(!path.exists(), "oldest indexes are pruned");
+        }
+
+        // A hit on the oldest survivor refreshes it, so the next store evicts
+        // the second-oldest instead.
+        assert!(load_index(&corpora[3]).is_some());
+        let other = cache_dir().join("listing-0000000000000000.bin");
+        std::fs::write(&other, b"x").expect("write unrelated cache file");
+        set_age(&other, 5000);
+        let fresh = vec![record("fresh", 1, "title", "body")];
+        store_index(&fresh, &Bm25Index::build(&fresh));
+
+        assert_eq!(index_file_count(), MAX_CACHED_INDEXES);
+        assert!(paths[3].exists(), "recently read index survives");
+        assert!(!paths[4].exists(), "least recently used index is pruned");
+        assert!(index_cache_path(fingerprint(&fresh)).exists());
+        assert!(other.exists(), "non-index cache files are left alone");
     }
 }
