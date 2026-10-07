@@ -16,6 +16,7 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::cache::{cache_dir, index_cache_path, records_fingerprint, write_cache_atomic};
@@ -79,52 +80,81 @@ pub fn load_index(records: &[crate::record::WorkRecord]) -> Option<Bm25Index> {
     if cached.version != INDEX_CACHE_VERSION || cached.fingerprint != fingerprint {
         return None;
     }
-    touch(&path);
+    // Best-effort: a missed touch only makes the file an earlier eviction
+    // candidate.
+    if let Err(error) = touch(&path) {
+        crate::diagnostics::warn(format!("failed to refresh cached BM25 index: {error:#}"));
+    }
     Some(cached.index)
 }
 
-/// Mark an index file as just used so pruning keeps it. Best-effort: a missed
-/// touch only makes the file an earlier eviction candidate.
-fn touch(path: &Path) {
-    if let Ok(file) = std::fs::File::options().write(true).open(path) {
-        let _ = file.set_modified(SystemTime::now());
-    }
+/// Mark an index file as just used so pruning keeps it.
+fn touch(path: &Path) -> Result<()> {
+    let file = std::fs::File::options()
+        .write(true)
+        .open(path)
+        .with_context(|| format!("failed to open {} for writing", path.display()))?;
+    file.set_modified(SystemTime::now())
+        .with_context(|| format!("failed to update the modified time of {}", path.display()))
 }
 
+/// Whether `path` is named the way [`index_cache_path`] names an index:
+/// `bm25-`, 16 lowercase hex digits, `.bin`. Anything else in the cache
+/// directory is not ours to prune.
 fn is_index_cache_file(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with("bm25-") && name.ends_with(".bin"))
+        .and_then(|name| name.strip_prefix("bm25-"))
+        .and_then(|name| name.strip_suffix(".bin"))
+        .is_some_and(|digits| {
+            digits.len() == 16
+                && digits
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        })
 }
 
 /// Remove all but the [`MAX_CACHED_INDEXES`] most recently used index files,
-/// always keeping `keep` (the one just written). Best-effort: a file another
-/// process removed first is not an error, and any other failure only leaves
-/// the file for the next prune.
-fn prune_stale_indexes(keep: &Path) {
-    let Ok(entries) = std::fs::read_dir(cache_dir()) else {
-        return;
-    };
-    let mut indexes: Vec<(SystemTime, PathBuf)> = entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path != keep && is_index_cache_file(path))
-        .filter_map(|path| {
-            let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
-            Some((modified, path))
-        })
-        .collect();
+/// always keeping `keep` (the one just written). A file another process
+/// removed first is not an error. A file that cannot be removed does not stop
+/// the rest from being pruned; the first such failure is returned.
+fn prune_stale_indexes(keep: &Path) -> Result<()> {
+    let dir = cache_dir();
+    let entries = std::fs::read_dir(&dir)
+        .with_context(|| format!("failed to read cache directory {}", dir.display()))?;
+    let mut indexes: Vec<(SystemTime, PathBuf)> = Vec::new();
+    for entry in entries {
+        let path = entry
+            .with_context(|| format!("failed to read an entry of {}", dir.display()))?
+            .path();
+        if path == keep || !is_index_cache_file(&path) {
+            continue;
+        }
+        match std::fs::metadata(&path).and_then(|metadata| metadata.modified()) {
+            Ok(modified) => indexes.push((modified, path)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("failed to read the modified time of {}", path.display())
+                });
+            }
+        }
+    }
     indexes.sort_by(|left, right| right.cmp(left));
+    let mut first_failure = None;
     for (_, path) in indexes.into_iter().skip(MAX_CACHED_INDEXES - 1) {
         match std::fs::remove_file(&path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => crate::diagnostics::warn(format!(
-                "failed to remove stale BM25 index cache {}: {error}",
-                path.display()
-            )),
+            Err(error) => {
+                first_failure.get_or_insert(anyhow::Error::new(error).context(format!(
+                    "failed to remove stale BM25 index cache {}",
+                    path.display()
+                )));
+            }
         }
     }
+    first_failure.map_or(Ok(()), Err)
 }
 
 /// Best-effort write of a built index; failures only cost a rebuild next run.
@@ -151,7 +181,10 @@ pub fn store_index(records: &[crate::record::WorkRecord], index: &Bm25Index) {
         ));
         return;
     }
-    prune_stale_indexes(&path);
+    // Best-effort: whatever is not pruned now is left for the next store.
+    if let Err(error) = prune_stale_indexes(&path) {
+        crate::diagnostics::warn(format!("failed to prune BM25 index cache: {error:#}"));
+    }
 }
 
 /// Build or load the index for a corpus: reuse the cached index when it
@@ -255,6 +288,10 @@ mod tests {
         let other = cache_dir().join("listing-0000000000000000.bin");
         std::fs::write(&other, b"x").expect("write unrelated cache file");
         set_age(&other, 5000);
+        // Starts and ends like an index file but is not one sivtr wrote.
+        let lookalike = cache_dir().join("bm25-notes.bin");
+        std::fs::write(&lookalike, b"x").expect("write lookalike file");
+        set_age(&lookalike, 5000);
         let fresh = vec![record("fresh", 1, "title", "body")];
         store_index(&fresh, &Bm25Index::build(&fresh));
 
@@ -263,5 +300,6 @@ mod tests {
         assert!(!paths[4].exists(), "least recently used index is pruned");
         assert!(index_cache_path(fingerprint(&fresh)).exists());
         assert!(other.exists(), "non-index cache files are left alone");
+        assert!(lookalike.exists(), "only generated index names are pruned");
     }
 }
