@@ -247,6 +247,50 @@ enum InstallStatus {
     Unchanged,
 }
 
+/// What a profile holds for one shell's integration block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HookState {
+    Missing,
+    Current,
+    /// A marked block is present but is not the hook this build installs —
+    /// typically left behind by an older sivtr. It may call commands that no
+    /// longer exist, so capture silently does nothing until it is replaced.
+    Outdated,
+}
+
+fn hook_state(content: &str, spec: &HookSpec) -> HookState {
+    match update_existing_hook(content, spec) {
+        None => HookState::Missing,
+        Some(updated) if updated == content => HookState::Current,
+        Some(_) => HookState::Outdated,
+    }
+}
+
+/// [`HookState`] of `shell`'s block inside a profile's `content`. `shell` is
+/// a name `sivtr init` accepts; unknown names report `Missing`.
+pub(crate) fn shell_hook_state(shell: &str, content: &str) -> HookState {
+    let spec = match shell {
+        "powershell" | "pwsh" => &POWERSHELL_SPEC,
+        "bash" => &BASH_SPEC,
+        "zsh" => &ZSH_SPEC,
+        "nu" | "nushell" => &NUSHELL_SPEC,
+        _ => return HookState::Missing,
+    };
+    hook_state(content, spec)
+}
+
+fn print_hook_status(name: &str, target: &str, state: HookState, location: &str) -> bool {
+    match state {
+        HookState::Current => eprintln!("  {name}: installed in {location}"),
+        HookState::Outdated => {
+            eprintln!("  {name}: outdated in {location}");
+            eprintln!("    run `sivtr init {target}` to replace it, then restart the shell");
+        }
+        HookState::Missing => eprintln!("  {name}: not installed ({location})"),
+    }
+    state != HookState::Missing
+}
+
 /// Install or upgrade shell capture, show status, or uninstall hooks.
 /// Capture settings are read by the proxy; installing never resets an opt-out.
 pub fn execute(shell: &str) -> Result<()> {
@@ -461,12 +505,12 @@ fn show_status() -> Result<()> {
             let path = Path::new(&profile);
             if path.exists() {
                 let content = fs::read_to_string(path).unwrap_or_default();
-                if content.contains(POWERSHELL_MARKER_START) || content.contains(POWERSHELL_HOOK) {
-                    eprintln!("  powershell ({cmd}): installed in {profile}");
-                    any_installed = true;
-                } else {
-                    eprintln!("  powershell ({cmd}): not installed ({profile})");
-                }
+                any_installed |= print_hook_status(
+                    &format!("powershell ({cmd})"),
+                    "powershell",
+                    hook_state(&content, &POWERSHELL_SPEC),
+                    &profile,
+                );
             } else {
                 eprintln!("  powershell ({cmd}): not installed (no profile at {profile})");
             }
@@ -478,14 +522,12 @@ fn show_status() -> Result<()> {
             Ok(path) => {
                 if path.exists() {
                     let content = fs::read_to_string(&path).unwrap_or_default();
-                    if content.contains(spec_ref.spec.marker_start)
-                        || content.contains(spec_ref.spec.hook)
-                    {
-                        eprintln!("  {}: installed in {}", spec_ref.name, path.display());
-                        any_installed = true;
-                    } else {
-                        eprintln!("  {}: not installed ({})", spec_ref.name, path.display());
-                    }
+                    any_installed |= print_hook_status(
+                        spec_ref.name,
+                        spec_ref.name,
+                        hook_state(&content, spec_ref.spec),
+                        &path.display().to_string(),
+                    );
                 } else {
                     eprintln!(
                         "  {}: not installed (no profile at {})",
@@ -905,9 +947,9 @@ mod tests {
     };
     use super::{
         desktop_exec_quote, render_macos_shortcut_plist, render_macos_shortcut_script,
-        shell_printed_path, update_existing_hook, xml_escape, BASH_HOOK, BASH_SPEC,
-        MACOS_SHORTCUT_LABEL, NUSHELL_HOOK, NUSHELL_SPEC, POWERSHELL_HOOK, POWERSHELL_SPEC,
-        ZSH_HOOK, ZSH_SPEC,
+        shell_hook_state, shell_printed_path, update_existing_hook, xml_escape, HookState,
+        BASH_HOOK, BASH_SPEC, MACOS_SHORTCUT_LABEL, NUSHELL_HOOK, NUSHELL_SPEC, POWERSHELL_HOOK,
+        POWERSHELL_SPEC, ZSH_HOOK, ZSH_SPEC,
     };
     use std::path::Path;
 
@@ -919,6 +961,19 @@ mod tests {
         #[cfg(windows)]
         let result = shell_printed_path("cmd", &["/C", "echo junk & exit /b 1"]);
         assert!(result.is_err(), "nonzero exit must not parse as a path");
+    }
+
+    #[test]
+    fn hook_left_by_an_older_version_is_reported_outdated() {
+        // The block 0.7.x installed: same markers, but it calls `sivtr flush`,
+        // which no longer exists.
+        let stale = "before\n# >>> sivtr shell integration >>>\n_sivtr_precmd() {\n  sivtr flush >/dev/null 2>&1 || true\n}\n# <<< sivtr shell integration <<<\nafter\n";
+        assert_eq!(shell_hook_state("zsh", stale), HookState::Outdated);
+
+        let current = format!("before\n{ZSH_HOOK}\nafter\n");
+        assert_eq!(shell_hook_state("zsh", &current), HookState::Current);
+
+        assert_eq!(shell_hook_state("zsh", "export A=1\n"), HookState::Missing);
     }
 
     #[test]
