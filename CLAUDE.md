@@ -64,7 +64,7 @@ src/                       ← CLI binary
 ## Key Data Types
 
 - `WorkRecord` — single command execution or AI turn
-- `WorkPart` — leaf content chunk; `WorkPartKind` is Prompt/Command/User/Assistant/ToolCall/ToolResult/Skill/Thinking/Output/Error
+- `WorkPart` — leaf content chunk; `WorkPartKind` is `Message` or `Action`. A message carries a `MessageRole` (User/Assistant/System/Reasoning); an action carries a `WorkActor` (User/Agent), a `WorkTarget` (Shell/Tool/Mcp/Agent), its input, output, and status
 - `WorkRef` — typed address: `WorkScope` + `WorkPath` + `WorkAt` as `[scope:]path[/at]` (e.g. `terminal/session_42/3/p1`, `desk:codex/abc123/5/p2`)
 - `WorkTime::from_components(started_at, ended_at, duration_ms)` — time construction
 - `AgentProvider` — registry in `agents/mod.rs` (`AgentProvider::all()` / `from_command_name` / `command_names_csv`); do not hardcode provider lists in CLI/help
