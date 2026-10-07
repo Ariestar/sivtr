@@ -167,7 +167,7 @@ fn decode_zstd(bytes: &[u8], cap: Option<usize>) -> Result<Vec<u8>> {
 
     let mut out = Vec::new();
     let mut rest = bytes;
-    while !rest.is_empty() && !cap.is_some_and(|cap| out.len() >= cap) {
+    while !rest.is_empty() && cap.is_none_or(|cap| out.len() < cap) {
         let mut cursor = std::io::Cursor::new(rest);
         let mut decoder =
             match StreamingDecoder::new_with_max_window_size(&mut cursor, MAX_ZSTD_WINDOW) {
