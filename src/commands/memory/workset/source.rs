@@ -236,7 +236,7 @@ fn merge_and_apply(results: Vec<QuerySourceResult>, cwd: &Path, filter: Filter) 
         return apply_loaded(WorkSet::new(cwd.display().to_string(), Vec::new()), filter);
     }
     for error in &errors {
-        output::warning(format!("skipped an origin: {error}"));
+        sivtr_core::diagnostics::warn(format!("skipped an origin: {error}"));
     }
     // `from_parts` normalizes the anchors (dedup + Whole canonical form), so
     // the merged per-source anchors need no pre-dedup here.
