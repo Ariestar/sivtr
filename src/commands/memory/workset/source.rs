@@ -265,15 +265,6 @@ pub fn query_sources(
         .unwrap_or(std::env::current_dir().context("Failed to resolve current directory")?);
     let cwd = cwd.as_path();
 
-    // Bounds that read part text (pattern, exclude, BM25 ranking) need a full
-    // load; metadata-only filters stay light and callers materialize part
-    // text on demand.
-    let mode = if filter.needs_parts() {
-        LoadMode::Full
-    } else {
-        LoadMode::Light
-    };
-
     // Scoped threads borrow `sources` and `cwd` instead of cloning per
     // worker; only the filter (consumed by each load path) is cloned. Each
     // worker reports `(idx, outcome)`, joined in list order so a slow source
@@ -288,6 +279,7 @@ pub fn query_sources(
                     let result = match source.transport {
                         QueryTransport::Local => {
                             let root = source.root.as_deref().unwrap_or(cwd);
+                            let mode = local_load_mode(&source.selector, &filter);
                             run_local(&source.selector, root, filter, mode)
                         }
                         QueryTransport::Remote => query_remote_bounded(
@@ -415,6 +407,24 @@ pub fn run_on_share(
             Ok((Vec::new(), Vec::new()))
         }
         Err(error) => Err(error),
+    }
+}
+
+/// Load mode for one local source. Bounds that read part text (pattern,
+/// exclude, BM25 ranking) need a full load; metadata-only filters stay light
+/// and callers materialize part text on demand.
+///
+/// A part ref (`claude/abc/2/p1`) also needs a full load: the filter resolves
+/// the part inside the record, and a light record has no parts, so the ref
+/// would match nothing.
+fn local_load_mode(selector: &str, filter: &Filter) -> LoadMode {
+    let addresses_part = selector
+        .parse::<WorkRef>()
+        .is_ok_and(|reference| reference.part().is_some());
+    if filter.needs_parts() || addresses_part {
+        LoadMode::Full
+    } else {
+        LoadMode::Light
     }
 }
 
@@ -610,8 +620,11 @@ pub fn load_context_records(
 
 #[cfg(test)]
 mod tests {
-    use super::{merge_and_apply, resolve_source, split_group_scope, QueryTransport};
+    use super::{
+        local_load_mode, merge_and_apply, resolve_source, split_group_scope, QueryTransport,
+    };
     use crate::commands::memory::workset::{QuerySourceResult, WorkSet};
+    use sivtr_core::query::LoadMode;
     use sivtr_core::record::{MessageRole, WorkRecord, WorkSessionRef, WorkTime};
     use sivtr_core::search::Filter;
 
@@ -640,6 +653,14 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn part_refs_load_in_full_so_the_part_can_be_resolved() {
+        let none = Filter::none();
+        assert_eq!(local_load_mode("claude/abc123/2/p1", &none), LoadMode::Full);
+        assert_eq!(local_load_mode("claude/abc123/2", &none), LoadMode::Light);
+        assert_eq!(local_load_mode("claude", &none), LoadMode::Light);
     }
 
     #[test]
