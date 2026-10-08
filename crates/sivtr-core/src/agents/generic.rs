@@ -256,6 +256,11 @@ fn collect_candidates(
         return Ok(());
     }
     if metadata.is_dir() {
+        // Installed packages are never transcripts, and editor storage roots
+        // hold whole dependency trees of unrelated extensions.
+        if path.file_name().is_some_and(|name| name == "node_modules") {
+            return Ok(());
+        }
         if is_openhands_dir(provider, path) || is_roocode_dir(provider, path) {
             if seen.insert(path.to_path_buf()) {
                 output.push(path.to_path_buf());
@@ -285,12 +290,25 @@ fn is_roocode_dir(provider: AgentProvider, path: &Path) -> bool {
     provider == AgentProvider::RooCode && path.join("history_item.json").is_file()
 }
 
+/// File names that are tool or package configuration wherever they appear,
+/// so the extension-based rules below never take them for a transcript.
+const CONFIGURATION_FILE_NAMES: &[&str] = &[
+    "config.json",
+    "settings.json",
+    "package.json",
+    "package-lock.json",
+    "tsconfig.json",
+];
+
 fn is_candidate_file(provider: AgentProvider, path: &Path) -> bool {
     let name = path
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or_default();
     let lower = name.to_ascii_lowercase();
+    if CONFIGURATION_FILE_NAMES.contains(&lower.as_str()) {
+        return false;
+    }
     let extension = path
         .extension()
         .and_then(|value| value.to_str())
@@ -1892,6 +1910,65 @@ mod tests {
             assert_eq!(parsed.id, session.id);
             assert_eq!(parsed.blocks.len(), 2);
         }
+    }
+
+    #[test]
+    fn discovery_skips_node_modules_and_plain_configuration_files() {
+        let _guard =
+            crate::test_fixtures::EnvGuard::capture(&["COPILOT_DIR", "VSCODE_COPILOT_DIR"]);
+        let dir = tempfile::tempdir().expect("test tempdir");
+        let write = |relative: &str, text: &str| {
+            let path = dir.path().join(relative);
+            std::fs::create_dir_all(path.parent().expect("fixture path has a parent"))
+                .expect("create fixture directory");
+            std::fs::write(&path, text).expect("write fixture file");
+            path
+        };
+        let transcript = r#"{"sessionId":"demo","cwd":"/repo"}
+{"type":"user","content":"question"}
+{"type":"assistant","content":"answer"}
+"#;
+        // JSON-with-comments, as tool configuration files commonly are.
+        let jsonc = "// settings\n{\n  \"strict\": true,\n}\n";
+
+        // Copilot CLI keeps its own configuration next to its sessions.
+        let copilot_session = write("copilot/session-state/demo.jsonl", transcript);
+        write("copilot/config.json", jsonc);
+        write("copilot/settings.json", "{}");
+        std::env::set_var("COPILOT_DIR", dir.path().join("copilot"));
+        let copilot = GenericProvider::new(AgentProvider::Copilot);
+        assert_eq!(
+            copilot.candidates().expect("list Copilot candidates"),
+            vec![copilot_session.clone()]
+        );
+        let sessions = copilot
+            .list_recent_sessions(None)
+            .expect("list Copilot sessions");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].path, copilot_session);
+
+        // VS Code's globalStorage also holds other extensions' packages.
+        let chat = write(
+            "code/workspaceStorage/ws1/chatSessions/chat.jsonl",
+            transcript,
+        );
+        write(
+            "code/globalStorage/some.extension/node_modules/call-bind/tsconfig.json",
+            jsonc,
+        );
+        write(
+            "code/globalStorage/some.extension/node_modules/psl/data/rules.json",
+            "[]",
+        );
+        write("code/globalStorage/some.extension/package.json", "{}");
+        write("code/globalStorage/some.extension/tsconfig.json", jsonc);
+        std::env::set_var("VSCODE_COPILOT_DIR", dir.path().join("code"));
+        assert_eq!(
+            GenericProvider::new(AgentProvider::VSCodeCopilot)
+                .candidates()
+                .expect("list VS Code candidates"),
+            vec![chat]
+        );
     }
 
     #[test]
