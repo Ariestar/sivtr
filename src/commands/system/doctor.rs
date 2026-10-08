@@ -349,7 +349,10 @@ impl Report {
 
     fn check_shell_hooks(&mut self, fix: bool) {
         let installed = detect_installed_shells();
-        if !installed.is_empty() {
+        let outdated = detect_outdated_shells();
+        if !outdated.is_empty() {
+            self.add(outdated_shell_hooks_check(&outdated, fix));
+        } else if !installed.is_empty() {
             self.add(Check {
                 name: "shell_hooks",
                 label: "shell hooks",
@@ -823,21 +826,41 @@ fn path_has_content(path: &Path) -> Result<bool> {
 }
 
 pub fn detect_installed_shells() -> Vec<String> {
+    installed_shell_profiles()
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect()
+}
+
+/// Shells whose profile still carries a hook block written by another sivtr
+/// version. The markers match, so presence alone looks healthy, but the block
+/// may call commands this build no longer has.
+pub fn detect_outdated_shells() -> Vec<String> {
+    use crate::commands::terminal::init::{shell_hook_state, HookState};
+
+    installed_shell_profiles()
+        .into_iter()
+        .filter(|(name, content)| shell_hook_state(name, content) == HookState::Outdated)
+        .map(|(name, _)| name)
+        .collect()
+}
+
+/// `(shell, profile content)` for every profile holding a sivtr hook block.
+fn installed_shell_profiles() -> Vec<(String, String)> {
+    const MARKER: &str = "# >>> sivtr shell integration >>>";
+
     let mut installed = Vec::new();
     let home = match dirs::home_dir() {
         Some(h) => h,
         None => return installed,
     };
 
-    for (name, rel_path, marker) in [
-        ("bash", ".bashrc", "# >>> sivtr shell integration >>>"),
-        ("zsh", ".zshrc", "# >>> sivtr shell integration >>>"),
-    ] {
+    for (name, rel_path) in [("bash", ".bashrc"), ("zsh", ".zshrc")] {
         let path = home.join(rel_path);
         if path.exists() {
             if let Ok(content) = std::fs::read_to_string(&path) {
-                if content.contains(marker) {
-                    installed.push(name.to_string());
+                if content.contains(MARKER) {
+                    installed.push((name.to_string(), content));
                 }
             }
         }
@@ -847,8 +870,8 @@ pub fn detect_installed_shells() -> Vec<String> {
         let nu_config = config_dir.join("nushell").join("config.nu");
         if nu_config.exists() {
             if let Ok(content) = std::fs::read_to_string(&nu_config) {
-                if content.contains("# >>> sivtr shell integration >>>") {
-                    installed.push("nushell".to_string());
+                if content.contains(MARKER) {
+                    installed.push(("nushell".to_string(), content));
                 }
             }
         }
@@ -862,8 +885,8 @@ pub fn detect_installed_shells() -> Vec<String> {
             let path = Path::new(&profile);
             if path.exists() {
                 if let Ok(content) = std::fs::read_to_string(path) {
-                    if content.contains("# >>> sivtr shell integration >>>") {
-                        installed.push("powershell".to_string());
+                    if content.contains(MARKER) {
+                        installed.push(("powershell".to_string(), content));
                         break;
                     }
                 }
@@ -872,6 +895,52 @@ pub fn detect_installed_shells() -> Vec<String> {
     }
 
     installed
+}
+
+/// Outdated hooks fail the check: capture is silently dead until the block is
+/// replaced. `--fix` reinstalls each one in place (the same as `sivtr init`).
+fn outdated_shell_hooks_check(outdated: &[String], fix: bool) -> Check {
+    let shells = outdated.join(", ");
+    if !fix {
+        return Check {
+            name: "shell_hooks",
+            label: "shell hooks",
+            status: Status::Fail,
+            detail: format!(
+                "{shells}: installed by another sivtr version, terminal capture is not running"
+            ),
+            hint: Some(format!(
+                "run `sivtr init {}` (or `sivtr doctor --fix`), then restart the shell",
+                outdated[0]
+            )),
+        };
+    }
+
+    let failures: Vec<String> = outdated
+        .iter()
+        .filter_map(|shell| {
+            crate::commands::terminal::init::execute(shell)
+                .err()
+                .map(|error| format!("{shell}: {error}"))
+        })
+        .collect();
+    if failures.is_empty() {
+        Check {
+            name: "shell_hooks",
+            label: "shell hooks",
+            status: Status::Fixed,
+            detail: format!("replaced outdated hook for {shells}"),
+            hint: Some("restart your shell for hooks to take effect".to_string()),
+        }
+    } else {
+        Check {
+            name: "shell_hooks",
+            label: "shell hooks",
+            status: Status::Manual,
+            detail: format!("could not replace outdated hook: {}", failures.join("; ")),
+            hint: Some("run `sivtr init <shell>`".to_string()),
+        }
+    }
 }
 
 pub fn detect_current_shell() -> String {
@@ -905,6 +974,14 @@ mod tests {
             skipped: vec![(PathBuf::from("old-b"), "rename failed: boom".into())],
             current: 1,
         }
+    }
+
+    #[test]
+    fn outdated_hooks_fail_the_check_until_fixed() {
+        let check = outdated_shell_hooks_check(&["zsh".to_string()], false);
+        assert_eq!(check.status, Status::Fail);
+        assert!(check.detail.contains("zsh"));
+        assert!(check.hint.expect("hint").contains("sivtr init zsh"));
     }
 
     #[test]
