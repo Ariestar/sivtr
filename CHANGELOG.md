@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2](https://github.com/Ariestar/sivtr/compare/v0.8.1...v0.8.2) - 2026-10-09
+
+### Fixed
+
+- *(deps)* update dependency astro to v7.3.8 ([#412](https://github.com/Ariestar/sivtr/pull/412))
+- *(deps)* update dependency @astrojs/starlight to v0.42.6 ([#411](https://github.com/Ariestar/sivtr/pull/411))
+- *(deps)* update dependency @astrojs/starlight to v0.42.5 ([#386](https://github.com/Ariestar/sivtr/pull/386))
+- *(deps)* update astro monorepo ([#405](https://github.com/Ariestar/sivtr/pull/405))
+- *(doctor)* detect shell hooks left behind by an older version ([#398](https://github.com/Ariestar/sivtr/pull/398))
+- *(diagnostics)* route skipped-session warnings through the shared sink ([#397](https://github.com/Ariestar/sivtr/pull/397))
+- *(show)* resolve part refs instead of returning an empty set ([#395](https://github.com/Ariestar/sivtr/pull/395))
+- *(agents)* stop generic discovery from treating packages and config files as sessions ([#396](https://github.com/Ariestar/sivtr/pull/396))
+- *(search)* prune superseded BM25 index cache files ([#394](https://github.com/Ariestar/sivtr/pull/394))
+
+### Other
+
+- *(deps)* update dependency @cloudflare/workers-types to v5.20261009.1 ([#415](https://github.com/Ariestar/sivtr/pull/415))
+- *(deps)* update rust crate toml to v1.1.8 ([#414](https://github.com/Ariestar/sivtr/pull/414))
+- *(deps)* update dependency wrangler to v4.149.0 ([#413](https://github.com/Ariestar/sivtr/pull/413))
+- *(deps)* update dependency vite to v8.3.4 ([#410](https://github.com/Ariestar/sivtr/pull/410))
+- *(deps)* update rust crate uuid to v1.27.0 ([#409](https://github.com/Ariestar/sivtr/pull/409))
+- *(agents)* bring the module map and record model notes in line with the code ([#399](https://github.com/Ariestar/sivtr/pull/399))
+- *(deps)* update rust crate rust-embed to v8.13.0 ([#408](https://github.com/Ariestar/sivtr/pull/408))
+- *(deps)* update dependency wrangler to v4.146.0 ([#388](https://github.com/Ariestar/sivtr/pull/388))
+- *(deps)* update dependency marked to v18.1.0 ([#407](https://github.com/Ariestar/sivtr/pull/407))
+- *(deps)* update dependency @types/vscode to v1.140.0 ([#387](https://github.com/Ariestar/sivtr/pull/387))
+- *(deps)* update dependency @playwright/test to v1.64.0 ([#406](https://github.com/Ariestar/sivtr/pull/406))
+- *(deps)* update dependency @cloudflare/workers-types to v5.20261002.1 ([#391](https://github.com/Ariestar/sivtr/pull/391))
+- *(deps)* update rust crate libc to v0.2.190 ([#392](https://github.com/Ariestar/sivtr/pull/392))
+- *(deps)* update rust crate toml to v1.1.7 ([#404](https://github.com/Ariestar/sivtr/pull/404))
+- *(deps)* update rust crate tokio to v1.53.2 ([#403](https://github.com/Ariestar/sivtr/pull/403))
+- *(deps)* update rust crate rmcp to v3.5.1 ([#401](https://github.com/Ariestar/sivtr/pull/401))
+- *(deps)* update release-plz/action action to v0.5.140 ([#400](https://github.com/Ariestar/sivtr/pull/400))
+- *(deps)* update dependency @types/node to v26.6.4 ([#390](https://github.com/Ariestar/sivtr/pull/390))
+- *(deps)* update dependency vitest to v5.0.3 ([#383](https://github.com/Ariestar/sivtr/pull/383))
+- *(deps)* update dependency vite to v8.3.2 ([#385](https://github.com/Ariestar/sivtr/pull/385))
+- *(deps)* update dependency @types/node to v24.19.1 ([#389](https://github.com/Ariestar/sivtr/pull/389))
+- *(deps)* update dependency @cloudflare/workers-types to v5.20261001.1 ([#384](https://github.com/Ariestar/sivtr/pull/384))
+- *(deps)* update dependency @cloudflare/workers-types to v5.20260930.1 ([#382](https://github.com/Ariestar/sivtr/pull/382))
+- *(deps)* update dependency wrangler to v4.144.0 ([#379](https://github.com/Ariestar/sivtr/pull/379))
+- *(deps)* update dependency wrangler to v4.143.1 ([#378](https://github.com/Ariestar/sivtr/pull/378))
+- *(deps)* update rust crate iroh to v1.3.0 ([#376](https://github.com/Ariestar/sivtr/pull/376))
+- *(deps)* update dependency @cloudflare/workers-types to v5.20260929.1 ([#377](https://github.com/Ariestar/sivtr/pull/377))
+- *(deps)* update dependency wrangler to v4.143.0 ([#375](https://github.com/Ariestar/sivtr/pull/375))
+- *(deps)* update rust crate rmcp to v3.5.0 ([#374](https://github.com/Ariestar/sivtr/pull/374))
+- *(deps)* update dependency @cloudflare/workers-types to v5.20260928.1 ([#373](https://github.com/Ariestar/sivtr/pull/373))
+- *(deps)* update dependency wrangler to v4.142.0 ([#372](https://github.com/Ariestar/sivtr/pull/372))
+- *(deps)* update dependency @cloudflare/workers-types to v5.20260927.1 ([#371](https://github.com/Ariestar/sivtr/pull/371))
+- *(clippy)* fix lints reported by the current stable toolchain ([#393](https://github.com/Ariestar/sivtr/pull/393))
+
 ## [0.8.1](https://github.com/Ariestar/sivtr/compare/v0.8.0...v0.8.1) - 2026-09-26
 
 ### Fixed
