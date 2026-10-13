@@ -76,7 +76,7 @@ sivtr hotkey start --provider claude
 mode = "auto"
 ```
 
-`auto` follows the system appearance and picks the truecolor vs ANSI palette from the terminal. Force a scheme with `dark` or `light`:
+`auto` follows the **terminal background** (`COLORFGBG`, then the Windows console color table, then desktop appearance on macOS/Linux) and picks the truecolor vs ANSI palette from the terminal. Force a scheme with `dark` or `light`:
 
 ```toml
 [theme]
