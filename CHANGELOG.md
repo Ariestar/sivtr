@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3](https://github.com/Ariestar/sivtr/compare/v0.8.2...v0.8.3) - 2026-10-16
+
+### Fixed
+
+- *(deps)* update astro monorepo ([#442](https://github.com/Ariestar/sivtr/pull/442))
+
+### Other
+
+- *(deps)* update dependency wrangler to v4.151.1 ([#445](https://github.com/Ariestar/sivtr/pull/445))
+- *(deps)* update dependency @cloudflare/workers-types to v5.20261016.1 ([#444](https://github.com/Ariestar/sivtr/pull/444))
+- *(deps)* update dependency vitest to v5.0.5 ([#441](https://github.com/Ariestar/sivtr/pull/441))
+- *(deps)* update rust crate arboard to v3.7.0 ([#440](https://github.com/Ariestar/sivtr/pull/440))
+- *(deps)* update dependency @cloudflare/workers-types to v5.20261015.1 ([#439](https://github.com/Ariestar/sivtr/pull/439))
+- *(deps)* update dependency @playwright/test to v1.64.1 ([#438](https://github.com/Ariestar/sivtr/pull/438))
+- *(deps)* update dependency wrangler to v4.151.0 ([#437](https://github.com/Ariestar/sivtr/pull/437))
+- *(deps)* update dependency @cloudflare/workers-types to v5.20261014.1 ([#436](https://github.com/Ariestar/sivtr/pull/436))
+- *(deps)* update dependency wrangler to v4.150.0 ([#434](https://github.com/Ariestar/sivtr/pull/434))
+- *(deps)* update rust crate tokio to v1.53.3 ([#435](https://github.com/Ariestar/sivtr/pull/435))
+- *(deps)* update dependency @cloudflare/workers-types to v5.20261013.1 ([#433](https://github.com/Ariestar/sivtr/pull/433))
+- *(deps)* update rust crate sha2 to v0.11.1 ([#432](https://github.com/Ariestar/sivtr/pull/432))
+- *(deps)* update rust crate schemars to v1.2.3 ([#431](https://github.com/Ariestar/sivtr/pull/431))
+- *(deps)* update dependency marked to v18.1.1 ([#429](https://github.com/Ariestar/sivtr/pull/429))
+- *(deps)* update release-plz/action action to v0.5.142 ([#430](https://github.com/Ariestar/sivtr/pull/430))
+- *(deps)* update dependency dompurify to v3.4.17 ([#428](https://github.com/Ariestar/sivtr/pull/428))
+- *(deps)* update dependency vitest to v5.0.4 ([#427](https://github.com/Ariestar/sivtr/pull/427))
+- *(deps)* update dependency @cloudflare/workers-types to v5.20261012.1 ([#426](https://github.com/Ariestar/sivtr/pull/426))
+- *(deps)* update rust crate ruzstd to v0.9.1 ([#424](https://github.com/Ariestar/sivtr/pull/424))
+- *(deps)* update rust crate serde_json to v1.0.154 ([#425](https://github.com/Ariestar/sivtr/pull/425))
+- *(deps)* update rust crate serde_json to v1.0.152 ([#422](https://github.com/Ariestar/sivtr/pull/422))
+- *(deps)* update dependency @cloudflare/workers-types to v5.20261011.1 ([#423](https://github.com/Ariestar/sivtr/pull/423))
+- *(deps)* update rust crate uuid to v1.28.0 ([#420](https://github.com/Ariestar/sivtr/pull/420))
+- *(deps)* update dependency @cloudflare/workers-types to v5.20261010.1 ([#419](https://github.com/Ariestar/sivtr/pull/419))
+- *(deps)* update release-plz/action action to v0.5.141 ([#421](https://github.com/Ariestar/sivtr/pull/421))
+- *(deps)* update dependency @types/node to v26.6.5 ([#418](https://github.com/Ariestar/sivtr/pull/418))
+- *(deps)* update dependency @types/node to v24.19.2 ([#417](https://github.com/Ariestar/sivtr/pull/417))
+
 ## [0.8.2](https://github.com/Ariestar/sivtr/compare/v0.8.1...v0.8.2) - 2026-10-09
 
 ### Fixed
