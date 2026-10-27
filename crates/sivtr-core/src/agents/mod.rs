@@ -32,7 +32,7 @@ pub mod zcode;
 
 pub use jsonl::{
     jsonl_files, list_chat_recording_sessions, list_recent_jsonl_sessions, list_sessions_matching,
-    parse_jsonl_meta, parse_jsonl_session,
+    list_sessions_matching_with_extra_stamp_paths, parse_jsonl_meta, parse_jsonl_session,
 };
 pub use model::*;
 pub use sqlite::{open_readonly_db, system_time_from_millis, system_time_from_unix_secs};
