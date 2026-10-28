@@ -7,6 +7,7 @@ use std::time::Duration;
 use fs2::FileExt;
 use sivtr::remote::protocol::DaemonInfo;
 
+/// Active daemon errors must reach the CLI without deleting its control file.
 #[test]
 fn daemon_errors_preserve_control_file() {
     for action in ["stop", "start", "restart", "status"] {
@@ -96,6 +97,7 @@ fn daemon_errors_preserve_control_file() {
     }
 }
 
+/// Missing or malformed state remains removable when no daemon holds the lock.
 #[test]
 fn stopped_daemon_allows_stale_control_cleanup() {
     for contents in [None, Some("invalid json")] {
@@ -115,6 +117,7 @@ fn stopped_daemon_allows_stale_control_cleanup() {
     }
 }
 
+/// Shutdown must wait for lock release without sending another control request.
 #[test]
 fn shutdown_waits_for_lock_release_without_another_status_request() {
     use sivtr::remote::protocol::{

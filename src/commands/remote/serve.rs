@@ -9,6 +9,7 @@ use crate::output;
 use crate::remote::ipc;
 use crate::remote::protocol::{LocalRequest, LocalResponse, PROTOCOL_VERSION};
 
+/// Run a daemon command, preserving control errors from an active daemon.
 pub fn execute(command: &ServeCommand) -> Result<()> {
     match command.action {
         ServeAction::Start => start(true),
@@ -33,6 +34,7 @@ pub fn ensure_running() -> Result<()> {
     start(false)
 }
 
+/// Start a daemon only after confirming that no active daemon needs its control file.
 fn start(verbose: bool) -> Result<()> {
     if let Some(daemon) = ipc::status()? {
         // Restart an older protocol before sending requests it cannot deserialize.
@@ -82,6 +84,7 @@ fn start(verbose: bool) -> Result<()> {
     )
 }
 
+/// Request shutdown and wait for the daemon to release its lifetime lock.
 fn stop() -> Result<()> {
     if ipc::status()?.is_none() {
         crate::remote::ipc::remove_daemon_info()?;
@@ -103,6 +106,7 @@ fn stop() -> Result<()> {
     bail!("sivtr daemon did not stop cleanly")
 }
 
+/// Print daemon status, reporting control errors instead of claiming it stopped.
 fn status() -> Result<()> {
     let Some(status) = ipc::status()? else {
         output::plain("stopped");
