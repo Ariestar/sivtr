@@ -107,7 +107,7 @@ rmcp = { version = "3.1", default-features = false, features = ["server", "macro
 schemars = "1"
 tempfile = "3"
 ureq = { version = "3.3.0", default-features = false, features = ["rustls"] }
-zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+zip = { version = "9.0.0", default-features = false, features = ["deflate"] }
 flate2 = "1.1.9"
 tar = { version = "0.4.46", default-features = false }
 notify = "8.2"
