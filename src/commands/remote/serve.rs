@@ -9,12 +9,13 @@ use crate::output;
 use crate::remote::ipc;
 use crate::remote::protocol::{LocalRequest, LocalResponse, PROTOCOL_VERSION};
 
+/// Run a daemon command, preserving control errors from an active daemon.
 pub fn execute(command: &ServeCommand) -> Result<()> {
     match command.action {
         ServeAction::Start => start(true),
         ServeAction::Stop => stop(),
         ServeAction::Restart => {
-            if ipc::running() {
+            if ipc::status()?.is_some() {
                 stop()?;
             }
             start(true)
@@ -33,25 +34,18 @@ pub fn ensure_running() -> Result<()> {
     start(false)
 }
 
+/// Start a daemon only after confirming that no active daemon needs its control file.
 fn start(verbose: bool) -> Result<()> {
-    if ipc::running() {
-        match ipc::call(LocalRequest::Status) {
-            // A daemon from an older build answers Status but speaks an older
-            // protocol; restart it so new requests do not fail deserialization
-            // and close the control connection.
-            Ok(LocalResponse::Status(daemon)) if daemon.protocol_version == PROTOCOL_VERSION => {
-                if verbose {
-                    output::success("sivtr daemon is already running");
-                    return status();
-                }
-                return Ok(());
+    if let Some(daemon) = ipc::status()? {
+        // Restart an older protocol before sending requests it cannot deserialize.
+        if daemon.protocol_version == PROTOCOL_VERSION {
+            if verbose {
+                output::success("sivtr daemon is already running");
+                return status();
             }
-            // Old daemon: stop it cleanly and start the new build.
-            Ok(LocalResponse::Status(_)) => stop()?,
-            // Stale daemon.json pointing at a dead process: fall through and
-            // start fresh (remove_daemon_info clears the file).
-            _ => {}
+            return Ok(());
         }
+        stop()?;
     }
     crate::remote::ipc::remove_daemon_info()?;
     let log_path = ipc::daemon_log_path();
@@ -90,8 +84,9 @@ fn start(verbose: bool) -> Result<()> {
     )
 }
 
+/// Request shutdown and wait for the daemon to release its lifetime lock.
 fn stop() -> Result<()> {
-    if !ipc::running() {
+    if ipc::status()?.is_none() {
         crate::remote::ipc::remove_daemon_info()?;
         output::warning("sivtr daemon is not running");
         return Ok(());
@@ -102,7 +97,7 @@ fn stop() -> Result<()> {
     }
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
-        if !ipc::running() {
+        if !ipc::daemon_lock_held()? {
             output::success("sivtr daemon stopped");
             return Ok(());
         }
@@ -111,36 +106,32 @@ fn stop() -> Result<()> {
     bail!("sivtr daemon did not stop cleanly")
 }
 
+/// Print daemon status, reporting control errors instead of claiming it stopped.
 fn status() -> Result<()> {
-    if !ipc::running() {
+    let Some(status) = ipc::status()? else {
         output::plain("stopped");
         return Ok(());
+    };
+    output::plain("running");
+    output::detail("device", status.device_name);
+    output::detail("node", status.node_id);
+    output::detail("started", status.started_at);
+    output::detail("mode", "default (n0 discovery + relay)");
+    let relays: Vec<String> = status
+        .endpoint
+        .relay_urls()
+        .map(|url| url.to_string())
+        .collect();
+    let direct = status.endpoint.ip_addrs().count();
+    if relays.is_empty() {
+        output::detail("relay", "none yet");
+    } else {
+        output::detail("relay", relays.join(", "));
     }
-    match ipc::call(LocalRequest::Status)? {
-        LocalResponse::Status(status) => {
-            output::plain("running");
-            output::detail("device", status.device_name);
-            output::detail("node", status.node_id);
-            output::detail("started", status.started_at);
-            output::detail("mode", "default (n0 discovery + relay)");
-            let relays: Vec<String> = status
-                .endpoint
-                .relay_urls()
-                .map(|url| url.to_string())
-                .collect();
-            let direct = status.endpoint.ip_addrs().count();
-            if relays.is_empty() {
-                output::detail("relay", "none yet");
-            } else {
-                output::detail("relay", relays.join(", "));
-            }
-            output::detail("direct", format!("{direct} address(es)"));
-            output::detail("shares", status.shares.to_string());
-            output::detail("peers", status.peers.to_string());
-            Ok(())
-        }
-        response => bail!("Unexpected daemon response: {response:?}"),
-    }
+    output::detail("direct", format!("{direct} address(es)"));
+    output::detail("shares", status.shares.to_string());
+    output::detail("peers", status.peers.to_string());
+    Ok(())
 }
 
 #[cfg(windows)]
