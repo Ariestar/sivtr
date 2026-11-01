@@ -14,11 +14,11 @@
     "@astrojs/starlight": "0.42.8",
     "astro": "7.4.4",
     "astro-mermaid": "^2.1.0",
-    "mermaid": "^11.15.0"
+    "mermaid": "^12.0.0"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.8",
-    "typescript": "latest"
+    "typescript": "~6.0.3"
   },
   "overrides": {
     "yaml": "^2.8.3"
