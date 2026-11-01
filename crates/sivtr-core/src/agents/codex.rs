@@ -22,17 +22,16 @@ impl AgentSessionProvider for CodexProvider {
     fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
         let mut sessions = Vec::new();
 
-        for root in [local_codex_sessions_dir()] {
-            // Shared JSONL discovery (stamp-validated listing cache, workspace
-            // filter) is applied per root; the merge below re-sorts globally.
-            match list_recent_jsonl_sessions(PROVIDER_NAME, &root, cwd, parse_session_meta) {
-                Ok(mut root_sessions) => sessions.append(&mut root_sessions),
-                Err(error) => {
-                    crate::diagnostics::warn(format!(
-                        "failed to read Codex session dir {}: {error:#}",
-                        root.display()
-                    ));
-                }
+        // Shared JSONL discovery (stamp-validated listing cache, workspace
+        // filter) is applied per root; the sort below orders globally.
+        let root = local_codex_sessions_dir();
+        match list_recent_jsonl_sessions(PROVIDER_NAME, &root, cwd, parse_session_meta) {
+            Ok(mut root_sessions) => sessions.append(&mut root_sessions),
+            Err(error) => {
+                crate::diagnostics::warn(format!(
+                    "failed to read Codex session dir {}: {error:#}",
+                    root.display()
+                ));
             }
         }
 

@@ -3,7 +3,7 @@ members = ["crates/sivtr-core", "."]
 resolver = "2"
 
 [workspace.package]
-version = "0.7.1"
+version = "0.8.2"
 edition = "2021"
 license = "Apache-2.0"
 rust-version = "1.95"
@@ -78,7 +78,7 @@ pkg-url = "{ repo }/releases/download/v{ version }/sivtr-v{ version }-macos.tar.
 bin-dir = "sivtr-v{ version }-macos/{ bin }{ binary-ext }"
 
 [dependencies]
-sivtr-core = { version = "0.7.1", path = "crates/sivtr-core" }
+sivtr-core = { version = "0.8.2", path = "crates/sivtr-core" }
 chrono = { version = "0.4", features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
 ratatui = "0.30"
@@ -87,7 +87,7 @@ dark-light = "3.0.0"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 getrandom = "0.4"
 fs2 = "0.4"
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 sha2 = "0.11"
 aes-gcm = "0.11"
 iroh = "1.0"
@@ -111,13 +111,10 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 flate2 = "1.1.9"
 tar = { version = "0.4.46", default-features = false }
 notify = "8.2"
-portable-pty = "0.9"
-axum = "0.8.9"
-mime_guess = "2"
-rust-embed = "8.12.0"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+portable-pty = "0.9"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["consoleapi", "fileapi", "handleapi", "namedpipeapi", "processenv", "processthreadsapi", "synchapi", "winbase", "wincon", "winerror", "winnt", "winuser", "windef", "minwindef"] }
@@ -125,7 +122,6 @@ winapi = { version = "0.3", features = ["consoleapi", "fileapi", "handleapi", "n
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
 dhat = "0.3"
-tower = { version = "0.5", features = ["util"] }
 
 [features]
 # Benches only: `cargo bench -p sivtr --features perf-benches`

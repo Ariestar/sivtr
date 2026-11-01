@@ -1,19 +1,23 @@
 //! PTY proxy: owns the terminal, runs the shell inside a pty, and records one
 //! session entry per command.
 //!
-//! The child gets a real pty, so `isatty` is true and interactive programs
-//! behave exactly as they do without the proxy. The proxy only forwards bytes
-//! and acts on the OSC 133 markers the shell integration emits.
+//! Both sides speak VT. Unix uses a kernel pty. Windows opens a pseudoconsole
+//! with no extra flags, so it is the same kind of byte pipe. The proxy copies
+//! those bytes and slices commands on the OSC 133 markers the shell emits.
 
 pub mod stream;
 
+#[cfg(windows)]
+mod conpty;
+
 use anyhow::{Context, Result};
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+#[cfg(unix)]
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
 use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use sivtr_core::session::{self, SessionEntry, SessionState};
@@ -62,6 +66,17 @@ pub fn pending_path(terminal_id: &str) -> PathBuf {
         .join(format!("{terminal_id}.pending"))
 }
 
+struct Opened {
+    reader: Box<dyn Read + Send>,
+    writer: Box<dyn Write + Send>,
+    resize: Box<dyn FnMut(u16, u16) + Send>,
+    wait: Box<dyn FnOnce() -> Result<i32> + Send>,
+    /// Last owner of the Windows pseudoconsole. Dropped after the child has
+    /// exited so the output pipe reaches EOF. Unix closes the pty by dropping
+    /// the master inside `resize`.
+    close: Option<Box<dyn Send>>,
+}
+
 /// Run `program` inside a pty until it exits, returning its exit code.
 pub fn run(program: &str, args: &[String]) -> Result<i32> {
     // Inherited by the child, so everything in the session agrees on one log.
@@ -70,48 +85,21 @@ pub fn run(program: &str, args: &[String]) -> Result<i32> {
     // Take the terminal before spawning anything: failing here must not leave a
     // shell running in a pty that nobody drains.
     let restore = RawMode::enable().context("failed to put the terminal in raw mode")?;
-    let pair = native_pty_system()
-        .openpty(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .context("failed to open a pty")?;
-
-    let mut command = CommandBuilder::new(program);
-    command.args(args);
-    // portable-pty falls back to `$HOME` when no cwd is given, which would drop
-    // the shell into the wrong directory and resolve the wrong workspace.
-    command.cwd(std::env::current_dir().context("failed to resolve the current directory")?);
-    command.env(PROXIED_ENV, "1");
-    command.env(PROXY_ENV, "1");
-    command.env("SIVTR_TERMINAL_ID", &id);
-    let mut child = pair
-        .slave
-        .spawn_command(command)
-        .with_context(|| format!("failed to start {program} in a pty"))?;
-
-    let mut reader = pair.master.try_clone_reader().context("pty reader")?;
-    let writer = pair.master.take_writer().context("pty writer")?;
-    // Closing our copy of the slave is what lets the reader see EOF once the
-    // child exits; holding it open would hang the reader thread forever.
-    drop(pair.slave);
-
+    let opened = open_pty(program, args, cols, rows, &id)?;
+    let writer = Arc::new(Mutex::new(opened.writer));
     let stop = Arc::new(AtomicBool::new(false));
-    let resizer = spawn_resizer(Arc::clone(&stop), pair.master);
-
-    // Input and resize stay detached: both can block forever, and the process
-    // exits once the child is reaped and the reader has drained.
+    let resizer = spawn_resizer(Arc::clone(&stop), opened.resize);
+    let output = std::thread::spawn(move || pump(opened.reader, id));
     spawn_input(writer);
-    let output = std::thread::spawn(move || pump(&mut reader, id));
 
-    let status = child.wait().context("failed to wait for the shell")?;
-    let exit_code = status.exit_code() as i32;
-
-    let outcome = output.join().unwrap_or_else(|_| Ok(()));
+    let exit_code = (opened.wait)();
+    // Stop resizing, then close the pty, then drain the last output. Closing
+    // is what makes the reader see EOF.
     stop.store(true, Ordering::Relaxed);
     let _ = resizer.join();
+    drop(opened.close);
+    let outcome = output.join().unwrap_or_else(|_| Ok(()));
+    let exit_code = exit_code.context("failed to wait for the shell")?;
     drop(restore);
 
     if let Err(error) = outcome {
@@ -120,8 +108,67 @@ pub fn run(program: &str, args: &[String]) -> Result<i32> {
     Ok(exit_code)
 }
 
+#[cfg(unix)]
+fn open_pty(program: &str, args: &[String], cols: u16, rows: u16, id: &str) -> Result<Opened> {
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .context("failed to open a pty")?;
+    let mut command = CommandBuilder::new(program);
+    command.args(args);
+    // portable-pty falls back to `$HOME` when no cwd is given, which would drop
+    // the shell into the wrong directory and resolve the wrong workspace.
+    command.cwd(std::env::current_dir().context("failed to resolve the current directory")?);
+    command.env(PROXIED_ENV, "1");
+    command.env(PROXY_ENV, "1");
+    command.env("SIVTR_TERMINAL_ID", id);
+    let mut child = pair
+        .slave
+        .spawn_command(command)
+        .with_context(|| format!("failed to start {program} in a pty"))?;
+    let reader = pair.master.try_clone_reader().context("pty reader")?;
+    let writer = pair.master.take_writer().context("pty writer")?;
+    // Closing our copy of the slave is what lets the reader see EOF once the
+    // child exits; holding it open would hang the reader thread forever.
+    drop(pair.slave);
+    let master = pair.master;
+    Ok(Opened {
+        reader,
+        writer,
+        resize: Box::new(move |cols, rows| {
+            let _ = master.resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
+        }),
+        wait: Box::new(move || Ok(child.wait()?.exit_code() as i32)),
+        close: None,
+    })
+}
+
+#[cfg(windows)]
+fn open_pty(program: &str, args: &[String], cols: u16, rows: u16, id: &str) -> Result<Opened> {
+    let pty = conpty::ConPty::spawn(program, args, cols, rows, id)?;
+    let waited = std::sync::Arc::clone(&pty.session);
+    let resized = std::sync::Arc::clone(&pty.session);
+    let closed = std::sync::Arc::clone(&pty.session);
+    Ok(Opened {
+        reader: Box::new(pty.output),
+        writer: Box::new(pty.input),
+        resize: Box::new(move |cols, rows| resized.resize(cols, rows)),
+        wait: Box::new(move || waited.wait()),
+        close: Some(Box::new(closed)),
+    })
+}
+
 /// Forward everything the shell prints to the real terminal, recording blocks.
-fn pump(reader: &mut Box<dyn Read + Send>, terminal_id: String) -> Result<()> {
+fn pump(mut reader: Box<dyn Read + Send>, terminal_id: String) -> Result<()> {
     let mut stdout = std::io::stdout();
     let mut stream = Stream::default();
     let mut recorder = Recorder {
@@ -129,6 +176,9 @@ fn pump(reader: &mut Box<dyn Read + Send>, terminal_id: String) -> Result<()> {
         ..Recorder::default()
     };
     let mut chunk = [0u8; 8192];
+    // A failed terminal write must not stop this read. Before Windows 11
+    // 24H2, ClosePseudoConsole waits until the output pipe is drained.
+    let mut forward_error = None;
 
     loop {
         let read = match reader.read(&mut chunk) {
@@ -137,10 +187,15 @@ fn pump(reader: &mut Box<dyn Read + Send>, terminal_id: String) -> Result<()> {
             Err(error) if is_hangup(&error) => break,
             Err(error) => return Err(error).context("failed to read from the pty"),
         };
-
-        stdout.write_all(&chunk[..read])?;
-        stdout.flush()?;
-
+        if forward_error.is_none() {
+            if let Err(error) = stdout
+                .write_all(&chunk[..read])
+                .and_then(|_| stdout.flush())
+                .context("failed to write pty output")
+            {
+                forward_error = Some(error);
+            }
+        }
         for event in stream.push(&chunk[..read]) {
             match event {
                 Event::CommandStart => recorder.started = Some(Instant::now()),
@@ -151,31 +206,41 @@ fn pump(reader: &mut Box<dyn Read + Send>, terminal_id: String) -> Result<()> {
             }
         }
     }
-    Ok(())
+    match forward_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
-/// Feed the real terminal's input to the pty.
+/// Copy keystrokes to the pty unchanged.
 ///
-/// Ctrl-C and Ctrl-Z travel as ordinary bytes, and the pty's line discipline
-/// turns them into signals for the child — no signal forwarding needed.
-fn spawn_input(mut writer: Box<dyn Write + Send>) {
+/// The outer terminal already encoded the keys. Re-encoding them is what made
+/// raw-mode programs (cmdc) see nothing. On Windows the console is put in VT
+/// input mode first, so `ReadFile` yields the same byte stream Unix stdin has.
+fn spawn_input(writer: Arc<Mutex<Box<dyn Write + Send>>>) {
     std::thread::spawn(move || {
-        let mut stdin = std::io::stdin();
-        let mut chunk = [0u8; 8192];
-        while let Ok(read) = stdin.read(&mut chunk) {
-            if read == 0 || writer.write_all(&chunk[..read]).is_err() {
-                break;
-            }
-            let _ = writer.flush();
-        }
-        let _ = writer.flush();
+        let _ = forward_input(&writer);
     });
+}
+
+fn forward_input(writer: &Mutex<Box<dyn Write + Send>>) -> std::io::Result<()> {
+    let mut stdin = std::io::stdin();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let read = stdin.read(&mut chunk)?;
+        if read == 0 {
+            return Ok(());
+        }
+        let mut input = writer.lock().unwrap_or_else(|poison| poison.into_inner());
+        input.write_all(&chunk[..read])?;
+        input.flush()?;
+    }
 }
 
 /// Keep the pty sized to the real terminal.
 fn spawn_resizer(
     stop: Arc<AtomicBool>,
-    master: Box<dyn MasterPty + Send>,
+    mut resize: Box<dyn FnMut(u16, u16) + Send>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let mut current = crossterm::terminal::size().unwrap_or((80, 24));
@@ -188,12 +253,7 @@ fn spawn_resizer(
                 continue;
             }
             current = size;
-            let _ = master.resize(PtySize {
-                rows: size.1,
-                cols: size.0,
-                pixel_width: 0,
-                pixel_height: 0,
-            });
+            resize(size.0, size.1);
         }
     })
 }
@@ -364,6 +424,11 @@ impl RawMode {
             anyhow::bail!("stdin is not a terminal");
         }
         crossterm::terminal::enable_raw_mode()?;
+        #[cfg(windows)]
+        if let Err(error) = Self::enable_vt_input() {
+            let _ = crossterm::terminal::disable_raw_mode();
+            return Err(error);
+        }
         Ok(Self)
     }
 }
@@ -371,6 +436,26 @@ impl RawMode {
 impl Drop for RawMode {
     fn drop(&mut self) {
         let _ = crossterm::terminal::disable_raw_mode();
+    }
+}
+
+impl RawMode {
+    #[cfg(windows)]
+    fn enable_vt_input() -> Result<()> {
+        use winapi::um::consoleapi::{GetConsoleMode, SetConsoleMode};
+        use winapi::um::processenv::GetStdHandle;
+        use winapi::um::winbase::STD_INPUT_HANDLE;
+        use winapi::um::wincon::ENABLE_VIRTUAL_TERMINAL_INPUT;
+
+        let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+        let mut mode = 0u32;
+        if unsafe { GetConsoleMode(handle, &mut mode) } == 0 {
+            anyhow::bail!("failed to read console input mode");
+        }
+        if unsafe { SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_INPUT) } == 0 {
+            anyhow::bail!("failed to enable virtual terminal input");
+        }
+        Ok(())
     }
 }
 

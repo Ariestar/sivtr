@@ -25,7 +25,7 @@ Reliable CLI
 | Agent support | 核心已落地 | 面向 AI Agent 对话记录的 provider-neutral 解析和浏览。 |
 | Retrieval quality | 核心已落地 | 结构化、精确、可排序的检索,决定证据范式是否真正好用。 |
 | Skills and playbooks | 进行中 | 把 `sivtr` 作为统一记忆入口的可复用 Agent 流程。 |
-| Agent interfaces | 核心已落地 | CLI、MCP 和本地 Web API,让其他 Agent 把 `sivtr` 当工作记忆基础设施。 |
+| Agent interfaces | 核心已落地 | CLI、MCP 和本地 Rust API（`sivtr-core`）,让其他 Agent 把 `sivtr` 当工作记忆基础设施。 |
 | TUI workspace | 规划中 | 面向多 session、多 provider、长对话的高密度键盘优先界面。 |
 | Source expansion | 核心已落地 | 在不削弱共享模型的前提下,扩展到更多捕获面。 |
 | Remote collaboration | 核心已落地 | 通过 Share / Grant / Mount 有权限地只读访问队友 workspace 记忆。 |

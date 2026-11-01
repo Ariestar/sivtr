@@ -12,50 +12,59 @@
 ```
 src/
 ├── main.rs                    ← Command routing (start here for any command)
+├── output.rs                  ← Status output + the stderr diagnostics listener
+├── origins.rs                 ← Origin registry (local workspaces, remote mounts)
 ├── cli/
 │   ├── mod.rs                 ← Top-level Clap definitions
-│   └── remote.rs              ← Serve/Share/Peer/Remote/Workspace Clap types
+│   ├── remote.rs              ← Serve/Share/Peer/Remote/Workspace Clap types
+│   └── pty.rs / mcp.rs / publish.rs
 ├── commands/
 │   ├── terminal/              ← Write terminal memory
 │   │   ├── init.rs            ← Shell hook injection + show/uninstall
 │   │   ├── pty_proxy.rs       ← 采集代理 CLI：run / report / enable / disable
 │   │   ├── clear.rs           ← Clear session logs
-│   │   ├── run.rs / pipe.rs / import.rs  ← One-shot ingest → history + editor
-│   │   └── history.rs         ← Optional history auto-save helper
+│   │   └── run.rs / pipe.rs   ← One-shot ingest
 │   ├── memory/                ← WorkSet / search / show / copy / diff
 │   │   ├── copy/              ← Export to clipboard (plan/load/project/export)
 │   │   ├── diff.rs            ← Terminal-only dialogue compare (workset load)
 │   │   ├── search.rs / filter.rs / var.rs / nav.rs / zoom.rs
 │   │   ├── show.rs / work.rs / work_json.rs / records.rs
-│   │   ├── time_filter.rs
+│   │   ├── semantic.rs / eval.rs / time_filter.rs
 │   │   └── workset/           ← WorkSet source resolution + store
 │   ├── select.rs              ← Relative dialogue select (1 / A..B)
 │   ├── browse/                ← Product TUI (bare `sivtr` / hotkey / pick)
-│   │   ├── mod.rs / load.rs / picker.rs / selection.rs / content.rs
-│   │   └── help.rs / nav / vim / visual / text
+│   │   ├── mod.rs / load.rs / picker.rs / selection.rs / content.rs / panes.rs
+│   │   └── help.rs / nav.rs / vim.rs / visual.rs / text.rs / publish_overlay.rs
+│   ├── publish/               ← Privacy-projected shared publications
 │   ├── remote/                ← Device daemon CLI surface
-│   │   ├── serve.rs / share.rs / mounts.rs / peer.rs / workspace.rs
-│   └── system/                ← config, doctor, history, hotkey, codex, …
+│   │   └── serve.rs / share.rs / mounts.rs / peer.rs / group.rs / origin.rs / workspace.rs
+│   └── system/                ← config, doctor, export, hotkey, import, mcp, quality,
+│                                session, setup, skill, stats, sync, update, usage, version
+├── mcp/                       ← MCP server (server.rs = tool handlers, types.rs)
+├── pty/                       ← Capture proxy: owns the pty, records OSC 133 blocks
 ├── remote/                    ← Daemon runtime (not CLI handlers)
-│   ├── daemon.rs / state.rs / identity.rs / protocol.rs / ipc.rs
-└── tui/                       ← Workspace browser rendering (not product entry)
-    ├── terminal.rs / theme.rs / pane.rs
-    ├── content_view.rs / content_markdown.rs
-    ├── workspace.rs / workspace_search.rs
+│   ├── daemon.rs / identity.rs / protocol.rs / ipc.rs / net.rs
+│   └── fanout.rs / groups.rs / redact.rs / context.rs / state/
+└── tui/                       ← Terminal UI framework (not product entry)
+    ├── terminal.rs / theme.rs / pane.rs / panic.rs / search.rs
+    └── content/ / workspace/
 
 crates/sivtr-core/src/
 ├── lib.rs                     ← Core library root
 ├── agents/                    ← AgentProvider registry + per-provider parsers
+├── archive/                   ← Unified SQLite archive: schema, store, sync, stats
 ├── record/                    ← WorkRecord, WorkRef, index
 ├── query/                     ← load_workspace_records / load_workspace_source (terminal+agent)
-├── search/                    ← Search matcher / navigator
-├── workspace.rs               ← Workspace resolution + data_dir()
+├── search/                    ← Filter/Searcher pipeline, BM25 ranking + index cache
+├── usage/                     ← Token extraction, pricing
+├── workset.rs                 ← WorkSet / selection model
+├── workspace.rs               ← Workspace resolution + home_dir()
+├── cache.rs / diagnostics.rs  ← On-disk cache helpers; process-wide warning sink
+├── origin.rs / session_source.rs / publication.rs / privacy.rs
 ├── config/                    ← SivtrConfig
 ├── session.rs / session/      ← Session log types
-├── history/                   ← SQLite history store
 ├── export/                    ← Clipboard, editor, file export
 ├── capture/                   ← Low-level one-shot capture (pipe, subprocess)
-├── buffer/ / selection/ / parse/  ← Text primitives (shared)
 └── time.rs
 ```
 
