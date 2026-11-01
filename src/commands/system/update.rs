@@ -137,7 +137,8 @@ fn extract_binary(
             .context("cannot open zip archive")?;
         for i in 0..zip.len() {
             let mut entry = zip.by_index(i).context("cannot read zip entry")?;
-            if entry.name() == bin_name || entry.name().ends_with(&format!("/{bin_name}")) {
+            let name = entry.name().context("cannot decode zip entry name")?;
+            if name == bin_name || name.ends_with(&format!("/{bin_name}")) {
                 let mut out =
                     std::fs::File::create(&bin_path).context("cannot create temp file")?;
                 std::io::copy(&mut entry, &mut out).context("cannot extract binary from zip")?;
