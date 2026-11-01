@@ -345,10 +345,10 @@ fn colorfgbg_is_light() -> Option<bool> {
 
 /// Whether a `COLORFGBG` value (`fg;bg`) denotes a light background.
 ///
-/// `7` / `15` are the 16-color whites. Indexes `8..=14` are bright *foreground*
-/// colors (including bright black) and are not treated as a light paper
-/// color. 256-color backgrounds use relative luminance. Unset / `default` /
-/// unparsable values are unknown so a later detector can run.
+/// `7` / `15` are the 16-color whites, and `10` / `11` / `14` are light bright
+/// colors (bright green, yellow, cyan). 256-color backgrounds use relative
+/// luminance. Unset / `default` / unparsable values are unknown so a later
+/// detector can run.
 fn parse_colorfgbg(value: &str) -> Option<bool> {
     let background = value.rsplit(';').next()?;
     if background.eq_ignore_ascii_case("default") {
@@ -360,7 +360,7 @@ fn parse_colorfgbg(value: &str) -> Option<bool> {
 
 fn ansi_background_is_light(index: u16) -> bool {
     match index {
-        7 | 15 => true,
+        7 | 10 | 11 | 14 | 15 => true,
         0..=15 => false,
         16..=231 => {
             let cube = (index - 16) as u8;
@@ -789,11 +789,29 @@ mod tests {
     fn colorfgbg_treats_paper_whites_as_light() {
         assert_eq!(parse_colorfgbg("0;15"), Some(true), "bright white");
         assert_eq!(parse_colorfgbg("0;7"), Some(true), "white");
+        assert_eq!(parse_colorfgbg("0;10"), Some(true), "bright green");
+        assert_eq!(parse_colorfgbg("0;11"), Some(true), "bright yellow");
+        assert_eq!(parse_colorfgbg("0;14"), Some(true), "bright cyan");
         assert_eq!(parse_colorfgbg("15;0"), Some(false), "black");
         assert_eq!(
             parse_colorfgbg("15;8"),
             Some(false),
             "bright black is a dark background"
+        );
+        assert_eq!(
+            parse_colorfgbg("15;9"),
+            Some(false),
+            "bright red is a dark background"
+        );
+        assert_eq!(
+            parse_colorfgbg("15;12"),
+            Some(false),
+            "bright blue is a dark background"
+        );
+        assert_eq!(
+            parse_colorfgbg("15;13"),
+            Some(false),
+            "bright magenta is a dark background"
         );
         assert_eq!(parse_colorfgbg("15;16"), Some(false), "256-color black");
         assert_eq!(
