@@ -24,12 +24,28 @@ fn is_settled(mtime_secs: u64) -> bool {
         .unwrap_or(false)
 }
 
-/// A strong fingerprint for provider-specific auxiliary files (mtime, size, and content prefix hash).
-/// This prevents stale cache reuse on coarse-timestamp filesystems when a small metadata file
-/// (like `summary.json`) is rewritten in place with the same length within the same timestamp tick.
-fn extra_file_stamp(path: &Path) -> Option<(u64, u32, u64, u64)> {
-    let stamp = crate::cache::file_stamp(path)?;
-    let content_hash = if stamp.2 > 0 {
+/// A strong fingerprint for provider-specific auxiliary files (signed mtime, size, and content prefix hash).
+/// Returns:
+/// - `Some(None)` if the file does not exist (safely tracked as missing).
+/// - `Some(Some((secs, nanos, size, hash)))` if the file exists and is stamped (preserving pre-epoch timestamps).
+/// - `None` if the file exists but cannot be stamped (caller must treat as cache miss).
+fn extra_file_stamp(path: &Path) -> Option<Option<(i64, u32, u64, u64)>> {
+    let meta = match std::fs::metadata(path) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Some(None),
+        Err(_) => return None,
+    };
+    let (secs, nanos) = match meta.modified() {
+        Ok(time) => match time.duration_since(SystemTime::UNIX_EPOCH) {
+            Ok(dur) => (dur.as_secs() as i64, dur.subsec_nanos()),
+            Err(err) => {
+                let dur = err.duration();
+                (-(dur.as_secs() as i64), dur.subsec_nanos())
+            }
+        },
+        Err(_) => return None,
+    };
+    let content_hash = if meta.len() > 0 {
         use std::hash::{DefaultHasher, Hasher};
         use std::io::Read;
         let mut file = std::fs::File::open(path).ok()?;
@@ -41,7 +57,7 @@ fn extra_file_stamp(path: &Path) -> Option<(u64, u32, u64, u64)> {
     } else {
         0
     };
-    Some((stamp.0, stamp.1, stamp.2, content_hash))
+    Some(Some((secs, nanos, meta.len(), content_hash)))
 }
 
 /// One cached session file in a listing: fingerprint + parsed metadata.
@@ -50,7 +66,7 @@ struct ListingEntry {
     mtime_secs: u64,
     mtime_nanos: u32,
     size: u64,
-    extra_stamps: Vec<Option<(u64, u32, u64, u64)>>,
+    extra_stamps: Vec<Option<(i64, u32, u64, u64)>>,
     meta: AgentSessionMeta,
 }
 
@@ -252,10 +268,28 @@ fn collect_recent_sessions(
     }
 
     for path in leaves {
-        let extra_stamps: Vec<_> = extra_stamp_paths(&path)
+        let Some(extra_stamps) = extra_stamp_paths(&path)
             .iter()
             .map(|path| extra_file_stamp(path))
-            .collect();
+            .collect::<Option<Vec<_>>>()
+        else {
+            // A present auxiliary file could not be reliably stamped (e.g. unreadable metadata):
+            // bypass cache to ensure unstampable files are not treated as unchanged.
+            match parse_meta(&path) {
+                Ok(meta) => push_session(
+                    &mut sessions,
+                    path,
+                    SystemTime::UNIX_EPOCH,
+                    meta,
+                    wanted.as_ref(),
+                ),
+                Err(error) => crate::diagnostics::warn(format!(
+                    "failed to parse agent session metadata {}: {error:#}",
+                    path.display()
+                )),
+            }
+            continue;
+        };
         let Some(stamp) = crate::cache::file_stamp(&path) else {
             // Unstampable file (e.g. racing delete): parse without caching.
             match parse_meta(&path) {
