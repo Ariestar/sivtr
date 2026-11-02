@@ -379,6 +379,44 @@ mod tests {
     }
 
     #[test]
+    fn save_named_validates_and_list_saved_skips_invalid() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let prev = std::env::var_os("SIVTR_HOME");
+        std::env::set_var("SIVTR_HOME", dir.path());
+
+        let first = record(1);
+        let mut invalid_value =
+            serde_json::to_value(WorkSet::from_parts(".", vec![first.clone()], vec![]))
+                .expect("serialize WorkSet");
+        invalid_value["anchors"] = serde_json::json!([record(2).work_ref]);
+        let invalid_set: WorkSet =
+            serde_json::from_value(invalid_value).expect("deserialize WorkSet");
+
+        let err = store::save_named("invalid_set", &invalid_set);
+        assert!(err.is_err(), "save_named must reject invalid WorkSet");
+
+        let sets_dir = dir.path().join("sets");
+        std::fs::create_dir_all(&sets_dir).expect("create sets dir");
+        std::fs::write(
+            sets_dir.join("corrupt.json"),
+            serde_json::to_string(&invalid_set).unwrap(),
+        )
+        .expect("write corrupt set");
+
+        let valid_set = WorkSet::new(".", vec![first]);
+        store::save_named("valid_set", &valid_set).expect("save valid set");
+
+        let list = store::list_saved().expect("list_saved must not fail when corrupt set exists");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "valid_set");
+
+        match prev {
+            Some(val) => std::env::set_var("SIVTR_HOME", val),
+            None => std::env::remove_var("SIVTR_HOME"),
+        }
+    }
+
+    #[test]
     fn toggling_whole_replaces_narrow_selection() {
         let first = record(1);
         let mut set = WorkSet::new(".", Vec::new());

@@ -66,8 +66,8 @@ pub struct SearchParams {
     #[serde(default)]
     pub save: Option<String>,
     /// refs | timeline | workset (default timeline)
-    #[serde(default)]
-    pub detail: Option<String>,
+    #[serde(default, alias = "detail", alias = "mode")]
+    pub format: Option<String>,
     #[serde(default)]
     pub exclude_current: Option<bool>,
 }
@@ -108,8 +108,8 @@ pub struct FilterParams {
     pub cwd: Option<String>,
     #[serde(default)]
     pub save: Option<String>,
-    #[serde(default)]
-    pub detail: Option<String>,
+    #[serde(default, alias = "detail", alias = "mode")]
+    pub format: Option<String>,
     #[serde(default)]
     pub exclude_current: Option<bool>,
 }
@@ -120,9 +120,9 @@ pub struct ShowParams {
     pub source: String,
     #[serde(default)]
     pub cwd: Option<String>,
-    /// full | timeline | compact | md | refs (default full)
-    #[serde(default)]
-    pub mode: Option<String>,
+    /// full | timeline | compact | md | refs | workset (default full)
+    #[serde(default, alias = "mode")]
+    pub format: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -140,8 +140,8 @@ pub struct ZoomParams {
     pub cwd: Option<String>,
     #[serde(default)]
     pub save: Option<String>,
-    #[serde(default)]
-    pub detail: Option<String>,
+    #[serde(default, alias = "detail", alias = "mode")]
+    pub format: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -307,7 +307,7 @@ pub fn to_filter_args(params: &FilterParams) -> Result<FilterArgs, String> {
 }
 
 pub fn to_show_args(params: &ShowParams) -> Result<ShowArgs, String> {
-    let mode = params.mode.as_deref().unwrap_or("full");
+    let mode = params.format.as_deref().unwrap_or("full");
     let format = match mode {
         "full" => Some(WorkSetOutputFormat::Full),
         "timeline" => Some(WorkSetOutputFormat::Timeline),
@@ -447,6 +447,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn params_deserialize_format_alias() {
+        let show: ShowParams =
+            serde_json::from_str(r#"{"source":"@last","format":"timeline"}"#).unwrap();
+        assert_eq!(show.format.as_deref(), Some("timeline"));
+
+        let show_legacy: ShowParams =
+            serde_json::from_str(r#"{"source":"@last","mode":"timeline"}"#).unwrap();
+        assert_eq!(show_legacy.format.as_deref(), Some("timeline"));
+
+        let search: SearchParams =
+            serde_json::from_str(r#"{"source":"terminal","format":"timeline"}"#).unwrap();
+        assert_eq!(search.format.as_deref(), Some("timeline"));
+
+        let search_legacy: SearchParams =
+            serde_json::from_str(r#"{"source":"terminal","detail":"timeline"}"#).unwrap();
+        assert_eq!(search_legacy.format.as_deref(), Some("timeline"));
+    }
+
+    #[test]
     fn maps_search_params() {
         let args = to_search_args(&SearchParams {
             source: "terminal".into(),
@@ -466,7 +485,7 @@ mod tests {
             limit: None,
             cwd: None,
             save: Some("failures".into()),
-            detail: Some("timeline".into()),
+            format: Some("timeline".into()),
             exclude_current: Some(true),
         })
         .expect("map");
@@ -499,7 +518,7 @@ mod tests {
             limit: None,
             cwd: None,
             save: None,
-            detail: None,
+            format: None,
             exclude_current: None,
         })
         .expect("map");
@@ -525,7 +544,7 @@ mod tests {
             limit: None,
             cwd: None,
             save: None,
-            detail: None,
+            format: None,
             exclude_current: None,
         })
         .expect("map");
