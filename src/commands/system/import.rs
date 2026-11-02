@@ -73,7 +73,8 @@ fn read_export(path: &Path) -> Result<String> {
     let mut matches = Vec::new();
     for index in 0..archive.len() {
         let entry = archive.by_index(index)?;
-        if Path::new(entry.name())
+        let name = entry.name()?;
+        if Path::new(name.as_ref())
             .file_name()
             .and_then(|name| name.to_str())
             == Some("conversations.json")
