@@ -24,13 +24,33 @@ fn is_settled(mtime_secs: u64) -> bool {
         .unwrap_or(false)
 }
 
+/// A strong fingerprint for provider-specific auxiliary files (mtime, size, and content prefix hash).
+/// This prevents stale cache reuse on coarse-timestamp filesystems when a small metadata file
+/// (like `summary.json`) is rewritten in place with the same length within the same timestamp tick.
+fn extra_file_stamp(path: &Path) -> Option<(u64, u32, u64, u64)> {
+    let stamp = crate::cache::file_stamp(path)?;
+    let content_hash = if stamp.2 > 0 {
+        use std::hash::{DefaultHasher, Hasher};
+        use std::io::Read;
+        let mut file = std::fs::File::open(path).ok()?;
+        let mut buf = [0u8; 4096];
+        let n = file.read(&mut buf).ok()?;
+        let mut hasher = DefaultHasher::new();
+        hasher.write(&buf[..n]);
+        hasher.finish()
+    } else {
+        0
+    };
+    Some((stamp.0, stamp.1, stamp.2, content_hash))
+}
+
 /// One cached session file in a listing: fingerprint + parsed metadata.
 #[derive(Clone, Serialize, Deserialize)]
 struct ListingEntry {
     mtime_secs: u64,
     mtime_nanos: u32,
     size: u64,
-    extra_stamps: Vec<Option<(u64, u32, u64)>>,
+    extra_stamps: Vec<Option<(u64, u32, u64, u64)>>,
     meta: AgentSessionMeta,
 }
 
@@ -234,7 +254,7 @@ fn collect_recent_sessions(
     for path in leaves {
         let extra_stamps: Vec<_> = extra_stamp_paths(&path)
             .iter()
-            .map(|path| crate::cache::file_stamp(path))
+            .map(|path| extra_file_stamp(path))
             .collect();
         let Some(stamp) = crate::cache::file_stamp(&path) else {
             // Unstampable file (e.g. racing delete): parse without caching.

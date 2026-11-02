@@ -1050,6 +1050,33 @@ mod tests {
     }
 
     #[test]
+    fn listing_cache_refreshes_summary_metadata_after_same_length_in_place_update() {
+        let home = tempfile::tempdir().unwrap();
+        write_session(
+            home.path(),
+            "bucket",
+            "sess-same-len",
+            "{\"type\":\"user\",\"content\":\"hello\"}\n",
+            r#"{"info":{"id":"sess-same-len","cwd":"/tmp"},"generated_title":"title-A"}"#,
+        );
+        let _guard = EnvGuard::set("GROK_HOME", home.path());
+        let session_dir = home.path().join("sessions/bucket/sess-same-len");
+
+        let first = GrokProvider.list_recent_sessions(None).unwrap();
+        assert_eq!(first[0].title.as_deref(), Some("title-A"));
+
+        // Overwrite summary.json with an identical-length title ("title-B", 7 chars)
+        fs::write(
+            session_dir.join(SUMMARY_FILE),
+            r#"{"info":{"id":"sess-same-len","cwd":"/tmp"},"generated_title":"title-B"}"#,
+        )
+        .unwrap();
+
+        let second = GrokProvider.list_recent_sessions(None).unwrap();
+        assert_eq!(second[0].title.as_deref(), Some("title-B"));
+    }
+
+    #[test]
     fn parse_accepts_chat_history_path() {
         let home = tempfile::tempdir().unwrap();
         write_session(
