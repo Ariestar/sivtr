@@ -130,7 +130,12 @@ fi
 # Hand the terminal to the capture proxy; the profile is sourced again inside
 # it and installs the hooks above. Everything below the guard is skipped there.
 if [[ -z "${SIVTR_PTY_PROXIED:-}" ]] && [[ $- == *i* ]] && [[ -z "${SIVTR_NO_PTY_PROXY:-}" ]] && command -v sivtr >/dev/null 2>&1; then
-  exec sivtr pty-proxy run bash
+  if command -v exec >/dev/null 2>&1; then
+    exec sivtr pty-proxy run bash
+  else
+    sivtr pty-proxy run "${0#-}"
+    exit $?
+  fi
 fi
 # <<< sivtr shell integration <<<
 "#;
@@ -321,6 +326,27 @@ pub fn execute(shell: &str) -> Result<()> {
             );
             std::process::exit(1);
         }
+    }
+}
+
+/// Print shell integration hook script to stdout for dynamic evaluation (zero-mutation).
+pub fn print_hook(shell: &str) -> Result<()> {
+    let hook = get_hook(shell)?;
+    print!("{hook}");
+    Ok(())
+}
+
+/// Retrieve the raw hook script for the specified shell.
+pub(crate) fn get_hook(shell: &str) -> Result<&'static str> {
+    let target = shell.to_lowercase();
+    match target.as_str() {
+        "powershell" | "pwsh" => Ok(POWERSHELL_HOOK),
+        "bash" => Ok(BASH_HOOK),
+        "zsh" => Ok(ZSH_HOOK),
+        "nu" | "nushell" => Ok(NUSHELL_HOOK),
+        _ => anyhow::bail!(
+            "unsupported shell: '{shell}'. Supported: bash, zsh, powershell (pwsh), nushell (nu)"
+        ),
     }
 }
 
@@ -952,6 +978,27 @@ mod tests {
         POWERSHELL_SPEC, ZSH_HOOK, ZSH_SPEC,
     };
     use std::path::Path;
+
+    #[test]
+    fn get_hook_returns_expected_scripts() {
+        assert!(super::get_hook("bash")
+            .unwrap()
+            .contains("SIVTR_TERMINAL_ID"));
+        assert!(super::get_hook("zsh")
+            .unwrap()
+            .contains("SIVTR_TERMINAL_ID"));
+        assert!(super::get_hook("pwsh")
+            .unwrap()
+            .contains("SIVTR_TERMINAL_ID"));
+        assert!(super::get_hook("nu").unwrap().contains("SIVTR_TERMINAL_ID"));
+        assert!(super::get_hook("powershell")
+            .unwrap()
+            .contains("SIVTR_TERMINAL_ID"));
+        assert!(super::get_hook("nushell")
+            .unwrap()
+            .contains("SIVTR_TERMINAL_ID"));
+        assert!(super::get_hook("unsupported").is_err());
+    }
 
     #[test]
     fn shell_printed_path_rejects_nonzero_exit_code() {
