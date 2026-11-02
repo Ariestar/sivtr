@@ -448,21 +448,16 @@ mod tests {
 
     #[test]
     fn params_deserialize_format_alias() {
-        let show: ShowParams =
-            serde_json::from_str(r#"{"source":"@last","format":"timeline"}"#).unwrap();
-        assert_eq!(show.format.as_deref(), Some("timeline"));
-
-        let show_legacy: ShowParams =
-            serde_json::from_str(r#"{"source":"@last","mode":"timeline"}"#).unwrap();
-        assert_eq!(show_legacy.format.as_deref(), Some("timeline"));
-
-        let search: SearchParams =
-            serde_json::from_str(r#"{"source":"terminal","format":"timeline"}"#).unwrap();
-        assert_eq!(search.format.as_deref(), Some("timeline"));
-
-        let search_legacy: SearchParams =
-            serde_json::from_str(r#"{"source":"terminal","detail":"timeline"}"#).unwrap();
-        assert_eq!(search_legacy.format.as_deref(), Some("timeline"));
+        for key in ["format", "mode"] {
+            let json = format!(r#"{{"source":"@last","{key}":"timeline"}}"#);
+            let show: ShowParams = serde_json::from_str(&json).unwrap();
+            assert_eq!(show.format.as_deref(), Some("timeline"));
+        }
+        for key in ["format", "detail", "mode"] {
+            let json = format!(r#"{{"source":"terminal","{key}":"timeline"}}"#);
+            let search: SearchParams = serde_json::from_str(&json).unwrap();
+            assert_eq!(search.format.as_deref(), Some("timeline"));
+        }
     }
 
     #[test]

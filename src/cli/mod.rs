@@ -1495,23 +1495,17 @@ mod tests {
 
     #[test]
     fn show_and_search_accept_mode_as_format_alias() {
-        let cli =
+        let show =
             Cli::try_parse_from(["sivtr", "show", "terminal/1", "--mode", "timeline"]).unwrap();
-        match cli.command {
-            Some(Commands::Show(args)) => {
-                assert_eq!(args.format, Some(WorkSetOutputFormat::Timeline));
-            }
-            _ => panic!("expected show command"),
-        }
+        assert!(
+            matches!(show.command, Some(Commands::Show(args)) if args.format == Some(WorkSetOutputFormat::Timeline))
+        );
 
-        let cli =
+        let search =
             Cli::try_parse_from(["sivtr", "search", "terminal", "--mode", "compact"]).unwrap();
-        match cli.command {
-            Some(Commands::Search(args)) => {
-                assert_eq!(args.format, Some(WorkSetOutputFormat::Compact));
-            }
-            _ => panic!("expected search command"),
-        }
+        assert!(
+            matches!(search.command, Some(Commands::Search(args)) if args.format == Some(WorkSetOutputFormat::Compact))
+        );
     }
 
     #[test]

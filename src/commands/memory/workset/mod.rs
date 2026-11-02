@@ -385,13 +385,7 @@ mod tests {
         std::env::set_var("SIVTR_HOME", dir.path());
 
         let first = record(1);
-        let mut invalid_value =
-            serde_json::to_value(WorkSet::from_parts(".", vec![first.clone()], vec![]))
-                .expect("serialize WorkSet");
-        invalid_value["anchors"] = serde_json::json!([record(2).work_ref]);
-        let invalid_set: WorkSet =
-            serde_json::from_value(invalid_value).expect("deserialize WorkSet");
-
+        let invalid_set = WorkSet::from_parts(".", vec![first.clone()], vec![record(2).work_ref]);
         let err = store::save_named("invalid_set", &invalid_set);
         assert!(err.is_err(), "save_named must reject invalid WorkSet");
 
