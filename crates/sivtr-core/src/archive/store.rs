@@ -523,8 +523,6 @@ pub struct SessionRow {
     pub row_id: i64,
     pub provider: String,
     pub session_id: String,
-    pub source_path: String,
-    pub project: String,
     pub starred: bool,
 }
 
@@ -535,12 +533,16 @@ pub fn list_session_rows(
     starred: Option<bool>,
 ) -> Result<Vec<SessionRow>> {
     let mut stmt = conn.prepare(
-        "SELECT id, provider, session_id, source_path, project, starred
-         FROM sessions
-         WHERE (?1 IS NULL OR provider = ?1)
-           AND (?2 IS NULL OR session_id = ?2)
-           AND (?3 IS NULL OR starred = ?3)
-         ORDER BY COALESCE(ended_at, started_at, synced_at) DESC, id DESC",
+        "SELECT s.id, s.provider, s.session_id, st.provider IS NOT NULL
+         FROM sessions s
+         LEFT JOIN session_stars st
+                ON st.provider = s.provider AND st.session_id = s.session_id
+         WHERE (?1 IS NULL OR s.provider = ?1)
+           AND (?2 IS NULL OR s.session_id = ?2)
+           AND (?3 IS NULL
+                OR (?3 = 1 AND st.provider IS NOT NULL)
+                OR (?3 = 0 AND st.provider IS NULL))
+         ORDER BY COALESCE(s.ended_at, s.started_at, s.synced_at) DESC, s.id DESC",
     )?;
     let rows = stmt
         .query_map(
@@ -550,9 +552,7 @@ pub fn list_session_rows(
                     row_id: row.get(0)?,
                     provider: row.get(1)?,
                     session_id: row.get(2)?,
-                    source_path: row.get(3)?,
-                    project: row.get(4)?,
-                    starred: row.get::<_, i64>(5)? != 0,
+                    starred: row.get::<_, i64>(3)? != 0,
                 })
             },
         )?
@@ -568,7 +568,10 @@ pub fn remove_missing_sessions(
     if source_paths.is_empty() {
         return Ok(conn.execute(
             "DELETE FROM sessions
-             WHERE provider = ?1 AND source_path NOT LIKE ?2",
+             WHERE provider = ?1 AND source_path NOT LIKE ?2
+               AND NOT EXISTS (SELECT 1 FROM session_stars st
+                               WHERE st.provider = sessions.provider
+                                 AND st.session_id = sessions.session_id)",
             params![provider, format!("{CAPTURE_SOURCE_PREFIX}%")],
         )?);
     }
@@ -578,7 +581,10 @@ pub fn remove_missing_sessions(
     let sql = format!(
         "DELETE FROM sessions
          WHERE provider = ?1 AND source_path NOT LIKE ?2
-           AND source_path NOT IN ({placeholders})"
+           AND source_path NOT IN ({placeholders})
+           AND NOT EXISTS (SELECT 1 FROM session_stars st
+                           WHERE st.provider = sessions.provider
+                             AND st.session_id = sessions.session_id)"
     );
     let capture_prefix = format!("{CAPTURE_SOURCE_PREFIX}%");
     let mut values: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(source_paths.len() + 2);
@@ -596,12 +602,27 @@ pub fn set_session_starred(
     session_id: &str,
     starred: bool,
 ) -> Result<()> {
-    let changed = conn.execute(
-        "UPDATE sessions SET starred = ?3 WHERE provider = ?1 AND session_id = ?2",
-        params![provider, session_id, i64::from(starred)],
-    )?;
-    if changed == 0 {
-        anyhow::bail!("archived session `{provider}/{session_id}` was not found");
+    if starred {
+        let archived: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sessions WHERE provider = ?1 AND session_id = ?2)",
+            params![provider, session_id],
+            |row| row.get(0),
+        )?;
+        if !archived {
+            anyhow::bail!("archived session `{provider}/{session_id}` was not found");
+        }
+        conn.execute(
+            "INSERT OR IGNORE INTO session_stars (provider, session_id, starred_at)
+             VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+            params![provider, session_id],
+        )
+        .context("Failed to star archived session")?;
+    } else {
+        conn.execute(
+            "DELETE FROM session_stars WHERE provider = ?1 AND session_id = ?2",
+            params![provider, session_id],
+        )
+        .context("Failed to unstar archived session")?;
     }
     Ok(())
 }
@@ -689,8 +710,12 @@ pub fn session_meta_by_key(
     session_id: &str,
 ) -> Result<Option<SessionMeta>> {
     conn.query_row(
-        "SELECT provider, session_id, title, cwd, started_at, ended_at, record_count, project, starred
-         FROM sessions WHERE provider = ?1 AND session_id = ?2",
+        "SELECT s.provider, s.session_id, s.title, s.cwd, s.started_at, s.ended_at,
+                s.record_count, s.project, st.provider IS NOT NULL
+         FROM sessions s
+         LEFT JOIN session_stars st
+                ON st.provider = s.provider AND st.session_id = s.session_id
+         WHERE s.provider = ?1 AND s.session_id = ?2",
         params![provider, session_id],
         |row| {
             Ok(SessionMeta {
@@ -698,11 +723,11 @@ pub fn session_meta_by_key(
                 session_id: row.get(1)?,
                 title: row.get(2)?,
                 cwd: row.get(3)?,
-            started_at: row.get(4)?,
-            ended_at: row.get(5)?,
-            record_count: row.get(6)?,
-            project: row.get(7)?,
-            starred: row.get::<_, i64>(8)? != 0,
+                started_at: row.get(4)?,
+                ended_at: row.get(5)?,
+                record_count: row.get(6)?,
+                project: row.get(7)?,
+                starred: row.get::<_, i64>(8)? != 0,
             })
         },
     )
@@ -1008,6 +1033,43 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+        std::env::remove_var("SIVTR_HOME");
+    }
+
+    #[test]
+    fn starred_sessions_survive_source_removal_and_unstar_resumes_pruning() {
+        let _guard = crate::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("SIVTR_HOME", dir.path());
+        let conn = crate::archive::open().unwrap();
+        let records = vec![terminal_record("session_1", 1, "keep me")];
+        assert!(upsert_session(&conn, &sample_upsert(&records)).unwrap());
+
+        set_session_starred(&conn, "terminal", "session_1", true).unwrap();
+        // A re-sync updates the row in place and must keep the star.
+        assert!(!upsert_session(&conn, &sample_upsert(&records)).unwrap());
+        let starred = list_session_rows(&conn, None, None, Some(true)).unwrap();
+        assert_eq!(starred.len(), 1);
+        assert!(starred[0].starred);
+
+        assert_eq!(remove_missing_sessions(&conn, "terminal", &[]).unwrap(), 0);
+        assert!(session_meta_by_key(&conn, "terminal", "session_1")
+            .unwrap()
+            .is_some());
+
+        set_session_starred(&conn, "terminal", "session_1", false).unwrap();
+        assert_eq!(remove_missing_sessions(&conn, "terminal", &[]).unwrap(), 1);
+        std::env::remove_var("SIVTR_HOME");
+    }
+
+    #[test]
+    fn starring_an_unknown_session_fails() {
+        let _guard = crate::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("SIVTR_HOME", dir.path());
+        let conn = crate::archive::open().unwrap();
+        let error = set_session_starred(&conn, "terminal", "missing", true).unwrap_err();
+        assert!(error.to_string().contains("was not found"));
         std::env::remove_var("SIVTR_HOME");
     }
 

@@ -8,7 +8,10 @@ use rusqlite::Connection;
 /// Archive schema version. Bump when a release changes the table layout in a
 /// way older rows cannot serve; the store then rebuilds from native sources
 /// on the next sync (the archive is derived state, so a rebuild is safe).
-pub const SCHEMA_VERSION: i64 = 7;
+/// User intent lives in `session_stars`, which survives the rebuild.
+pub const SCHEMA_VERSION: i64 = 8;
+// v8 still decodes v7 blobs, so the v7 → v8 step upgrades in place; see
+// `init_schema`.
 
 /// Path of the archive database (`<home>/cache/archive.db`).
 pub fn db_path() -> PathBuf {
@@ -44,8 +47,6 @@ pub fn open() -> Result<Connection> {
 pub fn init_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(SCHEMA_SQL)
         .context("Failed to initialize archive schema")?;
-    ensure_column(conn, "project", "TEXT NOT NULL DEFAULT ''")?;
-    ensure_column(conn, "starred", "INTEGER NOT NULL DEFAULT 0")?;
     let stored: Option<i64> = conn
         .query_row(
             "SELECT value FROM archive_meta WHERE key = 'schema_version'",
@@ -69,6 +70,9 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             other => Err(other),
         })
         .context("Failed to read archive schema version")?;
+    if stored.is_some_and(|version| version < SCHEMA_VERSION) {
+        preserve_stars_before_rebuild(conn)?;
+    }
     match stored {
         None => {
             conn.execute(
@@ -84,26 +88,38 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             );
         }
         Some(version) if version < SCHEMA_VERSION => {
-            // The archive is a derived store of the source session files, so
-            // a breaking schema change rebuilds it from scratch: the previous
-            // record blobs decode under the old model only. Sessions are
-            // re-archived on the next sync; capture rows from before the
-            // upgrade do not survive (their blobs are model-shaped).
-            conn.execute_batch(
-                "DROP TABLE IF EXISTS record_embeddings;
-                 DROP TABLE IF EXISTS embedding_generations;
-                 DROP TABLE IF EXISTS embedding_state;
-                 DROP TABLE IF EXISTS usage_events;
-                 DROP TABLE IF EXISTS secret_findings;
-                 DROP TABLE IF EXISTS records;
-                 DROP TABLE IF EXISTS sessions;
-                 DROP TABLE IF EXISTS archive_meta;",
-            )
-            .context("Failed to clear the derived archive for rebuild")?;
-            conn.execute_batch(SCHEMA_SQL)
-                .context("Failed to recreate the archive schema")?;
+            if version == 7 {
+                // v8 only moved stars out of `sessions`. Record blobs keep
+                // their encoding, so the upgrade leaves the archive intact —
+                // including sessions whose native source is already gone.
+                if column_exists(conn, "sessions", "starred")? {
+                    conn.execute_batch("ALTER TABLE sessions DROP COLUMN starred")
+                        .context("Failed to drop the legacy starred column")?;
+                }
+            } else {
+                // The archive is a derived store of the source session files,
+                // so a breaking schema change rebuilds it from scratch: the
+                // previous record blobs decode under the old model only.
+                // Sessions are re-archived on the next sync; capture rows from
+                // before the upgrade do not survive (their blobs are
+                // model-shaped). `session_stars` is intentionally absent: user
+                // intent survives.
+                conn.execute_batch(
+                    "DROP TABLE IF EXISTS record_embeddings;
+                     DROP TABLE IF EXISTS embedding_generations;
+                     DROP TABLE IF EXISTS embedding_state;
+                     DROP TABLE IF EXISTS usage_events;
+                     DROP TABLE IF EXISTS secret_findings;
+                     DROP TABLE IF EXISTS records;
+                     DROP TABLE IF EXISTS sessions;
+                     DROP TABLE IF EXISTS archive_meta;",
+                )
+                .context("Failed to clear the derived archive for rebuild")?;
+                conn.execute_batch(SCHEMA_SQL)
+                    .context("Failed to recreate the archive schema")?;
+            }
             conn.execute(
-                "INSERT INTO archive_meta (key, value) VALUES ('schema_version', ?1)",
+                "INSERT OR REPLACE INTO archive_meta (key, value) VALUES ('schema_version', ?1)",
                 [SCHEMA_VERSION],
             )
             .context("Failed to stamp archive schema version")?;
@@ -140,18 +156,28 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn ensure_column(conn: &Connection, name: &str, definition: &str) -> Result<()> {
-    let exists: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('sessions') WHERE name = ?1)",
+fn column_exists(conn: &Connection, table: &str, name: &str) -> Result<bool> {
+    Ok(conn.query_row(
+        &format!("SELECT EXISTS(SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1)"),
         [name],
         |row| row.get(0),
-    )?;
-    if !exists {
-        conn.execute(
-            &format!("ALTER TABLE sessions ADD COLUMN {name} {definition}"),
-            [],
-        )?;
+    )?)
+}
+
+/// Stars are user intent, so they move to `session_stars` before a rebuild
+/// drops the derived `sessions` table. Pre-v8 archives keep the flag in a
+/// `starred` column; newer archives already wrote the durable table.
+fn preserve_stars_before_rebuild(conn: &Connection) -> Result<()> {
+    if !column_exists(conn, "sessions", "starred")? {
+        return Ok(());
     }
+    conn.execute(
+        "INSERT OR IGNORE INTO session_stars (provider, session_id, starred_at)
+         SELECT provider, session_id, strftime('%Y-%m-%dT%H:%M:%fZ','now')
+         FROM sessions WHERE starred = 1",
+        [],
+    )
+    .context("Failed to migrate starred sessions into session_stars")?;
     Ok(())
 }
 
@@ -177,7 +203,6 @@ CREATE TABLE IF NOT EXISTS sessions (
     ended_at      TEXT,
     record_count  INTEGER NOT NULL DEFAULT 0,
     project       TEXT NOT NULL DEFAULT '',
-    starred       INTEGER NOT NULL DEFAULT 0,
     mtime_secs    INTEGER NOT NULL DEFAULT 0,
     mtime_nanos   INTEGER NOT NULL DEFAULT 0,
     size          INTEGER NOT NULL DEFAULT 0,
@@ -190,6 +215,15 @@ CREATE INDEX IF NOT EXISTS idx_sessions_workspace
     ON sessions(workspace_key);
 CREATE INDEX IF NOT EXISTS idx_sessions_mtime
     ON sessions(provider, mtime_secs DESC, mtime_nanos DESC);
+
+-- A star is user intent, not derived archive state. It lives outside
+-- `sessions` so a schema rebuild and a vanished source file both keep it.
+CREATE TABLE IF NOT EXISTS session_stars (
+    provider   TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    starred_at TEXT NOT NULL,
+    PRIMARY KEY (provider, session_id)
+);
 
 -- One row per WorkRecord, in ref-index order. `blob` is the full
 -- MessagePack record; `blob_light` is the metadata view with part text
@@ -332,6 +366,95 @@ mod tests {
             .unwrap();
         assert_eq!(has_generation_id, 0);
         assert_eq!(has_embedding_state, 1);
+        std::env::remove_var("SIVTR_HOME");
+    }
+
+    /// Seed an archive written by an older build: two sessions, one starred.
+    fn seed_legacy_archive(path: &std::path::Path, version: i64) {
+        let old = Connection::open(path).unwrap();
+        old.execute_batch(&format!(
+            "CREATE TABLE archive_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO archive_meta (key, value) VALUES ('schema_version', '{version}');
+             CREATE TABLE sessions (
+                 id INTEGER PRIMARY KEY,
+                 provider TEXT NOT NULL,
+                 session_id TEXT NOT NULL,
+                 source_path TEXT NOT NULL,
+                 cwd TEXT,
+                 cwd_norm TEXT NOT NULL DEFAULT '',
+                 workspace_key TEXT NOT NULL DEFAULT '',
+                 title TEXT,
+                 started_at TEXT,
+                 ended_at TEXT,
+                 record_count INTEGER NOT NULL DEFAULT 0,
+                 project TEXT NOT NULL DEFAULT '',
+                 starred INTEGER NOT NULL DEFAULT 0,
+                 mtime_secs INTEGER NOT NULL DEFAULT 0,
+                 mtime_nanos INTEGER NOT NULL DEFAULT 0,
+                 size INTEGER NOT NULL DEFAULT 0,
+                 synced_at TEXT NOT NULL DEFAULT '',
+                 UNIQUE(provider, session_id)
+             );
+             INSERT INTO sessions (provider, session_id, source_path, starred)
+                 VALUES ('codex', 'keep', 'keep.jsonl', 1);
+             INSERT INTO sessions (provider, session_id, source_path, starred)
+                 VALUES ('codex', 'drop', 'drop.jsonl', 0);"
+        ))
+        .unwrap();
+    }
+
+    fn seeded_stars(conn: &Connection) -> Vec<String> {
+        conn.prepare("SELECT session_id FROM session_stars ORDER BY session_id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn v7_archives_upgrade_in_place() {
+        let _guard = crate::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("SIVTR_HOME", dir.path());
+        let path = db_path();
+        std::fs::create_dir_all(path.parent().expect("archive path has a parent"))
+            .expect("create archive cache dir");
+        seed_legacy_archive(&path, 7);
+
+        let conn = open().expect("open migrates the archive");
+        assert_eq!(seeded_stars(&conn), vec!["keep".to_string()]);
+        let sessions: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(sessions, 2, "the v8 upgrade keeps archived content");
+        let legacy_column: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'starred'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(legacy_column, 0);
+        std::env::remove_var("SIVTR_HOME");
+    }
+
+    #[test]
+    fn stars_survive_a_full_rebuild() {
+        let _guard = crate::test_env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("SIVTR_HOME", dir.path());
+        let path = db_path();
+        std::fs::create_dir_all(path.parent().expect("archive path has a parent"))
+            .expect("create archive cache dir");
+        seed_legacy_archive(&path, 6);
+
+        let conn = open().expect("open rebuilds the archive");
+        assert_eq!(seeded_stars(&conn), vec!["keep".to_string()]);
+        let sessions: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(sessions, 0, "derived sessions rebuild from native sources");
         std::env::remove_var("SIVTR_HOME");
     }
 }
