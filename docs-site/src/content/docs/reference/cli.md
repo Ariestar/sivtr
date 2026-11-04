@@ -927,6 +927,26 @@ sivtr stats [--provider <PROVIDER>] [--since <DATE>] [--until <DATE>] [--json]
 Reports session/record counts, activity days and hours, projects, outcomes,
 secret findings, starred sessions, and usage totals.
 
+## storage
+
+```bash
+sivtr storage status [--json]
+sivtr storage vacuum [--dry-run]
+sivtr storage prune-cache [--apply] [--json]
+```
+
+Reports the bytes under the sivtr home: the archive database and its WAL
+sidecars, derived caches, saved WorkSets, workspace session logs, and
+everything else. `vacuum` compacts `archive.db` and reclaims free pages;
+`prune-cache` removes legacy parsed-session caches that current builds no
+longer write. `vacuum` runs by default and previews with `--dry-run`;
+`prune-cache` previews by default and deletes only with `--apply`. Session
+sources and saved WorkSets are never deleted.
+
+`status` also reports an archive copy left at the home root by older layouts;
+`sivtr doctor` detects it, and `doctor --fix` migrates it into `cache/` when
+that path is free.
+
 ## session
 
 ```bash
