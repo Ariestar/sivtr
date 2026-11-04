@@ -403,6 +403,13 @@ pub enum Commands {
         target: String,
     },
 
+    /// Print shell integration hook script to stdout
+    Hook {
+        /// Target shell: bash, zsh, powershell (pwsh), nushell (nu)
+        #[arg(value_name = "SHELL")]
+        shell: String,
+    },
+
     /// Copy recent command blocks to clipboard
     #[command(visible_alias = "c")]
     Copy(Box<CopyCommand>),
@@ -2567,6 +2574,16 @@ mod tests {
         let help = String::from_utf8(help).unwrap();
 
         assert!(help.contains("macos-shortcut"));
+    }
+
+    #[test]
+    fn hook_parses_target_shell() {
+        let cli = Cli::try_parse_from(["sivtr", "hook", "bash"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Hook { shell }) => assert_eq!(shell, "bash"),
+            _ => panic!("expected hook command"),
+        }
     }
 
     #[test]
