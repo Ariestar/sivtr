@@ -11,6 +11,7 @@ pub mod session;
 pub mod setup;
 pub mod skill;
 pub mod stats;
+pub mod storage;
 pub mod sync;
 pub mod update;
 pub mod usage;
