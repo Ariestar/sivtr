@@ -63,7 +63,9 @@ impl AgentSessionProvider for CmdcProvider {
             &projects_root(),
             cwd,
             is_session_transcript,
-            |_| Vec::new(),
+            // A rename rewrites only the sidecar, so it must invalidate the
+            // cached title even when the transcript is unchanged.
+            |path| vec![path.with_extension("meta.json")],
             parse_session_meta,
         )
     }
@@ -559,6 +561,36 @@ mod tests {
             Some(cwd.to_string_lossy().as_ref())
         );
         assert_eq!(listed[0].title.as_deref(), Some("make sivtr support cmdc"));
+    }
+
+    #[test]
+    fn listing_cache_refreshes_title_after_sidecar_only_rename() {
+        let _guard = crate::test_env_lock();
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let cwd = dir.path().join("repo");
+        make_repo(&cwd);
+
+        let listed = with_home(dir.path(), || {
+            let project = dir.path().join("projects").join("repo");
+            let path = write_transcript(&project, &cwd.to_string_lossy());
+            let first = CmdcProvider
+                .list_recent_sessions(None)
+                .expect("list sessions");
+            assert_eq!(first[0].title.as_deref(), Some("make sivtr support cmdc"));
+
+            fs::write(
+                path.with_extension("meta.json"),
+                r#"{"title":"renamed session"}"#,
+            )
+            .expect("write sidecar");
+
+            CmdcProvider
+                .list_recent_sessions(None)
+                .expect("list sessions after rename")
+        });
+
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].title.as_deref(), Some("renamed session"));
     }
 
     #[test]

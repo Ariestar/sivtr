@@ -1023,7 +1023,7 @@ mod tests {
 
     #[test]
     fn listing_cache_refreshes_summary_metadata_after_same_length_in_place_update() {
-        let home = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().expect("create temp home");
         write_session(
             home.path(),
             "bucket",
@@ -1034,7 +1034,9 @@ mod tests {
         let _guard = EnvGuard::set("GROK_HOME", home.path());
         let session_dir = home.path().join("sessions/bucket/sess-same-len");
 
-        let first = GrokProvider.list_recent_sessions(None).unwrap();
+        let first = GrokProvider
+            .list_recent_sessions(None)
+            .expect("list sessions");
         assert_eq!(first[0].title.as_deref(), Some("title-A"));
         let directory_stamp = crate::cache::file_stamp(&session_dir);
 
@@ -1043,10 +1045,12 @@ mod tests {
             session_dir.join(SUMMARY_FILE),
             r#"{"info":{"id":"sess-same-len","cwd":"/tmp"},"generated_title":"title-B"}"#,
         )
-        .unwrap();
+        .expect("rewrite summary");
         assert_eq!(crate::cache::file_stamp(&session_dir), directory_stamp);
 
-        let second = GrokProvider.list_recent_sessions(None).unwrap();
+        let second = GrokProvider
+            .list_recent_sessions(None)
+            .expect("list sessions again");
         assert_eq!(second[0].title.as_deref(), Some("title-B"));
     }
 

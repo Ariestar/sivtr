@@ -46,16 +46,21 @@ fn extra_file_stamp(path: &Path) -> Option<Option<(i64, u32, u64, u64)>> {
             (-(dur.as_secs() as i64), dur.subsec_nanos())
         }
     };
-    // A settled mtime is reliable, so the content prefix only disambiguates
+    // A settled mtime is reliable, so the content hash only disambiguates
     // rewrites inside the filesystem's mtime granularity window.
     let content_hash = if meta.len() > 0 && !is_settled(secs as u64) {
         use std::hash::{DefaultHasher, Hasher};
         use std::io::Read;
         let mut file = std::fs::File::open(path).ok()?;
-        let mut buf = [0u8; 4096];
-        let n = file.read(&mut buf).ok()?;
         let mut hasher = DefaultHasher::new();
-        hasher.write(&buf[..n]);
+        let mut buf = [0u8; 8192];
+        loop {
+            match file.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => hasher.write(&buf[..n]),
+                Err(_) => return None,
+            }
+        }
         hasher.finish()
     } else {
         0
@@ -827,17 +832,17 @@ mod tests {
     #[test]
     fn listing_cache_reparses_when_provider_extra_file_changes() {
         let _guard = env_lock();
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempfile::tempdir().expect("create temp dir");
         let previous = std::env::var_os("SIVTR_HOME");
         std::env::set_var("SIVTR_HOME", temp.path());
 
         let root = temp.path().join("sessions");
         let session = root.join("bucket").join("session-1");
-        fs::create_dir_all(&session).unwrap();
+        fs::create_dir_all(&session).expect("create session dir");
         let summary = session.join("summary.json");
         let history = session.join("chat_history.jsonl");
-        fs::write(&summary, r#"{"generated_title":"first"}"#).unwrap();
-        fs::write(&history, "first\n").unwrap();
+        fs::write(&summary, r#"{"generated_title":"first"}"#).expect("write summary");
+        fs::write(&history, "first\n").expect("write history");
 
         let parses = std::cell::Cell::new(0usize);
         let parse_meta = |_: &Path| {
@@ -853,7 +858,7 @@ mod tests {
                 |path| vec![path.join("summary.json"), path.join("chat_history.jsonl")],
                 parse_meta,
             )
-            .unwrap()
+            .expect("list sessions")
         };
 
         assert_eq!(list().len(), 1);
@@ -866,7 +871,7 @@ mod tests {
         );
 
         let directory_stamp = crate::cache::file_stamp(&session);
-        fs::write(&history, "history updated in place\n").unwrap();
+        fs::write(&history, "history updated in place\n").expect("rewrite history");
         assert_eq!(crate::cache::file_stamp(&session), directory_stamp);
 
         assert_eq!(list().len(), 1);
@@ -885,19 +890,19 @@ mod tests {
     #[test]
     fn listing_cache_bypasses_metadata_for_unstampable_extra_file() {
         let _guard = env_lock();
-        let temp = tempfile::tempdir().unwrap();
+        let temp = tempfile::tempdir().expect("create temp dir");
         let previous = std::env::var_os("SIVTR_HOME");
         std::env::set_var("SIVTR_HOME", temp.path());
 
         let root = temp.path().join("sessions");
         let session = root.join("bucket").join("session-1");
-        fs::create_dir_all(&session).unwrap();
+        fs::create_dir_all(&session).expect("create session dir");
         let history = session.join("chat_history.jsonl");
-        fs::write(&history, "first\n").unwrap();
+        fs::write(&history, "first\n").expect("write history");
         // A directory in place of the auxiliary file cannot be opened, so its
         // stamp fails on every platform.
         let summary = session.join("summary.json");
-        fs::create_dir(&summary).unwrap();
+        fs::create_dir(&summary).expect("create summary placeholder");
 
         let parses = std::cell::Cell::new(0usize);
         let parse_meta = |_: &Path| {
@@ -913,7 +918,7 @@ mod tests {
                 |path| vec![path.join("summary.json"), path.join("chat_history.jsonl")],
                 parse_meta,
             )
-            .unwrap()
+            .expect("list sessions")
         };
 
         assert_eq!(list().len(), 1);
