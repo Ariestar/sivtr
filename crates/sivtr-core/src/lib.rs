@@ -13,6 +13,7 @@ pub mod record;
 pub mod search;
 pub mod session;
 pub mod session_source;
+pub mod storage;
 pub mod time;
 pub mod usage;
 pub mod workset;
