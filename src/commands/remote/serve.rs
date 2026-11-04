@@ -47,7 +47,7 @@ fn start(verbose: bool) -> Result<()> {
         }
         stop()?;
     }
-    crate::remote::ipc::remove_daemon_info()?;
+    // The child writes daemon.json atomically; deleting it here races a concurrent start.
     let log_path = ipc::daemon_log_path();
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent)?;
