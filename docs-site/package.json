@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@astrojs/mdx": "8.1.2",
-    "@astrojs/starlight": "0.42.8",
+    "@astrojs/starlight": "0.42.9",
     "astro": "7.4.5",
     "astro-mermaid": "^2.1.0",
     "mermaid": "^12.0.0"
