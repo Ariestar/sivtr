@@ -70,6 +70,7 @@ impl AgentSessionProvider for DshProvider {
             &root,
             cwd,
             |path, is_dir| !is_dir && is_dsh_log(path),
+            |_| Vec::new(),
             parse_session_meta,
         )
     }

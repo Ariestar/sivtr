@@ -48,6 +48,7 @@ impl AgentSessionProvider for GrokProvider {
                 is_dir
                     && (path.join(SUMMARY_FILE).exists() || path.join(CHAT_HISTORY_FILE).exists())
             },
+            |path| vec![path.join(SUMMARY_FILE), path.join(CHAT_HISTORY_FILE)],
             session_dir_meta,
         )
     }
@@ -1018,6 +1019,35 @@ mod tests {
         assert!(ids.contains(&"sess-match".to_string()));
         assert!(!ids.contains(&"sess-other".to_string()));
         assert_eq!(listed[0].title.as_deref(), Some("match"));
+    }
+
+    #[test]
+    fn listing_cache_refreshes_summary_metadata_after_same_length_in_place_update() {
+        let home = tempfile::tempdir().unwrap();
+        write_session(
+            home.path(),
+            "bucket",
+            "sess-same-len",
+            "{\"type\":\"user\",\"content\":\"hello\"}\n",
+            r#"{"info":{"id":"sess-same-len","cwd":"/tmp"},"generated_title":"title-A"}"#,
+        );
+        let _guard = EnvGuard::set("GROK_HOME", home.path());
+        let session_dir = home.path().join("sessions/bucket/sess-same-len");
+
+        let first = GrokProvider.list_recent_sessions(None).unwrap();
+        assert_eq!(first[0].title.as_deref(), Some("title-A"));
+        let directory_stamp = crate::cache::file_stamp(&session_dir);
+
+        // Overwrite summary.json with an identical-length title ("title-B", 7 chars)
+        fs::write(
+            session_dir.join(SUMMARY_FILE),
+            r#"{"info":{"id":"sess-same-len","cwd":"/tmp"},"generated_title":"title-B"}"#,
+        )
+        .unwrap();
+        assert_eq!(crate::cache::file_stamp(&session_dir), directory_stamp);
+
+        let second = GrokProvider.list_recent_sessions(None).unwrap();
+        assert_eq!(second[0].title.as_deref(), Some("title-B"));
     }
 
     #[test]

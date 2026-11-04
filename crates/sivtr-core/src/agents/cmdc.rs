@@ -63,6 +63,7 @@ impl AgentSessionProvider for CmdcProvider {
             &projects_root(),
             cwd,
             is_session_transcript,
+            |_| Vec::new(),
             parse_session_meta,
         )
     }
