@@ -576,7 +576,9 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "UPDATE sessions SET starred = 1 WHERE provider = 'cursor'",
+            "INSERT INTO session_stars (provider, session_id, starred_at)
+             SELECT provider, session_id, '2026-09-01T00:00:00Z'
+             FROM sessions WHERE provider = 'cursor'",
             [],
         )
         .unwrap();
