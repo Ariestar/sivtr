@@ -125,6 +125,7 @@ Sync and inspect the archive:
 sivtr sync
 sivtr usage daily
 sivtr stats
+sivtr storage status
 ```
 
 > [!NOTE]
