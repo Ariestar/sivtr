@@ -21,15 +21,14 @@ pub fn cache_dir() -> PathBuf {
 }
 
 /// `(mtime secs, mtime nanos, size)` fingerprint of a file; `None` when the
-/// file cannot be stamped (missing, unreadable). Falls back to zero for pre-epoch timestamps.
+/// file cannot be stamped (missing, unreadable, clock before epoch).
 pub fn file_stamp(path: &Path) -> Option<(u64, u32, u64)> {
     let meta = std::fs::metadata(path).ok()?;
-    let duration = match meta.modified().ok()? {
-        time => match time.duration_since(SystemTime::UNIX_EPOCH) {
-            Ok(dur) => dur,
-            Err(_) => std::time::Duration::ZERO,
-        },
-    };
+    let duration = meta
+        .modified()
+        .ok()?
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .ok()?;
     Some((duration.as_secs(), duration.subsec_nanos(), meta.len()))
 }
 

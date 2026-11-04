@@ -35,17 +35,20 @@ fn extra_file_stamp(path: &Path) -> Option<Option<(i64, u32, u64, u64)>> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Some(None),
         Err(_) => return None,
     };
-    let (secs, nanos) = match meta.modified() {
-        Ok(time) => match time.duration_since(SystemTime::UNIX_EPOCH) {
-            Ok(dur) => (dur.as_secs() as i64, dur.subsec_nanos()),
-            Err(err) => {
-                let dur = err.duration();
-                (-(dur.as_secs() as i64), dur.subsec_nanos())
-            }
-        },
-        Err(_) => return None,
+    if !meta.is_file() {
+        return None;
+    }
+    let time = meta.modified().ok()?;
+    let (secs, nanos) = match time.duration_since(SystemTime::UNIX_EPOCH) {
+        Ok(dur) => (dur.as_secs() as i64, dur.subsec_nanos()),
+        Err(err) => {
+            let dur = err.duration();
+            (-(dur.as_secs() as i64), dur.subsec_nanos())
+        }
     };
-    let content_hash = if meta.len() > 0 {
+    // A settled mtime is reliable, so the content prefix only disambiguates
+    // rewrites inside the filesystem's mtime granularity window.
+    let content_hash = if meta.len() > 0 && !is_settled(secs as u64) {
         use std::hash::{DefaultHasher, Hasher};
         use std::io::Read;
         let mut file = std::fs::File::open(path).ok()?;
@@ -122,26 +125,10 @@ pub fn list_recent_jsonl_sessions(
 /// Like [`list_recent_jsonl_sessions`], with a provider-supplied leaf
 /// predicate: true for a direct child that is one session. Used by dsh
 /// (`.jsonl.zstd` logs) and Grok (session directories).
+///
+/// `extra_stamp_paths` names provider-specific auxiliary files whose changes
+/// must invalidate the cached metadata of a session leaf.
 pub fn list_sessions_matching(
-    provider: &str,
-    root: &Path,
-    cwd: Option<&Path>,
-    is_session_leaf: impl Fn(&Path, bool) -> bool,
-    parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
-) -> Result<Vec<SessionInfo>> {
-    list_sessions_matching_with_extra_stamp_paths(
-        provider,
-        root,
-        cwd,
-        is_session_leaf,
-        |_| Vec::new(),
-        parse_meta,
-    )
-}
-
-/// Like [`list_sessions_matching`], while also invalidating cached metadata when
-/// provider-specific files inside a session leaf change.
-pub fn list_sessions_matching_with_extra_stamp_paths(
     provider: &str,
     root: &Path,
     cwd: Option<&Path>,
@@ -268,35 +255,21 @@ fn collect_recent_sessions(
     }
 
     for path in leaves {
-        let Some(extra_stamps) = extra_stamp_paths(&path)
+        let stamp = crate::cache::file_stamp(&path);
+        let extra_stamps = extra_stamp_paths(&path)
             .iter()
             .map(|path| extra_file_stamp(path))
-            .collect::<Option<Vec<_>>>()
-        else {
-            // A present auxiliary file could not be reliably stamped (e.g. unreadable metadata):
-            // bypass cache to ensure unstampable files are not treated as unchanged.
+            .collect::<Option<Vec<_>>>();
+        let (Some(stamp), Some(extra_stamps)) = (stamp, extra_stamps) else {
+            // Unstampable session or auxiliary file (racing delete, unreadable
+            // metadata): parse without caching so the next listing re-reads it.
             match parse_meta(&path) {
                 Ok(meta) => push_session(
                     &mut sessions,
                     path,
-                    SystemTime::UNIX_EPOCH,
-                    meta,
-                    wanted.as_ref(),
-                ),
-                Err(error) => crate::diagnostics::warn(format!(
-                    "failed to parse agent session metadata {}: {error:#}",
-                    path.display()
-                )),
-            }
-            continue;
-        };
-        let Some(stamp) = crate::cache::file_stamp(&path) else {
-            // Unstampable file (e.g. racing delete): parse without caching.
-            match parse_meta(&path) {
-                Ok(meta) => push_session(
-                    &mut sessions,
-                    path,
-                    SystemTime::UNIX_EPOCH,
+                    stamp.map_or(SystemTime::UNIX_EPOCH, |stamp| {
+                        SystemTime::UNIX_EPOCH + Duration::new(stamp.0, stamp.1)
+                    }),
                     meta,
                     wanted.as_ref(),
                 ),
@@ -872,7 +845,7 @@ mod tests {
             Ok(AgentSessionMeta::default())
         };
         let list = || {
-            list_sessions_matching_with_extra_stamp_paths(
+            list_sessions_matching(
                 "GrokExtraStampTest",
                 &root,
                 None,
@@ -901,6 +874,54 @@ mod tests {
             parses.get(),
             2,
             "changed provider files invalidate metadata"
+        );
+
+        match previous {
+            Some(value) => std::env::set_var("SIVTR_HOME", value),
+            None => std::env::remove_var("SIVTR_HOME"),
+        }
+    }
+
+    #[test]
+    fn listing_cache_bypasses_metadata_for_unstampable_extra_file() {
+        let _guard = env_lock();
+        let temp = tempfile::tempdir().unwrap();
+        let previous = std::env::var_os("SIVTR_HOME");
+        std::env::set_var("SIVTR_HOME", temp.path());
+
+        let root = temp.path().join("sessions");
+        let session = root.join("bucket").join("session-1");
+        fs::create_dir_all(&session).unwrap();
+        let history = session.join("chat_history.jsonl");
+        fs::write(&history, "first\n").unwrap();
+        // A directory in place of the auxiliary file cannot be opened, so its
+        // stamp fails on every platform.
+        let summary = session.join("summary.json");
+        fs::create_dir(&summary).unwrap();
+
+        let parses = std::cell::Cell::new(0usize);
+        let parse_meta = |_: &Path| {
+            parses.set(parses.get() + 1);
+            Ok(AgentSessionMeta::default())
+        };
+        let list = || {
+            list_sessions_matching(
+                "GrokExtraStampTest",
+                &root,
+                None,
+                |path, is_dir| is_dir && path.join("summary.json").exists(),
+                |path| vec![path.join("summary.json"), path.join("chat_history.jsonl")],
+                parse_meta,
+            )
+            .unwrap()
+        };
+
+        assert_eq!(list().len(), 1);
+        assert_eq!(list().len(), 1);
+        assert_eq!(
+            parses.get(),
+            2,
+            "an unstampable auxiliary file must bypass the cached metadata"
         );
 
         match previous {

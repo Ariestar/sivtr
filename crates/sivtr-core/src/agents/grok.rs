@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::agents::{
-    extract_content_text, list_sessions_matching_with_extra_stamp_paths, parse_jsonl_session,
-    pretty_json_string, pretty_json_value, push_block, push_tool_block, AgentBlockKind,
-    AgentProvider, AgentSession, AgentSessionMeta, AgentSessionProvider, SessionInfo,
+    extract_content_text, list_sessions_matching, parse_jsonl_session, pretty_json_string,
+    pretty_json_value, push_block, push_tool_block, AgentBlockKind, AgentProvider, AgentSession,
+    AgentSessionMeta, AgentSessionProvider, SessionInfo,
 };
 
 const PROVIDER_NAME: &str = "Grok";
@@ -40,7 +40,7 @@ impl AgentSessionProvider for GrokProvider {
     }
 
     fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        list_sessions_matching_with_extra_stamp_paths(
+        list_sessions_matching(
             PROVIDER_NAME,
             &grok_sessions_dir(),
             cwd,
@@ -1022,34 +1022,6 @@ mod tests {
     }
 
     #[test]
-    fn listing_cache_refreshes_summary_metadata_after_in_place_update() {
-        let home = tempfile::tempdir().unwrap();
-        write_session(
-            home.path(),
-            "bucket",
-            "sess-cache",
-            "{\"type\":\"user\",\"content\":\"hello\"}\n",
-            r#"{"info":{"id":"sess-cache","cwd":"/tmp"},"generated_title":"first"}"#,
-        );
-        let _guard = EnvGuard::set("GROK_HOME", home.path());
-        let session_dir = home.path().join("sessions/bucket/sess-cache");
-
-        let first = GrokProvider.list_recent_sessions(None).unwrap();
-        assert_eq!(first[0].title.as_deref(), Some("first"));
-        let directory_stamp = crate::cache::file_stamp(&session_dir);
-
-        fs::write(
-            session_dir.join(SUMMARY_FILE),
-            r#"{"info":{"id":"sess-cache","cwd":"/tmp"},"generated_title":"updated title"}"#,
-        )
-        .unwrap();
-        assert_eq!(crate::cache::file_stamp(&session_dir), directory_stamp);
-
-        let second = GrokProvider.list_recent_sessions(None).unwrap();
-        assert_eq!(second[0].title.as_deref(), Some("updated title"));
-    }
-
-    #[test]
     fn listing_cache_refreshes_summary_metadata_after_same_length_in_place_update() {
         let home = tempfile::tempdir().unwrap();
         write_session(
@@ -1064,6 +1036,7 @@ mod tests {
 
         let first = GrokProvider.list_recent_sessions(None).unwrap();
         assert_eq!(first[0].title.as_deref(), Some("title-A"));
+        let directory_stamp = crate::cache::file_stamp(&session_dir);
 
         // Overwrite summary.json with an identical-length title ("title-B", 7 chars)
         fs::write(
@@ -1071,6 +1044,7 @@ mod tests {
             r#"{"info":{"id":"sess-same-len","cwd":"/tmp"},"generated_title":"title-B"}"#,
         )
         .unwrap();
+        assert_eq!(crate::cache::file_stamp(&session_dir), directory_stamp);
 
         let second = GrokProvider.list_recent_sessions(None).unwrap();
         assert_eq!(second[0].title.as_deref(), Some("title-B"));
