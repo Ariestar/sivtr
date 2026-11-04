@@ -122,6 +122,9 @@ fn run() -> Result<()> {
         Some(Commands::Stats(args)) => {
             commands::system::stats::execute(&args)?;
         }
+        Some(Commands::Storage(command)) => {
+            commands::system::storage::execute(&command)?;
+        }
         Some(Commands::Session(command)) => {
             commands::system::session::execute(&command)?;
         }
