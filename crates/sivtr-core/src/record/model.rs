@@ -874,12 +874,17 @@ pub fn chat_turn_ranges(blocks: &[AgentBlock]) -> Vec<(usize, usize)> {
 
     for (idx, block) in blocks.iter().enumerate() {
         if block.kind == AgentBlockKind::User {
+            if crate::agents::model::is_scaffolding_user_text(block.text.trim()) {
+                continue;
+            }
             if let Some(start) = start {
                 if has_assistant {
                     ranges.push((start, idx));
                 }
             }
-            start = Some(idx);
+            if start.is_none() || has_assistant {
+                start = Some(idx);
+            }
             has_assistant = false;
         } else if start.is_some() && block.kind == AgentBlockKind::Assistant {
             has_assistant = true;
@@ -887,27 +892,10 @@ pub fn chat_turn_ranges(blocks: &[AgentBlock]) -> Vec<(usize, usize)> {
     }
 
     if let Some(start) = start {
-        if has_assistant {
-            ranges.push((start, blocks.len()));
-        } else if let Some(previous_user_only_turn) =
-            user_only_turn_before_trailing_tools(blocks, start)
-        {
-            ranges.push(previous_user_only_turn);
-        }
+        ranges.push((start, blocks.len()));
     }
 
     ranges
-}
-
-fn user_only_turn_before_trailing_tools(
-    blocks: &[AgentBlock],
-    start: usize,
-) -> Option<(usize, usize)> {
-    blocks
-        .get(start + 1..)?
-        .iter()
-        .all(|block| block.kind.is_structure())
-        .then_some((start, blocks.len()))
 }
 
 fn agent_session_ref_id(id: Option<&str>, path: &Path) -> String {
@@ -1905,6 +1893,45 @@ mod tests {
             parse_timestamp("2026-05-23T12:02:00Z")
         );
         assert_eq!(records[0].time.duration_ms, Some(60_000));
+    }
+
+    #[test]
+    fn chat_turn_records_preserve_consecutive_users_and_pending_followups() {
+        let blocks = [
+            (AgentBlockKind::User, "first request"),
+            (AgentBlockKind::User, "additional detail"),
+            (AgentBlockKind::Assistant, "answer"),
+            (AgentBlockKind::User, "question reply"),
+            (AgentBlockKind::User, "continue"),
+        ]
+        .into_iter()
+        .map(|(kind, text)| AgentBlock {
+            kind,
+            timestamp: None,
+            label: None,
+            call_id: None,
+            text: text.to_string(),
+            start_line: None,
+        })
+        .collect();
+        let session = AgentSession {
+            path: PathBuf::from("codex-session.jsonl"),
+            id: Some("consecutive-users".to_string()),
+            cwd: None,
+            title: None,
+            blocks,
+        };
+        assert_eq!(chat_turn_ranges(&session.blocks), [(0, 3), (3, 5)]);
+        let records = WorkRecord::chat_turns(AgentProvider::Codex, &session);
+        assert_eq!(records.len(), 2);
+        assert_eq!(
+            records[0].input_text().as_deref(),
+            Some("first request\n\nadditional detail")
+        );
+        assert_eq!(
+            records[1].input_text().as_deref(),
+            Some("question reply\n\ncontinue")
+        );
     }
 
     #[test]
