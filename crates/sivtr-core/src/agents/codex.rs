@@ -37,60 +37,66 @@ impl AgentSessionProvider for CodexProvider {
 
         sessions.sort_by_key(|session| session.modified);
         sessions.reverse();
+        let mut logical_ids = std::collections::HashSet::new();
+        sessions.retain(|session| {
+            session
+                .id
+                .as_ref()
+                .is_none_or(|id| logical_ids.insert(id.clone()))
+        });
         Ok(sessions)
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        let mut saw_response_item = false;
-        let mut event_fallback_indices = Vec::new();
-        let mut session = parse_jsonl_session(path, PROVIDER_NAME, |session, value| {
-            let timestamp = value
-                .get("timestamp")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            let payload = value.get("payload").unwrap_or(&Value::Null);
-
-            match value.get("type").and_then(Value::as_str) {
-                Some("session_meta") => {
-                    session.id = payload
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                    session.cwd = payload
-                        .get("cwd")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                }
-                Some("response_item") => {
-                    saw_response_item = true;
-                    apply_response_item(session, payload, timestamp.clone());
-                }
-                Some("event_msg") => {
-                    let start = session.blocks.len();
-                    apply_event_msg(session, payload, timestamp);
-                    if session.blocks.len() > start {
-                        event_fallback_indices.extend(start..session.blocks.len());
-                    }
-                }
-                _ => {}
-            }
-        })?;
-
-        if saw_response_item && !event_fallback_indices.is_empty() {
-            let mut drop_mask = vec![false; session.blocks.len()];
-            for index in event_fallback_indices {
-                if let Some(slot) = drop_mask.get_mut(index) {
-                    *slot = true;
-                }
-            }
-            session.blocks = session
-                .blocks
-                .into_iter()
-                .enumerate()
-                .filter_map(|(index, block)| (!drop_mask[index]).then_some(block))
-                .collect();
+        let mut session = parse_codex_segment(path)?;
+        if !path.starts_with(local_codex_sessions_dir()) {
+            return Ok(session);
         }
-
+        let Some(session_id) = session.id.clone() else {
+            return Ok(session);
+        };
+        let mut paths: Vec<_> = list_recent_local_sessions(None)?
+            .into_iter()
+            .filter(|info| info.id.as_deref() == Some(session_id.as_str()) && info.path != path)
+            .map(|info| info.path)
+            .collect();
+        paths.sort();
+        let mut segments = vec![std::mem::take(&mut session.blocks)];
+        for segment_path in paths {
+            let segment = parse_codex_segment(&segment_path)?;
+            anyhow::ensure!(
+                segment.id.as_deref() == Some(session_id.as_str()),
+                "Codex segment identity changed: {}",
+                segment_path.display()
+            );
+            segments.push(segment.blocks);
+        }
+        let mut seen = std::collections::HashMap::new();
+        for blocks in segments {
+            let mut occurrences = std::collections::HashMap::new();
+            for block in blocks {
+                let identity = (
+                    block.kind as u8,
+                    block.timestamp.clone(),
+                    block.label.clone(),
+                    block.call_id.clone(),
+                    block.start_line,
+                    block.text.clone(),
+                );
+                let count = occurrences.entry(identity.clone()).or_insert(0usize);
+                *count += 1;
+                if *count > seen.get(&identity).copied().unwrap_or(0) {
+                    session.blocks.push(block);
+                }
+            }
+            for (identity, count) in occurrences {
+                let previous = seen.entry(identity).or_insert(0usize);
+                *previous = (*previous).max(count);
+            }
+        }
+        session
+            .blocks
+            .sort_by(|left, right| left.timestamp.cmp(&right.timestamp));
         Ok(session)
     }
 
@@ -122,6 +128,69 @@ impl AgentSessionProvider for CodexProvider {
             .next()
             .map(|session| session.path))
     }
+}
+
+fn parse_codex_segment(path: &Path) -> Result<AgentSession> {
+    let mut saw_response_item = false;
+    let mut event_fallback_indices = Vec::new();
+    let mut session = parse_jsonl_session(path, PROVIDER_NAME, |session, value| {
+        let timestamp = value
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let payload = value.get("payload").unwrap_or(&Value::Null);
+
+        match value.get("type").and_then(Value::as_str) {
+            Some("session_meta") => {
+                session.id = payload
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                session.cwd = payload
+                    .get("cwd")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+            }
+            Some("response_item") => {
+                saw_response_item = true;
+                apply_response_item(session, payload, timestamp.clone());
+            }
+            Some("event_msg") => {
+                let start = session.blocks.len();
+                apply_event_msg(session, payload, timestamp);
+                if session.blocks.len() > start {
+                    event_fallback_indices.extend(start..session.blocks.len());
+                }
+            }
+            _ => {}
+        }
+    })?;
+
+    if saw_response_item && !event_fallback_indices.is_empty() {
+        let response_reasoning: std::collections::HashSet<_> = session
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(index, block)| {
+                block.kind == AgentBlockKind::Thinking && !event_fallback_indices.contains(index)
+            })
+            .map(|(_, block)| block.text.clone())
+            .collect();
+        let mut drop_mask = vec![false; session.blocks.len()];
+        for index in event_fallback_indices {
+            let block = &session.blocks[index];
+            drop_mask[index] =
+                block.kind != AgentBlockKind::Thinking || response_reasoning.contains(&block.text);
+        }
+        session.blocks = session
+            .blocks
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, block)| (!drop_mask[index]).then_some(block))
+            .collect();
+    }
+
+    Ok(session)
 }
 
 pub fn codex_home() -> PathBuf {
@@ -156,12 +225,7 @@ fn apply_response_item(session: &mut AgentSession, payload: &Value, timestamp: O
         Some("message") => {
             let kind = match payload.get("role").and_then(Value::as_str) {
                 Some("user") => AgentBlockKind::User,
-                Some("assistant") => {
-                    if payload.get("phase").and_then(Value::as_str) == Some("commentary") {
-                        return;
-                    }
-                    AgentBlockKind::Assistant
-                }
+                Some("assistant") => AgentBlockKind::Assistant,
                 _ => return,
             };
             let text = extract_content_text(payload.get("content").unwrap_or(&Value::Null));
@@ -173,6 +237,28 @@ fn apply_response_item(session: &mut AgentSession, payload: &Value, timestamp: O
                 clean_codex_message_text(kind, text),
             );
         }
+        Some("reasoning") => {
+            let summary = extract_content_text(payload.get("summary").unwrap_or(&Value::Null));
+            let content = extract_content_text(payload.get("content").unwrap_or(&Value::Null));
+            let text = [summary, content]
+                .into_iter()
+                .filter(|text| !text.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            push_block(session, AgentBlockKind::Thinking, timestamp, None, text);
+        }
+        Some("web_search_call") => push_tool_block(
+            session,
+            AgentBlockKind::ToolCall,
+            timestamp,
+            payload
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            Some("web_search".to_string()),
+            pretty_json_value(payload.get("action").unwrap_or(&Value::Null)),
+            None,
+        ),
         Some("function_call") => push_tool_block(
             session,
             AgentBlockKind::ToolCall,
@@ -197,11 +283,7 @@ fn apply_response_item(session: &mut AgentSession, payload: &Value, timestamp: O
                 .and_then(Value::as_str)
                 .map(str::to_string),
             None,
-            payload
-                .get("output")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
+            extract_content_text(payload.get("output").unwrap_or(&Value::Null)),
             None,
         ),
         // Modern codex records shell/apply_patch/read calls as custom tool
@@ -250,9 +332,6 @@ fn apply_event_msg(session: &mut AgentSession, payload: &Value, timestamp: Optio
             extract_content_text(payload.get("message").unwrap_or(&Value::Null)),
         ),
         Some("agent_message") => {
-            if payload.get("phase").and_then(Value::as_str) == Some("commentary") {
-                return;
-            }
             push_block(
                 session,
                 AgentBlockKind::Assistant,
@@ -264,6 +343,13 @@ fn apply_event_msg(session: &mut AgentSession, payload: &Value, timestamp: Optio
                 ),
             );
         }
+        Some("agent_reasoning") => push_block(
+            session,
+            AgentBlockKind::Thinking,
+            timestamp,
+            None,
+            extract_content_text(payload.get("text").unwrap_or(&Value::Null)),
+        ),
         _ => {}
     }
 }
@@ -334,6 +420,118 @@ mod tests {
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         crate::test_env_lock()
+    }
+
+    #[test]
+    fn merges_resumed_codex_segments_without_losing_messages() {
+        let _environment = crate::test_fixtures::EnvGuard::capture(&["CODEX_HOME", "SIVTR_HOME"]);
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("codex");
+        let sessions = home.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        env::set_var("CODEX_HOME", &home);
+        env::set_var("SIVTR_HOME", directory.path().join("sivtr"));
+        let first = sessions.join("rollout-session-segments-123456789.jsonl");
+        let resumed = sessions.join("rollout-session-segments-123456789_resume.jsonl");
+        std::fs::write(&first, concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"session-segments-123456789\"}}\n",
+            "{\"timestamp\":\"2026-11-07T00:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"text\":\"question\"}]}}\n",
+            "{\"timestamp\":\"2026-11-07T00:00:02Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"text\":\"first answer\"}]}}\n",
+        )).unwrap();
+        std::fs::write(&resumed, concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"session-segments-123456789\"}}\n",
+            "{\"timestamp\":\"2026-11-07T00:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"text\":\"question\"}]}}\n",
+            "{\"timestamp\":\"2026-11-07T00:00:03Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"text\":\"followup\"}]}}\n",
+            "{\"timestamp\":\"2026-11-07T00:00:04Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[{\"text\":\"working update\"}]}}\n",
+            "{\"timestamp\":\"2026-11-07T00:00:05Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"visible reasoning\"}]}}\n",
+            "{\"timestamp\":\"2026-11-07T00:00:06Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"call_id\":\"call-test\",\"name\":\"shell\",\"arguments\":\"echo evidence\"}}\n",
+            "{\"timestamp\":\"2026-11-07T00:00:07Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call-test\",\"output\":\"evidence\"}}\n",
+            "{\"timestamp\":\"2026-11-07T00:00:08Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"text\":\"latest answer\"}]}}\n",
+        )).unwrap();
+        let unrelated = sessions.join("rollout-session-segments-123456789_other.jsonl");
+        std::fs::write(&unrelated, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"other-session\"}}\n{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"text\":\"unrelated\"}]}}\n").unwrap();
+
+        let session = CodexProvider.parse_session_file(&first).unwrap();
+        let texts: Vec<_> = session
+            .blocks
+            .iter()
+            .map(|block| block.text.as_str())
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                "question",
+                "first answer",
+                "followup",
+                "working update",
+                "visible reasoning",
+                "echo evidence",
+                "evidence",
+                "latest answer"
+            ]
+        );
+        let logical = CodexProvider.list_recent_sessions(None).unwrap();
+        assert_eq!(
+            logical
+                .iter()
+                .filter(|info| info.id.as_deref() == Some("session-segments-123456789"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn retains_event_reasoning_when_response_items_have_no_plaintext_copy() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("rollout.jsonl");
+        std::fs::write(&path, concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"reasoning-test\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_reasoning\",\"text\":\"event only\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_reasoning\",\"text\":\"shared reasoning\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"reasoning\",\"summary\":[{\"text\":\"shared reasoning\"}]}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"text\":\"answer\"}]}}\n"
+        )).unwrap();
+        let session = CodexProvider.parse_session_file(&path).unwrap();
+        let texts: Vec<_> = session
+            .blocks
+            .iter()
+            .map(|block| block.text.as_str())
+            .collect();
+        assert_eq!(texts, ["event only", "shared reasoning", "answer"]);
+    }
+
+    #[test]
+    fn retains_array_function_outputs() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("rollout.jsonl");
+        std::fs::write(&path, concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"array-output-test\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"array-call\",\"output\":[{\"type\":\"input_text\",\"text\":\"Wall time: 1 second\"},{\"type\":\"input_text\",\"text\":\"complete evidence\"}]}}\n"
+        )).unwrap();
+        let session = CodexProvider.parse_session_file(&path).unwrap();
+        assert_eq!(session.blocks.len(), 1);
+        assert_eq!(session.blocks[0].kind, AgentBlockKind::ToolOutput);
+        assert_eq!(session.blocks[0].call_id.as_deref(), Some("array-call"));
+        assert_eq!(
+            session.blocks[0].text,
+            "Wall time: 1 second\n\ncomplete evidence"
+        );
+    }
+
+    #[test]
+    fn retains_native_web_search_actions() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("rollout.jsonl");
+        std::fs::write(&path, concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"web-test\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"web_search_call\",\"id\":\"ws-test\",\"status\":\"completed\",\"action\":{\"type\":\"search\",\"query\":\"session evidence\"}}}\n"
+        )).unwrap();
+        let session = CodexProvider.parse_session_file(&path).unwrap();
+        assert_eq!(session.blocks.len(), 1);
+        assert_eq!(session.blocks[0].kind, AgentBlockKind::ToolCall);
+        assert_eq!(session.blocks[0].label.as_deref(), Some("web_search"));
+        assert_eq!(session.blocks[0].call_id.as_deref(), Some("ws-test"));
+        assert!(session.blocks[0].text.contains("session evidence"));
     }
 
     #[test]
@@ -486,7 +684,7 @@ mod tests {
     }
 
     #[test]
-    fn skips_commentary_assistant_messages() {
+    fn preserves_commentary_and_selects_latest_assistant_message() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("rollout.jsonl");
         std::fs::write(
@@ -502,7 +700,8 @@ mod tests {
 
         let blocks = select_blocks(&session, AgentSelection::LastAssistant);
 
-        assert_eq!(session.blocks.len(), 2);
+        assert_eq!(session.blocks.len(), 3);
+        assert_eq!(session.blocks[1].text, "working update");
         assert_eq!(blocks[0].text, "real answer");
     }
 
@@ -660,11 +859,12 @@ mod tests {
         let session = CodexProvider.parse_session_file(&path).unwrap();
 
         assert_eq!(session.id.as_deref(), Some("abc"));
-        assert_eq!(session.blocks.len(), 2);
+        assert_eq!(session.blocks.len(), 3);
         assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
         assert_eq!(session.blocks[0].text, "hello from event");
         assert_eq!(session.blocks[1].kind, AgentBlockKind::Assistant);
-        assert_eq!(session.blocks[1].text, "done from event");
+        assert_eq!(session.blocks[1].text, "working");
+        assert_eq!(session.blocks[2].text, "done from event");
     }
 
     #[test]
