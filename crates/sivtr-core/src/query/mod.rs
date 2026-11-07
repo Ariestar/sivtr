@@ -168,6 +168,35 @@ pub fn load_workspace_source(
     }
 
     let selector: WorkRefSelector = source.parse()?;
+    if let WorkRefSelector::Agent {
+        provider: Some(AgentProvider::Codex),
+        session: Some(session),
+        records: None,
+    } = &selector
+    {
+        if session.len() == 36 && uuid::Uuid::parse_str(session).is_ok() {
+            let connection = crate::archive::open()?;
+            let canonical_id =
+                crate::archive::sync::refresh_codex_session(&connection, session, cwd)?;
+            let mut records = crate::archive::store::load_records_by_key(
+                &connection,
+                "codex",
+                &canonical_id,
+                mode.into(),
+            )?
+            .with_context(|| format!("No archived records for Codex session `{canonical_id}`"))?;
+            normalize_session_display_ids(&mut records);
+            let anchors = records
+                .iter()
+                .map(|record| record.work_ref.whole())
+                .collect();
+            return Ok(SourceQueryResult {
+                records,
+                anchors,
+                skipped: Vec::new(),
+            });
+        }
+    }
     let providers = selector.providers();
     let sources = workspace_sources(&providers);
     let result = load_workspace_records(&sources, cwd, None, mode)?;
@@ -375,6 +404,137 @@ mod tests {
 
     fn message(seq: usize, role: MessageRole, content: &str) -> WorkPart {
         message_part(seq, role, content)
+    }
+
+    #[test]
+    fn exact_codex_session_refreshes_all_segments_without_global_sync() {
+        let _environment = crate::test_fixtures::EnvGuard::capture(&["CODEX_HOME", "SIVTR_HOME"]);
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("codex");
+        let archive = directory.path().join("sivtr");
+        let workspace = directory.path().join("workspace");
+        let sessions = home.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::create_dir_all(&archive).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::env::set_var("CODEX_HOME", &home);
+        std::env::set_var("SIVTR_HOME", &archive);
+        std::fs::write(archive.join("config.toml"), "[sync]\nmax_age_secs = 3600\n").unwrap();
+        let canonical = "01234567-1234-5678-9012-345678901234";
+        for (filename, question, answer, minute) in [
+            ("first", "first question", "first answer", "01"),
+            ("resumed", "second question", "latest answer", "02"),
+        ] {
+            let events = [
+                serde_json::json!({"type":"session_meta","payload":{"id":canonical,"cwd":workspace}}),
+                serde_json::json!({"timestamp":format!("2026-11-07T00:{minute}:01Z"),"type":"response_item","payload":{"type":"message","role":"user","content":[{"text":question}]}}),
+                serde_json::json!({"timestamp":format!("2026-11-07T00:{minute}:02Z"),"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":answer}]}}),
+            ];
+            let text = events
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n";
+            std::fs::write(
+                sessions.join(format!("rollout-{canonical}-{filename}.jsonl")),
+                text,
+            )
+            .unwrap();
+        }
+        let connection = crate::archive::open().unwrap();
+        crate::archive::store::meta_set(
+            &connection,
+            "last_sync_at",
+            &chrono::Utc::now().to_rfc3339(),
+        )
+        .unwrap();
+        let result =
+            load_workspace_source(&workspace, &format!("codex/{canonical}"), LoadMode::Full)
+                .unwrap();
+        assert_eq!(result.records.len(), 2);
+        assert!(result
+            .records
+            .iter()
+            .flat_map(|record| &record.parts)
+            .any(|part| part.text() == "first answer"));
+        assert!(result
+            .records
+            .iter()
+            .flat_map(|record| &record.parts)
+            .any(|part| part.text() == "latest answer"));
+
+        let resumed = sessions.join(format!("rollout-{canonical}-resumed.jsonl"));
+        use std::io::Write;
+        let mut transcript = std::fs::OpenOptions::new()
+            .append(true)
+            .open(resumed)
+            .unwrap();
+        for event in [
+            serde_json::json!({"timestamp":"2026-11-07T00:03:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"new question"}]}}),
+            serde_json::json!({"timestamp":"2026-11-07T00:03:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"just appended"}]}}),
+        ] {
+            writeln!(transcript, "{event}").unwrap();
+        }
+        drop(transcript);
+        let updated =
+            load_workspace_source(&workspace, &format!("codex/{canonical}"), LoadMode::Full)
+                .unwrap();
+        assert_eq!(updated.records.len(), 3);
+        assert!(updated
+            .records
+            .iter()
+            .flat_map(|record| &record.parts)
+            .any(|part| part.text() == "just appended"));
+        assert!(updated.skipped.is_empty());
+    }
+
+    #[test]
+    fn codex_session_prefix_keeps_matching_multiple_sessions() {
+        let _environment = crate::test_fixtures::EnvGuard::capture(&["CODEX_HOME", "SIVTR_HOME"]);
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("codex");
+        let archive = directory.path().join("sivtr");
+        let workspace = directory.path().join("workspace");
+        let sessions = home.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::create_dir_all(&archive).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::env::set_var("CODEX_HOME", &home);
+        std::env::set_var("SIVTR_HOME", &archive);
+        std::fs::write(archive.join("config.toml"), "[sync]\nmax_age_secs = 3600\n").unwrap();
+        for canonical in [
+            "01234567-1234-5678-9012-345678901234",
+            "01234567-1234-5678-9012-345678901235",
+        ] {
+            let events = [
+                serde_json::json!({"type":"session_meta","payload":{"id":canonical,"cwd":workspace}}),
+                serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"question"}]}}),
+                serde_json::json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"answer"}]}}),
+            ];
+            let text = events
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n";
+            std::fs::write(sessions.join(format!("rollout-{canonical}.jsonl")), text).unwrap();
+            load_workspace_source(&workspace, &format!("codex/{canonical}"), LoadMode::Full)
+                .unwrap();
+        }
+        let connection = crate::archive::open().unwrap();
+        crate::archive::store::meta_set(
+            &connection,
+            "last_sync_at",
+            &chrono::Utc::now().to_rfc3339(),
+        )
+        .unwrap();
+        let result = load_workspace_source(&workspace, "codex/01234567", LoadMode::Full).unwrap();
+        assert_eq!(result.records.len(), 2);
+        assert_ne!(
+            result.records[0].session.canonical_id,
+            result.records[1].session.canonical_id
+        );
     }
 
     #[test]

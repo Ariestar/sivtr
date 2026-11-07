@@ -380,6 +380,48 @@ fn sync_terminals(conn: &Connection, full: bool) -> SourceSyncReport {
     }
 }
 
+pub(crate) fn refresh_codex_session(
+    conn: &Connection,
+    session_prefix: &str,
+    cwd: &Path,
+) -> Result<String> {
+    let provider = AgentProvider::Codex;
+    let matches: Vec<_> = SessionSource::list_sessions(&provider, Some(cwd))?
+        .into_iter()
+        .filter(|info| {
+            info.id
+                .as_deref()
+                .is_some_and(|id| id.starts_with(session_prefix))
+        })
+        .collect();
+    anyhow::ensure!(
+        !matches.is_empty(),
+        "No Codex session matches `{session_prefix}` in {}",
+        cwd.display()
+    );
+    anyhow::ensure!(
+        matches.len() == 1,
+        "Ambiguous Codex session prefix `{session_prefix}`; use the full UUID"
+    );
+    let info = &matches[0];
+    let session_id = info
+        .id
+        .clone()
+        .context("Codex session metadata has no id")?;
+    let stamp = crate::cache::file_stamp(&info.path)
+        .with_context(|| format!("Codex session disappeared: {}", info.path.display()))?;
+    sync_session(
+        conn,
+        &provider,
+        &info.path,
+        info.id.as_deref(),
+        info.title.as_deref(),
+        info.cwd.as_deref(),
+        stamp,
+    )?;
+    Ok(session_id)
+}
+
 /// Parse one source file and store its records. Returns `true` when a new
 /// session row was created.
 ///

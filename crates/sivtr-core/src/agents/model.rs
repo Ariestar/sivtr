@@ -288,7 +288,7 @@ pub fn push_block(
 /// reminders, context snapshots, goal continuations, machine notifications,
 /// command transcripts. One predicate at the shared block funnel keeps every
 /// provider's parser from leaking scaffolding into dialogue.
-fn is_scaffolding_user_text(text: &str) -> bool {
+pub(crate) fn is_scaffolding_user_text(text: &str) -> bool {
     const PREFIXES: &[&str] = &[
         // Claude Code runtime injections and slash-command/bash transcripts.
         "<system-reminder",
