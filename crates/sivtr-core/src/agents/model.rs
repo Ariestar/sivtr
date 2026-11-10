@@ -554,12 +554,21 @@ impl WorkspaceMatchTarget {
     }
 }
 
+/// Select visible evidence; the last assistant answer excludes commentary but full views retain it.
 pub fn select_blocks(session: &AgentSession, selection: AgentSelection) -> Vec<AgentBlock> {
     match selection {
         AgentSelection::LastTurn => select_last_turn(&session.blocks),
-        AgentSelection::LastAssistant => {
-            select_last_kind(&session.blocks, AgentBlockKind::Assistant)
-        }
+        AgentSelection::LastAssistant => session
+            .blocks
+            .iter()
+            .rev()
+            .find(|block| {
+                block.kind == AgentBlockKind::Assistant
+                    && block.label.as_deref() != Some("commentary")
+            })
+            .cloned()
+            .into_iter()
+            .collect(),
         AgentSelection::LastUser => select_last_kind(&session.blocks, AgentBlockKind::User),
         AgentSelection::LastTool => select_last_kind(&session.blocks, AgentBlockKind::ToolOutput),
         AgentSelection::LastBlocks(count) => {

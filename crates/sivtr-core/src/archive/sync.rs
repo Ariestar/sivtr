@@ -200,7 +200,25 @@ fn sync_provider(conn: &Connection, provider: AgentProvider, full: bool) -> Sour
         }
     };
 
-    let sessions = match SessionSource::list_sessions(&provider, None) {
+    let codex_index = if provider == AgentProvider::Codex {
+        match crate::agents::codex::CodexSessionIndex::discover() {
+            Ok(index) => Some(index),
+            Err(error) => {
+                return report(
+                    SyncCounts::default(),
+                    Some(format!("{error:#}")),
+                    Vec::new(),
+                )
+            }
+        }
+    } else {
+        None
+    };
+    let source: &dyn SessionSource = match &codex_index {
+        Some(index) => index,
+        None => &provider,
+    };
+    let sessions = match source.list_sessions(None) {
         Ok(sessions) => sessions,
         Err(error) => {
             return report(
@@ -244,7 +262,7 @@ fn sync_provider(conn: &Connection, provider: AgentProvider, full: bool) -> Sour
         }
         match sync_session(
             conn,
-            &provider,
+            source,
             &info.path,
             info.id.as_deref(),
             info.title.as_deref(),
@@ -380,46 +398,30 @@ fn sync_terminals(conn: &Connection, full: bool) -> SourceSyncReport {
     }
 }
 
-pub(crate) fn refresh_codex_session(
-    conn: &Connection,
-    session_prefix: &str,
-    cwd: &Path,
-) -> Result<String> {
-    let provider = AgentProvider::Codex;
-    let matches: Vec<_> = SessionSource::list_sessions(&provider, Some(cwd))?
+/// Refresh one complete Codex UUID without the global freshness TTL.
+/// No live match leaves the archive unchanged so retained sessions stay readable.
+/// Parse and storage errors propagate instead of being treated as absent sources.
+pub(crate) fn refresh_codex_session(conn: &Connection, session_id: &str, cwd: &Path) -> Result<()> {
+    let source = crate::agents::codex::CodexSessionIndex::discover()?;
+    let Some(info) = source
+        .list_sessions(Some(cwd))?
         .into_iter()
-        .filter(|info| {
-            info.id
-                .as_deref()
-                .is_some_and(|id| id.starts_with(session_prefix))
-        })
-        .collect();
-    anyhow::ensure!(
-        !matches.is_empty(),
-        "No Codex session matches `{session_prefix}` in {}",
-        cwd.display()
-    );
-    anyhow::ensure!(
-        matches.len() == 1,
-        "Ambiguous Codex session prefix `{session_prefix}`; use the full UUID"
-    );
-    let info = &matches[0];
-    let session_id = info
-        .id
-        .clone()
-        .context("Codex session metadata has no id")?;
+        .find(|info| info.id.as_deref() == Some(session_id))
+    else {
+        return Ok(());
+    };
     let stamp = crate::cache::file_stamp(&info.path)
         .with_context(|| format!("Codex session disappeared: {}", info.path.display()))?;
     sync_session(
         conn,
-        &provider,
+        &source,
         &info.path,
         info.id.as_deref(),
         info.title.as_deref(),
         info.cwd.as_deref(),
         stamp,
     )?;
-    Ok(session_id)
+    Ok(())
 }
 
 /// Parse one source file and store its records. Returns `true` when a new
