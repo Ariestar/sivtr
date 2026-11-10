@@ -56,13 +56,15 @@ pub struct StatsSummary {
 pub fn compute(conn: &Connection, query: &StatsQuery) -> Result<StatsSummary> {
     query.validate()?;
     let (sessions, records, starred_sessions, active_days) = conn.query_row(
-        "SELECT COUNT(*), COALESCE(SUM(record_count), 0),
-                COALESCE(SUM(starred), 0),
-                COUNT(DISTINCT date(COALESCE(ended_at, started_at)))
-         FROM sessions
-         WHERE (?1 IS NULL OR provider = ?1)
-           AND (?2 IS NULL OR date(COALESCE(ended_at, started_at)) >= date(?2))
-           AND (?3 IS NULL OR date(COALESCE(ended_at, started_at)) <= date(?3))",
+        "SELECT COUNT(*), COALESCE(SUM(s.record_count), 0),
+                COALESCE(SUM(st.provider IS NOT NULL), 0),
+                COUNT(DISTINCT date(COALESCE(s.ended_at, s.started_at)))
+         FROM sessions s
+         LEFT JOIN session_stars st
+                ON st.provider = s.provider AND st.session_id = s.session_id
+         WHERE (?1 IS NULL OR s.provider = ?1)
+           AND (?2 IS NULL OR date(COALESCE(s.ended_at, s.started_at)) >= date(?2))
+           AND (?3 IS NULL OR date(COALESCE(s.ended_at, s.started_at)) <= date(?3))",
         params![query.provider, query.since, query.until],
         |row| {
             Ok((
@@ -196,15 +198,21 @@ mod tests {
         crate::archive::schema::init_schema(&conn).unwrap();
         conn.execute(
             "INSERT INTO sessions
-             (provider, session_id, source_path, project, starred, record_count, started_at, ended_at)
-             VALUES ('codex', 'one', 'one.jsonl', 'sivtr', 1, 2, '2026-08-31T01:00:00Z', '2026-08-31T02:00:00Z')",
+             (provider, session_id, source_path, project, record_count, started_at, ended_at)
+             VALUES ('codex', 'one', 'one.jsonl', 'sivtr', 2, '2026-08-31T01:00:00Z', '2026-08-31T02:00:00Z')",
             [],
         )
         .unwrap();
         conn.execute(
             "INSERT INTO sessions
-             (provider, session_id, source_path, project, starred, record_count, started_at, ended_at)
-             VALUES ('claude', 'two', 'two.jsonl', '', 0, 3, '2026-08-30T01:00:00Z', '2026-08-30T02:00:00Z')",
+             (provider, session_id, source_path, project, record_count, started_at, ended_at)
+             VALUES ('claude', 'two', 'two.jsonl', '', 3, '2026-08-30T01:00:00Z', '2026-08-30T02:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO session_stars (provider, session_id, starred_at)
+             VALUES ('codex', 'one', '2026-09-01T00:00:00Z')",
             [],
         )
         .unwrap();

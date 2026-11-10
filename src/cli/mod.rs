@@ -437,6 +437,9 @@ pub enum Commands {
     /// Show archive activity and usage analytics
     Stats(StatsArgs),
 
+    /// Inspect and reclaim local storage
+    Storage(StorageCommand),
+
     /// Manage archived session labels and listings
     Session(SessionCommand),
 
@@ -1311,6 +1314,49 @@ pub struct StatsArgs {
 }
 
 #[derive(Parser, Debug)]
+pub struct StorageCommand {
+    #[command(subcommand)]
+    pub action: StorageAction,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum StorageAction {
+    /// Show local storage usage and reclaimable space
+    Status(StorageStatusArgs),
+
+    /// Compact the archive database and reclaim free pages
+    Vacuum(StorageVacuumArgs),
+
+    /// Report or delete legacy parsed-session caches
+    PruneCache(StoragePruneCacheArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct StorageStatusArgs {
+    /// Emit the complete machine-readable report
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct StorageVacuumArgs {
+    /// Show the reclaimable pages without compacting the archive
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct StoragePruneCacheArgs {
+    /// Delete the listed files (default: report only)
+    #[arg(long)]
+    pub apply: bool,
+
+    /// Emit the complete machine-readable report
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Parser, Debug)]
 pub struct ImportCommand {
     #[command(subcommand)]
     pub action: ImportAction,
@@ -1550,6 +1596,45 @@ mod tests {
         match cli.command {
             Some(Commands::Clear(args)) => assert!(args.all),
             _ => panic!("expected clear command"),
+        }
+    }
+
+    #[test]
+    fn storage_status_accepts_json() {
+        let cli = Cli::try_parse_from(["sivtr", "storage", "status", "--json"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Storage(command)) => match command.action {
+                StorageAction::Status(args) => assert!(args.json),
+                _ => panic!("expected storage status"),
+            },
+            _ => panic!("expected storage command"),
+        }
+    }
+
+    #[test]
+    fn storage_vacuum_accepts_dry_run() {
+        let cli = Cli::try_parse_from(["sivtr", "storage", "vacuum", "--dry-run"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Storage(command)) => match command.action {
+                StorageAction::Vacuum(args) => assert!(args.dry_run),
+                _ => panic!("expected storage vacuum"),
+            },
+            _ => panic!("expected storage command"),
+        }
+    }
+
+    #[test]
+    fn storage_prune_cache_accepts_apply() {
+        let cli = Cli::try_parse_from(["sivtr", "storage", "prune-cache", "--apply"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Storage(command)) => match command.action {
+                StorageAction::PruneCache(args) => assert!(args.apply),
+                _ => panic!("expected storage prune-cache"),
+            },
+            _ => panic!("expected storage command"),
         }
     }
 

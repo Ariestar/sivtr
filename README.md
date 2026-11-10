@@ -116,6 +116,7 @@ sivtr doctor
 sivtr sync
 sivtr usage daily
 sivtr stats
+sivtr storage status
 ```
 
 > [!NOTE]
