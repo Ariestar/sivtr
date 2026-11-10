@@ -874,9 +874,6 @@ pub fn chat_turn_ranges(blocks: &[AgentBlock]) -> Vec<(usize, usize)> {
 
     for (idx, block) in blocks.iter().enumerate() {
         if block.kind == AgentBlockKind::User {
-            if crate::agents::model::is_scaffolding_user_text(block.text.trim()) {
-                continue;
-            }
             if let Some(start) = start {
                 if has_assistant {
                     ranges.push((start, idx));
@@ -1835,38 +1832,34 @@ mod tests {
 
     #[test]
     fn chat_turn_records_ignore_startup_user_blocks() {
-        let session = AgentSession {
+        let mut session = AgentSession {
             path: PathBuf::from("pi-session.jsonl"),
             id: Some("abcdef123456".to_string()),
             cwd: Some("D:\\sivtr".to_string()),
             title: None,
-            blocks: vec![
-                AgentBlock {
-                    kind: AgentBlockKind::User,
-                    timestamp: Some("2026-05-23T12:00:00Z".to_string()),
-                    label: None,
-                    call_id: None,
-                    text: "<environment_context>".to_string(),
-                    start_line: None,
-                },
-                AgentBlock {
-                    kind: AgentBlockKind::User,
-                    timestamp: Some("2026-05-23T12:01:00Z".to_string()),
-                    label: None,
-                    call_id: None,
-                    text: "implement this".to_string(),
-                    start_line: None,
-                },
-                AgentBlock {
-                    kind: AgentBlockKind::Assistant,
-                    timestamp: Some("2026-05-23T12:02:00Z".to_string()),
-                    label: None,
-                    call_id: None,
-                    text: "done".to_string(),
-                    start_line: None,
-                },
-            ],
+            blocks: Vec::new(),
         };
+        for (kind, at, text) in [
+            (
+                AgentBlockKind::User,
+                "2026-05-23T12:00:00Z",
+                "<environment_context>",
+            ),
+            (
+                AgentBlockKind::User,
+                "2026-05-23T12:01:00Z",
+                "implement this",
+            ),
+            (AgentBlockKind::Assistant, "2026-05-23T12:02:00Z", "done"),
+        ] {
+            push_block(&mut session, kind, Some(at.to_string()), None, text);
+        }
+
+        assert_eq!(
+            session.blocks.len(),
+            2,
+            "scaffolding is filtered at parse time"
+        );
 
         let records = WorkRecord::chat_turns(AgentProvider::Pi, &session);
 
