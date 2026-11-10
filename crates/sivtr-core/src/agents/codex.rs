@@ -127,27 +127,39 @@ impl CodexSessionIndex {
                 )),
             }
         }
-        let mut seen = HashMap::new();
-        for blocks in segments {
-            let mut occurrences = HashMap::new();
-            for block in blocks {
-                let identity = (
-                    block.kind as u8,
-                    block.timestamp.clone(),
-                    block.label.clone(),
-                    block.call_id.clone(),
-                    block.text.clone(),
-                );
-                let count = occurrences.entry(identity.clone()).or_insert(0usize);
-                *count += 1;
-                if *count > seen.get(&identity).copied().unwrap_or(0) {
-                    session.blocks.push(block);
+        if segments.len() == 1 {
+            session.blocks = segments.pop().expect("representative segment is present");
+        } else {
+            let mut seen = HashMap::new();
+            for blocks in segments {
+                let mut occurrences = HashMap::new();
+                for block in blocks {
+                    let identity = (
+                        block.kind as u8,
+                        block.timestamp.clone(),
+                        block.label.clone(),
+                        block.call_id.clone(),
+                        block.text.clone(),
+                    );
+                    let count = occurrences.entry(identity.clone()).or_insert(0usize);
+                    *count += 1;
+                    if *count > seen.get(&identity).copied().unwrap_or(0) {
+                        session.blocks.push(block);
+                    }
+                }
+                for (identity, count) in occurrences {
+                    let previous = seen.entry(identity).or_insert(0usize);
+                    *previous = (*previous).max(count);
                 }
             }
-            for (identity, count) in occurrences {
-                let previous = seen.entry(identity).or_insert(0usize);
-                *previous = (*previous).max(count);
-            }
+        }
+        if session
+            .blocks
+            .iter()
+            .filter_map(|block| block.timestamp.as_deref())
+            .is_sorted()
+        {
+            return session;
         }
         // Undated blocks keep their slots; only dated blocks participate in sorting.
         let mut dated: Vec<_> = session
