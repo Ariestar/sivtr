@@ -149,6 +149,23 @@ pub fn load_workspace_source(
         if !reference.is_local() {
             anyhow::bail!("remote aliases are not valid inside a served source");
         }
+        if reference.provider() == Some(AgentProvider::Codex)
+            && reference.session().len() == 36
+            && uuid::Uuid::parse_str(reference.session()).is_ok()
+        {
+            let mut records = load_exact_codex_records(cwd, reference.session(), mode)?;
+            normalize_session_display_ids(&mut records);
+            let record = records
+                .into_iter()
+                .find(|record| record.work_ref.index() == reference.index())
+                .with_context(|| format!("No record found for ref `{source}`"))?;
+            let anchor = record.work_ref.with_at(reference.at);
+            return Ok(SourceQueryResult {
+                records: vec![record],
+                anchors: vec![anchor],
+                skipped: Vec::new(),
+            });
+        }
         let providers = reference
             .provider()
             .map(|provider| vec![provider])
@@ -168,6 +185,30 @@ pub fn load_workspace_source(
     }
 
     let selector: WorkRefSelector = source.parse()?;
+    if let WorkRefSelector::Agent {
+        provider: Some(AgentProvider::Codex),
+        session: Some(session),
+        records: selected_indexes,
+    } = &selector
+    {
+        if session.len() == 36 && uuid::Uuid::parse_str(session).is_ok() {
+            let mut records = load_exact_codex_records(cwd, session, mode)?;
+            if let Some(indexes) = selected_indexes {
+                records.retain(|record| indexes.contains(&record.work_ref.index()));
+            }
+            anyhow::ensure!(!records.is_empty(), "{NO_RECORD_FOR_SELECTOR} `{source}`");
+            normalize_session_display_ids(&mut records);
+            let anchors = records
+                .iter()
+                .map(|record| record.work_ref.whole())
+                .collect();
+            return Ok(SourceQueryResult {
+                records,
+                anchors,
+                skipped: Vec::new(),
+            });
+        }
+    }
     let providers = selector.providers();
     let sources = workspace_sources(&providers);
     let result = load_workspace_records(&sources, cwd, None, mode)?;
@@ -191,6 +232,33 @@ pub fn load_workspace_source(
         anchors,
         skipped: result.skipped,
     })
+}
+
+/// Refresh live segments when present, then read the workspace's retained copy.
+/// Missing or empty sessions return no records; refresh and decode failures propagate.
+fn load_exact_codex_records(
+    cwd: &Path,
+    session_id: &str,
+    mode: LoadMode,
+) -> Result<Vec<WorkRecord>> {
+    let connection = crate::archive::open()?;
+    crate::archive::sync::refresh_codex_session(&connection, session_id, cwd)?;
+    let Some(meta) = crate::archive::store::session_meta_by_key(&connection, "codex", session_id)?
+    else {
+        return Ok(Vec::new());
+    };
+    let target = crate::agents::model::WorkspaceMatchTarget::new(cwd);
+    if !meta
+        .cwd
+        .as_deref()
+        .is_some_and(|path| target.matches(Path::new(path)))
+    {
+        return Ok(Vec::new());
+    }
+    Ok(
+        crate::archive::store::load_records_by_key(&connection, "codex", session_id, mode.into())?
+            .unwrap_or_default(),
+    )
 }
 
 fn all_agent_providers() -> Vec<AgentProvider> {
@@ -375,6 +443,249 @@ mod tests {
 
     fn message(seq: usize, role: MessageRole, content: &str) -> WorkPart {
         message_part(seq, role, content)
+    }
+
+    /// Browse callers classify this exact error as an empty selection in either load mode.
+    #[test]
+    fn exact_codex_missing_and_empty_sessions_use_selector_not_found() {
+        let _environment = crate::test_fixtures::EnvGuard::capture(&["CODEX_HOME", "SIVTR_HOME"]);
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("codex");
+        let sessions = home.join("sessions");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::env::set_var("CODEX_HOME", &home);
+        std::env::set_var("SIVTR_HOME", directory.path().join("archive"));
+        let empty = "01234567-1234-5678-9012-345678901234";
+        let missing = "01234567-1234-5678-9012-345678901235";
+        std::fs::write(
+            sessions.join("empty.jsonl"),
+            serde_json::json!({"type":"session_meta","payload":{"id":empty,"cwd":workspace}})
+                .to_string()
+                + "\n",
+        )
+        .unwrap();
+        for id in [missing, empty] {
+            for mode in [LoadMode::Full, LoadMode::Light] {
+                let source = format!("codex/{id}");
+                let error = load_workspace_source(&workspace, &source, mode).unwrap_err();
+                assert_eq!(
+                    error.to_string(),
+                    format!("{NO_RECORD_FOR_SELECTOR} `{source}`")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn exact_codex_parse_errors_are_not_selector_not_found() {
+        let _environment = crate::test_fixtures::EnvGuard::capture(&["CODEX_HOME", "SIVTR_HOME"]);
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("codex");
+        let sessions = home.join("sessions");
+        let workspace = directory.path().join("workspace");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::env::set_var("CODEX_HOME", &home);
+        std::env::set_var("SIVTR_HOME", directory.path().join("archive"));
+        let id = "01234567-1234-5678-9012-345678901234";
+        let path = sessions.join("broken.jsonl");
+        let metadata =
+            serde_json::json!({"type":"session_meta","payload":{"id":id,"cwd":workspace}});
+        std::fs::write(&path, format!("{metadata}\n{{broken json\n")).unwrap();
+        let error =
+            load_workspace_source(&workspace, &format!("codex/{id}"), LoadMode::Full).unwrap_err();
+        assert!(!error.to_string().starts_with(NO_RECORD_FOR_SELECTOR));
+        assert!(format!("{error:#}").contains("Failed to parse Codex session line 2"));
+        assert!(format!("{error:#}").contains(&path.display().to_string()));
+    }
+
+    /// A warm global freshness stamp must not hide appends from any exact-UUID selector.
+    #[test]
+    fn exact_codex_session_refreshes_all_segments_without_global_sync() {
+        let _environment = crate::test_fixtures::EnvGuard::capture(&["CODEX_HOME", "SIVTR_HOME"]);
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("codex");
+        let archive = directory.path().join("sivtr");
+        let workspace = directory.path().join("workspace");
+        let sessions = home.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::create_dir_all(&archive).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::env::set_var("CODEX_HOME", &home);
+        std::env::set_var("SIVTR_HOME", &archive);
+        std::fs::write(archive.join("config.toml"), "[sync]\nmax_age_secs = 3600\n").unwrap();
+        let canonical = "01234567-1234-5678-9012-345678901234";
+        for (filename, question, answer, minute) in [
+            ("first", "first question", "first answer", "01"),
+            ("resumed", "second question", "latest answer", "02"),
+        ] {
+            let events = [
+                serde_json::json!({"type":"session_meta","payload":{"id":canonical,"cwd":workspace}}),
+                serde_json::json!({"timestamp":format!("2026-11-07T00:{minute}:01Z"),"type":"response_item","payload":{"type":"message","role":"user","content":[{"text":question}]}}),
+                serde_json::json!({"timestamp":format!("2026-11-07T00:{minute}:02Z"),"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":answer}]}}),
+            ];
+            let text = events
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n";
+            std::fs::write(
+                sessions.join(format!("rollout-{canonical}-{filename}.jsonl")),
+                text,
+            )
+            .unwrap();
+        }
+        let connection = crate::archive::open().unwrap();
+        crate::archive::store::meta_set(
+            &connection,
+            "last_sync_at",
+            &chrono::Utc::now().to_rfc3339(),
+        )
+        .unwrap();
+        let result =
+            load_workspace_source(&workspace, &format!("codex/{canonical}"), LoadMode::Full)
+                .unwrap();
+        assert_eq!(result.records.len(), 2);
+        assert!(result
+            .records
+            .iter()
+            .flat_map(|record| &record.parts)
+            .any(|part| part.text() == "first answer"));
+        assert!(result
+            .records
+            .iter()
+            .flat_map(|record| &record.parts)
+            .any(|part| part.text() == "latest answer"));
+
+        let resumed = sessions.join(format!("rollout-{canonical}-resumed.jsonl"));
+        use std::io::Write;
+        let mut transcript = std::fs::OpenOptions::new()
+            .append(true)
+            .open(resumed)
+            .unwrap();
+        for event in [
+            serde_json::json!({"timestamp":"2026-11-07T00:03:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"new question"}]}}),
+            serde_json::json!({"timestamp":"2026-11-07T00:03:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"just appended"}]}}),
+        ] {
+            writeln!(transcript, "{event}").unwrap();
+        }
+        drop(transcript);
+        for suffix in ["/3", "/3/p1", "/1,3", "/2-3"] {
+            let selected = load_workspace_source(
+                &workspace,
+                &format!("codex/{canonical}{suffix}"),
+                LoadMode::Full,
+            )
+            .unwrap();
+            assert_eq!(
+                selected.records.len(),
+                if suffix.contains(',') || suffix.contains('-') {
+                    2
+                } else {
+                    1
+                }
+            );
+            assert!(selected
+                .records
+                .iter()
+                .any(|record| record.work_ref.index() == 3));
+            assert!(selected
+                .records
+                .iter()
+                .flat_map(|record| &record.parts)
+                .any(|part| part.text() == "just appended"));
+            if suffix == "/3/p1" {
+                assert_eq!(
+                    selected.anchors[0].at,
+                    format!("codex/{canonical}{suffix}")
+                        .parse::<WorkRef>()
+                        .unwrap()
+                        .at
+                );
+            }
+        }
+        let updated =
+            load_workspace_source(&workspace, &format!("codex/{canonical}"), LoadMode::Full)
+                .unwrap();
+        assert_eq!(updated.records.len(), 3);
+        assert!(updated
+            .records
+            .iter()
+            .flat_map(|record| &record.parts)
+            .any(|part| part.text() == "just appended"));
+        assert!(updated.skipped.is_empty());
+
+        for entry in std::fs::read_dir(&sessions).unwrap() {
+            std::fs::remove_file(entry.unwrap().path()).unwrap();
+        }
+        let archived =
+            load_workspace_source(&workspace, &format!("codex/{canonical}"), LoadMode::Full)
+                .unwrap();
+        assert_eq!(
+            archived.records, updated.records,
+            "deleted live segments retain their archived records"
+        );
+        let other_workspace = directory.path().join("other-workspace");
+        std::fs::create_dir_all(&other_workspace).unwrap();
+        let error = load_workspace_source(
+            &other_workspace,
+            &format!("codex/{canonical}"),
+            LoadMode::Full,
+        )
+        .unwrap_err();
+        assert!(error.to_string().starts_with(NO_RECORD_FOR_SELECTOR));
+    }
+
+    /// A short prefix remains a multi-session selector rather than an exact-ID refresh.
+    #[test]
+    fn codex_session_prefix_keeps_matching_multiple_sessions() {
+        let _environment = crate::test_fixtures::EnvGuard::capture(&["CODEX_HOME", "SIVTR_HOME"]);
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("codex");
+        let archive = directory.path().join("sivtr");
+        let workspace = directory.path().join("workspace");
+        let sessions = home.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::create_dir_all(&archive).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::env::set_var("CODEX_HOME", &home);
+        std::env::set_var("SIVTR_HOME", &archive);
+        std::fs::write(archive.join("config.toml"), "[sync]\nmax_age_secs = 3600\n").unwrap();
+        for canonical in [
+            "01234567-1234-5678-9012-345678901234",
+            "01234567-1234-5678-9012-345678901235",
+        ] {
+            let events = [
+                serde_json::json!({"type":"session_meta","payload":{"id":canonical,"cwd":workspace}}),
+                serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"question"}]}}),
+                serde_json::json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"answer"}]}}),
+            ];
+            let text = events
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n";
+            std::fs::write(sessions.join(format!("rollout-{canonical}.jsonl")), text).unwrap();
+            load_workspace_source(&workspace, &format!("codex/{canonical}"), LoadMode::Full)
+                .unwrap();
+        }
+        let connection = crate::archive::open().unwrap();
+        crate::archive::store::meta_set(
+            &connection,
+            "last_sync_at",
+            &chrono::Utc::now().to_rfc3339(),
+        )
+        .unwrap();
+        let result = load_workspace_source(&workspace, "codex/01234567", LoadMode::Full).unwrap();
+        assert_eq!(result.records.len(), 2);
+        assert_ne!(
+            result.records[0].session.canonical_id,
+            result.records[1].session.canonical_id
+        );
     }
 
     #[test]

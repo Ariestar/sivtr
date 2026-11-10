@@ -867,6 +867,7 @@ fn selected_group_record(
     }]
 }
 
+/// Group consecutive requests until an assistant responds, retaining pending user-only turns.
 pub fn chat_turn_ranges(blocks: &[AgentBlock]) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
     let mut start = None;
@@ -879,7 +880,9 @@ pub fn chat_turn_ranges(blocks: &[AgentBlock]) -> Vec<(usize, usize)> {
                     ranges.push((start, idx));
                 }
             }
-            start = Some(idx);
+            if start.is_none() || has_assistant {
+                start = Some(idx);
+            }
             has_assistant = false;
         } else if start.is_some() && block.kind == AgentBlockKind::Assistant {
             has_assistant = true;
@@ -887,27 +890,10 @@ pub fn chat_turn_ranges(blocks: &[AgentBlock]) -> Vec<(usize, usize)> {
     }
 
     if let Some(start) = start {
-        if has_assistant {
-            ranges.push((start, blocks.len()));
-        } else if let Some(previous_user_only_turn) =
-            user_only_turn_before_trailing_tools(blocks, start)
-        {
-            ranges.push(previous_user_only_turn);
-        }
+        ranges.push((start, blocks.len()));
     }
 
     ranges
-}
-
-fn user_only_turn_before_trailing_tools(
-    blocks: &[AgentBlock],
-    start: usize,
-) -> Option<(usize, usize)> {
-    blocks
-        .get(start + 1..)?
-        .iter()
-        .all(|block| block.kind.is_structure())
-        .then_some((start, blocks.len()))
 }
 
 fn agent_session_ref_id(id: Option<&str>, path: &Path) -> String {
@@ -1102,7 +1088,7 @@ pub fn agent_parts(blocks: &[AgentBlock]) -> Vec<WorkPart> {
                         },
                         TextSegmentKind::Assistant => WorkPartBody::Message {
                             role: MessageRole::Assistant,
-                            label: None,
+                            label: block.label.clone(),
                             content: WorkContent::Text {
                                 content: segment.text,
                                 ansi: None,
@@ -1847,38 +1833,34 @@ mod tests {
 
     #[test]
     fn chat_turn_records_ignore_startup_user_blocks() {
-        let session = AgentSession {
+        let mut session = AgentSession {
             path: PathBuf::from("pi-session.jsonl"),
             id: Some("abcdef123456".to_string()),
             cwd: Some("D:\\sivtr".to_string()),
             title: None,
-            blocks: vec![
-                AgentBlock {
-                    kind: AgentBlockKind::User,
-                    timestamp: Some("2026-05-23T12:00:00Z".to_string()),
-                    label: None,
-                    call_id: None,
-                    text: "<environment_context>".to_string(),
-                    start_line: None,
-                },
-                AgentBlock {
-                    kind: AgentBlockKind::User,
-                    timestamp: Some("2026-05-23T12:01:00Z".to_string()),
-                    label: None,
-                    call_id: None,
-                    text: "implement this".to_string(),
-                    start_line: None,
-                },
-                AgentBlock {
-                    kind: AgentBlockKind::Assistant,
-                    timestamp: Some("2026-05-23T12:02:00Z".to_string()),
-                    label: None,
-                    call_id: None,
-                    text: "done".to_string(),
-                    start_line: None,
-                },
-            ],
+            blocks: Vec::new(),
         };
+        for (kind, at, text) in [
+            (
+                AgentBlockKind::User,
+                "2026-05-23T12:00:00Z",
+                "<environment_context>",
+            ),
+            (
+                AgentBlockKind::User,
+                "2026-05-23T12:01:00Z",
+                "implement this",
+            ),
+            (AgentBlockKind::Assistant, "2026-05-23T12:02:00Z", "done"),
+        ] {
+            push_block(&mut session, kind, Some(at.to_string()), None, text);
+        }
+
+        assert_eq!(
+            session.blocks.len(),
+            2,
+            "scaffolding is filtered at parse time"
+        );
 
         let records = WorkRecord::chat_turns(AgentProvider::Pi, &session);
 
@@ -1905,6 +1887,117 @@ mod tests {
             parse_timestamp("2026-05-23T12:02:00Z")
         );
         assert_eq!(records[0].time.duration_ms, Some(60_000));
+    }
+
+    /// Regenerated references must obey the same turn boundaries for every registered provider.
+    #[test]
+    fn chat_turn_records_preserve_consecutive_users_and_pending_followups() {
+        let blocks = [
+            (AgentBlockKind::User, "first request"),
+            (AgentBlockKind::User, "additional detail"),
+            (AgentBlockKind::Assistant, "answer"),
+            (AgentBlockKind::User, "question reply"),
+            (AgentBlockKind::User, "continue"),
+        ]
+        .into_iter()
+        .map(|(kind, text)| AgentBlock {
+            kind,
+            timestamp: None,
+            label: None,
+            call_id: None,
+            text: text.to_string(),
+            start_line: None,
+        })
+        .collect();
+        let session = AgentSession {
+            path: PathBuf::from("codex-session.jsonl"),
+            id: Some("consecutive-users".to_string()),
+            cwd: None,
+            title: None,
+            blocks,
+        };
+        assert_eq!(chat_turn_ranges(&session.blocks), [(0, 3), (3, 5)]);
+        for provider in AgentProvider::all().iter().map(|spec| spec.provider) {
+            let records = WorkRecord::chat_turns(provider, &session);
+            assert_eq!(records.len(), 2, "{provider:?}");
+            assert_eq!(records[0].work_ref.index(), 1, "{provider:?}");
+            assert_eq!(records[1].work_ref.index(), 2, "{provider:?}");
+            assert_eq!(records[0].work_ref.provider(), Some(provider));
+            assert_eq!(
+                records[0].input_text().as_deref(),
+                Some("first request\n\nadditional detail"),
+                "{provider:?}"
+            );
+            assert_eq!(
+                records[1].input_text().as_deref(),
+                Some("question reply\n\ncontinue"),
+                "{provider:?}"
+            );
+        }
+    }
+
+    /// Exercise native transcript formats as well as the shared typed-block boundary.
+    #[test]
+    fn provider_parsers_preserve_consecutive_and_pending_requests() {
+        use crate::session_source::SessionSource;
+        let directory = tempfile::tempdir().unwrap();
+        for provider in [
+            AgentProvider::Codex,
+            AgentProvider::Claude,
+            AgentProvider::Pi,
+        ] {
+            let path = directory
+                .path()
+                .join(format!("{}.jsonl", provider.command_name()));
+            let mut events = match provider {
+                AgentProvider::Codex => {
+                    vec![serde_json::json!({"type":"session_meta","payload":{"id":"turn-test"}})]
+                }
+                AgentProvider::Pi => {
+                    vec![serde_json::json!({"type":"session","version":3,"id":"turn-test"})]
+                }
+                _ => Vec::new(),
+            };
+            for (role, text) in [
+                ("user", "first request"),
+                ("user", "additional detail"),
+                ("assistant", "answer"),
+                ("user", "question reply"),
+                ("user", "continue"),
+            ] {
+                events.push(match provider {
+                    AgentProvider::Codex => serde_json::json!({"type":"response_item","payload":{"type":"message","role":role,"content":[{"type":"text","text":text}]}}),
+                    AgentProvider::Claude => serde_json::json!({"type":role,"sessionId":"turn-test","message":{"role":role,"content":[{"type":"text","text":text}]}}),
+                    AgentProvider::Pi => serde_json::json!({"type":"message","message":{"role":role,"content":[{"type":"text","text":text}]}}),
+                    _ => unreachable!(),
+                });
+            }
+            let transcript = events
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            std::fs::write(&path, transcript).unwrap();
+            let records = provider.parse_file(&path).unwrap();
+            assert_eq!(records.len(), 2, "{provider:?}");
+            assert_eq!(
+                records[0].input_text().as_deref(),
+                Some("first request\n\nadditional detail"),
+                "{provider:?}"
+            );
+            assert_eq!(
+                records[1].input_text().as_deref(),
+                Some("question reply\n\ncontinue"),
+                "{provider:?}"
+            );
+            assert_eq!(
+                records[0].output_text().as_deref(),
+                Some("answer"),
+                "{provider:?}"
+            );
+            assert_eq!(records[1].work_ref.index(), 2, "{provider:?}");
+            assert_eq!(records[1].work_ref.provider(), Some(provider));
+        }
     }
 
     #[test]
