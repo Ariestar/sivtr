@@ -109,7 +109,7 @@ impl CodexSessionIndex {
     /// Merge healthy siblings, preserving the representative when a sibling is invalid.
     fn merge_session(&self, mut session: AgentSession) -> AgentSession {
         let paths = session.id.as_ref().and_then(|id| self.segments.get(id));
-        let mut segments = vec![std::mem::take(&mut session.blocks)];
+        let mut segments = Vec::new();
         for segment_path in paths
             .into_iter()
             .flatten()
@@ -127,9 +127,8 @@ impl CodexSessionIndex {
                 )),
             }
         }
-        if segments.len() == 1 {
-            session.blocks = segments.pop().expect("representative segment is present");
-        } else {
+        if !segments.is_empty() {
+            segments.insert(0, std::mem::take(&mut session.blocks));
             let mut seen = HashMap::new();
             for blocks in segments {
                 let mut occurrences = HashMap::new();
