@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use super::WorkSet;
 
 pub fn save_named(name: &str, set: &WorkSet) -> Result<()> {
+    set.validate()
+        .with_context(|| format!("Invalid WorkSet @{name}"))?;
     let path = set_path(name)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
@@ -76,12 +78,13 @@ pub fn list_saved() -> Result<Vec<SavedWorkSetInfo>> {
         let Some(name) = path.file_stem().and_then(|stem| stem.to_str()) else {
             continue;
         };
-        let set = load_saved(name)?;
-        vars.push(SavedWorkSetInfo {
-            name: name.to_string(),
-            items: set.anchors().len(),
-            created_at: set.created_at,
-        });
+        if let Ok(set) = load_saved(name) {
+            vars.push(SavedWorkSetInfo {
+                name: name.to_string(),
+                items: set.anchors().len(),
+                created_at: set.created_at,
+            });
+        }
     }
     vars.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(vars)

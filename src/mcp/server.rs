@@ -42,11 +42,10 @@ impl SivtrMcp {
         &self,
         Parameters(params): Parameters<SearchParams>,
     ) -> Result<CallToolResult, McpError> {
-        let detail = params.detail.clone();
-        let save = params.save.clone();
         let args = to_search_args(&params).map_err(invalid_params)?;
         let set = search::run(&args).map_err(tool_error)?;
-        let result = memory_result(&set, detail.as_deref(), save).map_err(tool_error)?;
+        let result =
+            memory_result(&set, params.format.as_deref(), params.save).map_err(tool_error)?;
         ok_json(result)
     }
 
@@ -57,10 +56,9 @@ impl SivtrMcp {
         &self,
         Parameters(params): Parameters<ShowParams>,
     ) -> Result<CallToolResult, McpError> {
-        let mode = params.mode.clone();
         let args = to_show_args(&params).map_err(invalid_params)?;
         let set = show::run(&args).map_err(tool_error)?;
-        let result = show_result(&set, mode.as_deref()).map_err(tool_error)?;
+        let result = show_result(&set, params.format.as_deref()).map_err(tool_error)?;
         ok_json(result)
     }
 
@@ -71,11 +69,10 @@ impl SivtrMcp {
         &self,
         Parameters(params): Parameters<ZoomParams>,
     ) -> Result<CallToolResult, McpError> {
-        let detail = params.detail.clone();
-        let save = params.save.clone();
         let args = to_zoom_args(&params);
         let set = zoom::run(&args).map_err(tool_error)?;
-        let result = memory_result(&set, detail.as_deref(), save).map_err(tool_error)?;
+        let result =
+            memory_result(&set, params.format.as_deref(), params.save).map_err(tool_error)?;
         ok_json(result)
     }
 
@@ -86,11 +83,10 @@ impl SivtrMcp {
         &self,
         Parameters(params): Parameters<FilterParams>,
     ) -> Result<CallToolResult, McpError> {
-        let detail = params.detail.clone();
-        let save = params.save.clone();
         let args = to_filter_args(&params).map_err(invalid_params)?;
         let set = filter::run(&args).map_err(tool_error)?;
-        let result = memory_result(&set, detail.as_deref(), save).map_err(tool_error)?;
+        let result =
+            memory_result(&set, params.format.as_deref(), params.save).map_err(tool_error)?;
         ok_json(result)
     }
 
