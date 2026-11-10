@@ -572,6 +572,140 @@ fn sync_max_age_secs() -> Result<u64> {
 mod tests {
     use super::*;
 
+    /// Parser upgrades must refresh unchanged agent sources without destroying retained evidence.
+    #[test]
+    fn agent_turn_parser_refresh_preserves_records_stars_and_captures() {
+        let _environment = crate::test_fixtures::EnvGuard::capture(&["SIVTR_HOME", "CODEX_HOME"]);
+        let directory = tempfile::tempdir().unwrap();
+        std::env::set_var("SIVTR_HOME", directory.path().join("archive"));
+        let home = directory.path().join("codex");
+        let sessions = home.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::env::set_var("CODEX_HOME", &home);
+        let source = sessions.join("turn-refresh.jsonl");
+        let mut transcript = serde_json::json!({"type":"session_meta","payload":{"id":"turn-refresh","cwd":directory.path()}}).to_string() + "\n";
+        for (role, text) in [
+            ("user", "first request"),
+            ("user", "additional detail"),
+            ("assistant", "answer"),
+            ("user", "pending followup"),
+        ] {
+            transcript.push_str(&serde_json::json!({"type":"response_item","payload":{"type":"message","role":role,"content":[{"text":text}]}}).to_string());
+            transcript.push('\n');
+        }
+        std::fs::write(&source, transcript).unwrap();
+        let stamp = crate::cache::file_stamp(&source).unwrap();
+        let mut legacy = AgentProvider::Codex.parse_file(&source).unwrap();
+        legacy.truncate(1);
+        legacy[0]
+            .parts
+            .retain(|part| part.text() != "first request");
+        let connection = schema::open().unwrap();
+        for provider in ["codex", "claude", "pi"] {
+            store::upsert_session(
+                &connection,
+                &SessionUpsert {
+                    provider,
+                    session_id: "turn-refresh",
+                    source_path: &source,
+                    cwd: Some(source.parent().unwrap().to_str().unwrap()),
+                    workspace_key: "",
+                    title: None,
+                    stamp,
+                    records: &legacy,
+                    usage_events: &[],
+                },
+            )
+            .unwrap();
+        }
+        connection
+            .execute(
+                "UPDATE sessions SET starred = 1 WHERE provider = 'codex'",
+                [],
+            )
+            .unwrap();
+        let capture = store::insert_terminal_capture(
+            Some("echo retained"),
+            "retained",
+            directory.path(),
+            Some(0),
+        )
+        .unwrap();
+        let captured =
+            store::load_records_by_key(&connection, "terminal", &capture, store::BlobMode::Full)
+                .unwrap();
+        let terminal_stamps = store::provider_stamps(&connection, "terminal").unwrap();
+        connection
+            .execute(
+                "DELETE FROM archive_meta WHERE key = 'agent_turn_boundaries_v1'",
+                [],
+            )
+            .unwrap();
+        store::meta_set(&connection, "last_sync_at", &Utc::now().to_rfc3339()).unwrap();
+
+        schema::init_schema(&connection).unwrap();
+        assert!(store::meta_get(&connection, "last_sync_at")
+            .unwrap()
+            .is_none());
+        for provider in ["codex", "claude", "pi"] {
+            assert_eq!(
+                store::provider_stamps(&connection, provider).unwrap()[source.to_str().unwrap()].2,
+                0
+            );
+            assert_eq!(
+                store::load_records_by_key(
+                    &connection,
+                    provider,
+                    "turn-refresh",
+                    store::BlobMode::Full
+                )
+                .unwrap()
+                .unwrap(),
+                legacy
+            );
+        }
+        assert_eq!(
+            store::provider_stamps(&connection, "terminal").unwrap(),
+            terminal_stamps
+        );
+        assert_eq!(
+            store::load_records_by_key(&connection, "terminal", &capture, store::BlobMode::Full)
+                .unwrap(),
+            captured
+        );
+
+        let report = sync_sources(&connection, false, &[AgentProvider::Codex], false).unwrap();
+        assert_eq!(report.sources[0].counts.updated, 1);
+        assert!(report.sources[0].failures.is_empty());
+        let records =
+            store::load_records_by_key(&connection, "codex", "turn-refresh", store::BlobMode::Full)
+                .unwrap()
+                .unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(
+            records[0].input_text().as_deref(),
+            Some("first request\n\nadditional detail")
+        );
+        assert_eq!(records[1].input_text().as_deref(), Some("pending followup"));
+        assert!(
+            store::session_meta_by_key(&connection, "codex", "turn-refresh")
+                .unwrap()
+                .unwrap()
+                .starred
+        );
+
+        let freshness = store::meta_get(&connection, "last_sync_at").unwrap();
+        schema::init_schema(&connection).unwrap();
+        assert_eq!(
+            store::provider_stamps(&connection, "codex").unwrap()[source.to_str().unwrap()],
+            stamp
+        );
+        assert_eq!(
+            store::meta_get(&connection, "last_sync_at").unwrap(),
+            freshness
+        );
+    }
+
     #[test]
     fn cursor_parser_refresh_rebuilds_unchanged_sources_without_losing_captures() {
         let _guard = crate::test_fixtures::EnvGuard::capture(&["SIVTR_HOME", "CURSOR_HOME"]);
@@ -625,8 +759,11 @@ mod tests {
         )
         .unwrap();
         // Simulate an archive created before the one-time parser migration.
-        conn.execute("DELETE FROM archive_meta WHERE key != 'schema_version'", [])
-            .unwrap();
+        conn.execute(
+            "DELETE FROM archive_meta WHERE key = 'cursor_message_envelopes_v1'",
+            [],
+        )
+        .unwrap();
         store::meta_set(&conn, "last_sync_at", &Utc::now().to_rfc3339()).unwrap();
         schema::init_schema(&conn).unwrap();
         assert!(store::meta_get(&conn, "last_sync_at").unwrap().is_none());

@@ -137,6 +137,32 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         tx.commit()
             .context("Failed to commit Cursor parser migration")?;
     }
+
+    // Turn regrouping affects every agent parser. Keep retained blobs and user
+    // metadata until the source is available, but do not trust old parse stamps.
+    let refresh_agent_turns: bool = conn
+        .query_row(
+            "SELECT NOT EXISTS(SELECT 1 FROM archive_meta WHERE key = 'agent_turn_boundaries_v1')",
+            [],
+            |row| row.get(0),
+        )
+        .context("Failed to read the agent turn parser migration state")?;
+    if refresh_agent_turns {
+        let tx = conn
+            .unchecked_transaction()
+            .context("Failed to begin agent turn parser migration")?;
+        if tx.execute(
+            "INSERT OR IGNORE INTO archive_meta (key, value) VALUES ('agent_turn_boundaries_v1', '1')",
+            [],
+        )? != 0 {
+            tx.execute_batch(
+                "UPDATE sessions SET size = 0 WHERE provider != 'terminal';
+                 DELETE FROM archive_meta WHERE key = 'last_sync_at';"
+            ).context("Failed to invalidate old agent turn parse stamps")?;
+        }
+        tx.commit()
+            .context("Failed to commit agent turn parser migration")?;
+    }
     Ok(())
 }
 
