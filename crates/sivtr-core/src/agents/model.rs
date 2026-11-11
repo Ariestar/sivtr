@@ -147,6 +147,10 @@ pub struct AgentSession {
 
 pub use crate::session_source::SessionInfo;
 
+/// A provider listing plus the `(path, reason)` failures it skipped. Failing
+/// files make a scan incomplete, so the sync engine keeps their archive rows.
+pub type SessionListing = (Vec<SessionInfo>, Vec<(PathBuf, String)>);
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSessionMeta {
     pub id: Option<String>,
@@ -221,6 +225,13 @@ pub trait AgentSessionProvider {
     fn provider(&self) -> AgentProvider;
 
     fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>>;
+
+    /// Listing plus per-file discovery failures. A provider that skips a
+    /// broken file reports it here so the sync engine can keep the archive
+    /// intact instead of treating the skipped session as deleted.
+    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
+        Ok((self.list_recent_sessions(cwd)?, Vec::new()))
+    }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession>;
 

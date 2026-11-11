@@ -3,8 +3,7 @@
 //! Layout (`GEMINI_HOME`, default `~/.gemini`):
 //! ```text
 //! tmp/<project-id>/chats/
-//!   session-<timestamp>-<id8>.jsonl   ← current JSONL format
-//!   session-<timestamp>-<id8>.json    ← legacy single-record format
+//!   session-<timestamp>-<id8>.jsonl
 //! ```
 //! The project-id is a hash of the working directory; the CLI keeps the
 //! id→path mapping in `projects.json`, which is not always present, so
@@ -15,13 +14,12 @@
 //! startTime, lastUpdated, summary?}`; message lines are `{id, type:
 //! user|gemini|info|error|warning, timestamp, content, thoughts?,
 //! toolCalls?, model?}` plus `$set` metadata updates and `$rewindTo`
-//! markers. The legacy `.json` form is a single object with the header
-//! fields and an inline `messages` array.
+//! markers.
 
 use crate::agents::{
-    extract_content_text, list_chat_recording_sessions, pretty_json_value, push_block,
+    extract_content_text, list_chat_recording_sessions_outcome, pretty_json_value, push_block,
     push_parts_blocks, push_tool_block, AgentBlockKind, AgentProvider, AgentSession,
-    AgentSessionMeta, AgentSessionProvider, SessionInfo,
+    AgentSessionMeta, AgentSessionProvider, SessionInfo, SessionListing,
 };
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -45,35 +43,38 @@ impl AgentSessionProvider for GeminiProvider {
     }
 
     fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        list_chat_recording_sessions(PROVIDER_NAME, &gemini_tmp_dir(), cwd, parse_session_meta)
+        Ok(self.list_session_outcome(cwd)?.0)
+    }
+
+    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
+        crate::agents::profile::list(AgentProvider::Gemini, cwd)
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        let text = fs::read_to_string(path)
-            .with_context(|| format!("Failed to read Gemini session: {}", path.display()))?;
-
-        // Legacy files are a single JSON object (possibly pretty-printed);
-        // current files are JSONL with one record per line.
-        if let Ok(value) = serde_json::from_str::<Value>(&text) {
-            if is_legacy_record(&value) {
-                return parse_legacy_session(path, &value);
-            }
-        }
-
-        let mut session = AgentSession {
-            path: path.to_path_buf(),
-            id: None,
-            cwd: None,
-            title: None,
-            blocks: Vec::new(),
-        };
-        for line in text.lines() {
-            if let Ok(value) = serde_json::from_str::<Value>(line) {
-                apply_event(&mut session, &value);
-            }
-        }
-        Ok(session)
+        crate::agents::profile::parse(AgentProvider::Gemini, path)
     }
+}
+
+pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
+    list_chat_recording_sessions_outcome(PROVIDER_NAME, &gemini_tmp_dir(), cwd, parse_session_meta)
+}
+
+pub(crate) fn parse_file(_provider: AgentProvider, path: &Path) -> Result<AgentSession> {
+    let text = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read Gemini session: {}", path.display()))?;
+    let mut session = AgentSession {
+        path: path.to_path_buf(),
+        id: None,
+        cwd: None,
+        title: None,
+        blocks: Vec::new(),
+    };
+    for line in text.lines() {
+        if let Ok(value) = serde_json::from_str::<Value>(line) {
+            apply_event(&mut session, &value);
+        }
+    }
+    Ok(session)
 }
 
 pub fn gemini_home() -> PathBuf {
@@ -92,22 +93,10 @@ fn gemini_tmp_dir() -> PathBuf {
     gemini_home().join("tmp")
 }
 
-fn is_legacy_record(value: &Value) -> bool {
-    value.get("sessionId").is_some() && value.get("messages").is_some()
-}
-
 fn parse_session_meta(path: &Path) -> Result<AgentSessionMeta> {
     let head = read_head(path)?;
     let mut meta = AgentSessionMeta::default();
     let mut first_user_text: Option<String> = None;
-
-    if let Ok(value) = serde_json::from_str::<Value>(&head) {
-        if is_legacy_record(&value) {
-            update_meta(&mut meta, &value, &mut first_user_text);
-            meta.fallback_title(first_user_text.as_deref());
-            return Ok(meta);
-        }
-    }
 
     for line in head.lines().take(META_SCAN_LINES) {
         if let Ok(value) = serde_json::from_str::<Value>(line) {
@@ -171,30 +160,6 @@ fn dialogue_text(content: &Value) -> String {
             .join("\n\n"),
         _ => String::new(),
     }
-}
-
-fn parse_legacy_session(path: &Path, value: &Value) -> Result<AgentSession> {
-    let mut session = AgentSession {
-        path: path.to_path_buf(),
-        id: value
-            .get("sessionId")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        cwd: None,
-        title: value
-            .get("summary")
-            .and_then(Value::as_str)
-            .filter(|summary| !summary.trim().is_empty())
-            .map(str::to_string),
-        blocks: Vec::new(),
-    };
-
-    if let Some(messages) = value.get("messages").and_then(Value::as_array) {
-        for message in messages {
-            apply_event(&mut session, message);
-        }
-    }
-    Ok(session)
 }
 
 fn apply_event(session: &mut AgentSession, value: &Value) {
@@ -336,36 +301,6 @@ mod tests {
         assert!(session.blocks[3].text.contains("ls"));
         assert_eq!(session.blocks[4].kind, AgentBlockKind::ToolOutput);
         assert_eq!(session.blocks[4].text, "file.txt");
-    }
-
-    #[test]
-    fn parses_legacy_single_json_format() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("session-2026-01-25T15-10-130c64ed.json");
-        std::fs::write(
-            &path,
-            r#"{
-  "sessionId": "legacy-1",
-  "projectHash": "h2",
-  "startTime": "2026-01-25T15:10:52Z",
-  "lastUpdated": "2026-01-25T15:11:09Z",
-  "messages": [
-    {"id": "m1", "timestamp": "2026-01-25T15:10:52Z", "type": "user", "content": "hello legacy"},
-    {"id": "m2", "timestamp": "2026-01-25T15:11:09Z", "type": "gemini", "content": "hi"}
-  ]
-}
-"#,
-        )
-        .unwrap();
-
-        let session = GeminiProvider.parse_session_file(&path).unwrap();
-
-        assert_eq!(session.id.as_deref(), Some("legacy-1"));
-        assert_eq!(session.blocks.len(), 2);
-        assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
-        assert_eq!(session.blocks[0].text, "hello legacy");
-        assert_eq!(session.blocks[1].kind, AgentBlockKind::Assistant);
-        assert_eq!(session.blocks[1].text, "hi");
     }
 
     #[test]

@@ -3,9 +3,9 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 use crate::agents::{
-    extract_content_text, list_recent_jsonl_sessions, parse_jsonl_meta, parse_jsonl_session,
-    pretty_json_value, push_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionMeta,
-    AgentSessionProvider, SessionInfo,
+    extract_content_text, list_recent_jsonl_sessions_outcome, parse_jsonl_meta,
+    parse_jsonl_session, pretty_json_value, push_block, AgentBlockKind, AgentProvider,
+    AgentSession, AgentSessionMeta, AgentSessionProvider, SessionInfo, SessionListing,
 };
 
 const PROVIDER_NAME: &str = "Claude";
@@ -19,22 +19,36 @@ impl AgentSessionProvider for ClaudeProvider {
     }
 
     fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        list_recent_jsonl_sessions(
-            PROVIDER_NAME,
-            &claude_home().join("projects"),
-            cwd,
-            parse_session_meta,
-        )
+        Ok(self.list_session_outcome(cwd)?.0)
+    }
+
+    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
+        crate::agents::profile::list(AgentProvider::Claude, cwd)
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_jsonl_session(path, PROVIDER_NAME, apply_event)
+        crate::agents::profile::parse(AgentProvider::Claude, path)
     }
 }
 
+pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
+    list_recent_jsonl_sessions_outcome(
+        PROVIDER_NAME,
+        &claude_home().join("projects"),
+        cwd,
+        parse_session_meta,
+    )
+}
+
+pub(crate) fn parse_file(_provider: AgentProvider, path: &Path) -> Result<AgentSession> {
+    parse_jsonl_session(path, PROVIDER_NAME, apply_event)
+}
+
 pub fn claude_home() -> PathBuf {
-    if let Ok(path) = std::env::var("CLAUDE_HOME") {
-        return PathBuf::from(path);
+    if let Ok(path) = std::env::var("CLAUDE_CONFIG_DIR") {
+        if !path.trim().is_empty() {
+            return PathBuf::from(path);
+        }
     }
 
     dirs::home_dir()
@@ -682,9 +696,9 @@ mod tests {
     fn skips_malformed_unrelated_sessions_during_listing() {
         let _guard = env_lock();
         let dir = tempfile::tempdir().unwrap();
-        let original_claude_home = env::var_os("CLAUDE_HOME");
+        let original_claude_home = env::var_os("CLAUDE_CONFIG_DIR");
         let original_data_dir = env::var_os("SIVTR_HOME");
-        env::set_var("CLAUDE_HOME", dir.path());
+        env::set_var("CLAUDE_CONFIG_DIR", dir.path());
         env::set_var("SIVTR_HOME", dir.path().join("data"));
 
         let projects = dir.path().join("projects").join("workspace");
@@ -711,8 +725,8 @@ mod tests {
         let sessions = ClaudeProvider.list_recent_sessions(None).unwrap();
 
         match original_claude_home {
-            Some(value) => env::set_var("CLAUDE_HOME", value),
-            None => env::remove_var("CLAUDE_HOME"),
+            Some(value) => env::set_var("CLAUDE_CONFIG_DIR", value),
+            None => env::remove_var("CLAUDE_CONFIG_DIR"),
         }
         match original_data_dir {
             Some(value) => env::set_var("SIVTR_HOME", value),

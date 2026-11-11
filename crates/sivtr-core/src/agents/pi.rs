@@ -3,9 +3,9 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 use crate::agents::{
-    extract_content_text, list_recent_jsonl_sessions, parse_jsonl_meta, parse_jsonl_session,
-    pretty_json_value, push_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionMeta,
-    AgentSessionProvider, SessionInfo,
+    extract_content_text, list_recent_jsonl_sessions_outcome, parse_jsonl_meta,
+    parse_jsonl_session, pretty_json_value, push_block, AgentBlockKind, AgentProvider,
+    AgentSession, AgentSessionMeta, AgentSessionProvider, SessionInfo, SessionListing,
 };
 
 const PROVIDER_NAME: &str = "Pi";
@@ -19,26 +19,75 @@ impl AgentSessionProvider for PiProvider {
     }
 
     fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        list_recent_jsonl_sessions(PROVIDER_NAME, &pi_sessions_dir(), cwd, parse_session_meta)
+        Ok(self.list_session_outcome(cwd)?.0)
+    }
+
+    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
+        crate::agents::profile::list(AgentProvider::Pi, cwd)
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_jsonl_session(path, PROVIDER_NAME, apply_event)
+        crate::agents::profile::parse(AgentProvider::Pi, path)
     }
 }
 
+pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
+    list_recent_jsonl_sessions_outcome(PROVIDER_NAME, &pi_sessions_dir(), cwd, parse_session_meta)
+}
+
+pub(crate) fn parse_file(_provider: AgentProvider, path: &Path) -> Result<AgentSession> {
+    parse_jsonl_session(path, PROVIDER_NAME, apply_event)
+}
+
+/// Pi's agent folder: `$PI_CODING_AGENT_DIR`, else `~/.pi/agent`.
 pub fn pi_home() -> PathBuf {
-    if let Ok(path) = std::env::var("PI_HOME") {
-        return PathBuf::from(path);
+    if let Some(path) = non_empty_env("PI_CODING_AGENT_DIR") {
+        return path;
     }
 
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".pi")
+        .join("agent")
 }
 
 pub fn pi_sessions_dir() -> PathBuf {
-    pi_home().join("agent").join("sessions")
+    if let Some(path) = non_empty_env("PI_CODING_AGENT_SESSION_DIR") {
+        return path;
+    }
+    if let Some(path) = session_dir_setting() {
+        return path;
+    }
+    pi_home().join("sessions")
+}
+
+fn non_empty_env(name: &str) -> Option<PathBuf> {
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+}
+
+fn session_dir_setting() -> Option<PathBuf> {
+    let text = std::fs::read_to_string(pi_home().join("settings.json")).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let dir = value
+        .get("sessionDir")
+        .and_then(Value::as_str)
+        .filter(|dir| !dir.trim().is_empty())?;
+    Some(expand_home(dir))
+}
+
+fn expand_home(path: &str) -> PathBuf {
+    if path == "~" {
+        return dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    }
+    if let Some(rest) = path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\")) {
+        return dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(rest);
+    }
+    PathBuf::from(path)
 }
 
 fn parse_session_meta(path: &Path) -> Result<AgentSessionMeta> {

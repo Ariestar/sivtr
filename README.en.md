@@ -306,9 +306,9 @@ The owner manages the group: `rename` to rename, `remove <group> <peer>` to kick
 | Claude Code | Local transcript/session files. |
 | Cursor | Local Cursor agent transcript JSONL. |
 | OpenCode | Local session database. |
-| OpenClaw | Local OpenClaw agent SQLite (+ legacy JSONL). |
-| Hermes | Local Hermes `state.db` (JSONL under `sessions/` as residual). |
-| Grok | Local Grok agent sessions under `~/.grok` (`GROK_HOME`). |
+| OpenClaw | Local OpenClaw agent SQLite. |
+| Hermes | Local Hermes `state.db`. |
+| Grok | Local Grok `updates.jsonl` under `~/.grok` (`GROK_HOME`). |
 | Dsh | Local Dsh agent sessions. |
 | Gemini | Local Gemini CLI sessions. |
 | Goose | Local Goose agent sessions. |

@@ -19,9 +19,9 @@ use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 use crate::agents::{
-    list_chat_recording_sessions, parse_jsonl_session, pretty_json_value, push_parts_blocks,
-    push_tool_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionMeta,
-    AgentSessionProvider, SessionInfo,
+    list_chat_recording_sessions_outcome, parse_jsonl_session, pretty_json_value,
+    push_parts_blocks, push_tool_block, AgentBlockKind, AgentProvider, AgentSession,
+    AgentSessionMeta, AgentSessionProvider, SessionInfo, SessionListing,
 };
 
 const PROVIDER_NAME: &str = "Qwen";
@@ -38,12 +38,24 @@ impl AgentSessionProvider for QwenProvider {
     }
 
     fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        list_chat_recording_sessions(PROVIDER_NAME, &qwen_tmp_dir(), cwd, parse_session_meta)
+        Ok(self.list_session_outcome(cwd)?.0)
+    }
+
+    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
+        crate::agents::profile::list(AgentProvider::Qwen, cwd)
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_jsonl_session(path, PROVIDER_NAME, apply_event)
+        crate::agents::profile::parse(AgentProvider::Qwen, path)
     }
+}
+
+pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
+    list_chat_recording_sessions_outcome(PROVIDER_NAME, &qwen_tmp_dir(), cwd, parse_session_meta)
+}
+
+pub(crate) fn parse_file(_provider: AgentProvider, path: &Path) -> Result<AgentSession> {
+    parse_jsonl_session(path, PROVIDER_NAME, apply_event)
 }
 
 pub fn qwen_home() -> PathBuf {

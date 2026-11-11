@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use crate::agents::{
     extract_content_text, filter_sessions_by_workspace, open_readonly_db, pretty_json_value,
     push_block, push_tool_block, system_time_from_unix_secs, AgentBlockKind, AgentProvider,
-    AgentSession, AgentSessionProvider, SessionInfo,
+    AgentSession, AgentSessionProvider, SessionInfo, SessionListing,
 };
 
 const SESSION_PATH_PREFIX: &str = "goose-session-";
@@ -38,49 +38,15 @@ impl AgentSessionProvider for GooseProvider {
     }
 
     fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        let db_path = goose_db_path();
-        if !db_path.exists() {
-            return Ok(Vec::new());
-        }
+        Ok(self.list_session_outcome(cwd)?.0)
+    }
 
-        let conn = open_readonly_db(&db_path)?;
-        let mut stmt = conn.prepare(
-            "select id, working_dir, name, coalesce(cast(strftime('%s', updated_at) as integer), 0) \
-             from sessions order by updated_at desc, id desc",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, i64>(3)?,
-            ))
-        })?;
-
-        let mut sessions = Vec::new();
-        for row in rows {
-            let (id, working_dir, name, updated_secs) = row?;
-            sessions.push(SessionInfo {
-                modified: system_time_from_unix_secs(updated_secs as f64),
-                path: goose_session_path(&id),
-                physical_path: Some(db_path.clone()),
-                id: Some(id),
-                cwd: Some(working_dir).filter(|value| !value.trim().is_empty()),
-                title: Some(name).filter(|name| !name.trim().is_empty()),
-            });
-        }
-
-        Ok(filter_sessions_by_workspace(sessions, cwd))
+    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
+        crate::agents::profile::list(AgentProvider::Goose, cwd)
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        let session_id = session_id_from_path(path).with_context(|| {
-            format!(
-                "Goose session path `{}` does not contain a session id",
-                path.display()
-            )
-        })?;
-        parse_session_by_id(&session_id)
+        crate::agents::profile::parse(AgentProvider::Goose, path)
     }
 
     fn find_session_by_id(&self, id: &str) -> Result<Option<PathBuf>> {
@@ -111,6 +77,52 @@ impl AgentSessionProvider for GooseProvider {
             .optional()?;
         Ok(prefix_match.map(|id| goose_session_path(&id)))
     }
+}
+
+pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
+    let db_path = goose_db_path();
+    if !db_path.exists() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    let conn = open_readonly_db(&db_path)?;
+    let mut stmt = conn.prepare(
+        "select id, working_dir, name, coalesce(cast(strftime('%s', updated_at) as integer), 0) \
+             from sessions order by updated_at desc, id desc",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
+        ))
+    })?;
+
+    let mut sessions = Vec::new();
+    for row in rows {
+        let (id, working_dir, name, updated_secs) = row?;
+        sessions.push(SessionInfo {
+            modified: system_time_from_unix_secs(updated_secs as f64),
+            path: goose_session_path(&id),
+            physical_path: Some(db_path.clone()),
+            id: Some(id),
+            cwd: Some(working_dir).filter(|value| !value.trim().is_empty()),
+            title: Some(name).filter(|name| !name.trim().is_empty()),
+        });
+    }
+
+    Ok((filter_sessions_by_workspace(sessions, cwd), Vec::new()))
+}
+
+pub(crate) fn parse_file(_provider: AgentProvider, path: &Path) -> Result<AgentSession> {
+    let session_id = session_id_from_path(path).with_context(|| {
+        format!(
+            "Goose session path `{}` does not contain a session id",
+            path.display()
+        )
+    })?;
+    parse_session_by_id(&session_id)
 }
 
 pub fn goose_db_path() -> PathBuf {

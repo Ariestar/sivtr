@@ -17,9 +17,9 @@ Providers come from the `AgentProvider` registry. Copy uses the same names:
 | Claude Code | `sivtr copy claude ...` | Claude transcript/session env and local transcripts |
 | Cursor | `sivtr copy cursor ...` | Cursor agent transcript JSONL under `~/.cursor/projects` |
 | OpenCode | `sivtr copy opencode ...` | OpenCode local database |
-| OpenClaw | `sivtr copy openclaw ...` | OpenClaw agent SQLite (+ legacy JSONL) |
-| Hermes | `sivtr copy hermes ...` | Hermes `state.db` (JSONL under `sessions/` residual) |
-| Grok | `sivtr copy grok ...` | Grok sessions under `~/.grok` (`GROK_HOME`) |
+| OpenClaw | `sivtr copy openclaw ...` | OpenClaw agent SQLite |
+| Hermes | `sivtr copy hermes ...` | Hermes `state.db` |
+| Grok | `sivtr copy grok ...` | Grok `updates.jsonl` under `~/.grok` (`GROK_HOME`) |
 | Dsh | `sivtr copy dsh ...` | Dsh agent sessions |
 | Gemini | `sivtr copy gemini ...` | Gemini CLI sessions |
 | Goose | `sivtr copy goose ...` | Goose agent sessions |

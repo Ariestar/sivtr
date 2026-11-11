@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::agents::{
     extract_content_text, filter_sessions_by_workspace, parse_jsonl_meta, parse_jsonl_session,
     pretty_json_value, push_block, push_tool_block, AgentBlockKind, AgentProvider, AgentSession,
-    AgentSessionMeta, AgentSessionProvider, SessionInfo,
+    AgentSessionMeta, AgentSessionProvider, SessionInfo, SessionListing,
 };
 
 const PROVIDER_NAME: &str = "Qoder";
@@ -35,11 +35,15 @@ impl AgentSessionProvider for QoderProvider {
     }
 
     fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        list_recent_sessions_in(&qoder_projects_dir(), cwd)
+        Ok(self.list_session_outcome(cwd)?.0)
+    }
+
+    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
+        crate::agents::profile::list(AgentProvider::Qoder, cwd)
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_jsonl_session(path, PROVIDER_NAME, apply_event)
+        crate::agents::profile::parse(AgentProvider::Qoder, path)
     }
 }
 
@@ -49,22 +53,42 @@ impl AgentSessionProvider for QoderCnProvider {
     }
 
     fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        list_recent_sessions_in(&qoder_cn_projects_dir(), cwd)
+        Ok(self.list_session_outcome(cwd)?.0)
+    }
+
+    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
+        crate::agents::profile::list(AgentProvider::QoderCn, cwd)
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_jsonl_session(path, PROVIDER_NAME, apply_event)
+        crate::agents::profile::parse(AgentProvider::QoderCn, path)
     }
+}
+
+pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
+    list_recent_sessions_in(&qoder_projects_dir(), cwd)
+}
+
+pub(crate) fn list_cn_outcome(
+    _provider: AgentProvider,
+    cwd: Option<&Path>,
+) -> Result<SessionListing> {
+    list_recent_sessions_in(&qoder_cn_projects_dir(), cwd)
+}
+
+pub(crate) fn parse_file(_provider: AgentProvider, path: &Path) -> Result<AgentSession> {
+    parse_jsonl_session(path, PROVIDER_NAME, apply_event)
 }
 
 /// Scan `projects/<cwd-slug>/<session>.jsonl` under `root`, newest first.
 /// Shared by the global and CN Qoder providers; only `root` differs.
-fn list_recent_sessions_in(root: &Path, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
+fn list_recent_sessions_in(root: &Path, cwd: Option<&Path>) -> Result<SessionListing> {
     if !root.exists() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
 
     let mut sessions = Vec::new();
+    let mut failures = Vec::new();
     for bucket in fs::read_dir(root)
         .with_context(|| format!("Failed to read Qoder projects dir {}", root.display()))?
     {
@@ -95,14 +119,14 @@ fn list_recent_sessions_in(root: &Path, cwd: Option<&Path>) -> Result<Vec<Sessio
                         modified,
                     });
                 }
-                Err(_) => continue,
+                Err(error) => failures.push((path, format!("{error:#}"))),
             }
         }
     }
 
     sessions.sort_by_key(|s| s.modified);
     sessions.reverse();
-    Ok(filter_sessions_by_workspace(sessions, cwd))
+    Ok((filter_sessions_by_workspace(sessions, cwd), failures))
 }
 
 pub fn qoder_home() -> PathBuf {

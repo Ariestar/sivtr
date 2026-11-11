@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::agents::{
     filter_sessions_by_workspace, open_readonly_db, push_block, system_time_from_millis,
-    AgentBlockKind, AgentProvider, AgentSession, AgentSessionProvider, SessionInfo,
+    AgentBlockKind, AgentProvider, AgentSession, AgentSessionProvider, SessionInfo, SessionListing,
 };
 
 const SESSION_PATH_PREFIX: &str = "zcode-session-";
@@ -33,18 +33,30 @@ impl AgentSessionProvider for ZcodeProvider {
     }
 
     fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        list_sessions(cwd)
+        Ok(self.list_session_outcome(cwd)?.0)
+    }
+
+    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
+        crate::agents::profile::list(AgentProvider::Zcode, cwd)
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        let session_id = session_id_from_path(path)?;
-        parse_session(&session_id).with_context(|| {
-            format!(
-                "Failed to load {} session {session_id}",
-                AgentProvider::Zcode.name()
-            )
-        })
+        crate::agents::profile::parse(AgentProvider::Zcode, path)
     }
+}
+
+pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
+    list_sessions(cwd)
+}
+
+pub(crate) fn parse_file(_provider: AgentProvider, path: &Path) -> Result<AgentSession> {
+    let session_id = session_id_from_path(path)?;
+    parse_session(&session_id).with_context(|| {
+        format!(
+            "Failed to load {} session {session_id}",
+            AgentProvider::Zcode.name()
+        )
+    })
 }
 
 fn zcode_home() -> Result<PathBuf> {
@@ -71,10 +83,10 @@ fn display_id(row_id: &str) -> Result<&str> {
         .context("ZCode session id does not use the expected sess_ prefix")
 }
 
-fn list_sessions(cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
+fn list_sessions(cwd: Option<&Path>) -> Result<SessionListing> {
     let db_path = zcode_db_path()?;
     if !db_path.exists() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
 
     let conn = open_readonly_db(&db_path)?;
@@ -109,7 +121,7 @@ fn list_sessions(cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
             modified: system_time_from_millis(time_updated),
         });
     }
-    Ok(filter_sessions_by_workspace(sessions, cwd))
+    Ok((filter_sessions_by_workspace(sessions, cwd), Vec::new()))
 }
 
 fn parse_session(row_id: &str) -> Result<AgentSession> {

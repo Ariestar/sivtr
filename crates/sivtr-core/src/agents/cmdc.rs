@@ -36,9 +36,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::agents::{
-    extract_content_text, list_sessions_matching, parse_jsonl_meta, parse_jsonl_session,
+    extract_content_text, list_sessions_matching_outcome, parse_jsonl_meta, parse_jsonl_session,
     pretty_json_value, push_block, push_tool_block, AgentBlockKind, AgentProvider, AgentSession,
-    AgentSessionMeta, AgentSessionProvider, SessionInfo,
+    AgentSessionMeta, AgentSessionProvider, SessionInfo, SessionListing,
 };
 
 const PROVIDER_NAME: &str = "Command Code";
@@ -58,19 +58,31 @@ impl AgentSessionProvider for CmdcProvider {
     }
 
     fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        list_sessions_matching(
-            PROVIDER_NAME,
-            &projects_root(),
-            cwd,
-            is_session_transcript,
-            |_| Vec::new(),
-            parse_session_meta,
-        )
+        Ok(self.list_session_outcome(cwd)?.0)
+    }
+
+    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
+        crate::agents::profile::list(AgentProvider::CommandCode, cwd)
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_transcript(path)
+        crate::agents::profile::parse(AgentProvider::CommandCode, path)
     }
+}
+
+pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
+    list_sessions_matching_outcome(
+        PROVIDER_NAME,
+        &projects_root(),
+        cwd,
+        is_session_transcript,
+        |_| Vec::new(),
+        parse_session_meta,
+    )
+}
+
+pub(crate) fn parse_file(_provider: AgentProvider, path: &Path) -> Result<AgentSession> {
+    parse_transcript(path)
 }
 
 /// Command Code home: `$COMMANDCODE_HOME`, else `~/.commandcode`.

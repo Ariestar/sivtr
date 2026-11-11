@@ -815,6 +815,7 @@ mod tests {
                     workspace_key: "",
                     title: None,
                     stamp: (index as u64, 0, 1),
+                    fingerprint: 0,
                     records: &records,
                     usage_events: &[],
                 },

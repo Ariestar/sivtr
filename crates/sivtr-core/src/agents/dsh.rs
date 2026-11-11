@@ -28,9 +28,9 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::agents::{
-    extract_content_text, list_sessions_matching, pretty_json_string, push_block, push_tool_block,
-    AgentBlockKind, AgentProvider, AgentSession, AgentSessionMeta, AgentSessionProvider,
-    SessionInfo,
+    extract_content_text, list_sessions_matching_outcome, pretty_json_string, push_block,
+    push_tool_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionMeta,
+    AgentSessionProvider, SessionInfo, SessionListing,
 };
 
 const PROVIDER_NAME: &str = "Dsh";
@@ -64,25 +64,35 @@ impl AgentSessionProvider for DshProvider {
     }
 
     fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        let root = sessions_root();
-        list_sessions_matching(
-            PROVIDER_NAME,
-            &root,
-            cwd,
-            |path, is_dir| !is_dir && is_dsh_log(path),
-            |_| Vec::new(),
-            parse_session_meta,
-        )
+        Ok(self.list_session_outcome(cwd)?.0)
+    }
+
+    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
+        crate::agents::profile::list(AgentProvider::Dsh, cwd)
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        let bytes = read_log(path).with_context(|| {
-            format!("Failed to read {PROVIDER_NAME} session: {}", path.display())
-        })?;
-        let text = std::str::from_utf8(&bytes)
-            .with_context(|| format!("{PROVIDER_NAME} session is not UTF-8: {}", path.display()))?;
-        parse_log_text(path, text)
+        crate::agents::profile::parse(AgentProvider::Dsh, path)
     }
+}
+
+pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
+    list_sessions_matching_outcome(
+        PROVIDER_NAME,
+        &sessions_root(),
+        cwd,
+        |path, is_dir| !is_dir && is_dsh_log(path),
+        |_| Vec::new(),
+        parse_session_meta,
+    )
+}
+
+pub(crate) fn parse_file(_provider: AgentProvider, path: &Path) -> Result<AgentSession> {
+    let bytes = read_log(path)
+        .with_context(|| format!("Failed to read {PROVIDER_NAME} session: {}", path.display()))?;
+    let text = std::str::from_utf8(&bytes)
+        .with_context(|| format!("{PROVIDER_NAME} session is not UTF-8: {}", path.display()))?;
+    parse_log_text(path, text)
 }
 
 /// Harness home: `$DSH_HOME`, else `~/.dsh`.

@@ -3,12 +3,11 @@ use rusqlite::OptionalExtension;
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
 
 use crate::agents::{
-    extract_content_text, filter_sessions_by_workspace, jsonl_files, open_readonly_db,
-    pretty_json_value, push_block, system_time_from_millis, AgentBlockKind, AgentProvider,
-    AgentSession, AgentSessionProvider, SessionInfo,
+    extract_content_text, filter_sessions_by_workspace, open_readonly_db, pretty_json_value,
+    push_block, system_time_from_millis, AgentBlockKind, AgentProvider, AgentSession,
+    AgentSessionProvider, SessionInfo, SessionListing,
 };
 
 const SESSION_PATH_PREFIX: &str = "openclaw-session-";
@@ -17,12 +16,8 @@ const AGENT_DB_NAME: &str = "openclaw-agent.sqlite";
 
 /// OpenClaw session provider.
 ///
-/// Primary store (current):
-/// `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
-/// with tables `session_entries` + `transcript_events`.
-///
-/// Legacy/archive:
-/// `~/.openclaw/agents/<agentId>/sessions/*.jsonl` and `sessions.json`.
+/// Store: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+/// tables `session_entries` + `transcript_events`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct OpenClawProvider;
 
@@ -32,41 +27,35 @@ impl AgentSessionProvider for OpenClawProvider {
     }
 
     fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        let mut sessions = Vec::new();
-        sessions.extend(list_sqlite_sessions()?);
-        sessions.extend(list_legacy_jsonl_sessions()?);
+        Ok(self.list_session_outcome(cwd)?.0)
+    }
 
-        sessions.sort_by_key(|session| session.modified);
-        sessions.reverse();
-        // Dedup by path (sqlite wins over legacy if both exist for same id).
-        let mut seen = std::collections::HashSet::new();
-        sessions.retain(|session| seen.insert(session.path.clone()));
-        Ok(filter_sessions_by_workspace(sessions, cwd))
+    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
+        crate::agents::profile::list(AgentProvider::OpenClaw, cwd)
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        if let Some((agent_id, session_id)) = session_ids_from_path(path) {
-            if let Some(db_path) = agent_db_path(&agent_id) {
-                if db_path.exists() {
-                    return parse_sqlite_session(&db_path, &agent_id, &session_id);
-                }
-            }
-        }
+        crate::agents::profile::parse(AgentProvider::OpenClaw, path)
+    }
+}
 
-        // Legacy / archive transcript files.
-        if path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext == "jsonl" || ext.starts_with("jsonl"))
-        {
-            return parse_legacy_jsonl_session(path);
-        }
+pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
+    let mut sessions = list_sqlite_sessions()?;
+    sessions.sort_by_key(|session| session.modified);
+    sessions.reverse();
+    Ok((filter_sessions_by_workspace(sessions, cwd), Vec::new()))
+}
 
-        anyhow::bail!(
-            "OpenClaw session path `{}` is not a recognized sqlite or jsonl transcript",
+pub(crate) fn parse_file(_provider: AgentProvider, path: &Path) -> Result<AgentSession> {
+    let (agent_id, session_id) = session_ids_from_path(path).with_context(|| {
+        format!(
+            "OpenClaw session path `{}` is not a state database session",
             path.display()
         )
-    }
+    })?;
+    let db_path = agent_db_path(&agent_id)
+        .with_context(|| format!("OpenClaw agent `{agent_id}` has no session database"))?;
+    parse_sqlite_session(&db_path, &agent_id, &session_id)
 }
 
 pub fn openclaw_home() -> PathBuf {
@@ -134,12 +123,16 @@ fn list_sqlite_sessions() -> Result<Vec<SessionInfo>> {
 fn list_sessions_from_db(db_path: &Path, agent_id: &str) -> Result<Vec<SessionInfo>> {
     let conn = open_readonly_db(db_path)?;
     // Current OpenClaw schema: session_entries(session_key, session_id, entry_json, updated_at, ...)
-    let mut stmt = match conn.prepare(
-        "select session_key, session_id, entry_json, updated_at from session_entries order by updated_at desc, session_key asc",
-    ) {
-        Ok(stmt) => stmt,
-        Err(_) => return Ok(Vec::new()), // schema not present / empty stub db
-    };
+    let mut stmt = conn
+        .prepare(
+            "select session_key, session_id, entry_json, updated_at from session_entries order by updated_at desc, session_key asc",
+        )
+        .with_context(|| {
+            format!(
+                "Failed to list OpenClaw sessions in {}",
+                db_path.display()
+            )
+        })?;
 
     let rows = stmt.query_map([], |row| {
         Ok((
@@ -156,7 +149,12 @@ fn list_sessions_from_db(db_path: &Path, agent_id: &str) -> Result<Vec<SessionIn
         if session_key.starts_with("__") {
             continue;
         }
-        let entry: Value = serde_json::from_str(&entry_json).unwrap_or(Value::Null);
+        let entry: Value = serde_json::from_str(&entry_json).with_context(|| {
+            format!(
+                "Failed to parse OpenClaw session entry in {}",
+                db_path.display()
+            )
+        })?;
         if entry
             .get("status")
             .and_then(Value::as_str)
@@ -166,18 +164,11 @@ fn list_sessions_from_db(db_path: &Path, agent_id: &str) -> Result<Vec<SessionIn
         {
             continue;
         }
-        let cwd = entry
-            .get("cwd")
-            .or_else(|| entry.pointer("/origin/cwd"))
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        let cwd = entry.get("cwd").and_then(Value::as_str).map(str::to_string);
         let title = entry
             .get("displayName")
-            .or_else(|| entry.get("label"))
-            .or_else(|| entry.get("title"))
             .and_then(Value::as_str)
-            .map(str::to_string)
-            .or_else(|| Some(session_key.clone()));
+            .map(str::to_string);
 
         sessions.push(SessionInfo {
             path: openclaw_session_path(agent_id, &session_id),
@@ -201,23 +192,22 @@ fn parse_sqlite_session(db_path: &Path, agent_id: &str, session_id: &str) -> Res
         )
         .optional()?;
 
-    let entry: Value = entry_json
-        .as_deref()
-        .and_then(|text| serde_json::from_str(text).ok())
-        .unwrap_or(Value::Null);
+    let entry: Value = match entry_json.as_deref() {
+        Some(text) => serde_json::from_str(text).with_context(|| {
+            format!(
+                "Failed to parse OpenClaw session `{session_id}` in {}",
+                db_path.display()
+            )
+        })?,
+        None => Value::Null,
+    };
 
     let mut session = AgentSession {
         path: openclaw_session_path(agent_id, session_id),
         id: Some(session_id.to_string()),
-        cwd: entry
-            .get("cwd")
-            .or_else(|| entry.pointer("/origin/cwd"))
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        cwd: entry.get("cwd").and_then(Value::as_str).map(str::to_string),
         title: entry
             .get("displayName")
-            .or_else(|| entry.get("label"))
-            .or_else(|| entry.get("title"))
             .and_then(Value::as_str)
             .map(str::to_string),
         blocks: Vec::new(),
@@ -229,92 +219,12 @@ fn parse_sqlite_session(db_path: &Path, agent_id: &str, session_id: &str) -> Res
     let rows = stmt.query_map([session_id], |row| row.get::<_, String>(0))?;
     for row in rows {
         let event_json = row?;
-        if let Ok(event) = serde_json::from_str::<Value>(&event_json) {
-            apply_transcript_event(&mut session, &event);
-        }
+        let event: Value = serde_json::from_str(&event_json).with_context(|| {
+            format!("Failed to parse OpenClaw transcript event for `{session_id}`")
+        })?;
+        apply_transcript_event(&mut session, &event);
     }
 
-    Ok(session)
-}
-
-fn list_legacy_jsonl_sessions() -> Result<Vec<SessionInfo>> {
-    let root = agents_dir();
-    if !root.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut out = Vec::new();
-    for agent_entry in fs::read_dir(&root)? {
-        let agent_entry = agent_entry?;
-        if !agent_entry.file_type()?.is_dir() {
-            continue;
-        }
-        let sessions_dir = agent_entry.path().join("sessions");
-        if !sessions_dir.exists() {
-            continue;
-        }
-        for path in jsonl_files(&sessions_dir)? {
-            // Skip compressed archives like *.jsonl.deleted.*.zst
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or_default();
-            if !name.ends_with(".jsonl") {
-                continue;
-            }
-            let id = name.trim_end_matches(".jsonl").to_string();
-            let modified = fs::metadata(&path)
-                .and_then(|meta| meta.modified())
-                .unwrap_or(UNIX_EPOCH);
-            out.push(SessionInfo {
-                path,
-                physical_path: None,
-                id: Some(id),
-                cwd: None,
-                title: None,
-                modified,
-            });
-        }
-    }
-    Ok(out)
-}
-
-fn parse_legacy_jsonl_session(path: &Path) -> Result<AgentSession> {
-    let text = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read OpenClaw transcript {}", path.display()))?;
-    let mut session = AgentSession {
-        path: path.to_path_buf(),
-        id: path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .map(str::to_string),
-        cwd: None,
-        title: None,
-        blocks: Vec::new(),
-    };
-
-    for line in text.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        if let Ok(event) = serde_json::from_str::<Value>(line) {
-            // Header rows may carry session metadata.
-            if event.get("type").and_then(Value::as_str) == Some("session") {
-                if session.id.is_none() {
-                    session.id = event
-                        .get("id")
-                        .or_else(|| event.get("sessionId"))
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                }
-                if session.cwd.is_none() {
-                    session.cwd = event.get("cwd").and_then(Value::as_str).map(str::to_string);
-                }
-                continue;
-            }
-            apply_transcript_event(&mut session, &event);
-        }
-    }
     Ok(session)
 }
 
@@ -326,19 +236,16 @@ fn apply_transcript_event(session: &mut AgentSession, event: &Value) {
 
     match event.get("type").and_then(Value::as_str) {
         Some("message") => {
-            let message = event.get("message").unwrap_or(event);
-            apply_message(session, message, timestamp);
+            if let Some(message) = event.get("message") {
+                apply_message(session, message, timestamp);
+            }
         }
-        Some("toolCall" | "tool_call" | "tool-call") => {
+        Some("toolCall") => {
             let label = event
                 .get("name")
-                .or_else(|| event.get("tool"))
                 .and_then(Value::as_str)
                 .map(str::to_string);
-            let input = event
-                .get("input")
-                .or_else(|| event.get("arguments"))
-                .unwrap_or(event);
+            let input = event.get("input").unwrap_or(&Value::Null);
             push_block(
                 session,
                 AgentBlockKind::ToolCall,
@@ -347,12 +254,8 @@ fn apply_transcript_event(session: &mut AgentSession, event: &Value) {
                 pretty_json_value(input),
             );
         }
-        Some("toolResult" | "tool_result" | "tool-result") => {
-            let output = event
-                .get("output")
-                .or_else(|| event.get("result"))
-                .or_else(|| event.get("content"))
-                .unwrap_or(event);
+        Some("toolResult") => {
+            let output = event.get("output").unwrap_or(&Value::Null);
             push_block(
                 session,
                 AgentBlockKind::ToolOutput,
@@ -361,38 +264,21 @@ fn apply_transcript_event(session: &mut AgentSession, event: &Value) {
                 extract_content_text(output),
             );
         }
-        // compaction / system / custom: ignore for evidence browsing
-        _ => {
-            // Some legacy rows are bare messages without type.
-            if event.get("message").is_some() || event.get("role").is_some() {
-                apply_message(session, event.get("message").unwrap_or(event), timestamp);
-            }
-        }
+        _ => {}
     }
 }
 
 fn apply_message(session: &mut AgentSession, message: &Value, timestamp: Option<String>) {
-    let role = message
-        .get("role")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let content = message
-        .get("content")
-        .or_else(|| message.get("text"))
-        .unwrap_or(message);
+    let Some(role) = message.get("role").and_then(Value::as_str) else {
+        return;
+    };
+    let content = message.get("content").unwrap_or(&Value::Null);
 
     match role {
         "user" => push_content(session, AgentBlockKind::User, timestamp, content),
         "assistant" => push_assistant(session, timestamp, content),
-        "tool" | "toolResult" => {
-            push_content(session, AgentBlockKind::ToolOutput, timestamp, content)
-        }
-        _ => {
-            // content-array style without role
-            if content.as_array().is_some() {
-                push_assistant(session, timestamp, content);
-            }
-        }
+        "tool" => push_content(session, AgentBlockKind::ToolOutput, timestamp, content),
+        _ => {}
     }
 }
 
@@ -408,18 +294,9 @@ fn push_assistant(session: &mut AgentSession, timestamp: Option<String>, content
                         None,
                         extract_content_text(item),
                     ),
-                    Some("toolCall" | "tool_call" | "tool-call" | "functionCall") => {
-                        let label = item
-                            .get("name")
-                            .or_else(|| item.get("tool"))
-                            .or_else(|| item.pointer("/function/name"))
-                            .and_then(Value::as_str)
-                            .map(str::to_string);
-                        let input = item
-                            .get("input")
-                            .or_else(|| item.get("arguments"))
-                            .or_else(|| item.pointer("/function/arguments"))
-                            .unwrap_or(item);
+                    Some("toolCall") => {
+                        let label = item.get("name").and_then(Value::as_str).map(str::to_string);
+                        let input = item.get("input").unwrap_or(&Value::Null);
                         push_block(
                             session,
                             AgentBlockKind::ToolCall,
@@ -428,26 +305,14 @@ fn push_assistant(session: &mut AgentSession, timestamp: Option<String>, content
                             pretty_json_value(input),
                         );
                     }
-                    Some("toolResult" | "tool_result" | "tool-result") => push_block(
+                    Some("toolResult") => push_block(
                         session,
                         AgentBlockKind::ToolOutput,
                         timestamp.clone(),
                         None,
                         extract_content_text(item),
                     ),
-                    Some("thinking" | "reasoning") => {}
-                    _ => {
-                        let text = extract_content_text(item);
-                        if !text.trim().is_empty() {
-                            push_block(
-                                session,
-                                AgentBlockKind::Assistant,
-                                timestamp.clone(),
-                                None,
-                                text,
-                            );
-                        }
-                    }
+                    _ => {}
                 }
             }
         }

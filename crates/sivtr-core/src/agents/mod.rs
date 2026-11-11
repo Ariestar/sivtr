@@ -15,6 +15,7 @@ pub mod cmdc;
 pub mod codex;
 pub mod cursor;
 pub mod dsh;
+pub mod engine;
 pub mod gemini;
 pub mod generic;
 pub mod goose;
@@ -25,14 +26,16 @@ pub mod model;
 pub mod openclaw;
 pub mod opencode;
 pub mod pi;
+pub mod profile;
 pub mod qoder;
 pub mod qwen;
 pub mod sqlite;
 pub mod zcode;
 
 pub use jsonl::{
-    jsonl_files, list_chat_recording_sessions, list_recent_jsonl_sessions, list_sessions_matching,
-    parse_jsonl_meta, parse_jsonl_session,
+    jsonl_files, list_chat_recording_sessions, list_chat_recording_sessions_outcome,
+    list_recent_jsonl_sessions, list_recent_jsonl_sessions_outcome, list_sessions_matching,
+    list_sessions_matching_outcome, parse_jsonl_meta, parse_jsonl_session,
 };
 pub use model::*;
 pub use sqlite::{open_readonly_db, system_time_from_millis, system_time_from_unix_secs};
@@ -560,9 +563,13 @@ impl AgentProvider {
 
     /// Whether this provider has a native local source to sync. Web exports
     /// are imported explicitly and therefore belong to the archive namespace
-    /// without participating in native-source reconciliation.
+    /// without participating in native-source reconciliation. A generic
+    /// provider without a declared transcript format only launches agents.
     pub fn has_native_source(self) -> bool {
-        !matches!(self, Self::ClaudeAi | Self::ChatGpt | Self::GeminiApps)
+        if matches!(self, Self::ClaudeAi | Self::ChatGpt | Self::GeminiApps) {
+            return false;
+        }
+        profile::is_registered(self)
     }
 
     pub fn session_provider(self) -> Box<dyn AgentSessionProvider> {
@@ -588,18 +595,15 @@ impl SessionSource for AgentProvider {
     }
 
     fn list_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        self.session_provider()
-            .list_recent_sessions(cwd)
+        profile::list(*self, cwd)
+            .map(|(sessions, _failures)| sessions)
             .with_context(|| format!("Failed to list {} sessions", self.name()))
     }
 
     fn parse_file(&self, path: &Path) -> Result<Vec<WorkRecord>> {
-        let session = self
-            .session_provider()
-            .parse_session_file(path)
-            .with_context(|| {
-                format!("Failed to parse {} session {}", self.name(), path.display())
-            })?;
+        let session = profile::parse(*self, path).with_context(|| {
+            format!("Failed to parse {} session {}", self.name(), path.display())
+        })?;
         Ok(WorkRecord::chat_turns(*self, &session))
     }
 }
