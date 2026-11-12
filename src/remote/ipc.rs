@@ -3,10 +3,13 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
+use fs2::FileExt;
 use sivtr_core::workspace;
 
-use super::protocol::{DaemonInfo, LocalEnvelope, LocalRequest, LocalResponse, PROTOCOL_VERSION};
+use super::protocol::{
+    DaemonInfo, DaemonStatus, LocalEnvelope, LocalRequest, LocalResponse, PROTOCOL_VERSION,
+};
 
 pub fn daemon_info_path() -> PathBuf {
     workspace::home_dir().join("daemon.json")
@@ -91,6 +94,41 @@ pub fn call_with_read_timeout(
     match response {
         LocalResponse::Error { message } => Err(anyhow::anyhow!(message)),
         response => Ok(response),
+    }
+}
+
+/// Preserve control errors while the daemon still holds its lifetime lock.
+pub fn status() -> Result<Option<DaemonStatus>> {
+    match call(LocalRequest::Status) {
+        Ok(LocalResponse::Status(status)) => Ok(Some(status)),
+        Ok(response) => bail!("Unexpected daemon response: {response:?}"),
+        Err(error) if daemon_lock_held()? => Err(error).with_context(|| {
+            format!(
+                "Daemon is starting or unresponsive; inspect {}",
+                daemon_log_path().display()
+            )
+        }),
+        Err(_) => Ok(None),
+    }
+}
+
+/// The daemon holds this lock from startup through shutdown.
+pub fn daemon_lock_held() -> Result<bool> {
+    let lock = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(daemon_lock_path())
+    {
+        Ok(lock) => lock,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error).context("Failed to open daemon lock"),
+    };
+    match lock.try_lock_exclusive() {
+        Ok(()) => Ok(false),
+        Err(error) if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() => {
+            Ok(true)
+        }
+        Err(error) => Err(error).context("Failed to check daemon lock"),
     }
 }
 
