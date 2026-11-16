@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use crate::agents::{
     list_chat_recording_sessions_outcome, parse_jsonl_session, pretty_json_value,
     push_parts_blocks, push_tool_block, AgentBlockKind, AgentProvider, AgentSession,
-    AgentSessionMeta, AgentSessionProvider, SessionListing,
+    AgentSessionMeta, SessionListing,
 };
 
 const PROVIDER_NAME: &str = "Qwen";
@@ -31,20 +31,6 @@ const META_SCAN_LINES: usize = 40;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct QwenProvider;
-
-impl AgentSessionProvider for QwenProvider {
-    fn provider(&self) -> AgentProvider {
-        AgentProvider::Qwen
-    }
-
-    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
-        list_outcome(AgentProvider::Qwen, cwd)
-    }
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_file(AgentProvider::Qwen, path)
-    }
-}
 
 pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
     list_chat_recording_sessions_outcome(PROVIDER_NAME, &qwen_tmp_dir(), cwd, parse_session_meta)
@@ -238,7 +224,6 @@ fn extract_parts_text(parts: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::AgentSessionProvider;
 
     #[test]
     fn parses_qwen_records() {
@@ -259,7 +244,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = QwenProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Qwen, &path).unwrap();
 
         assert_eq!(
             session.id.as_deref(),

@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use crate::agents::{
     extract_content_text, filter_sessions_by_workspace, open_readonly_db, pretty_json_value,
     push_block, push_tool_block, system_time_from_unix_secs, AgentBlockKind, AgentProvider,
-    AgentSession, AgentSessionProvider, SessionInfo, SessionListing,
+    AgentSession, SessionInfo, SessionListing,
 };
 
 const SESSION_PATH_PREFIX: &str = "goose-session-";
@@ -31,20 +31,6 @@ const SESSION_PATH_SUFFIX: &str = ".sqlite";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GooseProvider;
-
-impl AgentSessionProvider for GooseProvider {
-    fn provider(&self) -> AgentProvider {
-        AgentProvider::Goose
-    }
-
-    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
-        list_outcome(AgentProvider::Goose, cwd)
-    }
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_file(AgentProvider::Goose, path)
-    }
-}
 
 pub(crate) fn find_session_by_id(id: &str) -> Result<Option<PathBuf>> {
     let db_path = goose_db_path();
@@ -328,7 +314,6 @@ fn apply_content(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::AgentSessionProvider;
     use rusqlite::Connection;
 
     #[cfg(not(windows))]
@@ -400,7 +385,7 @@ mod tests {
         let _guard = crate::test_env_lock();
         std::env::set_var("GOOSE_PATH_ROOT", dir.path());
         let path = goose_session_path("s1");
-        let session = GooseProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Goose, &path).unwrap();
 
         assert_eq!(session.id.as_deref(), Some("s1"));
         assert_eq!(session.cwd.as_deref(), Some("D:\\repo"));
@@ -431,7 +416,7 @@ mod tests {
         let _guard = crate::test_env_lock();
         std::env::set_var("GOOSE_PATH_ROOT", dir.path());
 
-        let sessions = GooseProvider.list_recent_sessions(None).unwrap();
+        let sessions = list_outcome(AgentProvider::Goose, None).unwrap().0;
 
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id.as_deref(), Some("s1"));

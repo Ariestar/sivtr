@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::agents::{
     filter_sessions_by_workspace, open_readonly_db, push_block, system_time_from_millis,
-    AgentBlockKind, AgentProvider, AgentSession, AgentSessionProvider, SessionInfo, SessionListing,
+    AgentBlockKind, AgentProvider, AgentSession, SessionInfo, SessionListing,
 };
 
 const SESSION_PATH_PREFIX: &str = "zcode-session-";
@@ -26,20 +26,6 @@ const SESSION_ID_PREFIX: &str = "sess_";
 ///   into the model context, not user dialogue.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ZcodeProvider;
-
-impl AgentSessionProvider for ZcodeProvider {
-    fn provider(&self) -> AgentProvider {
-        AgentProvider::Zcode
-    }
-
-    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
-        list_outcome(AgentProvider::Zcode, cwd)
-    }
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_file(AgentProvider::Zcode, path)
-    }
-}
 
 pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
     list_sessions(cwd)
@@ -274,8 +260,8 @@ fn session_id_from_path(path: &Path) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{session_id_from_path, session_path, ZcodeProvider};
-    use crate::agents::{AgentBlockKind, AgentProvider, AgentSessionProvider};
+    use super::{list_outcome, parse_file, session_id_from_path, session_path};
+    use crate::agents::{AgentBlockKind, AgentProvider};
     use rusqlite::Connection;
     use std::path::Path;
 
@@ -334,7 +320,6 @@ mod tests {
     fn provider_name_is_zcode() {
         assert_eq!(AgentProvider::Zcode.name(), "ZCode");
         assert_eq!(AgentProvider::Zcode.command_name(), "zcode");
-        assert_eq!(ZcodeProvider.provider(), AgentProvider::Zcode);
     }
 
     #[test]
@@ -354,17 +339,16 @@ mod tests {
         std::env::set_var("ZCODE_HOME", dir.path());
         write_db(dir.path());
 
-        let sessions = ZcodeProvider
-            .list_recent_sessions(None)
-            .expect("list ZCode sessions");
+        let sessions = list_outcome(AgentProvider::Zcode, None)
+            .expect("list ZCode sessions")
+            .0;
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id.as_deref(), Some("uuid-1"));
         assert_eq!(sessions[0].cwd.as_deref(), Some("D:/Coding/alpha"));
         assert_eq!(sessions[0].title.as_deref(), Some("First task"));
 
-        let session = ZcodeProvider
-            .parse_session_file(&sessions[0].path)
-            .expect("parse ZCode session");
+        let session =
+            parse_file(AgentProvider::Zcode, &sessions[0].path).expect("parse ZCode session");
         assert_eq!(session.id.as_deref(), Some("uuid-1"));
         let kinds: Vec<_> = session.blocks.iter().map(|b| b.kind).collect();
         assert_eq!(
@@ -400,8 +384,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("create temp dir");
         let original = std::env::var_os("ZCODE_HOME");
         std::env::set_var("ZCODE_HOME", dir.path());
-        let error = ZcodeProvider
-            .parse_session_file(&session_path("sess_missing"))
+        let error = parse_file(AgentProvider::Zcode, &session_path("sess_missing"))
             .expect_err("missing session row must error");
         assert!(format!("{error:#}").contains("Failed to load"));
         match original {

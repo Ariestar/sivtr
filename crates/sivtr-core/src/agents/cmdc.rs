@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 use crate::agents::{
     extract_content_text, list_sessions_matching_outcome, parse_jsonl_meta, parse_jsonl_session,
     pretty_json_value, push_block, push_tool_block, AgentBlockKind, AgentProvider, AgentSession,
-    AgentSessionMeta, AgentSessionProvider, SessionListing,
+    AgentSessionMeta, SessionListing,
 };
 
 const PROVIDER_NAME: &str = "Command Code";
@@ -51,20 +51,6 @@ const META_MAX_LINES: usize = 200;
 /// Command Code session provider.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CmdcProvider;
-
-impl AgentSessionProvider for CmdcProvider {
-    fn provider(&self) -> AgentProvider {
-        AgentProvider::CommandCode
-    }
-
-    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
-        list_outcome(AgentProvider::CommandCode, cwd)
-    }
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_file(AgentProvider::CommandCode, path)
-    }
-}
 
 pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
     list_sessions_matching_outcome(
@@ -406,7 +392,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = write_transcript(dir.path(), "C:\\repo");
 
-        let session = CmdcProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::CommandCode, &path).unwrap();
 
         assert_eq!(session.id.as_deref(), Some(SESSION_ID));
         assert_eq!(session.cwd.as_deref(), Some("C:\\repo"));
@@ -461,8 +447,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            CmdcProvider
-                .parse_session_file(&path)
+            parse_file(AgentProvider::CommandCode, &path)
                 .unwrap()
                 .title
                 .as_deref(),
@@ -481,8 +466,7 @@ mod tests {
         let path = write_transcript(dir.path(), "C:\\repo");
 
         assert_eq!(
-            CmdcProvider
-                .parse_session_file(&path)
+            parse_file(AgentProvider::CommandCode, &path)
                 .unwrap()
                 .title
                 .as_deref(),
@@ -504,7 +488,7 @@ mod tests {
 
         for path in [&foreign, &empty] {
             for error in [
-                CmdcProvider.parse_session_file(path).unwrap_err(),
+                parse_file(AgentProvider::CommandCode, path).unwrap_err(),
                 parse_session_meta(path).unwrap_err(),
             ] {
                 assert!(format!("{error:#}").contains("missing session header"));
@@ -532,7 +516,7 @@ mod tests {
         .unwrap();
 
         for error in [
-            CmdcProvider.parse_session_file(&path).unwrap_err(),
+            parse_file(AgentProvider::CommandCode, &path).unwrap_err(),
             parse_session_meta(&path).unwrap_err(),
         ] {
             assert!(format!("{error:#}").contains("missing session header"));
@@ -557,7 +541,7 @@ mod tests {
             .unwrap();
             fs::write(project.join("config.json"), r#"{"tasteOnboarding":{}}"#).unwrap();
             fs::write(project.join("mcp.json"), r#"{"mcpServers":{}}"#).unwrap();
-            CmdcProvider.list_recent_sessions(None).unwrap()
+            list_outcome(AgentProvider::CommandCode, None).unwrap().0
         });
 
         assert_eq!(listed.len(), 1);
@@ -582,7 +566,9 @@ mod tests {
             let projects = dir.path().join("projects");
             write_transcript(&projects.join("repo"), &repo.to_string_lossy());
             write_transcript(&projects.join("elsewhere"), &elsewhere.to_string_lossy());
-            CmdcProvider.list_recent_sessions(Some(&repo)).unwrap()
+            list_outcome(AgentProvider::CommandCode, Some(&repo))
+                .unwrap()
+                .0
         });
 
         assert_eq!(listed.len(), 1);
@@ -600,7 +586,6 @@ mod tests {
             AgentProvider::from_command_name("cmdc"),
             Some(AgentProvider::CommandCode)
         );
-        assert_eq!(CmdcProvider.provider(), AgentProvider::CommandCode);
     }
 
     #[test]
@@ -628,7 +613,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = write_transcript(dir.path(), "C:\\repo");
 
-        let session = CmdcProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::CommandCode, &path).unwrap();
         let records = crate::record::WorkRecord::chat_turns(AgentProvider::CommandCode, &session);
         assert!(!records.is_empty());
         assert_eq!(records[0].work_ref.to_string(), "cmdc/7f3c1a2e/1");

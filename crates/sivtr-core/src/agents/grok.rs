@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::agents::{
     list_sessions_matching_outcome, pretty_json_value, push_block, push_tool_block, AgentBlockKind,
-    AgentProvider, AgentSession, AgentSessionMeta, AgentSessionProvider, SessionListing,
+    AgentProvider, AgentSession, AgentSessionMeta, SessionListing,
 };
 
 const PROVIDER_NAME: &str = "Grok";
@@ -24,20 +24,6 @@ const SUMMARY_FILE: &str = "summary.json";
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GrokProvider;
-
-impl AgentSessionProvider for GrokProvider {
-    fn provider(&self) -> AgentProvider {
-        AgentProvider::Grok
-    }
-
-    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
-        list_outcome(AgentProvider::Grok, cwd)
-    }
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_file(AgentProvider::Grok, path)
-    }
-}
 
 pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
     list_sessions_matching_outcome(
@@ -534,7 +520,7 @@ fn rfc3339_from_system_time(time: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::{AgentBlockKind, AgentSessionProvider};
+    use crate::agents::AgentBlockKind;
 
     fn write_session(home: &Path, cwd_bucket: &str, session_id: &str, summary: &str) {
         let dir = home.join("sessions").join(cwd_bucket).join(session_id);
@@ -576,7 +562,7 @@ mod tests {
         .unwrap();
 
         let _guard = EnvGuard::set("GROK_HOME", home.path());
-        let session = GrokProvider.parse_session_file(&dir).unwrap();
+        let session = parse_file(AgentProvider::Grok, &dir).unwrap();
 
         assert_eq!(session.id.as_deref(), Some(session_id));
         assert_eq!(session.blocks.len(), 8);
@@ -624,7 +610,7 @@ mod tests {
         );
         let _guard = EnvGuard::set("GROK_HOME", home.path());
         let path = home.path().join("sessions").join("bucket").join(session_id);
-        let session = GrokProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Grok, &path).unwrap();
 
         // Read result: the `N→` gutter is stripped, the start line kept as
         // generic metadata for the display layer.
@@ -734,7 +720,7 @@ mod tests {
         .unwrap();
 
         let _guard = EnvGuard::set("GROK_HOME", home.path());
-        let session = GrokProvider.parse_session_file(&dir).unwrap();
+        let session = parse_file(AgentProvider::Grok, &dir).unwrap();
         assert!(session.blocks.is_empty());
     }
 
@@ -760,9 +746,9 @@ mod tests {
         );
 
         let _guard = EnvGuard::set("GROK_HOME", home.path());
-        let listed = GrokProvider
-            .list_recent_sessions(Some(&repo))
-            .expect("list");
+        let listed = list_outcome(AgentProvider::Grok, Some(&repo))
+            .expect("list")
+            .0;
         let ids: Vec<_> = listed
             .iter()
             .filter_map(|session| session.id.clone())
@@ -784,7 +770,7 @@ mod tests {
         let _guard = EnvGuard::set("GROK_HOME", home.path());
         let session_dir = home.path().join("sessions/bucket/sess-same-len");
 
-        let first = GrokProvider.list_recent_sessions(None).unwrap();
+        let first = list_outcome(AgentProvider::Grok, None).unwrap().0;
         assert_eq!(first[0].title.as_deref(), Some("title-A"));
         let directory_stamp = crate::cache::file_stamp(&session_dir);
 
@@ -796,7 +782,7 @@ mod tests {
         .unwrap();
         assert_eq!(crate::cache::file_stamp(&session_dir), directory_stamp);
 
-        let second = GrokProvider.list_recent_sessions(None).unwrap();
+        let second = list_outcome(AgentProvider::Grok, None).unwrap().0;
         assert_eq!(second[0].title.as_deref(), Some("title-B"));
     }
 

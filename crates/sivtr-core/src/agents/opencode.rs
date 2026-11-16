@@ -5,45 +5,13 @@ use std::path::{Path, PathBuf};
 
 use crate::agents::{
     extract_content_text, filter_sessions_by_workspace, open_readonly_db, pretty_json_value,
-    push_block, system_time_from_millis, AgentBlockKind, AgentProvider, AgentSession,
-    AgentSessionProvider, SessionInfo, SessionListing,
+    push_block, system_time_from_millis, AgentBlockKind, AgentProvider, AgentSession, SessionInfo,
+    SessionListing,
 };
 
 const PROVIDER_NAME: &str = "OpenCode";
 const SESSION_PATH_PREFIX: &str = "opencode-session-";
 const SESSION_PATH_SUFFIX: &str = ".json";
-
-#[derive(Debug, Clone, Default)]
-pub struct OpenCodeProvider {
-    db_path: Option<PathBuf>,
-}
-
-impl OpenCodeProvider {
-    #[cfg(test)]
-    fn with_db_path(path: PathBuf) -> Self {
-        Self {
-            db_path: Some(path),
-        }
-    }
-}
-
-impl AgentSessionProvider for OpenCodeProvider {
-    fn provider(&self) -> AgentProvider {
-        AgentProvider::OpenCode
-    }
-
-    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
-        list_with_db(cwd, self.db_path.as_deref())
-    }
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_at(self.db_path.as_deref(), path)
-    }
-
-    fn find_session_by_id(&self, id: &str) -> Result<Option<PathBuf>> {
-        find_session_in(self.db_path.as_deref(), id)
-    }
-}
 
 pub(crate) fn find_session_by_id(id: &str) -> Result<Option<PathBuf>> {
     find_session_in(None, id)
@@ -346,11 +314,12 @@ fn extract_opencode_text(value: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::OpenCodeProvider;
-    use crate::agents::{AgentBlockKind, AgentSessionProvider};
+    use super::{find_session_in, list_with_db, parse_at};
+    use crate::agents::AgentBlockKind;
     use rusqlite::{params, Connection};
+    use std::path::PathBuf;
 
-    fn test_provider() -> (tempfile::TempDir, OpenCodeProvider) {
+    fn test_provider() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("opencode.db");
         let conn = Connection::open(&path).unwrap();
@@ -422,17 +391,16 @@ mod tests {
         .unwrap();
         drop(conn);
 
-        let provider = OpenCodeProvider::with_db_path(path);
-        (dir, provider)
+        (dir, path)
     }
 
     #[test]
     fn lists_opencode_sessions_from_database() {
-        let (_dir, provider) = test_provider();
+        let (_dir, db) = test_provider();
 
-        let sessions = provider
-            .list_recent_sessions(Some(std::path::Path::new("D:\\sivtr")))
-            .unwrap();
+        let sessions = list_with_db(Some(std::path::Path::new("D:\\sivtr")), Some(&db))
+            .unwrap()
+            .0;
 
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id.as_deref(), Some("open-session"));
@@ -493,15 +461,10 @@ mod tests {
         .expect("insert opencode test part");
         drop(conn);
 
-        let provider = OpenCodeProvider::with_db_path(path);
-        let session = provider
-            .parse_session_file(
-                &provider
-                    .find_session_by_id("mcp-session")
-                    .expect("query opencode mcp session")
-                    .expect("opencode mcp session exists"),
-            )
-            .expect("parse opencode mcp session");
+        let session_path = find_session_in(Some(&path), "mcp-session")
+            .expect("query opencode mcp session")
+            .expect("opencode mcp session exists");
+        let session = parse_at(Some(&path), &session_path).expect("parse opencode mcp session");
 
         assert_eq!(session.blocks.len(), 2);
         assert_eq!(session.blocks[0].kind, AgentBlockKind::ToolCall);
@@ -518,13 +481,10 @@ mod tests {
 
     #[test]
     fn parses_opencode_messages_and_tools() {
-        let (_dir, provider) = test_provider();
-        let path = provider
-            .find_session_by_id("open-session")
-            .unwrap()
-            .unwrap();
+        let (_dir, db) = test_provider();
+        let path = find_session_in(Some(&db), "open-session").unwrap().unwrap();
 
-        let session = provider.parse_session_file(&path).unwrap();
+        let session = parse_at(Some(&db), &path).unwrap();
 
         assert_eq!(session.id.as_deref(), Some("open-session"));
         assert_eq!(session.cwd.as_deref(), Some("D:\\sivtr"));

@@ -5,27 +5,13 @@ use std::path::{Path, PathBuf};
 use crate::agents::{
     extract_content_text, list_recent_jsonl_sessions_outcome, parse_jsonl_meta,
     parse_jsonl_session, pretty_json_value, push_block, AgentBlockKind, AgentProvider,
-    AgentSession, AgentSessionMeta, AgentSessionProvider, SessionListing,
+    AgentSession, AgentSessionMeta, SessionListing,
 };
 
 const PROVIDER_NAME: &str = "Claude";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ClaudeProvider;
-
-impl AgentSessionProvider for ClaudeProvider {
-    fn provider(&self) -> AgentProvider {
-        AgentProvider::Claude
-    }
-
-    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
-        list_outcome(AgentProvider::Claude, cwd)
-    }
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_file(AgentProvider::Claude, path)
-    }
-}
 
 pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
     list_recent_jsonl_sessions_outcome(
@@ -375,8 +361,8 @@ fn tool_child_body(inner: &str, tool_kind: EmbeddedToolKind) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::ClaudeProvider;
-    use crate::agents::{select_blocks, AgentBlockKind, AgentSelection, AgentSessionProvider};
+    use super::{list_outcome, parse_file};
+    use crate::agents::{select_blocks, AgentBlockKind, AgentProvider, AgentSelection};
     use std::env;
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -420,7 +406,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Claude, &path).unwrap();
 
         assert_eq!(session.id.as_deref(), Some("abc"));
         assert_eq!(session.cwd.as_deref(), Some("C:\\repo"));
@@ -445,7 +431,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Claude, &path).unwrap();
 
         assert_eq!(session.blocks.len(), 2);
         assert_eq!(session.blocks[0].text.trim(), "hello");
@@ -467,7 +453,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Claude, &path).unwrap();
 
         assert_eq!(session.id.as_deref(), Some("abc"));
         assert_eq!(session.cwd.as_deref(), Some("C:\\repo"));
@@ -489,7 +475,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Claude, &path).unwrap();
 
         assert_eq!(session.blocks.len(), 2);
         assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
@@ -509,7 +495,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Claude, &path).unwrap();
 
         assert_eq!(session.blocks.len(), 5);
         assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
@@ -536,7 +522,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Claude, &path).unwrap();
 
         assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
         assert_eq!(session.blocks[1].kind, AgentBlockKind::Assistant);
@@ -562,7 +548,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Claude, &path).unwrap();
 
         assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
         assert_eq!(session.blocks[1].kind, AgentBlockKind::ToolOutput);
@@ -585,7 +571,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Claude, &path).unwrap();
 
         assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
         assert_eq!(session.blocks[1].kind, AgentBlockKind::ToolCall);
@@ -606,7 +592,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Claude, &path).unwrap();
 
         assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
         assert_eq!(session.blocks[1].kind, AgentBlockKind::Assistant);
@@ -633,7 +619,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Claude, &path).unwrap();
 
         assert_eq!(session.blocks.len(), 2);
         assert_eq!(session.blocks[0].text, "real task");
@@ -657,9 +643,7 @@ mod tests {
         )
         .expect("write test session log");
 
-        let session = ClaudeProvider
-            .parse_session_file(&path)
-            .expect("parse test session");
+        let session = parse_file(AgentProvider::Claude, &path).expect("parse test session");
 
         assert_eq!(session.blocks.len(), 2);
         assert_eq!(session.blocks[0].text, "real follow-up");
@@ -679,7 +663,7 @@ mod tests {
 "#,
         )
         .unwrap();
-        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Claude, &path).unwrap();
 
         let blocks = select_blocks(&session, AgentSelection::LastTurn);
 
@@ -718,7 +702,7 @@ mod tests {
         )
         .unwrap();
 
-        let sessions = ClaudeProvider.list_recent_sessions(None).unwrap();
+        let sessions = list_outcome(AgentProvider::Claude, None).unwrap().0;
 
         match original_claude_home {
             Some(value) => env::set_var("CLAUDE_CONFIG_DIR", value),
@@ -746,7 +730,7 @@ mod tests {
         )
         .unwrap();
 
-        let error = ClaudeProvider.parse_session_file(&path).unwrap_err();
+        let error = parse_file(AgentProvider::Claude, &path).unwrap_err();
         let message = format!("{error:#}");
 
         assert!(message.contains("Failed to parse Claude session line 2 as JSON"));

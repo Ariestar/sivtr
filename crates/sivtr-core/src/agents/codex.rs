@@ -5,31 +5,13 @@ use std::path::{Path, PathBuf};
 use crate::agents::{
     extract_content_text, jsonl_files, list_recent_jsonl_sessions_outcome, parse_jsonl_meta,
     parse_jsonl_session, pretty_json_string, pretty_json_value, push_block, push_tool_block,
-    AgentBlockKind, AgentProvider, AgentSession, AgentSessionMeta, AgentSessionProvider,
-    SessionInfo, SessionListing,
+    AgentBlockKind, AgentProvider, AgentSession, AgentSessionMeta, SessionInfo, SessionListing,
 };
 
 const PROVIDER_NAME: &str = "Codex";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CodexProvider;
-
-impl AgentSessionProvider for CodexProvider {
-    fn provider(&self) -> AgentProvider {
-        AgentProvider::Codex
-    }
-
-    /// Grouping and sibling merge live in the shared engine; this listing
-    /// returns every physical rollout so a resumed session's segments stay
-    /// visible to that engine.
-    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
-        list_outcome(AgentProvider::Codex, cwd)
-    }
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_file(AgentProvider::Codex, path)
-    }
-}
 
 pub(crate) fn find_session_by_id(id: &str) -> Result<Option<PathBuf>> {
     for path in local_session_files()? {
@@ -366,15 +348,13 @@ fn find_current_thread_session() -> Result<Option<PathBuf>> {
         return Ok(None);
     }
 
-    CodexProvider.find_session_by_id(thread_id)
+    find_session_by_id(thread_id)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::CodexProvider;
-    use crate::agents::{
-        select_blocks, AgentBlockKind, AgentProvider, AgentSelection, AgentSessionProvider,
-    };
+    use super::parse_file;
+    use crate::agents::{select_blocks, AgentBlockKind, AgentProvider, AgentSelection};
     use serde_json::json;
     use std::path::Path;
     use std::time::{Duration, UNIX_EPOCH};
@@ -521,7 +501,7 @@ mod tests {
             "{\"type\":\"response_item\",\"payload\":{\"type\":\"reasoning\",\"summary\":[{\"text\":\"shared reasoning\"}]}}\n",
             "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"text\":\"answer\"}]}}\n"
         )).unwrap();
-        let session = CodexProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Codex, &path).unwrap();
         let texts: Vec<_> = session
             .blocks
             .iter()
@@ -538,7 +518,7 @@ mod tests {
             "{\"type\":\"session_meta\",\"payload\":{\"id\":\"array-output-test\"}}\n",
             "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"array-call\",\"output\":[{\"type\":\"input_text\",\"text\":\"Wall time: 1 second\"},{\"type\":\"input_text\",\"text\":\"complete evidence\"}]}}\n"
         )).unwrap();
-        let session = CodexProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Codex, &path).unwrap();
         assert_eq!(session.blocks.len(), 1);
         assert_eq!(session.blocks[0].kind, AgentBlockKind::ToolOutput);
         assert_eq!(session.blocks[0].call_id.as_deref(), Some("array-call"));
@@ -556,7 +536,7 @@ mod tests {
             "{\"type\":\"session_meta\",\"payload\":{\"id\":\"web-test\"}}\n",
             "{\"type\":\"response_item\",\"payload\":{\"type\":\"web_search_call\",\"id\":\"ws-test\",\"status\":\"completed\",\"action\":{\"type\":\"search\",\"query\":\"session evidence\"}}}\n"
         )).unwrap();
-        let session = CodexProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Codex, &path).unwrap();
         assert_eq!(session.blocks.len(), 1);
         assert_eq!(session.blocks[0].kind, AgentBlockKind::ToolCall);
         assert_eq!(session.blocks[0].label.as_deref(), Some("web_search"));
@@ -579,7 +559,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = CodexProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Codex, &path).unwrap();
 
         assert_eq!(session.id.as_deref(), Some("abc"));
         assert_eq!(session.cwd.as_deref(), Some("C:\\repo"));
@@ -605,7 +585,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = CodexProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Codex, &path).unwrap();
 
         assert_eq!(session.blocks.len(), 4);
         assert_eq!(session.blocks[1].kind, AgentBlockKind::ToolCall);
@@ -637,9 +617,7 @@ mod tests {
         )
         .expect("write test session log");
 
-        let session = CodexProvider
-            .parse_session_file(&path)
-            .expect("parse test session");
+        let session = parse_file(AgentProvider::Codex, &path).expect("parse test session");
 
         // Injected envelopes never become dialogue; the bare `<skill>` wrapper
         // becomes a labeled skill block.
@@ -671,9 +649,7 @@ mod tests {
         )
         .expect("write test session log");
 
-        let session = CodexProvider
-            .parse_session_file(&path)
-            .expect("parse test session");
+        let session = parse_file(AgentProvider::Codex, &path).expect("parse test session");
 
         // A truncated wrapper is user text, not a Codex skill expansion:
         // reclassifying it would swallow real dialogue into a Skill block.
@@ -697,7 +673,7 @@ mod tests {
 "#,
         )
         .unwrap();
-        let session = CodexProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Codex, &path).unwrap();
 
         let blocks = select_blocks(&session, AgentSelection::LastTurn);
 
@@ -727,7 +703,7 @@ mod tests {
 "#,
         )
         .unwrap();
-        let session = CodexProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Codex, &path).unwrap();
 
         let blocks = select_blocks(&session, AgentSelection::LastAssistant);
 
@@ -751,7 +727,7 @@ mod tests {
         let answer = json!({"type":"event_msg","payload":{"type":"agent_message","phase":"final_answer","message":"final answer"}});
         for events in [format!("{progress}\n"), format!("{answer}\n{progress}\n")] {
             std::fs::write(&path, events).unwrap();
-            let session = CodexProvider.parse_session_file(&path).unwrap();
+            let session = parse_file(AgentProvider::Codex, &path).unwrap();
             let all = select_blocks(&session, AgentSelection::All);
             assert_eq!(all.last().unwrap().label.as_deref(), Some("commentary"));
             let selected = select_blocks(&session, AgentSelection::LastAssistant);
@@ -776,7 +752,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = CodexProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Codex, &path).unwrap();
 
         assert_eq!(session.blocks.len(), 1);
         assert_eq!(session.blocks[0].text, "real answer");
@@ -794,7 +770,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = CodexProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Codex, &path).unwrap();
 
         assert_eq!(
             session.blocks[0].text,
@@ -855,12 +831,16 @@ mod tests {
         env::set_var("CODEX_THREAD_ID", "thread-session");
         env::set_var("SIVTR_HOME", temp.path().join("data"));
 
-        let resolved = CodexProvider.find_current_session(&cwd_match).unwrap();
+        let resolved =
+            crate::agents::profile::find_current_session(AgentProvider::Codex, &cwd_match).unwrap();
         env::remove_var("CODEX_THREAD_ID");
-        let inferred = CodexProvider.find_current_session(&cwd_match).unwrap();
-        let missing = CodexProvider
-            .find_current_session(&temp.path().join("unrelated"))
-            .unwrap();
+        let inferred =
+            crate::agents::profile::find_current_session(AgentProvider::Codex, &cwd_match).unwrap();
+        let missing = crate::agents::profile::find_current_session(
+            AgentProvider::Codex,
+            &temp.path().join("unrelated"),
+        )
+        .unwrap();
 
         match previous_codex_home {
             Some(value) => env::set_var("CODEX_HOME", value),
@@ -893,7 +873,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = CodexProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Codex, &path).unwrap();
 
         assert_eq!(session.id.as_deref(), Some("abc"));
         assert_eq!(session.blocks.len(), 2);
@@ -915,7 +895,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = CodexProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Codex, &path).unwrap();
 
         assert_eq!(session.id.as_deref(), Some("abc"));
         assert_eq!(session.blocks.len(), 3);
@@ -941,7 +921,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = CodexProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Codex, &path).unwrap();
 
         assert_eq!(session.blocks.len(), 2);
         assert_eq!(session.blocks[0].text, "response user");

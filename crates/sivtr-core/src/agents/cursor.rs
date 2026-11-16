@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::agents::{
     extract_content_text, list_recent_jsonl_sessions_outcome, parse_jsonl_meta,
     parse_jsonl_session, pretty_json_value, push_block, AgentBlockKind, AgentProvider,
-    AgentSession, AgentSessionMeta, AgentSessionProvider, SessionListing,
+    AgentSession, AgentSessionMeta, SessionListing,
 };
 
 const PROVIDER_NAME: &str = "Cursor";
@@ -18,20 +18,6 @@ const PROVIDER_NAME: &str = "Cursor";
 /// When no transcripts exist, returns empty rather than inventing content.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CursorProvider;
-
-impl AgentSessionProvider for CursorProvider {
-    fn provider(&self) -> AgentProvider {
-        AgentProvider::Cursor
-    }
-
-    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
-        list_outcome(AgentProvider::Cursor, cwd)
-    }
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_file(AgentProvider::Cursor, path)
-    }
-}
 
 pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
     list_recent_jsonl_sessions_outcome(
@@ -258,15 +244,14 @@ fn push_text(
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_event, CursorProvider};
-    use crate::agents::{AgentBlockKind, AgentProvider, AgentSession, AgentSessionProvider};
+    use super::{apply_event, list_outcome};
+    use crate::agents::{AgentBlockKind, AgentProvider, AgentSession};
     use serde_json::json;
     use std::path::PathBuf;
 
     #[test]
     fn provider_name_is_cursor() {
         assert_eq!(AgentProvider::Cursor.name(), "Cursor");
-        assert_eq!(CursorProvider.provider(), AgentProvider::Cursor);
     }
 
     #[test]
@@ -291,17 +276,26 @@ mod tests {
         )
         .unwrap();
 
-        assert!(CursorProvider
-            .list_recent_sessions(Some(&dir.path().join("shared")))
-            .unwrap()
-            .is_empty());
-        let missing = CursorProvider
-            .find_current_session(&dir.path().join("shared"))
-            .unwrap();
-        let matching = CursorProvider
-            .find_current_session(&dir.path().join("other"))
-            .unwrap();
-        assert_eq!(CursorProvider.list_recent_sessions(None).unwrap().len(), 2);
+        assert!(
+            list_outcome(AgentProvider::Cursor, Some(&dir.path().join("shared")))
+                .unwrap()
+                .0
+                .is_empty()
+        );
+        let missing = crate::agents::profile::find_current_session(
+            AgentProvider::Cursor,
+            &dir.path().join("shared"),
+        )
+        .unwrap();
+        let matching = crate::agents::profile::find_current_session(
+            AgentProvider::Cursor,
+            &dir.path().join("other"),
+        )
+        .unwrap();
+        assert_eq!(
+            list_outcome(AgentProvider::Cursor, None).unwrap().0.len(),
+            2
+        );
 
         assert_eq!(missing, None);
         assert_eq!(matching, Some(projects.join("other.jsonl")));

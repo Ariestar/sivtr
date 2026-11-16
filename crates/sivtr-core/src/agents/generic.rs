@@ -17,8 +17,8 @@ use sha2::{Digest, Sha256};
 
 use super::{
     extract_content_text, filter_sessions_by_workspace, open_readonly_db, pretty_json_value,
-    push_block, push_tool_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionProvider,
-    SessionInfo, SessionListing,
+    push_block, push_tool_block, AgentBlockKind, AgentProvider, AgentSession, SessionInfo,
+    SessionListing,
 };
 
 /// The transcript layout a provider stores today.
@@ -333,20 +333,6 @@ impl GenericProvider {
         }
         paths.sort();
         Ok(paths)
-    }
-}
-
-impl AgentSessionProvider for GenericProvider {
-    fn provider(&self) -> AgentProvider {
-        self.provider
-    }
-
-    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
-        list_provider(self.provider, cwd)
-    }
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_provider(self.provider, path)
     }
 }
 
@@ -1497,9 +1483,7 @@ mod tests {
         // Undeclared formats stay registered but never sync.
         assert!(!is_supported(AgentProvider::Amp));
         assert_eq!(
-            GenericProvider::new(AgentProvider::Amp)
-                .list_recent_sessions(None)
-                .unwrap(),
+            list_provider(AgentProvider::Amp, None).unwrap().0,
             Vec::new()
         );
     }
@@ -1603,8 +1587,7 @@ mod tests {
                 .expect("list OpenHands conversations"),
             vec![conversation.clone()]
         );
-        let parsed = GenericProvider::new(AgentProvider::OpenHands)
-            .parse_session_file(&conversation)
+        let parsed = parse_provider(AgentProvider::OpenHands, &conversation)
             .expect("parse OpenHands conversation");
         assert_eq!(parsed.id.as_deref(), Some("conv-1"));
         assert_eq!(parsed.blocks.len(), 1);

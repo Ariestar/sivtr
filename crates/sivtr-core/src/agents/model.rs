@@ -1,4 +1,3 @@
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cell::RefCell;
@@ -218,30 +217,6 @@ impl AgentSelection {
             Self::LastBlocks(_) => "blocks",
             Self::All => "all",
         }
-    }
-}
-
-pub trait AgentSessionProvider {
-    fn provider(&self) -> AgentProvider;
-
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        Ok(self.list_session_outcome(cwd)?.0)
-    }
-
-    /// Listing plus per-file discovery failures. A provider that skips a
-    /// broken file reports it here so the sync engine can keep the archive
-    /// intact instead of treating the skipped session as deleted.
-    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing>;
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession>;
-
-    fn find_session_by_id(&self, id: &str) -> Result<Option<PathBuf>> {
-        crate::agents::profile::find_session_by_id(self.provider(), id)
-    }
-
-    /// Inferring a current session must not widen an empty workspace search.
-    fn find_current_session(&self, cwd: &Path) -> Result<Option<PathBuf>> {
-        crate::agents::profile::find_current_session(self.provider(), cwd)
     }
 }
 

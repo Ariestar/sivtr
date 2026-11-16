@@ -5,27 +5,13 @@ use std::path::{Path, PathBuf};
 use crate::agents::{
     extract_content_text, list_recent_jsonl_sessions_outcome, parse_jsonl_meta,
     parse_jsonl_session, pretty_json_value, push_block, AgentBlockKind, AgentProvider,
-    AgentSession, AgentSessionMeta, AgentSessionProvider, SessionListing,
+    AgentSession, AgentSessionMeta, SessionListing,
 };
 
 const PROVIDER_NAME: &str = "Pi";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PiProvider;
-
-impl AgentSessionProvider for PiProvider {
-    fn provider(&self) -> AgentProvider {
-        AgentProvider::Pi
-    }
-
-    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
-        list_outcome(AgentProvider::Pi, cwd)
-    }
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_file(AgentProvider::Pi, path)
-    }
-}
 
 pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
     list_recent_jsonl_sessions_outcome(PROVIDER_NAME, &pi_sessions_dir(), cwd, parse_session_meta)
@@ -215,8 +201,8 @@ fn push_text_items(
 
 #[cfg(test)]
 mod tests {
-    use super::PiProvider;
-    use crate::agents::{AgentBlockKind, AgentSessionProvider};
+    use super::parse_file;
+    use crate::agents::{AgentBlockKind, AgentProvider};
 
     #[test]
     fn parses_pi_messages_and_tools() {
@@ -234,7 +220,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = PiProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Pi, &path).unwrap();
 
         assert_eq!(session.id.as_deref(), Some("pi-session"));
         assert_eq!(session.cwd.as_deref(), Some("D:\\sivtr"));

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::agents::{
     extract_content_text, filter_sessions_by_workspace, parse_jsonl_meta, parse_jsonl_session,
     pretty_json_value, push_block, push_tool_block, AgentBlockKind, AgentProvider, AgentSession,
-    AgentSessionMeta, AgentSessionProvider, SessionInfo, SessionListing,
+    AgentSessionMeta, SessionInfo, SessionListing,
 };
 
 const PROVIDER_NAME: &str = "Qoder";
@@ -28,34 +28,6 @@ pub struct QoderProvider;
 /// only the home directory differs.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct QoderCnProvider;
-
-impl AgentSessionProvider for QoderProvider {
-    fn provider(&self) -> AgentProvider {
-        AgentProvider::Qoder
-    }
-
-    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
-        list_outcome(AgentProvider::Qoder, cwd)
-    }
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_file(AgentProvider::Qoder, path)
-    }
-}
-
-impl AgentSessionProvider for QoderCnProvider {
-    fn provider(&self) -> AgentProvider {
-        AgentProvider::QoderCn
-    }
-
-    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
-        list_outcome(AgentProvider::QoderCn, cwd)
-    }
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_file(AgentProvider::QoderCn, path)
-    }
-}
 
 pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
     list_recent_sessions_in(&qoder_projects_dir(), cwd)
@@ -299,8 +271,8 @@ fn push_content_blocks(
 
 #[cfg(test)]
 mod tests {
-    use super::{QoderCnProvider, QoderProvider};
-    use crate::agents::{AgentBlockKind, AgentSessionProvider};
+    use super::parse_file;
+    use crate::agents::{AgentBlockKind, AgentProvider};
 
     #[test]
     fn parses_qoder_messages_and_tools() {
@@ -317,7 +289,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = QoderProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Qoder, &path).unwrap();
 
         assert_eq!(session.id.as_deref(), Some("abc"));
         assert_eq!(session.cwd.as_deref(), Some("D:\\repo"));
@@ -347,7 +319,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = QoderProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Qoder, &path).unwrap();
 
         assert_eq!(session.title.as_deref(), Some("My Session"));
         assert_eq!(session.blocks.len(), 2);
@@ -368,7 +340,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = QoderProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Qoder, &path).unwrap();
 
         assert_eq!(session.cwd.as_deref(), Some("D:\\Coding\\sivtr"));
     }
@@ -386,7 +358,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = QoderCnProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::QoderCn, &path).unwrap();
 
         assert_eq!(session.id.as_deref(), Some("cn-1"));
         assert_eq!(session.cwd.as_deref(), Some("D:\\repo"));

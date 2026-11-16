@@ -29,8 +29,7 @@ use std::path::{Path, PathBuf};
 
 use crate::agents::{
     extract_content_text, list_sessions_matching_outcome, pretty_json_string, push_block,
-    push_tool_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionMeta,
-    AgentSessionProvider, SessionListing,
+    push_tool_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionMeta, SessionListing,
 };
 
 const PROVIDER_NAME: &str = "Dsh";
@@ -57,20 +56,6 @@ const MAX_ZSTD_WINDOW: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DshProvider;
-
-impl AgentSessionProvider for DshProvider {
-    fn provider(&self) -> AgentProvider {
-        AgentProvider::Dsh
-    }
-
-    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
-        list_outcome(AgentProvider::Dsh, cwd)
-    }
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_file(AgentProvider::Dsh, path)
-    }
-}
 
 pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
     list_sessions_matching_outcome(
@@ -580,7 +565,7 @@ mod tests {
         let path = dir.path().join("session.jsonl");
         std::fs::write(&path, fixture_with_cwd("C:\\repo")).unwrap();
 
-        let session = DshProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Dsh, &path).unwrap();
 
         assert_eq!(
             session.id.as_deref(),
@@ -626,7 +611,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = DshProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Dsh, &path).unwrap();
 
         let user_blocks: Vec<_> = session
             .blocks
@@ -651,7 +636,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = DshProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Dsh, &path).unwrap();
 
         assert_eq!(session.title.as_deref(), Some("Fix the flaky test"));
         assert_eq!(session.blocks.len(), 2);
@@ -671,7 +656,7 @@ mod tests {
         )
         .unwrap();
 
-        let error = DshProvider.parse_session_file(&path).unwrap_err();
+        let error = parse_file(AgentProvider::Dsh, &path).unwrap_err();
         assert!(format!("{error:#}").contains("unsupported Dsh session log version"));
     }
 
@@ -686,7 +671,7 @@ mod tests {
         )
         .unwrap();
 
-        let error = DshProvider.parse_session_file(&path).unwrap_err();
+        let error = parse_file(AgentProvider::Dsh, &path).unwrap_err();
         assert!(format!("{error:#}").contains("missing session header"));
     }
 
@@ -696,7 +681,7 @@ mod tests {
         let path = dir.path().join("session.jsonl");
         std::fs::write(&path, "").unwrap();
 
-        let error = DshProvider.parse_session_file(&path).unwrap_err();
+        let error = parse_file(AgentProvider::Dsh, &path).unwrap_err();
         assert!(format!("{error:#}").contains("missing session header"));
     }
 
@@ -708,7 +693,7 @@ mod tests {
         let path = dir.path().join("session.jsonl.zstd");
         std::fs::write(&path, []).unwrap();
 
-        let error = DshProvider.parse_session_file(&path).unwrap_err();
+        let error = parse_file(AgentProvider::Dsh, &path).unwrap_err();
         assert!(format!("{error:#}").contains("missing session header"));
     }
 
@@ -736,7 +721,7 @@ mod tests {
         std::fs::create_dir_all(&empty).unwrap();
         std::fs::write(empty.join("session.jsonl"), "").unwrap();
 
-        let listed = DshProvider.list_recent_sessions(None).unwrap();
+        let listed = list_outcome(AgentProvider::Dsh, None).unwrap().0;
 
         match previous {
             Some(value) => std::env::set_var("DSH_HOME", value),
@@ -780,7 +765,7 @@ mod tests {
         )
         .unwrap();
 
-        let listed = DshProvider.list_recent_sessions(Some(&repo)).unwrap();
+        let listed = list_outcome(AgentProvider::Dsh, Some(&repo)).unwrap().0;
 
         match previous {
             Some(value) => std::env::set_var("DSH_HOME", value),
@@ -814,7 +799,7 @@ mod tests {
         let path = dir.path().join("session.jsonl.zstd");
         std::fs::write(&path, zstd_fixture()).unwrap();
 
-        let session = DshProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Dsh, &path).unwrap();
 
         assert_eq!(
             session.id.as_deref(),

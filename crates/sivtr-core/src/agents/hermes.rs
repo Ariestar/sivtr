@@ -6,7 +6,7 @@ use std::time::UNIX_EPOCH;
 use crate::agents::{
     filter_sessions_by_workspace, open_readonly_db, pretty_json_string, pretty_json_value,
     push_block, system_time_from_unix_secs, AgentBlockKind, AgentProvider, AgentSession,
-    AgentSessionProvider, SessionInfo, SessionListing,
+    SessionInfo, SessionListing,
 };
 
 const STATE_DB_NAME: &str = "state.db";
@@ -18,20 +18,6 @@ const SESSION_PATH_SUFFIX: &str = ".sqlite";
 /// Current Hermes store: `$HERMES_HOME/state.db` tables `sessions` + `messages`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HermesProvider;
-
-impl AgentSessionProvider for HermesProvider {
-    fn provider(&self) -> AgentProvider {
-        AgentProvider::Hermes
-    }
-
-    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
-        list_outcome(AgentProvider::Hermes, cwd)
-    }
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_file(AgentProvider::Hermes, path)
-    }
-}
 
 pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
     Ok((
@@ -350,7 +336,7 @@ fn session_id_from_sqlite_path(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::{AgentBlockKind, AgentSessionProvider};
+    use crate::agents::AgentBlockKind;
     use rusqlite::Connection;
 
     fn write_state_db(home: &Path) -> PathBuf {
@@ -404,16 +390,18 @@ mod tests {
         drop(conn);
 
         let _guard = EnvGuard::set("HERMES_HOME", home.path());
-        let sessions = HermesProvider
-            .list_recent_sessions(Some(Path::new("/repo")))
-            .expect("list");
+        let sessions = list_outcome(AgentProvider::Hermes, Some(Path::new("/repo")))
+            .expect("list")
+            .0;
 
         let ids: Vec<_> = sessions
             .iter()
             .filter_map(|session| session.id.clone())
             .collect();
         assert_eq!(ids, vec!["s_match"]);
-        let all = HermesProvider.list_recent_sessions(None).expect("list all");
+        let all = list_outcome(AgentProvider::Hermes, None)
+            .expect("list all")
+            .0;
         assert_eq!(all.len(), 3);
         assert!(all
             .iter()
@@ -447,7 +435,7 @@ mod tests {
 
         let _guard = EnvGuard::set("HERMES_HOME", home.path());
         let path = sqlite_session_path("sess1");
-        let session = HermesProvider.parse_session_file(&path).expect("parse");
+        let session = parse_file(AgentProvider::Hermes, &path).expect("parse");
 
         assert_eq!(session.id.as_deref(), Some("sess1"));
         assert_eq!(

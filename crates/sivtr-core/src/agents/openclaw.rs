@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 use crate::agents::{
     extract_content_text, filter_sessions_by_workspace, open_readonly_db, pretty_json_value,
-    push_block, system_time_from_millis, AgentBlockKind, AgentProvider, AgentSession,
-    AgentSessionProvider, SessionInfo, SessionListing,
+    push_block, system_time_from_millis, AgentBlockKind, AgentProvider, AgentSession, SessionInfo,
+    SessionListing,
 };
 
 const SESSION_PATH_PREFIX: &str = "openclaw-session-";
@@ -20,20 +20,6 @@ const AGENT_DB_NAME: &str = "openclaw-agent.sqlite";
 /// tables `session_entries` + `transcript_events`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct OpenClawProvider;
-
-impl AgentSessionProvider for OpenClawProvider {
-    fn provider(&self) -> AgentProvider {
-        AgentProvider::OpenClaw
-    }
-
-    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
-        list_outcome(AgentProvider::OpenClaw, cwd)
-    }
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_file(AgentProvider::OpenClaw, path)
-    }
-}
 
 pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
     let mut sessions = list_sqlite_sessions()?;
@@ -350,9 +336,9 @@ fn session_ids_from_path(path: &Path) -> Option<(String, String)> {
 mod tests {
     use super::{
         openclaw_config_path, openclaw_home, openclaw_session_path, parse_sqlite_session,
-        session_ids_from_path, OpenClawProvider, AGENT_DB_NAME,
+        session_ids_from_path, AGENT_DB_NAME,
     };
-    use crate::agents::{AgentBlockKind, AgentProvider, AgentSessionProvider};
+    use crate::agents::{AgentBlockKind, AgentProvider};
     use rusqlite::Connection;
     use std::path::PathBuf;
 
@@ -439,7 +425,6 @@ mod tests {
         assert_eq!(session.blocks[1].kind, AgentBlockKind::Assistant);
         assert_eq!(session.blocks[2].kind, AgentBlockKind::ToolCall);
         assert_eq!(session.blocks[2].label.as_deref(), Some("bash"));
-        assert_eq!(OpenClawProvider.provider(), AgentProvider::OpenClaw);
         let _ = PathBuf::from("noop");
     }
 }

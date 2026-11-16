@@ -19,7 +19,7 @@
 use crate::agents::{
     extract_content_text, list_chat_recording_sessions_outcome, pretty_json_value, push_block,
     push_parts_blocks, push_tool_block, AgentBlockKind, AgentProvider, AgentSession,
-    AgentSessionMeta, AgentSessionProvider, SessionListing,
+    AgentSessionMeta, SessionListing,
 };
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -36,20 +36,6 @@ const META_SCAN_LINES: usize = 30;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GeminiProvider;
-
-impl AgentSessionProvider for GeminiProvider {
-    fn provider(&self) -> AgentProvider {
-        AgentProvider::Gemini
-    }
-
-    fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
-        list_outcome(AgentProvider::Gemini, cwd)
-    }
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_file(AgentProvider::Gemini, path)
-    }
-}
 
 pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
     list_chat_recording_sessions_outcome(PROVIDER_NAME, &gemini_tmp_dir(), cwd, parse_session_meta)
@@ -255,7 +241,6 @@ fn apply_tool_call(session: &mut AgentSession, timestamp: Option<String>, call: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::AgentSessionProvider;
     use std::time::{Duration, UNIX_EPOCH};
 
     fn touch(path: &Path, epoch_secs: u64) {
@@ -281,7 +266,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = GeminiProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Gemini, &path).unwrap();
 
         assert_eq!(session.id.as_deref(), Some("abc-123"));
         assert_eq!(session.blocks.len(), 5);
@@ -318,7 +303,7 @@ mod tests {
         touch(&older, 1_700_000_000);
         touch(&nested, 1_800_000_001);
 
-        let sessions = GeminiProvider.list_recent_sessions(None).unwrap();
+        let sessions = list_outcome(AgentProvider::Gemini, None).unwrap().0;
 
         // Subagent files nested under chats/<parent>/ are skipped.
         assert_eq!(sessions.len(), 2);
