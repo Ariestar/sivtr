@@ -2,7 +2,7 @@
 //! plays: discovery and parsing go through here, and each provider declares
 //! exactly one current format.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
@@ -132,6 +132,43 @@ pub fn is_registered(provider: AgentProvider) -> bool {
 
 pub fn merges_siblings(provider: AgentProvider) -> bool {
     native(provider).is_some_and(|profile| profile.merge_siblings)
+}
+
+/// Resolve a session id. Codex, Goose, and OpenCode keep a direct lookup;
+/// everyone else matches the listing.
+pub fn find_session_by_id(provider: AgentProvider, id: &str) -> Result<Option<PathBuf>> {
+    match provider {
+        AgentProvider::Codex => codex::find_session_by_id(id),
+        AgentProvider::Goose => goose::find_session_by_id(id),
+        AgentProvider::OpenCode => opencode::find_session_by_id(id),
+        _ => find_listed_id(provider, id),
+    }
+}
+
+/// The newest workspace session. Codex also honors its current thread id.
+pub fn find_current_session(provider: AgentProvider, cwd: &Path) -> Result<Option<PathBuf>> {
+    if provider == AgentProvider::Codex {
+        return codex::find_current_session(cwd);
+    }
+    Ok(list(provider, Some(cwd))?
+        .0
+        .into_iter()
+        .next()
+        .map(|session| session.path))
+}
+
+fn find_listed_id(provider: AgentProvider, id: &str) -> Result<Option<PathBuf>> {
+    for session in list(provider, None)?.0 {
+        let name_hit = session
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.contains(id));
+        if name_hit || session.id.as_deref() == Some(id) {
+            return Ok(Some(session.path));
+        }
+    }
+    Ok(None)
 }
 
 /// List one provider. An unregistered provider contributes nothing.

@@ -25,19 +25,11 @@ impl OpenCodeProvider {
             db_path: Some(path),
         }
     }
-
-    fn db_path(&self) -> PathBuf {
-        self.db_path.clone().unwrap_or_else(opencode_db_path)
-    }
 }
 
 impl AgentSessionProvider for OpenCodeProvider {
     fn provider(&self) -> AgentProvider {
         AgentProvider::OpenCode
-    }
-
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        Ok(self.list_session_outcome(cwd)?.0)
     }
 
     fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
@@ -49,31 +41,39 @@ impl AgentSessionProvider for OpenCodeProvider {
     }
 
     fn find_session_by_id(&self, id: &str) -> Result<Option<PathBuf>> {
-        let db_path = self.db_path();
-        if !db_path.exists() {
-            return Ok(None);
-        }
-
-        let conn = open_readonly_db(&db_path)?;
-        let exact = conn
-            .query_row("select id from session where id = ?1", params![id], |row| {
-                row.get::<_, String>(0)
-            })
-            .optional()?;
-        if let Some(id) = exact {
-            return Ok(Some(opencode_session_path(&id)));
-        }
-
-        let prefix = format!("{id}%");
-        let prefix_match = conn
-            .query_row(
-                "select id from session where id like ?1 order by time_updated desc limit 1",
-                params![prefix],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-        Ok(prefix_match.map(|id| opencode_session_path(&id)))
+        find_session_in(self.db_path.as_deref(), id)
     }
+}
+
+pub(crate) fn find_session_by_id(id: &str) -> Result<Option<PathBuf>> {
+    find_session_in(None, id)
+}
+
+fn find_session_in(db: Option<&Path>, id: &str) -> Result<Option<PathBuf>> {
+    let db_path = db.map(Path::to_path_buf).unwrap_or_else(opencode_db_path);
+    if !db_path.exists() {
+        return Ok(None);
+    }
+
+    let conn = open_readonly_db(&db_path)?;
+    let exact = conn
+        .query_row("select id from session where id = ?1", params![id], |row| {
+            row.get::<_, String>(0)
+        })
+        .optional()?;
+    if let Some(id) = exact {
+        return Ok(Some(opencode_session_path(&id)));
+    }
+
+    let prefix = format!("{id}%");
+    let prefix_match = conn
+        .query_row(
+            "select id from session where id like ?1 order by time_updated desc limit 1",
+            params![prefix],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    Ok(prefix_match.map(|id| opencode_session_path(&id)))
 }
 
 pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {

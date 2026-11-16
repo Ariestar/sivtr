@@ -751,8 +751,6 @@ mod tests {
         use sivtr_core::agents::AgentProvider;
         use sivtr_core::archive::{self, store};
         use sivtr_core::config::SivtrConfig;
-        use sivtr_core::session_source::SessionSource;
-
         // Keep process-global configuration isolated from parallel library tests.
         const CHILD: &str = "SIVTR_SHARE_SCOPE_TEST_CHILD";
         if std::env::var_os(CHILD).is_none() {
@@ -799,7 +797,8 @@ mod tests {
                 ),
             )
             .unwrap();
-            let records = AgentProvider::Cursor.parse_file(&path).unwrap();
+            let session = sivtr_core::agents::profile::parse(AgentProvider::Cursor, &path).unwrap();
+            let records = WorkRecord::chat_turns(AgentProvider::Cursor, &session);
             assert_eq!(records.len(), 1);
             if matches!(id, "private" | "unbound") {
                 private_refs.push(records[0].work_ref.to_string());

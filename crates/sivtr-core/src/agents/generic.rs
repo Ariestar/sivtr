@@ -341,16 +341,12 @@ impl AgentSessionProvider for GenericProvider {
         self.provider
     }
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        Ok(self.list_session_outcome(cwd)?.0)
-    }
-
     fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
-        crate::agents::profile::list(self.provider, cwd)
+        list_provider(self.provider, cwd)
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        crate::agents::profile::parse(self.provider, path)
+        parse_provider(self.provider, path)
     }
 }
 

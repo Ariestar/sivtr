@@ -19,7 +19,7 @@
 use crate::agents::{
     extract_content_text, list_chat_recording_sessions_outcome, pretty_json_value, push_block,
     push_parts_blocks, push_tool_block, AgentBlockKind, AgentProvider, AgentSession,
-    AgentSessionMeta, AgentSessionProvider, SessionInfo, SessionListing,
+    AgentSessionMeta, AgentSessionProvider, SessionListing,
 };
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -42,16 +42,12 @@ impl AgentSessionProvider for GeminiProvider {
         AgentProvider::Gemini
     }
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        Ok(self.list_session_outcome(cwd)?.0)
-    }
-
     fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
-        crate::agents::profile::list(AgentProvider::Gemini, cwd)
+        list_outcome(AgentProvider::Gemini, cwd)
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        crate::agents::profile::parse(AgentProvider::Gemini, path)
+        parse_file(AgentProvider::Gemini, path)
     }
 }
 

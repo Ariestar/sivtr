@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::agents::{
     extract_content_text, list_recent_jsonl_sessions_outcome, parse_jsonl_meta,
     parse_jsonl_session, pretty_json_value, push_block, AgentBlockKind, AgentProvider,
-    AgentSession, AgentSessionMeta, AgentSessionProvider, SessionInfo, SessionListing,
+    AgentSession, AgentSessionMeta, AgentSessionProvider, SessionListing,
 };
 
 const PROVIDER_NAME: &str = "Cursor";
@@ -24,16 +24,12 @@ impl AgentSessionProvider for CursorProvider {
         AgentProvider::Cursor
     }
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        Ok(self.list_session_outcome(cwd)?.0)
-    }
-
     fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
-        crate::agents::profile::list(AgentProvider::Cursor, cwd)
+        list_outcome(AgentProvider::Cursor, cwd)
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        crate::agents::profile::parse(AgentProvider::Cursor, path)
+        parse_file(AgentProvider::Cursor, path)
     }
 }
 

@@ -32,16 +32,12 @@ impl AgentSessionProvider for ZcodeProvider {
         AgentProvider::Zcode
     }
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        Ok(self.list_session_outcome(cwd)?.0)
-    }
-
     fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
-        crate::agents::profile::list(AgentProvider::Zcode, cwd)
+        list_outcome(AgentProvider::Zcode, cwd)
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        crate::agents::profile::parse(AgentProvider::Zcode, path)
+        parse_file(AgentProvider::Zcode, path)
     }
 }
 

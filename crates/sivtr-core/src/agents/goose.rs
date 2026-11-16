@@ -37,46 +37,42 @@ impl AgentSessionProvider for GooseProvider {
         AgentProvider::Goose
     }
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        Ok(self.list_session_outcome(cwd)?.0)
-    }
-
     fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
-        crate::agents::profile::list(AgentProvider::Goose, cwd)
+        list_outcome(AgentProvider::Goose, cwd)
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        crate::agents::profile::parse(AgentProvider::Goose, path)
+        parse_file(AgentProvider::Goose, path)
+    }
+}
+
+pub(crate) fn find_session_by_id(id: &str) -> Result<Option<PathBuf>> {
+    let db_path = goose_db_path();
+    if !db_path.exists() {
+        return Ok(None);
     }
 
-    fn find_session_by_id(&self, id: &str) -> Result<Option<PathBuf>> {
-        let db_path = goose_db_path();
-        if !db_path.exists() {
-            return Ok(None);
-        }
-
-        let conn = open_readonly_db(&db_path)?;
-        let exact = conn
-            .query_row(
-                "select id from sessions where id = ?1",
-                params![id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-        if let Some(id) = exact {
-            return Ok(Some(goose_session_path(&id)));
-        }
-
-        let prefix = format!("{id}%");
-        let prefix_match = conn
-            .query_row(
-                "select id from sessions where id like ?1 order by updated_at desc limit 1",
-                params![prefix],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-        Ok(prefix_match.map(|id| goose_session_path(&id)))
+    let conn = open_readonly_db(&db_path)?;
+    let exact = conn
+        .query_row(
+            "select id from sessions where id = ?1",
+            params![id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if let Some(id) = exact {
+        return Ok(Some(goose_session_path(&id)));
     }
+
+    let prefix = format!("{id}%");
+    let prefix_match = conn
+        .query_row(
+            "select id from sessions where id like ?1 order by updated_at desc limit 1",
+            params![prefix],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    Ok(prefix_match.map(|id| goose_session_path(&id)))
 }
 
 pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {

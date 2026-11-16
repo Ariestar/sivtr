@@ -13,7 +13,8 @@ use anyhow::{Context, Result};
 
 use crate::agents::AgentProvider;
 use crate::record::{WorkRecord, WorkRecordIndex, WorkRef, WorkRefSelector};
-use crate::session_source::{workspace_sources, SessionSource};
+#[cfg(test)]
+use crate::session_source::SessionSource;
 
 /// Prefix of the error [`load_workspace_source`] raises when a selector
 /// matches no records. An empty source is a normal browse outcome (a
@@ -76,23 +77,25 @@ impl From<LoadMode> for crate::archive::store::BlobMode {
     }
 }
 
-/// Build the record index for a workspace: read every archived session of
-/// the given sources (terminal, agent providers, …), deduplicate records,
-/// and sort newest-first.
+/// Build the record index for a workspace: read every archived terminal
+/// session and the given agent providers, deduplicate records, and sort
+/// newest-first.
 ///
 /// The archive is the single read surface: a stamp-gated freshness pass
 /// brings it up to date first, then sessions are listed and decoded from
 /// `archive.db` — native session files are only parsed by the sync engine.
 ///
-/// `recent_sessions` truncates how many recent sessions each source
+/// `recent_sessions` truncates how many recent sessions each namespace
 /// contributes.
 pub fn load_workspace_records(
-    sources: &[Box<dyn SessionSource>],
+    providers: &[AgentProvider],
     cwd: &Path,
     recent_sessions: Option<usize>,
     mode: LoadMode,
 ) -> Result<QueryResult> {
-    let namespaces: Vec<&str> = sources.iter().map(|source| source.namespace()).collect();
+    let mut namespaces = Vec::with_capacity(providers.len() + 1);
+    namespaces.push("terminal");
+    namespaces.extend(providers.iter().map(|provider| provider.command_name()));
     let conn = crate::archive::open()?;
     let sync_skipped = crate::archive::sync::ensure_fresh_with_conn(&conn)?;
     let listed = crate::archive::store::list_workspace_sessions(
@@ -171,8 +174,7 @@ pub fn load_workspace_source(
             .provider()
             .map(|provider| vec![provider])
             .unwrap_or_else(all_agent_providers);
-        let sources = workspace_sources(&providers);
-        let result = load_workspace_records(&sources, cwd, None, mode)?;
+        let result = load_workspace_records(&providers, cwd, None, mode)?;
         let index = WorkRecordIndex::new(result.records);
         let record = index
             .resolve(&reference)
@@ -210,8 +212,7 @@ pub fn load_workspace_source(
         }
     }
     let providers = selector.providers();
-    let sources = workspace_sources(&providers);
-    let result = load_workspace_records(&sources, cwd, None, mode)?;
+    let result = load_workspace_records(&providers, cwd, None, mode)?;
     let mut records = Vec::new();
     let mut anchors = Vec::new();
 

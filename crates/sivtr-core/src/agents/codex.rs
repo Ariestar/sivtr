@@ -19,49 +19,45 @@ impl AgentSessionProvider for CodexProvider {
         AgentProvider::Codex
     }
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        Ok(self.list_session_outcome(cwd)?.0)
-    }
-
     /// Grouping and sibling merge live in the shared engine; this listing
     /// returns every physical rollout so a resumed session's segments stay
     /// visible to that engine.
     fn list_session_outcome(&self, cwd: Option<&Path>) -> Result<SessionListing> {
-        crate::agents::profile::list(AgentProvider::Codex, cwd)
+        list_outcome(AgentProvider::Codex, cwd)
     }
 
     fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        crate::agents::profile::parse(AgentProvider::Codex, path)
+        parse_file(AgentProvider::Codex, path)
     }
+}
 
-    fn find_session_by_id(&self, id: &str) -> Result<Option<PathBuf>> {
-        for path in local_session_files()? {
-            if path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.contains(id))
-            {
-                return Ok(Some(path));
-            }
-
-            if parse_session_meta(&path)?.id.as_deref() == Some(id) {
-                return Ok(Some(path));
-            }
-        }
-
-        Ok(None)
-    }
-
-    fn find_current_session(&self, cwd: &Path) -> Result<Option<PathBuf>> {
-        if let Some(path) = find_current_thread_session()? {
+pub(crate) fn find_session_by_id(id: &str) -> Result<Option<PathBuf>> {
+    for path in local_session_files()? {
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.contains(id))
+        {
             return Ok(Some(path));
         }
 
-        Ok(list_recent_local_sessions(Some(cwd))?
-            .into_iter()
-            .next()
-            .map(|session| session.path))
+        if parse_session_meta(&path)?.id.as_deref() == Some(id) {
+            return Ok(Some(path));
+        }
     }
+
+    Ok(None)
+}
+
+pub(crate) fn find_current_session(cwd: &Path) -> Result<Option<PathBuf>> {
+    if let Some(path) = find_current_thread_session()? {
+        return Ok(Some(path));
+    }
+
+    Ok(list_recent_local_sessions(Some(cwd))?
+        .into_iter()
+        .next()
+        .map(|session| session.path))
 }
 
 pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
