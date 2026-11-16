@@ -8,7 +8,7 @@ use rusqlite::Connection;
 /// Archive schema version. Bump when a release changes the table layout in a
 /// way older rows cannot serve; the store then rebuilds from native sources
 /// on the next sync (the archive is derived state, so a rebuild is safe).
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 
 /// Path of the archive database (`<home>/cache/archive.db`).
 pub fn db_path() -> PathBuf {
@@ -46,6 +46,7 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         .context("Failed to initialize archive schema")?;
     ensure_column(conn, "project", "TEXT NOT NULL DEFAULT ''")?;
     ensure_column(conn, "starred", "INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(conn, "files_fingerprint", "INTEGER NOT NULL DEFAULT 0")?;
     let stored: Option<i64> = conn
         .query_row(
             "SELECT value FROM archive_meta WHERE key = 'schema_version'",
@@ -110,59 +111,6 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         }
         Some(_) => {}
     }
-
-    // Older Cursor parses could stamp a transcript without its wrapped messages.
-    // Invalidate only those source stamps once; keep records, stars, and terminal
-    // captures intact until native Cursor transcripts can be re-parsed.
-    let refresh_cursor: bool = conn.query_row(
-        "SELECT NOT EXISTS(SELECT 1 FROM archive_meta WHERE key = 'cursor_message_envelopes_v1')",
-        [],
-        |row| row.get(0),
-    ).context("Failed to read the Cursor parser migration state")?;
-    if refresh_cursor {
-        let tx = conn
-            .unchecked_transaction()
-            .context("Failed to begin Cursor parser migration")?;
-        // Claim inside the transaction too: another process may have migrated
-        // between the read above and acquiring the write lock.
-        if tx.execute(
-            "INSERT OR IGNORE INTO archive_meta (key, value) VALUES ('cursor_message_envelopes_v1', '1')",
-            [],
-        )? != 0 {
-            tx.execute_batch(
-                "UPDATE sessions SET size = 0 WHERE provider = 'cursor';
-                 DELETE FROM archive_meta WHERE key = 'last_sync_at';"
-            ).context("Failed to invalidate old Cursor parse stamps")?;
-        }
-        tx.commit()
-            .context("Failed to commit Cursor parser migration")?;
-    }
-
-    // Turn regrouping affects every agent parser. Keep retained blobs and user
-    // metadata until the source is available, but do not trust old parse stamps.
-    let refresh_agent_turns: bool = conn
-        .query_row(
-            "SELECT NOT EXISTS(SELECT 1 FROM archive_meta WHERE key = 'agent_turn_boundaries_v1')",
-            [],
-            |row| row.get(0),
-        )
-        .context("Failed to read the agent turn parser migration state")?;
-    if refresh_agent_turns {
-        let tx = conn
-            .unchecked_transaction()
-            .context("Failed to begin agent turn parser migration")?;
-        if tx.execute(
-            "INSERT OR IGNORE INTO archive_meta (key, value) VALUES ('agent_turn_boundaries_v1', '1')",
-            [],
-        )? != 0 {
-            tx.execute_batch(
-                "UPDATE sessions SET size = 0 WHERE provider != 'terminal';
-                 DELETE FROM archive_meta WHERE key = 'last_sync_at';"
-            ).context("Failed to invalidate old agent turn parse stamps")?;
-        }
-        tx.commit()
-            .context("Failed to commit agent turn parser migration")?;
-    }
     Ok(())
 }
 
@@ -204,6 +152,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     record_count  INTEGER NOT NULL DEFAULT 0,
     project       TEXT NOT NULL DEFAULT '',
     starred       INTEGER NOT NULL DEFAULT 0,
+    files_fingerprint INTEGER NOT NULL DEFAULT 0,
     mtime_secs    INTEGER NOT NULL DEFAULT 0,
     mtime_nanos   INTEGER NOT NULL DEFAULT 0,
     size          INTEGER NOT NULL DEFAULT 0,

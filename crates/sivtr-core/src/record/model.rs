@@ -1939,7 +1939,6 @@ mod tests {
     /// Exercise native transcript formats as well as the shared typed-block boundary.
     #[test]
     fn provider_parsers_preserve_consecutive_and_pending_requests() {
-        use crate::session_source::SessionSource;
         let directory = tempfile::tempdir().unwrap();
         for provider in [
             AgentProvider::Codex,
@@ -1978,7 +1977,8 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n");
             std::fs::write(&path, transcript).unwrap();
-            let records = provider.parse_file(&path).unwrap();
+            let session = crate::agents::profile::parse(provider, &path).unwrap();
+            let records = WorkRecord::chat_turns(provider, &session);
             assert_eq!(records.len(), 2, "{provider:?}");
             assert_eq!(
                 records[0].input_text().as_deref(),

@@ -297,9 +297,9 @@ sivtr s <peer>:terminal --status failure --latest 5 --refs
 | Claude Code | 本地 transcript/session files。 |
 | Cursor | 本地 Cursor agent transcript JSONL。 |
 | OpenCode | 本地 session 数据库。 |
-| OpenClaw | 本地 OpenClaw agent SQLite（+ legacy JSONL）。 |
-| Hermes | 本地 Hermes `state.db`（`sessions/` 下 JSONL 为 residual）。 |
-| Grok | 本地 Grok agent sessions（`~/.grok`，可用 `GROK_HOME`）。 |
+| OpenClaw | 本地 OpenClaw agent SQLite。 |
+| Hermes | 本地 Hermes `state.db`。 |
+| Grok | 本地 Grok `updates.jsonl`（`~/.grok`，可用 `GROK_HOME`）。 |
 | Dsh | 本地 Dsh agent sessions。 |
 | Gemini | 本地 Gemini CLI sessions。 |
 | Goose | 本地 Goose agent sessions。 |

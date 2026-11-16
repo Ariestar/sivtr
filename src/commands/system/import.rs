@@ -48,6 +48,7 @@ pub fn execute(args: &ImportSessionsArgs) -> Result<()> {
                 workspace_key: "",
                 title: session.title.as_deref(),
                 stamp,
+                fingerprint: 0,
                 records: &records,
                 usage_events: &[],
             },

@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::agents::{AgentProvider, AgentSessionProvider};
+use crate::agents::AgentProvider;
 use crate::record::{
     output_blocks_text, WorkAt, WorkOutcome, WorkPart, WorkPartBody, WorkRecord, WorkRef,
     WorkTarget,
@@ -706,28 +706,23 @@ fn current_agent_session_paths(
 ) -> Result<HashSet<PathBuf>> {
     let mut paths = HashSet::new();
     for provider in providers {
-        let source = provider.session_provider();
-        if let Some(path) = current_agent_session_path(source.as_ref(), *provider, cwd)? {
+        if let Some(path) = current_agent_session_path(*provider, cwd)? {
             paths.insert(comparable_path(&path));
         }
     }
     Ok(paths)
 }
 
-fn current_agent_session_path(
-    source: &dyn AgentSessionProvider,
-    provider: AgentProvider,
-    cwd: &Path,
-) -> Result<Option<PathBuf>> {
+fn current_agent_session_path(provider: AgentProvider, cwd: &Path) -> Result<Option<PathBuf>> {
     if let Some(path) = current_agent_transcript_path(provider) {
         return Ok(Some(path));
     }
     if let Some(session_id) = current_agent_session_id(provider) {
-        if let Some(path) = source.find_session_by_id(&session_id)? {
+        if let Some(path) = crate::agents::profile::find_session_by_id(provider, &session_id)? {
             return Ok(Some(path));
         }
     }
-    source.find_current_session(cwd)
+    crate::agents::profile::find_current_session(provider, cwd)
 }
 
 fn current_agent_transcript_path(provider: AgentProvider) -> Option<PathBuf> {

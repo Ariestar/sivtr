@@ -4,7 +4,6 @@ use anyhow::Result;
 use sivtr_core::agents::AgentProvider;
 use sivtr_core::query::{load_workspace_records, LoadMode};
 use sivtr_core::record::WorkRecordIndex;
-use sivtr_core::session_source::workspace_sources;
 
 /// Build the record index for the current workspace.
 ///
@@ -17,8 +16,7 @@ pub(crate) fn current_work_record_index(
     cwd: &Path,
     recent_sessions: Option<usize>,
 ) -> Result<WorkRecordIndex> {
-    let sources = workspace_sources(providers);
-    let result = load_workspace_records(&sources, cwd, recent_sessions, LoadMode::Light)?;
+    let result = load_workspace_records(providers, cwd, recent_sessions, LoadMode::Light)?;
     warn_skipped(&result.skipped);
     Ok(result.into_index())
 }
