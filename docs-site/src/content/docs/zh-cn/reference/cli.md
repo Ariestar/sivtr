@@ -925,6 +925,23 @@ sivtr stats [--provider <PROVIDER>] [--since <DATE>] [--until <DATE>] [--json]
 报告 session/record 数量、活跃日期与小时、项目、结果状态、secret finding、
 星标 session 和 usage 总量。
 
+## storage
+
+```bash
+sivtr storage status [--json]
+sivtr storage vacuum [--dry-run]
+sivtr storage prune-cache [--apply] [--json]
+```
+
+统计 sivtr home 下的占用：archive 数据库及其 WAL sidecar、派生缓存、保存的
+WorkSet、workspace session log 和其他文件。`vacuum` 压缩 `archive.db` 并回收
+空闲页；`prune-cache` 删除当前版本不再写入的旧解析缓存。`vacuum` 默认执行，
+`--dry-run` 只预览；`prune-cache` 默认只列出，`--apply` 才删除。不会删除
+session 源文件或已保存的 WorkSet。
+
+`status` 还会报告旧布局留在 home 根目录的 archive 副本；`sivtr doctor` 会
+检测它，`doctor --fix` 在目标路径空闲时把它迁移到 `cache/`。
+
 ## session
 
 ```bash
