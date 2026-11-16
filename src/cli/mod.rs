@@ -679,7 +679,7 @@ pub struct SearchArgs {
 
     /// WorkSet output format: full, timeline, compact, md, refs, or workset.
     /// Defaults to full when stdout is a terminal and workset when piped.
-    #[arg(short = 'f', long, value_name = "FORMAT")]
+    #[arg(short = 'f', long, visible_aliases = ["mode", "detail"], value_name = "FORMAT")]
     pub format: Option<WorkSetOutputFormat>,
 
     /// Alias for --format workset
@@ -820,7 +820,7 @@ pub struct FilterArgs {
 
     /// WorkSet output format: full, timeline, compact, md, refs, or workset.
     /// Defaults to full when stdout is a terminal and workset when piped.
-    #[arg(short = 'f', long, value_name = "FORMAT")]
+    #[arg(short = 'f', long, visible_aliases = ["mode", "detail"], value_name = "FORMAT")]
     pub format: Option<WorkSetOutputFormat>,
 
     /// Alias for --format workset
@@ -902,7 +902,7 @@ pub struct NavArgs {
 
     /// WorkSet output format: full, timeline, compact, md, refs, or workset.
     /// Defaults to full when stdout is a terminal and workset when piped.
-    #[arg(short = 'f', long, value_name = "FORMAT")]
+    #[arg(short = 'f', long, visible_aliases = ["mode", "detail"], value_name = "FORMAT")]
     pub format: Option<WorkSetOutputFormat>,
 
     /// Alias for --format workset
@@ -938,7 +938,7 @@ pub struct ZoomArgs {
 
     /// WorkSet output format: full, timeline, compact, md, refs, or workset.
     /// Defaults to full when stdout is a terminal and workset when piped.
-    #[arg(short = 'f', long, value_name = "FORMAT")]
+    #[arg(short = 'f', long, visible_aliases = ["mode", "detail"], value_name = "FORMAT")]
     pub format: Option<WorkSetOutputFormat>,
 
     /// Alias for --format workset
@@ -965,7 +965,7 @@ pub struct ShowArgs {
     pub cwd: Option<PathBuf>,
 
     /// WorkSet output format: full, timeline, compact, md, refs, or workset
-    #[arg(short = 'f', long, value_name = "FORMAT")]
+    #[arg(short = 'f', long, visible_aliases = ["mode", "detail"], value_name = "FORMAT")]
     pub format: Option<WorkSetOutputFormat>,
 
     /// Alias for --format full
@@ -1491,6 +1491,21 @@ mod tests {
             },
             _ => panic!("expected mcp command"),
         }
+    }
+
+    #[test]
+    fn show_and_search_accept_mode_as_format_alias() {
+        let show =
+            Cli::try_parse_from(["sivtr", "show", "terminal/1", "--mode", "timeline"]).unwrap();
+        assert!(
+            matches!(show.command, Some(Commands::Show(args)) if args.format == Some(WorkSetOutputFormat::Timeline))
+        );
+
+        let search =
+            Cli::try_parse_from(["sivtr", "search", "terminal", "--mode", "compact"]).unwrap();
+        assert!(
+            matches!(search.command, Some(Commands::Search(args)) if args.format == Some(WorkSetOutputFormat::Compact))
+        );
     }
 
     #[test]

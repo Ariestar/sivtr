@@ -180,7 +180,9 @@ fn root_env(provider: AgentProvider) -> Option<&'static str> {
 fn default_roots(provider: AgentProvider) -> &'static [&'static str] {
     match provider {
         AgentProvider::Amp => &[".local/share/amp/threads"],
-        AgentProvider::Antigravity | AgentProvider::AntigravityCli => &[".gemini/antigravity"],
+        AgentProvider::Antigravity | AgentProvider::AntigravityCli => {
+            &[".gemini/antigravity/conversations"]
+        }
         AgentProvider::Copilot => &[".copilot"],
         AgentProvider::DeepSeekTui => &[".codewhale/sessions", ".deepseek/sessions"],
         AgentProvider::Forge => &[".forge"],
@@ -350,7 +352,10 @@ fn is_candidate_file(provider: AgentProvider, path: &Path) -> bool {
         AgentProvider::Kilo | AgentProvider::Shelley => {
             extension.eq_ignore_ascii_case("db") || lower.ends_with(".sqlite")
         }
-        AgentProvider::RooCode | AgentProvider::OpenHands => false,
+        AgentProvider::Antigravity
+        | AgentProvider::AntigravityCli
+        | AgentProvider::RooCode
+        | AgentProvider::OpenHands => false,
         _ => {
             extension.eq_ignore_ascii_case("jsonl")
                 || extension.eq_ignore_ascii_case("ndjson")
