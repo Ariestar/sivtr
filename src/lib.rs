@@ -144,6 +144,9 @@ fn run() -> Result<()> {
         Some(Commands::Init { target }) => {
             commands::terminal::init::execute(&target)?;
         }
+        Some(Commands::Hook { shell }) => {
+            commands::terminal::init::print_hook(&shell)?;
+        }
         Some(Commands::Copy(cmd)) => run_copy_command(*cmd)?,
         Some(Commands::Ci(inv)) => run_copy_invocation(Projection::Input, &inv)?,
         Some(Commands::Co(inv)) => run_copy_invocation(Projection::Output, &inv)?,
