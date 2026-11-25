@@ -104,7 +104,7 @@ fn download(agent: &ureq::Agent, url: &str, limit: u64) -> Result<Vec<u8>> {
     let buf = response
         .body_mut()
         .with_config()
-        .limit(limit.saturating_add(1))
+        .limit(limit)
         .read_to_vec()
         .with_context(|| format!("failed to read {url}"))?;
     Ok(buf)
