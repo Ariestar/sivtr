@@ -1,10 +1,9 @@
-//! Provider adapters for the additional transcript formats covered by the
-//! agentsview provider catalog.
+//! Declared transcript formats for the providers without a dedicated module.
 //!
-//! The registry keeps provider identity and storage roots separate from the
-//! parser. Formats that are byte-compatible share a parser (TraeX/Codex),
-//! while JSONL, JSON-container, Markdown, directory, and SQLite shapes have
-//! one explicit decoding path each.
+//! Every provider here names one current on-disk layout in [`Layout`] and one
+//! root list in [`profile_for`]. A provider whose format this build cannot
+//! declare is `None`: it stays registered for launching agents, but it has no
+//! native source, so nothing guesses its way into the archive.
 
 use std::collections::HashSet;
 use std::fs;
@@ -16,13 +15,272 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use super::codex::CodexProvider;
 use super::{
     extract_content_text, filter_sessions_by_workspace, open_readonly_db, pretty_json_value,
-    push_block, push_tool_block, system_time_from_millis, system_time_from_unix_secs,
-    AgentBlockKind, AgentProvider, AgentSession, AgentSessionMeta, AgentSessionProvider,
-    SessionInfo,
+    push_block, push_tool_block, AgentBlockKind, AgentProvider, AgentSession, SessionInfo,
+    SessionListing,
 };
+
+/// The transcript layout a provider stores today.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Layout {
+    /// One markdown history file holding several `# aider chat started at` runs.
+    AiderMarkdown,
+    /// `wire.jsonl` events: `turn.prompt` / `content.part` / `tool.call` / `tool.result`.
+    KimiWire,
+    /// `<id>/base_state.json` plus ordered `events/*.json` event files.
+    OpenHandsEvents,
+    /// `<id>/history_item.json` plus `ui_messages.json` ask/say items.
+    RooCodeHistory,
+    /// `*.ndjson` events: `session.input` / `assistant_message.end` / `tool_call.*`.
+    PoolsideEvents,
+    /// `*.jsonl` events with `kind: Prompt | AssistantMessage | ToolResults`.
+    KiroEvents,
+    /// `*.json` session documents with `requests[].message` / `requests[].response`.
+    VSCodeSession,
+    /// Codex-compatible rollout JSONL.
+    CodexRollout,
+    /// `threads.db` rows holding one JSON (optionally zstd) conversation document.
+    ZedThreads,
+    /// VS Code `state.vscdb` `ItemTable` rows keyed by chat/session.
+    WindsurfState,
+}
+
+/// How a provider's sessions are discovered under one root. Directories and
+/// multi-run files are the exception; everything else is one file per session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Discovery {
+    /// Every candidate file is one session.
+    File,
+    /// Every candidate directory is one session.
+    Directory,
+    /// One physical file holds several runs, each its own session.
+    Runs,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct GenericProfile {
+    pub provider: AgentProvider,
+    /// Override root variable, read before `default_roots`.
+    pub env: Option<&'static str>,
+    pub default_roots: &'static [&'static str],
+    pub layout: Layout,
+    pub discovery: Discovery,
+    /// Which file names under a root are session leaves. Unused for
+    /// directory discovery.
+    pub leaf: Option<Leaf>,
+}
+
+/// Which file names under a root are session leaves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Leaf {
+    /// `.jsonl` only.
+    Jsonl,
+    /// `.ndjson` only.
+    Ndjson,
+    /// `.json`, `.jsonl`, or `.ndjson` inside a chat/session storage path.
+    ChatStorage,
+    /// One named file, wherever it appears under the root.
+    Named(&'static str),
+    /// `.jsonl` named `wire.jsonl` (Kimi's turn log).
+    WireLog,
+}
+
+impl Leaf {
+    fn matches(self, path: &Path, is_dir: bool) -> bool {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        let lower = name.to_ascii_lowercase();
+        let extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        match self {
+            Self::Jsonl => !is_dir && extension.eq_ignore_ascii_case("jsonl"),
+            Self::Ndjson => !is_dir && extension.eq_ignore_ascii_case("ndjson"),
+            Self::ChatStorage => {
+                !is_dir
+                    && (extension.eq_ignore_ascii_case("json")
+                        || extension.eq_ignore_ascii_case("jsonl"))
+                    && path.components().any(|component| {
+                        matches!(
+                            component
+                                .as_os_str()
+                                .to_string_lossy()
+                                .to_ascii_lowercase()
+                                .as_str(),
+                            "chatsessions" | "session-state"
+                        )
+                    })
+            }
+            Self::Named(wanted) => !is_dir && lower == wanted,
+            Self::WireLog => !is_dir && lower == "wire.jsonl",
+        }
+    }
+}
+
+/// Configuration files that are never transcripts, wherever they appear.
+const CONFIGURATION_FILE_NAMES: &[&str] = &[
+    "config.json",
+    "settings.json",
+    "package.json",
+    "package-lock.json",
+    "tsconfig.json",
+];
+
+/// One provider's declared current format, or `None` when this build cannot
+/// declare it. `None` providers never sync.
+pub fn profile_for(provider: AgentProvider) -> Option<&'static GenericProfile> {
+    GENERIC_PROFILES
+        .iter()
+        .find(|profile| profile.provider == provider)
+}
+
+pub fn is_supported(provider: AgentProvider) -> bool {
+    profile_for(provider).is_some()
+}
+
+const GENERIC_PROFILES: &[GenericProfile] = &[
+    GenericProfile {
+        provider: AgentProvider::Aider,
+        env: Some("AIDER_DIR"),
+        default_roots: &[],
+        layout: Layout::AiderMarkdown,
+        discovery: Discovery::Runs,
+        leaf: Some(Leaf::Named(".aider.chat.history.md")),
+    },
+    GenericProfile {
+        provider: AgentProvider::Kimi,
+        env: Some("KIMI_DIR"),
+        default_roots: &[".kimi/sessions", ".kimi-code/sessions"],
+        layout: Layout::KimiWire,
+        discovery: Discovery::File,
+        leaf: Some(Leaf::WireLog),
+    },
+    GenericProfile {
+        provider: AgentProvider::KimiWork,
+        env: Some("KIMI_WORK_DIR"),
+        default_roots: &[
+            "Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions",
+            ".config/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions",
+            ".local/share/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions",
+            "AppData/Roaming/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions",
+        ],
+        layout: Layout::KimiWire,
+        discovery: Discovery::File,
+        leaf: Some(Leaf::WireLog),
+    },
+    GenericProfile {
+        provider: AgentProvider::Kiro,
+        env: Some("KIRO_SESSIONS_DIR"),
+        default_roots: &[".kiro/sessions", ".local/share/kiro-cli"],
+        layout: Layout::KiroEvents,
+        discovery: Discovery::File,
+        leaf: Some(Leaf::Jsonl),
+    },
+    GenericProfile {
+        provider: AgentProvider::OpenHands,
+        env: Some("OPENHANDS_CONVERSATIONS_DIR"),
+        default_roots: &[".openhands/conversations"],
+        layout: Layout::OpenHandsEvents,
+        discovery: Discovery::Directory,
+        leaf: None,
+    },
+    GenericProfile {
+        provider: AgentProvider::Poolside,
+        env: Some("POOLSIDE_DIR"),
+        default_roots: &[
+            "Library/Application Support/poolside",
+            ".local/state/poolside",
+            "AppData/Roaming/poolside",
+        ],
+        layout: Layout::PoolsideEvents,
+        discovery: Discovery::File,
+        leaf: Some(Leaf::Ndjson),
+    },
+    GenericProfile {
+        provider: AgentProvider::RooCode,
+        env: Some("ROOCODE_DIR"),
+        default_roots: &[
+            "Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline",
+            ".config/Code/User/globalStorage/rooveterinaryinc.roo-cline",
+            "AppData/Roaming/Code/User/globalStorage/rooveterinaryinc.roo-cline",
+        ],
+        layout: Layout::RooCodeHistory,
+        discovery: Discovery::Directory,
+        leaf: None,
+    },
+    GenericProfile {
+        provider: AgentProvider::Trae,
+        env: Some("TRAE_DIR"),
+        default_roots: &[
+            "AppData/Roaming/Trae/User",
+            "AppData/Roaming/Trae CN/User",
+            "Library/Application Support/Trae/User",
+            ".config/Trae/User",
+        ],
+        layout: Layout::VSCodeSession,
+        discovery: Discovery::File,
+        leaf: Some(Leaf::ChatStorage),
+    },
+    GenericProfile {
+        provider: AgentProvider::TraeX,
+        env: Some("TRAEX_SESSIONS_DIR"),
+        default_roots: &[".trae/cli/sessions", ".trae/cli/archived_sessions"],
+        layout: Layout::CodexRollout,
+        discovery: Discovery::File,
+        leaf: Some(Leaf::Jsonl),
+    },
+    GenericProfile {
+        provider: AgentProvider::VSCodeCopilot,
+        env: Some("VSCODE_COPILOT_DIR"),
+        default_roots: &[
+            "AppData/Roaming/Code/User",
+            "AppData/Roaming/Code - Insiders/User",
+            "Library/Application Support/Code/User",
+            ".config/Code/User",
+        ],
+        layout: Layout::VSCodeSession,
+        discovery: Discovery::File,
+        leaf: Some(Leaf::ChatStorage),
+    },
+    GenericProfile {
+        provider: AgentProvider::Windsurf,
+        env: Some("WINDSURF_DIR"),
+        default_roots: &[
+            "AppData/Roaming/Windsurf/User",
+            "Library/Application Support/Windsurf/User",
+            ".config/Windsurf/User",
+        ],
+        layout: Layout::WindsurfState,
+        discovery: Discovery::File,
+        leaf: Some(Leaf::Named("state.vscdb")),
+    },
+    GenericProfile {
+        provider: AgentProvider::Zed,
+        env: Some("ZED_DIR"),
+        default_roots: &[
+            "Library/Application Support/Zed",
+            ".config/zed",
+            "AppData/Roaming/Zed",
+        ],
+        layout: Layout::ZedThreads,
+        discovery: Discovery::File,
+        leaf: Some(Leaf::Named("threads.db")),
+    },
+];
+
+fn directory_layout_matches(provider: AgentProvider, path: &Path) -> bool {
+    match provider {
+        AgentProvider::OpenHands => {
+            path.join("base_state.json").is_file() && path.join("events").is_dir()
+        }
+        AgentProvider::RooCode => path.join("history_item.json").is_file(),
+        _ => false,
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct GenericProvider {
@@ -34,8 +292,18 @@ impl GenericProvider {
         Self { provider }
     }
 
+    fn profile(self) -> Result<&'static GenericProfile> {
+        profile_for(self.provider).with_context(|| {
+            format!(
+                "{} has no declared transcript format in this build",
+                self.provider.name()
+            )
+        })
+    }
+
     fn roots(self) -> Result<Vec<PathBuf>> {
-        if let Some(name) = root_env(self.provider) {
+        let profile = self.profile()?;
+        if let Some(name) = profile.env {
             if let Some(value) = std::env::var_os(name) {
                 if value.is_empty() {
                     anyhow::bail!("{name} must not be empty");
@@ -43,204 +311,110 @@ impl GenericProvider {
                 return Ok(vec![PathBuf::from(value)]);
             }
         }
-
-        if matches!(self.provider, AgentProvider::Aider) {
+        if profile.discovery == Discovery::Runs {
+            // Aider keeps its history in the project it runs in.
             return Ok(vec![std::env::current_dir()
                 .context("failed to determine current directory for Aider")?]);
         }
-
         let home = dirs::home_dir().context("failed to determine home directory")?;
-        Ok(default_roots(self.provider)
+        Ok(profile
+            .default_roots
             .iter()
             .map(|relative| home.join(relative))
             .collect())
     }
 
     fn candidates(self) -> Result<Vec<PathBuf>> {
-        if self.provider == AgentProvider::Aider && std::env::var_os("AIDER_DIR").is_none() {
-            let path = std::env::current_dir()
-                .context("failed to determine current directory for Aider")?
-                .join(".aider.chat.history.md");
-            return Ok(path.is_file().then_some(path).into_iter().collect());
-        }
+        let profile = self.profile()?;
         let mut paths = Vec::new();
         let mut seen = HashSet::new();
         for root in self.roots()? {
-            collect_candidates(self.provider, &root, &mut paths, &mut seen)?;
+            collect_candidates(profile, &root, &mut paths, &mut seen)?;
         }
         paths.sort();
         Ok(paths)
     }
 }
 
-impl AgentSessionProvider for GenericProvider {
-    fn provider(&self) -> AgentProvider {
-        self.provider
+pub(crate) fn list_provider(provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
+    if !is_supported(provider) {
+        return Ok((Vec::new(), Vec::new()));
     }
-
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        let mut sessions = Vec::new();
-        for path in self.candidates()? {
-            if self.provider == AgentProvider::Aider {
-                sessions.extend(list_aider_sessions(&path)?);
-                continue;
-            }
-            if is_sqlite_provider(self.provider) {
-                sessions.extend(list_sqlite_sessions(self.provider, &path)?);
-                continue;
-            }
-            // One unreadable file must not drop the provider's whole listing;
-            // warn and keep going (same policy as the jsonl meta reader).
-            let parsed = match self.parse_session_file(&path) {
-                Ok(parsed) => parsed,
-                Err(error) => {
-                    crate::diagnostics::warn(format!(
-                        "failed to parse {} session {}: {error:#}",
-                        self.provider.command_name(),
-                        path.display()
-                    ));
-                    continue;
-                }
-            };
-            if parsed.blocks.is_empty() {
-                continue;
-            }
-            let modified = fs::metadata(&path)
-                .with_context(|| format!("failed to stat {}", path.display()))?
-                .modified()
-                .with_context(|| format!("failed to read mtime {}", path.display()))?;
-            let id = parsed.id.clone().or_else(|| {
-                path.file_stem()
-                    .and_then(|name| name.to_str())
-                    .map(str::to_string)
-            });
-            sessions.push(SessionInfo {
-                modified,
-                path,
-                physical_path: None,
-                id,
-                cwd: parsed.cwd,
-                title: parsed.title,
-            });
+    let source = GenericProvider::new(provider);
+    let profile = source.profile()?;
+    let mut sessions = Vec::new();
+    let mut failures = Vec::new();
+    for path in source.candidates()? {
+        // One unreadable file must not drop the provider's whole listing:
+        // report it so the sync engine keeps the archived copy.
+        if let Err(error) = source.list_candidate(profile, &path, &mut sessions) {
+            failures.push((path, format!("{error:#}")));
         }
-        sessions.sort_by_key(|session| session.modified);
-        sessions.reverse();
-        Ok(filter_sessions_by_workspace(sessions, cwd))
     }
+    sessions.sort_by_key(|session| session.modified);
+    sessions.reverse();
+    Ok((filter_sessions_by_workspace(sessions, cwd), failures))
+}
 
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        match self.provider {
-            AgentProvider::TraeX => CodexProvider.parse_session_file(path),
-            AgentProvider::Aider => parse_aider(path),
-            AgentProvider::Kimi | AgentProvider::KimiWork => parse_kimi(path, self.provider),
-            AgentProvider::OpenHands => parse_openhands(path),
-            AgentProvider::RooCode => parse_roocode(path),
-            AgentProvider::Zed
-            | AgentProvider::Windsurf
-            | AgentProvider::Kilo
-            | AgentProvider::Shelley => parse_sqlite(path, self.provider),
-            _ => parse_json_document(path, self.provider),
-        }
+pub(crate) fn parse_provider(provider: AgentProvider, path: &Path) -> Result<AgentSession> {
+    let profile = GenericProvider::new(provider).profile()?;
+    match profile.layout {
+        Layout::AiderMarkdown => parse_aider(path),
+        Layout::KimiWire => parse_kimi(path),
+        Layout::OpenHandsEvents => parse_openhands(path),
+        Layout::RooCodeHistory => parse_roocode(path),
+        Layout::PoolsideEvents => parse_poolside(path),
+        Layout::KiroEvents => parse_kiro(path),
+        Layout::VSCodeSession => parse_vscode_session(path),
+        Layout::CodexRollout => crate::agents::codex::parse_file(AgentProvider::Codex, path),
+        Layout::ZedThreads => parse_zed(path),
+        Layout::WindsurfState => parse_windsurf(path),
     }
 }
 
-fn root_env(provider: AgentProvider) -> Option<&'static str> {
-    Some(match provider {
-        AgentProvider::Amp => "AMP_DIR",
-        AgentProvider::Aider => "AIDER_DIR",
-        AgentProvider::Antigravity => "ANTIGRAVITY_DIR",
-        AgentProvider::AntigravityCli => "ANTIGRAVITY_CLI_DIR",
-        AgentProvider::Copilot => "COPILOT_DIR",
-        AgentProvider::DeepSeekTui => "DEEPSEEK_TUI_SESSIONS_DIR",
-        AgentProvider::Forge => "FORGE_DIR",
-        AgentProvider::Gptme => "GPTME_DIR",
-        AgentProvider::Iflow => "IFLOW_DIR",
-        AgentProvider::Kilo => "KILO_DIR",
-        AgentProvider::Kimi => "KIMI_DIR",
-        AgentProvider::KimiWork => "KIMI_WORK_DIR",
-        AgentProvider::Kiro => "KIRO_SESSIONS_DIR",
-        AgentProvider::OpenHands => "OPENHANDS_CONVERSATIONS_DIR",
-        AgentProvider::Poolside => "POOLSIDE_DIR",
-        AgentProvider::PositAssistant => "POSIT_ASSISTANT_DIR",
-        AgentProvider::QwenPaw => "QWENPAW_DIR",
-        AgentProvider::Reasonix => "REASONIX_DIR",
-        AgentProvider::RooCode => "ROOCODE_DIR",
-        AgentProvider::Shelley => "SHELLEY_DIR",
-        AgentProvider::Trae => "TRAE_DIR",
-        AgentProvider::TraeX => "TRAEX_SESSIONS_DIR",
-        AgentProvider::Vibe => "VIBE_SESSIONS_DIR",
-        AgentProvider::VSCodeCopilot => "VSCODE_COPILOT_DIR",
-        AgentProvider::Windsurf => "WINDSURF_DIR",
-        AgentProvider::Zed => "ZED_DIR",
-        AgentProvider::Zencoder => "ZENCODER_DIR",
-        _ => return None,
+impl GenericProvider {
+    fn list_candidate(
+        self,
+        profile: &GenericProfile,
+        path: &Path,
+        sessions: &mut Vec<SessionInfo>,
+    ) -> Result<()> {
+        match profile.discovery {
+            Discovery::Runs => sessions.extend(list_aider_sessions(path)?),
+            Discovery::Directory => {
+                let session = parse_provider(self.provider, path)?;
+                sessions.push(session_info(path, session, true)?);
+            }
+            Discovery::File => match profile.layout {
+                Layout::ZedThreads => sessions.extend(list_zed_sessions(path)?),
+                Layout::WindsurfState => sessions.extend(list_windsurf_sessions(path)?),
+                _ => {
+                    let session = parse_provider(self.provider, path)?;
+                    sessions.push(session_info(path, session, false)?);
+                }
+            },
+        }
+        Ok(())
+    }
+}
+
+fn session_info(path: &Path, session: AgentSession, directory: bool) -> Result<SessionInfo> {
+    let modified = fs::metadata(path)
+        .with_context(|| format!("failed to stat {}", path.display()))?
+        .modified()
+        .with_context(|| format!("failed to read mtime {}", path.display()))?;
+    Ok(SessionInfo {
+        modified,
+        path: path.to_path_buf(),
+        physical_path: directory.then(|| path.to_path_buf()),
+        id: session.id,
+        cwd: session.cwd,
+        title: session.title,
     })
 }
 
-fn default_roots(provider: AgentProvider) -> &'static [&'static str] {
-    match provider {
-        AgentProvider::Amp => &[".local/share/amp/threads"],
-        AgentProvider::Antigravity | AgentProvider::AntigravityCli => &[".gemini/antigravity"],
-        AgentProvider::Copilot => &[".copilot"],
-        AgentProvider::DeepSeekTui => &[".codewhale/sessions", ".deepseek/sessions"],
-        AgentProvider::Forge => &[".forge"],
-        AgentProvider::Gptme => &[".local/share/gptme/logs"],
-        AgentProvider::Iflow => &[".iflow/projects"],
-        AgentProvider::Kilo => &[".local/share/kilo"],
-        AgentProvider::Kimi => &[".kimi/sessions", ".kimi-code/sessions"],
-        AgentProvider::KimiWork => &[
-            "Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions",
-            ".config/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions",
-            ".local/share/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions",
-            "AppData/Roaming/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions",
-        ],
-        AgentProvider::Kiro => &[".kiro/sessions", ".local/share/kiro-cli"],
-        AgentProvider::OpenHands => &[".openhands/conversations"],
-        AgentProvider::Poolside => &[
-            "Library/Application Support/poolside",
-            ".local/state/poolside",
-            "AppData/Roaming/poolside",
-        ],
-        AgentProvider::PositAssistant => &[".posit/assistant/workspaces"],
-        AgentProvider::QwenPaw => &[".copaw/workspaces"],
-        AgentProvider::Reasonix => &[".reasonix", "AppData/Roaming/reasonix"],
-        AgentProvider::RooCode => &[
-            "Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline",
-            ".config/Code/User/globalStorage/rooveterinaryinc.roo-cline",
-            "AppData/Roaming/Code/User/globalStorage/rooveterinaryinc.roo-cline",
-        ],
-        AgentProvider::Shelley => &[".config/shelley"],
-        AgentProvider::Trae => &[
-            "AppData/Roaming/Trae/User",
-            "AppData/Roaming/Trae CN/User",
-            "Library/Application Support/Trae/User",
-            ".config/Trae/User",
-        ],
-        AgentProvider::TraeX => &[".trae/cli/sessions", ".trae/cli/archived_sessions"],
-        AgentProvider::Vibe => &[".vibe/logs/session"],
-        AgentProvider::VSCodeCopilot => &[
-            "AppData/Roaming/Code/User",
-            "AppData/Roaming/Code - Insiders/User",
-            "Library/Application Support/Code/User",
-            ".config/Code/User",
-        ],
-        AgentProvider::Windsurf => &[
-            "AppData/Roaming/Windsurf/User",
-            "Library/Application Support/Windsurf/User",
-            ".config/Windsurf/User",
-        ],
-        AgentProvider::Zed => &[
-            "Library/Application Support/Zed",
-            ".config/zed",
-            "AppData/Roaming/Zed",
-        ],
-        AgentProvider::Zencoder => &[".zencoder/sessions"],
-        _ => &[],
-    }
-}
-
 fn collect_candidates(
-    provider: AgentProvider,
+    profile: &GenericProfile,
     path: &Path,
     output: &mut Vec<PathBuf>,
     seen: &mut HashSet<PathBuf>,
@@ -261,7 +435,7 @@ fn collect_candidates(
         if path.file_name().is_some_and(|name| name == "node_modules") {
             return Ok(());
         }
-        if is_openhands_dir(provider, path) || is_roocode_dir(provider, path) {
+        if directory_layout_matches(profile.provider, path) {
             if seen.insert(path.to_path_buf()) {
                 output.push(path.to_path_buf());
             }
@@ -270,944 +444,23 @@ fn collect_candidates(
         for entry in
             fs::read_dir(path).with_context(|| format!("failed to read {}", path.display()))?
         {
-            collect_candidates(provider, &entry?.path(), output, seen)?;
+            collect_candidates(profile, &entry?.path(), output, seen)?;
         }
         return Ok(());
     }
-    if is_candidate_file(provider, path) && seen.insert(path.to_path_buf()) {
-        output.push(path.to_path_buf());
-    }
-    Ok(())
-}
-
-fn is_openhands_dir(provider: AgentProvider, path: &Path) -> bool {
-    provider == AgentProvider::OpenHands
-        && path.join("base_state.json").is_file()
-        && path.join("events").is_dir()
-}
-
-fn is_roocode_dir(provider: AgentProvider, path: &Path) -> bool {
-    provider == AgentProvider::RooCode && path.join("history_item.json").is_file()
-}
-
-/// File names that are tool or package configuration wherever they appear,
-/// so the extension-based rules below never take them for a transcript.
-const CONFIGURATION_FILE_NAMES: &[&str] = &[
-    "config.json",
-    "settings.json",
-    "package.json",
-    "package-lock.json",
-    "tsconfig.json",
-];
-
-fn is_candidate_file(provider: AgentProvider, path: &Path) -> bool {
     let name = path
         .file_name()
         .and_then(|value| value.to_str())
-        .unwrap_or_default();
-    let lower = name.to_ascii_lowercase();
-    if CONFIGURATION_FILE_NAMES.contains(&lower.as_str()) {
-        return false;
-    }
-    let extension = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default();
-    match provider {
-        AgentProvider::Aider => name == ".aider.chat.history.md",
-        AgentProvider::Amp => extension.eq_ignore_ascii_case("json"),
-        AgentProvider::DeepSeekTui => {
-            extension.eq_ignore_ascii_case("json") && lower.contains("session")
-        }
-        AgentProvider::Gptme => lower == "conversation.jsonl",
-        AgentProvider::Iflow => lower.starts_with("session-") && lower.ends_with(".jsonl"),
-        AgentProvider::Kimi | AgentProvider::KimiWork => {
-            lower == "wire.jsonl"
-                && (provider == AgentProvider::Kimi
-                    || path.components().any(|component| {
-                        component.as_os_str().to_string_lossy().starts_with("conv-")
-                    }))
-        }
-        AgentProvider::Kiro => extension.eq_ignore_ascii_case("jsonl"),
-        AgentProvider::Poolside => extension.eq_ignore_ascii_case("ndjson"),
-        AgentProvider::TraeX => extension.eq_ignore_ascii_case("jsonl"),
-        AgentProvider::Vibe => lower == "messages.jsonl",
-        AgentProvider::VSCodeCopilot | AgentProvider::Trae => {
-            (extension.eq_ignore_ascii_case("json") || extension.eq_ignore_ascii_case("jsonl"))
-                && path.components().any(|component| {
-                    matches!(
-                        component
-                            .as_os_str()
-                            .to_string_lossy()
-                            .to_ascii_lowercase()
-                            .as_str(),
-                        "chatsessions" | "session-state" | "globalstorage"
-                    )
-                })
-        }
-        AgentProvider::Windsurf => lower == "state.vscdb",
-        AgentProvider::Zed => lower == "threads.db",
-        AgentProvider::Kilo | AgentProvider::Shelley => {
-            extension.eq_ignore_ascii_case("db") || lower.ends_with(".sqlite")
-        }
-        AgentProvider::RooCode | AgentProvider::OpenHands => false,
-        _ => {
-            extension.eq_ignore_ascii_case("jsonl")
-                || extension.eq_ignore_ascii_case("ndjson")
-                || extension.eq_ignore_ascii_case("json")
-        }
-    }
-}
-
-fn is_sqlite_provider(provider: AgentProvider) -> bool {
-    matches!(
-        provider,
-        AgentProvider::Zed | AgentProvider::Windsurf | AgentProvider::Kilo | AgentProvider::Shelley
-    )
-}
-
-fn list_sqlite_sessions(_provider: AgentProvider, path: &Path) -> Result<Vec<SessionInfo>> {
-    let conn = open_readonly_db(path)?;
-    let tables = table_names(&conn)?;
-    let modified = fs::metadata(path)
-        .with_context(|| format!("failed to stat {}", path.display()))?
-        .modified()
-        .with_context(|| format!("failed to read mtime {}", path.display()))?;
-    let mut sessions = Vec::new();
-    let mut seen = HashSet::new();
-
-    if tables.contains("threads") {
-        let columns = table_columns(&conn, "threads")?;
-        if columns.contains("id") {
-            let id = column_or_null(&columns, "id");
-            let summary = column_or_null(&columns, "summary");
-            let updated = if columns.contains("updated_at") {
-                "CAST(updated_at AS TEXT)"
-            } else if columns.contains("last_message_at") {
-                "CAST(last_message_at AS TEXT)"
-            } else {
-                "NULL"
-            };
-            let cwd = if columns.contains("folder_paths") {
-                "CAST(folder_paths AS TEXT)"
-            } else if columns.contains("cwd") {
-                "CAST(cwd AS TEXT)"
-            } else {
-                "NULL"
-            };
-            let sql = format!(
-                "SELECT CAST({id} AS TEXT), CAST({summary} AS TEXT), {updated}, {cwd} FROM threads ORDER BY rowid DESC"
-            );
-            let mut stmt = conn.prepare(&sql)?;
-            let rows = stmt.query_map([], |row| {
-                Ok((
-                    row.get::<_, Option<String>>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                ))
-            })?;
-            for row in rows {
-                let (id, title, updated, cwd) = row?;
-                if let Some(info) = sqlite_session_info(
-                    path,
-                    id.as_deref(),
-                    title.as_deref(),
-                    cwd.as_deref(),
-                    updated.as_deref(),
-                    modified,
-                    &mut seen,
-                ) {
-                    sessions.push(info);
-                }
-            }
-        }
-    }
-
-    if tables.contains("session") {
-        let columns = table_columns(&conn, "session")?;
-        if columns.contains("id") {
-            let id = column_or_null(&columns, "id");
-            let title = if columns.contains("title") {
-                "CAST(title AS TEXT)"
-            } else if columns.contains("name") {
-                "CAST(name AS TEXT)"
-            } else {
-                "NULL"
-            };
-            let cwd = if columns.contains("directory") {
-                "CAST(directory AS TEXT)"
-            } else if columns.contains("cwd") {
-                "CAST(cwd AS TEXT)"
-            } else {
-                "NULL"
-            };
-            let updated = if columns.contains("time_updated") {
-                "CAST(time_updated AS TEXT)"
-            } else if columns.contains("updated_at") {
-                "CAST(updated_at AS TEXT)"
-            } else {
-                "NULL"
-            };
-            let sql = format!(
-                "SELECT CAST({id} AS TEXT), {title}, {cwd}, {updated} FROM session ORDER BY rowid DESC"
-            );
-            let mut stmt = conn.prepare(&sql)?;
-            let rows = stmt.query_map([], |row| {
-                Ok((
-                    row.get::<_, Option<String>>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                ))
-            })?;
-            for row in rows {
-                let (id, title, cwd, updated) = row?;
-                if let Some(info) = sqlite_session_info(
-                    path,
-                    id.as_deref(),
-                    title.as_deref(),
-                    cwd.as_deref(),
-                    updated.as_deref(),
-                    modified,
-                    &mut seen,
-                ) {
-                    sessions.push(info);
-                }
-            }
-        }
-    }
-
-    if tables.contains("ItemTable") {
-        let columns = table_columns(&conn, "ItemTable")?;
-        if columns.contains("key") && columns.contains("value") {
-            let mut stmt = conn.prepare(
-                "SELECT key, CAST(value AS TEXT) FROM ItemTable WHERE value IS NOT NULL",
-            )?;
-            let rows = stmt.query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?;
-            for row in rows {
-                let (key, value) = row?;
-                if !key.to_ascii_lowercase().contains("chat")
-                    && !key.to_ascii_lowercase().contains("session")
-                {
-                    continue;
-                }
-                let document: Value = serde_json::from_str(&value)
-                    .with_context(|| format!("SQLite ItemTable value `{key}` is not JSON"))?;
-                let mut metadata = Vec::new();
-                collect_session_metadata(&document, &mut metadata);
-                for (id, title, cwd, updated) in metadata {
-                    if let Some(info) = sqlite_session_info(
-                        path,
-                        Some(&id),
-                        title.as_deref().or(Some(key.as_str())),
-                        cwd.as_deref(),
-                        updated.as_deref(),
-                        modified,
-                        &mut seen,
-                    ) {
-                        sessions.push(info);
-                    }
-                }
-            }
-        }
-    }
-
-    for table in ["message", "messages"] {
-        if !tables.contains(table) {
-            continue;
-        }
-        let columns = table_columns(&conn, table)?;
-        let Some(session_column) = columns
-            .iter()
-            .find(|name| name.eq_ignore_ascii_case("session_id"))
-        else {
-            continue;
-        };
-        let sql = format!(
-            "SELECT DISTINCT CAST(\"{}\" AS TEXT) FROM \"{}\" WHERE \"{}\" IS NOT NULL",
-            session_column.replace('"', "\"\""),
-            table.replace('"', "\"\""),
-            session_column.replace('"', "\"\""),
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        for row in rows {
-            if let Some(info) =
-                sqlite_session_info(path, Some(&row?), None, None, None, modified, &mut seen)
-            {
-                sessions.push(info);
-            }
-        }
-    }
-
-    sessions.sort_by_key(|session| session.modified);
-    sessions.reverse();
-    Ok(sessions)
-}
-
-fn sqlite_session_info(
-    physical: &Path,
-    raw_id: Option<&str>,
-    title: Option<&str>,
-    cwd: Option<&str>,
-    updated: Option<&str>,
-    fallback_modified: SystemTime,
-    seen: &mut HashSet<String>,
-) -> Option<SessionInfo> {
-    let id = raw_id
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(addressable_session_id)?;
-    if !seen.insert(id.clone()) {
-        return None;
-    }
-    Some(SessionInfo {
-        path: sqlite_virtual_path(physical, &id),
-        physical_path: Some(physical.to_path_buf()),
-        id: Some(id),
-        cwd: parse_sqlite_cwd(cwd),
-        title: non_empty(title),
-        modified: parse_sqlite_time(updated).unwrap_or(fallback_modified),
-    })
-}
-
-type SessionMetadata = (String, Option<String>, Option<String>, Option<String>);
-
-fn collect_session_metadata(value: &Value, output: &mut Vec<SessionMetadata>) {
-    if let Some(id) = value
-        .get("sessionId")
-        .or_else(|| value.get("session_id"))
-        .or_else(|| value.get("conversationId"))
-        .or_else(|| value.get("conversation_id"))
-        .and_then(Value::as_str)
-    {
-        output.push((
-            id.to_string(),
-            value
-                .get("title")
-                .or_else(|| value.get("customTitle"))
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            value
-                .get("cwd")
-                .or_else(|| value.get("workspace"))
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            json_timestamp(value),
-        ));
-    }
-    match value {
-        Value::Object(map) => map
-            .values()
-            .for_each(|value| collect_session_metadata(value, output)),
-        Value::Array(items) => items
-            .iter()
-            .for_each(|value| collect_session_metadata(value, output)),
-        _ => {}
-    }
-}
-
-fn addressable_session_id(raw: &str) -> String {
-    if raw
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
-    {
-        raw.to_string()
-    } else {
-        sanitize_id(raw)
-    }
-}
-
-fn sqlite_virtual_path(physical: &Path, session_id: &str) -> PathBuf {
-    PathBuf::from(format!("{}#{session_id}", physical.display()))
-}
-
-fn split_sqlite_virtual_path(path: &Path) -> (PathBuf, Option<String>) {
-    let text = path.to_string_lossy();
-    let Some((physical, session_id)) = text.rsplit_once('#') else {
-        return (path.to_path_buf(), None);
-    };
-    let physical = PathBuf::from(physical);
-    if physical.is_file() {
-        (physical, Some(session_id.to_string()))
-    } else {
-        (path.to_path_buf(), None)
-    }
-}
-
-fn parse_sqlite_time(value: Option<&str>) -> Option<SystemTime> {
-    let value = value?.trim();
-    if let Ok(number) = value.parse::<i64>() {
-        return Some(if value.len() >= 13 {
-            system_time_from_millis(number)
-        } else {
-            system_time_from_unix_secs(number as f64)
-        });
-    }
-    let timestamp = crate::time::parse_timestamp(value)?;
-    let millis = timestamp.timestamp_millis();
-    Some(system_time_from_millis(millis))
-}
-
-fn parse_sqlite_cwd(value: Option<&str>) -> Option<String> {
-    let value = value?.trim();
-    if value.is_empty() {
-        return None;
-    }
-    if let Ok(paths) = serde_json::from_str::<Vec<String>>(value) {
-        return paths.into_iter().find(|path| !path.trim().is_empty());
-    }
-    Some(value.to_string())
-}
-
-fn non_empty(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
-fn parse_json_document(path: &Path, provider: AgentProvider) -> Result<AgentSession> {
-    let values = read_json_values(path)?;
-    let mut session = empty_session(path);
-    for value in values {
-        match provider {
-            AgentProvider::VSCodeCopilot | AgentProvider::Trae => {
-                if !apply_vscode_session(&mut session, &value) {
-                    apply_generic_value(&mut session, &value, None);
-                }
-            }
-            AgentProvider::Kiro => apply_kiro_value(&mut session, &value),
-            AgentProvider::Poolside => apply_poolside_value(&mut session, &value),
-            _ => apply_generic_value(&mut session, &value, None),
-        }
-    }
-    finish_session(&mut session, provider, path);
-    Ok(session)
-}
-
-fn read_json_values(path: &Path) -> Result<Vec<Value>> {
-    let extension = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default();
-    if extension.eq_ignore_ascii_case("json") {
-        let text = fs::read_to_string(path)
-            .with_context(|| format!("failed to read JSON transcript {}", path.display()))?;
-        return Ok(vec![serde_json::from_str(&text).with_context(|| {
-            format!("failed to parse JSON transcript {}", path.display())
-        })?]);
-    }
-
-    let file = fs::File::open(path)
-        .with_context(|| format!("failed to read transcript {}", path.display()))?;
-    let mut values = Vec::new();
-    for (index, line) in BufReader::new(file).lines().enumerate() {
-        let line =
-            line.with_context(|| format!("failed to read {} line {}", path.display(), index + 1))?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        match serde_json::from_str::<Value>(&line) {
-            Ok(value) => values.push(value),
-            Err(error) if index > 0 && error.classify() == serde_json::error::Category::Eof => {
-                break
-            }
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!("failed to parse {} line {}", path.display(), index + 1)
-                })
-            }
-        }
-    }
-    Ok(values)
-}
-
-fn empty_session(path: &Path) -> AgentSession {
-    AgentSession {
-        path: path.to_path_buf(),
-        id: None,
-        cwd: None,
-        title: None,
-        blocks: Vec::new(),
-    }
-}
-
-fn finish_session(session: &mut AgentSession, _provider: AgentProvider, path: &Path) {
-    if session.id.is_none() {
-        session.id = path
-            .file_stem()
-            .and_then(|name| name.to_str())
-            .map(str::to_string);
-    }
-    if session.title.is_none() {
-        let first_user = session
-            .blocks
-            .iter()
-            .find(|block| block.kind == AgentBlockKind::User)
-            .map(|block| block.text.as_str());
-        let mut meta = AgentSessionMeta::default();
-        meta.fallback_title(first_user);
-        session.title = meta.title;
-    }
-}
-
-fn apply_generic_value(
-    session: &mut AgentSession,
-    value: &Value,
-    inherited_timestamp: Option<String>,
-) {
-    update_identity(session, value);
-    let timestamp = json_timestamp(value).or(inherited_timestamp);
-
-    if let Some(messages) = value.get("messages").and_then(Value::as_array) {
-        for message in messages {
-            apply_generic_value(session, message, timestamp.clone());
-        }
-        return;
-    }
-    if let Some(events) = value.get("events").and_then(Value::as_array) {
-        for event in events {
-            apply_generic_value(session, event, timestamp.clone());
-        }
-        return;
-    }
-
-    if let Some(kind) = value.get("kind").and_then(Value::as_str) {
-        if matches!(kind, "MessageEvent" | "ActionEvent" | "ObservationEvent") {
-            apply_openhands_value(session, value, timestamp.clone());
-            return;
-        }
-    }
-
-    let payload = value
-        .get("message")
-        .filter(|message| message.is_object())
-        .unwrap_or(value);
-    let role = payload
-        .get("role")
-        .and_then(Value::as_str)
-        .or_else(|| value.get("role").and_then(Value::as_str))
-        .or_else(|| value.get("source").and_then(Value::as_str))
-        .or_else(|| value.get("type").and_then(Value::as_str));
-
-    if let Some(role) = role.and_then(role_kind) {
-        let content = payload
-            .get("content")
-            .or_else(|| payload.get("text"))
-            .or_else(|| value.get("content"))
-            .unwrap_or(&Value::Null);
-        push_content(session, role, timestamp.clone(), content);
-        push_top_level_tools(session, timestamp, value);
-    } else if value.get("thought").and_then(Value::as_bool) == Some(true)
-        || value.get("reasoning").is_some()
-    {
-        let content = value.get("reasoning").or_else(|| value.get("text"));
-        if let Some(content) = content {
-            push_block(
-                session,
-                AgentBlockKind::Thinking,
-                timestamp,
-                None,
-                extract_content_text(content),
-            );
-        }
-    }
-}
-
-fn update_identity(session: &mut AgentSession, value: &Value) {
-    if session.id.is_none() {
-        session.id = value
-            .get("sessionId")
-            .or_else(|| value.get("session_id"))
-            .or_else(|| value.get("conversationId"))
-            .or_else(|| value.get("conversation_id"))
-            .and_then(Value::as_str)
-            .filter(|id| !id.trim().is_empty())
-            .map(str::to_string);
-    }
-    if session.cwd.is_none() {
-        session.cwd = value
-            .get("cwd")
-            .or_else(|| value.get("workspace"))
-            .or_else(|| value.get("workspaceRootPath"))
-            .or_else(|| value.get("workingDirectory"))
-            .or_else(|| value.get("working_dir"))
-            .and_then(Value::as_str)
-            .filter(|cwd| !cwd.trim().is_empty())
-            .map(str::to_string);
-    }
-    if session.title.is_none() {
-        session.title = value
-            .get("title")
-            .or_else(|| value.get("name"))
-            .or_else(|| value.get("summary"))
-            .or_else(|| value.get("customTitle"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|title| !title.is_empty())
-            .map(str::to_string);
-    }
-}
-
-fn role_kind(role: &str) -> Option<AgentBlockKind> {
-    match role.to_ascii_lowercase().as_str() {
-        "user" | "human" | "prompt" | "session.input" => Some(AgentBlockKind::User),
-        "assistant" | "ai" | "model" | "agent" | "say" => Some(AgentBlockKind::Assistant),
-        "tool" | "tool_result" | "toolresult" | "tool-response" | "observation" => {
-            Some(AgentBlockKind::ToolOutput)
-        }
-        _ => None,
-    }
-}
-
-fn push_content(
-    session: &mut AgentSession,
-    kind: AgentBlockKind,
-    timestamp: Option<String>,
-    value: &Value,
-) {
-    match value {
-        Value::Array(items) => {
-            for item in items {
-                let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
-                if item.get("functionCall").is_some()
-                    || item.get("toolCall").is_some()
-                    || item.get("tool_use").is_some()
-                {
-                    let call = item
-                        .get("functionCall")
-                        .or_else(|| item.get("toolCall"))
-                        .or_else(|| item.get("tool_use"))
-                        .unwrap_or(item);
-                    push_tool(session, AgentBlockKind::ToolCall, timestamp.clone(), call);
-                } else if item.get("functionResponse").is_some()
-                    || item.get("toolResult").is_some()
-                    || item.get("tool_result").is_some()
-                {
-                    let result = item
-                        .get("functionResponse")
-                        .or_else(|| item.get("toolResult"))
-                        .or_else(|| item.get("tool_result"))
-                        .unwrap_or(item);
-                    push_tool(
-                        session,
-                        AgentBlockKind::ToolOutput,
-                        timestamp.clone(),
-                        result,
-                    );
-                } else {
-                    match item_type {
-                        "tool_use" | "tool_call" | "toolCall" | "functionCall" | "tool" => {
-                            push_tool(session, AgentBlockKind::ToolCall, timestamp.clone(), item)
-                        }
-                        "tool_result" | "toolResult" | "functionResponse" => {
-                            push_tool(session, AgentBlockKind::ToolOutput, timestamp.clone(), item)
-                        }
-                        "thinking" | "reasoning" => push_block(
-                            session,
-                            AgentBlockKind::Thinking,
-                            timestamp.clone(),
-                            None,
-                            extract_content_text(item.get("text").unwrap_or(item)),
-                        ),
-                        _ => push_block(
-                            session,
-                            kind,
-                            timestamp.clone(),
-                            None,
-                            extract_content_text(item),
-                        ),
-                    }
-                }
-            }
-        }
-        Value::Object(object) if object.get("type").is_some() => {
-            let item_type = object
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if matches!(
-                item_type,
-                "tool_use" | "tool_call" | "toolCall" | "functionCall" | "tool"
-            ) {
-                push_tool(session, AgentBlockKind::ToolCall, timestamp, value);
-            } else if matches!(item_type, "tool_result" | "toolResult" | "functionResponse") {
-                push_tool(session, AgentBlockKind::ToolOutput, timestamp, value);
-            } else {
-                push_block(session, kind, timestamp, None, extract_content_text(value));
-            }
-        }
-        _ => push_block(session, kind, timestamp, None, extract_content_text(value)),
-    }
-}
-
-fn push_top_level_tools(session: &mut AgentSession, timestamp: Option<String>, value: &Value) {
-    for key in [
-        "tool_calls",
-        "toolCalls",
-        "toolCall",
-        "functionCall",
-        "tool_use",
-    ] {
-        let Some(tools) = value.get(key) else {
-            continue;
-        };
-        match tools {
-            Value::Array(items) => items.iter().for_each(|item| {
-                push_tool(session, AgentBlockKind::ToolCall, timestamp.clone(), item)
-            }),
-            _ => push_tool(session, AgentBlockKind::ToolCall, timestamp.clone(), tools),
-        }
-    }
-    for key in [
-        "tool_results",
-        "toolResults",
-        "toolResult",
-        "functionResponse",
-    ] {
-        let Some(results) = value.get(key) else {
-            continue;
-        };
-        match results {
-            Value::Array(items) => items.iter().for_each(|item| {
-                push_tool(session, AgentBlockKind::ToolOutput, timestamp.clone(), item)
-            }),
-            _ => push_tool(
-                session,
-                AgentBlockKind::ToolOutput,
-                timestamp.clone(),
-                results,
-            ),
-        }
-    }
-}
-
-fn push_tool(
-    session: &mut AgentSession,
-    kind: AgentBlockKind,
-    timestamp: Option<String>,
-    value: &Value,
-) {
-    let label = value
-        .get("name")
-        .or_else(|| value.get("tool"))
-        .or_else(|| value.get("toolName"))
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let call_id = value
-        .get("id")
-        .or_else(|| value.get("call_id"))
-        .or_else(|| value.get("tool_call_id"))
-        .or_else(|| value.get("tool_use_id"))
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let body = value
-        .get("input")
-        .or_else(|| value.get("args"))
-        .or_else(|| value.get("arguments"))
-        .or_else(|| value.get("output"))
-        .or_else(|| value.get("content"))
-        .or_else(|| value.get("result"))
-        .unwrap_or(value);
-    push_tool_block(
-        session,
-        kind,
-        timestamp,
-        call_id,
-        label,
-        match body {
-            Value::String(text) => text.to_string(),
-            _ => pretty_json_value(body),
-        },
-        None,
-    );
-}
-
-fn json_timestamp(value: &Value) -> Option<String> {
-    value
-        .get("timestamp")
-        .or_else(|| value.get("createdAt"))
-        .or_else(|| value.get("created_at"))
-        .or_else(|| value.get("time"))
-        .and_then(|timestamp| {
-            timestamp
-                .as_str()
-                .map(str::to_string)
-                .or_else(|| timestamp.as_i64().map(|number| number.to_string()))
-        })
-}
-
-fn apply_openhands_value(session: &mut AgentSession, value: &Value, timestamp: Option<String>) {
-    let kind = value
-        .get("kind")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    match kind {
-        "MessageEvent" => {
-            let source = value
-                .get("source")
-                .or_else(|| value.get("role"))
-                .and_then(Value::as_str)
-                .unwrap_or("assistant");
-            let Some(role) = role_kind(source) else {
-                return;
-            };
-            let content = value
-                .get("message")
-                .or_else(|| value.get("content"))
-                .or_else(|| value.get("text"))
-                .unwrap_or(&Value::Null);
-            push_content(session, role, timestamp, content);
-        }
-        "ActionEvent" => {
-            let action = value
-                .get("action")
-                .or_else(|| value.get("content"))
-                .unwrap_or(value);
-            push_tool(session, AgentBlockKind::ToolCall, timestamp, action);
-        }
-        "ObservationEvent" => {
-            let observation = value
-                .get("observation")
-                .or_else(|| value.get("content"))
-                .unwrap_or(value);
-            push_tool(session, AgentBlockKind::ToolOutput, timestamp, observation);
-        }
-        _ => {}
-    }
-}
-
-fn apply_vscode_session(session: &mut AgentSession, value: &Value) -> bool {
-    let Some(requests) = value.get("requests").and_then(Value::as_array) else {
-        return false;
-    };
-    for request in requests {
-        let timestamp = json_timestamp(request);
-        if let Some(message) = request.get("message") {
-            let text = message
-                .get("text")
-                .or_else(|| message.get("content"))
-                .unwrap_or(&Value::Null);
-            push_content(session, AgentBlockKind::User, timestamp.clone(), text);
-        }
-        if let Some(response) = request.get("response") {
-            push_vscode_response(session, timestamp, response);
-        }
-    }
-    true
-}
-
-fn push_vscode_response(session: &mut AgentSession, timestamp: Option<String>, response: &Value) {
-    let Some(items) = response.as_array() else {
-        push_content(session, AgentBlockKind::Assistant, timestamp, response);
-        return;
-    };
-    for item in items {
-        if let Some(text) = item.get("value").and_then(Value::as_str) {
-            push_block(
-                session,
-                AgentBlockKind::Assistant,
-                timestamp.clone(),
-                None,
-                text,
-            );
-        } else if item.get("toolSpecificData").is_some() {
-            push_tool(session, AgentBlockKind::ToolCall, timestamp.clone(), item);
-        } else {
-            push_content(session, AgentBlockKind::Assistant, timestamp.clone(), item);
-        }
-    }
-}
-
-fn apply_kiro_value(session: &mut AgentSession, value: &Value) {
-    let timestamp = json_timestamp(value);
-    match value
-        .get("kind")
-        .and_then(Value::as_str)
         .unwrap_or_default()
-    {
-        "Prompt" => push_content(
-            session,
-            AgentBlockKind::User,
-            timestamp,
-            value
-                .get("data")
-                .or_else(|| value.get("content"))
-                .unwrap_or(&Value::Null),
-        ),
-        "AssistantMessage" => push_content(
-            session,
-            AgentBlockKind::Assistant,
-            timestamp,
-            value
-                .get("data")
-                .or_else(|| value.get("content"))
-                .unwrap_or(&Value::Null),
-        ),
-        "ToolResults" => push_content(
-            session,
-            AgentBlockKind::ToolOutput,
-            timestamp,
-            value
-                .get("data")
-                .or_else(|| value.get("content"))
-                .unwrap_or(&Value::Null),
-        ),
-        _ => apply_generic_value(session, value, None),
+        .to_ascii_lowercase();
+    if CONFIGURATION_FILE_NAMES.contains(&name.as_str()) {
+        return Ok(());
     }
-}
-
-fn apply_poolside_value(session: &mut AgentSession, value: &Value) {
-    let timestamp = json_timestamp(value);
-    match value
-        .get("type")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-    {
-        "session.input" => push_content(
-            session,
-            AgentBlockKind::User,
-            timestamp,
-            value
-                .pointer("/session_input/prompt")
-                .unwrap_or(&Value::Null),
-        ),
-        "assistant_message.end" => push_content(
-            session,
-            AgentBlockKind::Assistant,
-            timestamp,
-            value
-                .pointer("/assistant_message_end/assistant_message")
-                .unwrap_or(&Value::Null),
-        ),
-        "thought.end" => push_block(
-            session,
-            AgentBlockKind::Thinking,
-            timestamp,
-            None,
-            value
-                .pointer("/thought_end/thought")
-                .and_then(Value::as_str)
-                .unwrap_or_default(),
-        ),
-        "tool_call.parsed" => push_tool(
-            session,
-            AgentBlockKind::ToolCall,
-            timestamp,
-            value.get("tool_call_parsed").unwrap_or(value),
-        ),
-        "tool_call.result" => push_tool(
-            session,
-            AgentBlockKind::ToolOutput,
-            timestamp,
-            value.get("tool_call_result").unwrap_or(value),
-        ),
-        _ => apply_generic_value(session, value, None),
+    let is_leaf = profile.leaf.is_some_and(|leaf| leaf.matches(path, false));
+    if is_leaf && seen.insert(path.to_path_buf()) {
+        output.push(path.to_path_buf());
     }
+    Ok(())
 }
 
 fn parse_aider(path: &Path) -> Result<AgentSession> {
@@ -1215,7 +468,7 @@ fn parse_aider(path: &Path) -> Result<AgentSession> {
     let text = fs::read_to_string(&physical)
         .with_context(|| format!("failed to read Aider history {}", physical.display()))?;
     let runs = split_aider_runs(&text);
-    let selected_runs: Vec<_> = match selected {
+    let selected_runs = match selected {
         Some(index) => vec![runs
             .get(index)
             .with_context(|| format!("Aider run {index} is not present in {}", physical.display()))?
@@ -1228,7 +481,6 @@ fn parse_aider(path: &Path) -> Result<AgentSession> {
     for run in selected_runs {
         parse_aider_run_body(&mut session, &run.header, &run.body);
     }
-    finish_session(&mut session, AgentProvider::Aider, path);
     Ok(session)
 }
 
@@ -1276,20 +528,14 @@ fn list_aider_sessions(path: &Path) -> Result<Vec<SessionInfo>> {
         parsed.id = Some(path_id(&virtual_path));
         parsed.cwd = path.parent().map(|parent| parent.display().to_string());
         parse_aider_run_body(&mut parsed, &run.header, &run.body);
-        finish_session(&mut parsed, AgentProvider::Aider, &virtual_path);
-        if parsed.blocks.is_empty() {
-            continue;
-        }
+        parsed.title = title_from_blocks(&parsed);
         sessions.push(SessionInfo {
+            modified,
             path: virtual_path,
             physical_path: Some(path.to_path_buf()),
             id: parsed.id,
             cwd: parsed.cwd,
             title: parsed.title,
-            modified: aider_timestamp(&run.header)
-                .and_then(|value| crate::time::parse_timestamp(&value))
-                .map(|value| system_time_from_millis(value.timestamp_millis()))
-                .unwrap_or(modified),
         });
     }
     Ok(sessions)
@@ -1355,11 +601,11 @@ fn aider_timestamp(value: &str) -> Option<String> {
         })
 }
 
-fn parse_kimi(path: &Path, provider: AgentProvider) -> Result<AgentSession> {
-    let values = read_json_values(path)?;
+/// `wire.jsonl`: one turn event per line, each carrying its own channel.
+fn parse_kimi(path: &Path) -> Result<AgentSession> {
     let mut session = empty_session(path);
     session.id = Some(kimi_id(path));
-    for value in values {
+    for value in read_json_values(path)? {
         update_identity(&mut session, &value);
         let timestamp = json_timestamp(&value);
         match value
@@ -1367,52 +613,76 @@ fn parse_kimi(path: &Path, provider: AgentProvider) -> Result<AgentSession> {
             .and_then(Value::as_str)
             .unwrap_or_default()
         {
-            "turn.prompt" => push_content(
+            "turn.prompt" => push_text(
                 &mut session,
                 AgentBlockKind::User,
                 timestamp,
-                value
-                    .get("content")
-                    .or_else(|| value.get("prompt"))
-                    .unwrap_or(&Value::Null),
+                value.get("content").or_else(|| value.get("prompt")),
             ),
-            "content.part" | "ContentPart" => push_content(
+            "content.part" | "ContentPart" => push_text(
                 &mut session,
                 AgentBlockKind::Assistant,
                 timestamp,
-                value
-                    .get("content")
-                    .or_else(|| value.get("text"))
-                    .unwrap_or(&Value::Null),
+                value.get("content").or_else(|| value.get("text")),
             ),
-            "tool.call" | "ToolCall" => push_tool(
+            "tool.call" | "ToolCall" => push_declared_tool(
                 &mut session,
                 AgentBlockKind::ToolCall,
                 timestamp,
-                value
-                    .get("tool")
-                    .or_else(|| value.get("call"))
-                    .unwrap_or(&value),
+                value.get("tool").or_else(|| value.get("call")),
             ),
-            "tool.result" | "ToolResult" => push_tool(
+            "tool.result" | "ToolResult" => push_declared_tool(
                 &mut session,
                 AgentBlockKind::ToolOutput,
                 timestamp,
-                value
-                    .get("result")
-                    .or_else(|| value.get("tool"))
-                    .unwrap_or(&value),
+                value.get("result").or_else(|| value.get("tool")),
             ),
+            // Loop events are wrappers around a declared event.
             "context.append_loop_event" => {
                 if let Some(event) = value.get("event") {
-                    apply_generic_value(&mut session, event, timestamp);
+                    apply_kimi_event(&mut session, event);
                 }
             }
-            _ => apply_generic_value(&mut session, &value, timestamp),
+            _ => {}
         }
     }
-    finish_session(&mut session, provider, path);
+    finish_session(&mut session);
     Ok(session)
+}
+
+fn apply_kimi_event(session: &mut AgentSession, event: &Value) {
+    let timestamp = json_timestamp(event);
+    match event
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+    {
+        "turn.prompt" => push_text(
+            session,
+            AgentBlockKind::User,
+            timestamp,
+            event.get("content"),
+        ),
+        "content.part" | "ContentPart" => push_text(
+            session,
+            AgentBlockKind::Assistant,
+            timestamp,
+            event.get("content"),
+        ),
+        "tool.call" | "ToolCall" => push_declared_tool(
+            session,
+            AgentBlockKind::ToolCall,
+            timestamp,
+            event.get("tool"),
+        ),
+        "tool.result" | "ToolResult" => push_declared_tool(
+            session,
+            AgentBlockKind::ToolOutput,
+            timestamp,
+            event.get("result"),
+        ),
+        _ => {}
+    }
 }
 
 fn kimi_id(path: &Path) -> String {
@@ -1432,22 +702,21 @@ fn kimi_id(path: &Path) -> String {
     }
 }
 
+/// `<conversation>/base_state.json` plus ordered `events/*.json`.
 fn parse_openhands(path: &Path) -> Result<AgentSession> {
     let mut session = empty_session(path);
     let base = path.join("base_state.json");
-    if base.is_file() {
-        let value: Value = serde_json::from_str(
-            &fs::read_to_string(&base)
-                .with_context(|| format!("failed to read {}", base.display()))?,
-        )
-        .with_context(|| format!("failed to parse {}", base.display()))?;
-        update_identity(&mut session, &value);
-        session.id = value
-            .get("id")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .or_else(|| Some(path_id(path)));
-    }
+    let value: Value = serde_json::from_str(
+        &fs::read_to_string(&base).with_context(|| format!("failed to read {}", base.display()))?,
+    )
+    .with_context(|| format!("failed to parse {}", base.display()))?;
+    update_identity(&mut session, &value);
+    session.id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| Some(path_id(path)));
+
     let events = path.join("events");
     let mut files = fs::read_dir(&events)
         .with_context(|| format!("failed to read {}", events.display()))?
@@ -1463,12 +732,53 @@ fn parse_openhands(path: &Path) -> Result<AgentSession> {
                 .with_context(|| format!("failed to read {}", event_path.display()))?,
         )
         .with_context(|| format!("failed to parse {}", event_path.display()))?;
-        apply_generic_value(&mut session, &value, None);
+        apply_openhands_event(&mut session, &value);
     }
-    finish_session(&mut session, AgentProvider::OpenHands, path);
+    finish_session(&mut session);
     Ok(session)
 }
 
+fn apply_openhands_event(session: &mut AgentSession, value: &Value) {
+    let timestamp = json_timestamp(value);
+    match value
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+    {
+        "MessageEvent" => {
+            let kind = match value
+                .get("source")
+                .and_then(Value::as_str)
+                .unwrap_or("assistant")
+            {
+                "user" => AgentBlockKind::User,
+                "assistant" | "agent" => AgentBlockKind::Assistant,
+                _ => return,
+            };
+            push_text(
+                session,
+                kind,
+                timestamp,
+                value.get("message").or_else(|| value.get("content")),
+            );
+        }
+        "ActionEvent" => push_declared_tool(
+            session,
+            AgentBlockKind::ToolCall,
+            timestamp,
+            value.get("action"),
+        ),
+        "ObservationEvent" => push_declared_tool(
+            session,
+            AgentBlockKind::ToolOutput,
+            timestamp,
+            value.get("observation"),
+        ),
+        _ => {}
+    }
+}
+
+/// `<task>/history_item.json` metadata plus `ui_messages.json` ask/say items.
 fn parse_roocode(path: &Path) -> Result<AgentSession> {
     let mut session = empty_session(path);
     let history = path.join("history_item.json");
@@ -1494,9 +804,10 @@ fn parse_roocode(path: &Path) -> Result<AgentSession> {
         .get("task")
         .and_then(Value::as_str)
         .map(str::to_string);
+
     let messages = path.join("ui_messages.json");
     if !messages.is_file() {
-        finish_session(&mut session, AgentProvider::RooCode, path);
+        finish_session(&mut session);
         return Ok(session);
     }
     let value: Value = serde_json::from_str(
@@ -1513,12 +824,14 @@ fn parse_roocode(path: &Path) -> Result<AgentSession> {
             Some("say") => AgentBlockKind::Assistant,
             _ => continue,
         };
-        let content = item
-            .get("text")
-            .or_else(|| item.get("ask"))
-            .or_else(|| item.get("say"))
-            .unwrap_or(&Value::Null);
-        push_content(&mut session, kind, json_timestamp(item), content);
+        push_text(
+            &mut session,
+            kind,
+            json_timestamp(item),
+            item.get("text")
+                .or_else(|| item.get("ask"))
+                .or_else(|| item.get("say")),
+        );
         if let Some(reasoning) = item.get("reasoning") {
             push_block(
                 &mut session,
@@ -1529,227 +842,325 @@ fn parse_roocode(path: &Path) -> Result<AgentSession> {
             );
         }
     }
-    finish_session(&mut session, AgentProvider::RooCode, path);
+    finish_session(&mut session);
     Ok(session)
 }
 
-fn parse_sqlite(path: &Path, provider: AgentProvider) -> Result<AgentSession> {
-    let (physical_path, only_session) = split_sqlite_virtual_path(path);
-    let conn = open_readonly_db(&physical_path)?;
-    let tables = table_names(&conn)?;
+/// `*.ndjson` events: `session.input`, `assistant_message.end`, `thought.end`,
+/// `tool_call.parsed`, `tool_call.result`.
+fn parse_poolside(path: &Path) -> Result<AgentSession> {
     let mut session = empty_session(path);
-    session.id = only_session
-        .clone()
-        .or_else(|| Some(path_id(&physical_path)));
-
-    if tables.iter().any(|table| table == "threads") {
-        parse_thread_rows(&conn, &mut session, only_session.as_deref())?;
+    for value in read_json_values(path)? {
+        update_identity(&mut session, &value);
+        let timestamp = json_timestamp(&value);
+        match value
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+        {
+            "session.input" => push_text(
+                &mut session,
+                AgentBlockKind::User,
+                timestamp,
+                value.pointer("/session_input/prompt"),
+            ),
+            "assistant_message.end" => push_text(
+                &mut session,
+                AgentBlockKind::Assistant,
+                timestamp,
+                value.pointer("/assistant_message_end/assistant_message"),
+            ),
+            "thought.end" => push_block(
+                &mut session,
+                AgentBlockKind::Thinking,
+                timestamp,
+                None,
+                value
+                    .pointer("/thought_end/thought")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            ),
+            "tool_call.parsed" => push_declared_tool(
+                &mut session,
+                AgentBlockKind::ToolCall,
+                timestamp,
+                value.get("tool_call_parsed"),
+            ),
+            "tool_call.result" => push_declared_tool(
+                &mut session,
+                AgentBlockKind::ToolOutput,
+                timestamp,
+                value.get("tool_call_result"),
+            ),
+            _ => {}
+        }
     }
-    if tables.iter().any(|table| table == "ItemTable") {
-        parse_item_table(&conn, &mut session, only_session.as_deref())?;
-    }
-    if tables
-        .iter()
-        .any(|table| table == "message" || table == "messages")
-    {
-        parse_message_rows(
-            &conn,
-            &mut session,
-            if tables.iter().any(|table| table == "message") {
-                "message"
-            } else {
-                "messages"
-            },
-            only_session.as_deref(),
-        )?;
-    }
-    finish_session(&mut session, provider, path);
+    finish_session(&mut session);
     Ok(session)
 }
 
-fn table_names(conn: &rusqlite::Connection) -> Result<HashSet<String>> {
-    let mut stmt = conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table'")?;
-    let names = stmt
-        .query_map([], |row| row.get::<_, String>(0))?
-        .collect::<std::result::Result<HashSet<_>, _>>()?;
-    Ok(names)
+/// `*.jsonl` events with `kind: Prompt | AssistantMessage | ToolResults`.
+fn parse_kiro(path: &Path) -> Result<AgentSession> {
+    let mut session = empty_session(path);
+    for value in read_json_values(path)? {
+        update_identity(&mut session, &value);
+        let timestamp = json_timestamp(&value);
+        let data = value.get("data").or_else(|| value.get("content"));
+        match value
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+        {
+            "Prompt" => push_text(&mut session, AgentBlockKind::User, timestamp, data),
+            "AssistantMessage" => {
+                push_text(&mut session, AgentBlockKind::Assistant, timestamp, data)
+            }
+            "ToolResults" => push_text(&mut session, AgentBlockKind::ToolOutput, timestamp, data),
+            _ => {}
+        }
+    }
+    finish_session(&mut session);
+    Ok(session)
 }
 
-fn table_columns(conn: &rusqlite::Connection, table: &str) -> Result<HashSet<String>> {
-    let sql = format!("PRAGMA table_info(\"{}\")", table.replace('"', "\"\""));
-    let mut stmt = conn.prepare(&sql)?;
-    let columns = stmt
-        .query_map([], |row| row.get::<_, String>(1))?
-        .collect::<std::result::Result<HashSet<_>, _>>()?;
-    Ok(columns)
+/// `*.json` session documents with `requests[].message` / `requests[].response`.
+fn parse_vscode_session(path: &Path) -> Result<AgentSession> {
+    let mut session = empty_session(path);
+    for value in read_json_values(path)? {
+        update_identity(&mut session, &value);
+        let Some(requests) = value.get("requests").and_then(Value::as_array) else {
+            continue;
+        };
+        for request in requests {
+            let timestamp = json_timestamp(request);
+            if let Some(message) = request.get("message") {
+                push_text(
+                    &mut session,
+                    AgentBlockKind::User,
+                    timestamp.clone(),
+                    message.get("text").or_else(|| message.get("content")),
+                );
+            }
+            if let Some(response) = request.get("response") {
+                push_vscode_response(&mut session, timestamp, response);
+            }
+        }
+    }
+    finish_session(&mut session);
+    Ok(session)
 }
 
-fn parse_thread_rows(
-    conn: &rusqlite::Connection,
-    session: &mut AgentSession,
-    only_session: Option<&str>,
-) -> Result<()> {
-    let columns = table_columns(conn, "threads")?;
-    let id = column_or_null(&columns, "id");
-    let summary = column_or_null(&columns, "summary");
-    let data_type = column_or_null(&columns, "data_type");
-    let data = column_or_null(&columns, "data");
-    let sql = format!(
-        "SELECT {id}, {summary}, {data_type}, CAST({data} AS BLOB) FROM threads WHERE (?1 IS NULL OR {id} = ?1) ORDER BY rowid"
-    );
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params![only_session], |row| {
+fn push_vscode_response(session: &mut AgentSession, timestamp: Option<String>, response: &Value) {
+    let Some(items) = response.as_array() else {
+        push_text(
+            session,
+            AgentBlockKind::Assistant,
+            timestamp,
+            Some(response),
+        );
+        return;
+    };
+    for item in items {
+        if let Some(text) = item.get("value").and_then(Value::as_str) {
+            push_block(
+                session,
+                AgentBlockKind::Assistant,
+                timestamp.clone(),
+                None,
+                text,
+            );
+        } else if item.get("toolSpecificData").is_some() {
+            push_declared_tool(
+                session,
+                AgentBlockKind::ToolCall,
+                timestamp.clone(),
+                Some(item),
+            );
+        } else {
+            push_text(
+                session,
+                AgentBlockKind::Assistant,
+                timestamp.clone(),
+                Some(item),
+            );
+        }
+    }
+}
+
+/// `threads.db`: one row per thread holding a JSON (optionally zstd) document.
+fn list_zed_sessions(path: &Path) -> Result<Vec<SessionInfo>> {
+    let conn = open_readonly_db(path)?;
+    let modified = file_modified(path)?;
+    let mut stmt =
+        conn.prepare("SELECT CAST(id AS TEXT), CAST(summary AS TEXT) FROM threads ORDER BY rowid")?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut sessions = Vec::new();
+    for (id, title) in rows {
+        let Some(id) = id.map(|id| addressable_session_id(&id)) else {
+            continue;
+        };
+        sessions.push(SessionInfo {
+            modified,
+            path: sqlite_virtual_path(path, &id),
+            physical_path: Some(path.to_path_buf()),
+            id: Some(id),
+            cwd: None,
+            title: title.filter(|title| !title.trim().is_empty()),
+        });
+    }
+    Ok(sessions)
+}
+
+fn parse_zed(path: &Path) -> Result<AgentSession> {
+    let (physical, only_session) = split_sqlite_virtual_path(path);
+    let conn = open_readonly_db(&physical)?;
+    let mut session = empty_session(path);
+    session.id = only_session.or_else(|| Some(path_id(&physical)));
+    let mut stmt = conn.prepare(
+        "SELECT CAST(data_type AS TEXT), CAST(data AS BLOB) FROM threads
+         WHERE (?1 IS NULL OR CAST(id AS TEXT) = ?1) ORDER BY rowid",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![session.id], |row| {
         Ok((
             row.get::<_, Option<String>>(0)?,
-            row.get::<_, Option<String>>(1)?,
-            row.get::<_, Option<String>>(2)?,
-            row.get::<_, Vec<u8>>(3)?,
+            row.get::<_, Option<Vec<u8>>>(1)?,
         ))
     })?;
     for row in rows {
-        let (_id, summary, data_type, bytes) = row?;
-        if session.title.is_none() {
-            session.title = summary;
-        }
+        let (data_type, Some(bytes)) = row? else {
+            continue;
+        };
         let bytes = decode_sqlite_payload(&bytes, data_type.as_deref().unwrap_or(""))?;
         let value: Value =
-            serde_json::from_slice(&bytes).context("SQLite thread data is not valid JSON")?;
-        apply_sqlite_document(session, &value);
+            serde_json::from_slice(&bytes).context("Zed thread data is not valid JSON")?;
+        apply_thread_document(&mut session, &value);
     }
-    Ok(())
+    finish_session(&mut session);
+    Ok(session)
 }
 
-fn parse_item_table(
-    conn: &rusqlite::Connection,
-    session: &mut AgentSession,
-    only_session: Option<&str>,
-) -> Result<()> {
-    let columns = table_columns(conn, "ItemTable")?;
-    if !columns.contains("key") || !columns.contains("value") {
-        return Ok(());
+/// Consecutive `{"User": …}` / `{"Agent": …}` entries in a thread document.
+fn apply_thread_document(session: &mut AgentSession, value: &Value) {
+    let Some(messages) = value.get("messages").and_then(Value::as_array) else {
+        return;
+    };
+    for message in messages {
+        if let Some(user) = message.get("User") {
+            push_text(
+                session,
+                AgentBlockKind::User,
+                None,
+                Some(user.get("content").unwrap_or(user)),
+            );
+        } else if let Some(agent) = message.get("Agent") {
+            push_text(
+                session,
+                AgentBlockKind::Assistant,
+                None,
+                Some(agent.get("content").unwrap_or(agent)),
+            );
+        }
     }
-    let mut stmt =
-        conn.prepare("SELECT key, CAST(value AS TEXT) FROM ItemTable WHERE value IS NOT NULL")?;
-    let rows = stmt.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    })?;
-    for row in rows {
-        let (key, value) = row?;
-        if !key.to_ascii_lowercase().contains("chat")
-            && !key.to_ascii_lowercase().contains("session")
-        {
+}
+
+/// VS Code `state.vscdb`: `ItemTable` rows keyed by chat/session.
+fn list_windsurf_sessions(path: &Path) -> Result<Vec<SessionInfo>> {
+    let conn = open_readonly_db(path)?;
+    let modified = file_modified(path)?;
+    let mut stmt = conn.prepare(
+        "SELECT key, CAST(value AS TEXT) FROM ItemTable
+         WHERE value IS NOT NULL ORDER BY key",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut sessions = Vec::new();
+    let mut seen = HashSet::new();
+    for (key, value) in rows {
+        if !is_session_key(&key) {
+            continue;
+        }
+        let Ok(document) = serde_json::from_str::<Value>(&value) else {
+            continue;
+        };
+        for id in document_session_ids(&document) {
+            let id = addressable_session_id(&id);
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            sessions.push(SessionInfo {
+                modified,
+                path: sqlite_virtual_path(path, &id),
+                physical_path: Some(path.to_path_buf()),
+                id: Some(id),
+                cwd: None,
+                title: None,
+            });
+        }
+    }
+    Ok(sessions)
+}
+
+fn parse_windsurf(path: &Path) -> Result<AgentSession> {
+    let (physical, only_session) = split_sqlite_virtual_path(path);
+    let conn = open_readonly_db(&physical)?;
+    let mut session = empty_session(path);
+    session.id = only_session.or_else(|| Some(path_id(&physical)));
+    let mut stmt = conn.prepare(
+        "SELECT key, CAST(value AS TEXT) FROM ItemTable
+         WHERE value IS NOT NULL ORDER BY key",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    for (key, value) in rows {
+        if !is_session_key(&key) {
             continue;
         }
         let document: Value = serde_json::from_str(&value)
-            .with_context(|| format!("SQLite ItemTable value `{key}` is not JSON"))?;
-        if let Some(only_session) = only_session {
+            .with_context(|| format!("ItemTable value `{key}` is not JSON"))?;
+        if let Some(only_session) = session.id.as_deref() {
             let ids = document_session_ids(&document);
             if !ids.is_empty() && !ids.iter().any(|id| id == only_session) {
                 continue;
             }
         }
-        apply_sqlite_document(session, &document);
+        apply_thread_document(&mut session, &document);
     }
-    Ok(())
+    finish_session(&mut session);
+    Ok(session)
 }
 
-fn parse_message_rows(
-    conn: &rusqlite::Connection,
-    session: &mut AgentSession,
-    table: &str,
-    only_session: Option<&str>,
-) -> Result<()> {
-    let columns = table_columns(conn, table)?;
-    let role = column_or_null(&columns, "role");
-    let content = if columns.contains("content") {
-        "content"
-    } else if columns.contains("data") {
-        "data"
-    } else {
-        return Ok(());
-    };
-    let timestamp = if columns.contains("time_created") {
-        "time_created"
-    } else if columns.contains("created_at") {
-        "created_at"
-    } else {
-        "NULL"
-    };
-    let session_column = columns
-        .iter()
-        .find(|name| name.eq_ignore_ascii_case("session_id"))
-        .map(|name| format!("\"{}\"", name.replace('"', "\"\"")))
-        .unwrap_or_else(|| "NULL".to_string());
-    let sql = format!(
-        "SELECT {role}, CAST({content} AS TEXT), CAST({timestamp} AS TEXT) FROM \"{table}\" WHERE (?1 IS NULL OR {session_column} = ?1) ORDER BY rowid"
-    );
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params![only_session], |row| {
-        Ok((
-            row.get::<_, Option<String>>(0)?,
-            row.get::<_, Option<String>>(1)?,
-            row.get::<_, Option<String>>(2)?,
-        ))
-    })?;
-    for row in rows {
-        let (role, content, timestamp) = row?;
-        let Some(content) = content else { continue };
-        let value = serde_json::from_str::<Value>(&content)
-            .with_context(|| format!("SQLite {table} message content is not JSON"))?;
-        let Some(kind) = role.as_deref().and_then(role_kind) else {
-            continue;
-        };
-        push_content(session, kind, timestamp, &value);
-    }
-    Ok(())
+fn is_session_key(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    lower.contains("chat") || lower.contains("session")
 }
 
 fn document_session_ids(value: &Value) -> Vec<String> {
     let mut ids = Vec::new();
-    collect_ids(value, &mut ids);
+    collect_keyed_ids(value, &mut ids);
     ids
 }
 
-fn collect_ids(value: &Value, ids: &mut Vec<String>) {
-    if let Some(id) = value
-        .get("sessionId")
-        .or_else(|| value.get("session_id"))
-        .or_else(|| value.get("conversationId"))
-        .or_else(|| value.get("conversation_id"))
-        .and_then(Value::as_str)
-    {
+fn collect_keyed_ids(value: &Value, ids: &mut Vec<String>) {
+    if let Some(id) = value.get("sessionId").and_then(Value::as_str) {
         ids.push(id.to_string());
     }
     match value {
-        Value::Object(map) => map.values().for_each(|value| collect_ids(value, ids)),
-        Value::Array(items) => items.iter().for_each(|value| collect_ids(value, ids)),
+        Value::Object(map) => map.values().for_each(|value| collect_keyed_ids(value, ids)),
+        Value::Array(items) => items.iter().for_each(|value| collect_keyed_ids(value, ids)),
         _ => {}
-    }
-}
-
-fn apply_sqlite_document(session: &mut AgentSession, value: &Value) {
-    if let Some(messages) = value.get("messages").and_then(Value::as_array) {
-        for message in messages {
-            if let Some(user) = message.get("User") {
-                push_content(
-                    session,
-                    AgentBlockKind::User,
-                    None,
-                    user.get("content").unwrap_or(user),
-                );
-            } else if let Some(agent) = message.get("Agent") {
-                push_content(
-                    session,
-                    AgentBlockKind::Assistant,
-                    None,
-                    agent.get("content").unwrap_or(agent),
-                );
-            } else {
-                apply_generic_value(session, message, None);
-            }
-        }
-    } else {
-        apply_generic_value(session, value, None);
     }
 }
 
@@ -1767,11 +1178,208 @@ fn decode_sqlite_payload(bytes: &[u8], data_type: &str) -> Result<Vec<u8>> {
     Ok(bytes.to_vec())
 }
 
-fn column_or_null(columns: &HashSet<String>, name: &str) -> String {
-    if columns.contains(name) {
-        format!("\"{}\"", name.replace('"', "\"\""))
+fn read_json_values(path: &Path) -> Result<Vec<Value>> {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    if extension.eq_ignore_ascii_case("json") {
+        let text = fs::read_to_string(path)
+            .with_context(|| format!("failed to read JSON transcript {}", path.display()))?;
+        return Ok(vec![serde_json::from_str(&text).with_context(|| {
+            format!("failed to parse JSON transcript {}", path.display())
+        })?]);
+    }
+
+    let file = fs::File::open(path)
+        .with_context(|| format!("failed to read transcript {}", path.display()))?;
+    let mut values = Vec::new();
+    for (index, line) in BufReader::new(file).lines().enumerate() {
+        let line =
+            line.with_context(|| format!("failed to read {} line {}", path.display(), index + 1))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<Value>(&line) {
+            Ok(value) => values.push(value),
+            // A writer can leave the last line unfinished.
+            Err(error) if index > 0 && error.classify() == serde_json::error::Category::Eof => {
+                break
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("failed to parse {} line {}", path.display(), index + 1)
+                })
+            }
+        }
+    }
+    Ok(values)
+}
+
+fn empty_session(path: &Path) -> AgentSession {
+    AgentSession {
+        path: path.to_path_buf(),
+        id: None,
+        cwd: None,
+        title: None,
+        blocks: Vec::new(),
+    }
+}
+
+fn finish_session(session: &mut AgentSession) {
+    if session.id.is_none() {
+        session.id = session
+            .path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .map(str::to_string);
+    }
+    if session.title.is_none() {
+        session.title = title_from_blocks(session);
+    }
+}
+
+fn title_from_blocks(session: &AgentSession) -> Option<String> {
+    let first_user = session
+        .blocks
+        .iter()
+        .find(|block| block.kind == AgentBlockKind::User)
+        .map(|block| block.text.as_str());
+    let mut meta = crate::agents::AgentSessionMeta::default();
+    meta.fallback_title(first_user);
+    meta.title
+}
+
+/// Session identity, cwd, and title from the fields these formats declare.
+fn update_identity(session: &mut AgentSession, value: &Value) {
+    if session.id.is_none() {
+        session.id = value
+            .get("sessionId")
+            .or_else(|| value.get("session_id"))
+            .and_then(Value::as_str)
+            .filter(|id| !id.trim().is_empty())
+            .map(str::to_string);
+    }
+    if session.cwd.is_none() {
+        session.cwd = value
+            .get("cwd")
+            .or_else(|| value.get("workspace"))
+            .and_then(Value::as_str)
+            .filter(|cwd| !cwd.trim().is_empty())
+            .map(str::to_string);
+    }
+    if session.title.is_none() {
+        session.title = value
+            .get("title")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+            .map(str::to_string);
+    }
+}
+
+fn push_text(
+    session: &mut AgentSession,
+    kind: AgentBlockKind,
+    timestamp: Option<String>,
+    content: Option<&Value>,
+) {
+    let Some(content) = content else {
+        return;
+    };
+    push_block(
+        session,
+        kind,
+        timestamp,
+        None,
+        extract_content_text(content),
+    );
+}
+
+fn push_declared_tool(
+    session: &mut AgentSession,
+    kind: AgentBlockKind,
+    timestamp: Option<String>,
+    tool: Option<&Value>,
+) {
+    let Some(tool) = tool else {
+        return;
+    };
+    let label = tool
+        .get("name")
+        .or_else(|| tool.get("tool"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let call_id = tool
+        .get("id")
+        .or_else(|| tool.get("call_id"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    // Payloads are structured arguments or results, so a field with no text
+    // renders as JSON rather than vanishing.
+    let body = tool
+        .get("input")
+        .or_else(|| tool.get("args"))
+        .or_else(|| tool.get("output"))
+        .or_else(|| tool.get("content"))
+        .map(text_or_json)
+        .unwrap_or_else(|| text_or_json(tool));
+    push_tool_block(session, kind, timestamp, call_id, label, body, None);
+}
+
+fn text_or_json(value: &Value) -> String {
+    let text = extract_content_text(value);
+    if text.trim().is_empty() {
+        pretty_json_value(value)
     } else {
-        "NULL".to_string()
+        text
+    }
+}
+
+fn json_timestamp(value: &Value) -> Option<String> {
+    let field = value
+        .get("timestamp")
+        .or_else(|| value.get("created_at"))
+        .or_else(|| value.get("createdAt"))
+        .or_else(|| value.get("time"))?;
+    field
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| field.as_i64().map(|number| number.to_string()))
+}
+
+fn file_modified(path: &Path) -> Result<SystemTime> {
+    fs::metadata(path)
+        .with_context(|| format!("failed to stat {}", path.display()))?
+        .modified()
+        .with_context(|| format!("failed to read mtime {}", path.display()))
+}
+
+fn addressable_session_id(raw: &str) -> String {
+    if raw
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        raw.to_string()
+    } else {
+        sanitize_id(raw)
+    }
+}
+
+fn sqlite_virtual_path(physical: &Path, session_id: &str) -> PathBuf {
+    PathBuf::from(format!("{}#{session_id}", physical.display()))
+}
+
+fn split_sqlite_virtual_path(path: &Path) -> (PathBuf, Option<String>) {
+    let text = path.to_string_lossy();
+    let Some((physical, session_id)) = text.rsplit_once('#') else {
+        return (path.to_path_buf(), None);
+    };
+    let physical = PathBuf::from(physical);
+    if physical.is_file() {
+        (physical, Some(session_id.to_string()))
+    } else {
+        (path.to_path_buf(), None)
     }
 }
 
@@ -1808,26 +1416,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_generic_gemini_style_messages() {
-        let path = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(
-            path.path(),
-            r#"{"sessionId":"s1","cwd":"D:/repo","title":"task"}
-{"type":"user","timestamp":"2026-08-31T00:00:00Z","content":"hello"}
-{"type":"assistant","content":[{"text":"answer"},{"functionCall":{"name":"read","args":{"path":"a.rs"}}}]}
-{"type":"tool_result","content":"file"}
-"#,
-        )
-        .unwrap();
-        let session = parse_json_document(path.path(), AgentProvider::Iflow).unwrap();
-        assert_eq!(session.id.as_deref(), Some("s1"));
-        assert_eq!(session.cwd.as_deref(), Some("D:/repo"));
-        assert_eq!(session.title.as_deref(), Some("task"));
-        assert_eq!(session.blocks.len(), 4);
-        assert_eq!(session.blocks[2].kind, AgentBlockKind::ToolCall);
-    }
-
-    #[test]
     fn parses_aider_runs_without_collapsing_channels() {
         let path = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(
@@ -1859,17 +1447,49 @@ mod tests {
     }
 
     #[test]
-    fn provider_roots_cover_the_expanded_catalog() {
-        assert!(default_roots(AgentProvider::KimiWork).len() >= 3);
-        assert_eq!(root_env(AgentProvider::TraeX), Some("TRAEX_SESSIONS_DIR"));
-        assert!(is_candidate_file(
-            AgentProvider::Kimi,
-            Path::new("wire.jsonl")
-        ));
+    fn kimi_wire_log_keeps_prompt_part_and_tool_channels() {
+        let path = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            path.path(),
+            concat!(
+                "{\"type\":\"turn.prompt\",\"content\":\"question\"}\n",
+                "{\"type\":\"content.part\",\"content\":\"answer\"}\n",
+                "{\"type\":\"tool.call\",\"tool\":{\"name\":\"shell\",\"args\":{\"command\":\"ls\"}}}\n",
+                "{\"type\":\"tool.result\",\"result\":{\"content\":\"a.rs\"}}\n",
+            ),
+        )
+        .unwrap();
+        let session = parse_kimi(path.path()).unwrap();
+        let kinds: Vec<_> = session.blocks.iter().map(|block| block.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                AgentBlockKind::User,
+                AgentBlockKind::Assistant,
+                AgentBlockKind::ToolCall,
+                AgentBlockKind::ToolOutput
+            ]
+        );
+        assert_eq!(session.blocks[2].label.as_deref(), Some("shell"));
     }
 
     #[test]
-    fn sqlite_container_exposes_each_thread_as_a_logical_session() {
+    fn declared_formats_cover_the_kept_catalog() {
+        assert!(profile_for(AgentProvider::Zed).is_some());
+        assert_eq!(
+            profile_for(AgentProvider::TraeX).map(|profile| profile.layout),
+            Some(Layout::CodexRollout)
+        );
+        // Undeclared formats stay registered but never sync.
+        assert!(!is_supported(AgentProvider::Amp));
+        assert_eq!(
+            list_provider(AgentProvider::Amp, None).unwrap().0,
+            Vec::new()
+        );
+    }
+
+    #[test]
+    fn zed_threads_expose_each_row_as_a_logical_session() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("threads.db");
         let conn = rusqlite::Connection::open(&path).unwrap();
@@ -1878,9 +1498,7 @@ mod tests {
                 id TEXT PRIMARY KEY,
                 summary TEXT,
                 data_type TEXT,
-                data BLOB,
-                updated_at TEXT,
-                folder_paths TEXT
+                data BLOB
             )",
         )
         .unwrap();
@@ -1892,21 +1510,21 @@ mod tests {
                 ]
             });
             conn.execute(
-                "INSERT INTO threads (id, summary, data_type, data, updated_at, folder_paths) VALUES (?1, ?2, 'json', ?3, '1770000000000', '[]')",
+                "INSERT INTO threads (id, summary, data_type, data) VALUES (?1, ?2, 'json', ?3)",
                 rusqlite::params![id, text, document.to_string()],
             )
             .unwrap();
         }
         drop(conn);
 
-        let sessions = list_sqlite_sessions(AgentProvider::Zed, &path).unwrap();
+        let sessions = list_zed_sessions(&path).unwrap();
         assert_eq!(sessions.len(), 2);
         assert!(sessions.iter().all(|session| {
             session.physical_path.as_deref() == Some(path.as_path())
                 && session.path.to_string_lossy().contains('#')
         }));
         for session in sessions {
-            let parsed = parse_sqlite(&session.path, AgentProvider::Zed).unwrap();
+            let parsed = parse_zed(&session.path).unwrap();
             assert_eq!(parsed.id, session.id);
             assert_eq!(parsed.blocks.len(), 2);
         }
@@ -1914,8 +1532,10 @@ mod tests {
 
     #[test]
     fn discovery_skips_node_modules_and_plain_configuration_files() {
-        let _guard =
-            crate::test_fixtures::EnvGuard::capture(&["COPILOT_DIR", "VSCODE_COPILOT_DIR"]);
+        let _guard = crate::test_fixtures::EnvGuard::capture(&[
+            "VSCODE_COPILOT_DIR",
+            "OPENHANDS_CONVERSATIONS_DIR",
+        ]);
         let dir = tempfile::tempdir().expect("test tempdir");
         let write = |relative: &str, text: &str| {
             let path = dir.path().join(relative);
@@ -1924,34 +1544,12 @@ mod tests {
             std::fs::write(&path, text).expect("write fixture file");
             path
         };
-        let transcript = r#"{"sessionId":"demo","cwd":"/repo"}
-{"type":"user","content":"question"}
-{"type":"assistant","content":"answer"}
-"#;
-        // JSON-with-comments, as tool configuration files commonly are.
+        let session =
+            r#"{"requests":[{"message":{"text":"question"},"response":[{"value":"answer"}]}]}"#;
+        // JSON with comments, as tool configuration files commonly are.
         let jsonc = "// settings\n{\n  \"strict\": true,\n}\n";
 
-        // Copilot CLI keeps its own configuration next to its sessions.
-        let copilot_session = write("copilot/session-state/demo.jsonl", transcript);
-        write("copilot/config.json", jsonc);
-        write("copilot/settings.json", "{}");
-        std::env::set_var("COPILOT_DIR", dir.path().join("copilot"));
-        let copilot = GenericProvider::new(AgentProvider::Copilot);
-        assert_eq!(
-            copilot.candidates().expect("list Copilot candidates"),
-            vec![copilot_session.clone()]
-        );
-        let sessions = copilot
-            .list_recent_sessions(None)
-            .expect("list Copilot sessions");
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].path, copilot_session);
-
-        // VS Code's globalStorage also holds other extensions' packages.
-        let chat = write(
-            "code/workspaceStorage/ws1/chatSessions/chat.jsonl",
-            transcript,
-        );
+        let chat = write("code/workspaceStorage/ws1/chatSessions/chat.json", session);
         write(
             "code/globalStorage/some.extension/node_modules/call-bind/tsconfig.json",
             jsonc,
@@ -1961,7 +1559,7 @@ mod tests {
             "[]",
         );
         write("code/globalStorage/some.extension/package.json", "{}");
-        write("code/globalStorage/some.extension/tsconfig.json", jsonc);
+        write("code/globalStorage/some.extension/settings.json", "{}");
         std::env::set_var("VSCODE_COPILOT_DIR", dir.path().join("code"));
         assert_eq!(
             GenericProvider::new(AgentProvider::VSCodeCopilot)
@@ -1969,33 +1567,30 @@ mod tests {
                 .expect("list VS Code candidates"),
             vec![chat]
         );
-    }
 
-    #[test]
-    fn discovers_i_flow_sessions_from_the_declared_root() {
-        let _guard = crate::test_env_lock();
-        let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var_os("IFLOW_DIR");
-        std::env::set_var("IFLOW_DIR", dir.path());
-        let path = dir.path().join("project").join("session-demo.jsonl");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // A conversation directory is claimed whole, never walked into.
+        let conversation = dir.path().join("conversations/conv-1");
+        std::fs::create_dir_all(conversation.join("events")).unwrap();
+        std::fs::write(conversation.join("base_state.json"), "{\"id\":\"conv-1\"}").unwrap();
         std::fs::write(
-            &path,
-            r#"{"sessionId":"demo","cwd":"D:/repo"}
-{"type":"user","content":"question"}
-{"type":"assistant","content":"answer"}
-"#,
+            conversation.join("events/event-00001.json"),
+            r#"{"kind":"MessageEvent","source":"user","message":"question"}"#,
         )
         .unwrap();
-        let sessions = GenericProvider::new(AgentProvider::Iflow)
-            .list_recent_sessions(None)
-            .unwrap();
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].id.as_deref(), Some("demo"));
-        assert_eq!(sessions[0].physical_path, None);
-        match previous {
-            Some(value) => std::env::set_var("IFLOW_DIR", value),
-            None => std::env::remove_var("IFLOW_DIR"),
-        }
+        std::env::set_var(
+            "OPENHANDS_CONVERSATIONS_DIR",
+            dir.path().join("conversations"),
+        );
+        assert_eq!(
+            GenericProvider::new(AgentProvider::OpenHands)
+                .candidates()
+                .expect("list OpenHands conversations"),
+            vec![conversation.clone()]
+        );
+        let parsed = parse_provider(AgentProvider::OpenHands, &conversation)
+            .expect("parse OpenHands conversation");
+        assert_eq!(parsed.id.as_deref(), Some("conv-1"));
+        assert_eq!(parsed.blocks.len(), 1);
+        assert_eq!(parsed.blocks[0].kind, AgentBlockKind::User);
     }
 }

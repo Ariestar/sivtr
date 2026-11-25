@@ -305,10 +305,7 @@ pub(super) fn handle_content_mouse_select(
             }
             // Pure click: never selected, just let the caller handle the
             // block highlight / fold toggle.
-            if mouse_down.take().is_some() {
-                return true;
-            }
-            false
+            mouse_down.take().is_some()
         }
         _ => false,
     }

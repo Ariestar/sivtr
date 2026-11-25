@@ -1,4 +1,3 @@
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cell::RefCell;
@@ -147,6 +146,10 @@ pub struct AgentSession {
 
 pub use crate::session_source::SessionInfo;
 
+/// A provider listing plus the `(path, reason)` failures it skipped. Failing
+/// files make a scan incomplete, so the sync engine keeps their archive rows.
+pub type SessionListing = (Vec<SessionInfo>, Vec<(PathBuf, String)>);
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSessionMeta {
     pub id: Option<String>,
@@ -214,39 +217,6 @@ impl AgentSelection {
             Self::LastBlocks(_) => "blocks",
             Self::All => "all",
         }
-    }
-}
-
-pub trait AgentSessionProvider {
-    fn provider(&self) -> AgentProvider;
-
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>>;
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession>;
-
-    fn find_session_by_id(&self, id: &str) -> Result<Option<PathBuf>> {
-        for session in self.list_recent_sessions(None)? {
-            if session
-                .path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.contains(id))
-                || session.id.as_deref() == Some(id)
-            {
-                return Ok(Some(session.path));
-            }
-        }
-
-        Ok(None)
-    }
-
-    /// Inferring a current session must not widen an empty workspace search.
-    fn find_current_session(&self, cwd: &Path) -> Result<Option<PathBuf>> {
-        Ok(self
-            .list_recent_sessions(Some(cwd))?
-            .into_iter()
-            .next()
-            .map(|session| session.path))
     }
 }
 

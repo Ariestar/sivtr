@@ -17,9 +17,9 @@ Provider 来自 `AgentProvider` registry。copy 使用同一组名字：
 | Claude Code | `sivtr copy claude ...` | Claude transcript/session 环境变量和本地 transcripts |
 | Cursor | `sivtr copy cursor ...` | `~/.cursor/projects` 下 agent transcript JSONL |
 | OpenCode | `sivtr copy opencode ...` | OpenCode 本地数据库 |
-| OpenClaw | `sivtr copy openclaw ...` | OpenClaw agent SQLite（+ legacy JSONL） |
-| Hermes | `sivtr copy hermes ...` | Hermes `state.db`（`sessions/` 下 JSONL 为 residual） |
-| Grok | `sivtr copy grok ...` | Grok sessions（`~/.grok`，可用 `GROK_HOME`） |
+| OpenClaw | `sivtr copy openclaw ...` | OpenClaw agent SQLite |
+| Hermes | `sivtr copy hermes ...` | Hermes `state.db` |
+| Grok | `sivtr copy grok ...` | Grok `updates.jsonl`（`~/.grok`，可用 `GROK_HOME`） |
 | Dsh | `sivtr copy dsh ...` | Dsh agent sessions |
 | Gemini | `sivtr copy gemini ...` | Gemini CLI sessions |
 | Goose | `sivtr copy goose ...` | Goose agent sessions |

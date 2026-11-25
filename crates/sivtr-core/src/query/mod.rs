@@ -13,7 +13,8 @@ use anyhow::{Context, Result};
 
 use crate::agents::AgentProvider;
 use crate::record::{WorkRecord, WorkRecordIndex, WorkRef, WorkRefSelector};
-use crate::session_source::{workspace_sources, SessionSource};
+#[cfg(test)]
+use crate::session_source::SessionSource;
 
 /// Prefix of the error [`load_workspace_source`] raises when a selector
 /// matches no records. An empty source is a normal browse outcome (a
@@ -76,23 +77,25 @@ impl From<LoadMode> for crate::archive::store::BlobMode {
     }
 }
 
-/// Build the record index for a workspace: read every archived session of
-/// the given sources (terminal, agent providers, …), deduplicate records,
-/// and sort newest-first.
+/// Build the record index for a workspace: read every archived terminal
+/// session and the given agent providers, deduplicate records, and sort
+/// newest-first.
 ///
 /// The archive is the single read surface: a stamp-gated freshness pass
 /// brings it up to date first, then sessions are listed and decoded from
 /// `archive.db` — native session files are only parsed by the sync engine.
 ///
-/// `recent_sessions` truncates how many recent sessions each source
+/// `recent_sessions` truncates how many recent sessions each namespace
 /// contributes.
 pub fn load_workspace_records(
-    sources: &[Box<dyn SessionSource>],
+    providers: &[AgentProvider],
     cwd: &Path,
     recent_sessions: Option<usize>,
     mode: LoadMode,
 ) -> Result<QueryResult> {
-    let namespaces: Vec<&str> = sources.iter().map(|source| source.namespace()).collect();
+    let mut namespaces = Vec::with_capacity(providers.len() + 1);
+    namespaces.push("terminal");
+    namespaces.extend(providers.iter().map(|provider| provider.command_name()));
     let conn = crate::archive::open()?;
     let sync_skipped = crate::archive::sync::ensure_fresh_with_conn(&conn)?;
     let listed = crate::archive::store::list_workspace_sessions(
@@ -149,29 +152,29 @@ pub fn load_workspace_source(
         if !reference.is_local() {
             anyhow::bail!("remote aliases are not valid inside a served source");
         }
-        if reference.provider() == Some(AgentProvider::Codex)
-            && reference.session().len() == 36
-            && uuid::Uuid::parse_str(reference.session()).is_ok()
-        {
-            let mut records = load_exact_codex_records(cwd, reference.session(), mode)?;
-            normalize_session_display_ids(&mut records);
-            let record = records
-                .into_iter()
-                .find(|record| record.work_ref.index() == reference.index())
-                .with_context(|| format!("No record found for ref `{source}`"))?;
-            let anchor = record.work_ref.with_at(reference.at);
-            return Ok(SourceQueryResult {
-                records: vec![record],
-                anchors: vec![anchor],
-                skipped: Vec::new(),
-            });
+        if let Some(provider) = reference.provider() {
+            if let Some(mut records) = load_exact_records(cwd, provider, reference.session(), mode)?
+            {
+                normalize_session_display_ids(&mut records);
+                if let Some(record) = records
+                    .into_iter()
+                    .find(|record| record.work_ref.index() == reference.index())
+                {
+                    let anchor = record.work_ref.with_at(reference.at);
+                    return Ok(SourceQueryResult {
+                        records: vec![record],
+                        anchors: vec![anchor],
+                        skipped: Vec::new(),
+                    });
+                }
+                anyhow::bail!("No record found for ref `{source}`");
+            }
         }
         let providers = reference
             .provider()
             .map(|provider| vec![provider])
             .unwrap_or_else(all_agent_providers);
-        let sources = workspace_sources(&providers);
-        let result = load_workspace_records(&sources, cwd, None, mode)?;
+        let result = load_workspace_records(&providers, cwd, None, mode)?;
         let index = WorkRecordIndex::new(result.records);
         let record = index
             .resolve(&reference)
@@ -186,13 +189,12 @@ pub fn load_workspace_source(
 
     let selector: WorkRefSelector = source.parse()?;
     if let WorkRefSelector::Agent {
-        provider: Some(AgentProvider::Codex),
+        provider: Some(provider),
         session: Some(session),
         records: selected_indexes,
     } = &selector
     {
-        if session.len() == 36 && uuid::Uuid::parse_str(session).is_ok() {
-            let mut records = load_exact_codex_records(cwd, session, mode)?;
+        if let Some(mut records) = load_exact_records(cwd, *provider, session, mode)? {
             if let Some(indexes) = selected_indexes {
                 records.retain(|record| indexes.contains(&record.work_ref.index()));
             }
@@ -210,8 +212,7 @@ pub fn load_workspace_source(
         }
     }
     let providers = selector.providers();
-    let sources = workspace_sources(&providers);
-    let result = load_workspace_records(&sources, cwd, None, mode)?;
+    let result = load_workspace_records(&providers, cwd, None, mode)?;
     let mut records = Vec::new();
     let mut anchors = Vec::new();
 
@@ -234,18 +235,25 @@ pub fn load_workspace_source(
     })
 }
 
-/// Refresh live segments when present, then read the workspace's retained copy.
-/// Missing or empty sessions return no records; refresh and decode failures propagate.
-fn load_exact_codex_records(
+/// Refresh the live session when present, then read the workspace's retained
+/// copy. `None` means the archive has no row for that exact id either, so the
+/// caller keeps its selector path; a row with no records returns `Some(empty)`.
+/// Refresh and decode failures propagate.
+fn load_exact_records(
     cwd: &Path,
+    provider: AgentProvider,
     session_id: &str,
     mode: LoadMode,
-) -> Result<Vec<WorkRecord>> {
+) -> Result<Option<Vec<WorkRecord>>> {
     let connection = crate::archive::open()?;
-    crate::archive::sync::refresh_codex_session(&connection, session_id, cwd)?;
-    let Some(meta) = crate::archive::store::session_meta_by_key(&connection, "codex", session_id)?
+    crate::archive::sync::refresh_session(&connection, provider, session_id, cwd)?;
+    let Some(meta) = crate::archive::store::session_meta_by_key(
+        &connection,
+        provider.command_name(),
+        session_id,
+    )?
     else {
-        return Ok(Vec::new());
+        return Ok(None);
     };
     let target = crate::agents::model::WorkspaceMatchTarget::new(cwd);
     if !meta
@@ -253,12 +261,17 @@ fn load_exact_codex_records(
         .as_deref()
         .is_some_and(|path| target.matches(Path::new(path)))
     {
-        return Ok(Vec::new());
+        return Ok(Some(Vec::new()));
     }
-    Ok(
-        crate::archive::store::load_records_by_key(&connection, "codex", session_id, mode.into())?
-            .unwrap_or_default(),
-    )
+    Ok(Some(
+        crate::archive::store::load_records_by_key(
+            &connection,
+            provider.command_name(),
+            session_id,
+            mode.into(),
+        )?
+        .unwrap_or_default(),
+    ))
 }
 
 fn all_agent_providers() -> Vec<AgentProvider> {

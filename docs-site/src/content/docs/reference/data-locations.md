@@ -59,11 +59,11 @@ session tree.
 | --- | --- |
 | Codex | `~/.codex/sessions` rollout JSONL files |
 | Claude Code | Current transcript/session environment and local Claude transcripts |
-| Hermes | Primary: `$HERMES_HOME/state.db` (Windows default `%LOCALAPPDATA%\hermes`, else `~/.hermes`). Residual: `sessions/*.jsonl` under the same home. |
+| Hermes | `$HERMES_HOME/state.db` (Windows default `%LOCALAPPDATA%\hermes`, else `~/.hermes`). |
 | OpenCode | OpenCode local database |
 | Cursor | `~/.cursor/projects/**/agent-transcripts/**/*.jsonl` (override home with `CURSOR_HOME`) |
-| OpenClaw | `~/.openclaw/agents/<id>/agent/openclaw-agent.sqlite` (legacy JSONL under `sessions/`) |
-| Grok | `~/.grok/sessions/**` (`summary.json` + `chat_history.jsonl`; override home with `GROK_HOME`) |
+| OpenClaw | `~/.openclaw/agents/<id>/agent/openclaw-agent.sqlite` |
+| Grok | `~/.grok/sessions/**` (`summary.json` + `updates.jsonl`; override home with `GROK_HOME`) |
 | Pi | Pi agent session JSONL files |
 
 Provider formats differ; `sivtr` normalizes them into sessions and dialogue units for copy, picker, search, and show workflows.

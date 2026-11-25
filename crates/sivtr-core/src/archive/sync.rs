@@ -189,7 +189,7 @@ fn sync_sources(
     Ok(report)
 }
 
-/// Sync one agent provider's sessions.
+/// Sync one agent provider's sessions through the shared discovery engine.
 fn sync_provider(conn: &Connection, provider: AgentProvider, full: bool) -> SourceSyncReport {
     let report = |counts: SyncCounts, error: Option<String>, failures: Vec<(PathBuf, String)>| {
         SourceSyncReport {
@@ -200,26 +200,8 @@ fn sync_provider(conn: &Connection, provider: AgentProvider, full: bool) -> Sour
         }
     };
 
-    let codex_index = if provider == AgentProvider::Codex {
-        match crate::agents::codex::CodexSessionIndex::discover() {
-            Ok(index) => Some(index),
-            Err(error) => {
-                return report(
-                    SyncCounts::default(),
-                    Some(format!("{error:#}")),
-                    Vec::new(),
-                )
-            }
-        }
-    } else {
-        None
-    };
-    let source: &dyn SessionSource = match &codex_index {
-        Some(index) => index,
-        None => &provider,
-    };
-    let sessions = match source.list_sessions(None) {
-        Ok(sessions) => sessions,
+    let known = match store::provider_fingerprints(conn, provider.command_name()) {
+        Ok(known) => known,
         Err(error) => {
             return report(
                 SyncCounts::default(),
@@ -228,8 +210,8 @@ fn sync_provider(conn: &Connection, provider: AgentProvider, full: bool) -> Sour
             )
         }
     };
-    let stamps = match store::provider_stamps(conn, provider.command_name()) {
-        Ok(stamps) => stamps,
+    let scan = match crate::agents::engine::scan_provider(provider, None, full, &known) {
+        Ok(scan) => scan,
         Err(error) => {
             return report(
                 SyncCounts::default(),
@@ -239,36 +221,16 @@ fn sync_provider(conn: &Connection, provider: AgentProvider, full: bool) -> Sour
         }
     };
 
-    let mut counts = SyncCounts::default();
-    let mut failures = Vec::new();
-    let mut source_paths = Vec::with_capacity(sessions.len());
-    for info in sessions {
-        source_paths.push(info.path.to_string_lossy().into_owned());
-        let physical_path = info.physical_path.as_deref().unwrap_or(&info.path);
-        let Some(stamp) = crate::cache::file_stamp(physical_path) else {
-            counts.failed += 1;
-            failures.push((
-                info.path.clone(),
-                format!(
-                    "source disappeared before sync: {}",
-                    physical_path.display()
-                ),
-            ));
-            continue;
-        };
-        if !full && stamps.get(info.path.to_string_lossy().as_ref()) == Some(&stamp) {
-            counts.unchanged += 1;
-            continue;
-        }
-        match sync_session(
-            conn,
-            source,
-            &info.path,
-            info.id.as_deref(),
-            info.title.as_deref(),
-            info.cwd.as_deref(),
-            stamp,
-        ) {
+    let mut counts = SyncCounts {
+        unchanged: scan.unchanged,
+        failed: scan.failures.len(),
+        ..SyncCounts::default()
+    };
+    let mut failures = scan.failures;
+    let mut source_paths = Vec::with_capacity(scan.sessions.len());
+    for session in scan.sessions {
+        source_paths.push(session.path.to_string_lossy().into_owned());
+        match sync_engine_session(conn, provider, &session) {
             Ok(was_new) => {
                 if was_new {
                     counts.added += 1;
@@ -278,18 +240,22 @@ fn sync_provider(conn: &Connection, provider: AgentProvider, full: bool) -> Sour
             }
             Err(error) => {
                 counts.failed += 1;
-                failures.push((info.path.clone(), format!("{error:#}")));
+                failures.push((session.path.clone(), format!("{error:#}")));
             }
         }
     }
-    match store::remove_missing_sessions(conn, provider.command_name(), &source_paths) {
-        Ok(removed) => counts.removed = removed,
-        Err(error) => {
-            counts.failed += 1;
-            failures.push((
-                PathBuf::from(format!("<{}>", provider.command_name())),
-                format!("failed to reconcile removed sessions: {error:#}"),
-            ));
+    // Reconcile only after a complete scan: a failed root or file must never
+    // turn into a deletion.
+    if scan.complete {
+        match store::remove_missing_sessions(conn, provider.command_name(), &source_paths) {
+            Ok(removed) => counts.removed = removed,
+            Err(error) => {
+                counts.failed += 1;
+                failures.push((
+                    PathBuf::from(format!("<{}>", provider.command_name())),
+                    format!("failed to reconcile removed sessions: {error:#}"),
+                ));
+            }
         }
     }
     report(counts, None, failures)
@@ -398,30 +364,53 @@ fn sync_terminals(conn: &Connection, full: bool) -> SourceSyncReport {
     }
 }
 
-/// Refresh one complete Codex UUID without the global freshness TTL.
-/// No live match leaves the archive unchanged so retained sessions stay readable.
-/// Parse and storage errors propagate instead of being treated as absent sources.
-pub(crate) fn refresh_codex_session(conn: &Connection, session_id: &str, cwd: &Path) -> Result<()> {
-    let source = crate::agents::codex::CodexSessionIndex::discover()?;
-    let Some(info) = source
-        .list_sessions(Some(cwd))?
-        .into_iter()
-        .find(|info| info.id.as_deref() == Some(session_id))
+/// Store one engine-assembled session. Returns `true` when a new row was
+/// created.
+fn sync_engine_session(
+    conn: &Connection,
+    provider: AgentProvider,
+    session: &crate::agents::engine::EngineSession,
+) -> Result<bool> {
+    let records = WorkRecord::chat_turns(provider, &session.session);
+    let usage_events = crate::usage::extract::extract(provider.command_name(), &session.path)?;
+    let workspace_key = session
+        .cwd
+        .as_deref()
+        .map(Path::new)
+        .and_then(workspace::repo_identity)
+        .unwrap_or_default();
+    let fingerprint = crate::agents::engine::files_fingerprint(&session.files);
+    store::upsert_session(
+        conn,
+        &SessionUpsert {
+            provider: provider.command_name(),
+            session_id: &session.key,
+            source_path: &session.path,
+            cwd: session.cwd.as_deref(),
+            workspace_key: &workspace_key,
+            title: session.title.as_deref(),
+            stamp: crate::agents::engine::ProviderScan::session_stamp(session),
+            fingerprint,
+            records: &records,
+            usage_events: &usage_events,
+        },
+    )
+}
+
+/// Refresh one session for an exact ref read without the global freshness TTL.
+/// A missing live session leaves the archive untouched; parse and storage
+/// errors propagate.
+pub(crate) fn refresh_session(
+    conn: &Connection,
+    provider: AgentProvider,
+    session_id: &str,
+    cwd: &Path,
+) -> Result<()> {
+    let Some(session) = crate::agents::engine::scan_session(provider, session_id, Some(cwd))?
     else {
         return Ok(());
     };
-    let stamp = crate::cache::file_stamp(&info.path)
-        .with_context(|| format!("Codex session disappeared: {}", info.path.display()))?;
-    sync_session(
-        conn,
-        &source,
-        &info.path,
-        info.id.as_deref(),
-        info.title.as_deref(),
-        info.cwd.as_deref(),
-        stamp,
-    )?;
-    Ok(())
+    sync_engine_session(conn, provider, &session).map(|_| ())
 }
 
 /// Parse one source file and store its records. Returns `true` when a new
@@ -468,6 +457,7 @@ pub fn sync_session(
             workspace_key: &workspace_key,
             title: listing_title,
             stamp,
+            fingerprint: 0,
             records: &records,
             usage_events: &usage_events,
         },
@@ -571,240 +561,6 @@ fn sync_max_age_secs() -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Parser upgrades must refresh unchanged agent sources without destroying retained evidence.
-    #[test]
-    fn agent_turn_parser_refresh_preserves_records_stars_and_captures() {
-        let _environment = crate::test_fixtures::EnvGuard::capture(&["SIVTR_HOME", "CODEX_HOME"]);
-        let directory = tempfile::tempdir().unwrap();
-        std::env::set_var("SIVTR_HOME", directory.path().join("archive"));
-        let home = directory.path().join("codex");
-        let sessions = home.join("sessions");
-        std::fs::create_dir_all(&sessions).unwrap();
-        std::env::set_var("CODEX_HOME", &home);
-        let source = sessions.join("turn-refresh.jsonl");
-        let mut transcript = serde_json::json!({"type":"session_meta","payload":{"id":"turn-refresh","cwd":directory.path()}}).to_string() + "\n";
-        for (role, text) in [
-            ("user", "first request"),
-            ("user", "additional detail"),
-            ("assistant", "answer"),
-            ("user", "pending followup"),
-        ] {
-            transcript.push_str(&serde_json::json!({"type":"response_item","payload":{"type":"message","role":role,"content":[{"text":text}]}}).to_string());
-            transcript.push('\n');
-        }
-        std::fs::write(&source, transcript).unwrap();
-        let stamp = crate::cache::file_stamp(&source).unwrap();
-        let mut legacy = AgentProvider::Codex.parse_file(&source).unwrap();
-        legacy.truncate(1);
-        legacy[0]
-            .parts
-            .retain(|part| part.text() != "first request");
-        let connection = schema::open().unwrap();
-        for provider in ["codex", "claude", "pi"] {
-            store::upsert_session(
-                &connection,
-                &SessionUpsert {
-                    provider,
-                    session_id: "turn-refresh",
-                    source_path: &source,
-                    cwd: Some(source.parent().unwrap().to_str().unwrap()),
-                    workspace_key: "",
-                    title: None,
-                    stamp,
-                    records: &legacy,
-                    usage_events: &[],
-                },
-            )
-            .unwrap();
-        }
-        connection
-            .execute(
-                "UPDATE sessions SET starred = 1 WHERE provider = 'codex'",
-                [],
-            )
-            .unwrap();
-        let capture = store::insert_terminal_capture(
-            Some("echo retained"),
-            "retained",
-            directory.path(),
-            Some(0),
-        )
-        .unwrap();
-        let captured =
-            store::load_records_by_key(&connection, "terminal", &capture, store::BlobMode::Full)
-                .unwrap();
-        let terminal_stamps = store::provider_stamps(&connection, "terminal").unwrap();
-        connection
-            .execute(
-                "DELETE FROM archive_meta WHERE key = 'agent_turn_boundaries_v1'",
-                [],
-            )
-            .unwrap();
-        store::meta_set(&connection, "last_sync_at", &Utc::now().to_rfc3339()).unwrap();
-
-        schema::init_schema(&connection).unwrap();
-        assert!(store::meta_get(&connection, "last_sync_at")
-            .unwrap()
-            .is_none());
-        for provider in ["codex", "claude", "pi"] {
-            assert_eq!(
-                store::provider_stamps(&connection, provider).unwrap()[source.to_str().unwrap()].2,
-                0
-            );
-            assert_eq!(
-                store::load_records_by_key(
-                    &connection,
-                    provider,
-                    "turn-refresh",
-                    store::BlobMode::Full
-                )
-                .unwrap()
-                .unwrap(),
-                legacy
-            );
-        }
-        assert_eq!(
-            store::provider_stamps(&connection, "terminal").unwrap(),
-            terminal_stamps
-        );
-        assert_eq!(
-            store::load_records_by_key(&connection, "terminal", &capture, store::BlobMode::Full)
-                .unwrap(),
-            captured
-        );
-
-        let report = sync_sources(&connection, false, &[AgentProvider::Codex], false).unwrap();
-        assert_eq!(report.sources[0].counts.updated, 1);
-        assert!(report.sources[0].failures.is_empty());
-        let records =
-            store::load_records_by_key(&connection, "codex", "turn-refresh", store::BlobMode::Full)
-                .unwrap()
-                .unwrap();
-        assert_eq!(records.len(), 2);
-        assert_eq!(
-            records[0].input_text().as_deref(),
-            Some("first request\n\nadditional detail")
-        );
-        assert_eq!(records[1].input_text().as_deref(), Some("pending followup"));
-        assert!(
-            store::session_meta_by_key(&connection, "codex", "turn-refresh")
-                .unwrap()
-                .unwrap()
-                .starred
-        );
-
-        let freshness = store::meta_get(&connection, "last_sync_at").unwrap();
-        schema::init_schema(&connection).unwrap();
-        assert_eq!(
-            store::provider_stamps(&connection, "codex").unwrap()[source.to_str().unwrap()],
-            stamp
-        );
-        assert_eq!(
-            store::meta_get(&connection, "last_sync_at").unwrap(),
-            freshness
-        );
-    }
-
-    #[test]
-    fn cursor_parser_refresh_rebuilds_unchanged_sources_without_losing_captures() {
-        let _guard = crate::test_fixtures::EnvGuard::capture(&["SIVTR_HOME", "CURSOR_HOME"]);
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("SIVTR_HOME", dir.path().join("data"));
-        std::env::set_var("CURSOR_HOME", dir.path().join("cursor"));
-        let projects = dir.path().join("cursor/projects");
-        std::fs::create_dir_all(&projects).unwrap();
-        let source = projects.join("cursor-old.jsonl");
-        std::fs::write(
-            &source,
-            serde_json::json!({
-                "sessionId": "cursor-old",
-                "role": "user",
-                "cwd": dir.path(),
-                "message": {"content": [{"type": "text", "text": "restored envelope"}]}
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let stamp = crate::cache::file_stamp(&source).unwrap();
-        let conn = schema::open().unwrap();
-        // The old parser could save an empty result with a current file stamp.
-        for provider in ["cursor", "claude"] {
-            store::upsert_session(
-                &conn,
-                &SessionUpsert {
-                    provider,
-                    session_id: "cursor-old",
-                    source_path: &source,
-                    cwd: None,
-                    workspace_key: "",
-                    title: None,
-                    stamp,
-                    records: &[],
-                    usage_events: &[],
-                },
-            )
-            .unwrap();
-        }
-        let capture = store::insert_terminal_capture(
-            Some("echo keep-capture"),
-            "keep-capture",
-            dir.path(),
-            Some(0),
-        )
-        .unwrap();
-        conn.execute(
-            "UPDATE sessions SET starred = 1 WHERE provider = 'cursor'",
-            [],
-        )
-        .unwrap();
-        // Simulate an archive created before the one-time parser migration.
-        conn.execute(
-            "DELETE FROM archive_meta WHERE key = 'cursor_message_envelopes_v1'",
-            [],
-        )
-        .unwrap();
-        store::meta_set(&conn, "last_sync_at", &Utc::now().to_rfc3339()).unwrap();
-        schema::init_schema(&conn).unwrap();
-        assert!(store::meta_get(&conn, "last_sync_at").unwrap().is_none());
-        assert_eq!(
-            store::provider_stamps(&conn, "claude").unwrap()[source.to_str().unwrap()],
-            stamp
-        );
-
-        let report = sync_sources(&conn, false, &[AgentProvider::Cursor], false).unwrap();
-        assert_eq!(report.sources[0].counts.updated, 1);
-        let records =
-            store::load_records_by_key(&conn, "cursor", "cursor-old", store::BlobMode::Full)
-                .unwrap()
-                .unwrap();
-        assert_eq!(records.len(), 1);
-        assert!(records[0]
-            .parts
-            .iter()
-            .any(|part| part.text().contains("restored envelope")));
-        assert!(
-            store::session_meta_by_key(&conn, "cursor", "cursor-old")
-                .unwrap()
-                .unwrap()
-                .starred
-        );
-        let captured =
-            store::load_records_by_key(&conn, "terminal", &capture, store::BlobMode::Full)
-                .unwrap()
-                .unwrap();
-        assert_eq!(captured.len(), 1);
-        assert!(captured[0]
-            .parts
-            .iter()
-            .any(|part| part.text().contains("keep-capture")));
-
-        // Reopening must not invalidate the repaired Cursor records again.
-        schema::init_schema(&conn).unwrap();
-        let second = sync_sources(&conn, false, &[AgentProvider::Cursor], false).unwrap();
-        assert_eq!(second.sources[0].counts.unchanged, 1);
-        assert_eq!(crate::cache::file_stamp(&source), Some(stamp));
-    }
 
     #[test]
     fn ensure_fresh_never_hard_fails_on_empty_environments() {

@@ -50,6 +50,7 @@ pub struct SessionUpsert<'a> {
     pub workspace_key: &'a str,
     pub title: Option<&'a str>,
     pub stamp: Stamp,
+    pub fingerprint: u64,
     pub records: &'a [WorkRecord],
     pub usage_events: &'a [crate::usage::UsageEvent],
 }
@@ -105,6 +106,7 @@ pub fn upsert_session(conn: &Connection, up: &SessionUpsert) -> Result<bool> {
                 "UPDATE sessions SET session_id = ?2, source_path = ?3, cwd = ?4, cwd_norm = ?5,
                  workspace_key = ?6, title = ?7, started_at = ?8, ended_at = ?9, record_count = ?10,
                  project = ?11, mtime_secs = ?12, mtime_nanos = ?13, size = ?14,
+                 files_fingerprint = ?15,
                  synced_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
                  WHERE id = ?1",
                 params![
@@ -122,6 +124,7 @@ pub fn upsert_session(conn: &Connection, up: &SessionUpsert) -> Result<bool> {
                     up.stamp.0 as i64,
                     up.stamp.1 as i64,
                     up.stamp.2 as i64,
+                    up.fingerprint as i64,
                 ],
             )
             .with_context(|| format!("Failed to update archived session {}", up.session_id))?;
@@ -135,9 +138,9 @@ pub fn upsert_session(conn: &Connection, up: &SessionUpsert) -> Result<bool> {
             tx.execute(
                 "INSERT INTO sessions (provider, session_id, source_path, cwd, cwd_norm,
                  workspace_key, title, started_at, ended_at, record_count, project,
-                 mtime_secs, mtime_nanos, size, synced_at)
+                 mtime_secs, mtime_nanos, size, files_fingerprint, synced_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-                 strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+                 ?15, strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
                 params![
                     up.provider,
                     up.session_id,
@@ -153,6 +156,7 @@ pub fn upsert_session(conn: &Connection, up: &SessionUpsert) -> Result<bool> {
                     up.stamp.0 as i64,
                     up.stamp.1 as i64,
                     up.stamp.2 as i64,
+                    up.fingerprint as i64,
                 ],
             )
             .with_context(|| format!("Failed to insert archived session {}", up.session_id))?;
@@ -205,6 +209,7 @@ pub fn insert_terminal_capture(
             workspace_key: &workspace_key,
             title: command.filter(|command| !command.trim().is_empty()),
             stamp,
+            fingerprint: 0,
             records: std::slice::from_ref(&record),
             usage_events: &usage_events,
         },
@@ -496,6 +501,21 @@ pub fn provider_stamps(
     Ok(rows.into_iter().collect())
 }
 
+/// Archived file-set fingerprints of one provider, keyed by source path.
+pub fn provider_fingerprints(
+    conn: &Connection,
+    provider: &str,
+) -> Result<std::collections::HashMap<String, u64>> {
+    let mut stmt =
+        conn.prepare("SELECT source_path, files_fingerprint FROM sessions WHERE provider = ?1")?;
+    let rows = stmt
+        .query_map([provider], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows.into_iter().collect())
+}
+
 /// Session metadata for listings and API responses.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SessionMeta {
@@ -596,14 +616,39 @@ pub fn set_session_starred(
     session_id: &str,
     starred: bool,
 ) -> Result<()> {
-    let changed = conn.execute(
+    let resolved = resolve_session_id(conn, provider, session_id)?.ok_or_else(|| {
+        anyhow::anyhow!("archived session `{provider}/{session_id}` was not found")
+    })?;
+    conn.execute(
         "UPDATE sessions SET starred = ?3 WHERE provider = ?1 AND session_id = ?2",
-        params![provider, session_id, i64::from(starred)],
+        params![provider, resolved, i64::from(starred)],
     )?;
-    if changed == 0 {
-        anyhow::bail!("archived session `{provider}/{session_id}` was not found");
-    }
     Ok(())
+}
+
+/// Resolve a user-typed session address to its archived key. A full id wins;
+/// a unique prefix is accepted so the compact display ids from listings work.
+pub fn resolve_session_id(
+    conn: &Connection,
+    provider: &str,
+    session_id: &str,
+) -> Result<Option<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT session_id FROM sessions WHERE provider = ?1 AND session_id = ?2
+         UNION ALL
+         SELECT session_id FROM sessions WHERE provider = ?1 AND session_id LIKE ?3 || '%'
+         ORDER BY 1 LIMIT 2",
+    )?;
+    let mut rows = stmt
+        .query_map(params![provider, session_id, session_id], |row| {
+            row.get::<_, String>(0)
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    match rows.len() {
+        0 => Ok(None),
+        1 => Ok(rows.pop()),
+        _ => anyhow::bail!("session `{provider}/{session_id}` is ambiguous; use the full id"),
+    }
 }
 
 fn replace_secret_findings(
@@ -893,6 +938,7 @@ mod tests {
             workspace_key: "repo-key",
             title: None,
             stamp: (100, 0, 42),
+            fingerprint: 0,
             records,
             usage_events: &[],
         }
