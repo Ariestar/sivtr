@@ -87,7 +87,22 @@ fn start(verbose: bool) -> Result<()> {
 /// Request shutdown and wait for the daemon to release its lifetime lock.
 fn stop() -> Result<()> {
     if ipc::status()?.is_none() {
-        crate::remote::ipc::remove_daemon_info()?;
+        // Hold the lifetime lock across the recheck so a concurrent start
+        // cannot publish fresh daemon state into the removal window.
+        let Some(_lock) = ipc::DaemonLock::try_acquire()? else {
+            bail!(
+                "sivtr daemon is starting; inspect {}",
+                ipc::daemon_log_path().display()
+            );
+        };
+        match ipc::call(LocalRequest::Status) {
+            Ok(LocalResponse::Status(_)) => {
+                bail!("sivtr daemon started while stopping; run `sivtr serve stop` again")
+            }
+            Ok(response) => bail!("Unexpected daemon response: {response:?}"),
+            Err(_) => {}
+        }
+        ipc::remove_daemon_info()?;
         output::warning("sivtr daemon is not running");
         return Ok(());
     }

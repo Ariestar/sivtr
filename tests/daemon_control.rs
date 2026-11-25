@@ -117,6 +117,40 @@ fn stopped_daemon_allows_stale_control_cleanup() {
     }
 }
 
+/// The lifetime lock must serialize stale cleanup with a concurrent daemon start.
+#[test]
+fn daemon_lock_guard_serializes_stale_cleanup() {
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _env = ENV_LOCK.lock().expect("serialize SIVTR_HOME changes");
+    let home = tempfile::tempdir().expect("isolated home");
+    let previous = std::env::var_os("SIVTR_HOME");
+    std::env::set_var("SIVTR_HOME", home.path());
+
+    let guard = sivtr::remote::ipc::DaemonLock::try_acquire()
+        .expect("acquire daemon lock")
+        .expect("daemon lock is free");
+    assert!(
+        sivtr::remote::ipc::daemon_lock_held().expect("detect held lock"),
+        "cleanup must own the lifetime lock"
+    );
+    assert!(
+        sivtr::remote::ipc::DaemonLock::try_acquire()
+            .expect("probe daemon lock")
+            .is_none(),
+        "concurrent start must wait for cleanup"
+    );
+    drop(guard);
+    assert!(
+        !sivtr::remote::ipc::daemon_lock_held().expect("detect released lock"),
+        "cleanup must release the lock"
+    );
+
+    match previous {
+        Some(value) => std::env::set_var("SIVTR_HOME", value),
+        None => std::env::remove_var("SIVTR_HOME"),
+    }
+}
+
 /// Shutdown must wait for lock release without sending another control request.
 #[test]
 fn shutdown_waits_for_lock_release_without_another_status_request() {
