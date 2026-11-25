@@ -2,9 +2,7 @@
 
 use super::help::{help_action_for_key, parse_help_key, WorkspaceHelpAction};
 use super::layout::can_open_dialogue_vim;
-use super::model::{
-    WorkspaceCopyParts, WorkspaceDialogue, WorkspaceFocus, WorkspaceSearchView, WorkspaceSource,
-};
+use super::model::{WorkspaceDialogue, WorkspaceFocus, WorkspaceSearchView, WorkspaceSource};
 use super::render::{
     content_title, current_content_dialogue, current_content_ref, line_filter_prompt_text,
     search_box_body, search_box_title,
@@ -13,41 +11,78 @@ use crate::tui::content::io::ExpandedBlocks;
 use crate::tui::content::text::{workspace_content_io_texts, workspace_content_text};
 use crate::tui::content::view::ContentViewMode;
 use crate::tui::search::WorkspaceSearchScope;
-use sivtr_core::ai::AgentProvider;
-use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
+use sivtr_core::agents::AgentProvider;
+use sivtr_core::record::{
+    MessageRole, WorkActionStatus, WorkActor, WorkAt, WorkContent, WorkPart, WorkPartBody,
+    WorkRecord, WorkRef, WorkTarget,
+};
 
-fn tool_test_value(text: String) -> serde_json::Value {
-    serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text))
-}
-
-fn part(seq: usize, data: sivtr_core::record::WorkPartData) -> sivtr_core::record::WorkPart {
-    sivtr_core::record::WorkPart {
+fn part(seq: usize, body: WorkPartBody) -> WorkPart {
+    WorkPart {
         seq,
         occurred_at: None,
-        data,
+        body,
     }
 }
 
-fn chat_record(parts: Vec<sivtr_core::record::WorkPart>) -> WorkRecord {
-    WorkRecord {
-        schema_version: 2,
-        work_ref: WorkRef::agent(AgentProvider::Codex, "session", 1),
-        kind: sivtr_core::record::WorkRecordKind::ChatTurn,
-        source: sivtr_core::record::WorkSource {
-            channel: sivtr_core::record::WorkChannel::Chat,
-            provider: Some("codex".to_string()),
+fn message(seq: usize, role: MessageRole, content: &str) -> WorkPart {
+    crate::test_fixtures::message_part(seq, role, content)
+}
+
+fn user(seq: usize, content: &str) -> WorkPart {
+    message(seq, MessageRole::User, content)
+}
+
+fn assistant(seq: usize, content: &str) -> WorkPart {
+    message(seq, MessageRole::Assistant, content)
+}
+
+fn skill(seq: usize, name: &str, content: &str) -> WorkPart {
+    part(
+        seq,
+        WorkPartBody::Message {
+            role: MessageRole::System,
+            label: Some(name.to_string()),
+            content: WorkContent::Text {
+                content: content.to_string(),
+                ansi: None,
+            },
         },
-        session: sivtr_core::record::WorkSessionRef {
-            id: "session".to_string(),
-            canonical_id: None,
-            path: None,
-        },
-        cwd: None,
-        time: sivtr_core::record::WorkTime::default(),
-        status: None,
-        title: "cmd".to_string(),
-        parts,
+    )
+}
+
+fn shell_call(seq: usize, command: &str) -> WorkPart {
+    let mut p = crate::test_fixtures::shell_action_part(seq, command, None);
+    if let WorkPartBody::Action { status, .. } = &mut p.body {
+        *status = WorkActionStatus::InProgress;
     }
+    p
+}
+
+fn shell_done(seq: usize, command: &str, output: &str) -> WorkPart {
+    crate::test_fixtures::shell_action_part(seq, command, Some(output))
+}
+
+fn tool_call(seq: usize, tool: &str, input: serde_json::Value) -> WorkPart {
+    part(
+        seq,
+        WorkPartBody::Action {
+            id: format!("tool-{seq}"),
+            actor: WorkActor::Agent,
+            target: WorkTarget::Tool {
+                name: Some(tool.to_string()),
+            },
+            title: None,
+            input: Some(WorkContent::Json(input)),
+            output: Vec::new(),
+            status: WorkActionStatus::InProgress,
+            exit_code: None,
+        },
+    )
+}
+
+fn chat_record(parts: Vec<WorkPart>) -> WorkRecord {
+    crate::test_fixtures::chat_record(1, parts)
 }
 
 fn codex_dialogue(record: WorkRecord) -> WorkspaceDialogue {
@@ -55,7 +90,6 @@ fn codex_dialogue(record: WorkRecord) -> WorkspaceDialogue {
         source: WorkspaceSource::agent(AgentProvider::Codex),
         work_ref: Some(record.work_ref.clone()),
         record: Some(record),
-        copy: WorkspaceCopyParts::default(),
     }
 }
 
@@ -69,20 +103,7 @@ fn can_open_dialogue_vim_accepts_sessions_when_dialogues_exist() {
 
 #[test]
 fn content_preview_text_preserves_raw_text_without_line_number_prefixes() {
-    let record = chat_record(vec![
-        part(
-            1,
-            sivtr_core::record::WorkPartData::User {
-                content: "alpha".to_string(),
-            },
-        ),
-        part(
-            1,
-            sivtr_core::record::WorkPartData::Assistant {
-                content: "omega".to_string(),
-            },
-        ),
-    ]);
+    let record = chat_record(vec![user(1, "alpha"), assistant(2, "omega")]);
     let dialogue = codex_dialogue(record);
 
     let io = workspace_content_io_texts(
@@ -103,13 +124,10 @@ fn content_preview_text_preserves_raw_text_without_line_number_prefixes() {
 
 #[test]
 fn content_preview_text_uses_targeted_part_text_in_raw_mode() {
-    let record = chat_record(vec![part(
+    let record = chat_record(vec![tool_call(
         1,
-        sivtr_core::record::WorkPartData::ToolCall {
-            call_id: None,
-            tool: Some("tool".to_string()),
-            input: tool_test_value("hidden tool call".to_string()),
-        },
+        "tool",
+        serde_json::Value::String("hidden tool call".to_string()),
     )]);
     let dialogue = codex_dialogue(record);
 
@@ -121,13 +139,10 @@ fn content_preview_text_uses_targeted_part_text_in_raw_mode() {
 
 #[test]
 fn content_preview_text_uses_structured_targeted_part_text_in_reading_mode() {
-    let record = chat_record(vec![part(
+    let record = chat_record(vec![tool_call(
         1,
-        sivtr_core::record::WorkPartData::ToolCall {
-            call_id: None,
-            tool: Some("tool".to_string()),
-            input: tool_test_value("hidden tool call".to_string()),
-        },
+        "tool",
+        serde_json::Value::String("hidden tool call".to_string()),
     )]);
     let dialogue = codex_dialogue(record);
 
@@ -146,37 +161,38 @@ fn content_preview_text_uses_structured_targeted_part_text_in_reading_mode() {
 }
 
 #[test]
+fn targeted_part_uses_its_dialogue_global_block_id() {
+    let record = chat_record(vec![
+        user(1, "question"),
+        assistant(2, "answer"),
+        tool_call(
+            3,
+            "tool",
+            serde_json::Value::String("target body".to_string()),
+        ),
+    ]);
+    let dialogue = codex_dialogue(record);
+    let mut expanded = ExpandedBlocks::default();
+    let folded =
+        dialogue.content_io_texts(ContentViewMode::Reading, Some(WorkAt::Part(3)), &expanded);
+    assert_eq!(
+        crate::tui::content::block::dialogue_block_id(dialogue.record.as_ref().unwrap(), 3),
+        Some(2)
+    );
+    assert_eq!(folded.output.trim(), "<:tool:tool call:>");
+    expanded.toggle(2);
+    let open =
+        dialogue.content_io_texts(ContentViewMode::Reading, Some(WorkAt::Part(3)), &expanded);
+    assert!(open.output.contains("target body"));
+}
+
+#[test]
 fn reading_mode_folds_structure_and_raw_expands() {
     let record = chat_record(vec![
-        part(
-            1,
-            sivtr_core::record::WorkPartData::User {
-                content: "question".to_string(),
-            },
-        ),
-        part(
-            2,
-            sivtr_core::record::WorkPartData::ToolCall {
-                call_id: None,
-                tool: Some("Bash".to_string()),
-                input: tool_test_value("cargo test".to_string()),
-            },
-        ),
-        part(
-            3,
-            sivtr_core::record::WorkPartData::ToolResult {
-                call_id: None,
-                tool: Some("Bash".to_string()),
-                output: tool_test_value("ok".to_string()),
-                start_line: None,
-            },
-        ),
-        part(
-            4,
-            sivtr_core::record::WorkPartData::Assistant {
-                content: "answer".to_string(),
-            },
-        ),
+        user(1, "question"),
+        // One shell action carries the call and its result.
+        shell_done(2, "cargo test", "ok"),
+        assistant(3, "answer"),
     ]);
     let dialogue = codex_dialogue(record);
 
@@ -194,10 +210,8 @@ fn reading_mode_folds_structure_and_raw_expands() {
         &ExpandedBlocks::default(),
     );
     assert!(reading_io.input.contains("question"));
-    // Reading folds each structure group to its tag line; the call+result
-    // pair collapses to one tag, so the result tag and payload are dropped.
-    assert!(reading_io.output.contains("<:bash: cargo test:>"));
-    assert!(!reading_io.output.contains("<:tool:Bash result:>"));
+    // Reading folds the agent action to its tag line; the payload drops.
+    assert!(reading_io.output.contains("<:shell: cargo test:>"));
     assert!(reading_io.output.contains("answer"));
     assert!(!reading.contains("$ cargo test"));
     assert!(!reading.contains("ok"));
@@ -217,8 +231,7 @@ fn reading_mode_folds_structure_and_raw_expands() {
     assert!(raw_io.input.contains("question"));
     assert!(raw_io.output.contains("cargo test"));
     assert!(raw_io.output.contains("$ cargo test"));
-    // Known results use the `>` output format.
-    assert!(raw_io.output.contains("> ok"));
+    // Shell output reads as the terminal transcript it is.
     assert!(raw_io.output.contains("ok"));
     assert!(raw_io.output.contains("answer"));
     assert!(!raw.contains("codex/session"));
@@ -229,48 +242,12 @@ fn reading_mode_folds_structure_and_raw_expands() {
 #[test]
 fn reading_mode_collapses_adjacent_structure_runs() {
     let record = chat_record(vec![
-        part(
-            1,
-            sivtr_core::record::WorkPartData::User {
-                content: "do it".to_string(),
-            },
-        ),
-        part(
-            2,
-            sivtr_core::record::WorkPartData::ToolCall {
-                call_id: None,
-                tool: Some("Bash".to_string()),
-                input: tool_test_value("ls".to_string()),
-            },
-        ),
-        part(
-            3,
-            sivtr_core::record::WorkPartData::ToolCall {
-                call_id: None,
-                tool: Some("Read".to_string()),
-                input: tool_test_value("file".to_string()),
-            },
-        ),
-        part(
-            4,
-            sivtr_core::record::WorkPartData::Skill {
-                skill: Some("review".to_string()),
-                content: "skill body".to_string(),
-            },
-        ),
-        part(
-            5,
-            sivtr_core::record::WorkPartData::Skill {
-                skill: Some("deploy".to_string()),
-                content: "skill body 2".to_string(),
-            },
-        ),
-        part(
-            1,
-            sivtr_core::record::WorkPartData::Assistant {
-                content: "done".to_string(),
-            },
-        ),
+        user(1, "do it"),
+        shell_call(2, "ls"),
+        tool_call(3, "Read", serde_json::json!({ "file_path": "file" })),
+        skill(4, "review", "skill body"),
+        skill(5, "deploy", "skill body 2"),
+        assistant(6, "done"),
     ]);
     let dialogue = codex_dialogue(record);
 
@@ -288,15 +265,15 @@ fn reading_mode_collapses_adjacent_structure_runs() {
         None,
     );
     assert!(reading_io.input.contains("do it"));
-    // Adjacent same-kind structure parts fold into one run tag each.
+    // Adjacent agent actions fold into one run tag each; the skills carry
+    // their names into the input half's run tag.
     let output = &reading_io.output;
-    assert!(output.contains("<:bash, read:>"));
-    assert!(!output.contains("<:tool:Bash call:>"));
-    assert!(!output.contains("<:tool:Read call:>"));
+    assert!(output.contains("<:shell, read:>"));
+    assert!(!output.contains("<:shell: ls:>"));
+    assert!(!output.contains("<:read: file:>"));
     let input = &reading_io.input;
-    assert!(input.contains("<:skill x2:>"));
-    assert!(!input.contains("<:skill:review:>"));
-    assert!(!input.contains("<:skill:deploy:>"));
+    assert!(input.contains("<:review, deploy:>"));
+    assert!(!input.contains("skill body"));
     assert!(reading_io.output.contains("done"));
     assert!(!reading.contains("file"));
     assert!(!reading.contains("skill body"));
@@ -306,46 +283,13 @@ fn reading_mode_collapses_adjacent_structure_runs() {
 #[test]
 fn reading_mode_folds_consecutive_same_kind_runs() {
     let record = chat_record(vec![
-        // Interleaved with dialogue — the output half still sees the tool
-        // calls as one consecutive run.
-        part(
-            1,
-            sivtr_core::record::WorkPartData::ToolCall {
-                call_id: None,
-                tool: Some("Bash".to_string()),
-                input: tool_test_value("ls".to_string()),
-            },
-        ),
-        part(
-            2,
-            sivtr_core::record::WorkPartData::User {
-                content: "middle note".to_string(),
-            },
-        ),
-        part(
-            3,
-            sivtr_core::record::WorkPartData::ToolCall {
-                call_id: None,
-                tool: Some("Read".to_string()),
-                input: tool_test_value("file".to_string()),
-            },
-        ),
-        part(
-            4,
-            sivtr_core::record::WorkPartData::ToolCall {
-                call_id: None,
-                tool: Some("Bash".to_string()),
-                input: tool_test_value("pwd".to_string()),
-            },
-        ),
-        part(
-            5,
-            sivtr_core::record::WorkPartData::ToolCall {
-                call_id: None,
-                tool: Some("Bash".to_string()),
-                input: tool_test_value("date".to_string()),
-            },
-        ),
+        // Interleaved with dialogue — the output half still sees the agent
+        // actions as one consecutive run.
+        shell_call(1, "ls"),
+        user(2, "middle note"),
+        tool_call(3, "Read", serde_json::json!({ "file_path": "file" })),
+        shell_call(4, "pwd"),
+        shell_call(5, "date"),
     ]);
     let dialogue = codex_dialogue(record);
 
@@ -356,11 +300,11 @@ fn reading_mode_folds_consecutive_same_kind_runs() {
         None,
         &ExpandedBlocks::default(),
     );
-    // The four output-half tool calls fold into one run tag.
+    // The four output-half agent actions fold into one run tag.
     assert!(reading_io.input.contains("middle note"));
     let output = &reading_io.output;
-    assert!(output.contains("<:bash x3, read:>"));
-    assert!(!output.contains("<:tool:Bash call:>"));
+    assert!(output.contains("<:shell x3, read:>"));
+    assert!(!output.contains("<:shell: ls:>"));
     assert!(!output.contains("file"));
     assert!(!output.contains("pwd"));
     assert!(!output.contains("date"));
@@ -369,41 +313,10 @@ fn reading_mode_folds_consecutive_same_kind_runs() {
 #[test]
 fn reading_mode_keeps_structure_runs_in_call_order() {
     let record = chat_record(vec![
-        part(
-            1,
-            sivtr_core::record::WorkPartData::User {
-                content: "do it".to_string(),
-            },
-        ),
-        part(
-            2,
-            sivtr_core::record::WorkPartData::Assistant {
-                content: "checking first".to_string(),
-            },
-        ),
-        part(
-            3,
-            sivtr_core::record::WorkPartData::ToolCall {
-                call_id: None,
-                tool: Some("Bash".to_string()),
-                input: tool_test_value("ls".to_string()),
-            },
-        ),
-        part(
-            4,
-            sivtr_core::record::WorkPartData::ToolResult {
-                call_id: None,
-                tool: Some("Bash".to_string()),
-                output: tool_test_value("ok".to_string()),
-                start_line: None,
-            },
-        ),
-        part(
-            5,
-            sivtr_core::record::WorkPartData::Assistant {
-                content: "all done".to_string(),
-            },
-        ),
+        user(1, "do it"),
+        assistant(2, "checking first"),
+        shell_done(3, "ls", "ok"),
+        assistant(4, "all done"),
     ]);
     let dialogue = codex_dialogue(record);
 
@@ -417,22 +330,23 @@ fn reading_mode_keeps_structure_runs_in_call_order() {
     // Tags sit between the assistant chunks, matching the call order.
     let output = &reading_io.output;
     let first_text = output.find("checking first").expect("first assistant text");
-    let tag = output.find("<:bash: ls:>").expect("tool tag");
+    let tag = output.find("<:shell: ls:>").expect("tool tag");
     let last_text = output.find("all done").expect("last assistant text");
     assert!(first_text < tag);
     assert!(tag < last_text);
-    // Payloads are dropped: the tag line mentions result, the body never shows.
+    // Payloads are dropped: the tag line mentions the command, the body
+    // never shows.
     assert!(!output.contains("ok"));
 }
 
 #[test]
 fn content_title_includes_view_mode() {
     assert_eq!(
-        content_title(ContentViewMode::Reading, &[false, false], None),
+        content_title(ContentViewMode::Reading, 0, None),
         "Content (read)"
     );
     assert_eq!(
-        content_title(ContentViewMode::Raw, &[true, false], None),
+        content_title(ContentViewMode::Raw, 1, None),
         "Content (raw): 1 dialogue selected"
     );
 }
@@ -442,7 +356,7 @@ fn content_title_includes_current_dialogue_ref() {
     let work_ref = WorkRef::agent(AgentProvider::Codex, "session", 2);
 
     assert_eq!(
-        content_title(ContentViewMode::Reading, &[false], Some(&work_ref)),
+        content_title(ContentViewMode::Reading, 0, Some(&work_ref)),
         "Content (read) [codex/session/2]"
     );
 }
@@ -489,10 +403,6 @@ fn help_action_for_key_is_focus_scoped() {
         help_action_for_key(KeyCode::Tab, KeyModifiers::NONE, WorkspaceFocus::Content),
         Some(WorkspaceHelpAction::ToggleContentIo)
     );
-    assert_eq!(
-        help_action_for_key(KeyCode::Tab, KeyModifiers::NONE, WorkspaceFocus::Source),
-        None
-    );
     // Source-only binding does not fire on Content.
     assert_eq!(
         help_action_for_key(
@@ -527,6 +437,25 @@ fn help_action_for_key_is_focus_scoped() {
         ),
         None
     );
+    assert_eq!(
+        help_action_for_key(
+            KeyCode::Char('p'),
+            KeyModifiers::NONE,
+            WorkspaceFocus::Dialogues
+        ),
+        Some(WorkspaceHelpAction::Publish)
+    );
+    for focus in [
+        WorkspaceFocus::Source,
+        WorkspaceFocus::Sessions,
+        WorkspaceFocus::Dialogues,
+        WorkspaceFocus::Content,
+    ] {
+        assert_eq!(
+            help_action_for_key(KeyCode::Char('a'), KeyModifiers::NONE, focus),
+            Some(WorkspaceHelpAction::ToggleAll)
+        );
+    }
 }
 
 #[test]
@@ -536,13 +465,11 @@ fn current_content_dialogue_uses_single_selected_dialogue() {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 1)),
             record: None,
-            copy: WorkspaceCopyParts::default(),
         },
         WorkspaceDialogue {
             source: WorkspaceSource::agent(AgentProvider::Codex),
             work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 2)),
             record: None,
-            copy: WorkspaceCopyParts::default(),
         },
     ];
 
@@ -560,7 +487,6 @@ fn current_content_ref_round_trips_active_part_target() {
         source: WorkspaceSource::agent(AgentProvider::Codex),
         work_ref: Some(WorkRef::agent(AgentProvider::Codex, "session", 2)),
         record: None,
-        copy: WorkspaceCopyParts::default(),
     }];
 
     let current = current_content_ref(&dialogues, &[false], 0, Some(WorkAt::Part(1))).unwrap();

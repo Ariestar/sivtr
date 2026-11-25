@@ -3,7 +3,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-use crate::ai::AgentProvider;
+use crate::agents::AgentProvider;
 
 /// Where a ref lives: current workspace, or a named scope (`docs`, `desk`, `alice/sivtr`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -62,6 +62,32 @@ impl WorkPath {
             Self::Terminal { .. } => None,
             Self::Agent { provider, .. } => Some(*provider),
         }
+    }
+
+    /// Query namespace of a source discriminator: `terminal` for `None`
+    /// (terminal records carry no provider), else the provider's command
+    /// name. Terminal-vs-agent is `Option<AgentProvider>` everywhere; this
+    /// is the single string rendering of that choice.
+    pub fn namespace_for(provider: Option<AgentProvider>) -> &'static str {
+        provider.map_or("terminal", |provider| provider.command_name())
+    }
+
+    /// Query namespace: `terminal` or the provider's command name — the
+    /// cache namespace and selector head of this path.
+    pub fn namespace(&self) -> &'static str {
+        Self::namespace_for(self.provider())
+    }
+
+    /// Session-stream path: `terminal/<session>` or `<provider>/<session>`.
+    pub fn stream_path(&self) -> String {
+        format!("{}/{}", self.namespace(), self.session())
+    }
+
+    /// Whether two paths address the same session stream: same namespace
+    /// (terminal vs agent, or different providers are distinct) and same
+    /// session.
+    pub fn same_stream(&self, other: &Self) -> bool {
+        self.provider() == other.provider() && self.session() == other.session()
     }
 
     pub fn with_session(&self, session: impl Into<String>) -> Self {

@@ -1,10 +1,9 @@
 use anyhow::{bail, Context, Result};
-use sivtr_core::record::{WorkAt, WorkPath, WorkRecord, WorkRef};
+use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
 use std::path::PathBuf;
 
 use crate::cli::NavArgs;
 use crate::commands::memory::show;
-use crate::commands::memory::var;
 use crate::commands::memory::workset::{self, WorkSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,11 +22,17 @@ pub fn execute(args: &NavArgs) -> Result<()> {
         args.cwd.as_deref(),
     )?;
     let cwd = PathBuf::from(&source.cwd);
-    let all_records = workset::load_context_records(&source.records, &source.anchors, &cwd)?;
-    let anchors = navigate(&source.records, &source.anchors, &all_records, &args.motion)?;
+    let source_anchors = source.anchors().to_vec();
+    let all_records = workset::load_context_records(source.records(), &source_anchors, &cwd)?;
+    let anchors = navigate(
+        source.records(),
+        &source_anchors,
+        &all_records,
+        &args.motion,
+    )?;
     let records = workset::records_for_anchors(&all_records, &anchors);
-    let mut set = WorkSet::with_anchors(source.cwd, records, anchors);
-    set.save_last()?;
+    let mut set = WorkSet::from_parts(source.cwd, records, anchors);
+    workset::save_last(&set)?;
     show::print_workset(
         &mut set,
         show::resolve_output_format(args.format, false, args.refs, args.json),
@@ -44,7 +49,7 @@ fn navigate(
     let mut anchors = source_anchors.to_vec();
     for step in steps {
         anchors = apply_step(source_records, &anchors, all_records, step)?;
-        anchors = var::unique_anchors(anchors);
+        anchors = workset::unique_anchors(anchors);
     }
     Ok(anchors)
 }
@@ -94,7 +99,8 @@ fn child(
     }
     match anchor.at {
         WorkAt::Whole => {
-            let record = record_for_anchor(anchor, source_records, all_records)?;
+            let record = workset::require_record([source_records, all_records], anchor)
+                .with_context(|| format!("resolve child record for `{anchor}`"))?;
             let Some(part) = record.parts.get(index - 1) else {
                 return Ok(Vec::new());
             };
@@ -112,7 +118,8 @@ fn sibling(
 ) -> Result<Vec<WorkRef>> {
     match anchor.at {
         WorkAt::Whole => {
-            let record = record_for_anchor(anchor, source_records, all_records)?;
+            let record = workset::require_record([source_records, all_records], anchor)
+                .with_context(|| format!("resolve sibling record for `{anchor}`"))?;
             let session_records = session_records_for(record, all_records);
             let Some(position) = session_records
                 .iter()
@@ -126,7 +133,8 @@ fn sibling(
             Ok(vec![session_records[target].work_ref.whole()])
         }
         WorkAt::Part(seq) => {
-            let record = record_for_anchor(anchor, source_records, all_records)?;
+            let record = workset::require_record([source_records, all_records], anchor)
+                .with_context(|| format!("resolve sibling record for `{anchor}`"))?;
             let Some(position) = record.parts.iter().position(|part| part.seq == seq) else {
                 return Ok(Vec::new());
             };
@@ -150,7 +158,8 @@ fn window(
     }
     match anchor.at {
         WorkAt::Whole => {
-            let record = record_for_anchor(anchor, source_records, all_records)?;
+            let record = workset::require_record([source_records, all_records], anchor)
+                .with_context(|| format!("resolve window record for `{anchor}`"))?;
             let session_records = session_records_for(record, all_records);
             let position = session_records
                 .iter()
@@ -164,7 +173,8 @@ fn window(
                 .collect())
         }
         WorkAt::Part(seq) => {
-            let record = record_for_anchor(anchor, source_records, all_records)?;
+            let record = workset::require_record([source_records, all_records], anchor)
+                .with_context(|| format!("resolve window record for `{anchor}`"))?;
             let position = record
                 .parts
                 .iter()
@@ -185,24 +195,12 @@ fn session(
     source_records: &[WorkRecord],
     all_records: &[WorkRecord],
 ) -> Result<Vec<WorkRef>> {
-    let record = record_for_anchor(anchor, source_records, all_records)?;
+    let record = workset::require_record([source_records, all_records], anchor)
+        .with_context(|| format!("resolve session record for `{anchor}`"))?;
     Ok(session_records_for(record, all_records)
         .into_iter()
         .map(|record| record.work_ref.whole())
         .collect())
-}
-
-fn record_for_anchor<'a>(
-    anchor: &WorkRef,
-    source_records: &'a [WorkRecord],
-    all_records: &'a [WorkRecord],
-) -> Result<&'a WorkRecord> {
-    let record_ref = anchor.whole();
-    source_records
-        .iter()
-        .chain(all_records.iter())
-        .find(|record| record.work_ref.whole() == record_ref)
-        .with_context(|| format!("No record found for ref `{record_ref}`"))
 }
 
 fn session_records_for<'a>(
@@ -211,29 +209,10 @@ fn session_records_for<'a>(
 ) -> Vec<&'a WorkRecord> {
     let mut records = all_records
         .iter()
-        .filter(|candidate| same_stream(record, candidate))
+        .filter(|candidate| record.work_ref.path.same_stream(&candidate.work_ref.path))
         .collect::<Vec<_>>();
     records.sort_by_key(|record| record.work_ref.index());
     records
-}
-
-fn same_stream(left: &WorkRecord, right: &WorkRecord) -> bool {
-    match (&left.work_ref.path, &right.work_ref.path) {
-        (WorkPath::Terminal { .. }, WorkPath::Terminal { .. }) => {
-            left.work_ref.session() == right.work_ref.session()
-        }
-        (
-            WorkPath::Agent {
-                provider: left_provider,
-                ..
-            },
-            WorkPath::Agent {
-                provider: right_provider,
-                ..
-            },
-        ) => left_provider == right_provider && left.work_ref.session() == right.work_ref.session(),
-        _ => false,
-    }
 }
 
 fn offset_index(position: usize, offset: isize, len: usize) -> Option<usize> {
@@ -345,9 +324,7 @@ fn parse_signed_literal(value: &str, label: &str) -> Result<isize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sivtr_core::record::{
-        WorkChannel, WorkPart, WorkRecordKind, WorkSessionRef, WorkSource, WorkTime,
-    };
+    use sivtr_core::record::{MessageRole, WorkSessionRef, WorkTime};
 
     #[test]
     fn parses_motion_steps() {
@@ -442,11 +419,6 @@ mod tests {
         WorkRecord {
             schema_version: sivtr_core::record::RECORD_SCHEMA_VERSION,
             work_ref: WorkRef::terminal("session_1", index),
-            kind: WorkRecordKind::TerminalCommand,
-            source: WorkSource {
-                channel: WorkChannel::Terminal,
-                provider: None,
-            },
             session: WorkSessionRef {
                 id: "session_1".to_string(),
                 canonical_id: Some("session_1".to_string()),
@@ -457,29 +429,17 @@ mod tests {
             time: WorkTime::from_components(None, None, None),
             status: None,
             parts: vec![
-                WorkPart {
-                    seq: 1,
-                    occurred_at: None,
-                    data: sivtr_core::record::WorkPartData::Command {
-                        content: format!("cmd {index}"),
-                    },
-                },
-                WorkPart {
-                    seq: 1,
-                    occurred_at: None,
-                    data: sivtr_core::record::WorkPartData::Output {
-                        content: format!("out {index}.1"),
-                        ansi: None,
-                    },
-                },
-                WorkPart {
-                    seq: 2,
-                    occurred_at: None,
-                    data: sivtr_core::record::WorkPartData::Output {
-                        content: format!("out {index}.2"),
-                        ansi: None,
-                    },
-                },
+                crate::test_fixtures::message_part(1, MessageRole::User, &format!("cmd {index}")),
+                crate::test_fixtures::message_part(
+                    1,
+                    MessageRole::Assistant,
+                    &format!("out {index}.1"),
+                ),
+                crate::test_fixtures::message_part(
+                    2,
+                    MessageRole::Assistant,
+                    &format!("out {index}.2"),
+                ),
             ],
         }
     }

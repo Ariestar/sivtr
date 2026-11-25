@@ -6,13 +6,11 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::agents::{
-    extract_content_text, list_sessions_matching, parse_jsonl_session, pretty_json_string,
-    pretty_json_value, push_block, push_tool_block, AgentBlockKind, AgentProvider, AgentSession,
-    AgentSessionMeta, AgentSessionProvider, SessionInfo,
+    list_sessions_matching_outcome, pretty_json_value, push_block, push_tool_block, AgentBlockKind,
+    AgentProvider, AgentSession, AgentSessionMeta, SessionListing,
 };
 
 const PROVIDER_NAME: &str = "Grok";
-const CHAT_HISTORY_FILE: &str = "chat_history.jsonl";
 const UPDATES_FILE: &str = "updates.jsonl";
 const SUMMARY_FILE: &str = "summary.json";
 
@@ -21,63 +19,36 @@ const SUMMARY_FILE: &str = "summary.json";
 /// Layout (`GROK_HOME`, default `~/.grok`):
 /// ```text
 /// sessions/<url-encoded-cwd>/<session-id>/
-///   summary.json
-///   chat_history.jsonl   ← conversation + tools (rebuilt on compaction)
-///   updates.jsonl        ← ACP stream, complete since session start
+///   summary.json    ← id, cwd, title
+///   updates.jsonl   ← ACP stream, the session record
 /// ```
-///
-/// `chat_history.jsonl` is rebuilt when the session is compacted, so it only
-/// covers the recent turns. `updates.jsonl` keeps every stream event (user
-/// chunks, thoughts, tool calls, results, turn boundaries) — it is the
-/// primary parse source; `chat_history.jsonl` is the fallback for sessions
-/// without a stream.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GrokProvider;
 
-impl AgentSessionProvider for GrokProvider {
-    fn provider(&self) -> AgentProvider {
-        AgentProvider::Grok
-    }
+pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
+    list_sessions_matching_outcome(
+        PROVIDER_NAME,
+        &grok_sessions_dir(),
+        cwd,
+        |path, is_dir| is_dir && path.join(UPDATES_FILE).is_file(),
+        |path| vec![path.join(SUMMARY_FILE), path.join(UPDATES_FILE)],
+        session_dir_meta,
+    )
+}
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        list_sessions_matching(
-            PROVIDER_NAME,
-            &grok_sessions_dir(),
-            cwd,
-            |path, is_dir| {
-                is_dir
-                    && (path.join(SUMMARY_FILE).exists() || path.join(CHAT_HISTORY_FILE).exists())
-            },
-            session_dir_meta,
-        )
+pub(crate) fn parse_file(_provider: AgentProvider, path: &Path) -> Result<AgentSession> {
+    let session_dir = resolve_session_dir(path)?;
+    let mut session = parse_updates_session(&session_dir)?;
+    // Prefer summary.json for stable id/cwd/title; keep path as the session directory.
+    session.path = session_dir.clone();
+    apply_summary_meta(&mut session, &session_dir)?;
+    if session.id.is_none() {
+        session.id = session_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_string);
     }
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        let session_dir = resolve_session_dir(path)?;
-        let mut session = if session_dir.join(UPDATES_FILE).exists() {
-            let mut parsed = parse_updates_session(&session_dir)?;
-            if parsed.blocks.is_empty() {
-                // Noise-only stream (e.g. a session that was never used):
-                // fall back to the conversation log.
-                if let Ok(history) = parse_chat_history_session(&session_dir) {
-                    parsed = history;
-                }
-            }
-            parsed
-        } else {
-            parse_chat_history_session(&session_dir)?
-        };
-        // Prefer summary.json for stable id/cwd/title; keep path as the session directory.
-        session.path = session_dir.clone();
-        apply_summary_meta(&mut session, &session_dir)?;
-        if session.id.is_none() {
-            session.id = session_dir
-                .file_name()
-                .and_then(|name| name.to_str())
-                .map(str::to_string);
-        }
-        Ok(session)
-    }
+    Ok(session)
 }
 
 pub fn grok_home() -> PathBuf {
@@ -134,11 +105,8 @@ fn read_summary(path: &Path) -> Result<Option<SummaryMeta>> {
     }
     let text = fs::read_to_string(path)
         .with_context(|| format!("Failed to read Grok summary {}", path.display()))?;
-    // A corrupt summary is supplementary metadata: skip it (fall back to the
-    // directory name) rather than failing discovery of every other session.
-    let Ok(value) = serde_json::from_str::<Value>(&text) else {
-        return Ok(None);
-    };
+    let value: Value = serde_json::from_str(&text)
+        .with_context(|| format!("Failed to parse Grok summary {}", path.display()))?;
 
     let info = value.get("info").unwrap_or(&value);
     let id = info
@@ -159,22 +127,14 @@ fn read_summary(path: &Path) -> Result<Option<SummaryMeta>> {
         .map(str::to_string);
     let title = value
         .get("generated_title")
-        .or_else(|| value.get("session_summary"))
-        .or_else(|| value.get("title"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|title| !title.is_empty())
         .map(str::to_string);
 
-    let modified = parse_rfc3339(
-        value
-            .get("last_active_at")
-            .or_else(|| value.get("updated_at"))
-            .or_else(|| value.get("created_at"))
-            .and_then(Value::as_str),
-    )
-    .or_else(|| fs::metadata(path).and_then(|meta| meta.modified()).ok())
-    .unwrap_or(UNIX_EPOCH);
+    let modified = parse_rfc3339(value.get("last_active_at").and_then(Value::as_str))
+        .or_else(|| fs::metadata(path).and_then(|meta| meta.modified()).ok())
+        .unwrap_or(UNIX_EPOCH);
 
     Ok(Some(SummaryMeta {
         id,
@@ -191,124 +151,17 @@ fn resolve_session_dir(path: &Path) -> Result<PathBuf> {
     if path
         .file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name == CHAT_HISTORY_FILE || name == SUMMARY_FILE)
+        .is_some_and(|name| name == UPDATES_FILE || name == SUMMARY_FILE)
     {
         return path
             .parent()
             .map(Path::to_path_buf)
             .with_context(|| format!("Grok session path `{}` has no parent dir", path.display()));
     }
-    // Bare session id under GROK_HOME/sessions/*/<id>
-    if let Some(found) = GrokProvider.find_session_by_id(
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default(),
-    )? {
-        return Ok(found);
-    }
     anyhow::bail!(
-        "Grok session path `{}` is not a session directory or {CHAT_HISTORY_FILE}",
+        "Grok session path `{}` is not a session directory or {UPDATES_FILE}",
         path.display()
     )
-}
-
-fn apply_event(session: &mut AgentSession, value: &Value) {
-    match value.get("type").and_then(Value::as_str) {
-        Some("system") => {}
-        Some("user") => apply_user(session, value),
-        Some("assistant") => apply_assistant(session, value),
-        Some("tool_result") => apply_tool_result(session, value),
-        Some("reasoning") => apply_reasoning(session, value),
-        _ => {}
-    }
-}
-
-fn apply_user(session: &mut AgentSession, value: &Value) {
-    // Injected scaffolding (system reminders, project instructions) is not a user turn.
-    if value.get("synthetic_reason").is_some() {
-        return;
-    }
-
-    let text = extract_user_text(value.get("content").unwrap_or(&Value::Null));
-    if text.trim().is_empty() || is_scaffolding_user_text(&text) {
-        return;
-    }
-    push_block(session, AgentBlockKind::User, None, None, text);
-}
-
-fn apply_assistant(session: &mut AgentSession, value: &Value) {
-    let content = value.get("content").unwrap_or(&Value::Null);
-    let text = extract_content_text(content);
-    if !text.trim().is_empty() {
-        push_block(session, AgentBlockKind::Assistant, None, None, text);
-    }
-
-    if let Some(tool_calls) = value.get("tool_calls") {
-        match tool_calls {
-            Value::Array(items) => {
-                for tool_call in items {
-                    push_one_tool_call(session, tool_call);
-                }
-            }
-            Value::String(raw) => {
-                if let Ok(Value::Array(items)) = serde_json::from_str(raw) {
-                    for tool_call in items {
-                        push_one_tool_call(session, &tool_call);
-                    }
-                } else {
-                    push_block(
-                        session,
-                        AgentBlockKind::ToolCall,
-                        None,
-                        None,
-                        pretty_json_string(raw),
-                    );
-                }
-            }
-            other => push_one_tool_call(session, other),
-        }
-    }
-}
-
-fn apply_tool_result(session: &mut AgentSession, value: &Value) {
-    let content = value.get("content").unwrap_or(&Value::Null);
-    let text = match content {
-        Value::String(text) => text.clone(),
-        other => extract_content_text(other),
-    };
-    push_tool_block(
-        session,
-        AgentBlockKind::ToolOutput,
-        None,
-        value
-            .get("tool_call_id")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        None,
-        text,
-        None,
-    );
-}
-
-fn apply_reasoning(session: &mut AgentSession, value: &Value) {
-    let summary = value.get("summary").unwrap_or(&Value::Null);
-    let text = match summary {
-        Value::Array(items) => items
-            .iter()
-            .filter_map(|item| {
-                item.get("text")
-                    .and_then(Value::as_str)
-                    .or_else(|| item.as_str())
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n"),
-        Value::String(text) => text.clone(),
-        other => extract_content_text(other),
-    };
-    if text.trim().is_empty() {
-        return;
-    }
-    push_block(session, AgentBlockKind::Thinking, None, None, text);
 }
 
 /// Fill id/cwd/title from summary.json and give timestamp-less blocks the
@@ -335,18 +188,7 @@ fn apply_summary_meta(session: &mut AgentSession, session_dir: &Path) -> Result<
     Ok(())
 }
 
-fn parse_chat_history_session(session_dir: &Path) -> Result<AgentSession> {
-    let history = session_dir.join(CHAT_HISTORY_FILE);
-    if !history.exists() {
-        anyhow::bail!(
-            "Grok session `{}` is missing {CHAT_HISTORY_FILE}",
-            session_dir.display()
-        );
-    }
-    parse_jsonl_session(&history, PROVIDER_NAME, apply_event)
-}
-
-/// Parse the ACP stream (`updates.jsonl`), the complete session record.
+/// Parse the ACP stream (`updates.jsonl`), the session record.
 ///
 /// Text chunks accumulate per kind and flush as blocks at tool events and
 /// turn boundaries; `tool_call` / `tool_call_update` events emit tool
@@ -370,9 +212,8 @@ fn parse_updates_session(session_dir: &Path) -> Result<AgentSession> {
         if line.trim().is_empty() {
             continue;
         }
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
+        let value: Value = serde_json::from_str(line)
+            .with_context(|| format!("Failed to parse Grok updates {}", updates.display()))?;
         parser.apply(&mut session, &value);
     }
     parser.flush(&mut session);
@@ -660,62 +501,6 @@ fn rfc3339_from_millis(millis: i64) -> String {
     rfc3339_from_system_time(time)
 }
 
-fn push_one_tool_call(session: &mut AgentSession, tool_call: &Value) {
-    let function = tool_call.get("function").unwrap_or(tool_call);
-    let name = function
-        .get("name")
-        .or_else(|| tool_call.get("name"))
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let arguments = function
-        .get("arguments")
-        .or_else(|| tool_call.get("arguments"))
-        .or_else(|| tool_call.get("input"))
-        .map(|value| match value {
-            Value::String(text) => pretty_json_string(text),
-            other => pretty_json_value(other),
-        })
-        .unwrap_or_else(|| pretty_json_value(tool_call));
-    push_tool_block(
-        session,
-        AgentBlockKind::ToolCall,
-        None,
-        tool_call
-            .get("id")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        name,
-        arguments,
-        None,
-    );
-}
-
-fn extract_user_text(content: &Value) -> String {
-    let raw = extract_content_text(content);
-    extract_user_query(&raw).unwrap_or(raw)
-}
-
-fn extract_user_query(text: &str) -> Option<String> {
-    let start_tag = "<user_query>";
-    let end_tag = "</user_query>";
-    let start = text.find(start_tag)? + start_tag.len();
-    let end = text[start..].find(end_tag)? + start;
-    let query = text[start..end].trim();
-    if query.is_empty() {
-        None
-    } else {
-        Some(query.to_string())
-    }
-}
-
-fn is_scaffolding_user_text(text: &str) -> bool {
-    let trimmed = text.trim_start();
-    trimmed.starts_with("<user_info>")
-        || trimmed.starts_with("<system-reminder>")
-        || trimmed.starts_with("<image_files>")
-        || trimmed.starts_with("<environment_context>")
-}
-
 fn parse_rfc3339(value: Option<&str>) -> Option<SystemTime> {
     let value = value?;
     let dt = chrono::DateTime::parse_from_rfc3339(value).ok()?;
@@ -735,70 +520,17 @@ fn rfc3339_from_system_time(time: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::{AgentBlockKind, AgentSessionProvider};
+    use crate::agents::AgentBlockKind;
 
-    fn write_session(
-        home: &Path,
-        cwd_bucket: &str,
-        session_id: &str,
-        history: &str,
-        summary: &str,
-    ) {
+    fn write_session(home: &Path, cwd_bucket: &str, session_id: &str, summary: &str) {
         let dir = home.join("sessions").join(cwd_bucket).join(session_id);
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join(CHAT_HISTORY_FILE), history).unwrap();
+        fs::write(
+            dir.join(UPDATES_FILE),
+            "{\"params\":{\"update\":{\"sessionUpdate\":\"user_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"hi\"}}}}\n",
+        )
+        .unwrap();
         fs::write(dir.join(SUMMARY_FILE), summary).unwrap();
-    }
-
-    #[test]
-    fn parses_grok_messages_tools_and_reasoning() {
-        let home = tempfile::tempdir().unwrap();
-        let session_id = "019f6119-df57-7fe1-8e38-e2e41d5a506e";
-        write_session(
-            home.path(),
-            "D%3A%5CCoding%5Crepo",
-            session_id,
-            r#"{"type":"system","content":"You are Grok"}
-{"type":"user","content":[{"type":"text","text":"<user_info>\nWorkspace Path: D:\\repo\n</user_info>"}]}
-{"type":"user","content":[{"type":"text","text":"<system-reminder>\nskills\n</system-reminder>"}],"synthetic_reason":"system_reminder"}
-{"type":"user","content":[{"type":"text","text":"<user_query>\nfix the ghosting\n</user_query>"}],"prompt_index":0}
-{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"Inspect gallery CSS"}],"status":"completed"}
-{"type":"assistant","content":"Looking at the gallery","tool_calls":[{"id":"call-1","name":"read_file","arguments":"{\"target_file\":\"a.tsx\"}"}],"model_id":"grok-4.5"}
-{"type":"tool_result","tool_call_id":"call-1","content":"file body"}
-{"type":"assistant","content":"done","model_id":"grok-4.5"}
-"#,
-            r#"{
-  "info": {"id": "019f6119-df57-7fe1-8e38-e2e41d5a506e", "cwd": "D:\\Coding\\repo"},
-  "generated_title": "fix gallery ghosting",
-  "last_active_at": "2026-07-14T15:19:44.953389100Z"
-}"#,
-        );
-
-        let _guard = EnvGuard::set("GROK_HOME", home.path());
-        let path = home
-            .path()
-            .join("sessions")
-            .join("D%3A%5CCoding%5Crepo")
-            .join(session_id);
-        let session = GrokProvider.parse_session_file(&path).unwrap();
-
-        assert_eq!(session.id.as_deref(), Some(session_id));
-        assert_eq!(session.cwd.as_deref(), Some("D:\\Coding\\repo"));
-        assert_eq!(session.title.as_deref(), Some("fix gallery ghosting"));
-        assert_eq!(session.blocks.len(), 6);
-        assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
-        assert_eq!(session.blocks[0].text, "fix the ghosting");
-        assert_eq!(session.blocks[1].kind, AgentBlockKind::Thinking);
-        assert_eq!(session.blocks[1].text, "Inspect gallery CSS");
-        assert_eq!(session.blocks[2].kind, AgentBlockKind::Assistant);
-        assert_eq!(session.blocks[2].text, "Looking at the gallery");
-        assert_eq!(session.blocks[3].kind, AgentBlockKind::ToolCall);
-        assert_eq!(session.blocks[3].label.as_deref(), Some("read_file"));
-        assert!(session.blocks[3].text.contains("a.tsx"));
-        assert_eq!(session.blocks[4].kind, AgentBlockKind::ToolOutput);
-        assert_eq!(session.blocks[4].text, "file body");
-        assert_eq!(session.blocks[5].kind, AgentBlockKind::Assistant);
-        assert_eq!(session.blocks[5].text, "done");
     }
 
     #[test]
@@ -830,7 +562,7 @@ mod tests {
         .unwrap();
 
         let _guard = EnvGuard::set("GROK_HOME", home.path());
-        let session = GrokProvider.parse_session_file(&dir).unwrap();
+        let session = parse_file(AgentProvider::Grok, &dir).unwrap();
 
         assert_eq!(session.id.as_deref(), Some(session_id));
         assert_eq!(session.blocks.len(), 8);
@@ -878,7 +610,7 @@ mod tests {
         );
         let _guard = EnvGuard::set("GROK_HOME", home.path());
         let path = home.path().join("sessions").join("bucket").join(session_id);
-        let session = GrokProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Grok, &path).unwrap();
 
         // Read result: the `N→` gutter is stripped, the start line kept as
         // generic metadata for the display layer.
@@ -963,10 +695,13 @@ mod tests {
     }
 
     #[test]
-    fn noise_only_updates_stream_falls_back_to_chat_history() {
+    fn noise_only_updates_stream_has_no_blocks() {
         let home = tempfile::tempdir().unwrap();
-        let session_id = "sess-fallback";
-        let dir = home.path().join("sessions").join("bucket").join(session_id);
+        let dir = home
+            .path()
+            .join("sessions")
+            .join("bucket")
+            .join("sess-noise");
         fs::create_dir_all(&dir).unwrap();
         fs::write(
             dir.join(UPDATES_FILE),
@@ -974,22 +709,19 @@ mod tests {
         )
         .unwrap();
         fs::write(
-            dir.join(CHAT_HISTORY_FILE),
-            r#"{"type":"user","content":[{"type":"text","text":"<user_query>\nhello\n</user_query>"}]}"#,
+            dir.join("chat_history.jsonl"),
+            r#"{"type":"user","content":[{"type":"text","text":"hello"}]}"#,
         )
         .unwrap();
         fs::write(
             dir.join(SUMMARY_FILE),
-            r#"{"info":{"id":"sess-fallback","cwd":"/tmp"}}"#,
+            r#"{"info":{"id":"sess-noise","cwd":"/tmp"}}"#,
         )
         .unwrap();
 
         let _guard = EnvGuard::set("GROK_HOME", home.path());
-        let session = GrokProvider.parse_session_file(&dir).unwrap();
-
-        assert_eq!(session.blocks.len(), 1);
-        assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
-        assert_eq!(session.blocks[0].text, "hello");
+        let session = parse_file(AgentProvider::Grok, &dir).unwrap();
+        assert!(session.blocks.is_empty());
     }
 
     #[test]
@@ -1001,7 +733,6 @@ mod tests {
             home.path(),
             "repo-bucket",
             "sess-match",
-            "{\"type\":\"user\",\"content\":\"hi\"}\n",
             &format!(
                 r#"{{"info":{{"id":"sess-match","cwd":{}}},"generated_title":"match","last_active_at":"2026-07-14T15:00:00Z"}}"#,
                 serde_json::to_string(&repo).unwrap()
@@ -1011,14 +742,13 @@ mod tests {
             home.path(),
             "other-bucket",
             "sess-other",
-            "{\"type\":\"user\",\"content\":\"yo\"}\n",
             r#"{"info":{"id":"sess-other","cwd":"/other"},"generated_title":"other","last_active_at":"2026-07-14T16:00:00Z"}"#,
         );
 
         let _guard = EnvGuard::set("GROK_HOME", home.path());
-        let listed = GrokProvider
-            .list_recent_sessions(Some(&repo))
-            .expect("list");
+        let listed = list_outcome(AgentProvider::Grok, Some(&repo))
+            .expect("list")
+            .0;
         let ids: Vec<_> = listed
             .iter()
             .filter_map(|session| session.id.clone())
@@ -1029,50 +759,31 @@ mod tests {
     }
 
     #[test]
-    fn parse_accepts_chat_history_path() {
+    fn listing_cache_refreshes_summary_metadata_after_same_length_in_place_update() {
         let home = tempfile::tempdir().unwrap();
         write_session(
             home.path(),
             "bucket",
-            "sess1",
-            r#"{"type":"user","content":[{"type":"text","text":"hello"}]}"#,
-            r#"{"info":{"id":"sess1","cwd":"/tmp"},"session_summary":"title"}"#,
+            "sess-same-len",
+            r#"{"info":{"id":"sess-same-len","cwd":"/tmp"},"generated_title":"title-A"}"#,
         );
         let _guard = EnvGuard::set("GROK_HOME", home.path());
-        let history = home
-            .path()
-            .join("sessions")
-            .join("bucket")
-            .join("sess1")
-            .join(CHAT_HISTORY_FILE);
-        let session = GrokProvider.parse_session_file(&history).unwrap();
-        assert_eq!(session.id.as_deref(), Some("sess1"));
-        assert_eq!(session.blocks[0].text, "hello");
-    }
+        let session_dir = home.path().join("sessions/bucket/sess-same-len");
 
-    #[test]
-    fn empty_assistant_with_tools_still_records_tool_calls() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(CHAT_HISTORY_FILE);
+        let first = list_outcome(AgentProvider::Grok, None).unwrap().0;
+        assert_eq!(first[0].title.as_deref(), Some("title-A"));
+        let directory_stamp = crate::cache::file_stamp(&session_dir);
+
+        // Overwrite summary.json with an identical-length title ("title-B", 7 chars)
         fs::write(
-            &path,
-            r#"{"type":"assistant","content":"","tool_calls":[{"id":"c1","name":"bash","arguments":"{\"command\":\"ls\"}"}]}
-{"type":"tool_result","tool_call_id":"c1","content":"a.rs"}
-"#,
+            session_dir.join(SUMMARY_FILE),
+            r#"{"info":{"id":"sess-same-len","cwd":"/tmp"},"generated_title":"title-B"}"#,
         )
         .unwrap();
-        // minimal summary sibling so resolve works when given dir
-        fs::write(
-            dir.path().join(SUMMARY_FILE),
-            r#"{"info":{"id":"x","cwd":"/tmp"}}"#,
-        )
-        .unwrap();
+        assert_eq!(crate::cache::file_stamp(&session_dir), directory_stamp);
 
-        let session = GrokProvider.parse_session_file(dir.path()).unwrap();
-        assert_eq!(session.blocks.len(), 2);
-        assert_eq!(session.blocks[0].kind, AgentBlockKind::ToolCall);
-        assert_eq!(session.blocks[0].label.as_deref(), Some("bash"));
-        assert_eq!(session.blocks[1].kind, AgentBlockKind::ToolOutput);
+        let second = list_outcome(AgentProvider::Grok, None).unwrap().0;
+        assert_eq!(second[0].title.as_deref(), Some("title-B"));
     }
 
     struct EnvGuard {

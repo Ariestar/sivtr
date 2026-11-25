@@ -5,16 +5,14 @@
 //! - [`sqlite`]: readonly SQLite helpers (OpenCode/OpenClaw)
 //! - per-provider modules keep only storage paths + schema mapping
 
-use std::path::Path;
-
-use crate::session_source::SessionSource;
-use anyhow::{Context, Result};
-
 pub mod claude;
+pub mod cmdc;
 pub mod codex;
 pub mod cursor;
 pub mod dsh;
+pub mod engine;
 pub mod gemini;
+pub mod generic;
 pub mod goose;
 pub mod grok;
 pub mod hermes;
@@ -23,13 +21,16 @@ pub mod model;
 pub mod openclaw;
 pub mod opencode;
 pub mod pi;
+pub mod profile;
 pub mod qoder;
 pub mod qwen;
 pub mod sqlite;
+pub mod zcode;
 
 pub use jsonl::{
-    jsonl_files, list_chat_recording_sessions, list_recent_jsonl_sessions, list_sessions_matching,
-    parse_jsonl_meta, parse_jsonl_session,
+    jsonl_files, list_chat_recording_sessions, list_chat_recording_sessions_outcome,
+    list_recent_jsonl_sessions, list_recent_jsonl_sessions_outcome, list_sessions_matching,
+    list_sessions_matching_outcome, parse_jsonl_meta, parse_jsonl_session,
 };
 pub use model::*;
 pub use sqlite::{open_readonly_db, system_time_from_millis, system_time_from_unix_secs};
@@ -41,7 +42,6 @@ pub struct AgentProviderSpec {
     pub command_name: &'static str,
     pub current_transcript_env: Option<&'static str>,
     pub current_session_id_env: Option<&'static str>,
-    factory: fn() -> Box<dyn AgentSessionProvider>,
 }
 
 const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
@@ -51,7 +51,6 @@ const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
         command_name: "codex",
         current_transcript_env: None,
         current_session_id_env: Some("CODEX_THREAD_ID"),
-        factory: codex_provider,
     },
     AgentProviderSpec {
         provider: AgentProvider::Claude,
@@ -59,7 +58,6 @@ const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
         command_name: "claude",
         current_transcript_env: Some("CLAUDE_TRANSCRIPT_PATH"),
         current_session_id_env: Some("CLAUDE_SESSION_ID"),
-        factory: claude_provider,
     },
     AgentProviderSpec {
         provider: AgentProvider::Cursor,
@@ -67,7 +65,6 @@ const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
         command_name: "cursor",
         current_transcript_env: None,
         current_session_id_env: None,
-        factory: cursor_provider,
     },
     AgentProviderSpec {
         provider: AgentProvider::Dsh,
@@ -75,7 +72,6 @@ const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
         command_name: "dsh",
         current_transcript_env: None,
         current_session_id_env: None,
-        factory: dsh_provider,
     },
     AgentProviderSpec {
         provider: AgentProvider::OpenCode,
@@ -83,7 +79,6 @@ const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
         command_name: "opencode",
         current_transcript_env: None,
         current_session_id_env: None,
-        factory: opencode_provider,
     },
     AgentProviderSpec {
         provider: AgentProvider::OpenClaw,
@@ -91,7 +86,6 @@ const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
         command_name: "openclaw",
         current_transcript_env: None,
         current_session_id_env: None,
-        factory: openclaw_provider,
     },
     AgentProviderSpec {
         provider: AgentProvider::Grok,
@@ -99,7 +93,6 @@ const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
         command_name: "grok",
         current_transcript_env: None,
         current_session_id_env: None,
-        factory: grok_provider,
     },
     AgentProviderSpec {
         provider: AgentProvider::Hermes,
@@ -107,7 +100,6 @@ const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
         command_name: "hermes",
         current_transcript_env: None,
         current_session_id_env: None,
-        factory: hermes_provider,
     },
     AgentProviderSpec {
         provider: AgentProvider::Pi,
@@ -115,7 +107,6 @@ const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
         command_name: "pi",
         current_transcript_env: None,
         current_session_id_env: None,
-        factory: pi_provider,
     },
     AgentProviderSpec {
         provider: AgentProvider::Qoder,
@@ -123,7 +114,6 @@ const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
         command_name: "qoder",
         current_transcript_env: None,
         current_session_id_env: None,
-        factory: qoder_provider,
     },
     AgentProviderSpec {
         provider: AgentProvider::QoderCn,
@@ -131,7 +121,6 @@ const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
         command_name: "qoder-cn",
         current_transcript_env: None,
         current_session_id_env: None,
-        factory: qoder_cn_provider,
     },
     AgentProviderSpec {
         provider: AgentProvider::Gemini,
@@ -139,7 +128,6 @@ const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
         command_name: "gemini",
         current_transcript_env: None,
         current_session_id_env: None,
-        factory: gemini_provider,
     },
     AgentProviderSpec {
         provider: AgentProvider::Goose,
@@ -147,7 +135,6 @@ const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
         command_name: "goose",
         current_transcript_env: None,
         current_session_id_env: None,
-        factory: goose_provider,
     },
     AgentProviderSpec {
         provider: AgentProvider::Qwen,
@@ -155,65 +142,232 @@ const AGENT_PROVIDER_SPECS: &[AgentProviderSpec] = &[
         command_name: "qwen",
         current_transcript_env: None,
         current_session_id_env: None,
-        factory: qwen_provider,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::Zcode,
+        name: "ZCode",
+        command_name: "zcode",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::ClaudeAi,
+        name: "Claude.ai",
+        command_name: "claude-ai",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::ChatGpt,
+        name: "ChatGPT",
+        command_name: "chatgpt",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::GeminiApps,
+        name: "Gemini Apps",
+        command_name: "gemini-apps",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::Amp,
+        name: "Amp",
+        command_name: "amp",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::Aider,
+        name: "Aider",
+        command_name: "aider",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::Antigravity,
+        name: "Antigravity",
+        command_name: "antigravity",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::AntigravityCli,
+        name: "Antigravity CLI",
+        command_name: "antigravity-cli",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::CommandCode,
+        name: "Command Code",
+        command_name: "cmdc",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::Copilot,
+        name: "Copilot",
+        command_name: "copilot",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::DeepSeekTui,
+        name: "DeepSeek TUI",
+        command_name: "deepseek-tui",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::Forge,
+        name: "Forge",
+        command_name: "forge",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::Gptme,
+        name: "gptme",
+        command_name: "gptme",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::Iflow,
+        name: "iFlow",
+        command_name: "iflow",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::Kilo,
+        name: "Kilo",
+        command_name: "kilo",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::Kimi,
+        name: "Kimi",
+        command_name: "kimi",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::KimiWork,
+        name: "Kimi Work",
+        command_name: "kimi-work",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::Kiro,
+        name: "Kiro",
+        command_name: "kiro",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::OpenHands,
+        name: "OpenHands",
+        command_name: "openhands",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::Poolside,
+        name: "Poolside",
+        command_name: "poolside",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::PositAssistant,
+        name: "Posit Assistant",
+        command_name: "posit-assistant",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::QwenPaw,
+        name: "QwenPaw",
+        command_name: "qwenpaw",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::Reasonix,
+        name: "Reasonix",
+        command_name: "reasonix",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::RooCode,
+        name: "RooCode",
+        command_name: "roocode",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::Shelley,
+        name: "Shelley",
+        command_name: "shelley",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::Trae,
+        name: "Trae",
+        command_name: "trae",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::TraeX,
+        name: "TraeX",
+        command_name: "traex",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::Vibe,
+        name: "Mistral Vibe",
+        command_name: "vibe",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::VSCodeCopilot,
+        name: "VSCode Copilot",
+        command_name: "vscode-copilot",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::Windsurf,
+        name: "Windsurf",
+        command_name: "windsurf",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::Zed,
+        name: "Zed",
+        command_name: "zed",
+        current_transcript_env: None,
+        current_session_id_env: None,
+    },
+    AgentProviderSpec {
+        provider: AgentProvider::Zencoder,
+        name: "Zencoder",
+        command_name: "zencoder",
+        current_transcript_env: None,
+        current_session_id_env: None,
     },
 ];
-
-fn codex_provider() -> Box<dyn AgentSessionProvider> {
-    Box::new(crate::agents::codex::CodexProvider)
-}
-
-fn claude_provider() -> Box<dyn AgentSessionProvider> {
-    Box::new(crate::agents::claude::ClaudeProvider)
-}
-
-fn cursor_provider() -> Box<dyn AgentSessionProvider> {
-    Box::new(crate::agents::cursor::CursorProvider)
-}
-
-fn dsh_provider() -> Box<dyn AgentSessionProvider> {
-    Box::new(crate::agents::dsh::DshProvider)
-}
-
-fn opencode_provider() -> Box<dyn AgentSessionProvider> {
-    Box::new(crate::agents::opencode::OpenCodeProvider::default())
-}
-
-fn openclaw_provider() -> Box<dyn AgentSessionProvider> {
-    Box::new(crate::agents::openclaw::OpenClawProvider)
-}
-
-fn grok_provider() -> Box<dyn AgentSessionProvider> {
-    Box::new(crate::agents::grok::GrokProvider)
-}
-
-fn hermes_provider() -> Box<dyn AgentSessionProvider> {
-    Box::new(crate::agents::hermes::HermesProvider)
-}
-
-fn pi_provider() -> Box<dyn AgentSessionProvider> {
-    Box::new(crate::agents::pi::PiProvider)
-}
-
-fn qoder_provider() -> Box<dyn AgentSessionProvider> {
-    Box::new(crate::agents::qoder::QoderProvider)
-}
-
-fn qoder_cn_provider() -> Box<dyn AgentSessionProvider> {
-    Box::new(crate::agents::qoder::QoderCnProvider)
-}
-
-fn gemini_provider() -> Box<dyn AgentSessionProvider> {
-    Box::new(crate::agents::gemini::GeminiProvider)
-}
-
-fn goose_provider() -> Box<dyn AgentSessionProvider> {
-    Box::new(crate::agents::goose::GooseProvider)
-}
-
-fn qwen_provider() -> Box<dyn AgentSessionProvider> {
-    Box::new(crate::agents::qwen::QwenProvider)
-}
 
 impl AgentProvider {
     pub fn all() -> &'static [AgentProviderSpec] {
@@ -224,15 +378,6 @@ impl AgentProvider {
         Self::all()
             .iter()
             .find(|spec| spec.command_name.eq_ignore_ascii_case(value))
-            .map(|spec| spec.provider)
-    }
-
-    /// Resolve a provider from its registry name (see [`Self::name`]),
-    /// used to map cache namespaces back to a provider.
-    pub fn from_name(value: &str) -> Option<Self> {
-        Self::all()
-            .iter()
-            .find(|spec| spec.name.eq_ignore_ascii_case(value))
             .map(|spec| spec.provider)
     }
 
@@ -259,8 +404,15 @@ impl AgentProvider {
         self.spec().current_session_id_env
     }
 
-    pub fn session_provider(self) -> Box<dyn AgentSessionProvider> {
-        (self.spec().factory)()
+    /// Whether this provider has a native local source to sync. Web exports
+    /// are imported explicitly and therefore belong to the archive namespace
+    /// without participating in native-source reconciliation. A generic
+    /// provider without a declared transcript format only launches agents.
+    pub fn has_native_source(self) -> bool {
+        if matches!(self, Self::ClaudeAi | Self::ChatGpt | Self::GeminiApps) {
+            return false;
+        }
+        profile::is_registered(self)
     }
 
     /// Registered provider CLI names (`codex`, `claude`, …), registry order.
@@ -274,26 +426,21 @@ impl AgentProvider {
     }
 }
 
-use crate::record::WorkRecord;
+#[cfg(test)]
+mod tests {
+    use super::AgentProvider;
+    use std::collections::HashSet;
 
-impl SessionSource for AgentProvider {
-    fn namespace(&self) -> &'static str {
-        self.command_name()
-    }
-
-    fn list_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        self.session_provider()
-            .list_recent_sessions(cwd)
-            .with_context(|| format!("Failed to list {} sessions", self.name()))
-    }
-
-    fn parse_file(&self, path: &Path) -> Result<Vec<WorkRecord>> {
-        let session = self
-            .session_provider()
-            .parse_session_file(path)
-            .with_context(|| {
-                format!("Failed to parse {} session {}", self.name(), path.display())
-            })?;
-        Ok(WorkRecord::chat_turns(*self, &session))
+    #[test]
+    fn registry_has_unique_expanded_provider_names() {
+        let names: HashSet<_> = AgentProvider::command_names().collect();
+        assert!(names.len() >= 40);
+        assert_eq!(names.len(), AgentProvider::all().len());
+        for spec in AgentProvider::all() {
+            assert_eq!(
+                AgentProvider::from_command_name(spec.command_name),
+                Some(spec.provider)
+            );
+        }
     }
 }

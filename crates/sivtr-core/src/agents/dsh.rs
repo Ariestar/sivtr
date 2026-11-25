@@ -28,9 +28,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::agents::{
-    extract_content_text, list_sessions_matching, pretty_json_string, push_block, push_tool_block,
-    AgentBlockKind, AgentProvider, AgentSession, AgentSessionMeta, AgentSessionProvider,
-    SessionInfo,
+    extract_content_text, list_sessions_matching_outcome, pretty_json_string, push_block,
+    push_tool_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionMeta, SessionListing,
 };
 
 const PROVIDER_NAME: &str = "Dsh";
@@ -58,30 +57,23 @@ const MAX_ZSTD_WINDOW: u64 = 256 * 1024 * 1024;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DshProvider;
 
-impl AgentSessionProvider for DshProvider {
-    fn provider(&self) -> AgentProvider {
-        AgentProvider::Dsh
-    }
+pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
+    list_sessions_matching_outcome(
+        PROVIDER_NAME,
+        &sessions_root(),
+        cwd,
+        |path, is_dir| !is_dir && is_dsh_log(path),
+        |_| Vec::new(),
+        parse_session_meta,
+    )
+}
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        let root = sessions_root();
-        list_sessions_matching(
-            PROVIDER_NAME,
-            &root,
-            cwd,
-            |path, is_dir| !is_dir && is_dsh_log(path),
-            parse_session_meta,
-        )
-    }
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        let bytes = read_log(path).with_context(|| {
-            format!("Failed to read {PROVIDER_NAME} session: {}", path.display())
-        })?;
-        let text = std::str::from_utf8(&bytes)
-            .with_context(|| format!("{PROVIDER_NAME} session is not UTF-8: {}", path.display()))?;
-        parse_log_text(path, text)
-    }
+pub(crate) fn parse_file(_provider: AgentProvider, path: &Path) -> Result<AgentSession> {
+    let bytes = read_log(path)
+        .with_context(|| format!("Failed to read {PROVIDER_NAME} session: {}", path.display()))?;
+    let text = std::str::from_utf8(&bytes)
+        .with_context(|| format!("{PROVIDER_NAME} session is not UTF-8: {}", path.display()))?;
+    parse_log_text(path, text)
 }
 
 /// Harness home: `$DSH_HOME`, else `~/.dsh`.
@@ -167,7 +159,7 @@ fn decode_zstd(bytes: &[u8], cap: Option<usize>) -> Result<Vec<u8>> {
 
     let mut out = Vec::new();
     let mut rest = bytes;
-    while !rest.is_empty() && !cap.is_some_and(|cap| out.len() >= cap) {
+    while !rest.is_empty() && cap.is_none_or(|cap| out.len() < cap) {
         let mut cursor = std::io::Cursor::new(rest);
         let mut decoder =
             match StreamingDecoder::new_with_max_window_size(&mut cursor, MAX_ZSTD_WINDOW) {
@@ -573,7 +565,7 @@ mod tests {
         let path = dir.path().join("session.jsonl");
         std::fs::write(&path, fixture_with_cwd("C:\\repo")).unwrap();
 
-        let session = DshProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Dsh, &path).unwrap();
 
         assert_eq!(
             session.id.as_deref(),
@@ -619,7 +611,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = DshProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Dsh, &path).unwrap();
 
         let user_blocks: Vec<_> = session
             .blocks
@@ -644,7 +636,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = DshProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Dsh, &path).unwrap();
 
         assert_eq!(session.title.as_deref(), Some("Fix the flaky test"));
         assert_eq!(session.blocks.len(), 2);
@@ -664,7 +656,7 @@ mod tests {
         )
         .unwrap();
 
-        let error = DshProvider.parse_session_file(&path).unwrap_err();
+        let error = parse_file(AgentProvider::Dsh, &path).unwrap_err();
         assert!(format!("{error:#}").contains("unsupported Dsh session log version"));
     }
 
@@ -679,7 +671,7 @@ mod tests {
         )
         .unwrap();
 
-        let error = DshProvider.parse_session_file(&path).unwrap_err();
+        let error = parse_file(AgentProvider::Dsh, &path).unwrap_err();
         assert!(format!("{error:#}").contains("missing session header"));
     }
 
@@ -689,7 +681,7 @@ mod tests {
         let path = dir.path().join("session.jsonl");
         std::fs::write(&path, "").unwrap();
 
-        let error = DshProvider.parse_session_file(&path).unwrap_err();
+        let error = parse_file(AgentProvider::Dsh, &path).unwrap_err();
         assert!(format!("{error:#}").contains("missing session header"));
     }
 
@@ -701,7 +693,7 @@ mod tests {
         let path = dir.path().join("session.jsonl.zstd");
         std::fs::write(&path, []).unwrap();
 
-        let error = DshProvider.parse_session_file(&path).unwrap_err();
+        let error = parse_file(AgentProvider::Dsh, &path).unwrap_err();
         assert!(format!("{error:#}").contains("missing session header"));
     }
 
@@ -729,7 +721,7 @@ mod tests {
         std::fs::create_dir_all(&empty).unwrap();
         std::fs::write(empty.join("session.jsonl"), "").unwrap();
 
-        let listed = DshProvider.list_recent_sessions(None).unwrap();
+        let listed = list_outcome(AgentProvider::Dsh, None).unwrap().0;
 
         match previous {
             Some(value) => std::env::set_var("DSH_HOME", value),
@@ -773,7 +765,7 @@ mod tests {
         )
         .unwrap();
 
-        let listed = DshProvider.list_recent_sessions(Some(&repo)).unwrap();
+        let listed = list_outcome(AgentProvider::Dsh, Some(&repo)).unwrap().0;
 
         match previous {
             Some(value) => std::env::set_var("DSH_HOME", value),
@@ -807,7 +799,7 @@ mod tests {
         let path = dir.path().join("session.jsonl.zstd");
         std::fs::write(&path, zstd_fixture()).unwrap();
 
-        let session = DshProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Dsh, &path).unwrap();
 
         assert_eq!(
             session.id.as_deref(),

@@ -9,10 +9,14 @@ pub mod mcp;
 pub mod origins;
 pub mod output;
 pub mod pane;
+pub mod pty;
 pub mod remote;
 pub mod tui;
 
-use anyhow::Result;
+#[cfg(test)]
+pub mod test_fixtures;
+
+use anyhow::{Context, Result};
 use clap::Parser;
 use cli::{
     Commands, CopyCommand, CopyFlagArgs, CopyInvocation, CopySubcommand, DiffArgs,
@@ -23,11 +27,12 @@ use commands::memory::diff::{DiffRequest, DiffTextMode};
 use std::io::IsTerminal;
 use tui::workspace::WorkspaceFocus;
 
-use sivtr_core::ai::AgentProvider;
+use sivtr_core::agents::AgentProvider;
 use std::process::ExitCode;
 
 /// Binary entry — keeps `main.rs` a one-liner so benches can depend on the lib.
 pub fn cli_main() -> ExitCode {
+    output::install_diagnostics_listener();
     tui::panic::install();
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -51,12 +56,9 @@ fn run() -> Result<()> {
         Some(Commands::Pipe) => {
             commands::terminal::pipe::execute()?;
         }
-        Some(Commands::Import) => {
-            commands::terminal::import::execute()?;
-        }
-        Some(Commands::History(hist_cmd)) => {
-            commands::system::history::execute(hist_cmd)?;
-        }
+        Some(Commands::Import(command)) => match command.action {
+            cli::ImportAction::Sessions(args) => commands::system::import::execute(&args)?,
+        },
         Some(Commands::Search(args)) => {
             commands::memory::search::execute(&args)?;
         }
@@ -84,6 +86,9 @@ fn run() -> Result<()> {
         Some(Commands::Show(args)) => {
             commands::memory::show::execute(&args)?;
         }
+        Some(Commands::Publish(command)) => {
+            commands::publish::execute(command)?;
+        }
         Some(Commands::Mcp(cmd)) => {
             commands::system::mcp::execute(cmd)?;
         }
@@ -108,8 +113,23 @@ fn run() -> Result<()> {
         Some(Commands::Hotkey(cmd)) => {
             commands::system::hotkey::execute(cmd)?;
         }
-        Some(Commands::Codex(cmd)) => {
-            commands::system::codex::execute(cmd)?;
+        Some(Commands::Sync(args)) => {
+            commands::system::sync::execute(&args)?;
+        }
+        Some(Commands::Usage(command)) => {
+            commands::system::usage::execute(&command)?;
+        }
+        Some(Commands::Stats(args)) => {
+            commands::system::stats::execute(&args)?;
+        }
+        Some(Commands::Session(command)) => {
+            commands::system::session::execute(&command)?;
+        }
+        Some(Commands::Export(command)) => {
+            commands::system::export::execute(&command)?;
+        }
+        Some(Commands::Quality(command)) => {
+            commands::system::quality::execute(&command)?;
         }
         Some(Commands::Config(cfg_cmd)) => {
             commands::system::config::execute(cfg_cmd)?;
@@ -137,8 +157,8 @@ fn run() -> Result<()> {
         Some(Commands::Clear(args)) => {
             commands::terminal::clear::execute(args.all)?;
         }
-        Some(Commands::Flush) => {
-            commands::terminal::flush::execute()?;
+        Some(Commands::PtyProxy(command)) => {
+            commands::terminal::pty_proxy::execute(&command.action)?;
         }
         Some(Commands::HotkeyServe(args)) => {
             run_hotkey_serve(&args)?;
@@ -166,8 +186,14 @@ fn run_workspace(select_remotes: bool) -> Result<()> {
         .iter()
         .map(|spec| spec.provider)
         .collect::<Vec<_>>();
-    let picked = commands::browse::run(&providers, select_remotes, WorkspaceFocus::Sessions)?;
-    commands::memory::copy::export_picked(&picked, false, None, None, false)
+    commands::finish_picker(
+        commands::browse::run(&providers, select_remotes, WorkspaceFocus::Sessions)
+            .context("工作区选择器失败")?,
+        false,
+        None,
+        None,
+        false,
+    )
 }
 
 fn run_copy_command(cmd: CopyCommand) -> Result<()> {

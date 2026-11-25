@@ -163,40 +163,35 @@ impl ContentScrolls {
 }
 
 /// Which blocks show their full body instead of their `<:…:>` tag, per
-/// content half. Structure blocks (tool/skill/thinking, including runs)
-/// default to collapsed, body blocks default to expanded; a block in the
-/// set flips the kind default (structure expanded, body collapsed). Raw
-/// mode always shows full blocks and ignores this state. A block id is the
-/// block's stable DFS id within its half — stable because ids come from the
-/// block tree, not the rendered segment count.
+/// dialogue. Structure blocks (tool/skill/thinking, including runs) default
+/// to collapsed, body blocks default to expanded; a block in the set flips
+/// the kind default (structure expanded, body collapsed). Raw mode always
+/// shows full blocks and ignores this state. A block id is the block's
+/// stable DFS id within the dialogue — stable because ids come from the
+/// block tree, not the rendered segment count, and unique across both IO
+/// halves so the fold state spans the input/output boundary.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ExpandedBlocks {
-    pub(crate) input: HashSet<usize>,
-    pub(crate) output: HashSet<usize>,
-}
+pub(crate) struct ExpandedBlocks(HashSet<usize>);
 
 impl ExpandedBlocks {
-    /// Whether `block` in `focus` shows its full body.
-    pub(crate) fn expanded(&self, focus: ContentIoFocus, block: usize, structure: bool) -> bool {
-        let set = match focus {
-            ContentIoFocus::Input => &self.input,
-            ContentIoFocus::Output => &self.output,
-        };
+    /// Whether `block` shows its full body.
+    pub(crate) fn expanded(&self, block: usize, structure: bool) -> bool {
         if structure {
-            set.contains(&block)
+            self.0.contains(&block)
         } else {
-            !set.contains(&block)
+            !self.0.contains(&block)
         }
     }
 
-    pub(crate) fn toggle(&mut self, focus: ContentIoFocus, block: usize) {
-        let set = match focus {
-            ContentIoFocus::Input => &mut self.input,
-            ContentIoFocus::Output => &mut self.output,
-        };
-        if !set.insert(block) {
-            set.remove(&block);
+    pub(crate) fn toggle(&mut self, block: usize) {
+        if !self.0.insert(block) {
+            self.0.remove(&block);
         }
+    }
+
+    /// Drop every flip (the shown dialogue changed).
+    pub(crate) fn clear(&mut self) {
+        self.0.clear();
     }
 }
 
@@ -431,14 +426,14 @@ pub(crate) fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sivtr_core::record::WorkPartKind;
+    use crate::tui::content::block::BlockRole;
 
     fn seg(text: &str) -> BlockText {
         BlockText {
             id: 0,
             text: text.to_string(),
             tight: false,
-            kind: WorkPartKind::ToolCall,
+            role: BlockRole::Tool,
         }
     }
 
@@ -459,13 +454,13 @@ mod tests {
                     id: 1,
                     text: "b".to_string(),
                     tight: true,
-                    kind: WorkPartKind::ToolCall,
+                    role: BlockRole::Tool,
                 },
                 BlockText {
                     id: 2,
                     text: "c".to_string(),
                     tight: false,
-                    kind: WorkPartKind::ToolCall,
+                    role: BlockRole::Tool,
                 },
                 seg("d"),
             ],

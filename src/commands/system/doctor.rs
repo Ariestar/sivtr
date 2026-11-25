@@ -1,7 +1,8 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::Serialize;
 use sivtr_core::config::SivtrConfig;
 use sivtr_core::workspace;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::cli::DoctorArgs;
@@ -89,9 +90,11 @@ pub struct Check {
 impl Report {
     fn run_checks(&mut self, fix: bool) {
         self.check_binary();
+        self.check_home_migration(fix);
         self.check_config(fix);
         self.check_session_dir();
         self.check_shell_hooks(fix);
+        self.check_terminal_capture();
         self.check_workspace_keys(fix);
         self.check_agent_hosts();
         self.check_mcp_registration(fix);
@@ -112,6 +115,131 @@ impl Report {
             status: Status::Pass,
             detail: format!("sivtr {}", env!("CARGO_PKG_VERSION")),
             hint: None,
+        });
+    }
+
+    /// Detect data left in pre-single-home locations and migrate it into
+    /// `SIVTR_HOME` / `~/.sivtr` with `--fix`.
+    fn check_home_migration(&mut self, fix: bool) {
+        let home = workspace::home_dir();
+        let mut pending = Vec::new();
+        let mut unread = Vec::new();
+        for path in workspace::legacy_home_paths() {
+            match path_has_content(&path.source) {
+                Ok(true) => pending.push(path),
+                Ok(false) => {}
+                Err(error) => unread.push(format!("{}: {error}", path.label)),
+            }
+        }
+
+        if pending.is_empty() && unread.is_empty() {
+            self.add(Check {
+                name: "home_layout",
+                label: "single home layout",
+                status: Status::Pass,
+                detail: home.display().to_string(),
+                hint: None,
+            });
+            return;
+        }
+
+        if !unread.is_empty() && pending.is_empty() {
+            self.add(Check {
+                name: "home_layout",
+                label: "single home layout",
+                status: Status::Manual,
+                detail: unread.join("; "),
+                hint: Some(
+                    "fix permissions on leftover sivtr directories, then re-run `sivtr doctor`"
+                        .to_string(),
+                ),
+            });
+            return;
+        }
+
+        if !fix {
+            let mut detail = pending
+                .iter()
+                .map(|path| format!("{} -> {}", path.source.display(), path.target.display()))
+                .collect::<Vec<_>>()
+                .join("; ");
+            if !unread.is_empty() {
+                detail.push_str("; ");
+                detail.push_str(&unread.join("; "));
+            }
+            self.add(Check {
+                name: "home_layout",
+                label: "single home layout",
+                status: Status::Fail,
+                detail,
+                hint: Some(
+                    "run `sivtr doctor --fix` to migrate leftover paths into the single home"
+                        .to_string(),
+                ),
+            });
+            return;
+        }
+
+        let mut conflicts = Vec::new();
+        let mut errors = Vec::new();
+        for path in &pending {
+            match workspace::move_path(&path.source, &path.target) {
+                Ok(skipped) => conflicts.extend(skipped),
+                Err(error) => errors.push(format!("{}: {error}", path.label)),
+            }
+        }
+
+        let remaining = workspace::legacy_home_paths()
+            .into_iter()
+            .filter_map(|path| match path_has_content(&path.source) {
+                Ok(true) => Some(path.label.to_string()),
+                Ok(false) => None,
+                Err(error) => {
+                    errors.push(format!("{}: {error}", path.label));
+                    None
+                }
+            })
+            .count();
+
+        if errors.is_empty() && remaining == 0 && unread.is_empty() {
+            self.add(Check {
+                name: "home_layout",
+                label: "single home layout",
+                status: Status::Fixed,
+                detail: format!(
+                    "migrated {} location(s) into {}",
+                    pending.len(),
+                    home.display()
+                ),
+                hint: None,
+            });
+            return;
+        }
+
+        let mut detail = format!("{} item(s) left to migrate", remaining + errors.len());
+        if !conflicts.is_empty() {
+            detail.push_str(&format!(
+                "; {} destination(s) already exist",
+                conflicts.len()
+            ));
+        }
+        if !errors.is_empty() {
+            detail.push_str("; ");
+            detail.push_str(&errors.join("; "));
+        }
+        if !unread.is_empty() {
+            detail.push_str("; ");
+            detail.push_str(&unread.join("; "));
+        }
+        self.add(Check {
+            name: "home_layout",
+            label: "single home layout",
+            status: Status::Manual,
+            detail,
+            hint: Some(
+                "resolve destination conflicts or permissions, then re-run `sivtr doctor --fix`"
+                    .to_string(),
+            ),
         });
     }
 
@@ -154,9 +282,8 @@ impl Report {
     }
 
     fn check_session_dir(&mut self) {
-        // Terminal sessions live under data_dir()/workspaces/*/terminals/*.jsonl,
-        // not under dirs::state_dir(). The latter is a false missing path on Windows.
-        let base = workspace::data_dir().join("workspaces");
+        // Terminal sessions live under home_dir()/workspaces/*/terminals/*.jsonl.
+        let base = workspace::home_dir().join("workspaces");
         if !base.exists() {
             self.add(Check {
                 name: "session_dir",
@@ -222,7 +349,10 @@ impl Report {
 
     fn check_shell_hooks(&mut self, fix: bool) {
         let installed = detect_installed_shells();
-        if !installed.is_empty() {
+        let outdated = detect_outdated_shells();
+        if !outdated.is_empty() {
+            self.add(outdated_shell_hooks_check(&outdated, fix));
+        } else if !installed.is_empty() {
             self.add(Check {
                 name: "shell_hooks",
                 label: "shell hooks",
@@ -259,6 +389,45 @@ impl Report {
                 ),
             });
         }
+    }
+
+    /// An explicit capture opt-out is not a fault and must survive `--fix`.
+    fn check_terminal_capture(&mut self) {
+        let config = match SivtrConfig::load() {
+            Ok(config) => config,
+            Err(error) => {
+                self.add(Check {
+                    name: "terminal_capture",
+                    label: "terminal capture",
+                    status: Status::Fail,
+                    detail: format!("cannot read capture settings: {error:#}"),
+                    hint: Some("run `sivtr config edit` to fix the configuration".to_string()),
+                });
+                return;
+            }
+        };
+        if config.pty_proxy.enabled {
+            self.add(Check {
+                name: "terminal_capture",
+                label: "terminal capture",
+                status: Status::Pass,
+                detail: "enabled for shells with sivtr integration (restart after init)"
+                    .to_string(),
+                hint: None,
+            });
+            return;
+        }
+
+        self.add(Check {
+            name: "terminal_capture",
+            label: "terminal capture",
+            status: Status::Manual,
+            detail: "disabled in config".to_string(),
+            hint: Some(
+                "set [pty_proxy] enabled = true with `sivtr config edit`, then restart your shell"
+                    .to_string(),
+            ),
+        });
     }
 
     /// Workspaces whose stored roots predate the commondir key scheme become
@@ -419,38 +588,41 @@ impl Report {
     }
 
     fn check_providers(&mut self) {
-        let mut detail = String::new();
-        let mut errors = 0usize;
-        for spec in sivtr_core::ai::AgentProvider::all() {
-            let provider = spec.provider.session_provider();
-            match provider.list_recent_sessions(None) {
-                Ok(s) if s.is_empty() => {
-                    detail.push_str(&format!("{}: 0  ", spec.provider.name()));
-                }
-                Ok(s) => {
-                    detail.push_str(&format!("{}: {}  ", spec.provider.name(), s.len()));
-                }
-                Err(_) => {
-                    errors += 1;
-                    detail.push_str(&format!("{}: error  ", spec.provider.name()));
-                }
+        match sivtr_core::archive::sync::provider_status() {
+            Ok(statuses) => {
+                let errors = statuses
+                    .iter()
+                    .filter(|status| status.error.is_some())
+                    .count();
+                let detail = statuses
+                    .iter()
+                    .map(|status| match &status.error {
+                        Some(error) => format!("{}: error ({error})", status.name),
+                        None => format!("{}: {}", status.name, status.sessions),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("  ");
+                self.add(Check {
+                    name: "providers",
+                    label: "provider sessions",
+                    status: if errors == 0 {
+                        Status::Pass
+                    } else {
+                        Status::Manual
+                    },
+                    detail,
+                    hint: (errors > 0)
+                        .then(|| "one or more providers failed during archive sync".to_string()),
+                });
             }
+            Err(error) => self.add(Check {
+                name: "providers",
+                label: "provider sessions",
+                status: Status::Manual,
+                detail: format!("archive status failed: {error:#}"),
+                hint: Some("run `sivtr sync --full` and inspect the report".to_string()),
+            }),
         }
-        self.add(Check {
-            name: "providers",
-            label: "provider sessions",
-            status: if errors == 0 {
-                Status::Pass
-            } else {
-                Status::Manual
-            },
-            detail: detail.trim().to_string(),
-            hint: if errors == 0 {
-                None
-            } else {
-                Some("one or more providers failed to list sessions".to_string())
-            },
-        });
     }
 
     fn check_clipboard(&mut self) {
@@ -633,30 +805,62 @@ fn print_json(report: &Report) {
 }
 
 fn config_path() -> PathBuf {
-    SivtrConfig::config_path().unwrap_or_else(|_| {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("sivtr")
-            .join("config.toml")
-    })
+    SivtrConfig::config_path().unwrap_or_else(|_| workspace::home_dir().join("config.toml"))
+}
+
+fn path_has_content(path: &Path) -> Result<bool> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(error).with_context(|| format!("Failed to inspect {}", path.display()))
+        }
+    };
+    if metadata.is_dir() {
+        let mut entries = fs::read_dir(path)
+            .with_context(|| format!("Failed to read leftover directory {}", path.display()))?;
+        Ok(entries.next().is_some())
+    } else {
+        Ok(true)
+    }
 }
 
 pub fn detect_installed_shells() -> Vec<String> {
+    installed_shell_profiles()
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect()
+}
+
+/// Shells whose profile still carries a hook block written by another sivtr
+/// version. The markers match, so presence alone looks healthy, but the block
+/// may call commands this build no longer has.
+pub fn detect_outdated_shells() -> Vec<String> {
+    use crate::commands::terminal::init::{shell_hook_state, HookState};
+
+    installed_shell_profiles()
+        .into_iter()
+        .filter(|(name, content)| shell_hook_state(name, content) == HookState::Outdated)
+        .map(|(name, _)| name)
+        .collect()
+}
+
+/// `(shell, profile content)` for every profile holding a sivtr hook block.
+fn installed_shell_profiles() -> Vec<(String, String)> {
+    const MARKER: &str = "# >>> sivtr shell integration >>>";
+
     let mut installed = Vec::new();
     let home = match dirs::home_dir() {
         Some(h) => h,
         None => return installed,
     };
 
-    for (name, rel_path, marker) in [
-        ("bash", ".bashrc", "# >>> sivtr shell integration >>>"),
-        ("zsh", ".zshrc", "# >>> sivtr shell integration >>>"),
-    ] {
+    for (name, rel_path) in [("bash", ".bashrc"), ("zsh", ".zshrc")] {
         let path = home.join(rel_path);
         if path.exists() {
             if let Ok(content) = std::fs::read_to_string(&path) {
-                if content.contains(marker) {
-                    installed.push(name.to_string());
+                if content.contains(MARKER) {
+                    installed.push((name.to_string(), content));
                 }
             }
         }
@@ -666,8 +870,8 @@ pub fn detect_installed_shells() -> Vec<String> {
         let nu_config = config_dir.join("nushell").join("config.nu");
         if nu_config.exists() {
             if let Ok(content) = std::fs::read_to_string(&nu_config) {
-                if content.contains("# >>> sivtr shell integration >>>") {
-                    installed.push("nushell".to_string());
+                if content.contains(MARKER) {
+                    installed.push(("nushell".to_string(), content));
                 }
             }
         }
@@ -681,8 +885,8 @@ pub fn detect_installed_shells() -> Vec<String> {
             let path = Path::new(&profile);
             if path.exists() {
                 if let Ok(content) = std::fs::read_to_string(path) {
-                    if content.contains("# >>> sivtr shell integration >>>") {
-                        installed.push("powershell".to_string());
+                    if content.contains(MARKER) {
+                        installed.push(("powershell".to_string(), content));
                         break;
                     }
                 }
@@ -691,6 +895,52 @@ pub fn detect_installed_shells() -> Vec<String> {
     }
 
     installed
+}
+
+/// Outdated hooks fail the check: capture is silently dead until the block is
+/// replaced. `--fix` reinstalls each one in place (the same as `sivtr init`).
+fn outdated_shell_hooks_check(outdated: &[String], fix: bool) -> Check {
+    let shells = outdated.join(", ");
+    if !fix {
+        return Check {
+            name: "shell_hooks",
+            label: "shell hooks",
+            status: Status::Fail,
+            detail: format!(
+                "{shells}: installed by another sivtr version, terminal capture is not running"
+            ),
+            hint: Some(format!(
+                "run `sivtr init {}` (or `sivtr doctor --fix`), then restart the shell",
+                outdated[0]
+            )),
+        };
+    }
+
+    let failures: Vec<String> = outdated
+        .iter()
+        .filter_map(|shell| {
+            crate::commands::terminal::init::execute(shell)
+                .err()
+                .map(|error| format!("{shell}: {error}"))
+        })
+        .collect();
+    if failures.is_empty() {
+        Check {
+            name: "shell_hooks",
+            label: "shell hooks",
+            status: Status::Fixed,
+            detail: format!("replaced outdated hook for {shells}"),
+            hint: Some("restart your shell for hooks to take effect".to_string()),
+        }
+    } else {
+        Check {
+            name: "shell_hooks",
+            label: "shell hooks",
+            status: Status::Manual,
+            detail: format!("could not replace outdated hook: {}", failures.join("; ")),
+            hint: Some("run `sivtr init <shell>`".to_string()),
+        }
+    }
 }
 
 pub fn detect_current_shell() -> String {
@@ -724,6 +974,14 @@ mod tests {
             skipped: vec![(PathBuf::from("old-b"), "rename failed: boom".into())],
             current: 1,
         }
+    }
+
+    #[test]
+    fn outdated_hooks_fail_the_check_until_fixed() {
+        let check = outdated_shell_hooks_check(&["zsh".to_string()], false);
+        assert_eq!(check.status, Status::Fail);
+        assert!(check.detail.contains("zsh"));
+        assert!(check.hint.expect("hint").contains("sivtr init zsh"));
     }
 
     #[test]

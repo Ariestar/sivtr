@@ -19,9 +19,10 @@ pub fn load_saved(name: &str) -> Result<WorkSet> {
     let path = set_path(name)?;
     let content = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read WorkSet @{name} from {}", path.display()))?;
-    let mut set: WorkSet = serde_json::from_str(&content)
+    let set: WorkSet = serde_json::from_str(&content)
         .with_context(|| format!("Failed to parse WorkSet @{name} from {}", path.display()))?;
-    set.ensure_anchors();
+    set.validate()
+        .with_context(|| format!("Invalid WorkSet @{name}"))?;
     Ok(set)
 }
 
@@ -98,11 +99,7 @@ fn set_path(name: &str) -> Result<PathBuf> {
 }
 
 fn sets_dir() -> Result<PathBuf> {
-    let state_dir = dirs::state_dir()
-        .or_else(dirs::data_local_dir)
-        .or_else(dirs::config_dir)
-        .ok_or_else(|| anyhow::anyhow!("Cannot determine state directory"))?;
-    Ok(state_dir.join("sivtr").join("sets"))
+    Ok(sivtr_core::workspace::home_dir().join("sets"))
 }
 
 pub fn validate_name(name: &str) -> Result<()> {

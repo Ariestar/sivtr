@@ -221,10 +221,11 @@ pub(crate) async fn group_fan_out(
     // share already applied; the shared code also ranks the merged corpus as
     // a whole when the sort is relevance.
     let merged = filter::apply(PathBuf::new(), records, anchors, full)?;
+    let (m_records, m_anchors) = merged.into_parts();
     Ok(GroupQueryResponse {
         query: QueryResponse {
-            records: merged.records,
-            anchors: merged.anchors,
+            records: m_records,
+            anchors: m_anchors,
         },
         skipped,
     })

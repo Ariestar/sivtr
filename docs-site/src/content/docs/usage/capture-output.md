@@ -1,6 +1,6 @@
 ---
 title: Capture Terminal Output
-description: Use pipe mode, run mode, and shell session import.
+description: Use pipe mode, run mode, and shell session integration.
 ---
 
 Capture is the first step in turning terminal output into reusable text. Use the lightest capture path that matches what you need.
@@ -11,13 +11,14 @@ Capture is the first step in turning terminal output into reusable text. Use the
 | --- | --- | --- |
 | Inspect one existing command pipeline | `command 2>&1 \| sivtr` | No |
 | Let `sivtr` run one command | `sivtr run command` | Partially, for the captured run |
-| Open the current shell's recorded work | `sivtr import` | Yes, after shell integration |
+| Record every command in a live shell | `sivtr init <shell>` | Yes, with exit code and directory |
+| Browse the current workspace's recorded work | `sivtr` | Yes, after shell integration |
 | Copy one recent command block | `sivtr copy out` | Yes, after shell integration |
-| Search saved output history | `sivtr history search "query"` | Yes, for saved captures |
+| Search captured terminal and AI work | `sivtr search "query"` | Yes, from the unified archive |
 
 ## Pipe mode
 
-Pipe mode reads stdin, writes it to history (when enabled), and opens the result in the external editor.
+Pipe mode archives stdin in the unified archive and opens the result in the external editor.
 
 ```bash
 ls -la | sivtr
@@ -52,36 +53,34 @@ Use run mode when:
 - you want the exit status reported and the output saved before the editor opens;
 - you prefer not to manage shell redirection manually.
 
-Run mode captures stdout and stderr together and saves the result to history. If the command produces no output, `sivtr` exits after reporting that nothing was captured.
+Run mode captures stdout and stderr together and saves the result to the unified archive. If the command produces no output, `sivtr` exits after reporting that nothing was captured.
 
-## Shell session import
+## Shell session browsing
 
-Shell integration records structured command entries over time. After installing it, open the current session log:
-
-```bash
-sivtr import
-```
-
-This is useful when you have been working normally and later want to open the accumulated session in the editor.
-
-Install shell integration with:
+Shell integration records structured command entries over time. After installing it, open the workspace browser:
 
 ```bash
-sivtr init powershell
-sivtr init bash
-sivtr init zsh
-sivtr init nushell
+sivtr
 ```
 
-Restart the shell after installation.
+This is useful when you have been working normally and later want to browse the accumulated terminal work.
 
-## History capture
-
-Captured output is saved to local history when `[history].auto_save` is enabled. Search it later with:
+Install or upgrade shell integration to capture terminal output:
 
 ```bash
-sivtr history search "panic"
-sivtr history show 42
+sivtr init all
+# or one shell: sivtr init bash / zsh / nushell / powershell
 ```
 
-History is separate from the current shell session log: history is a longer-lived SQLite store, while session logs are per-shell structured records for recent command blocks.
+`sivtr setup` runs the same installation step. Restart the shell after installation; subsequent commands use PTY capture without a separate enable command. After upgrading, rerun `sivtr init <shell>` to replace the existing sivtr hook in place, preserving surrounding user configuration without adding a second capture block.
+
+To pause capture, run `sivtr config edit`, set `enabled = false` under `[pty_proxy]`, and restart the shell. Both `setup` and `init` preserve this explicit opt-out. To resume, set it back to `true` and restart the shell.
+
+## Search captured output
+
+`pipe` and `run` records are terminal sessions in the same `archive.db` as shell and agent sessions. Search or show them through the normal archive commands:
+
+```bash
+sivtr search "panic"
+sivtr show terminal/<session>/<record>
+```

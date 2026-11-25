@@ -42,7 +42,7 @@ impl Identity {
 }
 
 pub fn identity_path() -> PathBuf {
-    workspace::data_dir().join("identity.key")
+    workspace::home_dir().join("identity.key")
 }
 
 fn write_secret(path: &Path, secret_key: &SecretKey) -> Result<()> {

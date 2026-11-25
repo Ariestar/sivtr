@@ -8,11 +8,11 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use super::model::{
-    workspace_matches_candidates, AgentSession, AgentSessionMeta, SessionInfo, WorkspaceMatchTarget,
+    AgentSession, AgentSessionMeta, SessionInfo, SessionListing, WorkspaceMatchTarget,
 };
 
 /// Bump when the listing cache layout or meta parsing changes.
-const LISTING_CACHE_VERSION: u32 = 3;
+const LISTING_CACHE_VERSION: u32 = 4;
 
 /// Directory stamps are trusted only after the filesystem mtime granularity
 /// window has passed, so a newly added file inside the same tick is not
@@ -26,12 +26,52 @@ fn is_settled(mtime_secs: u64) -> bool {
         .unwrap_or(false)
 }
 
+/// A strong fingerprint for provider-specific auxiliary files (signed mtime, size, and content prefix hash).
+/// Returns:
+/// - `Some(None)` if the file does not exist (safely tracked as missing).
+/// - `Some(Some((secs, nanos, size, hash)))` if the file exists and is stamped (preserving pre-epoch timestamps).
+/// - `None` if the file exists but cannot be stamped (caller must treat as cache miss).
+fn extra_file_stamp(path: &Path) -> Option<Option<(i64, u32, u64, u64)>> {
+    let meta = match std::fs::metadata(path) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Some(None),
+        Err(_) => return None,
+    };
+    if !meta.is_file() {
+        return None;
+    }
+    let time = meta.modified().ok()?;
+    let (secs, nanos) = match time.duration_since(SystemTime::UNIX_EPOCH) {
+        Ok(dur) => (dur.as_secs() as i64, dur.subsec_nanos()),
+        Err(err) => {
+            let dur = err.duration();
+            (-(dur.as_secs() as i64), dur.subsec_nanos())
+        }
+    };
+    // A settled mtime is reliable, so the content prefix only disambiguates
+    // rewrites inside the filesystem's mtime granularity window.
+    let content_hash = if meta.len() > 0 && !is_settled(secs as u64) {
+        use std::hash::{DefaultHasher, Hasher};
+        use std::io::Read;
+        let mut file = std::fs::File::open(path).ok()?;
+        let mut buf = [0u8; 4096];
+        let n = file.read(&mut buf).ok()?;
+        let mut hasher = DefaultHasher::new();
+        hasher.write(&buf[..n]);
+        hasher.finish()
+    } else {
+        0
+    };
+    Some(Some((secs, nanos, meta.len(), content_hash)))
+}
+
 /// One cached session file in a listing: fingerprint + parsed metadata.
 #[derive(Clone, Serialize, Deserialize)]
 struct ListingEntry {
     mtime_secs: u64,
     mtime_nanos: u32,
     size: u64,
+    extra_stamps: Vec<Option<(i64, u32, u64, u64)>>,
     meta: AgentSessionMeta,
 }
 
@@ -74,20 +114,68 @@ pub fn list_recent_jsonl_sessions(
     cwd: Option<&Path>,
     parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
 ) -> Result<Vec<SessionInfo>> {
-    collect_recent_sessions(provider, root, cwd, is_jsonl_leaf, parse_meta)
+    Ok(list_recent_jsonl_sessions_outcome(provider, root, cwd, parse_meta)?.0)
+}
+
+/// Listing plus per-file metadata failures, for sync callers that must keep
+/// the archive intact when a file cannot be read.
+pub fn list_recent_jsonl_sessions_outcome(
+    provider: &str,
+    root: &Path,
+    cwd: Option<&Path>,
+    parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
+) -> Result<SessionListing> {
+    collect_recent_sessions(
+        provider,
+        root,
+        cwd,
+        is_jsonl_leaf,
+        |_| Vec::new(),
+        parse_meta,
+    )
 }
 
 /// Like [`list_recent_jsonl_sessions`], with a provider-supplied leaf
 /// predicate: true for a direct child that is one session. Used by dsh
 /// (`.jsonl.zstd` logs) and Grok (session directories).
+///
+/// `extra_stamp_paths` names provider-specific auxiliary files whose changes
+/// must invalidate the cached metadata of a session leaf.
 pub fn list_sessions_matching(
     provider: &str,
     root: &Path,
     cwd: Option<&Path>,
     is_session_leaf: impl Fn(&Path, bool) -> bool,
+    extra_stamp_paths: impl Fn(&Path) -> Vec<PathBuf>,
     parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
 ) -> Result<Vec<SessionInfo>> {
-    collect_recent_sessions(provider, root, cwd, is_session_leaf, parse_meta)
+    Ok(list_sessions_matching_outcome(
+        provider,
+        root,
+        cwd,
+        is_session_leaf,
+        extra_stamp_paths,
+        parse_meta,
+    )?
+    .0)
+}
+
+pub fn list_sessions_matching_outcome(
+    provider: &str,
+    root: &Path,
+    cwd: Option<&Path>,
+    is_session_leaf: impl Fn(&Path, bool) -> bool,
+    extra_stamp_paths: impl Fn(&Path) -> Vec<PathBuf>,
+    parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
+) -> Result<SessionListing> {
+    collect_recent_sessions(
+        provider,
+        root,
+        cwd,
+        is_session_leaf,
+        extra_stamp_paths,
+        parse_meta,
+    )
 }
 
 /// Walk a chat-recording tmp root: `<tmp>/<project>*/chats/*.json[l]`.
@@ -102,7 +190,23 @@ pub fn list_chat_recording_sessions(
     cwd: Option<&Path>,
     parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
 ) -> Result<Vec<SessionInfo>> {
-    collect_recent_sessions(provider, tmp_root, cwd, is_chat_recording_leaf, parse_meta)
+    Ok(list_chat_recording_sessions_outcome(provider, tmp_root, cwd, parse_meta)?.0)
+}
+
+pub fn list_chat_recording_sessions_outcome(
+    provider: &str,
+    tmp_root: &Path,
+    cwd: Option<&Path>,
+    parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
+) -> Result<SessionListing> {
+    collect_recent_sessions(
+        provider,
+        tmp_root,
+        cwd,
+        is_chat_recording_leaf,
+        |_| Vec::new(),
+        parse_meta,
+    )
 }
 
 fn is_jsonl_leaf(path: &Path, is_dir: bool) -> bool {
@@ -127,16 +231,18 @@ fn collect_recent_sessions(
     root: &Path,
     cwd: Option<&Path>,
     is_session_leaf: impl Fn(&Path, bool) -> bool,
+    extra_stamp_paths: impl Fn(&Path) -> Vec<PathBuf>,
     parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
-) -> Result<Vec<SessionInfo>> {
+) -> Result<SessionListing> {
     if !root.exists() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
 
     let wanted = cwd.map(WorkspaceMatchTarget::new);
     let mut cache = load_listing_cache(provider, root);
     let mut dirty = false;
     let mut sessions = Vec::new();
+    let mut failures = Vec::new();
 
     // Incremental walk: a directory whose stamp is unchanged contributes its
     // cached child list without a read_dir; only changed directories are
@@ -191,29 +297,37 @@ fn collect_recent_sessions(
     }
 
     for path in leaves {
-        let Some(stamp) = crate::cache::file_stamp(&path) else {
-            // Unstampable file (e.g. racing delete): parse without caching.
+        let stamp = crate::cache::file_stamp(&path);
+        let extra_stamps = extra_stamp_paths(&path)
+            .iter()
+            .map(|path| extra_file_stamp(path))
+            .collect::<Option<Vec<_>>>();
+        let (Some(stamp), Some(extra_stamps)) = (stamp, extra_stamps) else {
+            // Unstampable session or auxiliary file (racing delete, unreadable
+            // metadata): parse without caching so the next listing re-reads it.
             match parse_meta(&path) {
                 Ok(meta) => push_session(
                     &mut sessions,
                     path,
-                    SystemTime::UNIX_EPOCH,
+                    stamp.map_or(SystemTime::UNIX_EPOCH, |stamp| {
+                        SystemTime::UNIX_EPOCH + Duration::new(stamp.0, stamp.1)
+                    }),
                     meta,
                     wanted.as_ref(),
                 ),
-                Err(error) => eprintln!(
-                    "warning: failed to parse agent session metadata {}: {error:#}",
-                    path.display()
-                ),
+                Err(error) => {
+                    failures.push((path.clone(), format!("{error:#}")));
+                    continue;
+                }
             }
             continue;
         };
-
         let meta = match cache.entries.get(&path) {
             Some(entry)
                 if entry.mtime_secs == stamp.0
                     && entry.mtime_nanos == stamp.1
-                    && entry.size == stamp.2 =>
+                    && entry.size == stamp.2
+                    && entry.extra_stamps == extra_stamps =>
             {
                 entry.meta.clone()
             }
@@ -227,16 +341,14 @@ fn collect_recent_sessions(
                                 mtime_secs: stamp.0,
                                 mtime_nanos: stamp.1,
                                 size: stamp.2,
+                                extra_stamps: extra_stamps.clone(),
                                 meta: meta.clone(),
                             },
                         );
                         meta
                     }
                     Err(error) => {
-                        eprintln!(
-                            "warning: failed to parse agent session metadata {}: {error:#}",
-                            path.display()
-                        );
+                        failures.push((path.clone(), format!("{error:#}")));
                         continue;
                     }
                 }
@@ -258,7 +370,7 @@ fn collect_recent_sessions(
 
     sessions.sort_by_key(|session| session.modified);
     sessions.reverse();
-    Ok(sessions)
+    Ok((sessions, failures))
 }
 
 fn push_session(
@@ -268,9 +380,12 @@ fn push_session(
     meta: AgentSessionMeta,
     wanted: Option<&WorkspaceMatchTarget>,
 ) {
-    // Shared policy: no cwd metadata → keep; otherwise path or git-remote match.
+    // Scoped listings require a matching path or repository identity.
     if let Some(wanted) = wanted {
-        if !workspace_matches_candidates(wanted, meta.cwd_candidates().map(Path::new)) {
+        if !meta
+            .cwd_candidates()
+            .any(|cwd| wanted.matches(Path::new(cwd)))
+        {
             return;
         }
     }
@@ -278,6 +393,7 @@ fn push_session(
     sessions.push(SessionInfo {
         modified,
         path,
+        physical_path: None,
         id: meta.id,
         cwd: meta.cwd,
         title: meta.title,
@@ -308,6 +424,18 @@ fn store_listing_cache(provider: &str, root: &Path, cache: &ListingCache) {
     );
 }
 
+fn jsonl_value_from_line(line: &str) -> std::result::Result<Option<Value>, serde_json::Error> {
+    if line.trim().is_empty() {
+        return Ok(None);
+    }
+    match serde_json::from_str(line) {
+        Ok(value) => Ok(Some(value)),
+        // NUL-padded garbage from a crashed write is never valid JSON.
+        Err(_) if line.contains('\0') => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 pub fn parse_jsonl_session(
     path: &Path,
     provider_name: &str,
@@ -332,18 +460,10 @@ pub fn parse_jsonl_session(
                 path.display()
             )
         })?;
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        let value: Value = match serde_json::from_str(&line) {
-            Ok(value) => value,
+        let value = match jsonl_value_from_line(&line) {
+            Ok(None) => continue,
+            Ok(Some(value)) => value,
             Err(error) if idx > 0 && is_trailing_partial_json_line(&error) => break,
-            Err(_) if line.contains('\0') => {
-                // NUL-padded garbage from a crashed write is never valid
-                // JSON; skip the line and keep the rest of the session.
-                continue;
-            }
             Err(error) => {
                 return Err(error).with_context(|| {
                     format!(
@@ -379,16 +499,18 @@ pub fn parse_jsonl_meta(
                 path.display()
             )
         })?;
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        let value: Value = serde_json::from_str(&line).with_context(|| {
-            format!(
-                "Failed to parse {provider_name} session metadata as JSON: {}",
-                path.display()
-            )
-        })?;
+        let value = match jsonl_value_from_line(&line) {
+            Ok(None) => continue,
+            Ok(Some(value)) => value,
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "Failed to parse {provider_name} session metadata as JSON: {}",
+                        path.display()
+                    )
+                });
+            }
+        };
         update_meta(&mut meta, &value);
     }
 
@@ -441,8 +563,8 @@ mod tests {
     fn includes_sessions_with_later_matching_cwd_metadata() {
         let _guard = env_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var_os("SIVTR_DATA_DIR");
-        std::env::set_var("SIVTR_DATA_DIR", dir.path().join("data"));
+        let previous = std::env::var_os("SIVTR_HOME");
+        std::env::set_var("SIVTR_HOME", dir.path().join("data"));
         let sessions = dir.path().join("sessions");
         let target = dir.path().join("sivtr");
         let candidate = dir.path().join("sivtr-worktree");
@@ -490,17 +612,17 @@ mod tests {
         );
 
         match previous {
-            Some(value) => std::env::set_var("SIVTR_DATA_DIR", value),
-            None => std::env::remove_var("SIVTR_DATA_DIR"),
+            Some(value) => std::env::set_var("SIVTR_HOME", value),
+            None => std::env::remove_var("SIVTR_HOME"),
         }
     }
 
     #[test]
-    fn keeps_sessions_without_cwd_when_filtering_by_cwd() {
+    fn lists_sessions_without_cwd_only_when_unfiltered() {
         let _guard = env_lock();
         let dir = tempfile::tempdir().unwrap();
-        let previous = std::env::var_os("SIVTR_DATA_DIR");
-        std::env::set_var("SIVTR_DATA_DIR", dir.path().join("data"));
+        let previous = std::env::var_os("SIVTR_HOME");
+        std::env::set_var("SIVTR_HOME", dir.path().join("data"));
         let sessions = dir.path().join("sessions");
         let target = dir.path().join("repo");
         fs::create_dir_all(&sessions).unwrap();
@@ -530,7 +652,12 @@ mod tests {
         )
         .unwrap();
 
-        let listed = list_recent_jsonl_sessions("Hermes", &sessions, Some(&target), |path| {
+        fs::write(
+            sessions.join("matching.jsonl"),
+            session_line("matching", &target),
+        )
+        .unwrap();
+        let parse_meta = |path: &Path| {
             parse_jsonl_meta(path, "Hermes", 5, |meta, value| {
                 if meta.id.is_none() {
                     meta.id = value
@@ -547,19 +674,24 @@ mod tests {
                     meta.add_cwd(cwd);
                 }
             })
-        })
-        .unwrap();
+        };
+        let listed =
+            list_recent_jsonl_sessions("Hermes", &sessions, Some(&target), parse_meta).unwrap();
 
         let ids: Vec<_> = listed
             .iter()
             .filter_map(|session| session.id.clone())
             .collect();
-        assert!(ids.iter().any(|id| id == "no-cwd"));
-        assert!(!ids.iter().any(|id| id == "wrong"));
+        assert_eq!(ids, vec!["matching"]);
+        let all = list_recent_jsonl_sessions("Hermes", &sessions, None, parse_meta).unwrap();
+        assert_eq!(all.len(), 3);
+        assert!(all
+            .iter()
+            .any(|session| session.id.as_deref() == Some("no-cwd")));
 
         match previous {
-            Some(value) => std::env::set_var("SIVTR_DATA_DIR", value),
-            None => std::env::remove_var("SIVTR_DATA_DIR"),
+            Some(value) => std::env::set_var("SIVTR_HOME", value),
+            None => std::env::remove_var("SIVTR_HOME"),
         }
     }
 
@@ -567,8 +699,8 @@ mod tests {
     fn listing_cache_reuses_meta_for_unchanged_files() {
         let _guard = env_lock();
         let temp = tempfile::tempdir().unwrap();
-        let previous = std::env::var_os("SIVTR_DATA_DIR");
-        std::env::set_var("SIVTR_DATA_DIR", temp.path());
+        let previous = std::env::var_os("SIVTR_HOME");
+        std::env::set_var("SIVTR_HOME", temp.path());
 
         let sessions = temp.path().join("sessions");
         fs::create_dir_all(&sessions).unwrap();
@@ -609,8 +741,8 @@ mod tests {
         );
 
         match previous {
-            Some(value) => std::env::set_var("SIVTR_DATA_DIR", value),
-            None => std::env::remove_var("SIVTR_DATA_DIR"),
+            Some(value) => std::env::set_var("SIVTR_HOME", value),
+            None => std::env::remove_var("SIVTR_HOME"),
         }
     }
 
@@ -618,8 +750,8 @@ mod tests {
     fn listing_cache_reparses_changed_files_only() {
         let _guard = env_lock();
         let temp = tempfile::tempdir().unwrap();
-        let previous = std::env::var_os("SIVTR_DATA_DIR");
-        std::env::set_var("SIVTR_DATA_DIR", temp.path());
+        let previous = std::env::var_os("SIVTR_HOME");
+        std::env::set_var("SIVTR_HOME", temp.path());
 
         let sessions = temp.path().join("sessions");
         fs::create_dir_all(&sessions).unwrap();
@@ -667,8 +799,8 @@ mod tests {
         assert!(ids.iter().any(|id| id == "stable"));
 
         match previous {
-            Some(value) => std::env::set_var("SIVTR_DATA_DIR", value),
-            None => std::env::remove_var("SIVTR_DATA_DIR"),
+            Some(value) => std::env::set_var("SIVTR_HOME", value),
+            None => std::env::remove_var("SIVTR_HOME"),
         }
     }
 
@@ -676,8 +808,8 @@ mod tests {
     fn listing_cache_discovers_new_files_via_dir_stamp() {
         let _guard = env_lock();
         let temp = tempfile::tempdir().unwrap();
-        let previous = std::env::var_os("SIVTR_DATA_DIR");
-        std::env::set_var("SIVTR_DATA_DIR", temp.path());
+        let previous = std::env::var_os("SIVTR_HOME");
+        std::env::set_var("SIVTR_HOME", temp.path());
 
         let sessions = temp.path().join("sessions");
         fs::create_dir_all(&sessions).unwrap();
@@ -725,8 +857,114 @@ mod tests {
         assert!(ids.iter().any(|id| id == "s3"));
 
         match previous {
-            Some(value) => std::env::set_var("SIVTR_DATA_DIR", value),
-            None => std::env::remove_var("SIVTR_DATA_DIR"),
+            Some(value) => std::env::set_var("SIVTR_HOME", value),
+            None => std::env::remove_var("SIVTR_HOME"),
+        }
+    }
+
+    #[test]
+    fn listing_cache_reparses_when_provider_extra_file_changes() {
+        let _guard = env_lock();
+        let temp = tempfile::tempdir().unwrap();
+        let previous = std::env::var_os("SIVTR_HOME");
+        std::env::set_var("SIVTR_HOME", temp.path());
+
+        let root = temp.path().join("sessions");
+        let session = root.join("bucket").join("session-1");
+        fs::create_dir_all(&session).unwrap();
+        let summary = session.join("summary.json");
+        let history = session.join("chat_history.jsonl");
+        fs::write(&summary, r#"{"generated_title":"first"}"#).unwrap();
+        fs::write(&history, "first\n").unwrap();
+
+        let parses = std::cell::Cell::new(0usize);
+        let parse_meta = |_: &Path| {
+            parses.set(parses.get() + 1);
+            Ok(AgentSessionMeta::default())
+        };
+        let list = || {
+            list_sessions_matching(
+                "GrokExtraStampTest",
+                &root,
+                None,
+                |path, is_dir| is_dir && path.join("summary.json").exists(),
+                |path| vec![path.join("summary.json"), path.join("chat_history.jsonl")],
+                parse_meta,
+            )
+            .unwrap()
+        };
+
+        assert_eq!(list().len(), 1);
+        assert_eq!(parses.get(), 1);
+        assert_eq!(list().len(), 1);
+        assert_eq!(
+            parses.get(),
+            1,
+            "unchanged stamps should reuse cached metadata"
+        );
+
+        let directory_stamp = crate::cache::file_stamp(&session);
+        fs::write(&history, "history updated in place\n").unwrap();
+        assert_eq!(crate::cache::file_stamp(&session), directory_stamp);
+
+        assert_eq!(list().len(), 1);
+        assert_eq!(
+            parses.get(),
+            2,
+            "changed provider files invalidate metadata"
+        );
+
+        match previous {
+            Some(value) => std::env::set_var("SIVTR_HOME", value),
+            None => std::env::remove_var("SIVTR_HOME"),
+        }
+    }
+
+    #[test]
+    fn listing_cache_bypasses_metadata_for_unstampable_extra_file() {
+        let _guard = env_lock();
+        let temp = tempfile::tempdir().unwrap();
+        let previous = std::env::var_os("SIVTR_HOME");
+        std::env::set_var("SIVTR_HOME", temp.path());
+
+        let root = temp.path().join("sessions");
+        let session = root.join("bucket").join("session-1");
+        fs::create_dir_all(&session).unwrap();
+        let history = session.join("chat_history.jsonl");
+        fs::write(&history, "first\n").unwrap();
+        // A directory in place of the auxiliary file cannot be opened, so its
+        // stamp fails on every platform.
+        let summary = session.join("summary.json");
+        fs::create_dir(&summary).unwrap();
+
+        let parses = std::cell::Cell::new(0usize);
+        let parse_meta = |_: &Path| {
+            parses.set(parses.get() + 1);
+            Ok(AgentSessionMeta::default())
+        };
+        let list = || {
+            list_sessions_matching(
+                "GrokExtraStampTest",
+                &root,
+                None,
+                |path, is_dir| is_dir && path.join("summary.json").exists(),
+                |path| vec![path.join("summary.json"), path.join("chat_history.jsonl")],
+                parse_meta,
+            )
+            .unwrap()
+        };
+
+        assert_eq!(list().len(), 1);
+        assert_eq!(list().len(), 1);
+        assert_eq!(
+            parses.get(),
+            2,
+            "an unstampable auxiliary file must bypass the cached metadata"
+        );
+
+        match previous {
+            Some(value) => std::env::set_var("SIVTR_HOME", value),
+            None => std::env::remove_var("SIVTR_HOME"),
         }
     }
 }

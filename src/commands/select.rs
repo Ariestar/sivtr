@@ -5,7 +5,6 @@ use anyhow::{Context, Result};
 pub enum CommandSelection {
     RecentSingle(usize),
     RecentRange { newer: usize, older: usize },
-    RecentExplicit(Vec<usize>),
 }
 
 pub fn parse_selector(value: &str) -> Result<CommandSelection> {
@@ -50,29 +49,6 @@ pub fn resolve_selector(selection: &CommandSelection, total: usize) -> Result<Ve
             let start = total - older;
             let end = total - newer;
             Ok((start..=end).collect())
-        }
-        CommandSelection::RecentExplicit(selected) => {
-            if selected.is_empty() {
-                anyhow::bail!("No command blocks selected.");
-            }
-
-            let mut indices = Vec::with_capacity(selected.len());
-            for recent in selected {
-                let recent = *recent;
-                if recent == 0 {
-                    anyhow::bail!("Selector values are 1-based. Use `1` for the last command.");
-                }
-                if recent > total {
-                    anyhow::bail!(
-                        "Only {total} command(s) recorded. Try a smaller selector or `--pick`."
-                    );
-                }
-                indices.push(total - recent);
-            }
-
-            indices.sort_unstable();
-            indices.dedup();
-            Ok(indices)
         }
     }
 }
@@ -120,14 +96,6 @@ mod tests {
         assert_eq!(
             resolve_selector(&CommandSelection::RecentRange { newer: 2, older: 5 }, 10).unwrap(),
             vec![5, 6, 7, 8]
-        );
-    }
-
-    #[test]
-    fn resolves_explicit_selection_as_disjoint_commands() {
-        assert_eq!(
-            resolve_selector(&CommandSelection::RecentExplicit(vec![1, 4, 7]), 10).unwrap(),
-            vec![3, 6, 9]
         );
     }
 }

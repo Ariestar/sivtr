@@ -2,13 +2,12 @@
 
 use ratatui::prelude::Color;
 use ratatui::widgets::ListState;
-use sivtr_core::ai::AgentProvider;
-use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
+use sivtr_core::agents::AgentProvider;
+use sivtr_core::record::{ProjectionSlice, WorkAt, WorkRecord, WorkRef, WorkScope};
 use std::collections::HashSet;
 use std::time::SystemTime;
 
-use crate::commands::select::CommandSelection;
-use crate::tui::content::block::{fold_label_for_part, BlockText};
+use crate::tui::content::block::{dialogue_block_id, fold_label_for_part, BlockRole, BlockText};
 use crate::tui::content::io::{
     ContentIoFocus, ContentIoFrame, ContentIoTexts, ContentScrolls, ExpandedBlocks,
 };
@@ -16,6 +15,8 @@ use crate::tui::content::text::content_io_from_record;
 use crate::tui::content::view::{ContentSelection, ContentViewMode};
 use crate::tui::search::WorkspaceSearchScope;
 use crate::tui::theme;
+use crate::tui::workspace::rows::Rows;
+use sivtr_core::workset::WorkSelectionTarget;
 
 /// Indices of true entries in a selection mask, in order.
 pub(crate) fn selected_indices(mask: &[bool]) -> Vec<usize> {
@@ -25,59 +26,55 @@ pub(crate) fn selected_indices(mask: &[bool]) -> Vec<usize> {
         .collect()
 }
 
-/// Count of true entries in a selection mask.
-pub(crate) fn selected_count(mask: &[bool]) -> usize {
-    mask.iter().filter(|selected| **selected).count()
+/// Kind of memory source: `None` = terminal, `Some` = the agent provider —
+/// the same discriminator as `WorkPath::provider()`.
+pub(crate) type WorkspaceSourceKind = Option<AgentProvider>;
+
+/// Rendering metadata for the stream discriminator (badges, colors).
+pub(crate) trait SourceKindDisplay: Copy {
+    fn path(self) -> &'static str;
+    fn badge(self) -> String;
+    fn color(self) -> Color;
 }
 
-/// Kind of memory source (local path body before any `scope:` prefix).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum WorkspaceSourceKind {
-    Terminal,
-    Agent(AgentProvider),
-}
+impl SourceKindDisplay for WorkspaceSourceKind {
+    fn path(self) -> &'static str {
+        sivtr_core::record::WorkPath::namespace_for(self)
+    }
 
-impl WorkspaceSourceKind {
-    pub(crate) fn path(self) -> &'static str {
+    fn badge(self) -> String {
+        const BADGES: &[(AgentProvider, &str)] = &[
+            (AgentProvider::Codex, "cdx"),
+            (AgentProvider::Claude, "cld"),
+            (AgentProvider::Cursor, "cur"),
+            (AgentProvider::Dsh, "dsh"),
+            (AgentProvider::OpenCode, "opc"),
+            (AgentProvider::OpenClaw, "ocw"),
+            (AgentProvider::Hermes, "hrm"),
+            (AgentProvider::Grok, "grk"),
+            (AgentProvider::Pi, "pi"),
+            (AgentProvider::Qoder, "qdr"),
+            (AgentProvider::QoderCn, "qcn"),
+            (AgentProvider::Gemini, "gmi"),
+            (AgentProvider::Goose, "gse"),
+            (AgentProvider::Qwen, "qwn"),
+            (AgentProvider::Zcode, "zcd"),
+        ];
         match self {
-            Self::Terminal => "terminal",
-            Self::Agent(provider) => provider.command_name(),
+            None => "term".to_string(),
+            Some(provider) => BADGES
+                .iter()
+                .find(|(known, _)| *known == provider)
+                .map(|(_, badge)| badge.to_string())
+                .unwrap_or_else(|| provider.command_name().chars().take(3).collect()),
         }
     }
 
-    pub(crate) fn badge(self) -> &'static str {
+    fn color(self) -> Color {
         match self {
-            Self::Terminal => "term",
-            Self::Agent(AgentProvider::Codex) => "cdx",
-            Self::Agent(AgentProvider::Claude) => "cld",
-            Self::Agent(AgentProvider::Cursor) => "cur",
-            Self::Agent(AgentProvider::Dsh) => "dsh",
-            Self::Agent(AgentProvider::OpenCode) => "opc",
-            Self::Agent(AgentProvider::OpenClaw) => "ocw",
-            Self::Agent(AgentProvider::Hermes) => "hrm",
-            Self::Agent(AgentProvider::Grok) => "grk",
-            Self::Agent(AgentProvider::Pi) => "pi",
-            Self::Agent(AgentProvider::Qoder) => "qdr",
-            Self::Agent(AgentProvider::QoderCn) => "qcn",
-            Self::Agent(AgentProvider::Gemini) => "gmi",
-            Self::Agent(AgentProvider::Goose) => "gse",
-            Self::Agent(AgentProvider::Qwen) => "qwn",
+            None => theme::terminal_color(),
+            Some(provider) => theme::provider_color(provider),
         }
-    }
-
-    pub(crate) fn color(self) -> Color {
-        match self {
-            Self::Terminal => theme::terminal_color(),
-            Self::Agent(provider) => theme::provider_color(provider),
-        }
-    }
-
-    pub(crate) fn is_agent(self) -> bool {
-        matches!(self, Self::Agent(_))
-    }
-
-    pub(crate) fn is_terminal(self) -> bool {
-        matches!(self, Self::Terminal)
     }
 }
 
@@ -96,11 +93,11 @@ impl WorkspaceSource {
     }
 
     pub(crate) fn terminal() -> Self {
-        Self::local(WorkspaceSourceKind::Terminal)
+        Self::local(None)
     }
 
     pub(crate) fn agent(provider: AgentProvider) -> Self {
-        Self::local(WorkspaceSourceKind::Agent(provider))
+        Self::local(Some(provider))
     }
 
     /// A source on another device, addressed by its mount alias.
@@ -127,7 +124,7 @@ impl WorkspaceSource {
         }
     }
 
-    pub(crate) fn badge(&self) -> &'static str {
+    pub(crate) fn badge(&self) -> String {
         self.kind.badge()
     }
 
@@ -141,11 +138,21 @@ impl WorkspaceSource {
     }
 
     pub(crate) fn is_agent(&self) -> bool {
-        self.kind.is_agent()
+        self.kind.is_some()
     }
 
     pub(crate) fn is_terminal(&self) -> bool {
-        self.kind.is_terminal()
+        self.kind.is_none()
+    }
+
+    pub(crate) fn selection_target(&self, session: Option<&str>) -> WorkSelectionTarget {
+        WorkSelectionTarget::Scope {
+            scope: self.scope.as_deref().map_or(WorkScope::Local, |scope| {
+                WorkScope::Named(scope.to_string())
+            }),
+            kind: self.kind,
+            session: session.map(str::to_string),
+        }
     }
 }
 
@@ -178,30 +185,6 @@ pub(crate) struct TextPair {
     pub(crate) ansi: String,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct WorkspaceCopyParts {
-    pub(crate) input: TextPair,
-    pub(crate) output: TextPair,
-    pub(crate) command: TextPair,
-}
-
-impl WorkspaceCopyParts {
-    pub(crate) fn from_block(block: TextPair) -> Self {
-        Self {
-            input: block.clone(),
-            output: block,
-            command: TextPair::default(),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct WorkspacePickedContent {
-    pub(crate) source: WorkspaceSource,
-    pub(crate) units: Vec<TextPair>,
-    pub(crate) selection: CommandSelection,
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct WorkspaceSession {
     pub(crate) source: WorkspaceSource,
@@ -221,25 +204,9 @@ pub(crate) struct WorkspaceDialogue {
     pub(crate) source: WorkspaceSource,
     pub(crate) work_ref: Option<WorkRef>,
     pub(crate) record: Option<WorkRecord>,
-    pub(crate) copy: WorkspaceCopyParts,
 }
 
 impl WorkspaceDialogue {
-    /// Text used for copy shortcuts / vim on the currently displayed content.
-    /// Always derived from `record.parts` when present — never a stale cache.
-    pub(crate) fn display_unit(&self, mode: ContentViewMode, target: Option<WorkAt>) -> TextPair {
-        let plain = self.content_text(mode, target);
-        TextPair {
-            ansi: plain.clone(),
-            plain,
-        }
-    }
-
-    pub(crate) fn content_text(&self, mode: ContentViewMode, target: Option<WorkAt>) -> String {
-        self.content_io_texts(mode, target, &ExpandedBlocks::default())
-            .join_displayed()
-    }
-
     /// Input / Output bodies for the dual content panes with per-block fold
     /// state (every workpart is a block; structure blocks fold by default in
     /// read mode).
@@ -257,27 +224,21 @@ impl WorkspaceDialogue {
             let Some(part) = record.part_for_at(target) else {
                 return ContentIoTexts::new(Vec::new(), Vec::new());
             };
-            let input = part.kind().is_input();
+            let input = part.is_input();
+            let block_id = dialogue_block_id(record, part.seq).expect("target part has a block");
             let shown = match mode {
                 ContentViewMode::Raw => true,
-                ContentViewMode::Reading => {
-                    let focus = if input {
-                        ContentIoFocus::Input
-                    } else {
-                        ContentIoFocus::Output
-                    };
-                    expanded.expanded(focus, 0, part.kind().is_structure())
-                }
+                ContentViewMode::Reading => expanded.expanded(block_id, part.is_structure()),
             };
             let segment = BlockText {
-                id: 0,
+                id: block_id,
                 text: if shown {
-                    crate::tui::content::tool::part_body_text(part)
+                    crate::tui::content::tool::part_body_text(part, ProjectionSlice::Whole)
                 } else {
                     fold_label_for_part(part)
                 },
                 tight: false,
-                kind: part.kind(),
+                role: BlockRole::of(part),
             };
             return if input {
                 ContentIoTexts::new(vec![segment], Vec::new())
@@ -363,14 +324,12 @@ impl WorkspaceFocus {
 
 pub(crate) struct WorkspaceView<'a> {
     pub(crate) sources: &'a [WorkspaceSource],
-    pub(crate) selected_sources: &'a [bool],
     /// Per-source load marker (idle remote / ready / failed).
     pub(crate) source_markers: &'a [SourceLoadMarker],
     pub(crate) loading_tick: u8,
-    pub(crate) source_state: &'a ListState,
+    /// Cursor, marks, and the live range anchor of all three list panes.
+    pub(crate) rows: &'a Rows,
     pub(crate) sessions: &'a [WorkspaceSession],
-    pub(crate) selected_sessions: &'a [bool],
-    pub(crate) session_state: &'a ListState,
     /// `(source, session id)` pairs whose body hydration failed (spawn or
     /// query error). Rows render an error marker and the loader does not retry
     /// them. Source-qualified so a local session sharing an id with a remote
@@ -378,11 +337,10 @@ pub(crate) struct WorkspaceView<'a> {
     pub(crate) body_failures: HashSet<(WorkspaceSource, String)>,
     /// Dialogue list titles only (no body materialize on paint).
     pub(crate) dialogue_titles: &'a [&'a str],
+    /// WorkSet-derived dialogue selection for this frame.
+    pub(crate) dialogue_selection: &'a [bool],
     /// Materialized dialogues for content/copy (focus ∪ multi-select bodies).
     pub(crate) dialogues: &'a [WorkspaceDialogue],
-    pub(crate) dialogue_state: &'a ListState,
-    pub(crate) selected_dialogues: &'a [bool],
-    pub(crate) range_anchor: Option<usize>,
     pub(crate) focus: WorkspaceFocus,
     pub(crate) content_scrolls: ContentScrolls,
     pub(crate) content_io_focus: ContentIoFocus,
@@ -390,25 +348,25 @@ pub(crate) struct WorkspaceView<'a> {
     pub(crate) content_at: Option<WorkAt>,
     pub(crate) show_help: bool,
     pub(crate) help_state: &'a ListState,
+    /// `!` diagnostics overlay (Option = closed), newest-last log snapshot.
+    pub(crate) diagnostics: Option<(&'a ListState, &'a [String])>,
     pub(crate) search: Option<WorkspaceSearchView<'a>>,
     pub(crate) line_filter_input_open: bool,
     pub(crate) line_filter: Option<&'a str>,
     pub(crate) line_filter_error: Option<&'a str>,
     pub(crate) fullscreen: Option<WorkspaceFocus>,
     pub(crate) content_selection: Option<ContentSelection>,
-    /// Block under the keyboard/mouse cursor per half; highlighted like a
-    /// list row when its half is focused.
+    pub(crate) publish: Option<WorkspacePublishView<'a>>,
+    pub(crate) publish_error: Option<&'a str>,
+    /// Block under the keyboard/mouse cursor plus its half (derived from
+    /// the dialogue-global id); highlighted like a list row in that half.
     pub(crate) content_block_cursor: Option<(ContentIoFocus, usize)>,
-    /// Pending `v` block-range span `(half, anchor block, cursor block)`;
+    /// Pending `v` block-range span `(anchor block, cursor block)`;
     /// its lines render with the same amber range style as the list panes.
-    pub(crate) content_range: Option<(ContentIoFocus, usize, usize)>,
-    /// Marked block masks per half (`mask[block_id]` = marked), owned by the
-    /// content pane's native selection; consumed by the dot gutter and copy.
-    pub(crate) content_marked_input: &'a [bool],
-    pub(crate) content_marked_output: &'a [bool],
-    /// Multi-select paging `(current_page, page_count)` when several
-    /// dialogues are selected; the content pane shows one at a time.
-    pub(crate) content_page: Option<(usize, usize)>,
+    pub(crate) content_range: Option<(usize, usize)>,
+    /// WorkSet-derived block mask (`mask[block_id]` = marked, dialogue-global
+    /// ids), consumed by the dot gutter and copy.
+    pub(crate) content_marked: &'a [bool],
     /// Dual IO layout + display texts, computed once per redraw by the picker
     /// and shared with the renderer (no per-frame duplicate layout).
     pub(crate) content_frame: &'a ContentIoFrame,
@@ -422,6 +380,17 @@ pub(crate) struct WorkspaceSearchView<'a> {
     pub(crate) match_count: usize,
     pub(crate) current_target: Option<String>,
     pub(crate) input_open: bool,
+}
+
+pub(crate) struct WorkspacePublishView<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) name_input: bool,
+    pub(crate) preview: bool,
+    pub(crate) selected: usize,
+    pub(crate) redaction_count: usize,
+    pub(crate) warning_count: usize,
+    pub(crate) item_count: usize,
+    pub(crate) schema_version: u32,
 }
 
 pub(crate) struct WorkspaceFooterView<'a> {

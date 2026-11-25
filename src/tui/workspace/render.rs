@@ -25,20 +25,12 @@ use crate::tui::theme;
 use crate::tui::workspace::help::{workspace_footer_hotkeys, workspace_help_entries};
 use crate::tui::workspace::layout::{selected_index, workspace_layout};
 use crate::tui::workspace::model::{
-    selected_count, selected_indices, SourceLoadMarker, WorkspaceDialogue, WorkspaceFocus,
-    WorkspaceFooterView, WorkspaceSearchView, WorkspaceSession, WorkspaceSource, WorkspaceView,
+    selected_indices, SourceLoadMarker, WorkspaceDialogue, WorkspaceFocus, WorkspaceFooterView,
+    WorkspacePublishView, WorkspaceSearchView, WorkspaceSession, WorkspaceSource, WorkspaceView,
 };
+use crate::tui::workspace::rows::{ListPane, RowCursor};
+use sivtr_core::publication::PublicationExpiry;
 use sivtr_core::record::{WorkAt, WorkRef};
-
-/// Range-selection anchor is per-pane: only the focused list honors it so a
-/// left-over anchor from another pane never styles unrelated rows.
-fn active_range(
-    focus: WorkspaceFocus,
-    pane: WorkspaceFocus,
-    range_anchor: Option<usize>,
-) -> Option<usize> {
-    (focus == pane).then_some(range_anchor).flatten()
-}
 
 pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
     let area = frame.area();
@@ -50,11 +42,11 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         .split(area);
     let layout = workspace_layout(area, view.focus, view.fullscreen);
 
-    let dialogue_idx =
-        selected_index(view.dialogue_state).min(view.dialogue_titles.len().saturating_sub(1));
+    let dialogues_pane = &view.rows.dialogues;
+    let dialogue_idx = dialogues_pane.cursor();
     let current_ref = current_content_ref(
         view.dialogues,
-        view.selected_dialogues,
+        view.dialogue_selection,
         dialogue_idx,
         view.content_at,
     );
@@ -67,34 +59,32 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         frame,
         layout.source,
         view.sources,
-        view.selected_sources,
         view.source_markers,
         view.loading_tick,
-        view.source_state,
-        active_range(view.focus, WorkspaceFocus::Source, view.range_anchor),
+        &view.rows.source,
+        view.rows.range_start(WorkspaceFocus::Source),
         view.focus == WorkspaceFocus::Source,
     );
     render_session_list(
         frame,
         layout.sessions,
         view.sessions,
-        view.selected_sources,
-        view.selected_sessions,
-        view.session_state,
+        view.rows.source.scope_count(),
+        &view.rows.sessions,
         &view.body_failures,
         view.search.as_ref(),
         search_regex.as_ref(),
-        active_range(view.focus, WorkspaceFocus::Sessions, view.range_anchor),
+        view.rows.range_start(WorkspaceFocus::Sessions),
         view.focus == WorkspaceFocus::Sessions,
     );
     render_dialogue_list(
         frame,
         layout.dialogues,
         view.dialogue_titles,
-        view.dialogue_state,
-        view.selected_sessions,
-        view.selected_dialogues,
-        active_range(view.focus, WorkspaceFocus::Dialogues, view.range_anchor),
+        view.dialogue_selection,
+        dialogues_pane,
+        view.rows.sessions.scope_count(),
+        view.rows.range_start(WorkspaceFocus::Dialogues),
         view.search.as_ref(),
         search_regex.as_ref(),
         view.focus == WorkspaceFocus::Dialogues,
@@ -109,12 +99,13 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         .as_ref()
         .filter(|search| search.scope == WorkspaceSearchScope::Content)
         .and(search_regex.as_ref());
-    let title_suffix = content_title_suffix(view.selected_dialogues, current_ref.as_ref());
-    // Multi-select paging: `Input (read) · 2/3 : 3 dialogues selected`.
-    let page_label = view
-        .content_page
-        .map(|(page, total)| format!(" · {}/{}", page + 1, total))
-        .unwrap_or_default();
+    let title_suffix = content_title_suffix(
+        view.dialogue_selection
+            .iter()
+            .filter(|selected| **selected)
+            .count(),
+        current_ref.as_ref(),
+    );
 
     for half in [ContentIoFocus::Input, ContentIoFocus::Output] {
         let area = frame_io.areas.area(half);
@@ -125,26 +116,19 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
             ContentIoFocus::Input => "Input",
             ContentIoFocus::Output => "Output",
         };
-        // The block cursor highlights the focused half like the cursor row in
-        // the session/dialogue lists; it never depends on the panel being
+        // The block cursor highlights its half like the cursor row in the
+        // session/dialogue lists; it never depends on the panel being
         // focused, so scrolling content always shows where the cursor is.
         let cursor_block = view
             .content_block_cursor
             .filter(|(focus, _)| *focus == half)
             .map(|(_, block)| block);
-        let range_blocks = view
-            .content_range
-            .filter(|(focus, _, _)| *focus == half)
-            .map(|(_, anchor, cursor)| (anchor, cursor));
         render_content_panel(
             frame,
             area,
             Panel::new(
                 WorkspaceFocus::Content.key(),
-                format!(
-                    "{half_title} ({}){page_label}{title_suffix}",
-                    view.content_mode.label()
-                ),
+                format!("{half_title} ({}){title_suffix}", view.content_mode.label()),
                 content_active && view.content_io_focus == half,
             ),
             frame_io.layout(half),
@@ -153,11 +137,8 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
                 .filter(|_| view.content_io_focus == half),
             content_search,
             cursor_block,
-            range_blocks,
-            match half {
-                ContentIoFocus::Input => view.content_marked_input,
-                ContentIoFocus::Output => view.content_marked_output,
-            },
+            view.content_range,
+            view.content_marked,
         );
     }
 
@@ -174,6 +155,8 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
             fullscreen: view.fullscreen,
             content_selection: view.content_selection,
         },
+        view.publish.as_ref(),
+        view.publish_error,
     );
 
     if let Some(selection) = view.content_selection {
@@ -192,10 +175,15 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
     } else if view.line_filter_input_open {
         let area = centered_rect(chunks[0], 60, 14);
         position_overlay_cursor(frame, area, view.line_filter.unwrap_or_default());
+    } else if let Some(publish) = view.publish.as_ref().filter(|publish| publish.name_input) {
+        let area = centered_rect(chunks[0], 50, 70);
+        position_publish_cursor(frame, area, publish.name);
     }
 
     if let Some(search) = view.search.filter(|search| search.input_open) {
         render_search_box(frame, centered_rect(chunks[0], 60, 12), search);
+    } else if let Some(publish) = view.publish.as_ref() {
+        render_publish_box(frame, centered_rect(chunks[0], 50, 70), publish);
     } else if view.line_filter_input_open || view.line_filter_error.is_some() {
         render_line_filter_box(
             frame,
@@ -206,6 +194,8 @@ pub(crate) fn render_workspace(frame: &mut Frame, view: WorkspaceView<'_>) {
         );
     } else if view.show_help {
         render_help_panel(frame, chunks[0], view.help_state);
+    } else if let Some((state, log)) = view.diagnostics {
+        render_diagnostics_panel(frame, chunks[0], state, log);
     }
 }
 
@@ -228,7 +218,28 @@ fn position_overlay_cursor(frame: &mut Frame, area: Rect, text: &str) {
     frame.set_cursor_position(Position::new(inner.x.saturating_add(column), row));
 }
 
-fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>) {
+fn position_publish_cursor(frame: &mut Frame, area: Rect, name: &str) {
+    let inner = area.inner(Margin::new(1, 1));
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let prefix = "> 名称（可选）： ";
+    let row = inner
+        .y
+        .saturating_add(PublicationExpiry::PICKER_CHOICES.len() as u16 + 1)
+        .min(inner.y.saturating_add(inner.height.saturating_sub(1)));
+    let column = (UnicodeWidthStr::width(prefix) + UnicodeWidthStr::width(name))
+        .min(inner.width as usize) as u16;
+    frame.set_cursor_position(Position::new(inner.x.saturating_add(column), row));
+}
+
+fn render_footer(
+    frame: &mut Frame,
+    area: Rect,
+    footer: WorkspaceFooterView<'_>,
+    publish: Option<&WorkspacePublishView<'_>>,
+    publish_error: Option<&str>,
+) {
     let WorkspaceFooterView {
         focus,
         show_help,
@@ -240,7 +251,15 @@ fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>)
         content_selection,
     } = footer;
 
-    let mut spans = if search.is_some() {
+    let mut spans = if let Some(publish) = publish {
+        footer_control_spans(if publish.name_input {
+            "输入名称  Tab 有效期  Enter 继续  Esc 取消"
+        } else if publish.preview {
+            "j/k 移动  Tab 名称  Enter 预览  Esc 取消"
+        } else {
+            "j/k 移动  Tab 名称  Enter 创建  Esc 取消"
+        })
+    } else if search.is_some() {
         let mut spans = if search.map(|search| search.input_open).unwrap_or(false) {
             footer_control_spans("type search  > session  # dialogue  Enter accept  Esc clear")
         } else {
@@ -270,7 +289,9 @@ fn render_footer(frame: &mut Frame, area: Rect, footer: WorkspaceFooterView<'_>)
     if fullscreen.is_some() {
         spans.extend(footer_status_spans("fullscreen"));
     }
-    if let Some(error) = line_filter_error {
+    if let Some(error) = publish_error {
+        spans.extend(footer_status_spans(error));
+    } else if let Some(error) = line_filter_error {
         spans.extend(footer_status_spans(&format!("lines invalid: {error}")));
     } else if line_filter_input_open {
         spans.extend(footer_status_spans(&format!(
@@ -499,6 +520,51 @@ fn render_line_filter_box(
     frame.render_widget(paragraph, area);
 }
 
+fn render_publish_box(frame: &mut Frame, area: Rect, publish: &WorkspacePublishView) {
+    frame.render_widget(Clear, area);
+    let paragraph = Paragraph::new(publish_box_body(publish)).block(panel_block(&Panel::new(
+        "",
+        format!(
+            "发布（v{} · {} 项）",
+            publish.schema_version, publish.item_count
+        ),
+        true,
+    )));
+    frame.render_widget(paragraph, area);
+}
+
+fn publish_box_body(publish: &WorkspacePublishView) -> String {
+    let mut lines = PublicationExpiry::PICKER_CHOICES
+        .iter()
+        .enumerate()
+        .map(|(index, expiry)| {
+            let marker = if index == publish.selected { ">" } else { " " };
+            format!("{marker} {}", expiry.as_str())
+        })
+        .collect::<Vec<_>>();
+    lines.push(String::new());
+    let name_marker = if publish.name_input { ">" } else { " " };
+    let name = if publish.name.is_empty() && !publish.name_input {
+        "<none>"
+    } else {
+        publish.name
+    };
+    lines.push(format!("{name_marker} 名称（可选）： {name}"));
+    lines.push(String::new());
+    lines.push(format!(
+        "已脱敏 {} 项 · {} 个警告",
+        publish.redaction_count, publish.warning_count
+    ));
+    lines.push(if publish.preview {
+        "Enter 预览快照，Esc 取消。".to_string()
+    } else if publish.warning_count > 0 {
+        "Enter 继续，随后确认隐私风险。".to_string()
+    } else {
+        "Enter 创建链接，Esc 取消。".to_string()
+    });
+    lines.join("\n")
+}
+
 pub(crate) fn line_filter_prompt_text(
     line_filter: Option<&str>,
     line_filter_error: Option<&str>,
@@ -548,45 +614,68 @@ fn render_help_panel(frame: &mut Frame, area: Rect, state: &ListState) {
     );
 }
 
+/// Full diagnostics history (`!`), newest last. Snapshot comes from the
+/// picker at paint, so warnings arriving while open appear live.
+fn render_diagnostics_panel(frame: &mut Frame, area: Rect, state: &ListState, log: &[String]) {
+    frame.render_widget(Clear, area);
+    let items = if log.is_empty() {
+        vec![ListItem::new(Line::styled(
+            "no warnings",
+            Style::default().fg(theme::muted()),
+        ))]
+    } else {
+        log.iter()
+            .map(|entry| {
+                ListItem::new(Line::styled(
+                    entry.clone(),
+                    Style::default().fg(theme::help_text()),
+                ))
+            })
+            .collect()
+    };
+    render_list_panel(
+        frame,
+        area,
+        Panel::new("!", "Diagnostics", true),
+        items,
+        state,
+    );
+    render_list_scrollbar(frame, area, selected_index(state), log.len(), true);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_source_list(
     frame: &mut Frame,
     area: Rect,
     sources: &[WorkspaceSource],
-    selected_sources: &[bool],
     source_markers: &[SourceLoadMarker],
     loading_tick: u8,
-    state: &ListState,
+    pane: &ListPane,
     range_anchor: Option<usize>,
     active: bool,
 ) {
-    let cursor_idx = selected_index(state).min(sources.len().saturating_sub(1));
-    let panel = Panel::new(WorkspaceFocus::Source.key(), "Source", active);
+    let cursor_idx = pane.cursor();
     // Compact strip when not focused; vertical list (scrollable) when focused.
     if !active || area.height <= 3 {
         render_source_strip(
             frame,
             area,
-            panel,
             sources,
-            selected_sources,
             source_markers,
             loading_tick,
-            state,
+            pane,
             active,
         );
         return;
     }
+    let panel = source_panel(active);
 
     let mut items: Vec<ListItem> = sources
         .iter()
         .enumerate()
         .map(|(idx, source)| {
-            let selected = selected_sources.get(idx).copied().unwrap_or(false);
-            let load = source_markers
-                .get(idx)
-                .copied()
-                .unwrap_or(SourceLoadMarker::Idle);
+            let selected = pane.scope_mask()[idx];
+            let load = source_markers[idx];
             let marker = load.status_glyph(selected, loading_tick);
             let style = row_highlight(idx, cursor_idx, range_anchor)
                 .unwrap_or_else(|| Style::default().fg(source.color()));
@@ -602,34 +691,33 @@ fn render_source_list(
             Style::default().fg(theme::dim()),
         )));
     }
-    render_list_panel(frame, area, panel, items, state);
+    render_list_panel(frame, area, panel, items, pane.state());
     render_list_scrollbar(frame, area, cursor_idx, sources.len(), active);
 }
 
-#[allow(clippy::too_many_arguments)]
+fn source_panel(active: bool) -> Panel {
+    Panel::new(WorkspaceFocus::Source.key(), "Source", active)
+}
+
 fn render_source_strip(
     frame: &mut Frame,
     area: Rect,
-    panel: Panel,
     sources: &[WorkspaceSource],
-    selected_sources: &[bool],
     source_markers: &[SourceLoadMarker],
     loading_tick: u8,
-    state: &ListState,
+    pane: &ListPane,
     active: bool,
 ) {
-    let current = selected_index(state).min(sources.len().saturating_sub(1));
+    let current = pane.cursor();
+    let panel = source_panel(active);
     let mut spans = Vec::new();
     for (idx, source) in sources.iter().enumerate() {
         if idx > 0 {
             spans.push(Span::styled("  ", Style::default().fg(theme::dim())));
         }
-        let selected = selected_sources.get(idx).copied().unwrap_or(false);
+        let selected = pane.scope_mask()[idx];
         let focused = idx == current && active;
-        let load = source_markers
-            .get(idx)
-            .copied()
-            .unwrap_or(SourceLoadMarker::Idle);
+        let load = source_markers[idx];
         let marker = load.status_glyph(selected, loading_tick);
         let marker_style = if focused {
             active_item_style()
@@ -668,21 +756,20 @@ fn render_session_list(
     frame: &mut Frame,
     area: Rect,
     choices: &[WorkspaceSession],
-    selected_sources: &[bool],
-    selected_sessions: &[bool],
-    state: &ListState,
+    marked_sources: usize,
+    pane: &ListPane,
     body_failures: &HashSet<(WorkspaceSource, String)>,
     search: Option<&WorkspaceSearchView<'_>>,
     search_regex: Option<&Regex>,
     range_anchor: Option<usize>,
     active: bool,
 ) {
-    let cursor_idx = selected_index(state);
+    let cursor_idx = pane.cursor();
     let mut items: Vec<ListItem> = choices
         .iter()
         .enumerate()
         .map(|(idx, choice)| {
-            let selected = selected_sessions.get(idx).copied().unwrap_or(false);
+            let selected = pane.scope_mask()[idx];
             let base_style = row_highlight(idx, cursor_idx, range_anchor).unwrap_or_default();
             let highlight = search
                 .filter(|search| search.scope == WorkspaceSearchScope::Session)
@@ -707,11 +794,11 @@ fn render_session_list(
         area,
         Panel::new(
             WorkspaceFocus::Sessions.key(),
-            selected_parent_title("Sessions", selected_sources, "source", "sources"),
+            selected_parent_title("Sessions", marked_sources, "source", "sources"),
             active,
         ),
         items,
-        state,
+        pane.state(),
     );
     render_list_scrollbar(frame, area, cursor_idx, choices.len(), active);
 }
@@ -721,20 +808,20 @@ fn render_dialogue_list(
     frame: &mut Frame,
     area: Rect,
     titles: &[&str],
-    state: &ListState,
-    selected_sessions: &[bool],
     selected_dialogues: &[bool],
+    pane: &RowCursor,
+    marked_sessions: usize,
     range_anchor: Option<usize>,
     search: Option<&WorkspaceSearchView<'_>>,
     search_regex: Option<&Regex>,
     active: bool,
 ) {
-    let highlighted_idx = selected_index(state);
+    let highlighted_idx = pane.cursor();
     let mut items: Vec<ListItem> = titles
         .iter()
         .enumerate()
         .map(|(idx, title)| {
-            let selected = selected_dialogues.get(idx).copied().unwrap_or(false);
+            let selected = selected_dialogues[idx];
             // Selection is shown by the dot alone (● = selected, ○ = not),
             // always visible so it survives pane switches.
             let marker = format!("{} ", selection_dot(selected));
@@ -765,11 +852,11 @@ fn render_dialogue_list(
         area,
         Panel::new(
             WorkspaceFocus::Dialogues.key(),
-            selected_parent_title("Dialogues", selected_sessions, "session", "sessions"),
+            selected_parent_title("Dialogues", marked_sessions, "session", "sessions"),
             active,
         ),
         items,
-        state,
+        pane.state(),
     );
     render_list_scrollbar(frame, area, highlighted_idx, titles.len(), active);
 }
@@ -827,13 +914,7 @@ fn render_content_panel(
     );
 }
 
-fn selected_parent_title(
-    title: &str,
-    selected_parent_items: &[bool],
-    singular: &str,
-    plural: &str,
-) -> String {
-    let count = selected_count(selected_parent_items);
+fn selected_parent_title(title: &str, count: usize, singular: &str, plural: &str) -> String {
     if count == 0 {
         title.to_string()
     } else if count == 1 {
@@ -843,9 +924,8 @@ fn selected_parent_title(
     }
 }
 
-fn content_title_suffix(selected_dialogues: &[bool], current_ref: Option<&WorkRef>) -> String {
-    let count = selected_count(selected_dialogues);
-    let select = match count {
+fn content_title_suffix(marked: usize, current_ref: Option<&WorkRef>) -> String {
+    let select = match marked {
         0 => String::new(),
         1 => ": 1 dialogue selected".to_string(),
         n => format!(": {n} dialogues selected"),
@@ -861,19 +941,19 @@ fn content_title_suffix(selected_dialogues: &[bool], current_ref: Option<&WorkRe
 #[cfg(test)]
 pub(crate) fn content_title(
     mode: ContentViewMode,
-    selected_dialogues: &[bool],
+    marked: usize,
     current_ref: Option<&WorkRef>,
 ) -> String {
     format!(
         "Content ({}){}",
         mode.label(),
-        content_title_suffix(selected_dialogues, current_ref)
+        content_title_suffix(marked, current_ref)
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::position_overlay_cursor;
+    use super::{position_overlay_cursor, position_publish_cursor};
     use ratatui::backend::{Backend, TestBackend};
     use ratatui::layout::Rect;
     use ratatui::prelude::Terminal;
@@ -882,13 +962,16 @@ mod tests {
     /// and return the caret position the frame recorded.
     fn cursor_for(text: &str) -> (u16, u16) {
         let backend = TestBackend::new(20, 8);
-        let mut terminal = Terminal::new(backend).unwrap();
+        let mut terminal = Terminal::new(backend).expect("test terminal should initialize");
         terminal
             .draw(|frame| {
                 position_overlay_cursor(frame, Rect::new(2, 1, 14, 4), text);
             })
-            .unwrap();
-        let pos = terminal.backend_mut().get_cursor_position().unwrap();
+            .expect("publish cursor should render");
+        let pos = terminal
+            .backend_mut()
+            .get_cursor_position()
+            .expect("test backend should expose the cursor position");
         (pos.x, pos.y)
     }
 
@@ -918,11 +1001,24 @@ mod tests {
     }
 
     #[test]
+    fn publish_cursor_clamps_to_a_small_overlay() {
+        let backend = TestBackend::new(20, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                position_publish_cursor(frame, Rect::new(2, 1, 14, 4), "");
+            })
+            .unwrap();
+        let pos = terminal.backend_mut().get_cursor_position().unwrap();
+        assert_eq!((pos.x, pos.y), (15, 3));
+    }
+
+    #[test]
     fn session_row_body_uses_default_foreground() {
         use super::session_row_line;
         use crate::tui::workspace::model::{WorkspaceSession, WorkspaceSource};
         use ratatui::prelude::Style;
-        use sivtr_core::ai::AgentProvider;
+        use sivtr_core::agents::AgentProvider;
         use std::time::SystemTime;
 
         let session = WorkspaceSession {

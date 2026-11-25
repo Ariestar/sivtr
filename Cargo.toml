@@ -3,7 +3,7 @@ members = ["crates/sivtr-core", "."]
 resolver = "2"
 
 [workspace.package]
-version = "0.6.0"
+version = "0.8.3"
 edition = "2021"
 license = "Apache-2.0"
 rust-version = "1.95"
@@ -78,22 +78,23 @@ pkg-url = "{ repo }/releases/download/v{ version }/sivtr-v{ version }-macos.tar.
 bin-dir = "sivtr-v{ version }-macos/{ bin }{ binary-ext }"
 
 [dependencies]
-sivtr-core = { version = "0.6.0", path = "crates/sivtr-core" }
+sivtr-core = { version = "0.8.3", path = "crates/sivtr-core" }
 chrono = { version = "0.4", features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
 ratatui = "0.30"
 crossterm = "0.29"
 dark-light = "3.0.0"
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 getrandom = "0.4"
 fs2 = "0.4"
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.42", features = ["bundled"] }
 sha2 = "0.11"
+aes-gcm = "0.11"
 iroh = "1.0"
 base64 = "0.23"
 anyhow = "1"
 arboard = "3"
-dirs = "6"
+dirs = "7"
 regex = "1"
 similar = "3"
 serde = { version = "1", features = ["derive"] }
@@ -106,13 +107,14 @@ rmcp = { version = "3.1", default-features = false, features = ["server", "macro
 schemars = "1"
 tempfile = "3"
 ureq = { version = "3.3.0", default-features = false, features = ["rustls"] }
-zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+zip = { version = "9.0.0", default-features = false, features = ["deflate"] }
 flate2 = "1.1.9"
 tar = { version = "0.4.46", default-features = false }
 notify = "8.2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+portable-pty = "0.9"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["consoleapi", "fileapi", "handleapi", "namedpipeapi", "processenv", "processthreadsapi", "synchapi", "winbase", "wincon", "winerror", "winnt", "winuser", "windef", "minwindef"] }

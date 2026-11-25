@@ -2,23 +2,24 @@
 //!
 //! The active palette lives in a thread-local so existing accessor call
 //! sites (`accent()`, `focus_row()`, …) stay unchanged while the palette is
-//! chosen at TUI startup and swapped at runtime when the system appearance
+//! chosen at TUI startup and swapped at runtime when the terminal background
 //! changes.
 //!
-//! Light/dark follows the desktop session's appearance (macOS, Linux XDG
-//! portal, Windows registry) via `dark-light`; RGB vs ANSI rendering is
-//! decided by the terminal's truecolor advertisement. Agent label colors
-//! live in a single table, [`provider_colors`]: one row per agent holding
-//! all four palette variants.
+//! Light/dark follows the terminal the TUI paints on (`COLORFGBG`, then the
+//! Windows console color table, then desktop appearance on macOS/Linux). RGB
+//! vs ANSI rendering is decided by the terminal's truecolor advertisement.
+//! Agent label colors live in a single table, [`provider_colors`]: one row
+//! per agent holding all four palette variants.
 
+#[cfg(not(windows))]
 use dark_light::Mode;
 use ratatui::prelude::{Color, Modifier, Style};
-use sivtr_core::ai::AgentProvider;
+use sivtr_core::agents::AgentProvider;
 use sivtr_core::config::ThemeMode;
 use std::cell::Cell;
 use std::time::Duration;
 
-/// How often the event loop re-checks the system appearance in auto mode.
+/// How often the event loop re-checks the terminal background in auto mode.
 pub(crate) const AUTO_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Which of the four color schemes is active. Chrome colors and agent label
@@ -54,10 +55,6 @@ pub(crate) struct Theme {
     pub(crate) link: Color,
     pub(crate) quote: Color,
     pub(crate) success: Color,
-    pub(crate) user: Color,
-    pub(crate) output: Color,
-    pub(crate) structure: Color,
-    pub(crate) structure_result: Color,
 }
 
 /// The four agent-label colors for one provider, one per palette. Chosen by
@@ -113,7 +110,7 @@ pub(crate) const fn provider_colors(provider: AgentProvider) -> ProviderColors {
         },
         AgentProvider::Hermes => ProviderColors {
             dark: Color::Rgb(250, 204, 21), // yellow-400
-            light: Color::Rgb(202, 138, 4), // yellow-600
+            light: Color::Rgb(161, 98, 7),  // yellow-700
             ansi: Color::LightYellow,
             ansi_light: Color::DarkGray,
         },
@@ -159,6 +156,18 @@ pub(crate) const fn provider_colors(provider: AgentProvider) -> ProviderColors {
             ansi: Color::LightMagenta,
             ansi_light: Color::Magenta,
         },
+        AgentProvider::Zcode => ProviderColors {
+            dark: Color::Rgb(163, 230, 53), // lime-400
+            light: Color::Rgb(63, 98, 18),  // lime-800
+            ansi: Color::LightGreen,
+            ansi_light: Color::DarkGray,
+        },
+        _ => ProviderColors {
+            dark: Color::Rgb(16 + provider as u8, 130, 220),
+            light: Color::Rgb(16 + provider as u8, 80, 150),
+            ansi: Color::White,
+            ansi_light: Color::DarkGray,
+        },
     }
 }
 
@@ -167,28 +176,24 @@ impl Theme {
     pub(crate) const fn dark() -> Self {
         Self {
             mode: PaletteMode::Dark,
-            accent: Color::Rgb(56, 189, 248),           // sky-400
-            muted: Color::Rgb(100, 116, 139),           // slate-500
-            dim: Color::Rgb(71, 85, 105),               // slate-600
-            local_origin: Color::Rgb(52, 211, 153),     // emerald-400
-            remote_origin: Color::Rgb(244, 114, 182),   // pink-400
-            focus_bg: Color::Rgb(15, 23, 42),           // slate-900 (veil tint)
-            selected_bg: Color::Rgb(51, 65, 85),        // slate-700
-            selected_fg: Color::Rgb(226, 232, 240),     // slate-200
-            range_fg: Color::Rgb(251, 191, 36),         // amber-400
-            title_active: Color::Rgb(224, 242, 254),    // sky-100
-            muted_text: Color::Rgb(203, 213, 225),      // slate-300
-            key_hint: Color::Rgb(125, 211, 252),        // sky-300
-            footer: Color::Rgb(148, 163, 184),          // slate-400
-            failure: Color::Rgb(248, 113, 113),         // red-400
-            code: Color::Rgb(148, 163, 184),            // slate-400
-            link: Color::Rgb(125, 211, 252),            // sky-300
-            quote: Color::Rgb(52, 211, 153),            // emerald-400
-            success: Color::Rgb(74, 222, 128),          // green-400
-            user: Color::Rgb(34, 211, 238),             // cyan-400
-            output: Color::Rgb(96, 165, 250),           // blue-400
-            structure: Color::Rgb(251, 191, 36),        // amber-400
-            structure_result: Color::Rgb(56, 189, 248), // sky-400
+            accent: Color::Rgb(56, 189, 248),         // sky-400
+            muted: Color::Rgb(100, 116, 139),         // slate-500
+            dim: Color::Rgb(71, 85, 105),             // slate-600
+            local_origin: Color::Rgb(52, 211, 153),   // emerald-400
+            remote_origin: Color::Rgb(244, 114, 182), // pink-400
+            focus_bg: Color::Rgb(15, 23, 42),         // slate-900 (veil tint)
+            selected_bg: Color::Rgb(51, 65, 85),      // slate-700
+            selected_fg: Color::Rgb(226, 232, 240),   // slate-200
+            range_fg: Color::Rgb(251, 191, 36),       // amber-400
+            title_active: Color::Rgb(224, 242, 254),  // sky-100
+            muted_text: Color::Rgb(203, 213, 225),    // slate-300
+            key_hint: Color::Rgb(125, 211, 252),      // sky-300
+            footer: Color::Rgb(148, 163, 184),        // slate-400
+            failure: Color::Rgb(248, 113, 113),       // red-400
+            code: Color::Rgb(148, 163, 184),          // slate-400
+            link: Color::Rgb(125, 211, 252),          // sky-300
+            quote: Color::Rgb(52, 211, 153),          // emerald-400
+            success: Color::Rgb(74, 222, 128),        // green-400
         }
     }
 
@@ -196,28 +201,24 @@ impl Theme {
     pub(crate) const fn light() -> Self {
         Self {
             mode: PaletteMode::Light,
-            accent: Color::Rgb(2, 132, 199),           // sky-600
-            muted: Color::Rgb(100, 116, 139),          // slate-500
-            dim: Color::Rgb(148, 163, 184),            // slate-400
-            local_origin: Color::Rgb(5, 150, 105),     // emerald-600
-            remote_origin: Color::Rgb(219, 39, 119),   // pink-600
-            focus_bg: Color::Rgb(241, 245, 249),       // slate-100 (faint gray tint)
-            selected_bg: Color::Rgb(226, 232, 240),    // slate-200
-            selected_fg: Color::Rgb(51, 65, 85),       // slate-700
-            range_fg: Color::Rgb(217, 119, 6),         // amber-600
-            title_active: Color::Rgb(15, 23, 42),      // slate-900
-            muted_text: Color::Rgb(100, 116, 139),     // slate-500
-            key_hint: Color::Rgb(3, 105, 161),         // sky-700
-            footer: Color::Rgb(71, 85, 105),           // slate-600
-            failure: Color::Rgb(220, 38, 38),          // red-600
-            code: Color::Rgb(71, 85, 105),             // slate-600
-            link: Color::Rgb(3, 105, 161),             // sky-700
-            quote: Color::Rgb(5, 150, 105),            // emerald-600
-            success: Color::Rgb(22, 163, 74),          // green-600
-            user: Color::Rgb(8, 145, 178),             // cyan-600
-            output: Color::Rgb(37, 99, 235),           // blue-600
-            structure: Color::Rgb(217, 119, 6),        // amber-600
-            structure_result: Color::Rgb(2, 132, 199), // sky-600
+            accent: Color::Rgb(2, 132, 199),         // sky-600
+            muted: Color::Rgb(100, 116, 139),        // slate-500
+            dim: Color::Rgb(148, 163, 184),          // slate-400
+            local_origin: Color::Rgb(5, 150, 105),   // emerald-600
+            remote_origin: Color::Rgb(219, 39, 119), // pink-600
+            focus_bg: Color::Rgb(241, 245, 249),     // slate-100 (faint gray tint)
+            selected_bg: Color::Rgb(226, 232, 240),  // slate-200
+            selected_fg: Color::Rgb(51, 65, 85),     // slate-700
+            range_fg: Color::Rgb(217, 119, 6),       // amber-600
+            title_active: Color::Rgb(15, 23, 42),    // slate-900
+            muted_text: Color::Rgb(100, 116, 139),   // slate-500
+            key_hint: Color::Rgb(3, 105, 161),       // sky-700
+            footer: Color::Rgb(71, 85, 105),         // slate-600
+            failure: Color::Rgb(220, 38, 38),        // red-600
+            code: Color::Rgb(71, 85, 105),           // slate-600
+            link: Color::Rgb(3, 105, 161),           // sky-700
+            quote: Color::Rgb(5, 150, 105),          // emerald-600
+            success: Color::Rgb(22, 163, 74),        // green-600
         }
     }
 
@@ -245,10 +246,6 @@ impl Theme {
             link: Color::Blue,
             quote: Color::Green,
             success: Color::Green,
-            user: Color::Cyan,
-            output: Color::Blue,
-            structure: Color::Yellow,
-            structure_result: Color::Blue,
         }
     }
 
@@ -277,10 +274,6 @@ impl Theme {
             link: Color::Blue,
             quote: Color::DarkGray,
             success: Color::Blue,
-            user: Color::Magenta,
-            output: Color::Blue,
-            structure: Color::Red,
-            structure_result: Color::Blue,
         }
     }
 }
@@ -291,14 +284,14 @@ thread_local! {
 }
 
 /// Pick the palette for this process. The preference decides light vs dark —
-/// auto follows the system appearance via desktop APIs — and the terminal's
-/// truecolor support decides RGB vs ANSI, so a forced light/dark mode still
-/// falls back to the ANSI palette when `COLORTERM` is absent, instead of
-/// emitting RGB sequences a non-truecolor terminal cannot render.
+/// auto follows the terminal background — and the terminal's truecolor
+/// support decides RGB vs ANSI, so a forced light/dark mode still falls back
+/// to the ANSI palette when `COLORTERM` is absent, instead of emitting RGB
+/// sequences a non-truecolor terminal cannot render.
 pub(crate) fn apply(preference: ThemeMode) {
     PREFERENCE.set(preference);
     let light = match preference {
-        ThemeMode::Auto => light_from_system(),
+        ThemeMode::Auto => light_from_environment(),
         ThemeMode::Dark => false,
         ThemeMode::Light => true,
     };
@@ -330,11 +323,177 @@ fn supports_truecolor() -> bool {
         .is_ok_and(|term| term.ends_with("-direct"))
 }
 
-/// Light when the desktop session reports a light appearance. Cross-platform
-/// (macOS / Linux XDG portal / Windows registry) via `dark-light`; anything
-/// else — dark, unspecified, or a detection error — stays dark.
-fn light_from_system() -> bool {
-    matches!(dark_light::detect(), Ok(Mode::Light))
+/// Light when the terminal the TUI paints on is light.
+///
+/// Windows Terminal / PowerShell is commonly dark while Windows itself stays
+/// in light mode. Following `AppsUseLightTheme` then paints the light
+/// palette's near-white `focus_bg` over the selected column. Prefer signals
+/// from the terminal, and skip the Windows registry fallback entirely.
+fn light_from_environment() -> bool {
+    if let Some(light) = colorfgbg_is_light() {
+        return light;
+    }
+    if let Some(light) = windows_console_is_light() {
+        return light;
+    }
+    light_from_desktop_appearance()
+}
+
+fn colorfgbg_is_light() -> Option<bool> {
+    parse_colorfgbg(&std::env::var("COLORFGBG").ok()?)
+}
+
+/// Whether a `COLORFGBG` value (`fg;bg`) denotes a light background.
+///
+/// `7` / `15` are the 16-color whites, and `10` / `11` / `14` are light bright
+/// colors (bright green, yellow, cyan). 256-color backgrounds use relative
+/// luminance. Unset / `default` / unparsable values are unknown so a later
+/// detector can run.
+fn parse_colorfgbg(value: &str) -> Option<bool> {
+    let background = value.rsplit(';').next()?;
+    if background.eq_ignore_ascii_case("default") {
+        return None;
+    }
+    let index = background.parse::<u16>().ok()?;
+    Some(ansi_background_is_light(index))
+}
+
+fn ansi_background_is_light(index: u16) -> bool {
+    match index {
+        7 | 10 | 11 | 14 | 15 => true,
+        0..=15 => false,
+        16..=231 => {
+            let cube = (index - 16) as u8;
+            const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+            rgb_is_light(
+                LEVELS[(cube / 36) as usize],
+                LEVELS[((cube % 36) / 6) as usize],
+                LEVELS[(cube % 6) as usize],
+            )
+        }
+        232..=255 => {
+            let gray = 8 + (index as u8 - 232) * 10;
+            rgb_is_light(gray, gray, gray)
+        }
+        _ => false,
+    }
+}
+
+fn rgb_is_light(r: u8, g: u8, b: u8) -> bool {
+    rgb_relative_luminance(r, g, b) > 0.5
+}
+
+fn rgb_relative_luminance(r: u8, g: u8, b: u8) -> f64 {
+    let linear = |channel: u8| {
+        let value = f64::from(channel) / 255.0;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+}
+
+#[cfg(windows)]
+fn windows_console_is_light() -> Option<bool> {
+    windows_console_background().map(|(r, g, b)| rgb_is_light(r, g, b))
+}
+
+#[cfg(not(windows))]
+fn windows_console_is_light() -> Option<bool> {
+    None
+}
+
+/// Read the default background from the active console, not redirected stdout.
+///
+/// PowerShell and ConPTY often make a child STDOUT a pipe; `CONOUT$` is the
+/// screen the user is looking at. Prefer the 16-color table RGB so a light
+/// Windows Terminal scheme that still uses index 0 is classified correctly.
+#[cfg(windows)]
+fn windows_console_background() -> Option<(u8, u8, u8)> {
+    use std::ffi::OsStr;
+    use std::iter;
+    use std::mem::{size_of, zeroed};
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr;
+    use winapi::um::fileapi::{CreateFileW, OPEN_EXISTING};
+    use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
+    use winapi::um::processenv::GetStdHandle;
+    use winapi::um::winbase::STD_OUTPUT_HANDLE;
+    use winapi::um::wincon::{
+        GetConsoleScreenBufferInfo, GetConsoleScreenBufferInfoEx, CONSOLE_SCREEN_BUFFER_INFO,
+        CONSOLE_SCREEN_BUFFER_INFOEX,
+    };
+    use winapi::um::winnt::{FILE_SHARE_READ, FILE_SHARE_WRITE, GENERIC_READ, GENERIC_WRITE};
+
+    unsafe {
+        let name: Vec<u16> = OsStr::new("CONOUT$")
+            .encode_wide()
+            .chain(iter::once(0))
+            .collect();
+        let conout = CreateFileW(
+            name.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            ptr::null_mut(),
+            OPEN_EXISTING,
+            0,
+            ptr::null_mut(),
+        );
+        let (handle, should_close) = if !conout.is_null() && conout != INVALID_HANDLE_VALUE {
+            (conout, true)
+        } else {
+            (GetStdHandle(STD_OUTPUT_HANDLE), false)
+        };
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+            return None;
+        }
+
+        let mut info_ex: CONSOLE_SCREEN_BUFFER_INFOEX = zeroed();
+        info_ex.cbSize = size_of::<CONSOLE_SCREEN_BUFFER_INFOEX>() as u32;
+        let rgb = if GetConsoleScreenBufferInfoEx(handle, &mut info_ex) != 0 {
+            let index = ((info_ex.wAttributes >> 4) & 0x0F) as usize;
+            Some(colorref_rgb(info_ex.ColorTable[index]))
+        } else {
+            let mut info: CONSOLE_SCREEN_BUFFER_INFO = zeroed();
+            (GetConsoleScreenBufferInfo(handle, &mut info) != 0).then(|| {
+                let index = (info.wAttributes >> 4) & 0x0F;
+                if matches!(index, 7 | 15) {
+                    (255, 255, 255)
+                } else {
+                    (0, 0, 0)
+                }
+            })
+        };
+
+        if should_close {
+            CloseHandle(handle);
+        }
+        rgb
+    }
+}
+
+#[cfg(any(windows, test))]
+fn colorref_rgb(color: u32) -> (u8, u8, u8) {
+    (
+        (color & 0xFF) as u8,
+        ((color >> 8) & 0xFF) as u8,
+        ((color >> 16) & 0xFF) as u8,
+    )
+}
+
+/// Desktop appearance via `dark-light`. Skipped on Windows: the registry
+/// light/dark bit is not the PowerShell / Windows Terminal background.
+fn light_from_desktop_appearance() -> bool {
+    #[cfg(windows)]
+    {
+        false
+    }
+    #[cfg(not(windows))]
+    {
+        matches!(dark_light::detect(), Ok(Mode::Light))
+    }
 }
 
 /// Poll interval for appearance changes while the theme is in auto mode.
@@ -344,7 +503,7 @@ pub(crate) fn auto_interval() -> Option<Duration> {
     (PREFERENCE.get() == ThemeMode::Auto).then_some(AUTO_POLL_INTERVAL)
 }
 
-/// Re-check the system appearance and swap the palette when it changed.
+/// Re-check the terminal background and swap the palette when it changed.
 /// Returns true when the next frame must be redrawn. No-op outside auto mode.
 pub(crate) fn refresh_if_changed() -> bool {
     if PREFERENCE.get() != ThemeMode::Auto {
@@ -481,27 +640,6 @@ pub(crate) fn success() -> Color {
     ACTIVE.get().success
 }
 
-/// User role headings.
-pub(crate) fn user() -> Color {
-    ACTIVE.get().user
-}
-
-/// Output role headings.
-pub(crate) fn output() -> Color {
-    ACTIVE.get().output
-}
-
-/// Color for the `## Command` dialogue heading and structural roles. Result
-/// channels (`… result:>`) lean blue, everything else yellow.
-pub(crate) fn structure_color(is_result: bool) -> Color {
-    let theme = ACTIVE.get();
-    if is_result {
-        theme.structure_result
-    } else {
-        theme.structure
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -518,11 +656,17 @@ mod tests {
 
     #[test]
     fn provider_colors_cover_every_agent_with_distinct_schemes() {
+        let mut seen_dark = std::collections::HashSet::new();
         for spec in AgentProvider::all() {
             let colors = provider_colors(spec.provider);
             assert_ne!(
                 colors.dark, colors.light,
                 "{} must have a light variant distinct from its dark one",
+                spec.name
+            );
+            assert!(
+                seen_dark.insert(colors.dark),
+                "{} collides with another provider's dark color",
                 spec.name
             );
         }
@@ -582,15 +726,43 @@ mod tests {
             ("link", light.link),
             ("quote", light.quote),
             ("success", light.success),
-            ("user", light.user),
-            ("output", light.output),
-            ("structure", light.structure),
-            ("structure result", light.structure_result),
         ] {
             assert_dark_foreground(name, color);
         }
         for spec in AgentProvider::all() {
             assert_dark_foreground(spec.name, provider_colors(spec.provider).ansi_light);
+        }
+    }
+
+    #[test]
+    fn light_theme_colors_keep_contrast_on_white() {
+        // Light-palette label colors render on a white terminal background;
+        // each must clear WCAG AA for large text / UI components (3:1).
+        // Expose the exact floor here so a new provider cannot silently ship
+        // an unreadable light color.
+        let contrast = |color: Color| {
+            let Color::Rgb(r, g, b) = color else {
+                return f64::INFINITY;
+            };
+            let linear = |channel: u8| {
+                let value = channel as f64 / 255.0;
+                if value <= 0.04045 {
+                    value / 12.92
+                } else {
+                    ((value + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            let luminance = 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+            (1.0 + 0.05) / (luminance + 0.05)
+        };
+        for spec in AgentProvider::all() {
+            let light = provider_colors(spec.provider).light;
+            assert!(
+                contrast(light) >= 3.0,
+                "{} light color {light:?} has contrast {:.1}:1 on white; darken it",
+                spec.name,
+                contrast(light)
+            );
         }
     }
 
@@ -611,5 +783,70 @@ mod tests {
         assert!(!refresh_if_changed());
         apply(ThemeMode::Light);
         assert!(!refresh_if_changed());
+    }
+
+    #[test]
+    fn colorfgbg_treats_paper_whites_as_light() {
+        assert_eq!(parse_colorfgbg("0;15"), Some(true), "bright white");
+        assert_eq!(parse_colorfgbg("0;7"), Some(true), "white");
+        assert_eq!(parse_colorfgbg("0;10"), Some(true), "bright green");
+        assert_eq!(parse_colorfgbg("0;11"), Some(true), "bright yellow");
+        assert_eq!(parse_colorfgbg("0;14"), Some(true), "bright cyan");
+        assert_eq!(parse_colorfgbg("15;0"), Some(false), "black");
+        assert_eq!(
+            parse_colorfgbg("15;8"),
+            Some(false),
+            "bright black is a dark background"
+        );
+        assert_eq!(
+            parse_colorfgbg("15;9"),
+            Some(false),
+            "bright red is a dark background"
+        );
+        assert_eq!(
+            parse_colorfgbg("15;12"),
+            Some(false),
+            "bright blue is a dark background"
+        );
+        assert_eq!(
+            parse_colorfgbg("15;13"),
+            Some(false),
+            "bright magenta is a dark background"
+        );
+        assert_eq!(parse_colorfgbg("15;16"), Some(false), "256-color black");
+        assert_eq!(
+            parse_colorfgbg("15;232"),
+            Some(false),
+            "256-color near-black"
+        );
+        assert_eq!(
+            parse_colorfgbg("15;231"),
+            Some(true),
+            "256-color cube white"
+        );
+        assert_eq!(parse_colorfgbg("15;default"), None);
+        assert_eq!(parse_colorfgbg("garbage"), None);
+    }
+
+    #[test]
+    fn windows_terminal_dark_backgrounds_are_not_light() {
+        // Windows Terminal Campbell / default PowerShell: near-black cell.
+        assert!(
+            !rgb_is_light(12, 12, 12),
+            "WT default background must keep the dark palette"
+        );
+        // Classic PowerShell conhost blue.
+        assert!(!rgb_is_light(1, 36, 86));
+        // Light-palette focus_bg (slate-100) — the white bar in #221.
+        assert!(
+            rgb_is_light(241, 245, 249),
+            "light focus veil must classify as light so it is not used on a dark terminal"
+        );
+    }
+
+    #[test]
+    fn colorref_unpacks_win32_bgr() {
+        assert_eq!(colorref_rgb(0x000C0C0C), (12, 12, 12));
+        assert_eq!(colorref_rgb(0x00562401), (1, 36, 86));
     }
 }

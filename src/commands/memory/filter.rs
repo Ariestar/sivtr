@@ -25,7 +25,7 @@ const SEARCH_DEFAULT_LIMIT: usize = 5;
 /// without either, the search stays a recency-bounded browse. An explicit
 /// `--sort` always wins.
 pub fn from_search_args(args: &SearchArgs) -> Result<Filter> {
-    let has_intent = args.query.is_some() || args.match_.is_some();
+    let has_intent = args.query.is_some();
     let sort = args.sort.unwrap_or(if has_intent {
         Sort::Relevance
     } else {
@@ -56,12 +56,9 @@ pub fn from_search_args(args: &SearchArgs) -> Result<Filter> {
         filter.limit = Some(SEARCH_DEFAULT_LIMIT);
     }
     if sort == Sort::Relevance {
-        // The plain QUERY is the BM25 query; --match falls back to it when no
-        // query is given (kept for backward compatibility).
-        let rank = args.query.clone().or_else(|| args.match_.clone());
-        match rank {
+        match args.query.clone() {
             Some(query) => filter.rank = Some(query),
-            None => bail!("relevance sort needs a query (positional QUERY or --match)"),
+            None => bail!("relevance sort needs a positional QUERY"),
         }
     }
     Ok(filter)
@@ -163,10 +160,7 @@ pub fn execute(args: &FilterArgs) -> Result<()> {
 /// Load, filter, and optionally save a WorkSet without printing.
 pub fn run(args: &FilterArgs) -> Result<WorkSet> {
     let mut set = workset::query(&args.source, from_filter_args(args)?, args.cwd.as_deref())?;
-    set.save_last()?;
-    if let Some(name) = args.save.as_deref() {
-        set.save_as(name)?;
-    }
+    workset::persist(&mut set, args.save.as_deref()).context("persist filter WorkSet")?;
     Ok(set)
 }
 
@@ -182,7 +176,7 @@ pub(crate) fn apply(
     let hits = searcher.search(&filter, &anchors, &cwd)?;
     let anchors: Vec<WorkRef> = hits.into_iter().map(|hit| hit.anchor).collect();
     let selected_records = workset::records_for_anchors(&records, &anchors);
-    Ok(WorkSet::with_anchors(
+    Ok(WorkSet::from_parts(
         cwd.display().to_string(),
         selected_records,
         anchors,
@@ -256,6 +250,8 @@ mod tests {
         let args = SearchArgs {
             source: "terminal".into(),
             query: None,
+            semantic: false,
+            hybrid: false,
             match_: None,
             exclude: None,
             in_field: Field::Content,
@@ -287,6 +283,8 @@ mod tests {
         let args = SearchArgs {
             source: "terminal".into(),
             query: None,
+            semantic: false,
+            hybrid: false,
             match_: None,
             exclude: None,
             in_field: Field::Content,
@@ -318,6 +316,8 @@ mod tests {
         let args = SearchArgs {
             source: "terminal".into(),
             query: None,
+            semantic: false,
+            hybrid: false,
             match_: None,
             exclude: None,
             in_field: Field::Content,
@@ -349,6 +349,8 @@ mod tests {
         let args = SearchArgs {
             source: "terminal".into(),
             query: Some("docker pull failed".into()),
+            semantic: false,
+            hybrid: false,
             match_: None,
             exclude: None,
             in_field: Field::Content,
@@ -383,6 +385,8 @@ mod tests {
         let args = SearchArgs {
             source: "terminal".into(),
             query: Some("docker pull".into()),
+            semantic: false,
+            hybrid: false,
             match_: Some("error.*E0".into()),
             exclude: None,
             in_field: Field::Content,
@@ -411,10 +415,12 @@ mod tests {
     }
 
     #[test]
-    fn match_falls_back_as_rank_when_no_query() {
+    fn match_without_query_keeps_recency_sort() {
         let args = SearchArgs {
             source: "terminal".into(),
             query: None,
+            semantic: false,
+            hybrid: false,
             match_: Some("kubectl".into()),
             exclude: None,
             in_field: Field::Content,
@@ -437,9 +443,9 @@ mod tests {
             save: None,
         };
         let spec = from_search_args(&args).expect("spec");
-        assert_eq!(spec.sort, Sort::Relevance);
+        assert_eq!(spec.sort, Sort::Newest);
         assert_eq!(spec.pattern.as_deref(), Some("kubectl"));
-        assert_eq!(spec.rank.as_deref(), Some("kubectl"));
+        assert_eq!(spec.rank, None);
     }
 
     #[test]
@@ -447,6 +453,8 @@ mod tests {
         let args = SearchArgs {
             source: "terminal".into(),
             query: None,
+            semantic: false,
+            hybrid: false,
             match_: None,
             exclude: None,
             in_field: Field::Content,

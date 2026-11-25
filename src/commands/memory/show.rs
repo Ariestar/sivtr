@@ -121,11 +121,14 @@ pub fn print_workset(set: &mut workset::WorkSet, format: WorkSetOutputFormat) ->
 
 fn anchor_items(set: &workset::WorkSet) -> Result<Vec<AnchorItem<'_>>> {
     set.anchors()
-        .into_iter()
+        .iter()
         .map(|anchor| {
-            let record = workset::record_for_anchor(&set.records, &anchor)
+            let record = workset::find_record([set.records()], anchor)
                 .with_context(|| format!("No record found for anchor `{anchor}`"))?;
-            Ok(AnchorItem { anchor, record })
+            Ok(AnchorItem {
+                anchor: anchor.clone(),
+                record,
+            })
         })
         .collect()
 }
@@ -256,7 +259,7 @@ fn print_markdown(set: &workset::WorkSet) -> Result<()> {
 }
 
 fn print_refs(set: &workset::WorkSet) {
-    for anchor in set.anchors() {
+    for anchor in set.anchors().iter() {
         println!("{anchor}");
     }
 }
@@ -319,14 +322,7 @@ fn short_time(record: &WorkRecord) -> String {
 }
 
 fn source_label(record: &WorkRecord) -> &'static str {
-    match record.kind {
-        sivtr_core::record::WorkRecordKind::TerminalCommand => "terminal",
-        sivtr_core::record::WorkRecordKind::ChatTurn => record
-            .work_ref
-            .provider()
-            .map(|provider| provider.command_name())
-            .unwrap_or("agent"),
-    }
+    record.work_ref.path.namespace()
 }
 
 fn escape_markdown_title(title: &str) -> String {

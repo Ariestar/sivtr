@@ -3,9 +3,9 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 use crate::agents::{
-    extract_content_text, list_recent_jsonl_sessions, parse_jsonl_meta, parse_jsonl_session,
-    pretty_json_value, push_block, AgentBlockKind, AgentProvider, AgentSession, AgentSessionMeta,
-    AgentSessionProvider, SessionInfo,
+    extract_content_text, list_recent_jsonl_sessions_outcome, parse_jsonl_meta,
+    parse_jsonl_session, pretty_json_value, push_block, AgentBlockKind, AgentProvider,
+    AgentSession, AgentSessionMeta, SessionListing,
 };
 
 const PROVIDER_NAME: &str = "Claude";
@@ -13,28 +13,24 @@ const PROVIDER_NAME: &str = "Claude";
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ClaudeProvider;
 
-impl AgentSessionProvider for ClaudeProvider {
-    fn provider(&self) -> AgentProvider {
-        AgentProvider::Claude
-    }
+pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
+    list_recent_jsonl_sessions_outcome(
+        PROVIDER_NAME,
+        &claude_home().join("projects"),
+        cwd,
+        parse_session_meta,
+    )
+}
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        list_recent_jsonl_sessions(
-            PROVIDER_NAME,
-            &claude_home().join("projects"),
-            cwd,
-            parse_session_meta,
-        )
-    }
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_jsonl_session(path, PROVIDER_NAME, apply_event)
-    }
+pub(crate) fn parse_file(_provider: AgentProvider, path: &Path) -> Result<AgentSession> {
+    parse_jsonl_session(path, PROVIDER_NAME, apply_event)
 }
 
 pub fn claude_home() -> PathBuf {
-    if let Ok(path) = std::env::var("CLAUDE_HOME") {
-        return PathBuf::from(path);
+    if let Ok(path) = std::env::var("CLAUDE_CONFIG_DIR") {
+        if !path.trim().is_empty() {
+            return PathBuf::from(path);
+        }
     }
 
     dirs::home_dir()
@@ -365,8 +361,8 @@ fn tool_child_body(inner: &str, tool_kind: EmbeddedToolKind) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::ClaudeProvider;
-    use crate::agents::{select_blocks, AgentBlockKind, AgentSelection, AgentSessionProvider};
+    use super::{list_outcome, parse_file};
+    use crate::agents::{select_blocks, AgentBlockKind, AgentProvider, AgentSelection};
     use std::env;
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -410,7 +406,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Claude, &path).unwrap();
 
         assert_eq!(session.id.as_deref(), Some("abc"));
         assert_eq!(session.cwd.as_deref(), Some("C:\\repo"));
@@ -435,7 +431,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Claude, &path).unwrap();
 
         assert_eq!(session.blocks.len(), 2);
         assert_eq!(session.blocks[0].text.trim(), "hello");
@@ -457,7 +453,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Claude, &path).unwrap();
 
         assert_eq!(session.id.as_deref(), Some("abc"));
         assert_eq!(session.cwd.as_deref(), Some("C:\\repo"));
@@ -479,7 +475,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Claude, &path).unwrap();
 
         assert_eq!(session.blocks.len(), 2);
         assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
@@ -499,7 +495,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Claude, &path).unwrap();
 
         assert_eq!(session.blocks.len(), 5);
         assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
@@ -526,7 +522,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Claude, &path).unwrap();
 
         assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
         assert_eq!(session.blocks[1].kind, AgentBlockKind::Assistant);
@@ -552,7 +548,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Claude, &path).unwrap();
 
         assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
         assert_eq!(session.blocks[1].kind, AgentBlockKind::ToolOutput);
@@ -575,7 +571,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Claude, &path).unwrap();
 
         assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
         assert_eq!(session.blocks[1].kind, AgentBlockKind::ToolCall);
@@ -596,7 +592,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Claude, &path).unwrap();
 
         assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
         assert_eq!(session.blocks[1].kind, AgentBlockKind::Assistant);
@@ -623,10 +619,34 @@ mod tests {
         )
         .unwrap();
 
-        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Claude, &path).unwrap();
 
         assert_eq!(session.blocks.len(), 2);
         assert_eq!(session.blocks[0].text, "real task");
+        assert_eq!(session.blocks[1].text, "done");
+    }
+
+    #[test]
+    fn skips_injected_user_envelopes_without_meta_flag() {
+        // Background-task notifications arrive as plain user messages with no
+        // isMeta flag; only the text identifies them as machine injections.
+        let dir = tempfile::tempdir().expect("test tempdir");
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            r#"{"type":"user","message":{"role":"user","content":"<task-notification>\n<task-id>aa05</task-id>\n<output-file>C:\\tmp\\out</output-file>\n</task-notification>"}}
+{"type":"user","message":{"role":"user","content":"<bash-input>cargo test</bash-input>\n<bash-stdout>ok</bash-stdout>"}}
+{"type":"user","message":{"role":"user","content":"<command-name>/review</command-name>\n<command-message>review</command-message>"}}
+{"type":"user","message":{"role":"user","content":"real follow-up"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}
+"#,
+        )
+        .expect("write test session log");
+
+        let session = parse_file(AgentProvider::Claude, &path).expect("parse test session");
+
+        assert_eq!(session.blocks.len(), 2);
+        assert_eq!(session.blocks[0].text, "real follow-up");
         assert_eq!(session.blocks[1].text, "done");
     }
 
@@ -643,7 +663,7 @@ mod tests {
 "#,
         )
         .unwrap();
-        let session = ClaudeProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Claude, &path).unwrap();
 
         let blocks = select_blocks(&session, AgentSelection::LastTurn);
 
@@ -656,10 +676,10 @@ mod tests {
     fn skips_malformed_unrelated_sessions_during_listing() {
         let _guard = env_lock();
         let dir = tempfile::tempdir().unwrap();
-        let original_claude_home = env::var_os("CLAUDE_HOME");
-        let original_data_dir = env::var_os("SIVTR_DATA_DIR");
-        env::set_var("CLAUDE_HOME", dir.path());
-        env::set_var("SIVTR_DATA_DIR", dir.path().join("data"));
+        let original_claude_home = env::var_os("CLAUDE_CONFIG_DIR");
+        let original_data_dir = env::var_os("SIVTR_HOME");
+        env::set_var("CLAUDE_CONFIG_DIR", dir.path());
+        env::set_var("SIVTR_HOME", dir.path().join("data"));
 
         let projects = dir.path().join("projects").join("workspace");
         std::fs::create_dir_all(&projects).unwrap();
@@ -682,15 +702,15 @@ mod tests {
         )
         .unwrap();
 
-        let sessions = ClaudeProvider.list_recent_sessions(None).unwrap();
+        let sessions = list_outcome(AgentProvider::Claude, None).unwrap().0;
 
         match original_claude_home {
-            Some(value) => env::set_var("CLAUDE_HOME", value),
-            None => env::remove_var("CLAUDE_HOME"),
+            Some(value) => env::set_var("CLAUDE_CONFIG_DIR", value),
+            None => env::remove_var("CLAUDE_CONFIG_DIR"),
         }
         match original_data_dir {
-            Some(value) => env::set_var("SIVTR_DATA_DIR", value),
-            None => env::remove_var("SIVTR_DATA_DIR"),
+            Some(value) => env::set_var("SIVTR_HOME", value),
+            None => env::remove_var("SIVTR_HOME"),
         }
 
         assert_eq!(sessions.len(), 1);
@@ -710,7 +730,7 @@ mod tests {
         )
         .unwrap();
 
-        let error = ClaudeProvider.parse_session_file(&path).unwrap_err();
+        let error = parse_file(AgentProvider::Claude, &path).unwrap_err();
         let message = format!("{error:#}");
 
         assert!(message.contains("Failed to parse Claude session line 2 as JSON"));

@@ -4,11 +4,13 @@ pub(crate) mod help;
 pub(crate) mod layout;
 pub(crate) mod model;
 pub(crate) mod render;
+pub(crate) mod rows;
 
 pub(crate) use help::*;
 pub(crate) use layout::*;
 pub(crate) use model::*;
 pub(crate) use render::*;
+pub(crate) use rows::*;
 
 // Dual-pane + content text surface for browse.
 pub(crate) use crate::tui::content::io::{

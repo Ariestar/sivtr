@@ -3,21 +3,24 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
+use fs2::FileExt;
 use sivtr_core::workspace;
 
-use super::protocol::{DaemonInfo, LocalEnvelope, LocalRequest, LocalResponse, PROTOCOL_VERSION};
+use super::protocol::{
+    DaemonInfo, DaemonStatus, LocalEnvelope, LocalRequest, LocalResponse, PROTOCOL_VERSION,
+};
 
 pub fn daemon_info_path() -> PathBuf {
-    workspace::data_dir().join("daemon.json")
+    workspace::home_dir().join("daemon.json")
 }
 
 pub fn daemon_lock_path() -> PathBuf {
-    workspace::data_dir().join("daemon.lock")
+    workspace::home_dir().join("daemon.lock")
 }
 
 pub fn daemon_log_path() -> PathBuf {
-    workspace::data_dir().join("daemon.log")
+    workspace::home_dir().join("daemon.log")
 }
 
 pub fn read_daemon_info() -> Result<DaemonInfo> {
@@ -91,6 +94,77 @@ pub fn call_with_read_timeout(
     match response {
         LocalResponse::Error { message } => Err(anyhow::anyhow!(message)),
         response => Ok(response),
+    }
+}
+
+/// Preserve control errors while the daemon still holds its lifetime lock.
+pub fn status() -> Result<Option<DaemonStatus>> {
+    match call(LocalRequest::Status) {
+        Ok(LocalResponse::Status(status)) => Ok(Some(status)),
+        Ok(response) => bail!("Unexpected daemon response: {response:?}"),
+        Err(error) if daemon_lock_held()? => Err(error).with_context(|| {
+            format!(
+                "Daemon is starting or unresponsive; inspect {}",
+                daemon_log_path().display()
+            )
+        }),
+        Err(_) => Ok(None),
+    }
+}
+
+/// The daemon holds this lock from startup through shutdown.
+pub fn daemon_lock_held() -> Result<bool> {
+    let lock = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(daemon_lock_path())
+    {
+        Ok(lock) => lock,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error).context("Failed to open daemon lock"),
+    };
+    match lock.try_lock_exclusive() {
+        Ok(()) => Ok(false),
+        Err(error) if lock_contended(&error) => Ok(true),
+        Err(error) => Err(error).context("Failed to check daemon lock"),
+    }
+}
+
+fn lock_contended(error: &std::io::Error) -> bool {
+    error.raw_os_error() == fs2::lock_contended_error().raw_os_error()
+}
+
+/// Exclusive guard for the daemon's lifetime lock. Dropping it releases the lock.
+pub struct DaemonLock(std::fs::File);
+
+impl DaemonLock {
+    /// Take the lifetime lock without waiting. `None` means another daemon owns it.
+    pub fn try_acquire() -> Result<Option<Self>> {
+        let path = daemon_lock_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create {}", parent.display()))?;
+        }
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .with_context(|| format!("Failed to open {}", path.display()))?;
+        match lock.try_lock_exclusive() {
+            Ok(()) => Ok(Some(Self(lock))),
+            Err(error) if lock_contended(&error) => Ok(None),
+            Err(error) => Err(error).context("Failed to lock daemon lifetime state"),
+        }
+    }
+}
+
+impl Drop for DaemonLock {
+    fn drop(&mut self) {
+        // Closing the handle releases the lock too; this keeps the release
+        // explicit at the guard boundary.
+        let _ = self.0.unlock();
     }
 }
 

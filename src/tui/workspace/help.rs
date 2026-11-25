@@ -13,11 +13,10 @@ pub(crate) enum WorkspaceHelpAction {
     PreviousPane,
     NextPane,
     ToggleSelection,
-    SelectAllSources,
+    ToggleAll,
     SelectAgentSources,
     SelectTerminalSource,
     RangeSelect,
-    ToggleAllDialogues,
     OpenVim,
     ScrollDown,
     ScrollUp,
@@ -26,10 +25,6 @@ pub(crate) enum WorkspaceHelpAction {
     ToggleContentIo,
     /// Content half: expand/collapse the cursor block.
     ToggleBlockFold,
-    /// Multi-select paging: flip the content pane to the next selected dialogue.
-    NextDialoguePage,
-    /// Multi-select paging: flip the content pane to the previous selected dialogue.
-    PreviousDialoguePage,
     Copy,
     CopyInput,
     CopyOutput,
@@ -38,12 +33,16 @@ pub(crate) enum WorkspaceHelpAction {
     ToggleFullscreen,
     /// Toggle the help overlay.
     ToggleHelp,
+    /// Toggle the diagnostics overlay (full warning history).
+    ToggleDiagnostics,
     OpenSearch,
     /// Esc in the main UI: cancel from Source/Sessions, else step focus left.
     BackOrCancel,
     Cancel,
     /// Refresh next level under active rows (source→sessions, session→dialogues).
     Refresh,
+    /// Open the publication lifetime picker for the canonical selection.
+    Publish,
     /// Content half: jump scroll to top / bottom.
     ScrollContentTop,
     ScrollContentBottom,
@@ -135,13 +134,6 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
             footer_panes: &[Source, Sessions, Dialogues, Content],
         },
         WorkspaceHelpEntry {
-            key: "a",
-            description: "select all sources",
-            action: WorkspaceHelpAction::SelectAllSources,
-            footer_label: Some("all"),
-            footer_panes: SRC,
-        },
-        WorkspaceHelpEntry {
             key: "g",
             description: "select agent sources",
             action: WorkspaceHelpAction::SelectAgentSources,
@@ -173,10 +165,10 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
         },
         WorkspaceHelpEntry {
             key: "a",
-            description: "toggle all dialogues",
-            action: WorkspaceHelpAction::ToggleAllDialogues,
-            footer_label: Some("all"),
-            footer_panes: DIA,
+            description: "切换全部",
+            action: WorkspaceHelpAction::ToggleAll,
+            footer_label: Some("全部"),
+            footer_panes: &[Source, Sessions, Dialogues, Content],
         },
         WorkspaceHelpEntry {
             key: "t",
@@ -284,20 +276,6 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
             footer_panes: CNT,
         },
         WorkspaceHelpEntry {
-            key: "J",
-            description: "next selected dialogue",
-            action: WorkspaceHelpAction::NextDialoguePage,
-            footer_label: Some("page"),
-            footer_panes: CNT,
-        },
-        WorkspaceHelpEntry {
-            key: "K",
-            description: "previous selected dialogue",
-            action: WorkspaceHelpAction::PreviousDialoguePage,
-            footer_label: Some("page"),
-            footer_panes: CNT,
-        },
-        WorkspaceHelpEntry {
             key: "Enter",
             description: "confirm / open next / copy",
             action: WorkspaceHelpAction::Copy,
@@ -320,10 +298,24 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
             footer_panes: NAV,
         },
         WorkspaceHelpEntry {
+            key: "!",
+            description: "diagnostics log",
+            action: WorkspaceHelpAction::ToggleDiagnostics,
+            footer_label: Some("diag"),
+            footer_panes: NAV,
+        },
+        WorkspaceHelpEntry {
             key: "/",
             description: "search",
             action: WorkspaceHelpAction::OpenSearch,
             footer_label: Some("search"),
+            footer_panes: NAV,
+        },
+        WorkspaceHelpEntry {
+            key: "p",
+            description: "发布选择",
+            action: WorkspaceHelpAction::Publish,
+            footer_label: Some("发布"),
             footer_panes: NAV,
         },
         WorkspaceHelpEntry {
@@ -383,10 +375,7 @@ fn key_matches(
     if modifiers.contains(KeyModifiers::CONTROL) {
         return false;
     }
-    match (want_code, code) {
-        (KeyCode::Char(a), KeyCode::Char(b)) => a == b,
-        (a, b) => a == b,
-    }
+    want_code == code
 }
 
 /// Resolve a pressed key through the help registry for the current focus.

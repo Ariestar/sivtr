@@ -3,7 +3,7 @@ title: Keybindings
 description: Workspace picker, content, search, line filter, and Vim-view keybindings.
 ---
 
-This page documents the workspace picker TUI (the default `sivtr` interface). The single-buffer browser that `pipe`/`run`/`import` used was removed — those commands now write to history and open the external editor.
+This page documents the workspace picker TUI (the default `sivtr` interface). The single-buffer browser that `pipe`/`run`/`import` used was removed — those commands now write to the unified archive and open the external editor.
 
 ## Workspace picker
 
@@ -15,10 +15,10 @@ This page documents the workspace picker TUI (the default `sivtr` interface). Th
 | `1` | Focus Sessions pane |
 | `2` | Focus Dialogues pane |
 | `3` | Focus Content pane |
-| `j` / `k` | Move down / up (Content: block cursor) |
+| `j` / `k` | Move down / up (Content: block cursor, crossing into an adjacent dialogue) |
 | `h` / `l` | Focus previous / next pane |
 | `Space` | Toggle source/session/dialogue, or mark a content block |
-| `a` | Select all sources (Source) or toggle all dialogues (Dialogues) |
+| `a` | 切换当前面板的全部条目 |
 | `g` | Select agent sources (Source) or scroll Content to top |
 | `G` | Scroll Content to bottom |
 | `t` | Select terminal source (Source), or open the Vim-style full view |
@@ -28,7 +28,6 @@ This page documents the workspace picker TUI (the default `sivtr` interface). Th
 | `r` | Toggle read/raw content mode in Content |
 | `Enter` | Focus next / copy (lists); fold/unfold the cursor block (Content) |
 | `i` / `o` / `y` / `c` | Copy input / output / input+output block / bare command |
-| `J` / `K` | Page next/previous selected dialogue (Content, multi-select) |
 | `z` | Toggle the focused pane fullscreen |
 | `?` | Toggle help overlay |
 | `/` | Open search |

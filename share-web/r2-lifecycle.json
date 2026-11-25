@@ -1,0 +1,10 @@
+{
+  "rules": [
+    { "id": "expire-2h", "conditions": { "prefix": "v1/2h/" }, "enabled": true, "deleteObjectsTransition": { "condition": { "type": "Age", "maxAge": 7200 } } },
+    { "id": "expire-1d", "conditions": { "prefix": "v1/1d/" }, "enabled": true, "deleteObjectsTransition": { "condition": { "type": "Age", "maxAge": 86400 } } },
+    { "id": "expire-3d", "conditions": { "prefix": "v1/3d/" }, "enabled": true, "deleteObjectsTransition": { "condition": { "type": "Age", "maxAge": 259200 } } },
+    { "id": "expire-7d", "conditions": { "prefix": "v1/7d/" }, "enabled": true, "deleteObjectsTransition": { "condition": { "type": "Age", "maxAge": 604800 } } },
+    { "id": "expire-30d", "conditions": { "prefix": "v1/30d/" }, "enabled": true, "deleteObjectsTransition": { "condition": { "type": "Age", "maxAge": 2592000 } } },
+    { "id": "expire-90d", "conditions": { "prefix": "v1/90d/" }, "enabled": true, "deleteObjectsTransition": { "condition": { "type": "Age", "maxAge": 7776000 } } }
+  ]
+}

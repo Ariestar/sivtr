@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::agents::{
     extract_content_text, filter_sessions_by_workspace, parse_jsonl_meta, parse_jsonl_session,
     pretty_json_value, push_block, push_tool_block, AgentBlockKind, AgentProvider, AgentSession,
-    AgentSessionMeta, AgentSessionProvider, SessionInfo,
+    AgentSessionMeta, SessionInfo, SessionListing,
 };
 
 const PROVIDER_NAME: &str = "Qoder";
@@ -29,42 +29,30 @@ pub struct QoderProvider;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct QoderCnProvider;
 
-impl AgentSessionProvider for QoderProvider {
-    fn provider(&self) -> AgentProvider {
-        AgentProvider::Qoder
-    }
-
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        list_recent_sessions_in(&qoder_projects_dir(), cwd)
-    }
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_jsonl_session(path, PROVIDER_NAME, apply_event)
-    }
+pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
+    list_recent_sessions_in(&qoder_projects_dir(), cwd)
 }
 
-impl AgentSessionProvider for QoderCnProvider {
-    fn provider(&self) -> AgentProvider {
-        AgentProvider::QoderCn
-    }
+pub(crate) fn list_cn_outcome(
+    _provider: AgentProvider,
+    cwd: Option<&Path>,
+) -> Result<SessionListing> {
+    list_recent_sessions_in(&qoder_cn_projects_dir(), cwd)
+}
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        list_recent_sessions_in(&qoder_cn_projects_dir(), cwd)
-    }
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        parse_jsonl_session(path, PROVIDER_NAME, apply_event)
-    }
+pub(crate) fn parse_file(_provider: AgentProvider, path: &Path) -> Result<AgentSession> {
+    parse_jsonl_session(path, PROVIDER_NAME, apply_event)
 }
 
 /// Scan `projects/<cwd-slug>/<session>.jsonl` under `root`, newest first.
 /// Shared by the global and CN Qoder providers; only `root` differs.
-fn list_recent_sessions_in(root: &Path, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
+fn list_recent_sessions_in(root: &Path, cwd: Option<&Path>) -> Result<SessionListing> {
     if !root.exists() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
 
     let mut sessions = Vec::new();
+    let mut failures = Vec::new();
     for bucket in fs::read_dir(root)
         .with_context(|| format!("Failed to read Qoder projects dir {}", root.display()))?
     {
@@ -88,20 +76,21 @@ fn list_recent_sessions_in(root: &Path, cwd: Option<&Path>) -> Result<Vec<Sessio
                         .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
                     sessions.push(SessionInfo {
                         path,
+                        physical_path: None,
                         id: meta.id,
                         cwd: meta.cwd,
                         title: meta.title,
                         modified,
                     });
                 }
-                Err(_) => continue,
+                Err(error) => failures.push((path, format!("{error:#}"))),
             }
         }
     }
 
     sessions.sort_by_key(|s| s.modified);
     sessions.reverse();
-    Ok(filter_sessions_by_workspace(sessions, cwd))
+    Ok((filter_sessions_by_workspace(sessions, cwd), failures))
 }
 
 pub fn qoder_home() -> PathBuf {
@@ -282,8 +271,8 @@ fn push_content_blocks(
 
 #[cfg(test)]
 mod tests {
-    use super::{QoderCnProvider, QoderProvider};
-    use crate::agents::{AgentBlockKind, AgentSessionProvider};
+    use super::parse_file;
+    use crate::agents::{AgentBlockKind, AgentProvider};
 
     #[test]
     fn parses_qoder_messages_and_tools() {
@@ -300,7 +289,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = QoderProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Qoder, &path).unwrap();
 
         assert_eq!(session.id.as_deref(), Some("abc"));
         assert_eq!(session.cwd.as_deref(), Some("D:\\repo"));
@@ -330,7 +319,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = QoderProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Qoder, &path).unwrap();
 
         assert_eq!(session.title.as_deref(), Some("My Session"));
         assert_eq!(session.blocks.len(), 2);
@@ -351,7 +340,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = QoderProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Qoder, &path).unwrap();
 
         assert_eq!(session.cwd.as_deref(), Some("D:\\Coding\\sivtr"));
     }
@@ -369,7 +358,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = QoderCnProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::QoderCn, &path).unwrap();
 
         assert_eq!(session.id.as_deref(), Some("cn-1"));
         assert_eq!(session.cwd.as_deref(), Some("D:\\repo"));

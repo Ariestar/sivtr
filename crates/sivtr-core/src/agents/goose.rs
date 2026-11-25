@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use crate::agents::{
     extract_content_text, filter_sessions_by_workspace, open_readonly_db, pretty_json_value,
     push_block, push_tool_block, system_time_from_unix_secs, AgentBlockKind, AgentProvider,
-    AgentSession, AgentSessionProvider, SessionInfo,
+    AgentSession, SessionInfo, SessionListing,
 };
 
 const SESSION_PATH_PREFIX: &str = "goose-session-";
@@ -32,84 +32,79 @@ const SESSION_PATH_SUFFIX: &str = ".sqlite";
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GooseProvider;
 
-impl AgentSessionProvider for GooseProvider {
-    fn provider(&self) -> AgentProvider {
-        AgentProvider::Goose
+pub(crate) fn find_session_by_id(id: &str) -> Result<Option<PathBuf>> {
+    let db_path = goose_db_path();
+    if !db_path.exists() {
+        return Ok(None);
     }
 
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        let db_path = goose_db_path();
-        if !db_path.exists() {
-            return Ok(Vec::new());
-        }
+    let conn = open_readonly_db(&db_path)?;
+    let exact = conn
+        .query_row(
+            "select id from sessions where id = ?1",
+            params![id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if let Some(id) = exact {
+        return Ok(Some(goose_session_path(&id)));
+    }
 
-        let conn = open_readonly_db(&db_path)?;
-        let mut stmt = conn.prepare(
-            "select id, working_dir, name, coalesce(cast(strftime('%s', updated_at) as integer), 0) \
+    let prefix = format!("{id}%");
+    let prefix_match = conn
+        .query_row(
+            "select id from sessions where id like ?1 order by updated_at desc limit 1",
+            params![prefix],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    Ok(prefix_match.map(|id| goose_session_path(&id)))
+}
+
+pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
+    let db_path = goose_db_path();
+    if !db_path.exists() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    let conn = open_readonly_db(&db_path)?;
+    let mut stmt = conn.prepare(
+        "select id, working_dir, name, coalesce(cast(strftime('%s', updated_at) as integer), 0) \
              from sessions order by updated_at desc, id desc",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, i64>(3)?,
-            ))
-        })?;
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
+        ))
+    })?;
 
-        let mut sessions = Vec::new();
-        for row in rows {
-            let (id, working_dir, name, updated_secs) = row?;
-            sessions.push(SessionInfo {
-                modified: system_time_from_unix_secs(updated_secs as f64),
-                path: goose_session_path(&id),
-                id: Some(id),
-                cwd: Some(working_dir).filter(|value| !value.trim().is_empty()),
-                title: Some(name).filter(|name| !name.trim().is_empty()),
-            });
-        }
-
-        Ok(filter_sessions_by_workspace(sessions, cwd))
+    let mut sessions = Vec::new();
+    for row in rows {
+        let (id, working_dir, name, updated_secs) = row?;
+        sessions.push(SessionInfo {
+            modified: system_time_from_unix_secs(updated_secs as f64),
+            path: goose_session_path(&id),
+            physical_path: Some(db_path.clone()),
+            id: Some(id),
+            cwd: Some(working_dir).filter(|value| !value.trim().is_empty()),
+            title: Some(name).filter(|name| !name.trim().is_empty()),
+        });
     }
 
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        let session_id = session_id_from_path(path).with_context(|| {
-            format!(
-                "Goose session path `{}` does not contain a session id",
-                path.display()
-            )
-        })?;
-        parse_session_by_id(&session_id)
-    }
+    Ok((filter_sessions_by_workspace(sessions, cwd), Vec::new()))
+}
 
-    fn find_session_by_id(&self, id: &str) -> Result<Option<PathBuf>> {
-        let db_path = goose_db_path();
-        if !db_path.exists() {
-            return Ok(None);
-        }
-
-        let conn = open_readonly_db(&db_path)?;
-        let exact = conn
-            .query_row(
-                "select id from sessions where id = ?1",
-                params![id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-        if let Some(id) = exact {
-            return Ok(Some(goose_session_path(&id)));
-        }
-
-        let prefix = format!("{id}%");
-        let prefix_match = conn
-            .query_row(
-                "select id from sessions where id like ?1 order by updated_at desc limit 1",
-                params![prefix],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-        Ok(prefix_match.map(|id| goose_session_path(&id)))
-    }
+pub(crate) fn parse_file(_provider: AgentProvider, path: &Path) -> Result<AgentSession> {
+    let session_id = session_id_from_path(path).with_context(|| {
+        format!(
+            "Goose session path `{}` does not contain a session id",
+            path.display()
+        )
+    })?;
+    parse_session_by_id(&session_id)
 }
 
 pub fn goose_db_path() -> PathBuf {
@@ -219,10 +214,9 @@ fn apply_message_rows(
         let content = match serde_json::from_str::<Value>(&content_json) {
             Ok(content) => content,
             Err(error) => {
-                eprintln!(
-                    "warning: failed to parse Goose message content for session {}: {error}",
-                    session_id
-                );
+                crate::diagnostics::warn(format!(
+                    "failed to parse Goose message content for session {session_id}: {error}"
+                ));
                 continue;
             }
         };
@@ -320,7 +314,6 @@ fn apply_content(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::AgentSessionProvider;
     use rusqlite::Connection;
 
     #[cfg(not(windows))]
@@ -392,7 +385,7 @@ mod tests {
         let _guard = crate::test_env_lock();
         std::env::set_var("GOOSE_PATH_ROOT", dir.path());
         let path = goose_session_path("s1");
-        let session = GooseProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Goose, &path).unwrap();
 
         assert_eq!(session.id.as_deref(), Some("s1"));
         assert_eq!(session.cwd.as_deref(), Some("D:\\repo"));
@@ -423,7 +416,7 @@ mod tests {
         let _guard = crate::test_env_lock();
         std::env::set_var("GOOSE_PATH_ROOT", dir.path());
 
-        let sessions = GooseProvider.list_recent_sessions(None).unwrap();
+        let sessions = list_outcome(AgentProvider::Goose, None).unwrap().0;
 
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id.as_deref(), Some("s1"));

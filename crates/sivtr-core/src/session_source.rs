@@ -1,18 +1,14 @@
-//! Unified conversation sources: terminal logs and agent providers behind one
-//! discovery/parse interface.
+//! Terminal session logs.
 //!
-//! Every source (the terminal, each agent provider, any future conversation
-//! store) implements [`SessionSource`]; the query layer consumes only this
-//! trait — no terminal/agent branches. Providers keep their internal
-//! [`crate::agents::AgentSessionProvider`] contract for parsing;
-//! [`AgentProvider`] adapts it.
+//! Agent transcripts are listed and parsed by [`crate::agents::profile`] and
+//! stored by the archive sync engine. [`SessionSource`] is the terminal ingest
+//! contract; tests also implement it for a mocked source.
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 
-use crate::agents::AgentProvider;
 use crate::record::WorkRecord;
 use crate::{session, workspace};
 
@@ -20,7 +16,12 @@ use crate::{session, workspace};
 /// address records without parsing the file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionInfo {
+    /// Logical source path passed to the provider parser. Container providers
+    /// use a virtual path so one physical database can expose many sessions.
     pub path: PathBuf,
+    /// Physical file or directory used for freshness stamping. `None` means
+    /// `path` itself is the physical source.
+    pub physical_path: Option<PathBuf>,
     pub id: Option<String>,
     pub cwd: Option<String>,
     pub title: Option<String>,
@@ -65,6 +66,7 @@ impl SessionSource for TerminalSource {
                 .with_context(|| format!("Failed to stamp terminal log {}", path.display()))?;
             infos.push(SessionInfo {
                 path,
+                physical_path: None,
                 id: None,
                 cwd: None,
                 title: None,
@@ -82,25 +84,4 @@ impl SessionSource for TerminalSource {
             .filter_map(|(idx, entry)| WorkRecord::terminal(entry, path, idx))
             .collect())
     }
-}
-
-/// The source list for a workspace query: the terminal plus the given agent
-/// providers.
-pub fn workspace_sources(providers: &[AgentProvider]) -> Vec<Box<dyn SessionSource>> {
-    let mut sources: Vec<Box<dyn SessionSource>> = vec![Box::new(TerminalSource)];
-    sources.extend(
-        providers
-            .iter()
-            .map(|provider| Box::new(*provider) as Box<dyn SessionSource>),
-    );
-    sources
-}
-
-/// Look up a source by its namespace (`"terminal"`, `"codex"`, …).
-pub fn source_by_namespace(namespace: &str) -> Option<Box<dyn SessionSource>> {
-    if namespace == TerminalSource.namespace() {
-        return Some(Box::new(TerminalSource));
-    }
-    AgentProvider::from_command_name(namespace)
-        .map(|provider| Box::new(provider) as Box<dyn SessionSource>)
 }

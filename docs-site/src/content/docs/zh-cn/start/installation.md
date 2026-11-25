@@ -54,7 +54,7 @@ npx skills add Ariestar/sivtr --skill sivtr-memory -g
 sivtr doctor
 ```
 
-预期：所有检查通过。若 `shell hooks` 显示 "not installed"，运行对应的 `sivtr init` 命令。若 `session log directory` 显示 "missing"，用户需在 `sivtr init` 后重启终端。
+预期：必需检查通过。若 `shell hooks` 显示 "not installed"，运行对应的 `sivtr init` 命令。若 `session log directory` 显示 "missing"，用户需在 `sivtr init` 后重启终端。`terminal capture` 在显式配置 `[pty_proxy] enabled = false` 时显示 `Manual`；如需恢复，在 `sivtr config edit` 中改回 `true` 并重启 shell。
 
 ### 查看当前状态
 
@@ -176,16 +176,18 @@ cargo install --path . --force
 
 ## Shell 集成
 
-Shell 集成会记录最近的命令块，让 `sivtr copy`、`sivtr import` 和命令块导航有结构化数据可用。
+Shell 集成会记录最近的命令块，让 `sivtr copy` 和命令块导航有结构化数据可用。
 
-为你的 shell 安装 hook：
+安装或升级 shell 集成即可使用终端捕获：
 
 ```bash
-sivtr init powershell
-sivtr init bash
-sivtr init zsh
-sivtr init nushell
+sivtr init all
+# 或只安装一个 shell：sivtr init bash / zsh / nushell / powershell
 ```
+
+`sivtr setup` 会执行同样的安装步骤。安装后重启 shell，后续命令会自动通过 PTY 捕获，无需额外启用。升级后重新运行 `sivtr init <shell>` 会原位替换旧的 sivtr hook，保留周围的用户配置，不会叠加另一套捕获代码。
+
+要暂停捕获，运行 `sivtr config edit`，将 `[pty_proxy]` 下的 `enabled` 设为 `false`，然后重启 shell。`setup` 和 `init` 都会保留这个显式关闭设置。重新开启时将它改回 `true` 并重启 shell。
 
 查看已安装的 hook：
 
@@ -201,11 +203,9 @@ sivtr init uninstall
 
 安装或卸载后重启终端。
 
-Hook 会写入按进程区分的 session log：
+代理会写入按终端区分的 session log：
 
-- Windows PowerShell 和 PowerShell 7 使用 `%APPDATA%\sivtr\session_<pid>.log`。
-- Bash 和 Zsh 使用 `$XDG_STATE_HOME/sivtr/session_<pid>.log` 或 `~/.local/state/sivtr/session_<pid>.log`。
-- Nushell 使用自己的 config/state 区域中的 `sivtr` session 文件。
+- Session log 写到 `<home>/workspaces/<workspace-key>/terminals/<terminal_id>.jsonl`（`SIVTR_HOME` 或 `~/.sivtr`）。
 
 ## 配置文件
 

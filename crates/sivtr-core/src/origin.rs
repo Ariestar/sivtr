@@ -18,26 +18,6 @@ use anyhow::{bail, Result};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Major source category.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum OriginKind {
-    /// Local files on this machine (workspaces).
-    Local,
-    /// Another device, forwarded through the daemon.
-    Remote,
-}
-
-impl OriginKind {
-    /// Stable lowercase label for display and serialization.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Local => "local",
-            Self::Remote => "remote",
-        }
-    }
-}
-
 /// A single addressable memory source.
 ///
 /// All fields exist for every kind; `detail` is the display projection the
@@ -46,8 +26,10 @@ impl OriginKind {
 pub struct Origin {
     /// Logical name (scope name / alias), used by [`OriginRegistry::resolve`].
     pub name: String,
-    /// Major source category.
-    pub kind: OriginKind,
+    /// Stable lowercase label of the reach kind (`"local"` / `"remote"`).
+    /// Private: derived from [`Reach`] by [`Entry::new`], so classification
+    /// always agrees with the reach. Serialized for MCP consumers.
+    kind: String,
     /// Whether this origin is the current context (e.g. the current workspace).
     pub current: bool,
     /// Display projection composed by the source (e.g. `root (key)`).
@@ -66,11 +48,35 @@ pub enum Reach {
     Remote { workspace_key: String },
 }
 
+impl Reach {
+    /// Stable lowercase label for display and serialization.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Local { .. } => "local",
+            Self::Remote { .. } => "remote",
+        }
+    }
+}
+
 /// One registry entry: the display [`Origin`] plus its [`Reach`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub origin: Origin,
     pub reach: Reach,
+}
+
+impl Entry {
+    /// Build an entry with `kind` derived from the reach — the two can never
+    /// disagree, since every consumer reads classification from one source.
+    pub fn new(name: String, current: bool, detail: String, reach: Reach) -> Self {
+        let origin = Origin {
+            name,
+            kind: reach.label().to_string(),
+            current,
+            detail,
+        };
+        Self { origin, reach }
+    }
 }
 
 /// Every origin addressable from the current context.
@@ -118,8 +124,10 @@ impl OriginRegistry {
             _ => {
                 // Remote wins a cross-kind collision; same-kind collisions stay
                 // ambiguous.
-                matched.sort_by_key(|entry| matches!(entry.origin.kind, OriginKind::Local));
-                if matched[0].origin.kind == matched[1].origin.kind {
+                matched.sort_by_key(|entry| matches!(entry.reach, Reach::Local { .. }));
+                if matches!(matched[0].reach, Reach::Local { .. })
+                    == matches!(matched[1].reach, Reach::Local { .. })
+                {
                     let details: Vec<&str> = matched
                         .iter()
                         .map(|entry| entry.origin.detail.as_str())
@@ -138,35 +146,41 @@ mod tests {
 
     fn sample() -> OriginRegistry {
         OriginRegistry::new(vec![
-            Entry {
-                origin: Origin {
-                    name: "sivtr".to_string(),
-                    kind: OriginKind::Local,
-                    current: true,
-                    detail: "D:\\Coding\\sivtr (key1)".to_string(),
-                },
-                reach: Reach::Local {
+            Entry::new(
+                "sivtr".to_string(),
+                true,
+                "D:\\Coding\\sivtr (key1)".to_string(),
+                Reach::Local {
                     root: "D:\\Coding\\sivtr".to_string(),
                 },
-            },
-            Entry {
-                origin: Origin {
-                    name: "desk".to_string(),
-                    kind: OriginKind::Remote,
-                    current: false,
-                    detail: "alice/sivtr".to_string(),
-                },
-                reach: Reach::Remote {
+            ),
+            Entry::new(
+                "desk".to_string(),
+                false,
+                "alice/sivtr".to_string(),
+                Reach::Remote {
                     workspace_key: "key1".to_string(),
                 },
-            },
+            ),
         ])
     }
 
     #[test]
     fn labels_are_stable() {
-        assert_eq!(OriginKind::Local.label(), "local");
-        assert_eq!(OriginKind::Remote.label(), "remote");
+        assert_eq!(
+            Reach::Local {
+                root: String::new()
+            }
+            .label(),
+            "local"
+        );
+        assert_eq!(
+            Reach::Remote {
+                workspace_key: String::new()
+            }
+            .label(),
+            "remote"
+        );
     }
 
     #[test]
@@ -199,28 +213,22 @@ mod tests {
     #[test]
     fn resolve_errors_on_ambiguous_names() {
         let registry = OriginRegistry::new(vec![
-            Entry {
-                origin: Origin {
-                    name: "return".to_string(),
-                    kind: OriginKind::Local,
-                    current: false,
-                    detail: "D:\\a (k1)".to_string(),
-                },
-                reach: Reach::Local {
+            Entry::new(
+                "return".to_string(),
+                false,
+                "D:\\a (k1)".to_string(),
+                Reach::Local {
                     root: "D:\\a".to_string(),
                 },
-            },
-            Entry {
-                origin: Origin {
-                    name: "return".to_string(),
-                    kind: OriginKind::Local,
-                    current: false,
-                    detail: "D:\\b (k2)".to_string(),
-                },
-                reach: Reach::Local {
+            ),
+            Entry::new(
+                "return".to_string(),
+                false,
+                "D:\\b (k2)".to_string(),
+                Reach::Local {
                     root: "D:\\b".to_string(),
                 },
-            },
+            ),
         ]);
         let error = registry.resolve("return").expect_err("ambiguous");
         assert!(error.to_string().contains("ambiguous origin `return`"));
@@ -231,31 +239,24 @@ mod tests {
         // A mount alias may equal a local workspace's basename; the mount
         // resolves (remote lookup ran before local workspaces pre-registry).
         let registry = OriginRegistry::new(vec![
-            Entry {
-                origin: Origin {
-                    name: "proj".to_string(),
-                    kind: OriginKind::Local,
-                    current: true,
-                    detail: "D:\\a\\proj (k1)".to_string(),
-                },
-                reach: Reach::Local {
+            Entry::new(
+                "proj".to_string(),
+                true,
+                "D:\\a\\proj (k1)".to_string(),
+                Reach::Local {
                     root: "D:\\a\\proj".to_string(),
                 },
-            },
-            Entry {
-                origin: Origin {
-                    name: "proj".to_string(),
-                    kind: OriginKind::Remote,
-                    current: false,
-                    detail: "alice/proj".to_string(),
-                },
-                reach: Reach::Remote {
+            ),
+            Entry::new(
+                "proj".to_string(),
+                false,
+                "alice/proj".to_string(),
+                Reach::Remote {
                     workspace_key: "k1".to_string(),
                 },
-            },
+            ),
         ]);
         let entry = registry.resolve("proj").expect("resolve").expect("found");
-        assert_eq!(entry.origin.kind, OriginKind::Remote);
         assert!(matches!(&entry.reach, Reach::Remote { workspace_key } if workspace_key == "k1"));
     }
 
@@ -280,10 +281,6 @@ mod tests {
 
     #[test]
     fn kind_serializes_as_lowercase_label() {
-        assert_eq!(
-            serde_json::to_string(&OriginKind::Remote).expect("serialize kind"),
-            "\"remote\""
-        );
         let origin = sample().all().nth(1).expect("second origin").clone();
         let json = serde_json::to_string(&origin).expect("serialize origin");
         assert!(json.contains("\"kind\":\"remote\""));

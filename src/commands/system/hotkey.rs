@@ -10,7 +10,6 @@ use crate::cli::{
     HotkeyStartArgs,
 };
 use crate::commands::browse;
-use crate::commands::memory::copy;
 use crate::tui::terminal::{panic_payload_message, wait_for_enter};
 use crate::tui::workspace::WorkspaceFocus;
 
@@ -64,9 +63,14 @@ pub fn pick_agent(args: &HotkeyPickAgentArgs) -> Result<()> {
         // The no-wait variant: this handler reports errors (and waits) itself,
         // so a panic recovered inside the picker must not consume an Enter
         // before show_pick_error_and_wait prompts.
-        let picked =
-            browse::run_without_panic_wait(&providers, args.all, WorkspaceFocus::Sessions)?;
-        copy::export_picked(&picked, false, None, None, false)
+        crate::commands::finish_picker(
+            browse::run_without_panic_wait(&providers, args.all, WorkspaceFocus::Sessions)
+                .context("热键选择器失败")?,
+            false,
+            None,
+            None,
+            false,
+        )
     });
 
     match result {
@@ -104,7 +108,7 @@ fn start(args: HotkeyStartArgs) -> Result<()> {
         clear_state_file()?;
     }
 
-    let config = SivtrConfig::load().unwrap_or_default();
+    let config = SivtrConfig::load()?;
     let chord = args.chord.unwrap_or(config.hotkey.chord);
     let cwd = std::env::current_dir().context("Failed to resolve current directory")?;
     let exe = std::env::current_exe().context("Failed to resolve current executable")?;

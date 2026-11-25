@@ -8,27 +8,39 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::time::Duration;
 
+use ureq::ResponseExt;
+
 use crate::output;
 
 const REPO: &str = "Ariestar/sivtr";
 const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_CHECKSUM_BYTES: u64 = 64 * 1024;
+const MAX_RELEASE_ARCHIVE_BYTES: u64 = 32 * 1024 * 1024;
 
-/// Latest published release tag from the GitHub API, e.g. `v0.4.0`.
+/// Latest published release tag, e.g. `v0.6.0`.
+///
+/// Follows the `releases/latest` redirect to `/releases/tag/<tag>`, avoiding
+/// the rate-limited GitHub API entirely.  No GitHub CLI required.
 pub fn latest_version() -> Result<String> {
-    let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
-    let mut response = agent(CHECK_TIMEOUT)
-        .get(&url)
+    let response = agent(CHECK_TIMEOUT)
+        .get("https://github.com/Ariestar/sivtr/releases/latest")
         .header("User-Agent", "sivtr-update")
         .call()
-        .context("cannot reach GitHub API")?;
-    let body = response
-        .body_mut()
-        .read_to_vec()
-        .context("failed to read GitHub API response")?;
-    let release: Release =
-        serde_json::from_slice(&body).context("failed to parse GitHub release metadata")?;
-    Ok(release.tag_name)
+        .context("cannot reach GitHub")?;
+
+    Ok(release_tag_from_path(response.get_uri().path())?.to_string())
+}
+
+fn release_tag_from_path(path: &str) -> Result<&str> {
+    let tag = path
+        .rsplit_once("/releases/tag/")
+        .with_context(|| format!("release redirect path is missing /releases/tag/: {path}"))?
+        .1;
+    if tag.is_empty() || tag.contains('/') {
+        bail!("release redirect path contains an invalid tag: {path}");
+    }
+    Ok(tag)
 }
 
 pub fn execute() -> Result<()> {
@@ -53,12 +65,13 @@ pub fn execute() -> Result<()> {
     let checksums = download(
         &agent,
         &format!("https://github.com/{REPO}/releases/download/v{latest}/SHA256SUMS"),
+        MAX_CHECKSUM_BYTES,
     )?;
     let expected = checksum_for(&checksums, &archive_name)
         .with_context(|| format!("no SHA256 entry for {archive_name}"))?;
 
     let url = format!("https://github.com/{REPO}/releases/download/v{latest}/{archive_name}");
-    let archive = download(&agent, &url)?;
+    let archive = download(&agent, &url, MAX_RELEASE_ARCHIVE_BYTES)?;
     verify_sha256(&archive, &expected)?;
 
     let current_bin = std::env::current_exe().context("cannot locate current binary")?;
@@ -82,7 +95,7 @@ fn agent(timeout: Duration) -> ureq::Agent {
         .new_agent()
 }
 
-fn download(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>> {
+fn download(agent: &ureq::Agent, url: &str, limit: u64) -> Result<Vec<u8>> {
     let mut response = agent
         .get(url)
         .header("User-Agent", "sivtr-update")
@@ -90,6 +103,8 @@ fn download(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>> {
         .with_context(|| format!("download failed: {url}"))?;
     let buf = response
         .body_mut()
+        .with_config()
+        .limit(limit.saturating_add(1))
         .read_to_vec()
         .with_context(|| format!("failed to read {url}"))?;
     Ok(buf)
@@ -122,7 +137,8 @@ fn extract_binary(
             .context("cannot open zip archive")?;
         for i in 0..zip.len() {
             let mut entry = zip.by_index(i).context("cannot read zip entry")?;
-            if entry.name() == bin_name || entry.name().ends_with(&format!("/{bin_name}")) {
+            let name = entry.name().context("cannot decode zip entry name")?;
+            if name == bin_name || name.ends_with(&format!("/{bin_name}")) {
                 let mut out =
                     std::fs::File::create(&bin_path).context("cannot create temp file")?;
                 std::io::copy(&mut entry, &mut out).context("cannot extract binary from zip")?;
@@ -204,14 +220,40 @@ fn parse_version(version: &str) -> Option<(u64, u64, u64)> {
     Some((major, minor, patch))
 }
 
-#[derive(serde::Deserialize)]
-struct Release {
-    tag_name: String,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+
+    fn serve(body: Vec<u8>) -> (String, std::thread::JoinHandle<()>) {
+        let listener =
+            TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        let handle = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept test request");
+            let mut request = BufReader::new(stream);
+            loop {
+                let mut line = String::new();
+                assert!(
+                    request.read_line(&mut line).expect("read test request") > 0,
+                    "test request ended before headers"
+                );
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            let mut stream = request.into_inner();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .expect("write test response headers");
+            stream.write_all(&body).expect("write test response body");
+        });
+        (format!("http://{address}/"), handle)
+    }
 
     #[test]
     fn parse_version_handles_v_prefix() {
@@ -238,5 +280,33 @@ mod tests {
             Some("abc".to_string())
         );
         assert_eq!(checksum_for(sums, "missing.zip"), None);
+    }
+
+    #[test]
+    fn tag_from_redirect_path() {
+        assert_eq!(
+            release_tag_from_path("/Ariestar/sivtr/releases/tag/v0.6.0").expect("valid tag"),
+            "v0.6.0"
+        );
+        assert!(release_tag_from_path("/Ariestar/sivtr/releases/tag/").is_err());
+        assert!(release_tag_from_path("/Ariestar/sivtr").is_err());
+    }
+
+    #[test]
+    fn download_allows_limit_but_rejects_larger_responses() {
+        let agent = agent(Duration::from_secs(5));
+        let limit: u64 = 8;
+
+        for (size, succeeds) in [(limit - 1, true), (limit, true), (limit + 1, false)] {
+            let (url, server) = serve(vec![b'x'; size as usize]);
+            let result = download(&agent, &url, limit);
+            server.join().expect("test server thread");
+
+            if succeeds {
+                assert_eq!(result.expect("response within limit").len(), size as usize);
+            } else {
+                assert!(result.is_err(), "response above limit should fail");
+            }
+        }
     }
 }

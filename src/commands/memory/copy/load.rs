@@ -4,8 +4,8 @@
 //! `terminal/<session_id>`, same read path as `sivtr s terminal/...`.
 
 use anyhow::{Context, Result};
-use sivtr_core::capture::scrollback;
 use sivtr_core::record::{WorkAt, WorkRecord, WorkRef};
+use sivtr_core::session;
 use sivtr_core::workspace::terminal_session_id_from_path;
 
 use crate::commands::memory::filter::Filter;
@@ -46,7 +46,7 @@ pub(super) fn load_for_plan(plan: &CopyPlan) -> Result<Option<LoadedCopy>> {
 
 /// Current shell session as a workset source: `terminal/<session_id>`.
 pub(crate) fn current_terminal_source() -> Result<Option<String>> {
-    let Some(log_path) = scrollback::session_log_path()? else {
+    let Some(log_path) = session::current_log_path()? else {
         return Ok(None);
     };
     if !log_path.exists() {
@@ -63,11 +63,11 @@ pub(crate) fn load_dialogues(
 ) -> Result<Vec<WorkRecord>> {
     let expanded = sivtr_core::record::expand_source(source)?;
     let set = workset::query(&expanded, Filter::none(), cwd)?;
-    if set.records.is_empty() {
+    if set.records().is_empty() {
         return Ok(Vec::new());
     }
 
-    let mut records = set.records;
+    let mut records = set.into_records();
     // Oldest → newest so relative select (from end) matches historical terminal semantics.
     records.sort_by_key(|r| (r.session.id.clone(), r.work_ref.index()));
     // Bare sources (e.g. `codex`, multi-session terminal) → newest session only.
@@ -118,7 +118,7 @@ fn load_pinned_ref(
     }
 
     let set = workset::query(expanded, Filter::none(), Some(cwd))?;
-    let record = workset::record_for_anchor(&set.records, work_ref)
+    let record = workset::find_record([set.records()], work_ref)
         .with_context(|| format!("No record found for ref `{expanded}`"))?
         .clone();
 
