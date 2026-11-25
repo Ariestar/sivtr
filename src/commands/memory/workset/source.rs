@@ -293,7 +293,7 @@ pub fn query_sources(
                             group_query(&source.selector, filter, cwd, source.timeout)
                         }
                     };
-                    (idx, normalize_source_result(result, cwd))
+                    (idx, normalize_source_result(result, &source.selector, cwd))
                 })
             })
             .collect();
@@ -304,7 +304,10 @@ pub fn query_sources(
             // source's error, and the rest still complete.
             outcomes[slot] = Some(match handle.join() {
                 Ok((_idx, outcome)) => outcome,
-                Err(_) => QuerySourceResult::Err("query worker panicked".to_string()),
+                Err(_) => QuerySourceResult::Err(format!(
+                    "{}: query worker panicked",
+                    sources[slot].selector
+                )),
             });
         }
         outcomes
@@ -312,14 +315,20 @@ pub fn query_sources(
 
     Ok(outcomes
         .into_iter()
-        .map(|slot| slot.unwrap_or(QuerySourceResult::Err("load worker exited".to_string())))
+        .enumerate()
+        .map(|(slot, outcome)| {
+            outcome.unwrap_or_else(|| {
+                QuerySourceResult::Err(format!("{}: load worker exited", sources[slot].selector))
+            })
+        })
         .collect())
 }
 
 /// Canonical per-source outcome: an empty selector (no records for the
 /// source, e.g. a workspace without terminal logs) is an empty result, not an
-/// error — the batch keeps the rest. Timeouts report as `timeout`.
-fn normalize_source_result(result: Result<WorkSet>, cwd: &Path) -> QuerySourceResult {
+/// error — the batch keeps the rest. Errors carry the source selector so
+/// merged `all:` warnings name the origin that failed.
+fn normalize_source_result(result: Result<WorkSet>, source: &str, cwd: &Path) -> QuerySourceResult {
     match result {
         Ok(set) => QuerySourceResult::Ok(set),
         Err(error) => {
@@ -331,9 +340,9 @@ fn normalize_source_result(result: Result<WorkSet>, cwd: &Path) -> QuerySourceRe
                     Vec::new(),
                 ))
             } else if is_timeout_error(&message) {
-                QuerySourceResult::Err("timeout".to_string())
+                QuerySourceResult::Err(format!("{source}: timeout"))
             } else {
-                QuerySourceResult::Err(format!("{error:#}"))
+                QuerySourceResult::Err(format!("{source}: {error:#}"))
             }
         }
     }
@@ -621,7 +630,8 @@ pub fn load_context_records(
 #[cfg(test)]
 mod tests {
     use super::{
-        local_load_mode, merge_and_apply, resolve_source, split_group_scope, QueryTransport,
+        local_load_mode, merge_and_apply, normalize_source_result, resolve_source,
+        split_group_scope, QueryTransport,
     };
     use crate::commands::memory::workset::{QuerySourceResult, WorkSet};
     use sivtr_core::query::LoadMode;
@@ -716,6 +726,20 @@ mod tests {
         assert_eq!(split_group_scope(""), None);
         assert_eq!(split_group_scope("team/"), None);
         assert_eq!(split_group_scope("a b"), None);
+    }
+
+    #[test]
+    fn source_errors_name_the_failed_origin() {
+        let outcome = normalize_source_result(
+            Err(anyhow::anyhow!("request timed out")),
+            "desk:terminal",
+            std::path::Path::new("/repo"),
+        );
+
+        match outcome {
+            QuerySourceResult::Err(message) => assert_eq!(message, "desk:terminal: timeout"),
+            other => panic!("expected source error, got {other:?}"),
+        }
     }
 
     #[test]
