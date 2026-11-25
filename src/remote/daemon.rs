@@ -121,6 +121,7 @@ async fn run_async() -> Result<()> {
     }
 
     endpoint.close().await;
+    drop(_guard);
     FileExt::unlock(&lock)?;
     Ok(())
 }
