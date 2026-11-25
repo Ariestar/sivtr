@@ -5,148 +5,132 @@ use std::path::{Path, PathBuf};
 
 use crate::agents::{
     extract_content_text, filter_sessions_by_workspace, open_readonly_db, pretty_json_value,
-    push_block, system_time_from_millis, AgentBlockKind, AgentProvider, AgentSession,
-    AgentSessionProvider, SessionInfo,
+    push_block, system_time_from_millis, AgentBlockKind, AgentProvider, AgentSession, SessionInfo,
+    SessionListing,
 };
 
 const PROVIDER_NAME: &str = "OpenCode";
 const SESSION_PATH_PREFIX: &str = "opencode-session-";
 const SESSION_PATH_SUFFIX: &str = ".json";
 
-#[derive(Debug, Clone, Default)]
-pub struct OpenCodeProvider {
-    db_path: Option<PathBuf>,
+pub(crate) fn find_session_by_id(id: &str) -> Result<Option<PathBuf>> {
+    find_session_in(None, id)
 }
 
-impl OpenCodeProvider {
-    #[cfg(test)]
-    fn with_db_path(path: PathBuf) -> Self {
-        Self {
-            db_path: Some(path),
-        }
+fn find_session_in(db: Option<&Path>, id: &str) -> Result<Option<PathBuf>> {
+    let db_path = db.map(Path::to_path_buf).unwrap_or_else(opencode_db_path);
+    if !db_path.exists() {
+        return Ok(None);
     }
 
-    fn db_path(&self) -> PathBuf {
-        self.db_path.clone().unwrap_or_else(opencode_db_path)
+    let conn = open_readonly_db(&db_path)?;
+    let exact = conn
+        .query_row("select id from session where id = ?1", params![id], |row| {
+            row.get::<_, String>(0)
+        })
+        .optional()?;
+    if let Some(id) = exact {
+        return Ok(Some(opencode_session_path(&id)));
     }
+
+    let prefix = format!("{id}%");
+    let prefix_match = conn
+        .query_row(
+            "select id from session where id like ?1 order by time_updated desc limit 1",
+            params![prefix],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    Ok(prefix_match.map(|id| opencode_session_path(&id)))
 }
 
-impl AgentSessionProvider for OpenCodeProvider {
-    fn provider(&self) -> AgentProvider {
-        AgentProvider::OpenCode
-    }
-
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        let db_path = self.db_path();
-        if !db_path.exists() {
-            return Ok(Vec::new());
-        }
-
-        let conn = open_readonly_db(&db_path)?;
-        let mut stmt = conn.prepare(
-            "select id, directory, time_updated, title from session order by time_updated desc, id desc",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            let id: String = row.get(0)?;
-            let cwd: String = row.get(1)?;
-            let updated: i64 = row.get(2)?;
-            let title: String = row.get(3)?;
-            Ok((id, cwd, updated, title))
-        })?;
-
-        let mut sessions = Vec::new();
-        for row in rows {
-            let (id, session_cwd, updated, title) = row?;
-            sessions.push(SessionInfo {
-                modified: system_time_from_millis(updated),
-                path: opencode_session_path(&id),
-                physical_path: Some(db_path.clone()),
-                id: Some(id),
-                cwd: Some(session_cwd).filter(|value| !value.trim().is_empty()),
-                title: Some(title).filter(|title| !title.trim().is_empty()),
-            });
-        }
-
-        Ok(filter_sessions_by_workspace(sessions, cwd))
-    }
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        let session_id = session_id_from_path(path).with_context(|| {
-            format!(
-                "OpenCode session path `{}` does not contain a session id",
-                path.display()
-            )
-        })?;
-        self.parse_session_by_id(&session_id)
-    }
-
-    fn find_session_by_id(&self, id: &str) -> Result<Option<PathBuf>> {
-        let db_path = self.db_path();
-        if !db_path.exists() {
-            return Ok(None);
-        }
-
-        let conn = open_readonly_db(&db_path)?;
-        let exact = conn
-            .query_row("select id from session where id = ?1", params![id], |row| {
-                row.get::<_, String>(0)
-            })
-            .optional()?;
-        if let Some(id) = exact {
-            return Ok(Some(opencode_session_path(&id)));
-        }
-
-        let prefix = format!("{id}%");
-        let prefix_match = conn
-            .query_row(
-                "select id from session where id like ?1 order by time_updated desc limit 1",
-                params![prefix],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-        Ok(prefix_match.map(|id| opencode_session_path(&id)))
-    }
+pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
+    list_with_db(cwd, None)
 }
 
-impl OpenCodeProvider {
-    fn parse_session_by_id(&self, session_id: &str) -> Result<AgentSession> {
-        let db_path = self.db_path();
-        let conn = open_readonly_db(&db_path)?;
-        let meta = conn
-            .query_row(
-                "select id, directory, title from session where id = ?1",
-                params![session_id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                },
-            )
-            .optional()?
-            .with_context(|| format!("OpenCode session `{session_id}` was not found"))?;
+pub(crate) fn parse_file(_provider: AgentProvider, path: &Path) -> Result<AgentSession> {
+    parse_at(None, path)
+}
 
-        let mut session = AgentSession {
-            path: opencode_session_path(&meta.0),
-            id: Some(meta.0),
-            cwd: Some(meta.1),
-            title: Some(meta.2).filter(|title| !title.trim().is_empty()),
-            blocks: Vec::new(),
-        };
-
-        apply_message_rows(&conn, session_id, &mut session)?;
-        if session.blocks.is_empty() {
-            apply_session_message_rows(&conn, session_id, &mut session)?;
-        }
-
-        Ok(session)
+fn list_with_db(cwd: Option<&Path>, db: Option<&Path>) -> Result<SessionListing> {
+    let db_path = db.map(Path::to_path_buf).unwrap_or_else(opencode_db_path);
+    if !db_path.exists() {
+        return Ok((Vec::new(), Vec::new()));
     }
+
+    let conn = open_readonly_db(&db_path)?;
+    let mut stmt = conn.prepare(
+        "select id, directory, time_updated, title from session order by time_updated desc, id desc",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        let id: String = row.get(0)?;
+        let cwd: String = row.get(1)?;
+        let updated: i64 = row.get(2)?;
+        let title: String = row.get(3)?;
+        Ok((id, cwd, updated, title))
+    })?;
+
+    let mut sessions = Vec::new();
+    for row in rows {
+        let (id, session_cwd, updated, title) = row?;
+        sessions.push(SessionInfo {
+            modified: system_time_from_millis(updated),
+            path: opencode_session_path(&id),
+            physical_path: Some(db_path.clone()),
+            id: Some(id),
+            cwd: Some(session_cwd).filter(|value| !value.trim().is_empty()),
+            title: Some(title).filter(|title| !title.trim().is_empty()),
+        });
+    }
+
+    Ok((filter_sessions_by_workspace(sessions, cwd), Vec::new()))
+}
+
+fn parse_at(db: Option<&Path>, path: &Path) -> Result<AgentSession> {
+    let session_id = session_id_from_path(path).with_context(|| {
+        format!(
+            "OpenCode session path `{}` does not contain a session id",
+            path.display()
+        )
+    })?;
+    parse_session_in(db, &session_id)
+}
+
+fn parse_session_in(db: Option<&Path>, session_id: &str) -> Result<AgentSession> {
+    let db_path = db.map(Path::to_path_buf).unwrap_or_else(opencode_db_path);
+    let conn = open_readonly_db(&db_path)?;
+    let meta = conn
+        .query_row(
+            "select id, directory, title from session where id = ?1",
+            params![session_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()?
+        .with_context(|| format!("OpenCode session `{session_id}` was not found"))?;
+
+    let mut session = AgentSession {
+        path: opencode_session_path(&meta.0),
+        id: Some(meta.0),
+        cwd: Some(meta.1),
+        title: Some(meta.2).filter(|title| !title.trim().is_empty()),
+        blocks: Vec::new(),
+    };
+
+    apply_message_rows(&conn, session_id, &mut session)?;
+    Ok(session)
 }
 
 pub fn opencode_db_path() -> PathBuf {
-    if let Ok(path) = std::env::var("OPENCODE_DB_PATH") {
-        return PathBuf::from(path);
+    if let Ok(path) = std::env::var("OPENCODE_DB") {
+        if !path.trim().is_empty() {
+            return PathBuf::from(path);
+        }
     }
 
     if let Ok(path) = std::env::var("XDG_DATA_HOME") {
@@ -213,27 +197,6 @@ fn load_parts(conn: &Connection, session_id: &str, message_id: &str) -> Result<V
     Ok(parts)
 }
 
-fn apply_session_message_rows(
-    conn: &Connection,
-    session_id: &str,
-    session: &mut AgentSession,
-) -> Result<()> {
-    let mut stmt = conn.prepare(
-        "select time_created, data from session_message where session_id = ?1 order by time_created, id",
-    )?;
-    let rows = stmt.query_map(params![session_id], |row| {
-        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-    })?;
-
-    for row in rows {
-        let (timestamp, data) = row?;
-        let message = parse_json(&data)?;
-        apply_message(session, &message, timestamp, &[]);
-    }
-
-    Ok(())
-}
-
 fn parse_json(text: &str) -> Result<Value> {
     serde_json::from_str(text).with_context(|| format!("Failed to parse {PROVIDER_NAME} JSON data"))
 }
@@ -244,26 +207,13 @@ fn apply_message(session: &mut AgentSession, message: &Value, timestamp_ms: i64,
         return;
     };
 
-    if parts.is_empty() {
-        push_message_fallback(session, kind, timestamp, message);
-        return;
-    }
-
     for part in parts {
         apply_part(session, kind, timestamp.clone(), part);
     }
 }
 
 fn message_kind(message: &Value) -> Option<AgentBlockKind> {
-    match message
-        .get("role")
-        .or_else(|| {
-            message
-                .get("message")
-                .and_then(|message| message.get("role"))
-        })
-        .and_then(Value::as_str)
-    {
+    match message.get("role").and_then(Value::as_str) {
         Some("user") => Some(AgentBlockKind::User),
         Some("assistant") => Some(AgentBlockKind::Assistant),
         _ => None,
@@ -284,8 +234,8 @@ fn apply_part(
             None,
             extract_opencode_text(part),
         ),
-        Some("tool" | "tool_call" | "tool-call") => push_tool_part(session, timestamp, part),
-        Some("tool_result" | "tool-result") => push_block(
+        Some("tool") => push_tool_part(session, timestamp, part),
+        Some("tool_result") => push_block(
             session,
             AgentBlockKind::ToolOutput,
             timestamp,
@@ -351,26 +301,6 @@ fn push_tool_part(session: &mut AgentSession, timestamp: Option<String>, part: &
     }
 }
 
-fn push_message_fallback(
-    session: &mut AgentSession,
-    kind: AgentBlockKind,
-    timestamp: Option<String>,
-    message: &Value,
-) {
-    let content = message
-        .get("content")
-        .or_else(|| message.get("text"))
-        .or_else(|| message.get("message"))
-        .unwrap_or(message);
-    push_block(
-        session,
-        kind,
-        timestamp,
-        None,
-        extract_opencode_text(content),
-    );
-}
-
 fn extract_opencode_text(value: &Value) -> String {
     let text = value
         .get("text")
@@ -384,11 +314,12 @@ fn extract_opencode_text(value: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::OpenCodeProvider;
-    use crate::agents::{AgentBlockKind, AgentSessionProvider};
+    use super::{find_session_in, list_with_db, parse_at};
+    use crate::agents::AgentBlockKind;
     use rusqlite::{params, Connection};
+    use std::path::PathBuf;
 
-    fn test_provider() -> (tempfile::TempDir, OpenCodeProvider) {
+    fn test_provider() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("opencode.db");
         let conn = Connection::open(&path).unwrap();
@@ -460,17 +391,16 @@ mod tests {
         .unwrap();
         drop(conn);
 
-        let provider = OpenCodeProvider::with_db_path(path);
-        (dir, provider)
+        (dir, path)
     }
 
     #[test]
     fn lists_opencode_sessions_from_database() {
-        let (_dir, provider) = test_provider();
+        let (_dir, db) = test_provider();
 
-        let sessions = provider
-            .list_recent_sessions(Some(std::path::Path::new("D:\\sivtr")))
-            .unwrap();
+        let sessions = list_with_db(Some(std::path::Path::new("D:\\sivtr")), Some(&db))
+            .unwrap()
+            .0;
 
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id.as_deref(), Some("open-session"));
@@ -531,15 +461,10 @@ mod tests {
         .expect("insert opencode test part");
         drop(conn);
 
-        let provider = OpenCodeProvider::with_db_path(path);
-        let session = provider
-            .parse_session_file(
-                &provider
-                    .find_session_by_id("mcp-session")
-                    .expect("query opencode mcp session")
-                    .expect("opencode mcp session exists"),
-            )
-            .expect("parse opencode mcp session");
+        let session_path = find_session_in(Some(&path), "mcp-session")
+            .expect("query opencode mcp session")
+            .expect("opencode mcp session exists");
+        let session = parse_at(Some(&path), &session_path).expect("parse opencode mcp session");
 
         assert_eq!(session.blocks.len(), 2);
         assert_eq!(session.blocks[0].kind, AgentBlockKind::ToolCall);
@@ -556,13 +481,10 @@ mod tests {
 
     #[test]
     fn parses_opencode_messages_and_tools() {
-        let (_dir, provider) = test_provider();
-        let path = provider
-            .find_session_by_id("open-session")
-            .unwrap()
-            .unwrap();
+        let (_dir, db) = test_provider();
+        let path = find_session_in(Some(&db), "open-session").unwrap().unwrap();
 
-        let session = provider.parse_session_file(&path).unwrap();
+        let session = parse_at(Some(&db), &path).unwrap();
 
         assert_eq!(session.id.as_deref(), Some("open-session"));
         assert_eq!(session.cwd.as_deref(), Some("D:\\sivtr"));

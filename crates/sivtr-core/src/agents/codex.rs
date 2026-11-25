@@ -3,10 +3,9 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 use crate::agents::{
-    extract_content_text, jsonl_files, list_recent_jsonl_sessions, parse_jsonl_meta,
+    extract_content_text, jsonl_files, list_recent_jsonl_sessions_outcome, parse_jsonl_meta,
     parse_jsonl_session, pretty_json_string, pretty_json_value, push_block, push_tool_block,
-    AgentBlockKind, AgentProvider, AgentSession, AgentSessionMeta, AgentSessionProvider,
-    SessionInfo,
+    AgentBlockKind, AgentProvider, AgentSession, AgentSessionMeta, SessionInfo, SessionListing,
 };
 
 const PROVIDER_NAME: &str = "Codex";
@@ -14,114 +13,112 @@ const PROVIDER_NAME: &str = "Codex";
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CodexProvider;
 
-impl AgentSessionProvider for CodexProvider {
-    fn provider(&self) -> AgentProvider {
-        AgentProvider::Codex
-    }
-
-    fn list_recent_sessions(&self, cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-        let mut sessions = Vec::new();
-
-        // Shared JSONL discovery (stamp-validated listing cache, workspace
-        // filter) is applied per root; the sort below orders globally.
-        let root = local_codex_sessions_dir();
-        match list_recent_jsonl_sessions(PROVIDER_NAME, &root, cwd, parse_session_meta) {
-            Ok(mut root_sessions) => sessions.append(&mut root_sessions),
-            Err(error) => {
-                crate::diagnostics::warn(format!(
-                    "failed to read Codex session dir {}: {error:#}",
-                    root.display()
-                ));
-            }
-        }
-
-        sessions.sort_by_key(|session| session.modified);
-        sessions.reverse();
-        Ok(sessions)
-    }
-
-    fn parse_session_file(&self, path: &Path) -> Result<AgentSession> {
-        let mut saw_response_item = false;
-        let mut event_fallback_indices = Vec::new();
-        let mut session = parse_jsonl_session(path, PROVIDER_NAME, |session, value| {
-            let timestamp = value
-                .get("timestamp")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            let payload = value.get("payload").unwrap_or(&Value::Null);
-
-            match value.get("type").and_then(Value::as_str) {
-                Some("session_meta") => {
-                    session.id = payload
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                    session.cwd = payload
-                        .get("cwd")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                }
-                Some("response_item") => {
-                    saw_response_item = true;
-                    apply_response_item(session, payload, timestamp.clone());
-                }
-                Some("event_msg") => {
-                    let start = session.blocks.len();
-                    apply_event_msg(session, payload, timestamp);
-                    if session.blocks.len() > start {
-                        event_fallback_indices.extend(start..session.blocks.len());
-                    }
-                }
-                _ => {}
-            }
-        })?;
-
-        if saw_response_item && !event_fallback_indices.is_empty() {
-            let mut drop_mask = vec![false; session.blocks.len()];
-            for index in event_fallback_indices {
-                if let Some(slot) = drop_mask.get_mut(index) {
-                    *slot = true;
-                }
-            }
-            session.blocks = session
-                .blocks
-                .into_iter()
-                .enumerate()
-                .filter_map(|(index, block)| (!drop_mask[index]).then_some(block))
-                .collect();
-        }
-
-        Ok(session)
-    }
-
-    fn find_session_by_id(&self, id: &str) -> Result<Option<PathBuf>> {
-        for path in local_session_files()? {
-            if path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.contains(id))
-            {
-                return Ok(Some(path));
-            }
-
-            if parse_session_meta(&path)?.id.as_deref() == Some(id) {
-                return Ok(Some(path));
-            }
-        }
-
-        Ok(None)
-    }
-
-    fn find_current_session(&self, cwd: &Path) -> Result<Option<PathBuf>> {
-        if let Some(path) = find_current_thread_session()? {
+pub(crate) fn find_session_by_id(id: &str) -> Result<Option<PathBuf>> {
+    for path in local_session_files()? {
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.contains(id))
+        {
             return Ok(Some(path));
         }
 
-        Ok(list_recent_local_sessions(Some(cwd))?
-            .into_iter()
-            .next()
-            .map(|session| session.path))
+        if parse_session_meta(&path)?.id.as_deref() == Some(id) {
+            return Ok(Some(path));
+        }
     }
+
+    Ok(None)
+}
+
+pub(crate) fn find_current_session(cwd: &Path) -> Result<Option<PathBuf>> {
+    if let Some(path) = find_current_thread_session()? {
+        return Ok(Some(path));
+    }
+
+    Ok(list_recent_local_sessions(Some(cwd))?
+        .into_iter()
+        .next()
+        .map(|session| session.path))
+}
+
+pub(crate) fn list_outcome(_provider: AgentProvider, cwd: Option<&Path>) -> Result<SessionListing> {
+    list_recent_jsonl_sessions_outcome(
+        PROVIDER_NAME,
+        &local_codex_sessions_dir(),
+        cwd,
+        parse_session_meta,
+    )
+}
+
+pub(crate) fn parse_file(_provider: AgentProvider, path: &Path) -> Result<AgentSession> {
+    parse_codex_segment(path)
+}
+
+/// Parse one rollout, preferring response events while retaining unmatched plaintext reasoning.
+fn parse_codex_segment(path: &Path) -> Result<AgentSession> {
+    let mut saw_response_item = false;
+    let mut event_fallback_indices = Vec::new();
+    let mut session = parse_jsonl_session(path, PROVIDER_NAME, |session, value| {
+        let timestamp = value
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let payload = value.get("payload").unwrap_or(&Value::Null);
+
+        match value.get("type").and_then(Value::as_str) {
+            Some("session_meta") => {
+                session.id = payload
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                session.cwd = payload
+                    .get("cwd")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+            }
+            Some("response_item") => {
+                saw_response_item = true;
+                apply_response_item(session, payload, timestamp.clone());
+            }
+            Some("event_msg") => {
+                let start = session.blocks.len();
+                apply_event_msg(session, payload, timestamp);
+                if session.blocks.len() > start {
+                    event_fallback_indices.extend(start..session.blocks.len());
+                }
+            }
+            _ => {}
+        }
+    })?;
+
+    if saw_response_item && !event_fallback_indices.is_empty() {
+        let mut is_event = vec![false; session.blocks.len()];
+        for &index in &event_fallback_indices {
+            is_event[index] = true;
+        }
+        let response_reasoning: std::collections::HashSet<_> = session
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(index, block)| block.kind == AgentBlockKind::Thinking && !is_event[*index])
+            .map(|(_, block)| block.text.clone())
+            .collect();
+        let mut drop_mask = vec![false; session.blocks.len()];
+        for index in event_fallback_indices {
+            let block = &session.blocks[index];
+            drop_mask[index] =
+                block.kind != AgentBlockKind::Thinking || response_reasoning.contains(&block.text);
+        }
+        session.blocks = session
+            .blocks
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, block)| (!drop_mask[index]).then_some(block))
+            .collect();
+    }
+
+    Ok(session)
 }
 
 pub fn codex_home() -> PathBuf {
@@ -151,28 +148,54 @@ fn parse_session_meta(path: &Path) -> Result<AgentSessionMeta> {
     })
 }
 
+/// Retain response content and assistant phases so selection can distinguish progress from answers.
 fn apply_response_item(session: &mut AgentSession, payload: &Value, timestamp: Option<String>) {
     match payload.get("type").and_then(Value::as_str) {
         Some("message") => {
             let kind = match payload.get("role").and_then(Value::as_str) {
                 Some("user") => AgentBlockKind::User,
-                Some("assistant") => {
-                    if payload.get("phase").and_then(Value::as_str) == Some("commentary") {
-                        return;
-                    }
-                    AgentBlockKind::Assistant
-                }
+                Some("assistant") => AgentBlockKind::Assistant,
                 _ => return,
             };
             let text = extract_content_text(payload.get("content").unwrap_or(&Value::Null));
+            let label = (kind == AgentBlockKind::Assistant)
+                .then(|| {
+                    payload
+                        .get("phase")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .flatten();
             push_block(
                 session,
                 kind,
                 timestamp,
-                None,
+                label,
                 clean_codex_message_text(kind, text),
             );
         }
+        Some("reasoning") => {
+            let summary = extract_content_text(payload.get("summary").unwrap_or(&Value::Null));
+            let content = extract_content_text(payload.get("content").unwrap_or(&Value::Null));
+            let text = [summary, content]
+                .into_iter()
+                .filter(|text| !text.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            push_block(session, AgentBlockKind::Thinking, timestamp, None, text);
+        }
+        Some("web_search_call") => push_tool_block(
+            session,
+            AgentBlockKind::ToolCall,
+            timestamp,
+            payload
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            Some("web_search".to_string()),
+            pretty_json_value(payload.get("action").unwrap_or(&Value::Null)),
+            None,
+        ),
         Some("function_call") => push_tool_block(
             session,
             AgentBlockKind::ToolCall,
@@ -197,11 +220,7 @@ fn apply_response_item(session: &mut AgentSession, payload: &Value, timestamp: O
                 .and_then(Value::as_str)
                 .map(str::to_string),
             None,
-            payload
-                .get("output")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
+            extract_content_text(payload.get("output").unwrap_or(&Value::Null)),
             None,
         ),
         // Modern codex records shell/apply_patch/read calls as custom tool
@@ -240,6 +259,7 @@ fn apply_response_item(session: &mut AgentSession, payload: &Value, timestamp: O
     }
 }
 
+/// Supply plaintext fallback content, retaining the same phase labels as response items.
 fn apply_event_msg(session: &mut AgentSession, payload: &Value, timestamp: Option<String>) {
     match payload.get("type").and_then(Value::as_str) {
         Some("user_message") => push_block(
@@ -250,20 +270,27 @@ fn apply_event_msg(session: &mut AgentSession, payload: &Value, timestamp: Optio
             extract_content_text(payload.get("message").unwrap_or(&Value::Null)),
         ),
         Some("agent_message") => {
-            if payload.get("phase").and_then(Value::as_str) == Some("commentary") {
-                return;
-            }
             push_block(
                 session,
                 AgentBlockKind::Assistant,
                 timestamp,
-                None,
+                payload
+                    .get("phase")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
                 clean_codex_message_text(
                     AgentBlockKind::Assistant,
                     extract_content_text(payload.get("message").unwrap_or(&Value::Null)),
                 ),
             );
         }
+        Some("agent_reasoning") => push_block(
+            session,
+            AgentBlockKind::Thinking,
+            timestamp,
+            None,
+            extract_content_text(payload.get("text").unwrap_or(&Value::Null)),
+        ),
         _ => {}
     }
 }
@@ -302,12 +329,13 @@ fn local_session_files() -> Result<Vec<PathBuf>> {
 }
 
 fn list_recent_local_sessions(cwd: Option<&Path>) -> Result<Vec<SessionInfo>> {
-    list_recent_jsonl_sessions(
+    list_recent_jsonl_sessions_outcome(
         PROVIDER_NAME,
         &local_codex_sessions_dir(),
         cwd,
         parse_session_meta,
     )
+    .map(|(sessions, _)| sessions)
 }
 
 fn find_current_thread_session() -> Result<Option<PathBuf>> {
@@ -320,20 +348,200 @@ fn find_current_thread_session() -> Result<Option<PathBuf>> {
         return Ok(None);
     }
 
-    CodexProvider.find_session_by_id(thread_id)
+    find_session_by_id(thread_id)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::CodexProvider;
-    use crate::agents::{
-        select_blocks, AgentBlockKind, AgentProvider, AgentSelection, AgentSessionProvider,
-    };
+    use super::parse_file;
+    use crate::agents::{select_blocks, AgentBlockKind, AgentProvider, AgentSelection};
     use serde_json::json;
-    use std::{env, time::Duration};
+    use std::path::Path;
+    use std::time::{Duration, UNIX_EPOCH};
+    use std::{env, fs};
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         crate::test_env_lock()
+    }
+
+    fn set_mtime(path: &Path, secs: u64) {
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(secs))
+            .unwrap();
+    }
+
+    /// Every resumed rollout of one logical session merges into one record set.
+    #[test]
+    fn merges_resumed_codex_segments_without_losing_messages() {
+        let _environment = crate::test_fixtures::EnvGuard::capture(&["CODEX_HOME", "SIVTR_HOME"]);
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("codex");
+        let sessions = home.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        env::set_var("CODEX_HOME", &home);
+        env::set_var("SIVTR_HOME", directory.path().join("sivtr"));
+        let first = sessions.join("rollout-session-segments-123456789.jsonl");
+        let resumed = sessions.join("rollout-session-segments-123456789_resume.jsonl");
+        std::fs::write(&first, concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"session-segments-123456789\"}}\n",
+            "{\"timestamp\":\"2026-11-07T00:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"text\":\"question\"}]}}\n",
+            "{\"timestamp\":\"2026-11-07T00:00:02Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"text\":\"first answer\"}]}}\n",
+        )).unwrap();
+        std::fs::write(&resumed, concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"session-segments-123456789\"}}\n",
+            "{\"timestamp\":\"2026-11-07T00:00:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"text\":\"question\"}]}}\n",
+            "{\"timestamp\":\"2026-11-07T00:00:03Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"text\":\"followup\"}]}}\n",
+            "{\"timestamp\":\"2026-11-07T00:00:04Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[{\"text\":\"working update\"}]}}\n",
+            "{\"timestamp\":\"2026-11-07T00:00:05Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"visible reasoning\"}]}}\n",
+            "{\"timestamp\":\"2026-11-07T00:00:06Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"call_id\":\"call-test\",\"name\":\"shell\",\"arguments\":\"echo evidence\"}}\n",
+            "{\"timestamp\":\"2026-11-07T00:00:07Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call-test\",\"output\":\"evidence\"}}\n",
+            "{\"timestamp\":\"2026-11-07T00:00:08Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"text\":\"latest answer\"}]}}\n",
+        )).unwrap();
+        let unrelated = sessions.join("rollout-session-segments-123456789_other.jsonl");
+        std::fs::write(&unrelated, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"other-session\"}}\n{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"text\":\"unrelated\"}]}}\n").unwrap();
+
+        let scan = crate::agents::engine::scan_provider(
+            AgentProvider::Codex,
+            None,
+            true,
+            &Default::default(),
+        )
+        .unwrap();
+        assert!(scan.complete);
+        assert_eq!(scan.sessions.len(), 2, "one logical session per id");
+        let merged = scan
+            .sessions
+            .iter()
+            .find(|session| session.key == "session-segments-123456789")
+            .unwrap();
+        assert_eq!(merged.files.len(), 2);
+        let texts: Vec<_> = merged
+            .session
+            .blocks
+            .iter()
+            .map(|block| block.text.as_str())
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                "question",
+                "first answer",
+                "followup",
+                "working update",
+                "visible reasoning",
+                "echo evidence",
+                "evidence",
+                "latest answer"
+            ]
+        );
+    }
+
+    /// A writer racing the reader must not hide healthy siblings, and the scan
+    /// reports itself incomplete so the archive keeps its rows.
+    #[test]
+    fn incomplete_sibling_parses_keep_healthy_segments_and_report_failure() {
+        let _environment = crate::test_fixtures::EnvGuard::capture(&["CODEX_HOME", "SIVTR_HOME"]);
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("codex");
+        let sessions = home.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        env::set_var("CODEX_HOME", &home);
+        env::set_var("SIVTR_HOME", directory.path().join("archive"));
+        let representative = sessions.join("representative.jsonl");
+        let healthy = sessions.join("healthy.jsonl");
+        let metadata = json!({"type":"session_meta","payload":{"id":"sibling-test"}});
+        let question = json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"question"}]}});
+        let answer = json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"healthy answer"}]}});
+        std::fs::write(&representative, format!("{metadata}\n{question}\n")).unwrap();
+        std::fs::write(&healthy, format!("{metadata}\n{answer}\n")).unwrap();
+        set_mtime(&representative, 1_700_000_000);
+        set_mtime(&healthy, 1_700_000_100);
+        let malformed = sessions.join("malformed.jsonl");
+        // A truncated sibling of a different session: its own group fails,
+        // the healthy group must still publish.
+        let broken = json!({"type":"session_meta","payload":{"id":"broken-sibling"}});
+        std::fs::write(&malformed, format!("{broken}\n{{truncated\n")).unwrap();
+
+        let scan = crate::agents::engine::scan_provider(
+            AgentProvider::Codex,
+            None,
+            true,
+            &Default::default(),
+        )
+        .unwrap();
+        assert!(!scan.complete, "failed siblings make the scan incomplete");
+        let failures: Vec<_> = scan.failures.iter().map(|(path, _)| path.clone()).collect();
+        assert_eq!(failures, [malformed]);
+        let session = scan
+            .sessions
+            .iter()
+            .find(|session| session.key == "sibling-test")
+            .unwrap();
+        let texts: Vec<_> = session
+            .session
+            .blocks
+            .iter()
+            .map(|block| block.text.as_str())
+            .collect();
+        assert_eq!(texts, ["question", "healthy answer"]);
+    }
+
+    /// Event reasoning is the only plaintext copy in some modern rollouts.
+    #[test]
+    fn retains_event_reasoning_when_response_items_have_no_plaintext_copy() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("rollout.jsonl");
+        std::fs::write(&path, concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"reasoning-test\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_reasoning\",\"text\":\"event only\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_reasoning\",\"text\":\"shared reasoning\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"reasoning\",\"summary\":[{\"text\":\"shared reasoning\"}]}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"text\":\"answer\"}]}}\n"
+        )).unwrap();
+        let session = parse_file(AgentProvider::Codex, &path).unwrap();
+        let texts: Vec<_> = session
+            .blocks
+            .iter()
+            .map(|block| block.text.as_str())
+            .collect();
+        assert_eq!(texts, ["event only", "shared reasoning", "answer"]);
+    }
+
+    #[test]
+    fn retains_array_function_outputs() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("rollout.jsonl");
+        std::fs::write(&path, concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"array-output-test\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"array-call\",\"output\":[{\"type\":\"input_text\",\"text\":\"Wall time: 1 second\"},{\"type\":\"input_text\",\"text\":\"complete evidence\"}]}}\n"
+        )).unwrap();
+        let session = parse_file(AgentProvider::Codex, &path).unwrap();
+        assert_eq!(session.blocks.len(), 1);
+        assert_eq!(session.blocks[0].kind, AgentBlockKind::ToolOutput);
+        assert_eq!(session.blocks[0].call_id.as_deref(), Some("array-call"));
+        assert_eq!(
+            session.blocks[0].text,
+            "Wall time: 1 second\n\ncomplete evidence"
+        );
+    }
+
+    #[test]
+    fn retains_native_web_search_actions() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("rollout.jsonl");
+        std::fs::write(&path, concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"web-test\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"web_search_call\",\"id\":\"ws-test\",\"status\":\"completed\",\"action\":{\"type\":\"search\",\"query\":\"session evidence\"}}}\n"
+        )).unwrap();
+        let session = parse_file(AgentProvider::Codex, &path).unwrap();
+        assert_eq!(session.blocks.len(), 1);
+        assert_eq!(session.blocks[0].kind, AgentBlockKind::ToolCall);
+        assert_eq!(session.blocks[0].label.as_deref(), Some("web_search"));
+        assert_eq!(session.blocks[0].call_id.as_deref(), Some("ws-test"));
+        assert!(session.blocks[0].text.contains("session evidence"));
     }
 
     #[test]
@@ -351,7 +559,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = CodexProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Codex, &path).unwrap();
 
         assert_eq!(session.id.as_deref(), Some("abc"));
         assert_eq!(session.cwd.as_deref(), Some("C:\\repo"));
@@ -377,7 +585,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = CodexProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Codex, &path).unwrap();
 
         assert_eq!(session.blocks.len(), 4);
         assert_eq!(session.blocks[1].kind, AgentBlockKind::ToolCall);
@@ -409,9 +617,7 @@ mod tests {
         )
         .expect("write test session log");
 
-        let session = CodexProvider
-            .parse_session_file(&path)
-            .expect("parse test session");
+        let session = parse_file(AgentProvider::Codex, &path).expect("parse test session");
 
         // Injected envelopes never become dialogue; the bare `<skill>` wrapper
         // becomes a labeled skill block.
@@ -443,9 +649,7 @@ mod tests {
         )
         .expect("write test session log");
 
-        let session = CodexProvider
-            .parse_session_file(&path)
-            .expect("parse test session");
+        let session = parse_file(AgentProvider::Codex, &path).expect("parse test session");
 
         // A truncated wrapper is user text, not a Codex skill expansion:
         // reclassifying it would swallow real dialogue into a Skill block.
@@ -469,7 +673,7 @@ mod tests {
 "#,
         )
         .unwrap();
-        let session = CodexProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Codex, &path).unwrap();
 
         let blocks = select_blocks(&session, AgentSelection::LastTurn);
 
@@ -486,7 +690,7 @@ mod tests {
     }
 
     #[test]
-    fn skips_commentary_assistant_messages() {
+    fn preserves_commentary_and_selects_latest_assistant_answer() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("rollout.jsonl");
         std::fs::write(
@@ -495,15 +699,45 @@ mod tests {
 {"type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"copy the answer"}]}}
 {"type":"response_item","payload":{"type":"message","role":"assistant","phase":"commentary","content":[{"text":"working update"}]}}
 {"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"real answer"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","phase":"commentary","content":[{"text":"trailing progress"}]}}
 "#,
         )
         .unwrap();
-        let session = CodexProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Codex, &path).unwrap();
 
         let blocks = select_blocks(&session, AgentSelection::LastAssistant);
 
-        assert_eq!(session.blocks.len(), 2);
+        assert_eq!(session.blocks.len(), 4);
+        assert_eq!(session.blocks[1].text, "working update");
+        assert_eq!(session.blocks[1].label.as_deref(), Some("commentary"));
         assert_eq!(blocks[0].text, "real answer");
+        let records = crate::record::WorkRecord::chat_turns(AgentProvider::Codex, &session);
+        assert!(records[0].parts.iter().any(|part| matches!(
+            &part.body, crate::record::WorkPartBody::Message { label: Some(label), .. }
+            if label == "commentary"
+        )));
+    }
+
+    /// Both event-only answers and commentary-only sessions need phase-aware selection.
+    #[test]
+    fn last_assistant_excludes_event_commentary_and_commentary_only_sessions() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("rollout.jsonl");
+        let progress = json!({"type":"event_msg","payload":{"type":"agent_message","phase":"commentary","message":"still working"}});
+        let answer = json!({"type":"event_msg","payload":{"type":"agent_message","phase":"final_answer","message":"final answer"}});
+        for events in [format!("{progress}\n"), format!("{answer}\n{progress}\n")] {
+            std::fs::write(&path, events).unwrap();
+            let session = parse_file(AgentProvider::Codex, &path).unwrap();
+            let all = select_blocks(&session, AgentSelection::All);
+            assert_eq!(all.last().unwrap().label.as_deref(), Some("commentary"));
+            let selected = select_blocks(&session, AgentSelection::LastAssistant);
+            if all.len() == 1 {
+                assert!(selected.is_empty());
+            } else {
+                assert_eq!(selected[0].text, "final answer");
+                assert_eq!(selected[0].label.as_deref(), Some("final_answer"));
+            }
+        }
     }
 
     #[test]
@@ -518,7 +752,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = CodexProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Codex, &path).unwrap();
 
         assert_eq!(session.blocks.len(), 1);
         assert_eq!(session.blocks[0].text, "real answer");
@@ -536,7 +770,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = CodexProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Codex, &path).unwrap();
 
         assert_eq!(
             session.blocks[0].text,
@@ -597,12 +831,16 @@ mod tests {
         env::set_var("CODEX_THREAD_ID", "thread-session");
         env::set_var("SIVTR_HOME", temp.path().join("data"));
 
-        let resolved = CodexProvider.find_current_session(&cwd_match).unwrap();
+        let resolved =
+            crate::agents::profile::find_current_session(AgentProvider::Codex, &cwd_match).unwrap();
         env::remove_var("CODEX_THREAD_ID");
-        let inferred = CodexProvider.find_current_session(&cwd_match).unwrap();
-        let missing = CodexProvider
-            .find_current_session(&temp.path().join("unrelated"))
-            .unwrap();
+        let inferred =
+            crate::agents::profile::find_current_session(AgentProvider::Codex, &cwd_match).unwrap();
+        let missing = crate::agents::profile::find_current_session(
+            AgentProvider::Codex,
+            &temp.path().join("unrelated"),
+        )
+        .unwrap();
 
         match previous_codex_home {
             Some(value) => env::set_var("CODEX_HOME", value),
@@ -635,7 +873,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = CodexProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Codex, &path).unwrap();
 
         assert_eq!(session.id.as_deref(), Some("abc"));
         assert_eq!(session.blocks.len(), 2);
@@ -657,14 +895,15 @@ mod tests {
         )
         .unwrap();
 
-        let session = CodexProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Codex, &path).unwrap();
 
         assert_eq!(session.id.as_deref(), Some("abc"));
-        assert_eq!(session.blocks.len(), 2);
+        assert_eq!(session.blocks.len(), 3);
         assert_eq!(session.blocks[0].kind, AgentBlockKind::User);
         assert_eq!(session.blocks[0].text, "hello from event");
         assert_eq!(session.blocks[1].kind, AgentBlockKind::Assistant);
-        assert_eq!(session.blocks[1].text, "done from event");
+        assert_eq!(session.blocks[1].text, "working");
+        assert_eq!(session.blocks[2].text, "done from event");
     }
 
     #[test]
@@ -682,7 +921,7 @@ mod tests {
         )
         .unwrap();
 
-        let session = CodexProvider.parse_session_file(&path).unwrap();
+        let session = parse_file(AgentProvider::Codex, &path).unwrap();
 
         assert_eq!(session.blocks.len(), 2);
         assert_eq!(session.blocks[0].text, "response user");

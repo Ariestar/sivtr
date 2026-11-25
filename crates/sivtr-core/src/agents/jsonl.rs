@@ -7,7 +7,9 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use super::model::{AgentSession, AgentSessionMeta, SessionInfo, WorkspaceMatchTarget};
+use super::model::{
+    AgentSession, AgentSessionMeta, SessionInfo, SessionListing, WorkspaceMatchTarget,
+};
 
 /// Bump when the listing cache layout or meta parsing changes.
 const LISTING_CACHE_VERSION: u32 = 4;
@@ -112,6 +114,17 @@ pub fn list_recent_jsonl_sessions(
     cwd: Option<&Path>,
     parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
 ) -> Result<Vec<SessionInfo>> {
+    Ok(list_recent_jsonl_sessions_outcome(provider, root, cwd, parse_meta)?.0)
+}
+
+/// Listing plus per-file metadata failures, for sync callers that must keep
+/// the archive intact when a file cannot be read.
+pub fn list_recent_jsonl_sessions_outcome(
+    provider: &str,
+    root: &Path,
+    cwd: Option<&Path>,
+    parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
+) -> Result<SessionListing> {
     collect_recent_sessions(
         provider,
         root,
@@ -136,6 +149,25 @@ pub fn list_sessions_matching(
     extra_stamp_paths: impl Fn(&Path) -> Vec<PathBuf>,
     parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
 ) -> Result<Vec<SessionInfo>> {
+    Ok(list_sessions_matching_outcome(
+        provider,
+        root,
+        cwd,
+        is_session_leaf,
+        extra_stamp_paths,
+        parse_meta,
+    )?
+    .0)
+}
+
+pub fn list_sessions_matching_outcome(
+    provider: &str,
+    root: &Path,
+    cwd: Option<&Path>,
+    is_session_leaf: impl Fn(&Path, bool) -> bool,
+    extra_stamp_paths: impl Fn(&Path) -> Vec<PathBuf>,
+    parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
+) -> Result<SessionListing> {
     collect_recent_sessions(
         provider,
         root,
@@ -158,6 +190,15 @@ pub fn list_chat_recording_sessions(
     cwd: Option<&Path>,
     parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
 ) -> Result<Vec<SessionInfo>> {
+    Ok(list_chat_recording_sessions_outcome(provider, tmp_root, cwd, parse_meta)?.0)
+}
+
+pub fn list_chat_recording_sessions_outcome(
+    provider: &str,
+    tmp_root: &Path,
+    cwd: Option<&Path>,
+    parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
+) -> Result<SessionListing> {
     collect_recent_sessions(
         provider,
         tmp_root,
@@ -192,15 +233,16 @@ fn collect_recent_sessions(
     is_session_leaf: impl Fn(&Path, bool) -> bool,
     extra_stamp_paths: impl Fn(&Path) -> Vec<PathBuf>,
     parse_meta: impl Fn(&Path) -> Result<AgentSessionMeta>,
-) -> Result<Vec<SessionInfo>> {
+) -> Result<SessionListing> {
     if !root.exists() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
 
     let wanted = cwd.map(WorkspaceMatchTarget::new);
     let mut cache = load_listing_cache(provider, root);
     let mut dirty = false;
     let mut sessions = Vec::new();
+    let mut failures = Vec::new();
 
     // Incremental walk: a directory whose stamp is unchanged contributes its
     // cached child list without a read_dir; only changed directories are
@@ -273,14 +315,13 @@ fn collect_recent_sessions(
                     meta,
                     wanted.as_ref(),
                 ),
-                Err(error) => crate::diagnostics::warn(format!(
-                    "failed to parse agent session metadata {}: {error:#}",
-                    path.display()
-                )),
+                Err(error) => {
+                    failures.push((path.clone(), format!("{error:#}")));
+                    continue;
+                }
             }
             continue;
         };
-
         let meta = match cache.entries.get(&path) {
             Some(entry)
                 if entry.mtime_secs == stamp.0
@@ -307,10 +348,7 @@ fn collect_recent_sessions(
                         meta
                     }
                     Err(error) => {
-                        crate::diagnostics::warn(format!(
-                            "failed to parse agent session metadata {}: {error:#}",
-                            path.display()
-                        ));
+                        failures.push((path.clone(), format!("{error:#}")));
                         continue;
                     }
                 }
@@ -332,7 +370,7 @@ fn collect_recent_sessions(
 
     sessions.sort_by_key(|session| session.modified);
     sessions.reverse();
-    Ok(sessions)
+    Ok((sessions, failures))
 }
 
 fn push_session(
