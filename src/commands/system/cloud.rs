@@ -21,7 +21,6 @@ use crate::cli::{
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct AttachedCapability {
     remote: String,
-    key_file: PathBuf,
     scope: String,
 }
 
@@ -215,17 +214,10 @@ fn share_attach(args: &ShareAttachArgs) -> Result<()> {
         recipient_path.exists(),
         "recipient key is missing; run `sivtr share register` first"
     );
-    let key = cloud::unwrap_capability(&capability, &cloud::load_recipient_key(&recipient_path)?)?;
-    let key_file = attached_key_path(&args.capability_id);
-    if let Some(parent) = key_file.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create {}", parent.display()))?;
-    }
-    std::fs::write(&key_file, key)
-        .with_context(|| format!("Failed to write {}", key_file.display()))?;
+    let payload =
+        cloud::unwrap_capability(&capability, &cloud::load_recipient_key(&recipient_path)?)?;
     let attached = AttachedCapability {
         remote: settings.remote.clone(),
-        key_file: key_file.clone(),
         scope: scope_label(&capability.scope),
     };
     std::fs::write(
@@ -233,7 +225,7 @@ fn share_attach(args: &ShareAttachArgs) -> Result<()> {
         toml::to_string(&attached)?,
     )?;
     let conn = archive::open()?;
-    let report = cloud::sync_pull_scope(&conn, backend.as_ref(), &key, &capability.scope)?;
+    let report = cloud::sync_pull_capability(&conn, backend.as_ref(), &payload)?;
     if args.json {
         print_json(&report)
     } else {
@@ -256,7 +248,6 @@ fn share_revoke(args: &ShareRevokeArgs) -> Result<()> {
     let backend = backend_for_remote(&settings.remote)?;
     cloud::revoke_capability(backend.as_ref(), &args.capability_id)?;
     let _ = std::fs::remove_file(attached_state_path(&args.capability_id));
-    let _ = std::fs::remove_file(attached_key_path(&args.capability_id));
     if args.json {
         print_json(&serde_json::json!({ "revoked": args.capability_id }))
     } else {
@@ -284,10 +275,6 @@ fn attached_state_path(id: &str) -> PathBuf {
     workspace::home_dir()
         .join("caps")
         .join(format!("{id}.toml"))
-}
-
-fn attached_key_path(id: &str) -> PathBuf {
-    workspace::home_dir().join("caps").join(format!("{id}.key"))
 }
 
 fn remote_from_attached(id: &str) -> Result<String> {

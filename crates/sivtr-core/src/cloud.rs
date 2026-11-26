@@ -124,10 +124,21 @@ pub struct Capability {
     pub schema_version: u32,
     pub id: String,
     pub scope: CapabilityScope,
-    pub wrapped_key: Vec<u8>,
+    pub wrapped_payload: Vec<u8>,
     pub ephemeral_public: [u8; 32],
     pub created_at: String,
     pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScopedSession {
+    pub entry: SessionEntry,
+    pub session_key: [u8; 32],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapabilityPayload {
+    pub sessions: Vec<ScopedSession>,
 }
 
 /// Blocking object backend. Implementations must keep secrets out of errors.
@@ -256,17 +267,28 @@ pub fn create_capability(
     scope: CapabilityScope,
     id: &str,
 ) -> Result<Capability> {
+    let catalog = read_catalog(backend, library_key)?;
+    let sessions = sessions_in_scope(&catalog, &scope)
+        .into_iter()
+        .map(|entry| ScopedSession {
+            session_key: session_key(library_key, &entry.provider, &entry.session_id),
+            entry,
+        })
+        .collect();
+    let payload = CapabilityPayload { sessions };
     let mut ephemeral_bytes = [0_u8; 32];
     getrandom::fill(&mut ephemeral_bytes).context("OS random source unavailable")?;
     let ephemeral = StaticSecret::from(ephemeral_bytes);
     let shared = ephemeral.diffie_hellman(&PublicKey::from(*recipient_public));
     let wrapping_key = capability_key(shared.as_bytes(), id);
-    let wrapped_key = encrypt(library_key, &wrapping_key, &capability_aad(id))?;
+    let plaintext =
+        serde_json::to_vec(&payload).context("Failed to serialize capability payload")?;
+    let wrapped_payload = encrypt(&plaintext, &wrapping_key, &capability_aad(id))?;
     let capability = Capability {
         schema_version: SCHEMA_VERSION,
         id: id.to_string(),
         scope,
-        wrapped_key,
+        wrapped_payload,
         ephemeral_public: PublicKey::from(&ephemeral).to_bytes(),
         created_at: now_rfc3339(),
         expires_at: None,
@@ -287,19 +309,20 @@ pub fn read_capability(backend: &dyn CloudBackend, id: &str) -> Result<Option<Ca
     Ok(Some(capability))
 }
 
-pub fn unwrap_capability(capability: &Capability, recipient_secret: &[u8; 32]) -> Result<[u8; 32]> {
+pub fn unwrap_capability(
+    capability: &Capability,
+    recipient_secret: &[u8; 32],
+) -> Result<CapabilityPayload> {
     let secret = StaticSecret::from(*recipient_secret);
     let public = PublicKey::from(capability.ephemeral_public);
     let shared = secret.diffie_hellman(&public);
     let wrapping_key = capability_key(shared.as_bytes(), &capability.id);
     let bytes = decrypt(
-        &capability.wrapped_key,
+        &capability.wrapped_payload,
         &wrapping_key,
         &capability_aad(&capability.id),
     )?;
-    bytes
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("unwrapped library key has invalid length"))
+    serde_json::from_slice(&bytes).context("Failed to parse capability payload")
 }
 
 pub fn revoke_capability(backend: &dyn CloudBackend, id: &str) -> Result<()> {
@@ -338,6 +361,17 @@ pub fn cross_session_matches<'a>(catalog: &'a Catalog, query: &str) -> Vec<&'a S
                 || entry.session_id.to_ascii_lowercase().contains(&needle)
         })
         .collect()
+}
+
+pub fn session_key(library_key: &[u8; 32], provider: &str, session_id: &str) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"sivtr-cloud-session-v1");
+    hasher.update(library_key);
+    hasher.update(b"\0");
+    hasher.update(provider.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(session_id.as_bytes());
+    hasher.finalize().into()
 }
 
 fn capability_key(shared_secret: &[u8], id: &str) -> [u8; 32] {
@@ -389,15 +423,15 @@ pub fn sync_push(
     let mut sessions_written = 0usize;
 
     for session in exported {
-        let session_key = (session.provider.clone(), session.session_id.clone());
-        if let Some(old) = sessions_by_key.get(&session_key) {
+        let map_key = (session.provider.clone(), session.session_id.clone());
+        if let Some(old) = sessions_by_key.get(&map_key) {
             if old.content_hash == session.content_hash {
                 continue;
             }
         }
         let chunks = upload_chunks(
             backend,
-            key,
+            &session_key(key, &session.provider, &session.session_id),
             &session.session_id,
             &session.canonical,
             &mut chunks_uploaded,
@@ -406,7 +440,7 @@ pub fn sync_push(
         )?;
         sessions_written += 1;
         sessions_by_key.insert(
-            session_key,
+            map_key,
             SessionEntry {
                 provider: session.provider,
                 session_id: session.session_id,
@@ -492,7 +526,11 @@ pub fn sync_pull_scope(
                 }
             }
             None => {
-                let json = download_session(backend, key, entry)?;
+                let json = download_session(
+                    backend,
+                    &session_key(key, &entry.provider, &entry.session_id),
+                    entry,
+                )?;
                 let records: Vec<WorkRecord> = parse_jsonl(&json, &entry.session_id)?;
                 ensure!(
                     records.len() == entry.record_count,
@@ -550,6 +588,87 @@ pub fn sync_pull_scope(
     })
 }
 
+pub fn sync_pull_capability(
+    conn: &Connection,
+    backend: &dyn CloudBackend,
+    payload: &CapabilityPayload,
+) -> Result<SyncPullReport> {
+    let mut added = 0usize;
+    let mut unchanged = 0usize;
+    let mut records_added = 0usize;
+    let mut conflicts = Vec::new();
+
+    for scoped in &payload.sessions {
+        let entry = &scoped.entry;
+        match store::load_records_by_key(conn, &entry.provider, &entry.session_id, BlobMode::Full)?
+        {
+            Some(records) => {
+                if sha256_hex(&canonical_jsonl(&records)?) == entry.content_hash {
+                    unchanged += 1;
+                } else {
+                    conflicts.push(format!(
+                        "{}/{} differs locally",
+                        entry.provider, entry.session_id
+                    ));
+                }
+            }
+            None => {
+                let json = download_session(backend, &scoped.session_key, entry)?;
+                let records = parse_jsonl(&json, &entry.session_id)?;
+                ensure!(
+                    records.len() == entry.record_count,
+                    "cloud session {}/{} declares {} records but contains {}",
+                    entry.provider,
+                    entry.session_id,
+                    entry.record_count,
+                    records.len()
+                );
+                ensure!(
+                    sha256_hex(&json) == entry.content_hash,
+                    "cloud session {}/{} content hash mismatch",
+                    entry.provider,
+                    entry.session_id
+                );
+                let workspace_key = entry.workspace_key.clone();
+                store::upsert_session(
+                    conn,
+                    &SessionUpsert {
+                        provider: &entry.provider,
+                        session_id: &entry.session_id,
+                        source_path: Path::new(&entry.source_path),
+                        cwd: entry.cwd.as_deref(),
+                        workspace_key: &workspace_key,
+                        title: entry.title.as_deref(),
+                        stamp: (0, 0, 0),
+                        fingerprint: 0,
+                        records: &records,
+                        usage_events: &[],
+                    },
+                )
+                .with_context(|| {
+                    format!(
+                        "Failed to restore cloud session {}/{}",
+                        entry.provider, entry.session_id
+                    )
+                })?;
+                if entry.starred {
+                    store::set_session_starred(conn, &entry.provider, &entry.session_id, true)?;
+                }
+                added += 1;
+                records_added += records.len();
+            }
+        }
+    }
+
+    Ok(SyncPullReport {
+        generation: 0,
+        sessions_added: added,
+        sessions_unchanged: unchanged,
+        records_added,
+        conflicts,
+    })
+}
+
 pub fn reclaim_cache(
     conn: &Connection,
     backend: &dyn CloudBackend,
@@ -580,14 +699,19 @@ pub fn verify_remote(backend: &dyn CloudBackend, key: &[u8; 32]) -> Result<Verif
     let mut chunks_checked = 0usize;
     let mut bytes_verified = 0u64;
     for entry in &manifest.sessions {
+        let session_key = session_key(key, &entry.provider, &entry.session_id);
         let mut session_bytes = Vec::new();
         for chunk in &entry.chunks {
             let object_key = chunk_key(&chunk.hash)?;
             let envelope = backend
                 .get(&object_key)?
                 .with_context(|| format!("cloud chunk {} is missing", chunk.hash))?;
-            let plaintext = decrypt(&envelope, key, &chunk_aad(&entry.session_id, &chunk.hash))
-                .with_context(|| format!("Failed to decrypt cloud chunk {}", chunk.hash))?;
+            let plaintext = decrypt(
+                &envelope,
+                &session_key,
+                &chunk_aad(&entry.session_id, &chunk.hash),
+            )
+            .with_context(|| format!("Failed to decrypt cloud chunk {}", chunk.hash))?;
             let bytes = decompress(&plaintext)
                 .with_context(|| format!("Failed to decompress cloud chunk {}", chunk.hash))?;
             ensure!(
@@ -1230,6 +1354,31 @@ mod tests {
 
     #[test]
     fn capability_scope_and_revocation() {
+        let conn = Connection::open_in_memory().expect("in-memory archive");
+        init_schema(&conn).expect("archive schema");
+        for (session_id, text) in [
+            ("session-1", "scoped payload"),
+            ("session-2", "other payload"),
+        ] {
+            let records = vec![terminal_record(session_id, 1, session_id, text)];
+            store::upsert_session(
+                &conn,
+                &SessionUpsert {
+                    provider: "terminal",
+                    session_id,
+                    source_path: Path::new(&format!("memory://{session_id}")),
+                    cwd: None,
+                    workspace_key: "",
+                    title: None,
+                    stamp: (0, 0, 0),
+                    fingerprint: 0,
+                    records: &records,
+                    usage_events: &[],
+                },
+            )
+            .expect("insert session");
+        }
+
         let backend = MemoryBackend::new();
         let library_key = [11_u8; 32];
         let recipient_secret = [12_u8; 32];
@@ -1237,8 +1386,9 @@ mod tests {
         register_public_key(&backend, "alice", &recipient_public).expect("register");
         let fetched = load_public_key(&backend, "alice").expect("load public");
         assert_eq!(fetched, recipient_public);
+        sync_push(&conn, &backend, &library_key, "owner").expect("push");
 
-        let capability = create_capability(
+        let _capability = create_capability(
             &backend,
             &library_key,
             &fetched,
@@ -1249,48 +1399,25 @@ mod tests {
         let stored = read_capability(&backend, "cap-1")
             .expect("read capability")
             .expect("capability exists");
+        let payload = unwrap_capability(&stored, &recipient_secret).expect("unwrap");
+        assert_eq!(payload.sessions.len(), 1);
+        assert_eq!(payload.sessions[0].entry.session_id, "session-1");
         assert_eq!(
-            unwrap_capability(&stored, &recipient_secret).expect("unwrap"),
-            library_key
+            payload.sessions[0].session_key,
+            session_key(&library_key, "terminal", "session-1")
         );
         assert!(unwrap_capability(&stored, &[13_u8; 32]).is_err());
 
-        let mut catalog = Catalog::default();
-        catalog.sessions.push(SessionEntry {
-            provider: "terminal".into(),
-            session_id: "session-1".into(),
-            source_path: "memory://session-1".into(),
-            cwd: None,
-            workspace_key: String::new(),
-            title: None,
-            project: String::new(),
-            starred: false,
-            started_at: None,
-            ended_at: None,
-            content_hash: "a".repeat(64),
-            record_count: 1,
-            preview: String::new(),
-            chunks: Vec::new(),
-        });
-        catalog.sessions.push(SessionEntry {
-            provider: "terminal".into(),
-            session_id: "session-2".into(),
-            source_path: "memory://session-2".into(),
-            cwd: None,
-            workspace_key: String::new(),
-            title: None,
-            project: String::new(),
-            starred: false,
-            started_at: None,
-            ended_at: None,
-            content_hash: "b".repeat(64),
-            record_count: 1,
-            preview: String::new(),
-            chunks: Vec::new(),
-        });
-        let scoped = sessions_in_scope(&catalog, &capability.scope);
-        assert_eq!(scoped.len(), 1);
-        assert_eq!(scoped[0].session_id, "session-1");
+        let catalog = read_catalog(&backend, &library_key).expect("catalog");
+        let out_of_scope = catalog
+            .sessions
+            .iter()
+            .find(|entry| entry.session_id == "session-2")
+            .expect("out of scope session");
+        assert!(
+            download_session(&backend, &payload.sessions[0].session_key, out_of_scope).is_err(),
+            "scoped key must not decrypt another session"
+        );
 
         revoke_capability(&backend, "cap-1").expect("revoke");
         assert!(read_capability(&backend, "cap-1")
