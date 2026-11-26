@@ -443,7 +443,7 @@ fn help_action_for_key_is_focus_scoped() {
             KeyModifiers::NONE,
             WorkspaceFocus::Dialogues
         ),
-        Some(WorkspaceHelpAction::Publish)
+        None
     );
     for focus in [
         WorkspaceFocus::Source,

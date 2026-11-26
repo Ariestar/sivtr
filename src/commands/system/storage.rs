@@ -88,6 +88,9 @@ fn print_report(report: &StorageReport) {
     if report.cache.legacy_bytes > 0 {
         println!("  sivtr storage prune-cache --apply");
     }
+    if report.cache.bm25_bytes > 0 {
+        println!("  sivtr storage prune-cache --include-bm25 --apply");
+    }
     println!();
     println!("provider-native session logs live outside this home and are not counted.");
 }
@@ -134,7 +137,7 @@ fn print_vacuum(report: &VacuumReport) {
 
 fn prune_cache(args: &StoragePruneCacheArgs) -> Result<()> {
     let cache_dir = home_dir().join("cache");
-    let mut entries = storage::legacy_cache_files(&cache_dir)?;
+    let mut entries = storage::prune_cache_files(&cache_dir, args.include_bm25)?;
     entries.sort_by(|left, right| {
         right
             .bytes
@@ -152,6 +155,7 @@ fn prune_cache(args: &StoragePruneCacheArgs) -> Result<()> {
         let (removed_files, freed_bytes) = removed.unwrap_or((0, 0));
         let report = serde_json::json!({
             "directory": cache_dir.display().to_string(),
+            "include_bm25": args.include_bm25,
             "files": &entries,
             "total_bytes": total_bytes,
             "applied": args.apply,
@@ -166,7 +170,7 @@ fn prune_cache(args: &StoragePruneCacheArgs) -> Result<()> {
     match removed {
         Some((0, _)) => {}
         Some((removed, freed)) => output::success(format!(
-            "removed {removed} legacy cache files ({})",
+            "removed {removed} cache files ({})",
             format_bytes(freed)
         )),
         None if !entries.is_empty() => output::hint("re-run with --apply to delete these files"),
@@ -178,14 +182,14 @@ fn prune_cache(args: &StoragePruneCacheArgs) -> Result<()> {
 fn print_cache(cache_dir: &Path, entries: &[CacheEntry], total_bytes: u64) {
     if entries.is_empty() {
         output::info(format!(
-            "no legacy parsed-session caches in {}",
+            "no selected cache files in {}",
             cache_dir.display()
         ));
         return;
     }
     println!("cache: {}", cache_dir.display());
     println!(
-        "{} legacy files, {}",
+        "{} cache files, {}",
         entries.len(),
         format_bytes(total_bytes)
     );

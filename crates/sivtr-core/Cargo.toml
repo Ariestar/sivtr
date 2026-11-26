@@ -25,6 +25,9 @@ arboard = "3"
 dirs = "7"
 uuid = { version = "1", features = ["v4"] }
 hostname = "0.4"
+getrandom = "0.4"
+aes-gcm = "0.11"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
 anyhow = "1"
 rmp-serde = "1"
 tempfile = "3"

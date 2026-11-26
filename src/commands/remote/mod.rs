@@ -1,9 +1,7 @@
-pub mod group;
 pub mod mounts;
 pub mod origin;
 pub mod peer;
 pub mod serve;
-pub mod share;
 pub mod workspace;
 
 // `sivtr remote` command lives in mounts.rs so the domain module can be `commands::remote`.

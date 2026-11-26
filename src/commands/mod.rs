@@ -9,12 +9,11 @@
 //! system/    doctor/hotkey/mcp/…
 //! ```
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 
 pub mod browse;
 pub mod interactive;
 pub mod memory;
-pub mod publish;
 pub mod remote;
 pub mod select;
 pub mod system;
@@ -30,17 +29,6 @@ pub(crate) fn finish_picker(
     match result {
         browse::PickerResult::Picked(picked) => {
             memory::copy::export_picked(&picked, print_full, regex, lines, ansi)
-        }
-        browse::PickerResult::Publish {
-            set,
-            draft,
-            expires,
-            save_name,
-        } => {
-            if regex.is_some() || lines.is_some() {
-                bail!("cannot publish a picker selection with copy filters; remove --regex and --lines");
-            }
-            publish::create_from_picker(set, *draft, expires, save_name)
         }
     }
 }

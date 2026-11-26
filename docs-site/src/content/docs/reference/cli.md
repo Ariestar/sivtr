@@ -507,77 +507,18 @@ sivtr serve logs
 sivtr serve stop
 ```
 
-## publish
-
-`publish` projects a local WorkSet into an immutable, client-encrypted browser snapshot. It is not `share`: `share` is a live workspace mount that needs Sivtr/daemon; `publish` uploads the encrypted envelope with the publication ID and `X-Sivtr-Management-Token`/`X-Sivtr-Published-At` request metadata, while the viewer key stays in the URL fragment and viewers need no Sivtr install.
-
-```bash
-sivtr publish <SOURCE> [--title <TITLE>] [--expires 7d] [--yes] [--allow-warnings]
-sivtr publish preview [<SOURCE>] [--title <TITLE>] [--expires 7d] [--format human|json]
-sivtr publish list [--json]
-sivtr publish link [<PUBLICATION_ID>]
-sivtr publish revoke [<PUBLICATION_ID>] [--yes]
-```
-
-Whole-record WorkSets use v1: they accept consecutive local agent records from one provider and session, and publish only User/Assistant text. `publish preview` without a source opens the existing workspace picker; it returns a WorkSet and prints the final snapshot locally. v2 supports User, Assistant, Tool, Skill, and Thinking atoms plus non-contiguous parts; ToolCall and ToolResult remain inseparable.
-
-Both versions reject terminal records, remotes/groups, mixed sessions/providers, attachments, and cross-session evidence bundles. WorkRefs remain valid selection inputs, but public snapshots omit WorkSets, WorkRefs, `cwd`, session paths, and provider envelopes; whole and part anchors cannot be mixed. Search defaults to newest-first and `--latest 5`; v1 publish sorts by record index before the continuity check. `[publish].endpoint` defaults to `https://share.hnnulwh.cn` and can be changed in `config.toml`. Non-interactive publish requires `--yes`. Path/email/internal-URL warnings require `--allow-warnings` in every environment, including a TTY.
-
-Typical flow:
-
-```bash
-sivtr search codex/<session-id> --sort oldest --latest 50 --save share_ready --refs
-sivtr publish preview share_ready
-sivtr publish share_ready --expires 7d --yes
-```
-
-Interactive preview flow:
-
-```powershell
-sivtr publish preview
-sivtr publish preview share_ready --format human
-sivtr publish share_ready --expires 7d --yes
-```
-
-`publish <SOURCE>` also accepts an existing saved WorkSet name without `@`, which avoids PowerShell splatting syntax. Bare `terminal`, `agent`, provider names, and sources containing `/`, `:`, or `*` are selectors; other bare identifiers are saved WorkSet names and fail directly when missing. In the workspace picker, `p` opens the lifetime panel, `Tab` focuses an optional WorkSet name, and a non-empty name is saved once before the selected publish/preview action continues. In an interactive terminal, `list` includes clickable active links; `link` and `revoke` open a selection prompt when their ID is omitted.
-
 ## share
 
-```bash
-sivtr share [OPTIONS]
-sivtr share <COMMAND>
-```
-
-Explicitly shares a local workspace for remote peers. Bare `sivtr share` is interactive: pick a workspace (Enter = current) and ensure the share exists (no invite). Create an invite with `sivtr share invite <name>`.
-
-Default interactive options:
-
-| Option | Meaning |
-| --- | --- |
-| `--path <PATH>` | Workspace path; skips the picker after confirm |
-| `--name <NAME>` | Stable share name; defaults to the workspace directory name |
-| `--no-redact` | Disable secret redaction for this share |
-
-Subcommands:
-
-| Command | Meaning |
-| --- | --- |
-| `add [PATH] [--name NAME] [--no-redact]` | Expose a workspace through the daemon |
-| `list` | List local shares |
-| `remove <SHARE>` | Remove a share and all grants and invitations attached to it |
-| `enable <SHARE>` / `disable <SHARE>` | Toggle a share without deleting it |
-| `invite <SHARE> [--expires DURATION]` | Create a single-use invite; prints the bare key on stdout |
-| `grants <SHARE>` | List active peer grants for a share |
-| `revoke <SHARE> <PEER>` | Revoke a peer's access to a share |
+Capability-based sharing of encrypted session history stored on the configured cloud remote.
 
 ```bash
-sivtr share
-sivtr share add --name alice-desk
-sivtr share invite alice-desk --expires 10m
-sivtr share list
-sivtr share grants alice-desk
-sivtr share revoke alice-desk <peer>
+sivtr share register --device <NAME> [--remote <URL>] [--key-file <PATH>]
+sivtr share create --scope <SCOPE> --to <DEVICE> [--id <ID>]
+sivtr share attach <CAPABILITY_ID> [--remote <URL>] [--key-file <PATH>]
+sivtr share revoke <CAPABILITY_ID>
 ```
+
+Scopes are `all`, `session:<id>`, or `provider:<name>`. A capability grants read access only; the recipient attaches it to a separate local state and fetches the scoped sessions into the local cache. Revocation removes the capability from the remote and stops further fetches. Copies already downloaded remain local.
 
 ## remote
 
@@ -620,37 +561,6 @@ sivtr peer <COMMAND>
 sivtr peer list
 sivtr peer forget <peer>
 ```
-
-## group
-
-```bash
-sivtr group <COMMAND>
-```
-
-Groups are a named set of devices that share memory with each other: every member contributes workspaces, and roster changes sync automatically.
-
-| Command | Meaning |
-| --- | --- |
-| `create <NAME> [--workspace PATH] [--share-name NAME]` | Create the group and contribute the current workspace in one transaction |
-| `invite <GROUP> [--expires DURATION] [--max-uses N]` | Owner-only; mint a multi-use join link (stdout = bare key) |
-| `join <INVITE> [--workspace PATH] [--share-name NAME] [--no-redact]` | Redeem an invite and contribute workspaces; re-run to adjust contributions |
-| `list` | List groups you belong to |
-| `members <GROUP>` | List members and their contributions |
-| `remove <GROUP> <PEER>` | Owner-only; remove a member |
-| `rename <GROUP> <NAME>` | Owner-only; rename the group |
-| `leave <GROUP>` | Leave the group (owner leaving disbands it) |
-| `sync <GROUP>` | Force a roster pull from the owner |
-
-```bash
-sivtr group create team
-sivtr group invite team --expires 1d --max-uses 10
-sivtr group join <invite-key>
-sivtr group list
-sivtr group members team
-sivtr group sync team
-```
-
-Membership changes broadcast to every member automatically (and re-pull on a 5-minute TTL). Group access to a member's contributions is read-only and redacts secrets like shares do.
 
 ## origin
 
@@ -881,31 +791,6 @@ sivtr hotkey status
 sivtr hotkey stop
 ```
 
-## sync
-
-```bash
-sivtr sync [--full] [--json]
-```
-
-Syncs every agent provider's sessions and every workspace's terminal logs into the unified local archive (`archive.db`). Queries (search, show, copy, TUI, MCP) read from this archive; when it is older than `[sync].max_age_secs` (default `15` seconds), a query first triggers an incremental re-sync.
-
-Options:
-
-| Option | Meaning |
-| --- | --- |
-| `--full` | Re-parse every session, ignoring cached stamps |
-| `--json` | Print a machine-readable report with per-source counts (added / updated / removed / unchanged / failed) |
-
-Sync is incremental by default: each source file is compared against the archive by its stat stamp, and only changed files are re-parsed. Failures are per-source and reported, so one broken provider never hides the rest.
-
-Examples:
-
-```bash
-sivtr sync
-sivtr sync --full
-sivtr sync --json
-```
-
 ## usage
 
 ```bash
@@ -932,20 +817,33 @@ secret findings, starred sessions, and usage totals.
 ```bash
 sivtr storage status [--json]
 sivtr storage vacuum [--dry-run]
-sivtr storage prune-cache [--apply] [--json]
+sivtr storage prune-cache [--include-bm25] [--apply] [--json]
 ```
 
 Reports the bytes under the sivtr home: the archive database and its WAL
 sidecars, derived caches, saved WorkSets, workspace session logs, and
 everything else. `vacuum` compacts `archive.db` and reclaims free pages;
 `prune-cache` removes legacy parsed-session caches that current builds no
-longer write. `vacuum` runs by default and previews with `--dry-run`;
+longer write. Add `--include-bm25` to select BM25 indexes, which search
+rebuilds on demand. `vacuum` runs by default and previews with `--dry-run`;
 `prune-cache` previews by default and deletes only with `--apply`. Session
 sources and saved WorkSets are never deleted.
 
 `status` also reports an archive copy left at the home root by older layouts;
 `sivtr doctor` detects it, and `doctor --fix` migrates it into `cache/` when
 that path is free.
+
+## sync
+
+```bash
+sivtr sync init --remote <URL> [--key-file <PATH>]
+sivtr sync now [--remote <URL>] [--key-file <PATH>] [--prune]
+sivtr sync status [--remote <URL>] [--key-file <PATH>]
+```
+
+Synchronizes the local archive with an encrypted cloud library. The remote URL is `file://<path>` or `s3://<bucket>/<prefix>`. `init` creates the library key and registers this device key. `now` pushes changed sessions, refreshes missing sessions from the remote catalog, and optionally reclaims cached sessions that are absent from the remote. `status` compares local and remote session state.
+
+History is exported as canonical JSONL, chunked, compressed, encrypted with AES-256-GCM, and stored under content hashes. The encrypted catalog is written last, so an interrupted sync leaves the previous generation readable.
 
 ## session
 

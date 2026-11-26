@@ -432,150 +432,18 @@ sivtr show @last --full
 sivtr show @ctx -f timeline
 ```
 
-## publish
-
-`publish` 把本地 WorkSet 投影成不可变、端侧加密的浏览器只读快照。它与 `share` 不同：`share` 是需要 Sivtr/daemon 的实时 workspace mount；`publish` 上传的只有密文，查看者无需登录或安装 Sivtr，分享者设备离线也能查看。
-
-```bash
-sivtr publish <SOURCE> [--title <TITLE>] [--expires 7d] [--yes] [--allow-warnings]
-sivtr publish preview [<SOURCE>] [--title <TITLE>] [--expires 7d] [--format human|json]
-sivtr publish list [--json]
-sivtr publish link [<PUBLICATION_ID>]
-sivtr publish revoke [<PUBLICATION_ID>] [--yes]
-```
-
-v1 只接受同一 provider、同一 session 中连续的本地 Agent record，并只发布 User/Assistant 文本。`publish preview` 不带 source 时会打开现有 workspace picker，返回 WorkSet 后在本地打印最终快照。v2 支持 User、Assistant、Tool、Skill、Thinking 原子以及不连续片段；ToolCall 与 ToolResult 不可拆开。Terminal、remote/group、附件和跨 session 证据包仍会被拒绝。公开快照不包含 WorkSet、WorkRef、`cwd`、session path 或本地 provider 原始事件。
-
-`preview` 完全离线生成最终快照和风险报告；已识别的 token、私钥、Bearer 和 secret assignment 自动替换为 `[REDACTED]`，绝对路径、邮箱和内网地址只警告。发布前会显示轮次数、大小、脱敏项和期限；非交互环境发布必须使用 `--yes`，存在未自动处理的风险时还必须使用 `--allow-warnings`。`[publish].endpoint` 默认是 `https://share.hnnulwh.cn`，可在 `config.toml` 里改成自建或其他兼容服务。成功创建时 stdout 只输出完整链接，说明和警告写 stderr，方便复制。
-
-密钥只放在 URL fragment（`#k=...`），托管服务只保存 AES-256-GCM 密文、管理 token 哈希、期限和 envelope 版本。链接默认 7 天，可选 `2h/1d/3d/7d/30d`，不提供永久链接；修改内容必须创建新链接。链接持有者均可查看，管理 token 只保存在本机的独立 `publication-state.db` 中。
-
-典型流程：
-
-```bash
-sivtr search codex/<session-id> --save share_ready --refs
-sivtr publish preview share_ready
-sivtr publish share_ready --expires 7d
-```
-
-交互式预览流程：
-
-```powershell
-sivtr publish preview
-sivtr publish preview share_ready --format human
-sivtr publish share_ready --expires 7d --yes
-```
-
-`publish <SOURCE>` 也接受不带 `@` 的已保存 WorkSet 名称，因此 PowerShell 中不需要为这个发布流程写引号。裸 `terminal`、`agent`、provider 名称以及包含 `/`、`:` 或 `*` 的 source 会按 selector 解析；其他裸标识符只按已保存 WorkSet 名称解析，缺失时直接报错，不会 fallback 到另一种 source。workspace picker 中按 `p` 打开有效期浮板，`Tab` 跳到可选的 WorkSet 名称输入；输入非空名称后会先保存一次，再继续发布或预览。交互式终端中的 `list` 会显示可点击的 active 链接；`link` 和 `revoke` 省略 ID 时会打开选择器。
-
-## zoom
-
-```bash
-sivtr zoom [SOURCE=@last] [OPTIONS]
-```
-
-把每个目标 WorkRecord 用同一 session 的相邻 records 展开。未给 source 时默认 `@last`。
-
-| 选项 | 含义 |
-| --- | --- |
-| `-C, --context <N>` | 每个 anchor 前后各取 N 条（默认 `1`） |
-| `--before <N>` | 每个 anchor 前取 N 条 |
-| `--after <N>` | 每个 anchor 后取 N 条 |
-| `--cwd <PATH>` | 用于解析 sessions 的 workspace 目录 |
-| `--json` | `--format workset` 别名 |
-| `--refs` | `--format refs` 别名 |
-| `-f, --format <FORMAT>` | `full`、`timeline`、`compact`、`md`、`refs`、`workset` |
-| `--save <NAME>` | 把展开结果保存为命名 WorkSet 变量 |
-
-```bash
-sivtr zoom                        # 展开 @last
-sivtr zoom claude/<session>/3 -C 2
-sivtr zoom @failures --before 2 --after 0 --refs
-```
-
-## work
-
-```bash
-sivtr work <COMMAND>
-```
-
-遍历 workspace 的 sessions、records、parts，只输出 marker 级信息（不打印全文），可管道给其他命令。
-
-| 命令 | 含义 |
-| --- | --- |
-| `sessions [SOURCE]` | 列出当前 workspace 的 terminal 与 agent sessions |
-| `records <SOURCE>` | 把 sessions 或已保存变量转成事件级 refs |
-| `parts <SOURCE>` | 从匹配事件里抽出真正有用的输入/输出片段 |
-
-常用 flag：`--provider <NAME>` 过滤、`--cwd <PATH>`、`--json`、`--refs`、`--save <NAME>`。
-
-```bash
-sivtr work sessions
-sivtr work records codex/ --refs
-sivtr work parts @last --kind output --save out_parts
-```
-
-## serve
-
-```bash
-sivtr serve <COMMAND>
-```
-
-管理本机 remote-memory daemon。share / remote 命令需要时会自动启动。
-
-| 命令 | 含义 |
-| --- | --- |
-| `start` | 后台启动 daemon |
-| `stop` | 干净停止正在运行的 daemon |
-| `restart` | 重启 daemon |
-| `status` | 显示 daemon 身份和运行状态 |
-| `logs` | 打印 daemon 日志路径 |
-| `foreground` | 前台运行 daemon |
-
-```bash
-sivtr serve start
-sivtr serve status
-sivtr serve logs
-sivtr serve stop
-```
-
 ## share
 
-```bash
-sivtr share [OPTIONS]
-sivtr share <COMMAND>
-```
-
-显式分享本机 workspace 给远端。裸 `sivtr share` 是交互入口：选择 workspace（Enter = 当前）并确保 share 存在（不出 invite）。出 invite 请用 `sivtr share invite <name>`。
-
-默认交互选项：
-
-| 选项 | 含义 |
-| --- | --- |
-| `--path <PATH>` | workspace 路径；确认后跳过选择器 |
-| `--name <NAME>` | 稳定 share 名；默认取 workspace 目录名 |
-| `--no-redact` | 关闭此 share 的密钥脱敏 |
-
-子命令：
-
-| 命令 | 含义 |
-| --- | --- |
-| `add [PATH] [--name NAME] [--no-redact]` | 通过 daemon 暴露一个 workspace |
-| `list` | 列出本机 shares |
-| `remove <SHARE>` | 删除 share 及其 grants 和 invitations |
-| `enable <SHARE>` / `disable <SHARE>` | 启用/禁用 share，不删除 |
-| `invite <SHARE> [--expires DURATION]` | 签发单次 invite；bare key 打印到 stdout |
-| `grants <SHARE>` | 列出 share 的活跃 peer grants |
-| `revoke <SHARE> <PEER>` | 撤销某 peer 对该 share 的访问 |
+基于 capability 的加密会话历史分享，数据来自已配置的云端远端。
 
 ```bash
-sivtr share
-sivtr share add --name alice-desk
-sivtr share invite alice-desk --expires 10m
-sivtr share list
-sivtr share grants alice-desk
-sivtr share revoke alice-desk <peer>
+sivtr share register --device <NAME> [--remote <URL>] [--key-file <PATH>]
+sivtr share create --scope <SCOPE> --to <DEVICE> [--id <ID>]
+sivtr share attach <CAPABILITY_ID> [--remote <URL>] [--key-file <PATH>]
+sivtr share revoke <CAPABILITY_ID>
 ```
+
+scope 支持 `all`、`session:<id>` 和 `provider:<name>`。capability 只授予读取权限；接收方在独立的本地状态中 attach，并把范围内的 session 拉取到本地缓存。撤销会移除远端 capability 并阻止后续拉取，已经下载的副本仍保留在本地。
 
 ## remote
 
@@ -618,37 +486,6 @@ sivtr peer <COMMAND>
 sivtr peer list
 sivtr peer forget <peer>
 ```
-
-## group
-
-```bash
-sivtr group <COMMAND>
-```
-
-群组是互相共享记忆的一组设备：每个成员贡献 workspace，成员变更自动同步。
-
-| 命令 | 含义 |
-| --- | --- |
-| `create <NAME> [--workspace PATH] [--share-name NAME]` | 建组并在同一事务里贡献当前 workspace |
-| `invite <GROUP> [--expires DURATION] [--max-uses N]` | 仅 owner；签发多设备 join 链接（stdout = bare key） |
-| `join <INVITE> [--workspace PATH] [--share-name NAME] [--no-redact]` | 兑换邀请并贡献 workspace；重跑可调整贡献 |
-| `list` | 列出你所属的组 |
-| `members <GROUP>` | 列出成员及其贡献 |
-| `remove <GROUP> <PEER>` | 仅 owner；移除成员 |
-| `rename <GROUP> <NAME>` | 仅 owner；给组改名 |
-| `leave <GROUP>` | 退出组（owner 退出会解散整组） |
-| `sync <GROUP>` | 强制从 owner 拉一次成员清单 |
-
-```bash
-sivtr group create team
-sivtr group invite team --expires 1d --max-uses 10
-sivtr group join <invite-key>
-sivtr group list
-sivtr group members team
-sivtr group sync team
-```
-
-成员变更会自动广播给每个成员（并每 5 分钟 TTL 重新拉取）。成员对他人贡献的访问是只读的，默认脱敏密钥，与 share 一致。
 
 ## origin
 
@@ -880,31 +717,6 @@ sivtr hotkey stop
 ```
 
 
-## sync
-
-```bash
-sivtr sync [--full] [--json]
-```
-
-把所有 Agent provider 的 session 和每个 workspace 的终端日志同步进统一的本地 archive（`archive.db`）。查询（search、show、copy、TUI、MCP）从这个 archive 读取；当 archive 比 `[sync].max_age_secs`（默认 `15` 秒）更旧时，查询会先触发一次增量同步。
-
-选项：
-
-| 选项 | 含义 |
-| --- | --- |
-| `--full` | 重新解析所有 session，忽略缓存的 stat stamp |
-| `--json` | 输出机器可读报告，包含每个 source 的计数（added / updated / removed / unchanged / failed） |
-
-默认增量同步：用 stat stamp 把每个源文件与 archive 比对，只重新解析有变化的文件。失败按 source 单独上报，一个 provider 出错不会掩盖其余结果。
-
-示例：
-
-```bash
-sivtr sync
-sivtr sync --full
-sivtr sync --json
-```
-
 ## usage
 
 ```bash
@@ -930,17 +742,30 @@ sivtr stats [--provider <PROVIDER>] [--since <DATE>] [--until <DATE>] [--json]
 ```bash
 sivtr storage status [--json]
 sivtr storage vacuum [--dry-run]
-sivtr storage prune-cache [--apply] [--json]
+sivtr storage prune-cache [--include-bm25] [--apply] [--json]
 ```
 
 统计 sivtr home 下的占用：archive 数据库及其 WAL sidecar、派生缓存、保存的
 WorkSet、workspace session log 和其他文件。`vacuum` 压缩 `archive.db` 并回收
-空闲页；`prune-cache` 删除当前版本不再写入的旧解析缓存。`vacuum` 默认执行，
+空闲页；`prune-cache` 删除当前版本不再写入的旧解析缓存，`--include-bm25`
+ 会额外选择可由搜索重建的 BM25 索引。`vacuum` 默认执行，
 `--dry-run` 只预览；`prune-cache` 默认只列出，`--apply` 才删除。不会删除
 session 源文件或已保存的 WorkSet。
 
 `status` 还会报告旧布局留在 home 根目录的 archive 副本；`sivtr doctor` 会
 检测它，`doctor --fix` 在目标路径空闲时把它迁移到 `cache/`。
+
+## sync
+
+```bash
+sivtr sync init --remote <URL> [--key-file <PATH>]
+sivtr sync now [--remote <URL>] [--key-file <PATH>] [--prune]
+sivtr sync status [--remote <URL>] [--key-file <PATH>]
+```
+
+把本地 archive 与加密云端库同步。远端 URL 支持 `file://<path>` 和 `s3://<bucket>/<prefix>`。`init` 创建库密钥并注册设备公钥；`now` 上传变化的 session，从远端 catalog 恢复缺失 session，并可用 `--prune` 回收远端不存在的本地缓存；`status` 比较本地与远端状态。
+
+历史导出为确定性 JSONL，分块、压缩、AES-256-GCM 加密后按内容哈希存储。加密 catalog 最后写入，所以同步中断时上一代数据仍可读取。
 
 ## session
 
