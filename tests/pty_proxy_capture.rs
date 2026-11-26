@@ -183,8 +183,14 @@ fn drive(command: CommandBuilder, input: &str) -> String {
         out
     });
 
-    writer.write_all(input.as_bytes()).expect("send input");
-    writer.flush().expect("flush");
+    // Send one line at a time so the shell and the OSC 133 hooks see each
+    // command boundary separately. Writing all input at once can race the
+    // marker report and attribute the next line's output to the wrong command.
+    for line in input.split_inclusive('\n') {
+        writer.write_all(line.as_bytes()).expect("send input");
+        writer.flush().expect("flush");
+        std::thread::sleep(Duration::from_millis(50));
+    }
     drop(writer);
 
     // Poll rather than hand the only child handle to a wait thread: on a
