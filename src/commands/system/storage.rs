@@ -21,7 +21,7 @@ pub fn execute(command: &StorageCommand) -> Result<()> {
 }
 
 fn status(args: &StorageStatusArgs) -> Result<()> {
-    let report = storage::report(&home_dir());
+    let report = storage::report(&home_dir())?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(());
