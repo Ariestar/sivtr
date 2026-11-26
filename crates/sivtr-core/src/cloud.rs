@@ -268,7 +268,15 @@ pub fn create_capability(
     id: &str,
 ) -> Result<Capability> {
     let catalog = read_catalog(backend, library_key)?;
-    let sessions = sessions_in_scope(&catalog, &scope)
+    let matches = sessions_in_scope(&catalog, &scope);
+    if let CapabilityScope::Session(session_id) = &scope {
+        ensure!(
+            matches.len() <= 1,
+            "session `{session_id}` is ambiguous across {} sessions; use a unique session id",
+            matches.len()
+        );
+    }
+    let sessions = matches
         .into_iter()
         .map(|entry| ScopedSession {
             session_key: session_key(library_key, &entry.provider, &entry.session_id),
@@ -591,8 +599,13 @@ pub fn sync_pull_scope(
 pub fn sync_pull_capability(
     conn: &Connection,
     backend: &dyn CloudBackend,
+    capability_id: &str,
     payload: &CapabilityPayload,
 ) -> Result<SyncPullReport> {
+    ensure!(
+        read_capability(backend, capability_id)?.is_some(),
+        "capability `{capability_id}` was revoked"
+    );
     let mut added = 0usize;
     let mut unchanged = 0usize;
     let mut records_added = 0usize;
@@ -700,9 +713,10 @@ pub fn verify_remote(backend: &dyn CloudBackend, key: &[u8; 32]) -> Result<Verif
     let mut bytes_verified = 0u64;
     for entry in &manifest.sessions {
         let session_key = session_key(key, &entry.provider, &entry.session_id);
+        let scope = chunk_scope(&session_key, &entry.session_id);
         let mut session_bytes = Vec::new();
         for chunk in &entry.chunks {
-            let object_key = chunk_key(&chunk.hash)?;
+            let object_key = chunk_key(&chunk.hash, &scope)?;
             let envelope = backend
                 .get(&object_key)?
                 .with_context(|| format!("cloud chunk {} is missing", chunk.hash))?;
@@ -890,10 +904,11 @@ fn upload_chunks(
     reused: &mut usize,
     bytes_uploaded: &mut u64,
 ) -> Result<Vec<ChunkRef>> {
+    let scope = chunk_scope(key, session_id);
     let mut chunks = Vec::new();
     for piece in jsonl.chunks(DEFAULT_CHUNK_BYTES) {
         let hash = sha256_hex(piece);
-        let object_key = chunk_key(&hash)?;
+        let object_key = chunk_key(&hash, &scope)?;
         let compressed = compress(piece)?;
         let envelope = encrypt(&compressed, key, &chunk_aad(session_id, &hash))?;
         if backend.put_if_absent(&object_key, &envelope)? {
@@ -915,9 +930,10 @@ fn download_session(
     key: &[u8; 32],
     entry: &SessionEntry,
 ) -> Result<Vec<u8>> {
+    let scope = chunk_scope(key, &entry.session_id);
     let mut output = Vec::new();
     for chunk in &entry.chunks {
-        let object_key = chunk_key(&chunk.hash)?;
+        let object_key = chunk_key(&chunk.hash, &scope)?;
         let envelope = backend
             .get(&object_key)?
             .with_context(|| format!("cloud chunk {} is missing", chunk.hash))?;
@@ -1015,9 +1031,23 @@ fn chunk_aad(session_id: &str, hash: &str) -> String {
     format!("sivtr-cloud-chunk-v{SCHEMA_VERSION}:{session_id}:{hash}")
 }
 
-fn chunk_key(hash: &str) -> Result<String> {
+fn chunk_key(hash: &str, scope: &str) -> Result<String> {
     ensure!(hash.len() >= 2, "invalid cloud chunk hash");
-    Ok(format!("objects/{}/{}", &hash[..2], hash))
+    Ok(format!("objects/{}/{}/{}", scope, &hash[..2], hash))
+}
+
+fn chunk_scope(key: &[u8; 32], session_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"sivtr-cloud-scope-v1");
+    hasher.update(key);
+    hasher.update(b"\0");
+    hasher.update(session_id.as_bytes());
+    let digest = hasher.finalize();
+    digest
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -1193,8 +1223,8 @@ mod tests {
         let second = sha256_hex(b"same");
         assert_eq!(first, second);
         assert_eq!(
-            chunk_key(&first).expect("key"),
-            format!("objects/{}/{}", &first[..2], first)
+            chunk_key(&first, "scope").expect("key"),
+            format!("objects/scope/{}/{}", &first[..2], first)
         );
     }
 
@@ -1469,5 +1499,140 @@ mod tests {
                 .expect("load drop")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn identical_chunks_use_session_scoped_object_keys() {
+        let conn = Connection::open_in_memory().expect("in-memory archive");
+        init_schema(&conn).expect("archive schema");
+        for session_id in ["first", "second"] {
+            let records = vec![terminal_record("shared", 1, "shared", "shared payload")];
+            store::upsert_session(
+                &conn,
+                &SessionUpsert {
+                    provider: "terminal",
+                    session_id,
+                    source_path: Path::new(&format!("memory://{session_id}")),
+                    cwd: None,
+                    workspace_key: "",
+                    title: None,
+                    stamp: (0, 0, 0),
+                    fingerprint: 0,
+                    records: &records,
+                    usage_events: &[],
+                },
+            )
+            .expect("insert session");
+        }
+        let backend = MemoryBackend::new();
+        let library_key = [21_u8; 32];
+        sync_push(&conn, &backend, &library_key, "device").expect("push");
+        let catalog = read_catalog(&backend, &library_key).expect("catalog");
+        let first = &catalog.sessions[0];
+        let second = &catalog.sessions[1];
+        assert_eq!(first.chunks[0].hash, second.chunks[0].hash);
+
+        let first_key = session_key(&library_key, &first.provider, &first.session_id);
+        let second_key = session_key(&library_key, &second.provider, &second.session_id);
+        let first_object = chunk_key(
+            &first.chunks[0].hash,
+            &chunk_scope(&first_key, &first.session_id),
+        )
+        .expect("first object key");
+        let second_object = chunk_key(
+            &second.chunks[0].hash,
+            &chunk_scope(&second_key, &second.session_id),
+        )
+        .expect("second object key");
+        assert_ne!(first_object, second_object);
+        assert!(download_session(&backend, &first_key, first).is_ok());
+        assert!(download_session(&backend, &second_key, second).is_ok());
+        assert!(download_session(&backend, &first_key, second).is_err());
+    }
+
+    #[test]
+    fn revocation_blocks_retained_payload_fetches() {
+        let conn = Connection::open_in_memory().expect("in-memory archive");
+        init_schema(&conn).expect("archive schema");
+        let records = vec![terminal_record("target", 1, "target", "restricted payload")];
+        store::upsert_session(
+            &conn,
+            &SessionUpsert {
+                provider: "terminal",
+                session_id: "target",
+                source_path: Path::new("memory://target"),
+                cwd: None,
+                workspace_key: "",
+                title: None,
+                stamp: (0, 0, 0),
+                fingerprint: 0,
+                records: &records,
+                usage_events: &[],
+            },
+        )
+        .expect("insert session");
+        let backend = MemoryBackend::new();
+        let library_key = [31_u8; 32];
+        let recipient = [32_u8; 32];
+        register_public_key(&backend, "bob", &recipient_public_key(&recipient)).expect("register");
+        sync_push(&conn, &backend, &library_key, "owner").expect("push");
+        create_capability(
+            &backend,
+            &library_key,
+            &recipient_public_key(&recipient),
+            CapabilityScope::Session("target".into()),
+            "cap-revoke",
+        )
+        .expect("create");
+        let capability = read_capability(&backend, "cap-revoke")
+            .expect("read")
+            .expect("exists");
+        let payload = unwrap_capability(&capability, &recipient).expect("unwrap");
+        revoke_capability(&backend, "cap-revoke").expect("revoke");
+
+        let empty = Connection::open_in_memory().expect("empty archive");
+        init_schema(&empty).expect("schema");
+        assert!(
+            sync_pull_capability(&empty, &backend, "cap-revoke", &payload).is_err(),
+            "revoked capability must stop retained-payload fetches"
+        );
+    }
+
+    #[test]
+    fn ambiguous_session_scope_is_rejected() {
+        let conn = Connection::open_in_memory().expect("in-memory archive");
+        init_schema(&conn).expect("archive schema");
+        for provider in ["terminal", "codex"] {
+            let records = vec![terminal_record("review", 1, "review", "same id")];
+            store::upsert_session(
+                &conn,
+                &SessionUpsert {
+                    provider,
+                    session_id: "review",
+                    source_path: Path::new("memory://review"),
+                    cwd: None,
+                    workspace_key: "",
+                    title: None,
+                    stamp: (0, 0, 0),
+                    fingerprint: 0,
+                    records: &records,
+                    usage_events: &[],
+                },
+            )
+            .expect("insert session");
+        }
+        let backend = MemoryBackend::new();
+        let library_key = [41_u8; 32];
+        let recipient = [42_u8; 32];
+        register_public_key(&backend, "bob", &recipient_public_key(&recipient)).expect("register");
+        sync_push(&conn, &backend, &library_key, "owner").expect("push");
+        assert!(create_capability(
+            &backend,
+            &library_key,
+            &recipient_public_key(&recipient),
+            CapabilityScope::Session("review".into()),
+            "cap-ambiguous",
+        )
+        .is_err());
     }
 }

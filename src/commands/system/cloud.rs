@@ -142,17 +142,26 @@ fn sync_status(args: &SyncRemoteArgs) -> Result<()> {
     }
 }
 
+fn resolve_share_settings(
+    remote_override: Option<&str>,
+    missing_message: &str,
+) -> Result<CloudSettings> {
+    let mut settings = cloud::load_settings()?.unwrap_or(CloudSettings {
+        remote: String::new(),
+        key_file: PathBuf::new(),
+    });
+    if let Some(remote) = remote_override {
+        settings.remote = remote.to_string();
+    }
+    ensure!(!settings.remote.is_empty(), "{missing_message}");
+    Ok(settings)
+}
+
 fn share_register(args: &ShareRegisterArgs) -> Result<()> {
-    let settings = match cloud::load_settings()? {
-        Some(settings) => settings,
-        None => CloudSettings {
-            remote: args
-                .remote
-                .clone()
-                .with_context(|| "fresh home requires --remote when registering a device")?,
-            key_file: PathBuf::new(),
-        },
-    };
+    let settings = resolve_share_settings(
+        args.remote.as_deref(),
+        "fresh home requires --remote when registering a device",
+    )?;
     let backend = backend_for_remote(&settings.remote)?;
     let path = recipient_key_path(args.key_file.as_deref());
     let secret = if path.exists() {
@@ -193,19 +202,10 @@ fn share_create(args: &ShareCreateArgs) -> Result<()> {
 }
 
 fn share_attach(args: &ShareAttachArgs) -> Result<()> {
-    let settings = match cloud::load_settings()? {
-        Some(settings) => settings,
-        None => {
-            let remote = args
-                .remote
-                .clone()
-                .with_context(|| "fresh home requires --remote when attaching a capability")?;
-            CloudSettings {
-                remote,
-                key_file: PathBuf::new(),
-            }
-        }
-    };
+    let settings = resolve_share_settings(
+        args.remote.as_deref(),
+        "fresh home requires --remote when attaching a capability",
+    )?;
     let backend = backend_for_remote(&settings.remote)?;
     let capability = cloud::read_capability(backend.as_ref(), &args.capability_id)?
         .with_context(|| format!("capability `{}` is unavailable", args.capability_id))?;
@@ -216,16 +216,20 @@ fn share_attach(args: &ShareAttachArgs) -> Result<()> {
     );
     let payload =
         cloud::unwrap_capability(&capability, &cloud::load_recipient_key(&recipient_path)?)?;
+    let conn = archive::open()?;
+    let report =
+        cloud::sync_pull_capability(&conn, backend.as_ref(), &args.capability_id, &payload)?;
     let attached = AttachedCapability {
         remote: settings.remote.clone(),
         scope: scope_label(&capability.scope),
     };
-    std::fs::write(
-        attached_state_path(&args.capability_id),
-        toml::to_string(&attached)?,
-    )?;
-    let conn = archive::open()?;
-    let report = cloud::sync_pull_capability(&conn, backend.as_ref(), &payload)?;
+    let state_path = attached_state_path(&args.capability_id);
+    if let Some(parent) = state_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create `{}`", parent.display()))?;
+    }
+    std::fs::write(&state_path, toml::to_string(&attached)?)
+        .with_context(|| format!("Failed to write `{}`", state_path.display()))?;
     if args.json {
         print_json(&report)
     } else {
