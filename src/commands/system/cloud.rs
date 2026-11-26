@@ -22,6 +22,7 @@ use crate::cli::{
 struct AttachedCapability {
     remote: String,
     scope: String,
+    sessions: Vec<(String, String)>,
 }
 
 pub fn execute_sync(command: &SyncCommand) -> Result<()> {
@@ -81,12 +82,14 @@ fn sync_now(args: &SyncRemoteArgs) -> Result<()> {
     let settings = load_settings(args.remote.as_deref())?;
     let backend = backend_for_remote(&settings.remote)?;
     let key = cloud::load_library_key(&settings.key_file)?;
-    let conn = archive::open()?;
-    let pushed = cloud::sync_push(&conn, backend.as_ref(), &key, &device_id()?)?;
+    let mut conn = archive::open()?;
+    let attached = load_attached_sessions()?;
+    let pushed =
+        cloud::sync_push_excluding(&conn, backend.as_ref(), &key, &device_id()?, &attached)?;
     let pulled = cloud::sync_pull(&conn, backend.as_ref(), &key)?;
     let reclaimed = if args.prune {
         Some(cloud::reclaim_cache(
-            &conn,
+            &mut conn,
             backend.as_ref(),
             &key,
             &CapabilityScope::All,
@@ -222,6 +225,16 @@ fn share_attach(args: &ShareAttachArgs) -> Result<()> {
     let attached = AttachedCapability {
         remote: settings.remote.clone(),
         scope: scope_label(&capability.scope),
+        sessions: payload
+            .sessions
+            .iter()
+            .map(|scoped| {
+                (
+                    scoped.entry.provider.clone(),
+                    scoped.entry.session_id.clone(),
+                )
+            })
+            .collect(),
     };
     let state_path = attached_state_path(&args.capability_id);
     if let Some(parent) = state_path.parent() {
@@ -242,14 +255,16 @@ fn share_attach(args: &ShareAttachArgs) -> Result<()> {
 }
 
 fn share_revoke(args: &ShareRevokeArgs) -> Result<()> {
-    let settings = match cloud::load_settings()? {
-        Some(settings) => settings,
-        None => CloudSettings {
-            remote: remote_from_attached(&args.capability_id)?,
-            key_file: PathBuf::new(),
-        },
+    let remote = if let Some(remote) = args.remote.as_deref() {
+        remote.to_string()
+    } else if let Ok(attached) = load_attached_capability(&args.capability_id) {
+        attached.remote
+    } else {
+        cloud::load_settings()?
+            .context("cloud sync is not initialized and no attachment record exists")?
+            .remote
     };
-    let backend = backend_for_remote(&settings.remote)?;
+    let backend = backend_for_remote(&remote)?;
     cloud::revoke_capability(backend.as_ref(), &args.capability_id)?;
     let _ = std::fs::remove_file(attached_state_path(&args.capability_id));
     if args.json {
@@ -281,25 +296,47 @@ fn attached_state_path(id: &str) -> PathBuf {
         .join(format!("{id}.toml"))
 }
 
-fn remote_from_attached(id: &str) -> Result<String> {
+fn load_attached_capability(id: &str) -> Result<AttachedCapability> {
     let path = attached_state_path(id);
     let text = std::fs::read_to_string(&path)
         .with_context(|| format!("capability `{}` is not attached", id))?;
-    let attached: AttachedCapability =
-        toml::from_str(&text).context("Failed to read attached capability")?;
-    Ok(attached.remote)
+    toml::from_str(&text).context("Failed to read attached capability")
+}
+
+fn load_attached_sessions() -> Result<std::collections::BTreeSet<(String, String)>> {
+    let dir = workspace::home_dir().join("caps");
+    let mut sessions = std::collections::BTreeSet::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Ok(sessions);
+    };
+    for entry in entries {
+        let entry = entry.context("Failed to read capability attachment directory")?;
+        if entry.path().extension().and_then(|value| value.to_str()) != Some("toml") {
+            continue;
+        }
+        let text = std::fs::read_to_string(entry.path())
+            .with_context(|| format!("Failed to read {}", entry.path().display()))?;
+        let attached: AttachedCapability =
+            toml::from_str(&text).context("Failed to parse attached capability")?;
+        sessions.extend(attached.sessions);
+    }
+    Ok(sessions)
 }
 
 fn parse_scope(value: &str) -> Result<CapabilityScope> {
     match value {
         "all" => Ok(CapabilityScope::All),
         value if value.starts_with("session:") => {
-            let id = value.trim_start_matches("session:");
+            let id = value
+                .strip_prefix("session:")
+                .expect("checked by starts_with");
             ensure!(!id.is_empty(), "session scope requires an id");
             Ok(CapabilityScope::Session(id.to_string()))
         }
         value if value.starts_with("provider:") => {
-            let provider = value.trim_start_matches("provider:");
+            let provider = value
+                .strip_prefix("provider:")
+                .expect("checked by starts_with");
             ensure!(!provider.is_empty(), "provider scope requires a name");
             Ok(CapabilityScope::Provider(provider.to_string()))
         }

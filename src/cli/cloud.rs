@@ -131,6 +131,10 @@ pub struct ShareRevokeArgs {
     /// Capability id to remove from the remote
     pub capability_id: String,
 
+    /// Remote URL override; defaults to the attached or configured remote
+    #[arg(long)]
+    pub remote: Option<String>,
+
     /// Emit the complete machine-readable report
     #[arg(long)]
     pub json: bool,

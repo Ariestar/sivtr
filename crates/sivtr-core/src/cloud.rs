@@ -271,8 +271,8 @@ pub fn create_capability(
     let matches = sessions_in_scope(&catalog, &scope);
     if let CapabilityScope::Session(session_id) = &scope {
         ensure!(
-            matches.len() <= 1,
-            "session `{session_id}` is ambiguous across {} sessions; use a unique session id",
+            matches.len() == 1,
+            "session `{session_id}` matched {} sessions; expected exactly one",
             matches.len()
         );
     }
@@ -416,8 +416,29 @@ pub fn sync_push(
     key: &[u8; 32],
     device_id: &str,
 ) -> Result<SyncPushReport> {
+    sync_push_excluding(
+        conn,
+        backend,
+        key,
+        device_id,
+        &std::collections::BTreeSet::new(),
+    )
+}
+
+pub fn sync_push_excluding(
+    conn: &Connection,
+    backend: &dyn CloudBackend,
+    key: &[u8; 32],
+    device_id: &str,
+    excluded: &std::collections::BTreeSet<(String, String)>,
+) -> Result<SyncPushReport> {
     let previous = read_catalog(backend, key)?;
-    let exported = export_sessions(conn)?;
+    let exported = export_sessions(conn)?
+        .into_iter()
+        .filter(|session| {
+            !excluded.contains(&(session.provider.clone(), session.session_id.clone()))
+        })
+        .collect::<Vec<_>>();
     let mut sessions_by_key: std::collections::BTreeMap<(String, String), SessionEntry> = previous
         .sessions
         .iter()
@@ -683,28 +704,64 @@ pub fn sync_pull_capability(
 }
 
 pub fn reclaim_cache(
-    conn: &Connection,
+    conn: &mut Connection,
     backend: &dyn CloudBackend,
     key: &[u8; 32],
     scope: &CapabilityScope,
 ) -> Result<usize> {
     let catalog = read_catalog(backend, key)?;
+    ensure!(
+        catalog.generation > 0,
+        "remote catalog is missing; refusing to reclaim local history"
+    );
     let keep: std::collections::BTreeSet<(String, String)> = sessions_in_scope(&catalog, scope)
         .into_iter()
         .map(|entry| (entry.provider, entry.session_id))
         .collect();
-    let mut removed = 0usize;
+    let mut candidates = Vec::new();
     for row in store::list_session_rows(conn, None, None, None)? {
         if keep.contains(&(row.provider.clone(), row.session_id.clone())) {
             continue;
         }
-        conn.execute("DELETE FROM records WHERE session_row = ?1", [row.row_id])
-            .context("Failed to remove cached records")?;
-        conn.execute("DELETE FROM sessions WHERE id = ?1", [row.row_id])
-            .context("Failed to remove cached session")?;
-        removed += 1;
+        let entry = catalog
+            .sessions
+            .iter()
+            .find(|entry| entry.provider == row.provider && entry.session_id == row.session_id)
+            .with_context(|| {
+                format!(
+                    "{}/{} is not in the remote catalog",
+                    row.provider, row.session_id
+                )
+            })?;
+        let session_key = session_key(key, &entry.provider, &entry.session_id);
+        let scope_id = chunk_scope(&session_key, &entry.session_id);
+        for chunk in &entry.chunks {
+            let object_key = chunk_key(&chunk.hash, &scope_id)?;
+            ensure!(
+                backend.get(&object_key)?.is_some(),
+                "remote chunk {} for {}/{} is missing; refusing to reclaim",
+                chunk.hash,
+                entry.provider,
+                entry.session_id
+            );
+        }
+        candidates.push(row.row_id);
     }
-    Ok(removed)
+    let transaction = conn
+        .transaction()
+        .context("Failed to start cache reclaim transaction")?;
+    for row_id in &candidates {
+        transaction
+            .execute("DELETE FROM records WHERE session_row = ?1", [row_id])
+            .context("Failed to remove cached records")?;
+        transaction
+            .execute("DELETE FROM sessions WHERE id = ?1", [row_id])
+            .context("Failed to remove cached session")?;
+    }
+    transaction
+        .commit()
+        .context("Failed to commit cache reclaim")?;
+    Ok(candidates.len())
 }
 
 pub fn verify_remote(backend: &dyn CloudBackend, key: &[u8; 32]) -> Result<VerifyReport> {
@@ -1457,7 +1514,7 @@ mod tests {
 
     #[test]
     fn reclaim_cache_removes_sessions_outside_scope() {
-        let conn = Connection::open_in_memory().expect("in-memory archive");
+        let mut conn = Connection::open_in_memory().expect("in-memory archive");
         init_schema(&conn).expect("archive schema");
         for (session_id, text) in [("keep", "keep payload"), ("drop", "drop payload")] {
             let records = vec![terminal_record(session_id, 1, session_id, text)];
@@ -1482,7 +1539,7 @@ mod tests {
         let key = [5_u8; 32];
         sync_push(&conn, &backend, &key, "device").expect("push");
         let removed = reclaim_cache(
-            &conn,
+            &mut conn,
             &backend,
             &key,
             &CapabilityScope::Session("keep".into()),

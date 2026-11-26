@@ -12,6 +12,7 @@ use sivtr_core::session::SessionEntry;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Generous: the shell has to start, print a prompt, run a command and report.
@@ -171,25 +172,49 @@ fn drive(command: CommandBuilder, input: &str) -> String {
     let mut writer = pair.master.take_writer().expect("pty writer");
 
     // The pty buffer is small: drain it or the shell blocks on its own output.
+    // The shared buffer lets input pacing wait for the shell's OSC 133;D marker.
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let seen_by_reader = Arc::clone(&seen);
     let drain = std::thread::spawn(move || {
         let mut out = Vec::new();
         let mut buffer = [0u8; 4096];
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) | Err(_) => break,
-                Ok(read) => out.extend_from_slice(&buffer[..read]),
+                Ok(read) => {
+                    out.extend_from_slice(&buffer[..read]);
+                    seen_by_reader
+                        .lock()
+                        .expect("reader buffer poisoned")
+                        .extend_from_slice(&buffer[..read]);
+                }
             }
         }
         out
     });
 
-    // Send one line at a time so the shell and the OSC 133 hooks see each
-    // command boundary separately. Writing all input at once can race the
-    // marker report and attribute the next line's output to the wrong command.
     for line in input.split_inclusive('\n') {
         writer.write_all(line.as_bytes()).expect("send input");
         writer.flush().expect("flush");
-        std::thread::sleep(Duration::from_millis(50));
+        if line.trim_end() == "exit" {
+            continue;
+        }
+        let line_deadline = Instant::now() + DEADLINE;
+        loop {
+            let ready = seen
+                .lock()
+                .expect("reader buffer poisoned")
+                .windows(6)
+                .any(|window| window == b"\x1b]133;D");
+            if ready {
+                seen.lock().expect("reader buffer poisoned").clear();
+                break;
+            }
+            if Instant::now() >= line_deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
     drop(writer);
 
