@@ -4,12 +4,18 @@ name: Rust
 #   ci (ubuntu-latest), ci (windows-latest), MSRV
 # Push to main does not re-run this workflow: squash + up-to-date means
 # the PR tree is the tree that lands. release-plz handles versioning.
+#
+# The workflow runs for every PR so required checks always report. A change
+# detector skips the expensive steps on docs/config-only PRs.
+# Draft PRs run only fast checks until ready_for_review.
+# Bot PRs run the required ubuntu/windows matrix; macOS is reserved for
+# human PRs. Slow ignored tests run on the nightly schedule.
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
   schedule:
-    - cron: "17 6 * * 1"
+    - cron: "17 3 * * *"
   workflow_dispatch:
 
 permissions:
@@ -23,6 +29,33 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Filter Rust changes
+        id: filter
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          if git diff --name-only "origin/${{ github.base_ref }}...HEAD" |
+            grep -Eq '^(src/|crates/|tests/|build\.rs|.*/build\.rs|Cargo\.toml|Cargo\.lock|rust-toolchain\.toml|\.github/workflows/rust\.yml|\.github/workflows/ai-review\.yml)'; then
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "rust=false" >> "$GITHUB_OUTPUT"
+          fi
+
   title:
     name: PR title
     if: github.event_name == 'pull_request'
@@ -49,14 +82,11 @@ jobs:
           print(f"ok: {title}")
           PY
 
-  ci:
-    if: github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
-
+  fast:
+    name: Fast checks
+    needs: changes
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft && needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -76,29 +106,82 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      - name: Check
+        run: cargo check --workspace --locked --all-targets
+
+  ci:
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && !github.event.pull_request.draft)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ github.event.pull_request.user.type == 'Bot' && fromJSON('["ubuntu-latest", "windows-latest"]') || fromJSON('["windows-latest", "ubuntu-latest", "macos-latest"]') }}
+
+    steps:
+      - name: Checkout
+        if: needs.changes.outputs.rust == 'true'
+        uses: actions/checkout@v7
+
+      - name: No Rust changes
+        if: needs.changes.outputs.rust != 'true'
+        run: echo "No Rust changes; required check satisfied without full matrix."
+
+      - name: Install Rust toolchain
+        if: needs.changes.outputs.rust == 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        if: needs.changes.outputs.rust == 'true'
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-nextest
+        if: needs.changes.outputs.rust == 'true'
+        uses: taiki-e/install-action@nextest
+
+      - name: Format check
+        if: needs.changes.outputs.rust == 'true'
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        if: needs.changes.outputs.rust == 'true'
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
       - name: Test
-        run: cargo test --workspace --locked
+        if: needs.changes.outputs.rust == 'true'
+        run: cargo nextest run --workspace --locked
+
+      - name: Doc tests
+        if: needs.changes.outputs.rust == 'true'
+        run: cargo test --workspace --locked --doc
 
       - name: Binary smoke test
+        if: needs.changes.outputs.rust == 'true'
         # Real CLI entry points; catches runtime breakage unit tests miss.
         run: |
           cargo run --quiet -- --version
           cargo run --quiet -- doctor
 
-      - name: Windows ConPTY TUI smoke
-        if: runner.os == 'Windows'
-        run: cargo test --locked tui::conpty_tests::windows_conpty_tui_smoke -- --ignored --exact
-
   msrv:
     name: MSRV
-    if: github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && !github.event.pull_request.draft)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
+        if: needs.changes.outputs.rust == 'true'
         uses: actions/checkout@v7
+
+      - name: No Rust changes
+        if: needs.changes.outputs.rust != 'true'
+        run: echo "No Rust changes; required check satisfied without MSRV build."
 
       - name: Resolve MSRV from Cargo.toml
         id: msrv
+        if: needs.changes.outputs.rust == 'true'
         run: |
           set -euo pipefail
           ver=$(sed -n 's/^rust-version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)
@@ -110,12 +193,34 @@ jobs:
           echo "MSRV $ver" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Install Rust MSRV
+        if: needs.changes.outputs.rust == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ steps.msrv.outputs.toolchain }}
 
       - name: Cache cargo
+        if: needs.changes.outputs.rust == 'true'
         uses: Swatinem/rust-cache@v2
 
       - name: Check on MSRV
+        if: needs.changes.outputs.rust == 'true'
         run: cargo check --workspace --locked --all-targets
+
+  slow-tests:
+    name: Slow tests
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Windows ConPTY TUI smoke
+        run: cargo test --locked tui::conpty_tests::windows_conpty_tui_smoke -- --ignored --exact
