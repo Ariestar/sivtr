@@ -12,7 +12,6 @@ use sivtr_core::session::SessionEntry;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Generous: the shell has to start, print a prompt, run a command and report.
@@ -157,10 +156,6 @@ fn find_entry(logs: &[PathBuf], command: &str) -> Option<SessionEntry> {
 
 /// Run a shell to completion inside an outer pty and return what it printed.
 fn drive(command: CommandBuilder, input: &str) -> String {
-    drive_with_markers(command, input, true)
-}
-
-fn drive_with_markers(command: CommandBuilder, input: &str, wait_for_markers: bool) -> String {
     let pair = native_pty_system()
         .openpty(PtySize {
             rows: 24,
@@ -176,22 +171,13 @@ fn drive_with_markers(command: CommandBuilder, input: &str, wait_for_markers: bo
     let mut writer = pair.master.take_writer().expect("pty writer");
 
     // The pty buffer is small: drain it or the shell blocks on its own output.
-    // The shared buffer lets input pacing wait for the shell's OSC 133;D marker.
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let seen_by_reader = Arc::clone(&seen);
     let drain = std::thread::spawn(move || {
         let mut out = Vec::new();
         let mut buffer = [0u8; 4096];
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) | Err(_) => break,
-                Ok(read) => {
-                    out.extend_from_slice(&buffer[..read]);
-                    seen_by_reader
-                        .lock()
-                        .expect("reader buffer poisoned")
-                        .extend_from_slice(&buffer[..read]);
-                }
+                Ok(read) => out.extend_from_slice(&buffer[..read]),
             }
         }
         out
@@ -200,26 +186,7 @@ fn drive_with_markers(command: CommandBuilder, input: &str, wait_for_markers: bo
     for line in input.split_inclusive('\n') {
         writer.write_all(line.as_bytes()).expect("send input");
         writer.flush().expect("flush");
-        if !wait_for_markers || line.trim_end() == "exit" {
-            continue;
-        }
-        const D_MARKER: &[u8] = b"\x1b]133;D";
-        let line_deadline = Instant::now() + DEADLINE;
-        loop {
-            let ready = seen
-                .lock()
-                .expect("reader buffer poisoned")
-                .windows(D_MARKER.len())
-                .any(|window| window == D_MARKER);
-            if ready {
-                seen.lock().expect("reader buffer poisoned").clear();
-                break;
-            }
-            if Instant::now() >= line_deadline {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        std::thread::sleep(Duration::from_millis(50));
     }
     drop(writer);
 
@@ -326,7 +293,7 @@ fn disabling_capture_leaves_the_shell_usable() {
     );
 
     let command = sandbox.builder("bash");
-    let output = drive_with_markers(command, "echo still-alive\nexit\n", false);
+    let output = drive(command, "echo still-alive\nexit\n");
 
     assert!(output.contains("still-alive"), "the shell must still run");
     // Nothing can ever be written here, so a short sanity wait is enough.
