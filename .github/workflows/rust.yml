@@ -4,12 +4,27 @@ name: Rust
 #   ci (ubuntu-latest), ci (windows-latest), MSRV
 # Push to main does not re-run this workflow: squash + up-to-date means
 # the PR tree is the tree that lands. release-plz handles versioning.
+#
+# Draft PRs run only fast checks until ready_for_review.
+# Bot PRs run the required ubuntu/windows matrix; macOS is reserved for
+# human PRs. Slow ignored tests run on the nightly schedule.
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+    paths:
+      - "src/**"
+      - "crates/**"
+      - "tests/**"
+      - "build.rs"
+      - "**/build.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/rust.yml"
+      - ".github/workflows/ai-review.yml"
   schedule:
-    - cron: "17 6 * * 1"
+    - cron: "17 3 * * *"
   workflow_dispatch:
 
 permissions:
@@ -49,14 +64,10 @@ jobs:
           print(f"ok: {title}")
           PY
 
-  ci:
-    if: github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
-
+  fast:
+    name: Fast checks
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -76,8 +87,44 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      - name: Check
+        run: cargo check --workspace --locked --all-targets
+
+  ci:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && !github.event.pull_request.draft)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ github.event.pull_request.user.type == 'Bot' && fromJSON('["ubuntu-latest", "windows-latest"]') || fromJSON('["windows-latest", "ubuntu-latest", "macos-latest"]') }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
       - name: Test
-        run: cargo test --workspace --locked
+        run: cargo nextest run --workspace --locked
+
+      - name: Doc tests
+        run: cargo test --workspace --locked --doc
 
       - name: Binary smoke test
         # Real CLI entry points; catches runtime breakage unit tests miss.
@@ -85,13 +132,10 @@ jobs:
           cargo run --quiet -- --version
           cargo run --quiet -- doctor
 
-      - name: Windows ConPTY TUI smoke
-        if: runner.os == 'Windows'
-        run: cargo test --locked tui::conpty_tests::windows_conpty_tui_smoke -- --ignored --exact
 
   msrv:
     name: MSRV
-    if: github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && !github.event.pull_request.draft)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -119,3 +163,22 @@ jobs:
 
       - name: Check on MSRV
         run: cargo check --workspace --locked --all-targets
+
+  slow-tests:
+    name: Slow tests
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Windows ConPTY TUI smoke
+        run: cargo test --locked tui::conpty_tests::windows_conpty_tui_smoke -- --ignored --exact
