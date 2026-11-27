@@ -1,25 +1,65 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended", ":enableVulnerabilityAlerts"],
+  "extends": [
+    "config:recommended",
+    ":enableVulnerabilityAlerts",
+    ":semanticCommits"
+  ],
+  "timezone": "Asia/Shanghai",
+  "schedule": ["after 10 pm every weekday", "every weekend"],
   "dependencyDashboard": true,
   "dependencyDashboardApproval": false,
-  "platformAutomerge": true,
+  "platformAutomerge": false,
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "separateMajorMinor": true,
+  "separateMultipleMajor": true,
+  "rebaseWhen": "conflicted",
   "packageRules": [
     {
+      "description": "Group routine dependency updates weekly.",
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "groupName": "weekly dependency updates",
+      "groupSlug": "weekly-deps",
+      "automerge": false
+    },
+    {
+      "description": "Keep major upgrades isolated and reviewable.",
+      "matchUpdateTypes": ["major"],
+      "groupName": "major dependency updates",
+      "automerge": false
+    },
+    {
+      "description": "Security fixes stay separate and may auto-merge after CI.",
+      "matchCategories": ["security"],
+      "groupName": "security updates",
+      "automerge": true,
+      "automergeType": "pr",
+      "labels": ["dependencies", "security"]
+    },
+    {
+      "description": "Group Cargo updates together.",
       "matchManagers": ["cargo"],
       "labels": ["dependencies", "rust"]
     },
     {
+      "description": "Group GitHub Actions updates together.",
       "matchManagers": ["github-actions"],
-      "labels": ["dependencies", "ci"]
+      "labels": ["dependencies", "ci"],
+      "pinDigests": true
     },
     {
+      "description": "Group docs and editor JS updates together.",
       "matchFileNames": ["docs-site/**", "editors/vscode/**"],
+      "groupName": "javascript dependency updates",
       "labels": ["dependencies", "js"]
     },
     {
-      "matchUpdateTypes": ["patch", "minor"],
-      "automerge": true
+      "description": "Monthly lockfile refresh.",
+      "matchManagers": ["cargo", "npm"],
+      "matchUpdateTypes": ["lockFileMaintenance"],
+      "schedule": ["before 5 am on the first day of the month"],
+      "automerge": false
     }
   ]
 }
