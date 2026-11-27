@@ -1,5 +1,6 @@
 use anyhow::{bail, Result};
 
+pub mod cloud;
 pub mod config;
 pub mod doctor;
 pub mod export;
@@ -12,7 +13,6 @@ pub mod setup;
 pub mod skill;
 pub mod stats;
 pub mod storage;
-pub mod sync;
 pub mod update;
 pub mod usage;
 pub mod version;

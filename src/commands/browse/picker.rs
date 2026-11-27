@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use crossterm::event::{
     self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
@@ -19,8 +19,8 @@ use crate::tui::workspace::{
     active_rows, help_action_for_key, panel_inner_rows, render_workspace, search_match_half,
     selected_index, workspace_help_entries, workspace_hit_test, workspace_layout, ContentIoFocus,
     ContentIoFrame, ContentScrolls, ExpandedBlocks, ListPane, Rows, WorkspaceDialogue,
-    WorkspaceFocus, WorkspaceHelpAction, WorkspacePublishView, WorkspaceSearchView,
-    WorkspaceSession, WorkspaceSource, WorkspaceView,
+    WorkspaceFocus, WorkspaceHelpAction, WorkspaceSearchView, WorkspaceSession, WorkspaceSource,
+    WorkspaceView,
 };
 
 use super::content::{
@@ -34,13 +34,12 @@ use super::nav::{
     open_link_target, row_list_index, source_list_index, ContentBlockCursor,
 };
 use super::panes::{ContentCtx, ContentPane, DialogueCtx, DialoguePane};
-use super::publish_overlay::{self, OverlayFocus, OverlayKey, PublishOverlay};
 use super::selection::{refresh_next_level, toggle_block_selection, toggle_row_selection};
 use super::visual::{
     apply_workspace_mouse_scroll, handle_content_mouse_select, handle_visual_select_key,
     MouseSelectionStart, VisualContentContext, VisualSelectMode, MOUSE_SCROLL_LINES,
 };
-use super::{PickerMode, PickerResult, PICK_CANCELLED_MESSAGE};
+use super::{PickerResult, PICK_CANCELLED_MESSAGE};
 use crate::pane::{Pane, PaneInput, Viewport};
 
 fn session_record_snapshot(
@@ -64,7 +63,7 @@ pub(crate) fn run(
     source_scope: Vec<bool>,
     cwd: PathBuf,
     initial_focus: WorkspaceFocus,
-    options: &super::PickerOptions,
+    _options: &super::PickerOptions,
 ) -> Result<PickerResult> {
     debug_assert_eq!(sources.len(), source_scope.len());
     debug_assert_eq!(sources.len(), source_states.len());
@@ -119,8 +118,6 @@ pub(crate) fn run(
     // First entry selected so the initial Down/j moves to the second line
     // instead of silently skipping the oldest warning.
     let mut diagnostics_state = ListState::default().with_selected(Some(0));
-    let mut publish_overlay: Option<PublishOverlay> = None;
-    let mut publish_error: Option<String> = None;
     let mut show_search = false;
     let mut search_query = String::new();
     let mut search_output = WorkspaceSearchOutput::default();
@@ -483,19 +480,6 @@ pub(crate) fn run(
                         fullscreen,
                         content_selection: visual_select_mode
                             .map(|mode: VisualSelectMode| mode.selection),
-                        publish: publish_overlay
-                            .as_ref()
-                            .map(|overlay| WorkspacePublishView {
-                                name: &overlay.name,
-                                name_input: overlay.focus == OverlayFocus::Name,
-                                selected: overlay.selected,
-                                redaction_count: overlay.draft.redaction_count,
-                                warning_count: overlay.draft.warning_count(),
-                                item_count: overlay.draft.item_count(),
-                                schema_version: overlay.draft.snapshot.schema_version(),
-                                preview: options.mode == PickerMode::Preview,
-                            }),
-                        publish_error: publish_error.as_deref(),
                         content_block_cursor: cursor_focus,
                         content_range: rows
                             .range_start(WorkspaceFocus::Content)
@@ -510,9 +494,6 @@ pub(crate) fn run(
             // plain click (no drag) never shows it.
             if show_search
                 || line_filter_input_open
-                || publish_overlay
-                    .as_ref()
-                    .is_some_and(|overlay| overlay.focus == OverlayFocus::Name)
                 || visual_select_mode
                     .is_some_and(|mode| mode.selection.anchor != mode.selection.cursor)
             {
@@ -567,13 +548,6 @@ pub(crate) fn run(
                     );
                 } else if line_filter_input_open {
                     handle_line_filter_paste(&text, &mut line_filter, &mut line_filter_error);
-                } else if publish_overlay
-                    .as_ref()
-                    .is_some_and(|overlay| overlay.focus == OverlayFocus::Name)
-                {
-                    if let Some(overlay) = publish_overlay.as_mut() {
-                        overlay.name.push_str(&text);
-                    }
                 }
             }
             Event::Key(key) => {
@@ -588,11 +562,7 @@ pub(crate) fn run(
                     && !is_repeat_safe(
                         key.code,
                         key.modifiers,
-                        show_search
-                            || line_filter_input_open
-                            || publish_overlay
-                                .as_ref()
-                                .is_some_and(|overlay| overlay.focus == OverlayFocus::Name),
+                        show_search || line_filter_input_open,
                     )
                 {
                     continue;
@@ -604,55 +574,7 @@ pub(crate) fn run(
                     anyhow::bail!(PICK_CANCELLED_MESSAGE);
                 }
 
-                if let Some(overlay) = publish_overlay.as_mut() {
-                    let action = publish_overlay::handle_key(
-                        key,
-                        &mut overlay.selected,
-                        &mut overlay.name,
-                        &mut overlay.focus,
-                    );
-                    match action {
-                        OverlayKey::Cancel => {
-                            publish_overlay = None;
-                            publish_error = None;
-                        }
-                        OverlayKey::Confirm => {
-                            let Some(overlay) = publish_overlay.take() else {
-                                continue;
-                            };
-                            let PublishOverlay {
-                                selected,
-                                name,
-                                mut set,
-                                draft: preview_draft,
-                                ..
-                            } = overlay;
-                            let expires = publish_overlay::selected_expiry(selected);
-                            let title = preview_draft.snapshot.title().to_string();
-                            let draft = crate::commands::publish::load_draft_from_set(
-                                &mut set,
-                                Some(title),
-                                expires,
-                            )
-                            .context("rebuild publish draft from selected WorkSet")?;
-                            let save_name = (!name.is_empty()).then_some(name);
-                            return Ok(PickerResult::Publish {
-                                set,
-                                draft: Box::new(draft),
-                                expires,
-                                save_name,
-                            });
-                        }
-                        OverlayKey::Continue => {}
-                    }
-                    continue;
-                }
-
                 if let Some(mode) = visual_select_mode.as_mut() {
-                    if key.code == KeyCode::Char('p') && key.modifiers == KeyModifiers::NONE {
-                        publish_error = Some("发布需要完整的区块选择".into());
-                        continue;
-                    }
                     let active = content_frame.active(content_io_focus, &mut content_scrolls);
                     if let Some(picked) = handle_visual_select_key(
                         key.code,
@@ -901,24 +823,6 @@ pub(crate) fn run(
                     )? {
                         HelpDispatch::Continue => {}
                         HelpDispatch::Picked(picked) => return Ok(PickerResult::Picked(picked)),
-                        HelpDispatch::Publish => {
-                            show_search = false;
-                            match crate::commands::publish::prepare_picker(
-                                &rows.selection,
-                                options.publish_title.as_deref(),
-                                options.publish_expiry,
-                            ) {
-                                Ok((set, draft)) => {
-                                    publish_error = None;
-                                    publish_overlay = Some(publish_overlay::new(
-                                        set,
-                                        draft,
-                                        options.publish_expiry,
-                                    ));
-                                }
-                                Err(error) => publish_error = Some(error.to_string()),
-                            }
-                        }
                         HelpDispatch::Refresh => {
                             let size = terminal.size()?;
                             let layout = workspace_layout(
@@ -956,7 +860,6 @@ pub(crate) fn run(
                     }
                 }
             }
-            Event::Mouse(_) if publish_overlay.is_some() => {}
             Event::Mouse(mouse) if show_help && !show_search => match mouse.kind {
                 MouseEventKind::ScrollUp => {
                     for _ in 0..MOUSE_SCROLL_LINES {

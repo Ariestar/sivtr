@@ -18,13 +18,16 @@ chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = "1"
-rusqlite = { version = "0.43", features = ["bundled", "vtab"] }
+rusqlite = { version = "0.42", features = ["bundled", "vtab"] }
 flate2 = "1.1"
 rust-embed = "8.12.0"
 arboard = "3"
 dirs = "7"
 uuid = { version = "1", features = ["v4"] }
 hostname = "0.4"
+getrandom = "0.4"
+aes-gcm = "0.11"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
 anyhow = "1"
 rmp-serde = "1"
 tempfile = "3"

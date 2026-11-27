@@ -177,8 +177,22 @@ fn archive_total_bytes(path: &Path) -> Result<u64> {
         + path_bytes(&sidecar(path, "-shm"))?)
 }
 
-/// Legacy parsed-session caches that current builds no longer write.
-pub fn legacy_cache_files(cache_dir: &Path) -> Result<Vec<CacheEntry>> {
+/// BM25 index caches that search rebuilds on demand.
+pub fn bm25_cache_files(cache_dir: &Path) -> Result<Vec<CacheEntry>> {
+    cache_files_matching(cache_dir, CacheKind::Bm25)
+}
+
+/// Caches selected by `prune-cache`: legacy files always, BM25 indexes only
+/// when the caller opts in explicitly.
+pub fn prune_cache_files(cache_dir: &Path, include_bm25: bool) -> Result<Vec<CacheEntry>> {
+    let mut files = cache_files_matching(cache_dir, CacheKind::Legacy)?;
+    if include_bm25 {
+        files.extend(bm25_cache_files(cache_dir)?);
+    }
+    Ok(files)
+}
+
+fn cache_files_matching(cache_dir: &Path, kind: CacheKind) -> Result<Vec<CacheEntry>> {
     if !cache_dir.exists() {
         return Ok(Vec::new());
     }
@@ -200,7 +214,7 @@ pub fn legacy_cache_files(cache_dir: &Path) -> Result<Vec<CacheEntry>> {
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        if matches!(classify_cache_file(&name), CacheKind::Legacy) {
+        if classify_cache_file(&name) == kind {
             files.push(CacheEntry {
                 name,
                 bytes: metadata.len(),
@@ -467,7 +481,7 @@ mod tests {
         }
         fs::create_dir(&backup_dir).expect("create backup dir");
 
-        let entries = legacy_cache_files(dir.path()).expect("list legacy files");
+        let entries = prune_cache_files(dir.path(), false).expect("list legacy files");
         assert_eq!(entries.len(), 2);
         assert!(legacy.exists());
         assert!(legacy_meta.exists());
@@ -579,5 +593,26 @@ mod tests {
         assert_eq!(report.reclaimable_bytes, before - after);
         drop(idle);
         drop(conn);
+    }
+
+    #[test]
+    fn prune_cache_only_selects_bm25_when_requested() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::write(dir.path().join("sess-0123456789abcdef.bin"), b"1").expect("write legacy");
+        fs::write(dir.path().join("bm25-0123456789abcdef.bin"), b"22").expect("write bm25");
+        fs::write(dir.path().join("listing-0123456789abcdef.bin"), b"333").expect("write listing");
+
+        let default = prune_cache_files(dir.path(), false).expect("default prune list");
+        assert_eq!(default.len(), 1);
+        assert_eq!(default[0].name, "sess-0123456789abcdef.bin");
+
+        let with_bm25 = prune_cache_files(dir.path(), true).expect("bm25 prune list");
+        assert_eq!(with_bm25.len(), 2);
+        assert!(with_bm25
+            .iter()
+            .any(|entry| entry.name.starts_with("bm25-")));
+        assert!(with_bm25
+            .iter()
+            .all(|entry| !entry.name.starts_with("listing-")));
     }
 }

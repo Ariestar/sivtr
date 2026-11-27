@@ -1,7 +1,7 @@
 //! Workspace browser: source catalog, on-demand load, and TUI picker.
 //!
 //! Product surface for bare `sivtr`, hotkey, and `copy --pick`. Returns a
-//! picker result; callers decide how to export or publish it.
+//! picker result; callers decide how to export it.
 //!
 //! Pane data capability lives in [`crate::pane`] (`SlidingPane`). This module
 //! owns loaders + picker orchestration only. `tui::pane` is chrome only.
@@ -14,7 +14,6 @@ mod panes;
 #[cfg(feature = "perf-benches")]
 pub mod perf;
 mod picker;
-mod publish_overlay;
 mod selection;
 mod text;
 mod vim;
@@ -27,8 +26,6 @@ pub(crate) use text::{filter_lines_by_spec, record_text_to_pair, select_lines};
 
 use anyhow::{anyhow, Context, Result};
 use sivtr_core::agents::AgentProvider;
-use sivtr_core::publication::{PublicationDraft, PublicationExpiry};
-use sivtr_core::workset::WorkSet;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use crate::tui::terminal::{
@@ -39,25 +36,10 @@ use crate::tui::workspace::{WorkspaceFocus, WorkspaceSource};
 
 pub(crate) enum PickerResult {
     Picked(PickedContent),
-    Publish {
-        set: WorkSet,
-        draft: Box<PublicationDraft>,
-        expires: PublicationExpiry,
-        save_name: Option<String>,
-    },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PickerMode {
-    Browse,
-    Preview,
 }
 
 struct PickerOptions {
-    mode: PickerMode,
     wait_after_panic: bool,
-    publish_title: Option<String>,
-    publish_expiry: PublicationExpiry,
 }
 
 /// Run the workspace browser.
@@ -74,10 +56,7 @@ pub fn run(
         select_remotes,
         initial_focus,
         PickerOptions {
-            mode: PickerMode::Browse,
             wait_after_panic: true,
-            publish_title: None,
-            publish_expiry: PublicationExpiry::default(),
         },
     )
 }
@@ -97,31 +76,7 @@ pub fn run_without_panic_wait(
         select_remotes,
         initial_focus,
         PickerOptions {
-            mode: PickerMode::Browse,
             wait_after_panic: false,
-            publish_title: None,
-            publish_expiry: PublicationExpiry::default(),
-        },
-    )
-}
-
-/// Open the workspace picker as a local publication preview.
-pub(crate) fn run_preview(
-    providers: &[AgentProvider],
-    select_remotes: bool,
-    initial_focus: WorkspaceFocus,
-    publish_title: Option<String>,
-    publish_expiry: PublicationExpiry,
-) -> Result<PickerResult> {
-    run_catalog(
-        providers,
-        select_remotes,
-        initial_focus,
-        PickerOptions {
-            mode: PickerMode::Preview,
-            wait_after_panic: true,
-            publish_title,
-            publish_expiry,
         },
     )
 }
@@ -174,10 +129,7 @@ pub fn run_with_sessions(
         cwd,
         initial_focus,
         PickerOptions {
-            mode: PickerMode::Browse,
             wait_after_panic: true,
-            publish_title: None,
-            publish_expiry: PublicationExpiry::default(),
         },
     );
     finish_tui(&mut terminal, result)

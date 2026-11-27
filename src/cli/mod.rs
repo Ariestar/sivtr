@@ -9,13 +9,13 @@ use std::sync::LazyLock;
 
 use crate::commands::memory::show::WorkSetOutputFormat;
 
+mod cloud;
 mod mcp;
 mod pty;
-mod publish;
 mod remote;
+pub use cloud::*;
 pub use mcp::*;
 pub use pty::*;
-pub use publish::*;
 pub use remote::*;
 
 pub(crate) const TIME_FILTER_HELP: &str = "Accepts RFC3339 timestamps, Unix seconds/milliseconds, relative durations like 30m, 2h, 7d, or aliases like today, yesterday, tomorrow, this morning, this afternoon, this evening, tonight, and now.";
@@ -358,27 +358,17 @@ pub enum Commands {
     /// Show a captured terminal or AI workspace ref
     Show(ShowArgs),
 
-    /// Publish an encrypted, browser-readable conversation snapshot
-    Publish(PublishCommand),
-
     /// Manage the read-only MCP server for agent hosts
     Mcp(McpCommand),
 
     /// Manage the local sivtr remote-memory daemon
     Serve(ServeCommand),
 
-    /// Manage workspaces explicitly shared by this device
-    Share(ShareCommand),
-
     /// Manage device identities known to this daemon
     Peer(PeerCommand),
 
     /// Manage remotes for the current workspace (like `git remote`)
     Remote(RemoteCommand),
-
-    /// Manage groups: a named set of devices that share memory with each other
-    #[command(visible_alias = "g")]
-    Group(GroupCommand),
 
     /// Manage source origins: one name for every addressable memory source
     /// (local workspace alias or remote mount), renamed through one command
@@ -427,9 +417,6 @@ pub enum Commands {
     #[command(after_help = HOTKEY_AFTER_HELP)]
     Hotkey(HotkeyCommand),
 
-    /// Sync terminal and agent sessions into the unified archive
-    Sync(SyncArgs),
-
     /// Show token usage and estimated model costs
     #[command(after_help = USAGE_AFTER_HELP)]
     Usage(UsageCommand),
@@ -439,6 +426,12 @@ pub enum Commands {
 
     /// Inspect and reclaim local storage
     Storage(StorageCommand),
+
+    /// Synchronize encrypted session history with a cloud remote
+    Sync(SyncCommand),
+
+    /// Share scoped session history through capabilities
+    Share(ShareCommand),
 
     /// Manage archived session labels and listings
     Session(SessionCommand),
@@ -1228,17 +1221,6 @@ impl<'de> Deserialize<'de> for HotkeyProviderSelection {
     }
 }
 
-#[derive(Args, Debug)]
-pub struct SyncArgs {
-    /// Re-parse every session, ignoring cached fingerprints
-    #[arg(long, default_value_t = false)]
-    pub full: bool,
-
-    /// Output structured JSON for agent/skill consumption
-    #[arg(long)]
-    pub json: bool,
-}
-
 #[derive(Parser, Debug)]
 pub struct UsageCommand {
     #[command(subcommand)]
@@ -1327,7 +1309,7 @@ pub enum StorageAction {
     /// Compact the archive database and reclaim free pages
     Vacuum(StorageVacuumArgs),
 
-    /// Report or delete legacy parsed-session caches
+    /// Report or delete legacy and optional BM25 caches
     PruneCache(StoragePruneCacheArgs),
 }
 
@@ -1350,6 +1332,10 @@ pub struct StoragePruneCacheArgs {
     /// Delete the listed files (default: report only)
     #[arg(long)]
     pub apply: bool,
+
+    /// Also select BM25 index caches, which search rebuilds on demand
+    #[arg(long)]
+    pub include_bm25: bool,
 
     /// Emit the complete machine-readable report
     #[arg(long)]
@@ -1635,6 +1621,58 @@ mod tests {
                 _ => panic!("expected storage prune-cache"),
             },
             _ => panic!("expected storage command"),
+        }
+    }
+
+    #[test]
+    fn storage_prune_cache_accepts_include_bm25() {
+        let cli =
+            Cli::try_parse_from(["sivtr", "storage", "prune-cache", "--include-bm25"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Storage(command)) => match command.action {
+                StorageAction::PruneCache(args) => assert!(args.include_bm25),
+                _ => panic!("expected storage prune-cache"),
+            },
+            _ => panic!("expected storage command"),
+        }
+    }
+
+    #[test]
+    fn sync_init_parses_remote_and_key_file() {
+        let cli = Cli::try_parse_from([
+            "sivtr",
+            "sync",
+            "init",
+            "--remote",
+            "s3://bucket/prefix",
+            "--key-file",
+            "custom.key",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Commands::Sync(command)) => match command.action {
+                SyncAction::Init(args) => {
+                    assert_eq!(args.remote, "s3://bucket/prefix");
+                    assert_eq!(args.key_file, Some(PathBuf::from("custom.key")));
+                }
+                _ => panic!("expected sync init"),
+            },
+            _ => panic!("expected sync command"),
+        }
+    }
+
+    #[test]
+    fn share_attach_parses_capability_id() {
+        let cli = Cli::try_parse_from(["sivtr", "share", "attach", "cap-123"]).unwrap();
+
+        match cli.command {
+            Some(Commands::Share(command)) => match command.action {
+                ShareAction::Attach(args) => assert_eq!(args.capability_id, "cap-123"),
+                _ => panic!("expected share attach"),
+            },
+            _ => panic!("expected share command"),
         }
     }
 
@@ -1947,77 +1985,6 @@ mod tests {
                 .is_err()
         );
         assert!(Cli::try_parse_from(["sivtr", "show", "@last", "--refs", "--json"]).is_err());
-    }
-
-    #[test]
-    fn publish_parses_preview_and_default_publish_flags() {
-        let cli = Cli::try_parse_from([
-            "sivtr",
-            "publish",
-            "preview",
-            "@share_ready",
-            "--expires",
-            "30d",
-            "--format",
-            "json",
-        ])
-        .expect("publish preview with a saved WorkSet should parse");
-        match cli.command {
-            Some(Commands::Publish(command)) => match command.action {
-                Some(PublishAction::Preview(args)) => {
-                    assert_eq!(args.source.as_deref(), Some("@share_ready"));
-                    assert_eq!(args.expires, "30d");
-                    assert_eq!(args.format, PublishFormat::Json);
-                }
-                _ => panic!("expected publish preview"),
-            },
-            _ => panic!("expected publish command"),
-        }
-
-        let cli = Cli::try_parse_from(["sivtr", "publish", "preview"])
-            .expect("publish preview without a source should parse");
-        match cli.command {
-            Some(Commands::Publish(command)) => match command.action {
-                Some(PublishAction::Preview(args)) => {
-                    assert!(args.source.is_none());
-                    assert_eq!(args.expires, "7d");
-                }
-                _ => panic!("expected publish preview"),
-            },
-            _ => panic!("expected publish command"),
-        }
-
-        let cli = Cli::try_parse_from(["sivtr", "publish", "@", "--yes", "--allow-warnings"])
-            .expect("default publish flags should parse");
-        match cli.command {
-            Some(Commands::Publish(command)) => {
-                assert!(command.action.is_none());
-                assert_eq!(command.source.as_deref(), Some("@"));
-                assert!(command.yes);
-                assert!(command.allow_warnings);
-            }
-            _ => panic!("expected publish command"),
-        }
-
-        let cli = Cli::try_parse_from(["sivtr", "publish", "review"])
-            .expect("a saved WorkSet name should parse as a publish source");
-        match cli.command {
-            Some(Commands::Publish(command)) => {
-                assert!(command.action.is_none());
-                assert_eq!(command.source.as_deref(), Some("review"));
-            }
-            _ => panic!("expected publish command"),
-        }
-
-        let cli = Cli::try_parse_from(["sivtr", "publish", "link"])
-            .expect("publish link without an id should parse");
-        match cli.command {
-            Some(Commands::Publish(command)) => match command.action {
-                Some(PublishAction::Link(args)) => assert!(args.publication_id.is_none()),
-                _ => panic!("expected publish link"),
-            },
-            _ => panic!("expected publish command"),
-        }
     }
 
     #[test]
@@ -2575,19 +2542,6 @@ mod tests {
                 assert!(args.current_session);
             }
             _ => panic!("expected hotkey-pick-agent command"),
-        }
-    }
-
-    #[test]
-    fn sync_accepts_full_and_json_flags() {
-        let cli = Cli::try_parse_from(["sivtr", "sync", "--full", "--json"]).unwrap();
-
-        match cli.command {
-            Some(Commands::Sync(args)) => {
-                assert!(args.full);
-                assert!(args.json);
-            }
-            _ => panic!("expected sync command"),
         }
     }
 

@@ -41,8 +41,6 @@ pub(crate) enum WorkspaceHelpAction {
     Cancel,
     /// Refresh next level under active rows (source→sessions, session→dialogues).
     Refresh,
-    /// Open the publication lifetime picker for the canonical selection.
-    Publish,
     /// Content half: jump scroll to top / bottom.
     ScrollContentTop,
     ScrollContentBottom,
@@ -309,13 +307,6 @@ pub(crate) fn workspace_help_entries() -> &'static [WorkspaceHelpEntry] {
             description: "search",
             action: WorkspaceHelpAction::OpenSearch,
             footer_label: Some("search"),
-            footer_panes: NAV,
-        },
-        WorkspaceHelpEntry {
-            key: "p",
-            description: "发布选择",
-            action: WorkspaceHelpAction::Publish,
-            footer_label: Some("发布"),
             footer_panes: NAV,
         },
         WorkspaceHelpEntry {

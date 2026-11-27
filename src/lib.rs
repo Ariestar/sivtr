@@ -86,17 +86,11 @@ fn run() -> Result<()> {
         Some(Commands::Show(args)) => {
             commands::memory::show::execute(&args)?;
         }
-        Some(Commands::Publish(command)) => {
-            commands::publish::execute(command)?;
-        }
         Some(Commands::Mcp(cmd)) => {
             commands::system::mcp::execute(cmd)?;
         }
         Some(Commands::Serve(args)) => {
             commands::remote::serve::execute(&args)?;
-        }
-        Some(Commands::Share(cmd)) => {
-            commands::remote::share::execute(cmd)?;
         }
         Some(Commands::Peer(cmd)) => {
             commands::remote::peer::execute(cmd)?;
@@ -104,17 +98,11 @@ fn run() -> Result<()> {
         Some(Commands::Remote(cmd)) => {
             commands::remote::execute(cmd)?;
         }
-        Some(Commands::Group(cmd)) => {
-            commands::remote::group::execute(cmd)?;
-        }
         Some(Commands::Origin(cmd)) => {
             commands::remote::origin::execute(cmd)?;
         }
         Some(Commands::Hotkey(cmd)) => {
             commands::system::hotkey::execute(cmd)?;
-        }
-        Some(Commands::Sync(args)) => {
-            commands::system::sync::execute(&args)?;
         }
         Some(Commands::Usage(command)) => {
             commands::system::usage::execute(&command)?;
@@ -124,6 +112,12 @@ fn run() -> Result<()> {
         }
         Some(Commands::Storage(command)) => {
             commands::system::storage::execute(&command)?;
+        }
+        Some(Commands::Sync(command)) => {
+            commands::system::cloud::execute_sync(&command)?;
+        }
+        Some(Commands::Share(command)) => {
+            commands::system::cloud::execute_share(&command)?;
         }
         Some(Commands::Session(command)) => {
             commands::system::session::execute(&command)?;
