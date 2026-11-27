@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/Ariestar/sivtr/compare/v0.9.0...v0.10.0) - 2026-11-27
+
+### Added
+
+- *(cloud)* unify encrypted session sync and sharing ([#586](https://github.com/Ariestar/sivtr/pull/586))
+- *(storage)* report and reclaim local bytes ([#585](https://github.com/Ariestar/sivtr/pull/585))
+
+### Fixed
+
+- *(deps)* update rust crate notify to v9 ([#590](https://github.com/Ariestar/sivtr/pull/590))
+- *(deps)* update rust crate rusqlite to 0.43 ([#588](https://github.com/Ariestar/sivtr/pull/588))
+- *(deps)* update dependency @astrojs/starlight to v0.43.2 ([#591](https://github.com/Ariestar/sivtr/pull/591))
+
+### Other
+
+- *(deps)* update dependency @cloudflare/workers-types to v5.20261127.1 ([#595](https://github.com/Ariestar/sivtr/pull/595))
+- *(deps)* update rust crate rmcp to v3.12.0 ([#594](https://github.com/Ariestar/sivtr/pull/594))
+- *(deps)* update dependency vite to v8.4.0 ([#592](https://github.com/Ariestar/sivtr/pull/592))
+- *(deps)* update dependency @types/node to v26.6.11 ([#584](https://github.com/Ariestar/sivtr/pull/584))
+- *(deps)* update rust crate zip to v9.8.2 ([#587](https://github.com/Ariestar/sivtr/pull/587))
+- *(deps)* update dependency @types/node to v26.6.11 ([#583](https://github.com/Ariestar/sivtr/pull/583))
+- *(deps)* update dependency vitest to v5.1.2 ([#581](https://github.com/Ariestar/sivtr/pull/581))
+- *(deps)* update rust crate sha2 to v0.11.2 ([#582](https://github.com/Ariestar/sivtr/pull/582))
+
 ## [0.9.0](https://github.com/Ariestar/sivtr/compare/v0.8.3...v0.9.0) - 2026-11-25
 
 ### Added
