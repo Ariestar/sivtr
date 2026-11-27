@@ -1,25 +1,61 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended", ":enableVulnerabilityAlerts"],
+  "extends": [
+    "config:recommended",
+    ":enableVulnerabilityAlerts",
+    ":semanticCommits"
+  ],
+  "timezone": "Asia/Shanghai",
   "dependencyDashboard": true,
   "dependencyDashboardApproval": false,
-  "platformAutomerge": true,
+  "platformAutomerge": false,
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "separateMajorMinor": true,
+  "separateMultipleMajor": true,
+  "rebaseWhen": "behind-base-branch",
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "automerge": true,
+    "automergeType": "pr",
+    "labels": ["dependencies", "security"]
+  },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 5 am on the first day of the month"],
+    "automerge": false
+  },
   "packageRules": [
     {
+      "description": "Group routine dependency updates into one weekly window.",
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest", "pinDigest"],
+      "schedule": ["after 10 pm every Sunday"],
+      "groupName": "weekly dependency updates",
+      "groupSlug": "weekly-deps",
+      "automerge": false
+    },
+    {
+      "description": "Keep major upgrades isolated and reviewable.",
+      "matchUpdateTypes": ["major"],
+      "groupName": "major dependency updates",
+      "automerge": false
+    },
+    {
+      "description": "Group Cargo updates together.",
       "matchManagers": ["cargo"],
       "labels": ["dependencies", "rust"]
     },
     {
+      "description": "Group GitHub Actions updates together.",
       "matchManagers": ["github-actions"],
-      "labels": ["dependencies", "ci"]
+      "labels": ["dependencies", "ci"],
+      "pinDigests": true
     },
     {
+      "description": "Group docs and editor JS updates together.",
       "matchFileNames": ["docs-site/**", "editors/vscode/**"],
+      "groupName": "javascript dependency updates",
       "labels": ["dependencies", "js"]
-    },
-    {
-      "matchUpdateTypes": ["patch", "minor"],
-      "automerge": true
     }
   ]
 }
