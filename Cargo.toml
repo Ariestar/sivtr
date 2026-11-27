@@ -110,7 +110,7 @@ ureq = { version = "3.3.0", default-features = false, features = ["rustls"] }
 zip = { version = "9.0.0", default-features = false, features = ["deflate"] }
 flate2 = "1.1.9"
 tar = { version = "0.4.46", default-features = false }
-notify = "8.2"
+notify = "9.0"
 object_store = { version = "0.14.2", features = ["aws"] }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 toml = "1"
