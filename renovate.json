@@ -6,7 +6,6 @@
     ":semanticCommits"
   ],
   "timezone": "Asia/Shanghai",
-  "schedule": ["after 10 pm every weekday", "every weekend"],
   "dependencyDashboard": true,
   "dependencyDashboardApproval": false,
   "platformAutomerge": false,
@@ -14,11 +13,23 @@
   "prHourlyLimit": 2,
   "separateMajorMinor": true,
   "separateMultipleMajor": true,
-  "rebaseWhen": "conflicted",
+  "rebaseWhen": "behind-base-branch",
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "automerge": true,
+    "automergeType": "pr",
+    "labels": ["dependencies", "security"]
+  },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 5 am on the first day of the month"],
+    "automerge": false
+  },
   "packageRules": [
     {
-      "description": "Group routine dependency updates weekly.",
+      "description": "Group routine dependency updates into one weekly window.",
       "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "schedule": ["after 10 pm every Sunday"],
       "groupName": "weekly dependency updates",
       "groupSlug": "weekly-deps",
       "automerge": false
@@ -28,14 +39,6 @@
       "matchUpdateTypes": ["major"],
       "groupName": "major dependency updates",
       "automerge": false
-    },
-    {
-      "description": "Security fixes stay separate and may auto-merge after CI.",
-      "matchCategories": ["security"],
-      "groupName": "security updates",
-      "automerge": true,
-      "automergeType": "pr",
-      "labels": ["dependencies", "security"]
     },
     {
       "description": "Group Cargo updates together.",
@@ -53,13 +56,6 @@
       "matchFileNames": ["docs-site/**", "editors/vscode/**"],
       "groupName": "javascript dependency updates",
       "labels": ["dependencies", "js"]
-    },
-    {
-      "description": "Monthly lockfile refresh.",
-      "matchManagers": ["cargo", "npm"],
-      "matchUpdateTypes": ["lockFileMaintenance"],
-      "schedule": ["before 5 am on the first day of the month"],
-      "automerge": false
     }
   ]
 }
