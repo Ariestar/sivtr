@@ -48,7 +48,8 @@ fn sync_init(args: &SyncInitArgs) -> Result<()> {
         "cloud sync is already initialized; remove {}",
         cloud::settings_path().display()
     );
-    let backend = backend_for_remote(&args.remote)?;
+    let remote = normalize_remote(&args.remote)?;
+    let backend = backend_for_remote(&remote)?;
     let key_file = args
         .key_file
         .clone()
@@ -63,10 +64,7 @@ fn sync_init(args: &SyncInitArgs) -> Result<()> {
         &device_id()?,
         &cloud::recipient_public_key(&cloud::load_recipient_key(&recipient_key)?),
     )?;
-    let settings = CloudSettings {
-        remote: args.remote.clone(),
-        key_file,
-    };
+    let settings = CloudSettings { remote, key_file };
     cloud::save_settings(&settings)?;
     if args.json {
         print_json(&settings)
@@ -79,7 +77,10 @@ fn sync_init(args: &SyncInitArgs) -> Result<()> {
 }
 
 fn sync_now(args: &SyncRemoteArgs) -> Result<()> {
-    let settings = load_settings(args.remote.as_deref())?;
+    let mut settings = load_settings(args.remote.as_deref())?;
+    if let Some(key_file) = args.key_file.as_deref() {
+        settings.key_file = key_file.to_path_buf();
+    }
     let backend = backend_for_remote(&settings.remote)?;
     let key = cloud::load_library_key(&settings.key_file)?;
     let mut conn = archive::open()?;
@@ -122,7 +123,10 @@ fn sync_now(args: &SyncRemoteArgs) -> Result<()> {
 }
 
 fn sync_status(args: &SyncRemoteArgs) -> Result<()> {
-    let settings = load_settings(args.remote.as_deref())?;
+    let mut settings = load_settings(args.remote.as_deref())?;
+    if let Some(key_file) = args.key_file.as_deref() {
+        settings.key_file = key_file.to_path_buf();
+    }
     let backend = backend_for_remote(&settings.remote)?;
     let key = cloud::load_library_key(&settings.key_file)?;
     let conn = archive::open()?;
@@ -219,6 +223,17 @@ fn share_attach(args: &ShareAttachArgs) -> Result<()> {
     );
     let payload =
         cloud::unwrap_capability(&capability, &cloud::load_recipient_key(&recipient_path)?)?;
+    let attached_session_ids: Vec<(String, String)> = payload
+        .sessions
+        .iter()
+        .map(|scoped| {
+            (
+                scoped.entry.provider.clone(),
+                scoped.entry.session_id.clone(),
+            )
+        })
+        .collect();
+    record_attached_sessions(&attached_session_ids)?;
     let conn = archive::open()?;
     let report =
         cloud::sync_pull_capability(&conn, backend.as_ref(), &args.capability_id, &payload)?;
@@ -250,6 +265,9 @@ fn share_attach(args: &ShareAttachArgs) -> Result<()> {
             "attached {}: {} sessions added, {} unchanged",
             args.capability_id, report.sessions_added, report.sessions_unchanged
         );
+        for conflict in &report.conflicts {
+            println!("conflict: {conflict}");
+        }
         Ok(())
     }
 }
@@ -257,8 +275,8 @@ fn share_attach(args: &ShareAttachArgs) -> Result<()> {
 fn share_revoke(args: &ShareRevokeArgs) -> Result<()> {
     let remote = if let Some(remote) = args.remote.as_deref() {
         remote.to_string()
-    } else if let Ok(attached) = load_attached_capability(&args.capability_id) {
-        attached.remote
+    } else if attached_state_path(&args.capability_id).exists() {
+        load_attached_capability(&args.capability_id)?.remote
     } else {
         cloud::load_settings()?
             .context("cloud sync is not initialized and no attachment record exists")?
@@ -296,6 +314,10 @@ fn attached_state_path(id: &str) -> PathBuf {
         .join(format!("{id}.toml"))
 }
 
+fn attached_sessions_path() -> PathBuf {
+    workspace::home_dir().join("attached-sessions.json")
+}
+
 fn load_attached_capability(id: &str) -> Result<AttachedCapability> {
     let path = attached_state_path(id);
     let text = std::fs::read_to_string(&path)
@@ -304,23 +326,29 @@ fn load_attached_capability(id: &str) -> Result<AttachedCapability> {
 }
 
 fn load_attached_sessions() -> Result<std::collections::BTreeSet<(String, String)>> {
-    let dir = workspace::home_dir().join("caps");
-    let mut sessions = std::collections::BTreeSet::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Ok(sessions);
-    };
-    for entry in entries {
-        let entry = entry.context("Failed to read capability attachment directory")?;
-        if entry.path().extension().and_then(|value| value.to_str()) != Some("toml") {
-            continue;
+    let path = attached_sessions_path();
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(std::collections::BTreeSet::new());
         }
-        let text = std::fs::read_to_string(entry.path())
-            .with_context(|| format!("Failed to read {}", entry.path().display()))?;
-        let attached: AttachedCapability =
-            toml::from_str(&text).context("Failed to parse attached capability")?;
-        sessions.extend(attached.sessions);
-    }
-    Ok(sessions)
+        Err(error) => {
+            return Err(error).with_context(|| format!("Failed to read {}", path.display()));
+        }
+    };
+    serde_json::from_str(&text).with_context(|| format!("Failed to parse {}", path.display()))
+}
+
+fn record_attached_sessions(sessions: &[(String, String)]) -> Result<()> {
+    let path = attached_sessions_path();
+    let mut known = load_attached_sessions()?;
+    known.extend(sessions.iter().cloned());
+    let entries: Vec<serde_json::Value> = known
+        .iter()
+        .map(|(provider, session_id)| serde_json::json!([provider, session_id]))
+        .collect();
+    std::fs::write(&path, serde_json::to_string_pretty(&entries)?)
+        .with_context(|| format!("Failed to write {}", path.display()))
 }
 
 fn parse_scope(value: &str) -> Result<CapabilityScope> {
@@ -383,6 +411,24 @@ fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
     Ok(())
 }
 
+fn normalize_remote(remote: &str) -> Result<String> {
+    if let Some(path) = remote.strip_prefix("file://") {
+        let path = PathBuf::from(path);
+        let absolute = if path.is_absolute() {
+            path
+        } else {
+            env::current_dir()
+                .context("Failed to resolve current directory")?
+                .join(path)
+        };
+        return Ok(format!(
+            "file://{}",
+            absolute.to_string_lossy().replace('\\', "/")
+        ));
+    }
+    Ok(remote.to_string())
+}
+
 fn backend_for_remote(remote: &str) -> Result<Box<dyn CloudBackend>> {
     if let Some(path) = remote.strip_prefix("file://") {
         ensure!(!path.is_empty(), "file:// remote requires a path");
@@ -397,7 +443,7 @@ fn backend_for_remote(remote: &str) -> Result<Box<dyn CloudBackend>> {
         let region = env::var("SIVTR_S3_REGION")
             .or_else(|_| env::var("AWS_REGION"))
             .unwrap_or_else(|_| "auto".to_string());
-        let mut builder = AmazonS3Builder::new()
+        let mut builder = AmazonS3Builder::from_env()
             .with_bucket_name(bucket)
             .with_region(region);
         if let Ok(endpoint) =

@@ -157,6 +157,10 @@ fn find_entry(logs: &[PathBuf], command: &str) -> Option<SessionEntry> {
 
 /// Run a shell to completion inside an outer pty and return what it printed.
 fn drive(command: CommandBuilder, input: &str) -> String {
+    drive_with_markers(command, input, true)
+}
+
+fn drive_with_markers(command: CommandBuilder, input: &str, wait_for_markers: bool) -> String {
     let pair = native_pty_system()
         .openpty(PtySize {
             rows: 24,
@@ -196,16 +200,17 @@ fn drive(command: CommandBuilder, input: &str) -> String {
     for line in input.split_inclusive('\n') {
         writer.write_all(line.as_bytes()).expect("send input");
         writer.flush().expect("flush");
-        if line.trim_end() == "exit" {
+        if !wait_for_markers || line.trim_end() == "exit" {
             continue;
         }
+        const D_MARKER: &[u8] = b"\x1b]133;D";
         let line_deadline = Instant::now() + DEADLINE;
         loop {
             let ready = seen
                 .lock()
                 .expect("reader buffer poisoned")
-                .windows(6)
-                .any(|window| window == b"\x1b]133;D");
+                .windows(D_MARKER.len())
+                .any(|window| window == D_MARKER);
             if ready {
                 seen.lock().expect("reader buffer poisoned").clear();
                 break;
@@ -321,7 +326,7 @@ fn disabling_capture_leaves_the_shell_usable() {
     );
 
     let command = sandbox.builder("bash");
-    let output = drive(command, "echo still-alive\nexit\n");
+    let output = drive_with_markers(command, "echo still-alive\nexit\n", false);
 
     assert!(output.contains("still-alive"), "the shell must still run");
     // Nothing can ever be written here, so a short sanity wait is enough.

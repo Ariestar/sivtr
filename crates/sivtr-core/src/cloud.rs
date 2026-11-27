@@ -54,6 +54,7 @@ pub struct SessionEntry {
     pub started_at: Option<String>,
     pub ended_at: Option<String>,
     pub content_hash: String,
+    pub usage_events: Vec<crate::usage::UsageEvent>,
     pub record_count: usize,
     pub preview: String,
     pub chunks: Vec<ChunkRef>,
@@ -173,26 +174,36 @@ pub fn save_settings(settings: &CloudSettings) -> Result<()> {
         .with_context(|| format!("Failed to write cloud settings {}", path.display()))
 }
 
-pub fn create_library_key(path: &Path) -> Result<[u8; 32]> {
-    ensure!(
-        !path.exists(),
-        "library key already exists at {}",
-        path.display()
-    );
+fn write_new_secret(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create key directory {}", parent.display()))?;
     }
-    let mut key = [0_u8; MASTER_KEY_BYTES];
-    getrandom::fill(&mut key).context("OS random source unavailable")?;
-    fs::write(path, key)
-        .with_context(|| format!("Failed to write library key {}", path.display()))?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("Failed to restrict library key {}", path.display()))?;
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
     }
+    let mut file = options
+        .open(path)
+        .with_context(|| format!("Failed to create {}", path.display()))?;
+    file.write_all(bytes)
+        .with_context(|| format!("Failed to write {}", path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("Failed to sync {}", path.display()))?;
+    Ok(())
+}
+
+pub fn create_library_key(path: &Path) -> Result<[u8; 32]> {
+    if path.exists() {
+        return load_library_key(path);
+    }
+    let mut key = [0_u8; MASTER_KEY_BYTES];
+    getrandom::fill(&mut key).context("OS random source unavailable")?;
+    write_new_secret(path, &key)
+        .with_context(|| format!("Failed to create library key {}", path.display()))?;
     Ok(key)
 }
 
@@ -209,25 +220,13 @@ pub fn load_library_key(path: &Path) -> Result<[u8; 32]> {
 }
 
 pub fn create_recipient_key(path: &Path) -> Result<[u8; 32]> {
-    ensure!(
-        !path.exists(),
-        "recipient key already exists at {}",
-        path.display()
-    );
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create key directory {}", parent.display()))?;
+    if path.exists() {
+        return load_recipient_key(path);
     }
     let mut secret = [0_u8; 32];
     getrandom::fill(&mut secret).context("OS random source unavailable")?;
-    fs::write(path, secret)
-        .with_context(|| format!("Failed to write recipient key {}", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("Failed to restrict recipient key {}", path.display()))?;
-    }
+    write_new_secret(path, &secret)
+        .with_context(|| format!("Failed to create recipient key {}", path.display()))?;
     Ok(secret)
 }
 
@@ -248,7 +247,18 @@ pub fn register_public_key(
     device_id: &str,
     public: &[u8; 32],
 ) -> Result<()> {
-    backend.put(&format!("peers/{device_id}.pub"), public)
+    let key = format!("peers/{device_id}.pub");
+    if backend.put_if_absent(&key, public)? {
+        return Ok(());
+    }
+    let existing = backend
+        .get(&key)?
+        .with_context(|| format!("device `{device_id}` has an unreadable public key"))?;
+    ensure!(
+        existing.as_slice() == public,
+        "device `{device_id}` already has a different public key; key rotation requires explicit removal"
+    );
+    Ok(())
 }
 
 pub fn load_public_key(backend: &dyn CloudBackend, device_id: &str) -> Result<[u8; 32]> {
@@ -288,6 +298,10 @@ pub fn create_capability(
     getrandom::fill(&mut ephemeral_bytes).context("OS random source unavailable")?;
     let ephemeral = StaticSecret::from(ephemeral_bytes);
     let shared = ephemeral.diffie_hellman(&PublicKey::from(*recipient_public));
+    ensure!(
+        shared.was_contributory(),
+        "recipient public key is non-contributory"
+    );
     let wrapping_key = capability_key(shared.as_bytes(), id);
     let plaintext =
         serde_json::to_vec(&payload).context("Failed to serialize capability payload")?;
@@ -324,6 +338,10 @@ pub fn unwrap_capability(
     let secret = StaticSecret::from(*recipient_secret);
     let public = PublicKey::from(capability.ephemeral_public);
     let shared = secret.diffie_hellman(&public);
+    ensure!(
+        shared.was_contributory(),
+        "capability public key is non-contributory"
+    );
     let wrapping_key = capability_key(shared.as_bytes(), &capability.id);
     let bytes = decrypt(
         &capability.wrapped_payload,
@@ -452,9 +470,50 @@ pub fn sync_push_excluding(
     let mut sessions_written = 0usize;
 
     for session in exported {
+        let records = store::load_records_by_key(
+            conn,
+            &session.provider,
+            &session.session_id,
+            BlobMode::Full,
+        )?
+        .with_context(|| {
+            format!(
+                "archived session {}/{} disappeared",
+                session.provider, session.session_id
+            )
+        })?;
+        let canonical = canonical_jsonl(&records)?;
+        let (usage_events, usage_json) =
+            load_session_usage(conn, &session.provider, &session.session_id)?;
+        let content_hash = session_hash(&canonical, &usage_json);
+        drop(records);
+
         let map_key = (session.provider.clone(), session.session_id.clone());
-        if let Some(old) = sessions_by_key.get(&map_key) {
-            if old.content_hash == session.content_hash {
+        if let Some(old) = sessions_by_key.get(&map_key).cloned() {
+            if old.content_hash == content_hash {
+                if !session_metadata_equal(&old, &session) {
+                    sessions_written += 1;
+                    sessions_by_key.insert(
+                        map_key,
+                        SessionEntry {
+                            provider: session.provider,
+                            session_id: session.session_id,
+                            source_path: session.source_path,
+                            cwd: session.cwd,
+                            workspace_key: session.workspace_key,
+                            title: session.title,
+                            project: session.project,
+                            starred: session.starred,
+                            started_at: session.started_at,
+                            ended_at: session.ended_at,
+                            content_hash,
+                            usage_events,
+                            record_count: session.record_count,
+                            preview: session.preview,
+                            chunks: old.chunks,
+                        },
+                    );
+                }
                 continue;
             }
         }
@@ -462,7 +521,7 @@ pub fn sync_push_excluding(
             backend,
             &session_key(key, &session.provider, &session.session_id),
             &session.session_id,
-            &session.canonical,
+            &canonical,
             &mut chunks_uploaded,
             &mut chunks_reused,
             &mut bytes_uploaded,
@@ -481,16 +540,34 @@ pub fn sync_push_excluding(
                 starred: session.starred,
                 started_at: session.started_at,
                 ended_at: session.ended_at,
-                content_hash: session.content_hash,
+                content_hash,
+                usage_events,
                 record_count: session.record_count,
                 preview: session.preview,
                 chunks,
             },
         );
     }
-    let sessions: Vec<SessionEntry> = sessions_by_key.into_values().collect();
-
-    let generation = previous.generation.saturating_add(1);
+    let current = read_catalog(backend, key)?;
+    let (sessions, generation) = if current.generation == previous.generation {
+        (
+            sessions_by_key.into_values().collect(),
+            current.generation.saturating_add(1),
+        )
+    } else {
+        let mut merged: std::collections::BTreeMap<(String, String), SessionEntry> = current
+            .sessions
+            .into_iter()
+            .map(|entry| ((entry.provider.clone(), entry.session_id.clone()), entry))
+            .collect();
+        for (key, entry) in sessions_by_key {
+            merged.insert(key, entry);
+        }
+        (
+            merged.into_values().collect(),
+            current.generation.saturating_add(1),
+        )
+    };
     let manifest = Catalog {
         schema_version: SCHEMA_VERSION,
         device_id: device_id.to_string(),
@@ -545,7 +622,9 @@ pub fn sync_pull_scope(
         match local {
             Some(records) => {
                 let local_json = canonical_jsonl(&records)?;
-                if sha256_hex(&local_json) == entry.content_hash {
+                let (_, local_usage_json) =
+                    load_session_usage(conn, &entry.provider, &entry.session_id)?;
+                if session_hash(&local_json, &local_usage_json) == entry.content_hash {
                     unchanged += 1;
                 } else {
                     conflicts.push(format!(
@@ -570,7 +649,8 @@ pub fn sync_pull_scope(
                     records.len()
                 );
                 ensure!(
-                    sha256_hex(&json) == entry.content_hash,
+                    session_hash(&json, &serde_json::to_vec(&entry.usage_events)?)
+                        == entry.content_hash,
                     "cloud session {}/{} content hash mismatch",
                     entry.provider,
                     entry.session_id
@@ -589,7 +669,7 @@ pub fn sync_pull_scope(
                         stamp: (0, 0, 0),
                         fingerprint: 0,
                         records: &records,
-                        usage_events: &[],
+                        usage_events: &entry.usage_events,
                     },
                 )
                 .with_context(|| {
@@ -658,7 +738,8 @@ pub fn sync_pull_capability(
                     records.len()
                 );
                 ensure!(
-                    sha256_hex(&json) == entry.content_hash,
+                    session_hash(&json, &serde_json::to_vec(&entry.usage_events)?)
+                        == entry.content_hash,
                     "cloud session {}/{} content hash mismatch",
                     entry.provider,
                     entry.session_id
@@ -676,7 +757,7 @@ pub fn sync_pull_capability(
                         stamp: (0, 0, 0),
                         fingerprint: 0,
                         records: &records,
-                        usage_events: &[],
+                        usage_events: &entry.usage_events,
                     },
                 )
                 .with_context(|| {
@@ -723,16 +804,13 @@ pub fn reclaim_cache(
         if keep.contains(&(row.provider.clone(), row.session_id.clone())) {
             continue;
         }
-        let entry = catalog
+        let Some(entry) = catalog
             .sessions
             .iter()
             .find(|entry| entry.provider == row.provider && entry.session_id == row.session_id)
-            .with_context(|| {
-                format!(
-                    "{}/{} is not in the remote catalog",
-                    row.provider, row.session_id
-                )
-            })?;
+        else {
+            continue;
+        };
         let session_key = session_key(key, &entry.provider, &entry.session_id);
         let scope_id = chunk_scope(&session_key, &entry.session_id);
         for chunk in &entry.chunks {
@@ -795,7 +873,8 @@ pub fn verify_remote(backend: &dyn CloudBackend, key: &[u8; 32]) -> Result<Verif
             bytes_verified += bytes.len() as u64;
         }
         ensure!(
-            sha256_hex(&session_bytes) == entry.content_hash,
+            session_hash(&session_bytes, &serde_json::to_vec(&entry.usage_events)?)
+                == entry.content_hash,
             "cloud session {}/{} content hash mismatch",
             entry.provider,
             entry.session_id
@@ -861,10 +940,8 @@ struct ExportedSession {
     starred: bool,
     started_at: Option<String>,
     ended_at: Option<String>,
-    content_hash: String,
     record_count: usize,
     preview: String,
-    canonical: Vec<u8>,
 }
 
 fn export_sessions(conn: &Connection) -> Result<Vec<ExportedSession>> {
@@ -887,13 +964,14 @@ fn export_sessions(conn: &Connection) -> Result<Vec<ExportedSession>> {
                         row.provider, row.session_id
                     )
                 })?;
-        let canonical = canonical_jsonl(&records)?;
         let preview_text = records
             .iter()
             .map(|record| record.combined_text())
             .collect::<Vec<_>>()
             .join("\n");
         let preview: String = preview_text.chars().take(4096).collect();
+        let record_count = records.len();
+        drop(records);
         let workspace_key = meta
             .cwd
             .as_deref()
@@ -911,10 +989,8 @@ fn export_sessions(conn: &Connection) -> Result<Vec<ExportedSession>> {
             starred: meta.starred,
             started_at: meta.started_at,
             ended_at: meta.ended_at,
-            content_hash: sha256_hex(&canonical),
-            record_count: records.len(),
+            record_count,
             preview,
-            canonical,
         });
     }
     exported.sort_by(|left, right| {
@@ -923,6 +999,46 @@ fn export_sessions(conn: &Connection) -> Result<Vec<ExportedSession>> {
             .then_with(|| left.session_id.cmp(&right.session_id))
     });
     Ok(exported)
+}
+
+fn load_session_usage(
+    conn: &Connection,
+    provider: &str,
+    session_id: &str,
+) -> Result<(Vec<crate::usage::UsageEvent>, Vec<u8>)> {
+    let stored = store::load_usage_events(conn, Some(provider), Some(session_id), None, None)?;
+    let events = stored
+        .into_iter()
+        .map(|event| crate::usage::UsageEvent {
+            model: event.model,
+            input_tokens: event.input_tokens,
+            output_tokens: event.output_tokens,
+            cache_creation_tokens: event.cache_creation_tokens,
+            cache_read_tokens: event.cache_read_tokens,
+            occurred_at: event.occurred_at,
+            dedup_key: event.dedup_key,
+        })
+        .collect::<Vec<_>>();
+    let json = serde_json::to_vec(&events).context("Failed to serialize usage events")?;
+    Ok((events, json))
+}
+
+fn session_hash(jsonl: &[u8], usage_json: &[u8]) -> String {
+    let mut bytes = jsonl.to_vec();
+    bytes.extend_from_slice(usage_json);
+    sha256_hex(&bytes)
+}
+
+fn session_metadata_equal(old: &SessionEntry, new: &ExportedSession) -> bool {
+    old.source_path == new.source_path
+        && old.cwd == new.cwd
+        && old.workspace_key == new.workspace_key
+        && old.title == new.title
+        && old.project == new.project
+        && old.starred == new.starred
+        && old.started_at == new.started_at
+        && old.ended_at == new.ended_at
+        && old.record_count == new.record_count
 }
 
 fn canonical_jsonl(records: &[WorkRecord]) -> Result<Vec<u8>> {
@@ -1148,6 +1264,18 @@ impl LocalDirBackend {
     }
 }
 
+fn unique_temp_path(path: &Path) -> Result<PathBuf> {
+    let name = path
+        .file_name()
+        .with_context(|| format!("cloud object {} has no file name", path.display()))?;
+    let mut random = [0_u8; 8];
+    getrandom::fill(&mut random).context("OS random source unavailable")?;
+    let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+    let mut temporary = name.to_os_string();
+    temporary.push(format!(".tmp-{suffix}"));
+    Ok(path.with_file_name(temporary))
+}
+
 impl CloudBackend for LocalDirBackend {
     fn put(&self, key: &str, bytes: &[u8]) -> Result<()> {
         let path = self.resolve(key)?;
@@ -1156,7 +1284,7 @@ impl CloudBackend for LocalDirBackend {
                 format!("Failed to create cloud directory {}", parent.display())
             })?;
         }
-        let temporary = path.with_extension("tmp");
+        let temporary = unique_temp_path(&path)?;
         fs::write(&temporary, bytes)
             .with_context(|| format!("Failed to write cloud object {}", path.display()))?;
         fs::rename(&temporary, &path)
@@ -1171,21 +1299,24 @@ impl CloudBackend for LocalDirBackend {
                 format!("Failed to create cloud directory {}", parent.display())
             })?;
         }
-        let mut file = match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("Failed to create cloud object {}", path.display()));
+        let temporary = unique_temp_path(&path)?;
+        fs::write(&temporary, bytes)
+            .with_context(|| format!("Failed to stage cloud object {}", path.display()))?;
+        match fs::hard_link(&temporary, &path) {
+            Ok(()) => {
+                let _ = fs::remove_file(&temporary);
+                Ok(true)
             }
-        };
-        file.write_all(bytes)
-            .with_context(|| format!("Failed to write cloud object {}", path.display()))?;
-        Ok(true)
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let _ = fs::remove_file(&temporary);
+                Ok(false)
+            }
+            Err(error) => {
+                let _ = fs::remove_file(&temporary);
+                Err(error)
+                    .with_context(|| format!("Failed to publish cloud object {}", path.display()))
+            }
+        }
     }
 
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
@@ -1415,6 +1546,7 @@ mod tests {
             started_at: None,
             ended_at: None,
             content_hash: "a".repeat(64),
+            usage_events: Vec::new(),
             record_count: 1,
             preview: "alpha marker".into(),
             chunks: Vec::new(),
@@ -1431,6 +1563,7 @@ mod tests {
             started_at: None,
             ended_at: None,
             content_hash: "b".repeat(64),
+            usage_events: Vec::new(),
             record_count: 1,
             preview: "beta marker".into(),
             chunks: Vec::new(),
