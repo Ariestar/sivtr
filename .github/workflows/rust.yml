@@ -38,7 +38,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Filter Rust changes
         id: filter
@@ -120,6 +120,7 @@ jobs:
 
     steps:
       - name: Checkout
+        if: needs.changes.outputs.rust == 'true'
         uses: actions/checkout@v7
 
       - name: No Rust changes
@@ -171,6 +172,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
+        if: needs.changes.outputs.rust == 'true'
         uses: actions/checkout@v7
 
       - name: No Rust changes
