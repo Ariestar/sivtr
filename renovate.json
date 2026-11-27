@@ -28,7 +28,7 @@
   "packageRules": [
     {
       "description": "Group routine dependency updates into one weekly window.",
-      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest", "pinDigest"],
       "schedule": ["after 10 pm every Sunday"],
       "groupName": "weekly dependency updates",
       "groupSlug": "weekly-deps",
