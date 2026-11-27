@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1](https://github.com/Ariestar/sivtr/compare/v0.10.0...v0.10.1) - 2026-11-27
+
+### Fixed
+
+- *(deps)* update rust crate rusqlite to 0.43 ([#597](https://github.com/Ariestar/sivtr/pull/597))
+- *(deps)* update rust crate notify to v9 ([#598](https://github.com/Ariestar/sivtr/pull/598))
+- *(renovate)* batch initial digest pins ([#601](https://github.com/Ariestar/sivtr/pull/601))
+
+### Other
+
+- reduce PR gate wall time ([#603](https://github.com/Ariestar/sivtr/pull/603))
+- *(deps)* update rust crate rmcp to v3.12.0 ([#596](https://github.com/Ariestar/sivtr/pull/596))
+- *(renovate)* batch routine dependency updates ([#599](https://github.com/Ariestar/sivtr/pull/599))
+
 ## [0.10.0](https://github.com/Ariestar/sivtr/compare/v0.9.0...v0.10.0) - 2026-11-27
 
 ### Added
